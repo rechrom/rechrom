@@ -38,6 +38,9 @@ impl URLLoader for Loader {
         Ok(Box::new(Body(self.body.clone())))
     }
     fn Load(&mut self, request: &URLRequest) -> io::Result<Box<dyn URLLoadOperation>> {
+        if request.url.ends_with("/fail.css") {
+            return Err(io::Error::other("fixture stylesheet failure"));
+        }
         Ok(Box::new(Resource(
             self.resources
                 .borrow_mut()
@@ -71,9 +74,9 @@ fn create(scripting: bool) -> (Page, Events, Responses, Rc<Cell<usize>>) {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(
-            image_decoder::svg_image_decoder::SVGImageDecoder::new(&assembly),
-        )),
+        Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+            &assembly,
+        ))),
         crate::CreateBrowserConstraints(320, 200),
         scripts,
         Some(Rc::new(RefCell::new(Client(finished.clone())))),
@@ -254,6 +257,7 @@ fn async_module_can_execute_while_css_and_deferred_scripts_are_waiting() {
             ..Default::default()
         });
         finish(&mut page);
+        assert!(page.CurrentFrame().is_some());
         assert_script(
             &mut page,
             "if(order.join('|')!=='async-dependency|async-root|deferred') throw Error(order);",
@@ -498,6 +502,57 @@ fn blocking_style() {
 }
 
 #[test]
+fn head_stylesheet_before_first_paint_blocks_and_failure_unblocks() {
+    crate::native_test_thread::run(|| {
+        for scripting in [false, true] {
+            let (mut page, body, resources, finished) = create(scripting);
+            body.borrow_mut().extend([
+                response(),
+                URLLoadEvent::Data(
+                    b"<head><script type=importmap>{}</script>\n<link rel=stylesheet href=slow.css></head><body><p id=early>Early</p>".to_vec(),
+                ),
+                URLLoadEvent::Finished,
+            ]);
+            page.Open("https://stream.test/", 4096, 4096).unwrap();
+            for _ in 0..8 {
+                page.RunTasks(0.0).unwrap();
+            }
+            assert!(has_id(&page, "early"));
+            assert!(!page.IsRenderingReady());
+            assert!(page.CurrentFrame().is_none());
+            *resources
+                .borrow()
+                .get("https://stream.test/slow.css")
+                .unwrap()
+                .borrow_mut() = Some(URLResponse {
+                body: b"p { color: green }".to_vec(),
+                ..Default::default()
+            });
+            finish(&mut page);
+            assert!(page.IsRenderingReady());
+            assert!(page.CurrentFrame().is_some());
+            assert_eq!(finished.get(), 1);
+
+            let (mut failed, body, _, finished) = create(scripting);
+            body.borrow_mut().extend([
+                response(),
+                URLLoadEvent::Data(
+                    b"<head><script type=importmap>{}</script>\n<link rel=stylesheet href=fail.css></head><body><p id=fallback>Fallback</p>"
+                        .to_vec(),
+                ),
+                URLLoadEvent::Finished,
+            ]);
+            failed.Open("https://stream.test/", 4096, 4096).unwrap();
+            finish(&mut failed);
+            assert!(has_id(&failed, "fallback"));
+            assert!(failed.IsRenderingReady());
+            assert!(failed.CurrentFrame().is_some());
+            assert_eq!(finished.get(), 1);
+        }
+    });
+}
+
+#[test]
 fn post_body_stylesheets_do_not_freeze_typing_or_caret() {
     crate::native_test_thread::run(|| {
         for scripting in [false, true] {
@@ -613,9 +668,9 @@ fn real_http() {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(
-            image_decoder::svg_image_decoder::SVGImageDecoder::new(&assembly),
-        )),
+        Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+            &assembly,
+        ))),
         crate::CreateBrowserConstraints(320, 200),
         None,
         None,
@@ -709,9 +764,9 @@ fn real_http_module_dependency_wait_keeps_page_frames_and_tasks_running() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(
-                image_decoder::svg_image_decoder::SVGImageDecoder::new(&assembly),
-            )),
+            Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+                &assembly,
+            ))),
             crate::CreateBrowserConstraints(320, 200),
             Some(ScriptEnvironment {
                 runtime: Box::new(
@@ -968,10 +1023,13 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
             .as_ref()
             .unwrap()
             .clone();
-        let bytes: usize = first.images.iter().map(|image| image.rgba8.len()).sum();
         assert_eq!(first.images.len(), 1);
-        assert_eq!(bytes, 7 * 11 * 4);
-        eprintln!("fixture-resource-bytes source_rgba_bytes={bytes} legacy_copy_sites_per_full_lifecycle=2 legacy_deep_copy_payload_bytes={} basis=static_layout_environment_and_export_callchain", 2*bytes);
+        assert!(first.images[0].IsDocumentImage());
+        let first_record = match &first.images[0].content {
+            image_resource::PaintImageContent::Document(record) => record.clone(),
+            image_resource::PaintImageContent::Bitmap(_) => unreachable!(),
+        };
+        eprintln!("fixture-resource-record document_record_shared=true source_rgba_bytes=0");
         // A real viewport change forces another ordinary Page lifecycle. This
         // is not old-frame reuse and the pixels remain complete and immutable.
         page.ResizeViewport(321.0, 200.0, 1.0).unwrap();
@@ -987,15 +1045,11 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
             !std::sync::Arc::ptr_eq(&first, second),
             "new lifecycle exports a new resource catalog"
         );
-        assert_eq!(
-            first.images[0].rgba8.as_ptr(),
-            second.images[0].rgba8.as_ptr(),
-            "catalogs share the admitted image pixel allocation"
-        );
-        assert_eq!(
-            first.images[0].rgba8.as_slice(),
-            second.images[0].rgba8.as_slice()
-        );
+        let second_record = match &second.images[0].content {
+            image_resource::PaintImageContent::Document(record) => record,
+            image_resource::PaintImageContent::Bitmap(_) => unreachable!(),
+        };
+        assert!(std::sync::Arc::ptr_eq(&first_record, second_record));
         let current_pixels = renderer::pure_replay::RasterizeDisplayItemList(
             &page.CurrentFrame().unwrap().display_items,
             321,

@@ -463,7 +463,9 @@ fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> &'a PaintImage {
         || found.height == 0
         || found.resolution_scale <= 0.0
         || !found.resolution_scale.is_finite()
-        || found.rgba8.len() != found.width as usize * found.height as usize * 4
+        || found
+            .BitmapPixels()
+            .is_some_and(|pixels| pixels.len() != found.width as usize * found.height as usize * 4)
     {
         panic!("table column image resource is invalid");
     }

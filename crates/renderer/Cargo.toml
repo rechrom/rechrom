@@ -11,6 +11,7 @@ paint = { path = "../paint" }
 layer_tile = { path = "../layer_tile" }
 layoutng_assembly = { path = "../layoutng_assembly" }
 font_engine = { path = "../font_engine", optional = true }
+image_resource = { path = "../image_resource" }
 
 [features]
 default = []

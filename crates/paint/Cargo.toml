@@ -11,3 +11,4 @@ browser_tracing = { path = "../tracing" }
 foundation = { package = "layoutng_foundation", path = "../foundation" }
 layoutng_assembly = { path = "../layoutng_assembly" }
 layoutng_style = { path = "../layoutng_style" }
+image_resource = { path = "../image_resource" }

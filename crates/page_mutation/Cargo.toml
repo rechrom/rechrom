@@ -7,3 +7,4 @@ edition = "2021"
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }
 layoutng_assembly = { path = "../layoutng_assembly" }
+image_resource = { path = "../image_resource" }

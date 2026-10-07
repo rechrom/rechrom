@@ -264,9 +264,9 @@ fn completed_frame_publishes_same_snapshot_without_a_second_measurement_layout()
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(
-                image_decoder::svg_image_decoder::SVGImageDecoder::new(&assembly),
-            )),
+            Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+                &assembly,
+            ))),
             constraints(),
             None,
             None,
@@ -304,9 +304,9 @@ fn style_write_geometry_and_frame_share_one_layout_snapshot_and_match_fresh_pixe
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(
-                image_decoder::svg_image_decoder::SVGImageDecoder::new(&assembly),
-            )),
+            Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+                &assembly,
+            ))),
             constraints(),
             None,
             None,
@@ -389,9 +389,9 @@ fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(
-                image_decoder::svg_image_decoder::SVGImageDecoder::new(&assembly),
-            )),
+            Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+                &assembly,
+            ))),
             constraints(),
             None,
             None,

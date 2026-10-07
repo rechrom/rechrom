@@ -134,7 +134,9 @@ fn SpawnDedicated(
                 let effects = match display.Handle(message, &post_swap_ack) {
                     Ok(effects) => effects,
                     Err(error) => {
-                        (display_output.notify)(UserEvent::Fatal(error.to_string()));
+                        (display_output.notify)(UserEvent::Fatal(crate::engine::FatalError::new(
+                            "display", error,
+                        )));
                         break;
                     }
                 };
@@ -168,7 +170,10 @@ fn SpawnDedicated(
                 display_sender,
                 frame_source,
             ) {
-                (output.notify)(UserEvent::Fatal(error.to_string()));
+                (output.notify)(UserEvent::Fatal(crate::engine::FatalError::new(
+                    "compositor",
+                    error,
+                )));
             }
         })?;
     Ok(())
@@ -308,7 +313,10 @@ fn SpawnShared(
                 receiver,
                 raster_sender,
             ) {
-                (output.notify)(UserEvent::Fatal(error.to_string()));
+                (output.notify)(UserEvent::Fatal(crate::engine::FatalError::new(
+                    "presentation",
+                    error,
+                )));
             }
         })?;
     Ok(())

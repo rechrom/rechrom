@@ -31,9 +31,9 @@ fn page(html: &str, width: u32, height: u32, scale: f64) -> Page {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(
-            image_decoder::svg_image_decoder::SVGImageDecoder::new(&assembly),
-        )),
+        Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+            &assembly,
+        ))),
         constraints,
         None,
         None,

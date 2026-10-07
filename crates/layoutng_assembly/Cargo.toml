@@ -13,6 +13,7 @@ layoutng_mathml = { path = "../layoutng_mathml" }
 icu_bidi = { path = "../icu_bidi" }
 cssom = { path = "../cssom" }
 layoutng_custom = { path = "../layoutng_custom" }
+image_resource = { path = "../image_resource" }
 
 [lib]
 path = "src/lib.rs"

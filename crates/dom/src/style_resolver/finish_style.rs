@@ -16,6 +16,9 @@ pub(crate) fn NormalizeOverflow(style: &mut ComputedStyle) {
 
 // cpp: style_resolver/style_resolver.cc:4511-4516
 pub(crate) fn ResolveSVGCurrentColor(style: &mut ComputedStyle) {
+    if style.paint.svg_stop_current_color {
+        style.paint.svg_stop_color = style.paint.color;
+    }
     if style.paint.svg_fill_current_color {
         style.paint.svg_fill = Some(style.paint.color);
     }

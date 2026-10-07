@@ -21,6 +21,7 @@ use crate::geometry_mapper::{
     MapRectToRoot, MultiplyTransforms, ResolveLocalTransformAroundOrigin, TranslationTransform,
 };
 use crate::paint_engine::DisplayMaskLayer;
+use crate::paint_order::ClassifyFragmentPaintLayer;
 use crate::paint_property_tree::{
     ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyKey, PaintPropertyNodeStore,
     PaintPropertyOwner, PaintPropertyRole, PropertyNodeUpdater, ScrollPaintPropertyNode,
@@ -989,7 +990,9 @@ fn FindMaskImage(fragment: &FragmentNode, id: u64) -> &PaintImage {
         || found.height == 0
         || !found.resolution_scale.is_finite()
         || found.resolution_scale <= 0.0
-        || found.rgba8.len() != found.width as usize * found.height as usize * 4
+        || found
+            .BitmapPixels()
+            .is_some_and(|pixels| pixels.len() != found.width as usize * found.height as usize * 4)
     {
         panic!("mask image resource is invalid");
     }
@@ -2507,52 +2510,10 @@ impl PrePaintTreeWalk {
         } else {
             Position::kStatic
         };
-        let positioned_z_index = style.is_some_and(|style| {
-            style.z_index.is_some() && (position != Position::kStatic || is_flex_or_grid_item)
-        });
-        node.stacking_level = if positioned_z_index {
-            style.unwrap().z_index.unwrap()
-        } else {
-            0
-        };
-        node.is_paint_layer = is_root
-            || fragment.paint.source_kind == NodeKind::kSvgRoot
-            || (establishes
-                && style.is_some_and(|style| {
-                    position != Position::kStatic
-                        || positioned_z_index
-                        || style.transform.is_some()
-                        || style.will_change_transform
-                        || style.opacity != 1.0
-                        || !style.filters.is_empty()
-                        || style.blend_mode != PaintBlendMode::kNormal
-                        || style.isolate_blending
-                        || style.clip_path.is_some()
-                        || !style.mask_images.is_empty()
-                }));
-        // Exported native PaintLayer determines whether this owner paints as
-        // a layer. A line/text fragment can borrow the same LayoutObject but
-        // does not become another layer owner.
-        if fragment.paint.paint_layer_client_id != 0 {
-            node.is_paint_layer = fragment.kind == FragmentKind::kBox
-                && establishes
-                && fragment.paint.paint_layer_is_self_painting;
-        }
-        node.is_stacking_context = is_root
-            || (establishes
-                && style.is_some_and(|style| {
-                    positioned_z_index
-                        || position == Position::kFixed
-                        || position == Position::kSticky
-                        || style.transform.is_some()
-                        || style.will_change_transform
-                        || style.opacity != 1.0
-                        || !style.filters.is_empty()
-                        || style.blend_mode != PaintBlendMode::kNormal
-                        || style.isolate_blending
-                        || style.clip_path.is_some()
-                        || !style.mask_images.is_empty()
-                }));
+        let layer = ClassifyFragmentPaintLayer(fragment, is_root, is_flex_or_grid_item);
+        node.stacking_level = layer.stacking_level;
+        node.is_paint_layer = layer.is_paint_layer;
+        node.is_stacking_context = layer.is_stacking_context;
 
         if geometry.applies_transform {
             node.properties.transform_id = self.next_property_id;

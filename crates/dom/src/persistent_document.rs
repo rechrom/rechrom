@@ -1120,6 +1120,20 @@ impl PersistentDocument {
     pub fn ImageResourceFor(&self, source: &str) -> Option<&ImageResourceMetadata> {
         self.image_resources.get(source)
     }
+    pub fn UpdateImageResourceIntrinsicSize(
+        &mut self,
+        source: &str,
+        metadata: ImageResourceMetadata,
+    ) -> bool {
+        let Some(resource) = self.image_resources.get_mut(source) else {
+            return false;
+        };
+        *resource = metadata;
+        self.style_state
+            .impact
+            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+        true
+    }
 
     // cpp: dom/document.h:197-199
     // cpp: dom/document.cc:351-364

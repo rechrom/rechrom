@@ -1,8 +1,6 @@
 use crate::{CompositorScrollOffset, UnsupportedReason};
 use layoutng_assembly::internal::layout_input::TransformMatrix;
-use layoutng_assembly::internal::paint_input::{
-    PaintBlendMode, PaintCornerRadii, PaintFilterType,
-};
+use layoutng_assembly::internal::paint_input::{PaintBlendMode, PaintCornerRadii, PaintFilterType};
 use paint::paint_engine::{PaintRect, RasterEffectOutset};
 use paint::paint_property_tree::{
     ClipPaintPropertyNode, PropertyTreeState, TransformPaintPropertyNode,
@@ -408,18 +406,20 @@ pub fn raster_properties(
     // its picture layer (PropertyTreeState::CanUpcastWith, same-transform
     // fast path). A scroller viewport in an ancestor space stays external.
     // Never move a clip across an effect's output-clip boundary.
-    let root_anchor = ancestor.parent.is_none()
-        && ancestor.direct_compositing_reasons.is_empty()
-        && ancestor.scroll.as_ref().is_none_or(|scroll| {
-            root_scroll.is_some_and(|root| scroll.lifecycle.same_node(&root.lifecycle))
-        });
     let mut clip = state.clip.clone();
     loop {
-        let local_space_is_omitted = omitted.iter().any(|transform| {
-            transform
-                .lifecycle
-                .same_node(&clip.local_transform_space.lifecycle)
-        });
+        // PaintChunksToCcLayer can SwitchToClip in an ancestor transform and
+        // later SwitchToTransform for the drawing. Our retained property tree
+        // can express that directly, while one canonical PaintRecord cannot
+        // remove an intermediate-transform clip without emitting the same
+        // transform-state switch. Only bake a clip when it already lives in
+        // the drawing's own transform space (or the retained raster anchor).
+        // Keeping all other clips external preserves Chromium's property-tree
+        // semantics instead of flattening them into the wrong local space.
+        let local_space_is_record = state
+            .transform
+            .lifecycle
+            .same_node(&clip.local_transform_space.lifecycle);
         let local_space_is_anchor = ancestor
             .lifecycle
             .same_node(&clip.local_transform_space.lifecycle);
@@ -436,16 +436,19 @@ pub fn raster_properties(
             }
             effect = current.parent.as_ref();
         }
-        if (!root_anchor && !local_space_is_omitted && !local_space_is_anchor) || output_boundary {
+        if (!local_space_is_record && !local_space_is_anchor) || output_boundary {
             break;
         }
         let Some(parent) = clip.parent.clone() else {
             break;
         };
-        if !valid_record_clip_shape(&clip)
-            || !clip.clip_path.is_empty()
-            || clip.pixel_moving_filter.is_some()
-        {
+        // Path clips remain owned by the compositor's real A8 clip surface.
+        // Stop upcasting at this boundary instead of rejecting web content or
+        // replacing the path with its scheduling rectangle.
+        if !clip.clip_path.is_empty() || clip.pixel_moving_filter.is_some() {
+            break;
+        }
+        if !valid_record_clip_shape(&clip) {
             clip_diagnostic(&clip, "raster-upcast-shape-or-filter", None, 1.0);
             return Err(UnsupportedReason::UnsupportedClip);
         }
@@ -537,19 +540,22 @@ fn valid_record_clip_shape(node: &ClipPaintPropertyNode) -> bool {
 pub fn needs_transparent_backing(state: &PropertyTreeState) -> bool {
     let mut effect = Some(&state.effect);
     while let Some(node) = effect {
-        if node.opacity != 1.0 || node.is_mask || clip_chain_is_rounded(node.output_clip.as_ref()) {
+        if node.opacity != 1.0 || node.is_mask || clip_chain_needs_mask(node.output_clip.as_ref()) {
             return true;
         }
         effect = node.parent.as_ref();
     }
     raster_properties(state)
-        .map(|lowered| clip_chain_is_rounded(Some(&lowered.clip)))
+        .map(|lowered| clip_chain_needs_mask(Some(&lowered.clip)))
         .unwrap_or(true)
 }
 
-fn clip_chain_is_rounded(mut clip: Option<&Arc<ClipPaintPropertyNode>>) -> bool {
+fn clip_chain_needs_mask(mut clip: Option<&Arc<ClipPaintPropertyNode>>) -> bool {
     while let Some(node) = clip {
-        if node.radii != PaintCornerRadii::default() {
+        let affine = crate::recording::clip_transform_state(&node.local_transform_space)
+            .map(|state| state.cross_axis != (0.0, 0.0))
+            .unwrap_or(true);
+        if affine || node.radii != PaintCornerRadii::default() || !node.clip_path.is_empty() {
             return true;
         }
         clip = node.parent.as_ref();
@@ -612,6 +618,42 @@ fn project_record_rect(
     Ok(projected)
 }
 
+fn project_affine_rect(
+    rect: PaintRect,
+    matrix: &TransformMatrix,
+) -> Result<PaintRect, UnsupportedReason> {
+    if !affine_2d(matrix) {
+        return Err(UnsupportedReason::UnsupportedClip);
+    }
+    let m = &matrix.values;
+    let mut left = f64::INFINITY;
+    let mut top = f64::INFINITY;
+    let mut right = f64::NEG_INFINITY;
+    let mut bottom = f64::NEG_INFINITY;
+    for (x, y) in [
+        (rect.x, rect.y),
+        (rect.x + rect.width, rect.y),
+        (rect.x, rect.y + rect.height),
+        (rect.x + rect.width, rect.y + rect.height),
+    ] {
+        let projected_x = x * m[0] + y * m[4] + m[12];
+        let projected_y = x * m[1] + y * m[5] + m[13];
+        left = left.min(projected_x);
+        top = top.min(projected_y);
+        right = right.max(projected_x);
+        bottom = bottom.max(projected_y);
+    }
+    let projected = PaintRect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    };
+    finite(projected)
+        .then_some(projected)
+        .ok_or(UnsupportedReason::UnsupportedClip)
+}
+
 pub(crate) fn pixel_aligned(value: f64, scale: f64) -> bool {
     let pixels = value * scale;
     pixels.is_finite() && pixels == pixels.round()
@@ -624,7 +666,10 @@ pub(crate) fn resolve(
     state: &PropertyTreeState,
     scale: f64,
 ) -> Result<((f64, f64), Option<PaintRect>), UnsupportedReason> {
-    resolve_with_record_clip_bounds(state, scale, true, false, false, None)
+    // PaintChunksToCcLayer retains affine clips as synthesized clip effects.
+    // Their projected rectangles are culling bounds only; renderer applies
+    // the original transformed rect/rrect/path as an A8 coverage mask.
+    resolve_with_record_clip_bounds(state, scale, true, true, false, None)
 }
 
 fn resolve_with_record_clip_bounds(
@@ -705,8 +750,19 @@ fn intersect_clip_chain(
     while let Some(node) = clip {
         if (node.radii != PaintCornerRadii::default() && !allow_rounded_record_clip)
             || !valid_record_clip_shape(node)
-            || !node.clip_path.is_empty()
-            || node.pixel_moving_filter.is_some()
+            || node.pixel_moving_filter.as_ref().is_some_and(|effect| {
+                // This is an input-cull expander for the actual filter effect,
+                // not an additional clip operation. Its output clip stays on
+                // the effect surface and the renderer supplies blur padding.
+                node.rect.is_some()
+                    || !node.clip_path.is_empty()
+                    || effect.filters.is_empty()
+                    || effect.filters.iter().any(|filter| {
+                        filter.r#type != PaintFilterType::kBlur
+                            || !filter.amount.is_finite()
+                            || filter.amount < 0.0
+                    })
+            })
         {
             clip_diagnostic(node, "shape-or-filter", None, scale);
             return Err(UnsupportedReason::UnsupportedClip);
@@ -722,20 +778,7 @@ fn intersect_clip_chain(
                     scale,
                     scroll_override,
                 )?;
-                if !axis_aligned(&matrix) {
-                    return Err(UnsupportedReason::UnsupportedClip);
-                }
-                let m = matrix.values;
-                let left = rect.x * m[0] + m[12];
-                let top = rect.y * m[5] + m[13];
-                let right = (rect.x + rect.width) * m[0] + m[12];
-                let bottom = (rect.y + rect.height) * m[5] + m[13];
-                Ok(PaintRect {
-                    x: left.min(right),
-                    y: top.min(bottom),
-                    width: (right - left).abs(),
-                    height: (bottom - top).abs(),
-                })
+                project_affine_rect(rect, &matrix)
             } else if allow_affine_record_clip {
                 project_record_rect(rect, &node.local_transform_space)
             } else {

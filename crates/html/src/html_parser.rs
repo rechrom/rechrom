@@ -1835,6 +1835,22 @@ impl<'a> DocumentTreeBuilder<'a> {
             self.site_.InsertText(data);
             return;
         }
+        // "In head" whitespace stays in the head insertion mode. In
+        // particular, a newline following </script> must not synthesize the
+        // body before later metadata and stylesheet links are parsed.
+        if self.fragment_context_.is_none()
+            && !self.head_closed_
+            && IsHTMLWhitespace(data)
+            && self.site_.CurrentElement().is_some_and(|current| {
+                self.site_
+                    .OwnerDocument()
+                    .Node(current)
+                    .IsHTMLElement("head")
+            })
+        {
+            self.site_.InsertText(data);
+            return;
+        }
         if self.frameset_document_ && IsHTMLWhitespace(data) {
             return;
         }

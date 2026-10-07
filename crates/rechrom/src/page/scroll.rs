@@ -183,9 +183,15 @@ fn scroll_updates(
     ] {
         let constrained = wheel.DefaultScrollDelta();
         let delta = if delta.x != 0.0 {
-            Offset { x: constrained.x, y: 0.0 }
+            Offset {
+                x: constrained.x,
+                y: 0.0,
+            }
         } else {
-            Offset { x: 0.0, y: constrained.y }
+            Offset {
+                x: 0.0,
+                y: constrained.y,
+            }
         };
         // A stationary or railed-away axis cannot select a scroll target.
         // Avoid the second fragment-tree walk for ordinary vertical gestures.

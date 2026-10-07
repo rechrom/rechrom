@@ -254,8 +254,10 @@ fn worker_loop(receiver: mpsc::Receiver<Batch>, clip_limit: usize, image_limit: 
             // One borrowed immutable resource directory per batch. Image/font
             // owners and all command payloads are shared Arcs, never byte copies.
             let resources = resources(&list);
+            let documents = crate::layer_replay::document_records(&list);
             let mut replay = LayerReplay::for_worker(
                 resources,
+                documents,
                 (*batch.layers).clone(),
                 std::mem::take(&mut scratch),
             );

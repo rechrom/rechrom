@@ -350,6 +350,8 @@ fn PresentationHints(node: &DOMNode) -> Vec<CSSDeclaration> {
             "color",
             "fill",
             "stroke",
+            "stop-color",
+            "stop-opacity",
             "stroke-width",
             "opacity",
             "visibility",

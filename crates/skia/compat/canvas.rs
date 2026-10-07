@@ -1082,11 +1082,36 @@ impl SkCanvas {
             }
             CommandKind::kDrawImageRect => self.drawImageRect(item, item.rect, list),
             CommandKind::kDrawTiledImage => self.draw_tiled_image(item, list),
-            CommandKind::kDrawGlyphRun => self.drawGlyphRunList(item, list),
+            CommandKind::kDrawGlyphRun => self.draw_glyph_run(item, list),
             CommandKind::kDrawBoxShadow => self.draw_box_shadow(item),
             CommandKind::kDrawMask => self.draw_mask_layers(&item.mask_layers, list),
             other => panic!("pure Rust raster replay for {other:?} is not yet implemented"),
         }
+    }
+
+    fn draw_glyph_run(&mut self, item: &DrawCommand, list: &ResourceContext) {
+        if item.blur_radius <= 0.0 {
+            self.drawGlyphRunList(item, list);
+            return;
+        }
+        // SkMaskFilter::MakeBlur receives sigma = CSS blur radius / 2. A
+        // single glyph run filtered through a transparent saveLayer is
+        // equivalent to applying that normal blur mask to its SkPaint, and
+        // reuses the compositor's bounded blur implementation for tile-safe
+        // input expansion.
+        let mut layer = DrawCommand::default();
+        layer.filters.push(PaintFilterOperation {
+            r#type: PaintFilterType::kBlur,
+            amount: item.blur_radius * 0.5,
+            offset: Offset::default(),
+            blur_radius: 0.0,
+            color: Color::default(),
+        });
+        self.save_layer_filter(&layer);
+        let mut glyphs = item.clone();
+        glyphs.blur_radius = 0.0;
+        self.drawGlyphRunList(&glyphs, list);
+        self.restore();
     }
 
     fn save_layer_alpha(&mut self, item: &DrawCommand) {

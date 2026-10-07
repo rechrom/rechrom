@@ -2,9 +2,10 @@
 //! deterministic test transport; parser, CSS, decoding, fonts, layout and paint
 //! are the production Rust implementations.
 use crate::script_scheduler::{ScriptLoadClient, ScriptScheduler};
+use document_image::SVGImageDecoder;
 use document_loader::{ResourceFetcher, ResourceFetcherClient};
 use dom::DOM;
-use image_decoder::{skia_image_decoder::SkiaImageDecoder, svg_image_decoder::SVGImageDecoder};
+use image_decoder::skia_image_decoder::SkiaImageDecoder;
 use javascript::{
     javascript_runtime::JavaScriptRuntime, quickjs_javascript_runtime::QuickJsJavaScriptRuntime,
 };
@@ -247,11 +248,15 @@ fn body() {
         ));
     }
     for image in &catalog.images {
-        let bytes = image
-            .rgba8
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>();
+        let bytes = image.BitmapPixels().map_or_else(
+            || format!("document-revision-{}", image.revision),
+            |pixels| {
+                pixels
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            },
+        );
         trace.borrow_mut().push(format!(
             "pixels\t{}\t{}\t{}\t{bytes}",
             image.id, image.width, image.height

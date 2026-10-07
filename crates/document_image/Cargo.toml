@@ -1,0 +1,12 @@
+[package]
+name = "document_image"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+cssom = { path = "../cssom" }
+dom = { path = "../dom" }
+html = { path = "../html" }
+image_resource = { path = "../image_resource" }
+layoutng_assembly = { path = "../layoutng_assembly", features = ["translation_in_progress"] }
+paint = { path = "../paint", features = ["translation_in_progress"] }

@@ -2,7 +2,6 @@
 //! The UI thread sends commands and receives presentation notifications; owned
 //! RGBA frames remain available through the diagnostic headless mailbox.
 use crate::begin_frame_source::NativeBeginFrame;
-use rechrom::page::{Page, PageClient};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use foundation::begin_frame::{BeginFrameArgs, BeginFrameSource};
 use interaction::input_event::*;
@@ -11,6 +10,7 @@ use layoutng_assembly::{
     internal::layout_input::{Offset, Size},
 };
 use page_mutation::PageMutation;
+use rechrom::page::{Page, PageClient};
 use skia::compat::surface::RasterSurface;
 use std::{
     cell::{Cell, RefCell},
@@ -56,6 +56,19 @@ pub struct WindowFrame {
 }
 pub type FrameMailbox = Arc<Mutex<Option<WindowFrame>>>;
 #[derive(Debug)]
+pub struct FatalError {
+    pub source: &'static str,
+    pub message: String,
+}
+impl FatalError {
+    pub fn new(source: &'static str, error: impl std::fmt::Display) -> Self {
+        Self {
+            source,
+            message: error.to_string(),
+        }
+    }
+}
+#[derive(Debug)]
 pub enum UserEvent {
     OpenDevTools,
     FrameReady,
@@ -67,7 +80,7 @@ pub enum UserEvent {
     FramePresented(Viewport),
     Location(String),
     Message(String),
-    Fatal(String),
+    Fatal(FatalError),
     CursorChanged(rechrom::page::Cursor),
     CaretChanged(Option<rechrom::page::CaretRect>),
 }
@@ -285,14 +298,29 @@ pub fn spawn(
             }));
             match outcome {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => (output.notify)(UserEvent::Fatal(error.to_string())),
-                Err(_) => (output.notify)(UserEvent::Fatal(
-                    "browser thread panicked; see terminal diagnostics".into(),
-                )),
+                Ok(Err(error)) => (output.notify)(UserEvent::Fatal(FatalError::new("page", error))),
+                Err(payload) => (output.notify)(UserEvent::Fatal(FatalError::new(
+                    "page",
+                    panic_message(payload),
+                ))),
             }
         })?;
     Ok(sender)
 }
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(error) = payload.downcast_ref::<dom::error::DOMException>() {
+        return format!("browser thread {:?}: {}", error.kind, error.message);
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return format!("browser thread panicked: {message}");
+    }
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        return format!("browser thread panicked: {message}");
+    }
+    "browser thread panicked with a non-string payload".into()
+}
+
 fn run(
     receiver: mpsc::Receiver<Command>,
     loading_sender: mpsc::Sender<Command>,
@@ -791,6 +819,10 @@ fn create_page(
     document_generation: u64,
 ) -> io::Result<Page> {
     let mut options = url_loader::DefaultURLLoaderOptions::default();
+    // Chromium can multiplex many subresource requests over HTTP/2. Keep the
+    // embedder-wide scheduler from letting deferred scripts and media occupy
+    // every slot while render-blocking stylesheets wait behind them.
+    options.max_parallel_requests = 32;
     options.trace_requests = std::env::var_os("BROWSER_APP_TRACE_NETWORK").is_some();
     let loader = Rc::new(RefCell::new(url_loader::DefaultURLLoader::new(
         options.clone(),
@@ -799,13 +831,13 @@ fn create_page(
         image_decoder::skia_image_decoder::SkiaImageDecoder,
     ));
     let assembly = rechrom::CreateLayoutAssembly();
-    let document_images = Rc::new(RefCell::new(
-        image_decoder::svg_image_decoder::SVGImageDecoder::new(&assembly),
-    ));
     let mut constraints =
         rechrom::CreateBrowserConstraints(width.ceil() as u32, height.ceil() as u32);
     constraints.available_size = Size { width, height };
     constraints.device_pixel_ratio = scale;
+    let document_images = Rc::new(RefCell::new(
+        document_image::SVGImageDecoder::new_with_constraints(&assembly, &constraints),
+    ));
     let environment = if scripting {
         Some(rechrom::page::ScriptEnvironment {
             // This embedding owns a 16 MiB thread. The unoptimized translated

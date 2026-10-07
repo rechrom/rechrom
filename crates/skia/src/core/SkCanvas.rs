@@ -3311,6 +3311,63 @@ mod readback_and_path_tests {
             }
         }
     }
+
+    #[test]
+    fn blurred_glyph_run_uses_bounded_normal_blur() {
+        let bytes = include_bytes!(
+            "../../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
+        );
+        let list = ResourceContext {
+            resources: Some(ResourceCatalog {
+                fonts: vec![FontFace {
+                    bytes,
+                    face_index: 0,
+                    family: "Roboto",
+                    native_family: "",
+                    weight: 400.0,
+                    italic: false,
+                    variations: vec![],
+                }],
+                images: vec![],
+            }),
+        };
+        let render = |blur_radius| {
+            let mut canvas = SkCanvas::new(&list, 96, 64);
+            canvas.set_glyph_mode(GlyphRasterMode::Outlines);
+            canvas.replay_item(
+                &DrawCommand {
+                    r#type: CommandKind::kDrawGlyphRun,
+                    font_size: 28.0,
+                    color: Color {
+                        red: 1.0,
+                        alpha: 1.0,
+                        ..Color::default()
+                    },
+                    text_blob_origin: Offset { x: 28.0, y: 42.0 },
+                    glyphs: vec![PaintGlyph {
+                        id: 36,
+                        ..PaintGlyph::default()
+                    }],
+                    blur_radius,
+                    ..DrawCommand::default()
+                },
+                &list,
+            );
+            canvas.finish()
+        };
+        let sharp = render(0.0);
+        let blurred = render(4.0);
+        assert_ne!(blurred, sharp);
+        let changed_pixels = |pixels: &[u8]| {
+            let background = &pixels[..4];
+            pixels
+                .chunks_exact(4)
+                .filter(|pixel| *pixel != background)
+                .count()
+        };
+        assert!(changed_pixels(&blurred) > changed_pixels(&sharp));
+        assert_eq!(blurred, render(4.0), "blurred replay must be deterministic");
+    }
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ pub struct Options {
     pub address: String,
     pub width: u32,
     pub height: u32,
+    pub headless: bool,
     pub exit_after: Option<std::time::Duration>,
     pub devtools_port: u16,
 }
@@ -14,6 +15,7 @@ impl Options {
             address: "about:home".into(),
             width: 1280,
             height: 800,
+            headless: false,
             exit_after: None,
             devtools_port: 9223,
         };
@@ -26,9 +28,10 @@ impl Options {
                     return Ok(None);
                 }
                 "--help" | "-h" => {
-                    println!("rechrom [URL or file] [--url URL | --input FILE] [--width N] [--height N]\n\
+                    println!("rechrom [URL or file] [--url URL | --input FILE] [--width N] [--height N] [--headless]\n\
                         Shortcuts: Ctrl/Cmd+L address, Ctrl/Cmd+R reload, Alt+Left/Right history, F12 Performance DevTools.\n\
                         --devtools-port PORT selects the localhost Performance server (default 9223, 0 automatic).\n\
+                        --headless keeps the native rendering surface hidden for automated verification.\n\
                         --exit-after SECONDS closes the window after a timed smoke run.");
                     return Ok(None);
                 }
@@ -38,6 +41,7 @@ impl Options {
                 }
                 "--width" => options.width = parse_number(args.next(), "width")?,
                 "--height" => options.height = parse_number(args.next(), "height")?,
+                "--headless" => options.headless = true,
                 "--devtools-port" => {
                     options.devtools_port = parse_number(args.next(), "devtools-port")?
                 }

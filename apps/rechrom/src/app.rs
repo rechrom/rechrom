@@ -1,6 +1,7 @@
 use crate::window_surface::WindowSurface;
 use crate::{
-    engine::{self, Command, Output, UserEvent, Viewport},
+    crash_report::{CrashReport, CrashReportSink, JsonCrashReportSink},
+    engine::{self, Command, FatalError, Output, UserEvent, Viewport},
     input::InputState,
     options::Options,
 };
@@ -18,6 +19,13 @@ use winit::{
 };
 
 pub fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
+    let working_directory = std::env::current_dir()?;
+    let current_location = options.address.clone();
+    let crash_reports: Option<Box<dyn CrashReportSink>> = (!options.headless).then(|| {
+        Box::new(JsonCrashReportSink::new(
+            working_directory.join("rechrom-crash-reports"),
+        )) as Box<dyn CrashReportSink>
+    });
     browser_tracing::register_target(1, "Page", &options.address);
     browser_tracing::register_target(2, "Browser toolbar", "browser://toolbar");
     let devtools_url = devtools::serve(options.devtools_port).or_else(|error| {
@@ -41,6 +49,9 @@ pub fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App {
         devtools_url,
         options,
+        working_directory,
+        current_location,
+        crash_reports,
         output,
         window: None,
         commands: None,
@@ -62,6 +73,9 @@ pub fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
 struct App {
     devtools_url: String,
     options: Options,
+    working_directory: std::path::PathBuf,
+    current_location: String,
+    crash_reports: Option<Box<dyn CrashReportSink>>,
     output: Output,
     window: Option<Arc<Window>>,
     commands: Option<mpsc::Sender<Command>>,
@@ -80,9 +94,38 @@ impl App {
             eprintln!("DevTools: {error}");
         }
     }
-    fn fail(&mut self, event_loop: &ActiveEventLoop, error: impl std::fmt::Display) {
-        eprintln!("rechrom: {error}");
-        self.error = Some(error.to_string());
+    fn fail(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        source: &'static str,
+        error: impl std::fmt::Display,
+    ) {
+        let message = error.to_string();
+        eprintln!(
+            "rechrom-fatal\t{}",
+            serde_json::json!({
+                "source": source,
+                "message": &message,
+                "url": &self.current_location,
+            })
+        );
+        if let Some(sink) = &self.crash_reports {
+            match sink.write(CrashReport {
+                source,
+                message: &message,
+                url: &self.current_location,
+                working_directory: &self.working_directory,
+            }) {
+                Ok(stored) => {
+                    eprintln!("rechrom-crash-report\t{}", stored.latest_path.display());
+                    eprintln!("rechrom-crash-archive\t{}", stored.archived_path.display());
+                }
+                Err(report_error) => {
+                    eprintln!("rechrom-crash-report-error\t{report_error}");
+                }
+            }
+        }
+        self.error = Some(format!("{source}: {message}"));
         event_loop.exit();
     }
     fn viewport(&self) -> Viewport {
@@ -168,7 +211,8 @@ impl ApplicationHandler<UserEvent> for App {
             let attributes = Window::default_attributes()
                 .with_title("Rechrom")
                 .with_inner_size(LogicalSize::new(self.options.width, self.options.height))
-                .with_min_inner_size(LogicalSize::new(320, 200));
+                .with_min_inner_size(LogicalSize::new(320, 200))
+                .with_visible(!self.options.headless);
             #[cfg(target_os = "macos")]
             let attributes = {
                 use winit::platform::macos::WindowAttributesExtMacOS;
@@ -183,7 +227,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.window = Some(Arc::new(window));
                 }
                 Err(error) => {
-                    self.fail(event_loop, error);
+                    self.fail(event_loop, "app", error);
                     return;
                 }
             }
@@ -193,7 +237,7 @@ impl ApplicationHandler<UserEvent> for App {
             let surface = match WindowSurface::new(window.clone(), window) {
                 Ok(surface) => surface,
                 Err(error) => {
-                    self.fail(event_loop, error);
+                    self.fail(event_loop, "app", error);
                     return;
                 }
             };
@@ -274,7 +318,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.last_requested_display.set(self.current_display_id());
                 }
                 Err(error) => {
-                    self.fail(event_loop, error);
+                    self.fail(event_loop, "app", error);
                     return;
                 }
             }
@@ -284,7 +328,7 @@ impl ApplicationHandler<UserEvent> for App {
                 .map(|duration| Instant::now() + duration);
         }
         if let Err(error) = self.resize() {
-            self.fail(event_loop, error);
+            self.fail(event_loop, "app", error);
         }
     }
     fn suspended(&mut self, _: &ActiveEventLoop) {
@@ -319,6 +363,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::Location(address) => {
                 browser_tracing::register_target(1, "Page", &address);
+                self.current_location.clone_from(&address);
                 if let Some(window) = &self.window {
                     window.set_title(&format!("Rechrom — {address}"));
                 }
@@ -345,7 +390,9 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::Message(message) => eprintln!("page: {message}"),
-            UserEvent::Fatal(error) => self.fail(event_loop, error),
+            UserEvent::Fatal(FatalError { source, message }) => {
+                self.fail(event_loop, source, message)
+            }
         }
     }
     fn window_event(
@@ -397,7 +444,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
                 if let Err(error) = self.resize() {
-                    self.fail(event_loop, error);
+                    self.fail(event_loop, "app", error);
                 }
             }
             WindowEvent::Moved(_) => self.update_display_binding(),

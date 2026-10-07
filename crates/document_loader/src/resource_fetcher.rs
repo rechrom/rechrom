@@ -7,22 +7,25 @@ use crate::{
 };
 use cssom::{CSSFontFaceRule, CSSStyleSheet};
 use dom::{Document, DOM};
-use image_decoder::{
-    document_image_decoder::DocumentImageDecoder,
-    image_decoder::{ImageDecodeInput, ImageDecoder},
+use image_decoder::image_decoder::{ImageDecodeInput, ImageDecoder};
+use image_resource::{
+    ContainerKey, DocumentImage, DocumentImageDecoder, DocumentImageEffect, DocumentImageMutation,
+    PaintImageContent,
 };
 use layoutng_assembly::internal::layout_input::{
     ComputedStyle, ConstraintSpace, FontFace, PaintImage,
 };
 use page_mutation::{
-    FontResourceReady, ImageResourceReady, ResourceKind, ResourceLoadFailed, ResourceMutation,
+    DocumentImageFrameChanged, DocumentImageIntrinsicSizeChanged, FontResourceReady,
+    ImageResourceReady, ResourceKind, ResourceLoadFailed, ResourceMutation,
 };
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     io,
     rc::Rc,
-    time::Duration,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 use url_loader::{RequestDestination, URLLoader, URLRequest};
 
@@ -45,6 +48,14 @@ struct PendingImage {
     source: String,
     url: String,
     resource: ResourceLoader,
+}
+
+struct AnimatedImage {
+    source: String,
+    id: u64,
+    first_frame_time: Option<Instant>,
+    begin_frame_requested: bool,
+    image: Box<dyn DocumentImage>,
 }
 
 struct ImageEventSubtrees {
@@ -71,6 +82,7 @@ pub struct ResourceFetcher {
     image_event_sources: RefCell<HashMap<u64, String>>,
     image_event_subtrees: RefCell<Option<ImageEventSubtrees>>,
     pending_images: RefCell<Vec<PendingImage>>,
+    animated_images: RefCell<Vec<AnimatedImage>>,
     loaded_font_urls: RefCell<HashSet<String>>,
     pending_fonts: RefCell<Vec<PendingFontFace>>,
 }
@@ -97,6 +109,7 @@ impl ResourceFetcher {
             image_event_sources: RefCell::new(HashMap::new()),
             image_event_subtrees: RefCell::new(None),
             pending_images: RefCell::new(Vec::new()),
+            animated_images: RefCell::new(Vec::new()),
             loaded_font_urls: RefCell::new(HashSet::new()),
             pending_fonts: RefCell::new(Vec::new()),
         }
@@ -391,31 +404,80 @@ impl ResourceFetcher {
                     bytes: &response.body,
                     mime_type: &response.mime_type,
                 };
-                let decoded = if self.document_images.borrow().CanDecode(&input) {
-                    self.document_images
-                        .borrow_mut()
-                        .Decode(&input, &self.constraints.borrow())?
-                } else {
-                    self.images.borrow_mut().Decode(&input)?
-                };
-                let decode_done = profile.map(|start| start.elapsed());
                 if self.next_image_id.get() == 0 {
                     return Err(io::Error::other("image resource id space exhausted"));
                 }
                 let id = self.next_image_id.get();
                 self.next_image_id
                     .set(self.next_image_id.get().wrapping_add(1));
-                let decoded = PaintImage {
-                    id,
-                    width: decoded.width,
-                    height: decoded.height,
-                    rgba8: decoded.rgba8.into(),
-                    ..Default::default()
+                let is_document = self
+                    .document_images
+                    .borrow()
+                    .can_decode(input.bytes, input.mime_type);
+                let (decoded, retained_document) = if is_document {
+                    let constraints = self.constraints.borrow();
+                    let container = ContainerKey::new(
+                        // The resource is decoded before any particular paint
+                        // client has a resolved replaced-content box. Zero asks
+                        // document_image to use the SVG intrinsic viewport;
+                        // a later typed SetContainer mutation selects a
+                        // client-specific responsive recording.
+                        0,
+                        0,
+                        1.0,
+                        constraints.device_pixel_ratio,
+                    );
+                    drop(constraints);
+                    let created = self.document_images.borrow_mut().create(
+                        id,
+                        Arc::from(response.body.clone()),
+                        &response.mime_type,
+                        &container,
+                    )?;
+                    let begin_frame_requested = created
+                        .effects
+                        .iter()
+                        .any(|effect| matches!(effect, DocumentImageEffect::RequestBeginFrame));
+                    let frame = created.initial_frame;
+                    let paint_image = PaintImage {
+                        id,
+                        revision: frame.revision,
+                        width: frame.intrinsic_size.width,
+                        height: frame.intrinsic_size.height,
+                        content: PaintImageContent::Document(frame.record.clone()),
+                        ..Default::default()
+                    };
+                    let retained =
+                        begin_frame_requested.then_some((created.image, begin_frame_requested));
+                    (paint_image, retained)
+                } else {
+                    let bitmap = self.images.borrow_mut().Decode(&input)?;
+                    (
+                        PaintImage {
+                            id,
+                            revision: 1,
+                            width: bitmap.width,
+                            height: bitmap.height,
+                            content: PaintImageContent::Bitmap(bitmap.rgba8.into()),
+                            ..Default::default()
+                        },
+                        None,
+                    )
                 };
+                let decode_done = profile.map(|start| start.elapsed());
                 // Source catches validation while committing the decoded image,
                 // as well as decoder failures. Keep the consumed id and continue
                 // loading other resources after a rejected image.
                 self.CommitImage(image.source.clone(), decoded, client);
+                if let Some((document, begin_frame_requested)) = retained_document {
+                    self.animated_images.borrow_mut().push(AnimatedImage {
+                        source: image.source.clone(),
+                        id,
+                        first_frame_time: None,
+                        begin_frame_requested,
+                        image: document,
+                    });
+                }
                 let commit_done = profile.map(|start| start.elapsed());
                 self.DispatchImageEvents(&image.source, true, client);
                 if let Some(start) = profile {
@@ -684,6 +746,76 @@ impl ResourceFetcher {
     }
     pub fn HasPendingImages(&self) -> bool {
         !self.pending_images.borrow().is_empty()
+    }
+    pub fn HasAnimatedImages(&self) -> bool {
+        self.animated_images
+            .borrow()
+            .iter()
+            .any(|image| image.begin_frame_requested)
+    }
+    /// Sample nested document-image timelines at the embedder's rendering
+    /// opportunity.  This emits ordinary immutable image frames; Page and
+    /// layout never retain or inspect the SVG animation implementation.
+    pub fn SampleAnimatedImages(
+        &self,
+        frame_time: Instant,
+        begin_frame_sequence: u64,
+        client: &mut dyn ResourceFetcherClient,
+    ) -> io::Result<usize> {
+        let mut sampled = 0;
+        for image in &mut *self.animated_images.borrow_mut() {
+            if !image.begin_frame_requested {
+                continue;
+            }
+            image.begin_frame_requested = false;
+            let origin = *image.first_frame_time.get_or_insert(frame_time);
+            let elapsed = frame_time.saturating_duration_since(origin);
+            for effect in image
+                .image
+                .apply_mutation(DocumentImageMutation::AdvanceTimeline {
+                    frame_time: elapsed,
+                    begin_frame_sequence,
+                })?
+            {
+                match effect {
+                    DocumentImageEffect::FrameChanged { frame, .. } => {
+                        if frame.resource_id != image.id {
+                            return Err(io::Error::other(
+                                "document image changed resource identity",
+                            ));
+                        }
+                        client.ApplyResourceMutation(ResourceMutation::DocumentImageFrameChanged(
+                            DocumentImageFrameChanged {
+                                source: image.source.clone(),
+                                frame,
+                            },
+                        ));
+                        sampled += 1;
+                    }
+                    DocumentImageEffect::IntrinsicSizeChanged {
+                        resource_id,
+                        revision,
+                        size,
+                        ..
+                    } => {
+                        client.ApplyResourceMutation(
+                            ResourceMutation::DocumentImageIntrinsicSizeChanged(
+                                DocumentImageIntrinsicSizeChanged {
+                                    source: image.source.clone(),
+                                    resource_id,
+                                    revision,
+                                    size,
+                                },
+                            ),
+                        );
+                    }
+                    DocumentImageEffect::RequestBeginFrame => {
+                        image.begin_frame_requested = true;
+                    }
+                }
+            }
+        }
+        Ok(sampled)
     }
     pub fn HasPendingFonts(&self) -> bool {
         self.pending_fonts.borrow().iter().any(|face| {

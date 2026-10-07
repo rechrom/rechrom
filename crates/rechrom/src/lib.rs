@@ -52,6 +52,7 @@ pub mod style_services;
 mod svg_image_tests;
 #[cfg(test)]
 mod table_layout_tests;
+mod text_transform;
 pub use persistent_layout::LayoutPersistentDocument;
 mod user_agent_styles;
 
@@ -116,6 +117,9 @@ pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
         ..ViewportGeometry::default()
     });
     space.fonts = font_catalog::DemoFonts();
+    space.text_transform = Some(std::sync::Arc::new(
+        text_transform::BrowserTextTransformProvider,
+    ));
     #[cfg(feature = "source_png")]
     {
         space.font_backend_factory = Some(std::sync::Arc::new(
@@ -294,10 +298,11 @@ fn LayoutWithStyleLoader(
         );
         images.push(PaintImage {
             id,
+            revision: 1,
             width: decoded.width,
             height: decoded.height,
             resolution_scale: 1.0,
-            rgba8: decoded.rgba8.into(),
+            content: image_resource::PaintImageContent::Bitmap(decoded.rgba8.into()),
         });
     }
     let styles = dom::style_resolver::ResolveCssomWithUserAgent(

@@ -75,8 +75,10 @@ pub use persistent_resolver::{ResolveComputedStyles, ResolveDocumentStyles, Styl
 pub mod persistent_selector;
 pub mod selector;
 mod shadow;
+#[cfg(test)]
 mod source_supported_properties;
 mod style_rule_index;
+mod svg_paint;
 mod text_properties;
 mod transform_origin;
 mod variables;
@@ -325,6 +327,21 @@ fn apply(style: &mut ComputedStyle, property: &str, value: &str, viewport: (f64,
         }
         // cpp: style_resolver/style_resolver.cc:5998-6053
         "fill" | "stroke" => {
+            if let Some((reference, fallback, current_color)) = svg_paint::ParseReference(raw_value)
+            {
+                if property == "fill" {
+                    style.paint.svg_fill_reference = Some(reference);
+                    style.paint.svg_fill_server = None;
+                    style.paint.svg_fill = fallback;
+                    style.paint.svg_fill_current_color = current_color;
+                } else {
+                    style.paint.svg_stroke_reference = Some(reference);
+                    style.paint.svg_stroke_server = None;
+                    style.paint.svg_stroke = fallback;
+                    style.paint.svg_stroke_current_color = current_color;
+                }
+                return;
+            }
             let resolved = if value.eq_ignore_ascii_case("none") {
                 Some((None, false))
             } else if value.eq_ignore_ascii_case("currentcolor") {
@@ -338,11 +355,27 @@ fn apply(style: &mut ComputedStyle, property: &str, value: &str, viewport: (f64,
                     style.paint.svg_fill = paint;
                     style.paint.svg_fill_current_color = current_color;
                     style.paint.svg_fill_server = None;
+                    style.paint.svg_fill_reference = None;
                 } else {
                     style.paint.svg_stroke = paint;
                     style.paint.svg_stroke_current_color = current_color;
                     style.paint.svg_stroke_server = None;
+                    style.paint.svg_stroke_reference = None;
                 }
+            }
+        }
+        "stop-color" => {
+            if value == "currentcolor" {
+                style.paint.svg_stop_current_color = true;
+            } else if let Some(color) = layoutng_assembly::css_color_parser::ParseCSSColor(value) {
+                style.paint.svg_stop_color = color;
+                style.paint.svg_stop_current_color = false;
+            }
+        }
+        "stop-opacity" => {
+            let (number, divisor) = value.strip_suffix('%').map_or((value, 1.0), |v| (v, 100.0));
+            if let Some(opacity) = number::Number(number) {
+                style.paint.svg_stop_opacity = (opacity / divisor).clamp(0.0, 1.0) as f32;
             }
         }
         "stroke-width" => {
@@ -380,8 +413,8 @@ fn apply(style: &mut ComputedStyle, property: &str, value: &str, viewport: (f64,
             }
         }
         "stroke-dashoffset" => {
-            let offset = border_radius::Length(value, font_size)
-                .or_else(|| value.parse::<f64>().ok());
+            let offset =
+                border_radius::Length(value, font_size).or_else(|| value.parse::<f64>().ok());
             if let Some(offset) = offset.filter(|offset| offset.is_finite()) {
                 style.paint.svg_stroke_dash_offset = offset;
             }
@@ -516,9 +549,9 @@ fn apply(style: &mut ComputedStyle, property: &str, value: &str, viewport: (f64,
                 }
             }
         }
-        _ if source_supported_properties::IsSourceSupported(property) => {
-            panic!("CSS property {property} requires source style_resolver translation")
-        }
+        // A source migration inventory is not a runtime assertion. Declarations
+        // outside this engine's implemented property set are ignored, just as
+        // unknown declarations are; web content must not panic the style worker.
         _ => {}
     }
 }
@@ -1079,6 +1112,8 @@ pub fn ResolveCssomWithUserAgent(
                 "color",
                 "fill",
                 "stroke",
+                "stop-color",
+                "stop-opacity",
                 "stroke-width",
                 "opacity",
                 "visibility",
@@ -1410,6 +1445,7 @@ pub fn ResolveCssomWithUserAgent(
         styles.generates_box.push(generates_box);
         styles.display_contents.push(display_contents);
     }
+    svg_paint::ResolveStatic(document, &mut styles.styles);
     styles
 }
 

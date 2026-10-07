@@ -1,6 +1,7 @@
 use crate::page::{Page, PageClient, PageFrame};
+use document_image::SVGImageDecoder;
 use dom::Document;
-use image_decoder::{skia_image_decoder::SkiaImageDecoder, svg_image_decoder::SVGImageDecoder};
+use image_decoder::skia_image_decoder::SkiaImageDecoder;
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
 use layoutng_assembly::internal::layout_input::FontFace;
 use std::{cell::RefCell, io, path::PathBuf, rc::Rc};
@@ -1239,16 +1240,95 @@ impl image_decoder::image_decoder::ImageDecoder for FixtureImageDecoder {
         decode_image_fixture(input)
     }
 }
-impl image_decoder::document_image_decoder::DocumentImageDecoder for FixtureImageDecoder {
-    fn CanDecode(&self, input: &image_decoder::image_decoder::ImageDecodeInput<'_>) -> bool {
-        input.mime_type == "image/svg+xml"
-    }
-    fn Decode(
+struct StaticFixtureDocumentImage;
+impl image_resource::DocumentImage for StaticFixtureDocumentImage {
+    fn apply_mutation(
         &mut self,
-        input: &image_decoder::image_decoder::ImageDecodeInput<'_>,
-        _: &layoutng_assembly::internal::layout_input::ConstraintSpace,
-    ) -> io::Result<image_decoder::image_decoder::DecodedImage> {
-        decode_image_fixture(input)
+        _: image_resource::DocumentImageMutation,
+    ) -> io::Result<Vec<image_resource::DocumentImageEffect>> {
+        Ok(Vec::new())
+    }
+    fn has_active_animation(&self) -> bool {
+        false
+    }
+}
+impl image_resource::DocumentImageDecoder for FixtureImageDecoder {
+    fn can_decode(&self, _: &[u8], mime_type: &str) -> bool {
+        mime_type == "image/svg+xml"
+    }
+    fn create(
+        &mut self,
+        resource_id: image_resource::ImageId,
+        bytes: std::sync::Arc<[u8]>,
+        mime_type: &str,
+        container: &image_resource::ContainerKey,
+    ) -> io::Result<image_resource::CreatedDocumentImage> {
+        let decoded = decode_image_fixture(&image_decoder::image_decoder::ImageDecodeInput {
+            bytes: &bytes,
+            mime_type,
+        })?;
+        let expected = (decoded.width as usize)
+            .checked_mul(decoded.height as usize)
+            .and_then(|pixels| pixels.checked_mul(4));
+        if decoded.width == 0 || decoded.height == 0 || expected != Some(decoded.rgba8.len()) {
+            return Err(io::Error::other("invalid fixture document image"));
+        }
+        let size = image_resource::IntrinsicSize {
+            width: decoded.width,
+            height: decoded.height,
+        };
+        let nested_image_id = 1;
+        let artifact = paint::paint_engine::PaintArtifact {
+            items: vec![paint::paint_engine::DisplayItem {
+                r#type: paint::paint_engine::DisplayItemType::kDrawImageRect,
+                rect: layoutng_assembly::internal::layout_input::PaintRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: decoded.width as f64,
+                    height: decoded.height as f64,
+                },
+                source_rect: layoutng_assembly::internal::layout_input::PaintRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: decoded.width as f64,
+                    height: decoded.height as f64,
+                },
+                resource_id: nested_image_id,
+                ..Default::default()
+            }]
+            .into(),
+            resources: Some(std::sync::Arc::new(
+                layoutng_assembly::fragment_tree::PaintResources {
+                    images: vec![layoutng_assembly::internal::layout_input::PaintImage {
+                        id: nested_image_id,
+                        revision: 1,
+                        width: decoded.width,
+                        height: decoded.height,
+                        content: image_resource::PaintImageContent::Bitmap(decoded.rgba8.into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        let record = std::sync::Arc::new(paint::paint_engine::DocumentPaintArtifactRecord {
+            artifact: std::sync::Arc::new(artifact),
+            intrinsic_size: size,
+            record_size: size,
+            container_key: container.clone(),
+        });
+        Ok(image_resource::CreatedDocumentImage {
+            initial_frame: std::sync::Arc::new(image_resource::DocumentImageFrame {
+                resource_id,
+                revision: 1,
+                intrinsic_size: size,
+                container_key: container.clone(),
+                record,
+            }),
+            image: Box::new(StaticFixtureDocumentImage),
+            effects: Vec::new(),
+        })
     }
 }
 

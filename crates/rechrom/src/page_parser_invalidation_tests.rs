@@ -56,9 +56,9 @@ fn parsing_after_a_style_read_invalidates_page_styles_before_the_next_script() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(
-                image_decoder::svg_image_decoder::SVGImageDecoder::new(&assembly),
-            )),
+            Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+                &assembly,
+            ))),
             crate::CreateBrowserConstraints(160, 96),
             Some(crate::page::ScriptEnvironment {
                 runtime: Box::new(QuickJsJavaScriptRuntime::new()),

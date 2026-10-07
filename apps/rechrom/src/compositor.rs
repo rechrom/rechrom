@@ -5,7 +5,9 @@
 //! channels, executors, or the final native display surface.
 use crate::{display, engine::Viewport};
 use interaction::input_event::{ScrollGranularity, WheelEvent, WheelPhase};
-use layer_tile::{CompositorScrollOffset, FrameConfig, FramePlan, LayerTileEngine};
+use layer_tile::{
+    CompositorScrollOffset, FrameConfig, FramePlan, LayerTileEngine, UnsupportedReason,
+};
 use paint::{
     paint_engine::{PaintArtifact, PaintRect},
     paint_property_tree::TransformPaintPropertyNode,
@@ -390,6 +392,20 @@ impl Compositor {
             Ok(planned) => planned,
             Err(error) => {
                 self.spare_bundle = Some(ready.bundle);
+                // Resource pressure while building a pending tree must not
+                // tear down the active tree. cc keeps presenting the active
+                // tree when required pending tiles cannot be prepared; a
+                // later scroll/page commit supplies a fresh raster target.
+                // Preserve a startup failure, where no active pixels exist,
+                // so real initialization errors remain visible.
+                if error.kind() == io::ErrorKind::OutOfMemory && self.planned.is_some() {
+                    browser_tracing::instant(
+                        "raster",
+                        "PendingTreeRasterRejected",
+                        &[("kept_active_tree", 1.0)],
+                    );
+                    return Ok(());
+                }
                 return Err(error);
             }
         };
@@ -549,6 +565,12 @@ pub(crate) fn PlanAndRaster(
         .GetFramePlan()
         .expect("toolbar plan")
         .clone();
+    if toolbar.unsupported == Some(UnsupportedReason::TileBudgetExceeded) {
+        return Err(io::Error::new(
+            io::ErrorKind::OutOfMemory,
+            "toolbar tile budget exceeded",
+        ));
+    }
     let source_root_scroll = snapshot
         .content
         .as_ref()
@@ -594,6 +616,15 @@ pub(crate) fn PlanAndRaster(
     } else {
         None
     };
+    if content
+        .as_ref()
+        .is_some_and(|plan| plan.unsupported == Some(UnsupportedReason::TileBudgetExceeded))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::OutOfMemory,
+            "content tile budget exceeded",
+        ));
+    }
     bundle.toolbar_renderer.prepare(
         &toolbar,
         snapshot.viewport.width,

@@ -2,6 +2,7 @@
 use cssom::{CSSDeclaration, CSSStyleSheet};
 use dom::{dom_mutation::DOMMutation, UserInteractionState};
 use layoutng_assembly::internal::layout_input::{FontFace, Offset, PaintImage, Size};
+use std::sync::Arc;
 
 // cpp: page_mutation/page_mutation.h:17-22
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -17,6 +18,18 @@ pub enum ResourceKind {
 pub struct ImageResourceReady {
     pub source: String,
     pub image: PaintImage,
+}
+#[derive(Clone)]
+pub struct DocumentImageFrameChanged {
+    pub source: String,
+    pub frame: Arc<image_resource::DocumentImageFrame>,
+}
+#[derive(Clone)]
+pub struct DocumentImageIntrinsicSizeChanged {
+    pub source: String,
+    pub resource_id: image_resource::ImageId,
+    pub revision: u64,
+    pub size: image_resource::IntrinsicSize,
 }
 // cpp: page_mutation/page_mutation.h:32-34
 #[derive(Clone)]
@@ -34,6 +47,8 @@ pub struct ResourceLoadFailed {
 #[derive(Clone)]
 pub enum ResourceMutation {
     ImageResourceReady(ImageResourceReady),
+    DocumentImageFrameChanged(DocumentImageFrameChanged),
+    DocumentImageIntrinsicSizeChanged(DocumentImageIntrinsicSizeChanged),
     FontResourceReady(FontResourceReady),
     ResourceLoadFailed(ResourceLoadFailed),
 }

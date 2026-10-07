@@ -10,6 +10,7 @@ html = { path = "../html" }
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }
 image_decoder = { path = "../image_decoder" }
+image_resource = { path = "../image_resource" }
 layoutng_assembly = { path = "../layoutng_assembly" }
 page_mutation = { path = "../page_mutation" }
 web_font = { path = "../web_font" }

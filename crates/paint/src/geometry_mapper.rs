@@ -86,6 +86,32 @@ pub fn InvertTransform(transform: &TransformMatrix) -> Option<TransformMatrix> {
     Some(inverse)
 }
 
+// Map a point through one paint-property transform. Hit testing uses the
+// inverse direction while painting and DOM geometry use the forward direction.
+// Keeping the homogeneous-coordinate policy here prevents the consumers from
+// drifting on perspective and singular transforms.
+pub fn MapPointWithTransform(
+    point: Offset,
+    transform: &TransformMatrix,
+    inverse: bool,
+) -> Option<Offset> {
+    let transform = if inverse {
+        InvertTransform(transform)?
+    } else {
+        *transform
+    };
+    let m = transform.values;
+    let w = m[3] * point.x + m[7] * point.y + m[15];
+    if !w.is_finite() || w <= 0.0 || w.abs() < 1e-12 {
+        return None;
+    }
+    let mapped = Offset {
+        x: (m[0] * point.x + m[4] * point.y + m[12]) / w,
+        y: (m[1] * point.x + m[5] * point.y + m[13]) / w,
+    };
+    (mapped.x.is_finite() && mapped.y.is_finite()).then_some(mapped)
+}
+
 // cpp: paint/geometry_mapper.h:80-127
 pub fn MapRectWithTransforms(
     rect: PaintRect,

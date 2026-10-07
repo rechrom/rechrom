@@ -37,6 +37,7 @@ pub mod paint_engine;
 pub(crate) mod paint_info;
 #[cfg(feature = "translation_in_progress")]
 pub(crate) mod paint_layer_painter;
+pub mod paint_order;
 pub mod paint_property_tree;
 pub(crate) mod paint_shader_resolver;
 pub(crate) mod pre_paint_tree_walk;

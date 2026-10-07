@@ -42,6 +42,7 @@ pub struct LayerComposition {
 }
 struct PreparedRecord {
     commands: Vec<DrawCommand>,
+    source_items: Vec<Option<DisplayItem>>,
     draw_support: Vec<Option<PaintRect>>,
     raster_guard: u32,
     shadow_regions: Vec<PaintRect>,
@@ -101,6 +102,7 @@ pub(crate) struct PreparedLayer {
 }
 pub struct LayerReplay<'a> {
     resources: ResourceContext<'a>,
+    documents: BTreeMap<u64, Arc<dyn image_resource::DocumentPaintRecord>>,
     layers: BTreeMap<LayerId, Arc<PreparedLayer>>,
     scratch: Vec<u8>,
 }
@@ -156,7 +158,126 @@ fn content_device_rect(
         1.0,
     )
 }
+
+pub(crate) fn document_records(
+    artifact: &paint::paint_engine::PaintArtifact,
+) -> BTreeMap<u64, Arc<dyn image_resource::DocumentPaintRecord>> {
+    artifact
+        .resources
+        .iter()
+        .flat_map(|resources| &resources.images)
+        .filter_map(|image| match &image.content {
+            image_resource::PaintImageContent::Document(record) => Some((image.id, record.clone())),
+            image_resource::PaintImageContent::Bitmap(_) => None,
+        })
+        .collect()
+}
+
+fn replay_document_image(
+    canvas: &mut skia::cpu::canvas::Canvas,
+    image: &DisplayItem,
+    record: Option<&paint::paint_engine::DocumentPaintArtifactRecord>,
+    depth: usize,
+) -> bool {
+    let Some(record) = record else { return false };
+    if depth >= 8 || image.rect.width <= 0.0 || image.rect.height <= 0.0 {
+        return false;
+    }
+    let mut source = image.source_rect;
+    if source.width <= 0.0 || source.height <= 0.0 {
+        source = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: record.record_size.width as f64,
+            height: record.record_size.height as f64,
+        };
+    } else if record.intrinsic_size.width != 0 && record.intrinsic_size.height != 0 {
+        // Outer DrawImage source coordinates are expressed in the resource's
+        // intrinsic space. The nested PaintRecord is container-sized, just as
+        // SVGImageForContainer records into its concrete container viewport.
+        let scale_x = record.record_size.width as f64 / record.intrinsic_size.width as f64;
+        let scale_y = record.record_size.height as f64 / record.intrinsic_size.height as f64;
+        source.x *= scale_x;
+        source.y *= scale_y;
+        source.width *= scale_x;
+        source.height *= scale_y;
+    }
+    if source.width <= 0.0 || source.height <= 0.0 {
+        return false;
+    }
+    let empty_resources = ResourceContext::default();
+    let save_kind = if image.opacity < 1.0 {
+        Kind::kSaveLayerAlpha
+    } else {
+        Kind::kSave
+    };
+    canvas.replay_item(
+        &DisplayItem {
+            r#type: save_kind,
+            rect: image.rect,
+            opacity: image.opacity,
+            ..Default::default()
+        }
+        .to_skia(),
+        &empty_resources,
+    );
+    canvas.replay_item(
+        &DisplayItem {
+            r#type: Kind::kClipRect,
+            rect: image.rect,
+            ..Default::default()
+        }
+        .to_skia(),
+        &empty_resources,
+    );
+    let sx = image.rect.width / source.width;
+    let sy = image.rect.height / source.height;
+    let mut transform = DisplayItem {
+        r#type: Kind::kConcat,
+        ..Default::default()
+    };
+    transform.transform.values[0] = sx;
+    transform.transform.values[5] = sy;
+    transform.transform.values[12] = image.rect.x - source.x * sx;
+    transform.transform.values[13] = image.rect.y - source.y * sy;
+    canvas.replay_item(&transform.to_skia(), &empty_resources);
+
+    let nested_resources = resources(&record.artifact);
+    let nested_documents = document_records(&record.artifact);
+    for nested in &*record.artifact.items {
+        let nested_record = nested_documents
+            .get(&nested.resource_id)
+            .and_then(|record| {
+                record
+                    .as_any()
+                    .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
+            });
+        if nested.r#type != Kind::kDrawImageRect
+            || !replay_document_image(canvas, nested, nested_record, depth + 1)
+        {
+            canvas.replay_item(&nested.to_skia(), &nested_resources);
+        }
+    }
+    canvas.replay_item(
+        &DisplayItem {
+            r#type: Kind::kRestore,
+            ..Default::default()
+        }
+        .to_skia(),
+        &empty_resources,
+    );
+    true
+}
 impl<'a> LayerReplay<'a> {
+    fn document_record(
+        &self,
+        id: u64,
+    ) -> Option<&paint::paint_engine::DocumentPaintArtifactRecord> {
+        self.documents
+            .get(&id)?
+            .as_any()
+            .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
+    }
     /// Borrow the exact compiled PaintRecord commands in this raster task's
     /// playback order. Missing layer/record ownership must reject analysis;
     /// callers must not filter errors into an apparently empty recording.
@@ -201,17 +322,20 @@ impl<'a> LayerReplay<'a> {
     }
     pub(crate) fn for_worker(
         resources: ResourceContext<'a>,
+        documents: BTreeMap<u64, Arc<dyn image_resource::DocumentPaintRecord>>,
         layers: BTreeMap<LayerId, Arc<PreparedLayer>>,
         scratch: Vec<u8>,
     ) -> Self {
         Self {
             resources,
+            documents,
             layers,
             scratch,
         }
     }
     pub fn new(plan: &'a FramePlan) -> Result<Self, ReplayUnsupported> {
         let list = plan.GetPaintArtifact();
+        let documents = document_records(list);
         let content = plan.GetRasterRecords();
         if plan.unsupported.is_some() {
             return Err(ReplayUnsupported("unsupported-layer-plan"));
@@ -305,6 +429,11 @@ impl<'a> LayerReplay<'a> {
                 } else {
                     Vec::new()
                 };
+                let mut source_items = if compile {
+                    Vec::with_capacity(source.items.len() + 2)
+                } else {
+                    Vec::new()
+                };
                 if compile {
                     commands.push(
                         DisplayItem {
@@ -314,6 +443,7 @@ impl<'a> LayerReplay<'a> {
                         .to_skia(),
                     );
                     draw_support.push(None);
+                    source_items.push(None);
                 }
                 for item in &*source.items {
                     match item.r#type {
@@ -369,8 +499,9 @@ impl<'a> LayerReplay<'a> {
                                         .and_then(|r| {
                                             r.images.iter().find(|r| r.id == item.resource_id)
                                         })
-                                        .is_some_and(|image| {
-                                            image.rgba8.chunks_exact(4).all(|pixel| pixel[3] == 255)
+                                        .and_then(|image| image.BitmapPixels())
+                                        .is_some_and(|pixels| {
+                                            pixels.chunks_exact(4).all(|pixel| pixel[3] == 255)
                                         })
                                 });
                             if direct_opaque_rect || direct_opaque_image {
@@ -434,6 +565,7 @@ impl<'a> LayerReplay<'a> {
                             }
                         }
                         commands.push(command);
+                        source_items.push(Some(item.clone()));
                     }
                 }
                 if !saved.is_empty() {
@@ -448,10 +580,12 @@ impl<'a> LayerReplay<'a> {
                         .to_skia(),
                     );
                     draw_support.push(None);
+                    source_items.push(None);
                     records.insert(
                         index,
                         PreparedRecord {
                             commands,
+                            source_items,
                             draw_support,
                             raster_guard,
                             shadow_regions,
@@ -495,6 +629,7 @@ impl<'a> LayerReplay<'a> {
         }
         Ok(Self {
             resources,
+            documents,
             layers,
             scratch: Vec::new(),
         })
@@ -643,13 +778,29 @@ impl<'a> LayerReplay<'a> {
                 .records
                 .get(&record)
                 .ok_or_else(|| bad("task record does not belong to layer"))?;
-            for (command, support) in record.commands.iter().zip(&record.draw_support) {
+            for ((command, support), source_item) in record
+                .commands
+                .iter()
+                .zip(&record.draw_support)
+                .zip(&record.source_items)
+            {
                 if support.is_some_and(|rect| intersection(rect, target_rect).is_empty()) {
                     culled_draws += 1;
                     continue;
                 }
                 let started = profile.map(|_| std::time::Instant::now());
-                canvas.replay_item(command, &self.resources);
+                let replayed_document = source_item.as_ref().is_some_and(|item| {
+                    item.r#type == Kind::kDrawImageRect
+                        && replay_document_image(
+                            &mut canvas,
+                            item,
+                            self.document_record(item.resource_id),
+                            0,
+                        )
+                });
+                if !replayed_document {
+                    canvas.replay_item(command, &self.resources);
+                }
                 if let Some(started) = started {
                     let cost = &mut costs[command.r#type as usize];
                     cost.0 = Some(command.r#type);

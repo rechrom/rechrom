@@ -1490,8 +1490,8 @@ impl StyleEngine {
             commit.set("resolved_nodes", stats.resolved_nodes as f64);
             commit.set("changed_nodes", stats.changed_nodes as f64);
         }
-        // Commit dirty state only after successful calculation. A panicking
-        // declaration leaves changes queued so the next update can retry.
+        super::svg_paint::ResolveDocument(document);
+        // Commit dirty state only after successful calculation.
         let state = document.StyleStateMut();
         state.environment = Some(key);
         state.all_dirty = false;

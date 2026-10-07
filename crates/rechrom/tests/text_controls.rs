@@ -1,6 +1,7 @@
 #[path = "../src/native_test_thread.rs"]
 mod native_test_thread;
-use image_decoder::{skia_image_decoder::SkiaImageDecoder, svg_image_decoder::SVGImageDecoder};
+use document_image::SVGImageDecoder;
+use image_decoder::skia_image_decoder::SkiaImageDecoder;
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
 use rechrom::page::Page;
 use std::{cell::RefCell, io, rc::Rc};

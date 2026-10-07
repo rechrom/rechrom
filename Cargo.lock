@@ -614,6 +614,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "document_image"
+version = "0.0.1"
+dependencies = [
+ "cssom",
+ "dom",
+ "html",
+ "image_resource",
+ "layoutng_assembly",
+ "paint",
+]
+
+[[package]]
 name = "document_loader"
 version = "0.0.1"
 dependencies = [
@@ -622,6 +634,7 @@ dependencies = [
  "font_engine",
  "html",
  "image_decoder",
+ "image_resource",
  "javascript",
  "layoutng_assembly",
  "layoutng_foundation",
@@ -639,6 +652,7 @@ dependencies = [
  "css_parser",
  "cssom",
  "font_engine",
+ "html",
  "layoutng_assembly",
  "layoutng_block",
  "layoutng_foundation",
@@ -1407,15 +1421,13 @@ dependencies = [
 name = "image_decoder"
 version = "0.0.1"
 dependencies = [
- "cssom",
- "dom",
- "html",
  "image",
- "layoutng_assembly",
- "paint",
- "renderer",
  "zune-jpeg",
 ]
+
+[[package]]
+name = "image_resource"
+version = "0.0.1"
 
 [[package]]
 name = "indexmap"
@@ -1576,6 +1588,7 @@ dependencies = [
  "cssom",
  "font_engine",
  "icu_bidi",
+ "image_resource",
  "layoutng_custom",
  "layoutng_foundation",
  "layoutng_geometry",
@@ -2315,6 +2328,7 @@ version = "0.0.1"
 dependencies = [
  "cssom",
  "dom",
+ "image_resource",
  "layoutng_assembly",
 ]
 
@@ -2323,6 +2337,7 @@ name = "paint"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "image_resource",
  "layoutng_assembly",
  "layoutng_foundation",
  "layoutng_style",
@@ -2661,11 +2676,13 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "cssom",
+ "document_image",
  "document_loader",
  "dom",
  "font_engine",
  "html",
  "image_decoder",
+ "image_resource",
  "interaction",
  "javascript",
  "layer_tile",
@@ -2699,8 +2716,10 @@ dependencies = [
  "browser_tracing",
  "cc",
  "devtools",
+ "document_image",
  "dom",
  "image_decoder",
+ "image_resource",
  "interaction",
  "javascript",
  "layer_tile",
@@ -2711,6 +2730,7 @@ dependencies = [
  "raw-window-handle",
  "rechrom",
  "renderer",
+ "serde_json",
  "skia",
  "softbuffer",
  "url",
@@ -2752,6 +2772,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "font_engine",
+ "image_resource",
  "layer_tile",
  "layoutng_assembly",
  "paint",

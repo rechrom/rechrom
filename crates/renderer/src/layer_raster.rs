@@ -195,10 +195,7 @@ impl Scope {
     }
 }
 
-fn effect_blur_sigmas(
-    scope: &Scope,
-    scale: f64,
-) -> io::Result<Vec<(f32, f32)>> {
+fn effect_blur_sigmas(scope: &Scope, scale: f64) -> io::Result<Vec<(f32, f32)>> {
     let Scope::Effect(effect) = scope else {
         return Ok(Vec::new());
     };
@@ -217,10 +214,7 @@ fn effect_blur_sigmas(
                 || !filter.amount.is_finite()
                 || filter.amount < 0.0
             {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "filter-effect",
-                ));
+                return Err(io::Error::new(io::ErrorKind::Unsupported, "filter-effect"));
             }
             Ok(((filter.amount * sx) as f32, (filter.amount * sy) as f32))
         })
@@ -248,14 +242,19 @@ fn expanded_for_blur(
     bounds.bottom = bounds.bottom.saturating_add(y).min(height as usize);
     Some(bounds)
 }
-fn needs_clip_mask(clip: &ClipPaintPropertyNode, _scale: f64) -> bool {
+fn needs_clip_mask(clip: &ClipPaintPropertyNode, scale: f64) -> bool {
     // PropertyTreeManager::SyntheticEffectType does not create an effect for
     // an axis-aligned plain rect, even at a fractional coordinate. Retained
     // compositor rects use LayerComposition's enclosing integer scissor
     // (draw_property_utils / SoftwareRenderer::SetClipRect). Clips removed
     // into a layer's PaintRecord remain AA, as in SwitchToClip/StartClip.
-    // LayerReplay has already rejected non-translation transforms.
-    clip.radii != PaintCornerRadii::default() || !clip.clip_path.is_empty()
+    // An affine transform turns a plain rect into a non-axis-aligned shape.
+    // Chromium represents that as a synthesized clip effect, so preserve its
+    // exact transformed edges in the same A8 coverage path as rrects/paths.
+    let affine = layer_tile::compositor_transform(&clip.local_transform_space, scale)
+        .map(|matrix| matrix.values[1] != 0.0 || matrix.values[4] != 0.0)
+        .unwrap_or(true);
+    affine || clip.radii != PaintCornerRadii::default() || !clip.clip_path.is_empty()
 }
 fn append_clip_scopes(
     leaf: &Arc<ClipPaintPropertyNode>,

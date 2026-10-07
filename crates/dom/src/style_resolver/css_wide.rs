@@ -690,10 +690,17 @@ pub(crate) fn CopyCSSProperty(
         to_paint.svg_fill = from_paint.svg_fill.clone();
         to_paint.svg_fill_current_color = from_paint.svg_fill_current_color.clone();
         to_paint.svg_fill_server = from_paint.svg_fill_server.clone();
+        to_paint.svg_fill_reference = from_paint.svg_fill_reference.clone();
     } else if property == "stroke" {
         to_paint.svg_stroke = from_paint.svg_stroke.clone();
         to_paint.svg_stroke_current_color = from_paint.svg_stroke_current_color.clone();
         to_paint.svg_stroke_server = from_paint.svg_stroke_server.clone();
+        to_paint.svg_stroke_reference = from_paint.svg_stroke_reference.clone();
+    } else if property == "stop-color" {
+        to_paint.svg_stop_color = from_paint.svg_stop_color;
+        to_paint.svg_stop_current_color = from_paint.svg_stop_current_color;
+    } else if property == "stop-opacity" {
+        to_paint.svg_stop_opacity = from_paint.svg_stop_opacity;
     } else if property == "stroke-width" {
         to_paint.svg_stroke_width = from_paint.svg_stroke_width.clone();
     } else if property == "stroke-dasharray" {

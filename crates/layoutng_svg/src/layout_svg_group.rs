@@ -63,10 +63,7 @@ impl LayoutSVGGroup {
         // the three common concrete classes rejects valid SVG image/resource
         // objects used by ordinary inline icons.
         let child = unsafe { &*child };
-        child.IsSVG()
-            && !child.IsSVGInline()
-            && !child.IsSVGInlineText()
-            && !child.IsSVGRoot()
+        child.IsSVG() && !child.IsSVGInline() && !child.IsSVGInlineText() && !child.IsSVGRoot()
     }
 
     // cpp: layoutng_svg/layout_svg_group.cc:19-24

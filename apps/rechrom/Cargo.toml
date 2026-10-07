@@ -31,11 +31,14 @@ interaction = { path = "../../crates/interaction" }
 page_mutation = { path = "../../crates/page_mutation" }
 dom = { path = "../../crates/dom" }
 image_decoder = { path = "../../crates/image_decoder" }
+document_image = { path = "../../crates/document_image" }
+image_resource = { path = "../../crates/image_resource" }
 url_loader = { path = "../../crates/url_loader" }
 xhr_transport = { path = "../../crates/xhr_transport" }
 javascript = { path = "../../crates/javascript" }
 layoutng_assembly = { path = "../../crates/layoutng_assembly" }
 url = "2.5"
+serde_json = "1"
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 softbuffer = { version = "0.4.8", features = ["native-iosurface"] }
 raw-window-handle = "0.6.2"

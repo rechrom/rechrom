@@ -27,11 +27,28 @@ pub struct CSSFontFaceRule {
     pub declarations: Vec<CSSDeclaration>,
 }
 
+/// One selector block inside an author `@keyframes` rule.  Keep the selector
+/// text (rather than prematurely converting it to a single offset): CSS permits
+/// comma-separated offsets and the `from`/`to` aliases.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CSSKeyframeRule {
+    pub key_text: String,
+    pub declarations: Vec<CSSDeclaration>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CSSKeyframesRule {
+    pub name: String,
+    pub keyframes: Vec<CSSKeyframeRule>,
+    pub media_conditions: Vec<String>,
+}
+
 // cpp: cssom/css_style_sheet.h:33-41
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CSSStyleSheet {
     pub rules: Vec<CSSStyleRule>,
     pub font_faces: Vec<CSSFontFaceRule>,
+    pub keyframes: Vec<CSSKeyframesRule>,
     pub layer_order: Vec<String>,
     pub owner_node_id: u64,
 }
@@ -93,6 +110,76 @@ fn AppendNestedSheet(
         destination.rules.push(rule);
     }
     destination.font_faces.extend(nested.font_faces);
+    for mut keyframes in nested.keyframes {
+        if let Some(condition) = media_condition {
+            keyframes.media_conditions.insert(0, condition.to_owned());
+        }
+        destination.keyframes.push(keyframes);
+    }
+}
+
+fn ParseKeyframes(name: String, body: &str) -> Option<CSSKeyframesRule> {
+    let source = BlinkString::FromUtf8(body.as_bytes());
+    let mut tokenizer = CSSTokenizer::new(&source, 0);
+    let mut keyframes = Vec::new();
+    loop {
+        let mut token = tokenizer.TokenizeSingleWithComments();
+        while matches!(
+            token.GetType(),
+            CSSParserTokenType::kWhitespaceToken | CSSParserTokenType::kSemicolonToken
+        ) {
+            token = tokenizer.TokenizeSingleWithComments();
+        }
+        if token.IsEOF() {
+            break;
+        }
+        let selector_start = tokenizer.PreviousOffset();
+        let mut selector_end = selector_start;
+        while !token.IsEOF() {
+            if token.GetType() == CSSParserTokenType::kLeftBraceToken {
+                selector_end = tokenizer.PreviousOffset();
+                break;
+            }
+            token = tokenizer.TokenizeSingleWithComments();
+        }
+        if token.IsEOF() {
+            break;
+        }
+        let body_start = tokenizer.Offset();
+        let mut body_end = body_start;
+        let mut depth = 1;
+        while depth > 0 {
+            let token = tokenizer.TokenizeSingleWithComments();
+            if token.IsEOF() {
+                body_end = tokenizer.PreviousOffset();
+                break;
+            }
+            match token.GetBlockType() {
+                BlockType::kBlockStart => depth += 1,
+                BlockType::kBlockEnd => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = tokenizer.PreviousOffset();
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let key_text = Trim(&Range(&tokenizer, selector_start, selector_end));
+        let declarations = ParseDeclarations(&Range(&tokenizer, body_start, body_end));
+        if !key_text.is_empty() && !declarations.is_empty() {
+            keyframes.push(CSSKeyframeRule {
+                key_text,
+                declarations,
+            });
+        }
+    }
+    (!name.is_empty() && !keyframes.is_empty()).then_some(CSSKeyframesRule {
+        name,
+        keyframes,
+        media_conditions: Vec::new(),
+    })
 }
 
 // cpp: cssom/css_style_sheet.cc:80-113
@@ -319,6 +406,11 @@ pub fn ParseCSS(input: &str) -> CSSStyleSheet {
                 let declarations = ParseDeclarations(&body);
                 if !declarations.is_empty() {
                     sheet.font_faces.push(CSSFontFaceRule { declarations });
+                }
+            } else if matches!(at_name.as_str(), "keyframes" | "-webkit-keyframes") {
+                let name = Trim(&Range(&tokenizer, prelude_start, prelude_end));
+                if let Some(rule) = ParseKeyframes(name, &body) {
+                    sheet.keyframes.push(rule);
                 }
             }
             continue;

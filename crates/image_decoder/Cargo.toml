@@ -5,13 +5,4 @@ edition = "2021"
 
 [dependencies]
 zune-jpeg = { version = "0.5.15", features = ["source_compat"] }
-cssom = { path = "../cssom" }
-dom = { path = "../dom" }
-html = { path = "../html" }
 image = { version = "0.25.10", default-features = false, features = ["bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
-layoutng_assembly = { path = "../layoutng_assembly" }
-paint = { path = "../paint", optional = true }
-renderer = { path = "../renderer", optional = true }
-
-[features]
-source_document_images = ["dep:paint", "paint/translation_in_progress", "dep:renderer", "renderer/pure_replay"]

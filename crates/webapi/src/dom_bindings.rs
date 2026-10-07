@@ -7,13 +7,13 @@ use std::rc::Rc;
 use dom::dom_mutation::{DOMMutation, DOMMutationEmitter, DOMMutationType};
 use dom::persistent_document::{DOMNamespace, DOMNodeType};
 use dom::{Document, DOM};
-use layoutng_assembly::internal::layout_input::PaintPathVerb;
 use javascript::javascript_runtime::{
     HostCall, HostContinuation, HostMethodRef, HostObjectId, HostObjectRef, HostOperation,
     HostResult, HostSymbol, HostValue, JavaScriptExceptionKind, JavaScriptFunction,
     JavaScriptHostBindings, JavaScriptHostRuntime, JavaScriptNull, JavaScriptRealm,
     JavaScriptValue, WeakJavaScriptRealm,
 };
+use layoutng_assembly::internal::layout_input::PaintPathVerb;
 
 #[path = "dom_services.rs"]
 mod services;
@@ -968,7 +968,9 @@ impl DOMJavaScriptBindings {
                     && node.Namespace() == DOMNamespace::kSVG
                     && node.Name() == "path" =>
             {
-                let Some(data) = node.FindAttribute("d").map(|attribute| attribute.value.as_str())
+                let Some(data) = node
+                    .FindAttribute("d")
+                    .map(|attribute| attribute.value.as_str())
                 else {
                     return Self::value(HostValue::Number(0.0));
                 };
@@ -978,14 +980,12 @@ impl DOMJavaScriptBindings {
                 let mut path = skia::PathBuilder::new();
                 for command in parsed.commands {
                     match command.verb {
-                        PaintPathVerb::kMoveTo => path.move_to(
-                            command.point.x as f32,
-                            command.point.y as f32,
-                        ),
-                        PaintPathVerb::kLineTo => path.line_to(
-                            command.point.x as f32,
-                            command.point.y as f32,
-                        ),
+                        PaintPathVerb::kMoveTo => {
+                            path.move_to(command.point.x as f32, command.point.y as f32)
+                        }
+                        PaintPathVerb::kLineTo => {
+                            path.line_to(command.point.x as f32, command.point.y as f32)
+                        }
                         PaintPathVerb::kQuadraticTo => path.quad_to(
                             command.control1.x as f32,
                             command.control1.y as f32,

@@ -8,7 +8,10 @@ use crate::{
     text_editor::{SyntheticEventDispatcher, TextEditor},
 };
 use dom::{persistent_document::DOMNodeType, Document, UserInteractionState};
-use layoutng_assembly::{fragment_tree::FragmentNode, internal::layout_input::Offset};
+use layoutng_assembly::{
+    fragment_tree::FragmentNode,
+    internal::layout_input::{Display, Offset},
+};
 use page_mutation::{InteractionStateMutation, PageMutation, PageMutationEmitter};
 use std::{
     cell::{Cell, RefCell},
@@ -29,23 +32,38 @@ fn LocalPoint(fragment: &FragmentNode, point: Offset, parent: Offset) -> Option<
         y: parent.y + fragment.offset.y,
     };
     let mut point = point;
-    if let Some(transform) = &fragment.paint.style.transform {
+    // Match ResolveFragmentGeometry's local paint-property order. Only the
+    // paint-state owner contributes these transforms; text/line fragments can
+    // borrow its style without establishing another transform node.
+    if fragment.paint.establishes_paint_state
+        && fragment.paint.has_source
+        && fragment.paint.position == layoutng_assembly::internal::layout_input::Position::kSticky
+    {
+        point.x -= fragment.paint.sticky_offset.x;
+        point.y -= fragment.paint.sticky_offset.y;
+    }
+    if fragment.paint.establishes_paint_state
+        && fragment.paint.has_source
+        && fragment.paint.style.transform.is_some()
+    {
+        let transform = fragment.paint.style.transform.as_ref().unwrap();
         let matrix = paint::geometry_mapper::ResolveTransformAroundOrigin(
             transform,
             absolute,
             fragment.size,
             fragment.paint.style.transform_origin.as_ref(),
         );
-        let inverse = paint::geometry_mapper::InvertTransform(&matrix)?;
-        let m = inverse.values;
-        let w = m[3] * point.x + m[7] * point.y + m[15];
-        if w == 0.0 {
-            return None;
+        point = paint::geometry_mapper::MapPointWithTransform(point, &matrix, true)?;
+    }
+    if fragment.paint.establishes_paint_state {
+        if let Some(transform) = fragment
+            .paint
+            .svg_shape
+            .as_ref()
+            .and_then(|shape| shape.local_transform.as_ref())
+        {
+            point = paint::geometry_mapper::MapPointWithTransform(point, transform, true)?;
         }
-        point = Offset {
-            x: (m[0] * point.x + m[4] * point.y + m[12]) / w,
-            y: (m[1] * point.x + m[5] * point.y + m[13]) / w,
-        };
     }
     Some((point, absolute))
 }
@@ -59,12 +77,11 @@ fn ChildOrigin(fragment: &FragmentNode, absolute: Offset) -> Offset {
         absolute
     }
 }
-fn HitTest(
-    document: &Document,
+fn HitGeometry(
     fragment: &FragmentNode,
     point: Offset,
     parent: Offset,
-) -> Option<u64> {
+) -> Option<(Offset, Offset, bool)> {
     if fragment.paint.hidden {
         return None;
     }
@@ -86,8 +103,151 @@ fn HitTest(
     {
         return None;
     }
+    Some((point, absolute, inside))
+}
+
+#[derive(Clone, Copy)]
+struct HitLayer<'a> {
+    fragment: &'a FragmentNode,
+    point: Offset,
+    parent: Offset,
+    classification: paint::paint_order::PaintLayerClassification,
+}
+
+fn ChildrenAreFlexOrGridItems(fragment: &FragmentNode) -> bool {
+    fragment.paint.has_source
+        && matches!(
+            fragment.paint.display,
+            Display::kFlex | Display::kGrid | Display::kGridLanes
+        )
+}
+
+// PaintLayerPainter flattens non-stacking layers into their nearest stacking
+// context and stable-sorts the result by stacking level. Preserve the physical
+// geometry path with each candidate so hit testing can walk that order in
+// reverse without teaching interaction how paint layers are classified.
+fn CollectHitLayers<'a>(
+    fragment: &'a FragmentNode,
+    point: Offset,
+    parent: Offset,
+    root_point: Offset,
+    output: &mut Vec<HitLayer<'a>>,
+) {
+    let Some((point, absolute, _)) = HitGeometry(fragment, point, parent) else {
+        return;
+    };
+    let children_are_flex_or_grid_items = ChildrenAreFlexOrGridItems(fragment);
+    for child in &fragment.children {
+        let (child_point, child_parent) = if child.paint.fixed_to_view {
+            (root_point, Offset::default())
+        } else {
+            (point, ChildOrigin(fragment, absolute))
+        };
+        let classification = paint::paint_order::ClassifyFragmentPaintLayer(
+            child,
+            false,
+            children_are_flex_or_grid_items,
+        );
+        if classification.is_paint_layer {
+            output.push(HitLayer {
+                fragment: child,
+                point: child_point,
+                parent: child_parent,
+                classification,
+            });
+            if !classification.is_stacking_context {
+                CollectHitLayers(child, child_point, child_parent, root_point, output);
+            }
+        } else {
+            CollectHitLayers(child, child_point, child_parent, root_point, output);
+        }
+    }
+}
+
+fn HitTestNormalFlow(
+    document: &Document,
+    fragment: &FragmentNode,
+    point: Offset,
+    parent: Offset,
+    root_point: Offset,
+    include_self: bool,
+) -> Option<u64> {
+    let (point, absolute, inside) = HitGeometry(fragment, point, parent)?;
+    let children_are_flex_or_grid_items = ChildrenAreFlexOrGridItems(fragment);
     for child in fragment.children.iter().rev() {
-        if let Some(target) = HitTest(document, child, point, ChildOrigin(fragment, absolute)) {
+        if paint::paint_order::ClassifyFragmentPaintLayer(
+            child,
+            false,
+            children_are_flex_or_grid_items,
+        )
+        .is_paint_layer
+        {
+            continue;
+        }
+        let (child_point, child_parent) = if child.paint.fixed_to_view {
+            (root_point, Offset::default())
+        } else {
+            (point, ChildOrigin(fragment, absolute))
+        };
+        if let Some(target) =
+            HitTestNormalFlow(document, child, child_point, child_parent, root_point, true)
+        {
+            return Some(target);
+        }
+    }
+    (include_self
+        && inside
+        && !fragment.paint.style.pointer_events_none
+        && fragment.paint.style.visible
+        && document.FindNodeById(fragment.node_id).is_some())
+    .then_some(fragment.node_id)
+}
+
+fn HitTestPaintLayer(document: &Document, layer: &HitLayer<'_>, root_point: Offset) -> Option<u64> {
+    if layer.classification.is_stacking_context {
+        HitTestStackingContext(
+            document,
+            layer.fragment,
+            layer.point,
+            layer.parent,
+            root_point,
+        )
+    } else {
+        HitTestNormalFlow(
+            document,
+            layer.fragment,
+            layer.point,
+            layer.parent,
+            root_point,
+            true,
+        )
+    }
+}
+
+fn HitTestStackingContext(
+    document: &Document,
+    fragment: &FragmentNode,
+    point: Offset,
+    parent: Offset,
+    root_point: Offset,
+) -> Option<u64> {
+    let (_, _, inside) = HitGeometry(fragment, point, parent)?;
+    let mut layers = Vec::new();
+    CollectHitLayers(fragment, point, parent, root_point, &mut layers);
+    // Stable sorting preserves physical order for equal z-index, matching
+    // PaintLayerPainter::CollectLayerChildren. Hit test consumes it backwards.
+    layers.sort_by_key(|layer| layer.classification.stacking_level);
+    let negative_count = layers.partition_point(|layer| layer.classification.stacking_level < 0);
+    for layer in layers[negative_count..].iter().rev() {
+        if let Some(target) = HitTestPaintLayer(document, layer, root_point) {
+            return Some(target);
+        }
+    }
+    if let Some(target) = HitTestNormalFlow(document, fragment, point, parent, root_point, false) {
+        return Some(target);
+    }
+    for layer in layers[..negative_count].iter().rev() {
+        if let Some(target) = HitTestPaintLayer(document, layer, root_point) {
             return Some(target);
         }
     }
@@ -97,11 +257,22 @@ fn HitTest(
         && document.FindNodeById(fragment.node_id).is_some())
     .then_some(fragment.node_id)
 }
+
+fn HitTest(
+    document: &Document,
+    fragment: &FragmentNode,
+    point: Offset,
+    parent: Offset,
+    root_point: Offset,
+) -> Option<u64> {
+    HitTestStackingContext(document, fragment, point, parent, root_point)
+}
 fn ControlPoint(
     fragment: &FragmentNode,
     id: u64,
     point: Offset,
     parent: Offset,
+    root_point: Offset,
 ) -> Option<(&FragmentNode, Offset)> {
     let (point, absolute) = LocalPoint(fragment, point, parent)?;
     if fragment.node_id == id && fragment.paint.text_control_caret_metrics.is_some() {
@@ -114,7 +285,12 @@ fn ControlPoint(
         ));
     }
     for child in &fragment.children {
-        if let Some(found) = ControlPoint(child, id, point, ChildOrigin(fragment, absolute)) {
+        let (child_point, child_parent) = if child.paint.fixed_to_view {
+            (root_point, Offset::default())
+        } else {
+            (point, ChildOrigin(fragment, absolute))
+        };
+        if let Some(found) = ControlPoint(child, id, child_point, child_parent, root_point) {
             return Some(found);
         }
     }
@@ -360,7 +536,10 @@ impl<'a> Interaction<'a> {
     ) -> crate::cursor::Cursor {
         let owner = document.borrow();
         let doc = owner.GetDocument();
-        crate::cursor::SelectCursor(doc, HitTest(doc, fragments, point, Offset::default()))
+        crate::cursor::SelectCursor(
+            doc,
+            HitTest(doc, fragments, point, Offset::default(), point),
+        )
     }
     pub fn State(&self) -> InteractionState {
         *self.state.borrow()
@@ -427,7 +606,13 @@ impl<'a> Interaction<'a> {
         if target.is_none() {
             if let Some(point) = EventPosition(input) {
                 let owner = document.borrow();
-                target = HitTest(owner.GetDocument(), fragments, point, Offset::default())
+                target = HitTest(
+                    owner.GetDocument(),
+                    fragments,
+                    point,
+                    Offset::default(),
+                    point,
+                )
             } else {
                 target = self.State().focused_node_id
             }
@@ -585,7 +770,7 @@ impl<'a> Interaction<'a> {
         point: Offset,
         extend: bool,
     ) {
-        if let Some((owner, local)) = ControlPoint(fragments, id, point, Offset::default()) {
+        if let Some((owner, local)) = ControlPoint(fragments, id, point, Offset::default(), point) {
             let empty =
                 ReadNode(document, id, |d, _, i| d.ControlValue(i).is_empty()).unwrap_or(true);
             let offset =

@@ -567,10 +567,7 @@ fn resources_equal(
                 .iter()
                 .zip(&b.fonts)
                 .all(|(a, b)| font_engine::SharedFontBytes::ptr_eq(&a.bytes, &b.bytes) && a == b)
-            && images
-                .iter()
-                .zip(&b.images)
-                .all(|(a, b)| Arc::ptr_eq(&a.rgba8, &b.rgba8) && a == b)
+            && images.iter().zip(&b.images).all(|(a, b)| a == b)
     })
 }
 
@@ -586,9 +583,10 @@ mod tests {
             .images
             .push(layoutng::internal::layout_input::PaintImage {
                 id: 7,
+                revision: 1,
                 width: 1,
                 height: 1,
-                rgba8: Arc::new(vec![1, 2, 3, 255]),
+                content: image_resource::PaintImageContent::Bitmap(Arc::new(vec![1, 2, 3, 255])),
                 ..Default::default()
             });
         root.paint.resources = Some(Arc::new(resources));
@@ -620,7 +618,9 @@ mod tests {
         assert_eq!(next.pre_paint_revision, self_revision);
         assert_eq!(next.pre_paint_subtree_revision, subtree_revision);
         let mut resources = (**next.paint.resources.as_ref().unwrap()).clone();
-        resources.images[0].rgba8 = Arc::new(vec![1, 2, 3, 255]);
+        resources.images[0].revision = 2;
+        resources.images[0].content =
+            image_resource::PaintImageContent::Bitmap(Arc::new(vec![1, 2, 3, 255]));
         let old = next.clone();
         next.paint.resources = Some(Arc::new(resources));
         assert!(!SamePrePaintInput(&old, &next));

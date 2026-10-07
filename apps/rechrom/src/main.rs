@@ -2,6 +2,7 @@ mod app;
 mod begin_frame_source;
 mod chrome;
 mod compositor;
+mod crash_report;
 mod devtools_window;
 mod display;
 mod engine;

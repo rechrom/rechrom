@@ -1999,23 +1999,36 @@ impl Default for FontFace {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintImage {
     pub id: u64,
+    pub revision: u64,
     pub width: u32,
     pub height: u32,
     pub resolution_scale: f64,
-    // Decoded pixels are immutable after admission. Cloning image catalogs or
-    // exported paint snapshots shares this allocation while consumers borrow
-    // the same byte slice. This stores pixels, not a cached frame.
-    pub rgba8: std::sync::Arc<Vec<u8>>,
+    /// Immutable bitmap pixels or a renderer-neutral document recording.
+    /// Layout reads only identity and intrinsic dimensions.
+    pub content: image_resource::PaintImageContent,
 }
 impl Default for PaintImage {
     fn default() -> Self {
         Self {
             id: 0,
+            revision: 0,
             width: 0,
             height: 0,
             resolution_scale: 1.0,
-            rgba8: Vec::new().into(),
+            content: Default::default(),
         }
+    }
+}
+impl PaintImage {
+    pub fn BitmapPixels(&self) -> Option<&std::sync::Arc<Vec<u8>>> {
+        match &self.content {
+            image_resource::PaintImageContent::Bitmap(pixels) => Some(pixels),
+            image_resource::PaintImageContent::Document(_) => None,
+        }
+    }
+
+    pub fn IsDocumentImage(&self) -> bool {
+        matches!(self.content, image_resource::PaintImageContent::Document(_))
     }
 }
 
@@ -2120,12 +2133,13 @@ mod shared_image_pixels_tests {
             id: 1,
             width: 1,
             height: 1,
-            rgba8: bytes.into(),
+            content: image_resource::PaintImageContent::Bitmap(bytes.into()),
             ..Default::default()
         };
+        let image_pixels = image.BitmapPixels().unwrap();
         assert_eq!(
             decoded_pointer,
-            image.rgba8.as_ptr(),
+            image_pixels.as_ptr(),
             "admission moves the decoded allocation"
         );
         let mut original = ConstraintSpace::default();
@@ -2133,16 +2147,22 @@ mod shared_image_pixels_tests {
         let clone = original.clone();
         let paint_catalog = original.images.clone();
         assert!(Arc::ptr_eq(
-            &original.images[0].rgba8,
-            &clone.images[0].rgba8
+            original.images[0].BitmapPixels().unwrap(),
+            clone.images[0].BitmapPixels().unwrap()
         ));
         assert!(Arc::ptr_eq(
-            &original.images[0].rgba8,
-            &paint_catalog[0].rgba8
+            original.images[0].BitmapPixels().unwrap(),
+            paint_catalog[0].BitmapPixels().unwrap()
         ));
         drop(original);
         drop(clone);
-        assert_eq!(decoded_pointer, paint_catalog[0].rgba8.as_ptr());
-        assert_eq!(paint_catalog[0].rgba8.as_slice(), &[1, 2, 3, 255]);
+        assert_eq!(
+            decoded_pointer,
+            paint_catalog[0].BitmapPixels().unwrap().as_ptr()
+        );
+        assert_eq!(
+            paint_catalog[0].BitmapPixels().unwrap().as_slice(),
+            &[1, 2, 3, 255]
+        );
     }
 }

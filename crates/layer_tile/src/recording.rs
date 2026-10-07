@@ -7,7 +7,7 @@ use crate::RasterRecordContent;
 use layoutng_assembly::internal::layout_input::{PaintPathVerb, TransformMatrix};
 use layoutng_assembly::internal::paint_input::{
     PaintBlendMode, PaintCornerRadii, PaintFilterOperation, PaintFilterType, PaintMaskComposite,
-    PaintMaskMode, PaintShaderKind,
+    PaintMaskMode, PaintShaderKind, SvgStrokeLineJoin,
 };
 use paint::paint_engine::{
     DisplayItem, DisplayItemType as Kind, PaintArtifact, PaintChunk, PaintRect, RecordedDisplayItem,
@@ -120,7 +120,7 @@ pub struct State {
     pub clip: Option<PaintRect>,
     pub complex_clip: bool,
 }
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct RoundedClip {
     rect: PaintRect,
     radii: PaintCornerRadii,
@@ -128,6 +128,8 @@ struct RoundedClip {
     // Exact receiver CTM for a removed clip in the drawing's affine space.
     // Translation-only clips keep their established root-space representation.
     affine: Option<(f64, f64, f64, f64, f64, f64)>,
+    path: Vec<layoutng_assembly::internal::layout_input::PaintPathCommand>,
+    even_odd: bool,
 }
 fn affine_key(state: State) -> (f64, f64, f64, f64, f64, f64) {
     (
@@ -151,6 +153,8 @@ fn clip_shape(
             radii,
             antialias,
             affine: None,
+            path: Vec::new(),
+            even_odd: false,
         }
     } else {
         RoundedClip {
@@ -158,8 +162,85 @@ fn clip_shape(
             radii,
             antialias,
             affine: Some(affine_key(state)),
+            path: Vec::new(),
+            even_odd: false,
         }
     }
+}
+fn path_clip_shape(item: &DisplayItem, state: State) -> Result<RoundedClip, ReplayUnsupported> {
+    if path_control_bounds(item).is_none() {
+        return Err(ReplayUnsupported("invalid-property-clip-path"));
+    }
+    // Keep the actual commands and receiver CTM. The compositor executes the
+    // retained path once for the entire clipped group, including even-odd AA.
+    let mut shape = clip_shape(
+        PaintRect::default(),
+        PaintCornerRadii::default(),
+        item.antialias,
+        state,
+    );
+    shape.rect = PaintRect::default();
+    if shape.affine.is_none() {
+        shape.path = canonical_item(item, state.translation)?.path;
+    } else {
+        shape.path = item.path.clone();
+    }
+    shape.even_odd = item.even_odd;
+    Ok(shape)
+}
+
+fn clip_shape_item(
+    shape: &RoundedClip,
+    delta: (f64, f64),
+) -> Result<DisplayItem, ReplayUnsupported> {
+    if !shape.path.is_empty() {
+        let mut item = DisplayItem {
+            r#type: Kind::kClipPath,
+            path: shape.path.clone(),
+            even_odd: shape.even_odd,
+            antialias: shape.antialias,
+            ..Default::default()
+        };
+        if delta != (0.0, 0.0) {
+            item = canonical_item(&item, delta)?;
+        }
+        Ok(item)
+    } else {
+        Ok(DisplayItem {
+            r#type: if shape.radii.HasRadius() {
+                Kind::kClipRoundedRect
+            } else {
+                Kind::kClipRect
+            },
+            rect: shift(shape.rect, delta),
+            corner_radii: shape.radii,
+            antialias: shape.antialias,
+            ..Default::default()
+        })
+    }
+}
+
+// Flat PaintRecords may carry a real clip that is intentionally absent from
+// the chunk property state (for example an escaping positioned descendant).
+// Keep every such scope in the record. Shapes already represented by the
+// property tree remain external so their AA coverage is applied exactly once.
+fn unrepresented_flat_clips(
+    actual: &[RoundedClip],
+    external: &[RoundedClip],
+) -> Option<Vec<RoundedClip>> {
+    let mut external_index = 0;
+    let mut extra = Vec::new();
+    for shape in actual {
+        if external
+            .get(external_index)
+            .is_some_and(|external| external == shape)
+        {
+            external_index += 1;
+        } else {
+            extra.push(shape.clone());
+        }
+    }
+    (external_index == external.len()).then_some(extra)
 }
 pub(crate) fn clip_transform_state(
     space: &Arc<paint::paint_property_tree::TransformPaintPropertyNode>,
@@ -198,7 +279,19 @@ fn rounded_clips_between_in_raster_space(
         if stop.is_some_and(|stop| stop.lifecycle.same_node(&node.lifecycle)) {
             break;
         }
-        if node.radii.HasRadius()
+        if !node.clip_path.is_empty() {
+            let item = DisplayItem {
+                r#type: Kind::kClipPath,
+                path: node.clip_path.clone(),
+                even_odd: node.clip_path_even_odd,
+                antialias: true,
+                ..Default::default()
+            };
+            result.push(path_clip_shape(
+                &item,
+                clip_transform_state(&node.local_transform_space)?,
+            )?);
+        } else if node.radii.HasRadius()
             || node.rect.is_some_and(|rect| {
                 let mut delta = (0.0, 0.0);
                 let mut transform = Some(&node.local_transform_space);
@@ -622,6 +715,47 @@ fn path_control_bounds(item: &DisplayItem) -> Option<PaintRect> {
         height: bottom - top,
     })
 }
+
+// SkPath::getBounds encloses the path geometry before paint expansion.  For a
+// stroke, SkPaint::computeFastBounds then outsets that geometry by the stroke
+// radius, or by radius * miter-limit for a miter join.  Keep the same complete
+// support proof here so a small SVG outline does not become an unknown record
+// and request every tile in the viewport.
+fn stroke_path_bounds(item: &DisplayItem, state: State, scale: f64) -> Option<PaintRect> {
+    if item.blur_radius != 0.0
+        || !item.stroke_width.is_finite()
+        || item.stroke_width < 0.0
+        || !item.miter_limit.is_finite()
+        || item.miter_limit < 0.0
+        || item
+            .dash_intervals
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        return None;
+    }
+    let mut rect = path_control_bounds(item)?;
+    let radius = item.stroke_width * 0.5;
+    let local_outset = if item.svg_line_join == SvgStrokeLineJoin::kMiter {
+        radius * item.miter_limit.max(1.0)
+    } else {
+        radius
+    };
+    rect.x -= local_outset;
+    rect.y -= local_outset;
+    rect.width += 2.0 * local_outset;
+    rect.height += 2.0 * local_outset;
+    let mut rect = mapped_rect(rect, state);
+    // A zero-width Skia stroke is a device hairline.  This native-pixel
+    // fringe also contains f32 path conversion and analytic-AA coverage for
+    // wider strokes after the affine projection.
+    let fringe = 1.0 / scale;
+    rect.x -= fringe;
+    rect.y -= fringe;
+    rect.width += 2.0 * fringe;
+    rect.height += 2.0 * fringe;
+    finite_rect(rect).then_some(rect)
+}
 fn rect_record_pixel_bounds(
     raw: &[DisplayItem],
     initial: State,
@@ -748,6 +882,21 @@ pub fn record_pixel_bounds(
                         rect.height += 2.0 * border;
                         rect
                     })
+                } else if kind == Kind::kDrawGlyphRun
+                    && item.blur_radius > 0.0
+                    && finite_rect(item.rect)
+                {
+                    let mut rect = mapped_rect(item.rect, state);
+                    let sigma = item.blur_radius * 0.5;
+                    let axis_x = state.axis_scale.0.hypot(state.cross_axis.1).abs();
+                    let axis_y = state.cross_axis.0.hypot(state.axis_scale.1).abs();
+                    let border_x = ((3.0 * sigma * axis_x * scale).ceil() + 2.0) / scale;
+                    let border_y = ((3.0 * sigma * axis_y * scale).ceil() + 2.0) / scale;
+                    rect.x -= border_x;
+                    rect.y -= border_y;
+                    rect.width += 2.0 * border_x;
+                    rect.height += 2.0 * border_y;
+                    Some(rect)
                 } else if kind == Kind::kDrawPath && item.blur_radius == 0.0 {
                     path_control_bounds(item).map(|rect| {
                         // Positive-weight Beziers remain inside their control
@@ -760,6 +909,8 @@ pub fn record_pixel_bounds(
                         rect.height += 2.0 * fringe;
                         rect
                     })
+                } else if kind == Kind::kStrokePath {
+                    stroke_path_bounds(item, state, scale)
                 } else {
                     None
                 };
@@ -834,6 +985,43 @@ fn rect_record_clips_are_redundant(
     }
     stack.is_empty()
 }
+
+// PaintChunksToCcLayer::SwitchToClip makes the chunk property tree the
+// semantic clip source. The flat PaintRecord may contain the same clip after
+// f32 SkMatrix mapping, so exact f64 rectangle equality would reject a valid
+// recording when the two paths differ only below one device pixel. Compare
+// their conservative raster enclosures instead; an empty clip is equivalent
+// to any other empty clip because both produce no pixels.
+fn raster_clips_equivalent(
+    actual: Option<PaintRect>,
+    expected: Option<PaintRect>,
+    scale: f64,
+) -> bool {
+    let skia_enclosure = |rect: PaintRect| {
+        // SkRect stores the origin and size as f32 and forms the far edge in
+        // f32. Mirror that before testing the device-pixel enclosure; doing
+        // f64 (x + width) can put an otherwise identical edge on the opposite
+        // side of an integer pixel boundary.
+        let left = rect.x as f32;
+        let top = rect.y as f32;
+        let right = left + rect.width as f32;
+        let bottom = top + rect.height as f32;
+        [
+            (left as f64 * scale).floor() as i64,
+            (top as f64 * scale).floor() as i64,
+            (right as f64 * scale).ceil() as i64,
+            (bottom as f64 * scale).ceil() as i64,
+        ]
+    };
+    match (actual, expected) {
+        (None, None) => true,
+        (Some(actual), Some(expected)) if actual.is_empty() && expected.is_empty() => true,
+        (Some(actual), Some(expected)) if finite_rect(actual) && finite_rect(expected) => {
+            skia_enclosure(actual) == skia_enclosure(expected)
+        }
+        _ => false,
+    }
+}
 pub fn is_draw(kind: Kind) -> bool {
     !matches!(
         kind,
@@ -895,9 +1083,13 @@ fn update_state(
             state.clip = intersect(state.clip, mapped_rect(item.rect, *state));
             state.complex_clip = true;
         }
-        Kind::kClipOutRoundedRect | Kind::kClipPath | Kind::kClipOutRect => {
-            state.complex_clip = true
+        Kind::kClipPath => {
+            let bounds =
+                path_control_bounds(item).ok_or(ReplayUnsupported("invalid-record-clip-path"))?;
+            state.clip = intersect(state.clip, mapped_rect(bounds, *state));
+            state.complex_clip = true;
         }
+        Kind::kClipOutRoundedRect | Kind::kClipOutRect => state.complex_clip = true,
         Kind::kSaveLayer | Kind::kSaveLayerAlpha
             if external
                 && finite_rect(item.rect)
@@ -964,6 +1156,7 @@ fn canonical_item(item: &DisplayItem, delta: (f64, f64)) -> Result<DisplayItem, 
         Kind::kDrawGradientRect | Kind::kDrawTiledGradient
     );
     let box_shadow = item.r#type == Kind::kDrawBoxShadow;
+    let blurred_glyph = item.r#type == Kind::kDrawGlyphRun;
     let mask = item.r#type == Kind::kDrawMask;
     if mask {
         validate_mask(item)?;
@@ -973,7 +1166,7 @@ fn canonical_item(item: &DisplayItem, delta: (f64, f64)) -> Result<DisplayItem, 
         || item.blend_mode != PaintBlendMode::kNormal
         || !item.blur_radius.is_finite()
         || item.blur_radius < 0.0
-        || (item.blur_radius != 0.0 && !box_shadow)
+        || (item.blur_radius != 0.0 && !box_shadow && !blurred_glyph)
         || (box_shadow
             && ![item.spread, item.shadow_offset.x, item.shadow_offset.y]
                 .iter()
@@ -2342,9 +2535,7 @@ fn prepare_raster_content(
                 // pixels, so it cannot bind an enclosing flat save-layer to
                 // its chunk effect identity. Chromium keeps such items for
                 // invalidation bookkeeping without replaying paint state.
-                if list.display_items[index].record_begin
-                    == list.display_items[index].record_end
-                {
+                if list.display_items[index].record_begin == list.display_items[index].record_end {
                     starts[index] = Some((state, stack.len()));
                     effect_starts[index] = Some(effect_scopes_flat.clone());
                     shape_starts[index] = Some((rounded_scopes.len(), unsupported_complex));
@@ -2403,10 +2594,18 @@ fn prepare_raster_content(
                                 .unwrap_or_else(|| Arc::from([])),
                         ),
                     };
-                    if scope_output_clips
-                        .get(&scope.cursor)
-                        .is_none_or(|actual| **actual != **output)
-                    {
+                    let actual_output = scope_output_clips.get(&scope.cursor);
+                    let output_matches = actual_output.is_some_and(|actual| **actual == **output);
+                    // A flat clip outside an opacity-only saveLayer commutes
+                    // with group alpha and is retained in each normalized
+                    // PaintRecord below. Filters can move pixels across the
+                    // boundary, so their output clips must still match the
+                    // property tree exactly.
+                    let opacity_clip_is_retained = scope.filters.is_empty()
+                        && actual_output.is_some_and(|actual| {
+                            unrepresented_flat_clips(actual, output).is_some()
+                        });
+                    if !output_matches && !opacity_clip_is_retained {
                         if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
                             eprintln!("layer-replay effect-output-clip-mismatch record={index} wrapper={scope:?} effect={} actual={:?} expected={output:?}",
                                 effect.id,scope_output_clips.get(&scope.cursor));
@@ -2421,15 +2620,29 @@ fn prepare_raster_content(
                     // recorded wrapper can cover adjacent chunks whose effect
                     // nodes are distinct but carry the same operation.
                 }
-                if unsupported_complex || &*record_rounded[index] != rounded_scopes.as_slice() {
+                if unsupported_complex {
                     if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
-                        eprintln!("layer-replay rounded-mismatch record={index} unsupported={unsupported_complex} actual={rounded_scopes:?} expected={:?}",record_rounded[index]);
+                        eprintln!("layer-replay rounded-mismatch record={index} id={:?} node={:?} clip={:?} unsupported={unsupported_complex} actual={rounded_scopes:?} expected={:?}",
+                            list.display_items[index].id,
+                            list.items.get(list.display_items[index].record_begin).map(|item| (item.node_id, item.r#type)),
+                            chunks.iter().find(|chunk| chunk.begin_index as usize <= index && index < chunk.end_index as usize).map(|chunk| chunk.properties.clip.id),
+                            record_rounded[index]);
                     }
                     return Err(ReplayUnsupported("external-rounded-clip-property-mismatch"));
                 }
+                let extra =
+                    unrepresented_flat_clips(&rounded_scopes, record_rounded[index].as_ref())
+                        .ok_or(ReplayUnsupported("external-rounded-clip-property-mismatch"))?;
+                let has_baked_flat_clip = !extra.is_empty();
+                if !extra.is_empty() {
+                    let mut baked = baked_rounded[index].to_vec();
+                    baked.extend(extra);
+                    baked_rounded[index] = Arc::from(baked);
+                }
                 // If any flat external clip is not represented by properties,
                 // removing the wrapper would omit actual pixels/state.
-                if expected.clip != state.clip
+                if !raster_clips_equivalent(state.clip, expected.clip, scale)
+                    && !has_baked_flat_clip
                     && !rect_record_clips_are_redundant(
                         &list.items[list.display_items[index].record_begin
                             ..list.display_items[index].record_end],
@@ -2568,9 +2781,10 @@ fn prepare_raster_content(
                     unsupported_complex = true;
                 }
             }
-            Kind::kClipPath | Kind::kClipOutRect | Kind::kClipOutRoundedRect => {
-                unsupported_complex = true
+            Kind::kClipPath => {
+                rounded_scopes.push(path_clip_shape(item, state)?);
             }
+            Kind::kClipOutRect | Kind::kClipOutRoundedRect => unsupported_complex = true,
             _ => {}
         }
     }
@@ -2683,20 +2897,10 @@ fn prepare_raster_content(
                 if affine_started {
                     return Err(ReplayUnsupported("removed-clip-affine-order-mismatch"));
                 }
-                items.push(DisplayItem {
-                    r#type: if rounded.radii.HasRadius() {
-                        Kind::kClipRoundedRect
-                    } else {
-                        Kind::kClipRect
-                    },
-                    rect: shift(
-                        rounded.rect,
-                        (-expected.translation.0, -expected.translation.1),
-                    ),
-                    corner_radii: rounded.radii,
-                    antialias: rounded.antialias,
-                    ..Default::default()
-                });
+                items.push(clip_shape_item(
+                    rounded,
+                    (-expected.translation.0, -expected.translation.1),
+                )?);
             }
             items.push(prefix);
             // PaintChunksToCcLayer::StartClip emits ApplyTransform followed
@@ -2707,17 +2911,7 @@ fn prepare_raster_content(
                 .iter()
                 .filter(|shape| shape.affine.is_some())
             {
-                items.push(DisplayItem {
-                    r#type: if shape.radii.HasRadius() {
-                        Kind::kClipRoundedRect
-                    } else {
-                        Kind::kClipRect
-                    },
-                    rect: shape.rect,
-                    corner_radii: shape.radii,
-                    antialias: shape.antialias,
-                    ..Default::default()
-                });
+                items.push(clip_shape_item(shape, (0.0, 0.0))?);
             }
             for item in raw {
                 if item.r#type == Kind::kConcat {
@@ -2804,20 +2998,10 @@ fn prepare_raster_content(
             if shape.affine.is_some() {
                 return Err(ReplayUnsupported("removed-clip-not-in-record-affine-space"));
             }
-            items.push(DisplayItem {
-                r#type: if shape.radii.HasRadius() {
-                    Kind::kClipRoundedRect
-                } else {
-                    Kind::kClipRect
-                },
-                rect: shift(
-                    shape.rect,
-                    (-expected.translation.0, -expected.translation.1),
-                ),
-                corner_radii: shape.radii,
-                antialias: shape.antialias,
-                ..Default::default()
-            });
+            items.push(clip_shape_item(
+                shape,
+                (-expected.translation.0, -expected.translation.1),
+            )?);
         }
         // A clip-only scope still normalizes the actual draw destinations.
         // Keeping prefix Concat(delta) + folded raw body would change payload

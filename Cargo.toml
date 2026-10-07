@@ -37,6 +37,8 @@ members = [
     "crates/url_loader",
     "crates/document_loader",
     "crates/image_decoder",
+    "crates/image_resource",
+    "crates/document_image",
     "crates/web_font",
     "crates/javascript",
     "crates/webapi",

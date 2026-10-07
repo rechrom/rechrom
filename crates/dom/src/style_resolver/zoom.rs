@@ -96,7 +96,10 @@ impl<'a> NumericParser<'a> {
         }
         let start = self.cursor;
         if self.peek().is_some_and(|byte| byte.is_ascii_alphabetic()) {
-            while self.peek().is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'-') {
+            while self
+                .peek()
+                .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'-')
+            {
                 self.cursor += 1;
             }
             let name = self.input[start..self.cursor].to_ascii_lowercase();
@@ -160,7 +163,9 @@ impl<'a> NumericParser<'a> {
                 self.cursor += 1;
             }
         }
-        if self.cursor == integer || (self.cursor == integer + 1 && &self.input[integer..self.cursor] == ".") {
+        if self.cursor == integer
+            || (self.cursor == integer + 1 && &self.input[integer..self.cursor] == ".")
+        {
             return None;
         }
         if self.peek().is_some_and(|byte| matches!(byte, b'e' | b'E')) {
@@ -196,10 +201,8 @@ impl<'a> NumericParser<'a> {
                 kind: NumericKind::Number,
             });
         }
-        let pixels = crate::style_resolver::border_radius::Length(
-            &self.input[start..self.cursor],
-            16.0,
-        )?;
+        let pixels =
+            crate::style_resolver::border_radius::Length(&self.input[start..self.cursor], 16.0)?;
         Some(Numeric {
             value: pixels,
             kind: NumericKind::Length,

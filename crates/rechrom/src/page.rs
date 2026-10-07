@@ -15,7 +15,8 @@ use document_loader::{
 };
 pub use dom::style_resolver::PreferredColorScheme;
 use dom::{dom_mutation::DOMMutationType, Document, UserInteractionState, DOM};
-use image_decoder::{document_image_decoder::DocumentImageDecoder, image_decoder::ImageDecoder};
+use image_decoder::image_decoder::ImageDecoder;
+use image_resource::DocumentImageDecoder;
 pub use interaction::cursor::Cursor;
 use interaction::event::{EventListenerInvocation, EventType, MakeSyntheticEvent};
 pub use interaction::frame_aligned_input_queue::DispatchedFrameInput;
@@ -24,7 +25,7 @@ use javascript::javascript_runtime::{
     JavaScriptRuntime,
 };
 use layoutng_assembly::{
-    fragment_tree::FragmentNode,
+    fragment_tree::{FragmentNode, PaintResources},
     internal::{
         layout_input::{ConstraintSpace, Offset},
         layout_input_types::IntSize,
@@ -164,6 +165,10 @@ struct PageState {
     scroll_only: Cell<bool>,
     styles_resolved: Cell<bool>,
     resource_references_dirty: Cell<bool>,
+    // A stable image resource id published a new immutable content snapshot.
+    // This never means DOM, layout geometry or display-item recording changed.
+    paint_resources_dirty: Cell<bool>,
+    pending_paint_mutations: RefCell<Vec<paint::paint_engine::PaintMutation>>,
     measurement: RefCell<Option<MeasurementSnapshot>>,
     measurement_candidate: RefCell<Option<MeasurementSnapshot>>,
     #[cfg(test)]
@@ -196,6 +201,8 @@ impl PageState {
             scroll_only: Cell::new(false),
             styles_resolved: Cell::new(false),
             resource_references_dirty: Cell::new(true),
+            paint_resources_dirty: Cell::new(false),
+            pending_paint_mutations: RefCell::new(Vec::new()),
             measurement: RefCell::new(None),
             measurement_candidate: RefCell::new(None),
             #[cfg(test)]
@@ -221,6 +228,47 @@ impl PageState {
         self.measurement_candidate.borrow_mut().take();
         *self.measurement.borrow_mut() =
             Some(MeasurementSnapshot::with_revision(fragments, revision));
+    }
+
+    fn PublishPaintResources(&self, frame: &mut PageFrame) {
+        let pending = std::mem::take(&mut *self.pending_paint_mutations.borrow_mut());
+        if !pending.is_empty() {
+            let mut paint = self.paint_engine.borrow_mut();
+            paint.AdoptPaintResult(std::mem::take(&mut frame.display_items));
+            for mutation in pending {
+                if paint.ApplyMutation(mutation).is_none() {
+                    dom::error::logic_error("image PaintMutation rejected");
+                }
+            }
+            frame.display_items = paint
+                .GetPaintResult()
+                .expect("image mutation retains the artifact")
+                .clone();
+            self.paint_resources_dirty.set(false);
+            return;
+        }
+        let resources = {
+            let constraints = self.constraints.borrow();
+            Arc::new(PaintResources {
+                fonts: constraints.fonts.clone(),
+                images: constraints.images.clone(),
+                device_pixel_ratio: constraints.device_pixel_ratio,
+                viewport: constraints.viewport,
+            })
+        };
+        let mut paint = self.paint_engine.borrow_mut();
+        // Page and PaintEngine jointly publish one immutable artifact. Move
+        // Page's current reference back before the resource-only COW update;
+        // any older compositor snapshot remains immutable.
+        paint.AdoptPaintResult(std::mem::take(&mut frame.display_items));
+        if !paint.UpdatePaintResources(resources) {
+            dom::error::logic_error("paint resource update requires a committed artifact");
+        }
+        frame.display_items = paint
+            .GetPaintResult()
+            .expect("paint resource update retains the artifact")
+            .clone();
+        self.paint_resources_dirty.set(false);
     }
     fn InvalidateStyle(&self) {
         self.InvalidateMeasurement();
@@ -993,6 +1041,74 @@ impl PageState {
                 self.scroll_only.set(false);
                 self.dirty.set(true);
             }
+            ResourceMutation::DocumentImageFrameChanged(m) => {
+                let mut constraints = self.constraints.borrow_mut();
+                let image = constraints
+                    .images
+                    .iter_mut()
+                    .find(|image| image.id == m.frame.resource_id)
+                    .unwrap_or_else(|| {
+                        dom::error::invalid_argument("animated image resource missing")
+                    });
+                if image.width != m.frame.intrinsic_size.width
+                    || image.height != m.frame.intrinsic_size.height
+                {
+                    dom::error::invalid_argument("animated image changed intrinsic dimensions");
+                }
+                if m.frame.revision <= image.revision {
+                    dom::error::invalid_argument("animated image revision must increase");
+                }
+                image.revision = m.frame.revision;
+                image.content = image_resource::PaintImageContent::Document(m.frame.record.clone());
+                drop(constraints);
+                self.pending_paint_mutations.borrow_mut().push(
+                    paint::paint_engine::PaintMutation::ImageChanged {
+                        image_id: m.frame.resource_id,
+                        revision: m.frame.revision,
+                        frame: m.frame,
+                    },
+                );
+                self.paint_resources_dirty.set(true);
+                self.dirty.set(true);
+            }
+            ResourceMutation::DocumentImageIntrinsicSizeChanged(m) => {
+                let mut constraints = self.constraints.borrow_mut();
+                let image = constraints
+                    .images
+                    .iter_mut()
+                    .find(|image| image.id == m.resource_id)
+                    .unwrap_or_else(|| {
+                        dom::error::invalid_argument("document image resource missing")
+                    });
+                if m.revision <= image.revision || m.size.width == 0 || m.size.height == 0 {
+                    dom::error::invalid_argument("invalid document image intrinsic size revision");
+                }
+                image.width = m.size.width;
+                image.height = m.size.height;
+                image.revision = m.revision;
+                let resolution_scale = image.resolution_scale;
+                drop(constraints);
+                if !self
+                    .document
+                    .borrow_mut()
+                    .GetDocumentMut()
+                    .UpdateImageResourceIntrinsicSize(
+                        &m.source,
+                        dom::ImageResourceMetadata {
+                            id: m.resource_id,
+                            natural_width: m.size.width as f64 / resolution_scale,
+                            natural_height: m.size.height as f64 / resolution_scale,
+                            resolution_scale,
+                        },
+                    )
+                {
+                    dom::error::invalid_argument("document image source missing");
+                }
+                self.InvalidateMeasurement();
+                self.document.borrow_mut().InvalidateLayout();
+                self.scroll_only.set(false);
+                self.dirty.set(true);
+            }
             ResourceMutation::FontResourceReady(m) => {
                 self.InvalidateMeasurement();
                 self.constraints.borrow_mut().fonts.push(m.font);
@@ -1595,8 +1711,11 @@ impl Page {
         Ok(())
     }
     pub fn IsRenderingReady(&self) -> bool {
-        // Once lifecycle updates have started, late styles must not freeze input.
-        // Blink records rendering_has_begun_ and only registers pre-body sheets.
+        // The Page lifecycle owns the first-content barrier. Parser/resource
+        // scheduling reports Blink-style render-blocking sheets discovered
+        // before body insertion; renderer and host presentation never infer
+        // loading policy. Once the first frame exists, later sheets restyle
+        // normally without freezing input, matching rendering_has_begun_.
         if self.frame.is_some() {
             return true;
         }
@@ -2118,11 +2237,14 @@ impl Page {
         // must not synchronously decode images or dispatch unrelated load
         // listeners before presenting its already committed paint artifact.
         // RunTasks continues polling those completions with its normal budget.
-        let offset_only = self.state.scroll_only.get()
+        let retained_input_only = (self.state.scroll_only.get()
+            || self.state.paint_resources_dirty.get())
+            && self.frame.is_some()
+            && !self.editing_paint_dirty
             && self.state.styles_resolved.get()
             && self.state.document.borrow().GetStyleImpact().IsEmpty();
-        trace.set("offset_only", offset_only as u8 as f64);
-        if !offset_only {
+        trace.set("retained_input_only", retained_input_only as u8 as f64);
+        if !retained_input_only {
             self.ResolveStylesAndLoadResources()?;
         }
         let resources_done = profile.map(|start| start.elapsed());
@@ -2134,6 +2256,11 @@ impl Page {
             && self.state.document.borrow().GetStyleImpact().IsEmpty()
         {
             trace.set("frame_retained", 1.0);
+            if self.state.paint_resources_dirty.get() {
+                self.state
+                    .PublishPaintResources(self.frame.as_mut().unwrap());
+                trace.set("paint_resources_updated", 1.0);
+            }
             // Keep the host's presentation/lifecycle contract while reusing
             // the existing fragments and display list for an ineffective edit.
             if let Some(start) = profile {
@@ -2281,6 +2408,8 @@ impl Page {
         // cannot re-enter the layout that just completed.
         self.hover_state_dirty = self.cursor_position.is_some();
         self.state.document.borrow_mut().DidCommitPaint();
+        self.state.paint_resources_dirty.set(false);
+        self.state.pending_paint_mutations.borrow_mut().clear();
         self.state.scroll_only.set(false);
         self.state.dirty.set(false);
         if let Some(scripts) = &mut self.scripts {
@@ -2314,9 +2443,9 @@ fn cursor_hit_test_same_point_reuses_clean_frame_and_scroll_invalidates() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(
-                image_decoder::svg_image_decoder::SVGImageDecoder::new(&assembly),
-            )),
+            Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+                &assembly,
+            ))),
             crate::CreateBrowserConstraints(320, 200),
             None,
             None,
@@ -2625,9 +2754,9 @@ pub fn OpenUrl(
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(
-            image_decoder::svg_image_decoder::SVGImageDecoder::new(&assembly),
-        )),
+        Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+            &assembly,
+        ))),
         crate::CreateBrowserConstraints(width, height),
         Some(ScriptEnvironment {
             runtime: Box::new(

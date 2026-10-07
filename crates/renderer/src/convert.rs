@@ -516,7 +516,10 @@ pub(crate) fn resources(list: &paint::paint_engine::PaintArtifact) -> target::Re
             images: r
                 .images
                 .iter()
-                .map(|i| target::Image::shared(i.id, i.width, i.height, &i.rgba8))
+                .filter_map(|i| {
+                    i.BitmapPixels()
+                        .map(|pixels| target::Image::shared(i.id, i.width, i.height, pixels))
+                })
                 .collect(),
         }),
     }

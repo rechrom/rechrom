@@ -231,6 +231,8 @@ fn initial(node: &impl NodeView, parent: Option<&ComputedStyle>, pseudo: bool) -
         style.paint.svg_stroke_current_color = parent.paint.svg_stroke_current_color.clone();
         style.paint.svg_fill_server = parent.paint.svg_fill_server.clone();
         style.paint.svg_stroke_server = parent.paint.svg_stroke_server.clone();
+        style.paint.svg_fill_reference = parent.paint.svg_fill_reference.clone();
+        style.paint.svg_stroke_reference = parent.paint.svg_stroke_reference.clone();
         style.paint.svg_stroke_width = parent.paint.svg_stroke_width.clone();
         style.paint.svg_stroke_dash_array = parent.paint.svg_stroke_dash_array.clone();
         style.paint.svg_stroke_dash_offset = parent.paint.svg_stroke_dash_offset.clone();

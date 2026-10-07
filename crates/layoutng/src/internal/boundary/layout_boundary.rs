@@ -277,7 +277,9 @@ impl NativeShapeImageResolver for InputShapeImageResolver {
             || image.height == 0
             || !image.resolution_scale.is_finite()
             || image.resolution_scale <= 0.0
-            || expected_pixels != Some(image.rgba8.len())
+            || image
+                .BitmapPixels()
+                .is_some_and(|pixels| expected_pixels != Some(pixels.len()))
         {
             panic!("shape image requires dimensions, scale and RGBA pixels");
         }

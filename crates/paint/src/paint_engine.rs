@@ -3,7 +3,7 @@
 //! Source paint display-list ABI. The entry point and private painters are
 //! connected after their owning source files have been translated.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 pub use layoutng_assembly::fragment_tree::RasterEffectOutset;
 use layoutng_assembly::fragment_tree::{PaintGlyph, PaintResources};
@@ -501,6 +501,88 @@ pub struct CaretGeometry {
 pub type DisplayItemList = Vec<RecordedDisplayItem>;
 pub type PaintChunks = Vec<PaintChunk>;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImagePaintDependency {
+    pub record_index: usize,
+    pub visual_rect: PaintRect,
+}
+
+/// Built while recording paint. Resource-only updates use this retained index
+/// instead of walking the outer Fragment tree to rediscover image clients.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ImageDependencyIndex {
+    by_image: HashMap<image_resource::ImageId, Vec<ImagePaintDependency>>,
+}
+
+impl ImageDependencyIndex {
+    pub fn dependencies(&self, image_id: image_resource::ImageId) -> &[ImagePaintDependency] {
+        self.by_image.get(&image_id).map_or(&[], Vec::as_slice)
+    }
+
+    fn build(items: &[DisplayItem], records: &[RecordedDisplayItem]) -> Self {
+        let mut by_image: HashMap<_, Vec<_>> = HashMap::new();
+        for (record_index, record) in records.iter().enumerate() {
+            let mut ids = std::collections::HashSet::new();
+            for item in &items[record.record_begin..record.record_end] {
+                if item.resource_id != 0 {
+                    ids.insert(item.resource_id);
+                }
+                if let Some(shader) = &item.paint_shader {
+                    if shader.resource_id != 0 {
+                        ids.insert(shader.resource_id);
+                    }
+                }
+                for mask in &item.mask_layers {
+                    if mask.resource_id != 0 {
+                        ids.insert(mask.resource_id);
+                    }
+                    if let Some(shader) = &mask.paint_shader {
+                        if shader.resource_id != 0 {
+                            ids.insert(shader.resource_id);
+                        }
+                    }
+                }
+            }
+            for image_id in ids {
+                by_image
+                    .entry(image_id)
+                    .or_default()
+                    .push(ImagePaintDependency {
+                        record_index,
+                        visual_rect: record.visual_rect,
+                    });
+            }
+        }
+        Self { by_image }
+    }
+}
+
+/// Concrete immutable record emitted by document_image and consumed only by
+/// raster replay. It contains no retained DOM, layout engine or timeline.
+#[derive(Clone)]
+pub struct DocumentPaintArtifactRecord {
+    pub artifact: Arc<PaintArtifact>,
+    pub intrinsic_size: image_resource::IntrinsicSize,
+    /// Coordinate space used by the nested recording. Responsive SVG may
+    /// paint at a container size different from its intrinsic dimensions.
+    pub record_size: image_resource::IntrinsicSize,
+    pub container_key: image_resource::ContainerKey,
+}
+
+#[derive(Clone)]
+pub enum PaintMutation {
+    ImageChanged {
+        image_id: image_resource::ImageId,
+        revision: u64,
+        frame: Arc<image_resource::DocumentImageFrame>,
+    },
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PaintMutationResult {
+    pub damaged_records: Vec<ImagePaintDependency>,
+}
+
 // cpp: paint/paint_engine.h:227-239
 #[derive(Clone, Default)]
 pub struct PaintArtifact {
@@ -521,6 +603,7 @@ pub struct PaintArtifact {
     /// downstream caches must retain their complete value proof.
     pub recording_revision: u64,
     pub resources: Option<Arc<PaintResources>>,
+    pub image_dependencies: Arc<ImageDependencyIndex>,
     pub caret: Option<CaretGeometry>,
 }
 
@@ -529,6 +612,7 @@ impl PartialEq for PaintArtifact {
         self.caret == other.caret
             && (Arc::ptr_eq(&self.items, &other.items) || self.items == other.items)
             && self.display_items == other.display_items
+            && self.image_dependencies == other.image_dependencies
             && self.chunks == other.chunks
             && self
                 .chunks
@@ -605,6 +689,94 @@ fn artifact_property_updates_share_ops_and_real_op_edits_isolate_old_frames() {
     assert_eq!(old.items.len(), scrolling.items.len());
 }
 
+#[cfg(all(test, feature = "translation_in_progress"))]
+#[test]
+fn document_image_mutation_retains_recording_and_targets_its_client() {
+    use image_resource::{ContainerKey, DocumentImageFrame, IntrinsicSize, PaintImageContent};
+    let draw = DisplayItem {
+        r#type: DisplayItemType::kDrawImageRect,
+        resource_id: 7,
+        rect: PaintRect {
+            x: 32.0,
+            y: 48.0,
+            width: 80.0,
+            height: 40.0,
+        },
+        ..Default::default()
+    };
+    let display = RecordedDisplayItem {
+        kind: RecordedDisplayItemKind::Drawing,
+        id: Default::default(),
+        visual_rect: draw.rect,
+        visual_rect_is_accurate: true,
+        draws_content: true,
+        raster_effect_outset: RasterEffectOutset::kNone,
+        record_begin: 0,
+        record_end: 1,
+        scroll_translation: None,
+    };
+    let items: Arc<Vec<_>> = Arc::new(vec![draw]);
+    let dependencies = Arc::new(ImageDependencyIndex::build(
+        &items,
+        std::slice::from_ref(&display),
+    ));
+    let old_record: Arc<dyn image_resource::DocumentPaintRecord> = Arc::new(1u8);
+    let resources = Arc::new(PaintResources {
+        images: vec![layoutng_assembly::internal::layout_input::PaintImage {
+            id: 7,
+            revision: 1,
+            width: 80,
+            height: 40,
+            content: PaintImageContent::Document(old_record),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let old = Arc::new(PaintArtifact {
+        items: items.clone(),
+        display_items: vec![display],
+        resources: Some(resources),
+        image_dependencies: dependencies,
+        recording_revision: 99,
+        ..Default::default()
+    });
+    let mut engine = PaintEngine::new();
+    engine.paint_result = Some(old.clone());
+    let next_record: Arc<dyn image_resource::DocumentPaintRecord> = Arc::new(2u8);
+    let frame = Arc::new(DocumentImageFrame {
+        resource_id: 7,
+        revision: 2,
+        intrinsic_size: IntrinsicSize {
+            width: 80,
+            height: 40,
+        },
+        container_key: ContainerKey::new(80, 40, 1.0, 1.0),
+        record: next_record,
+    });
+    let result = engine
+        .ApplyMutation(PaintMutation::ImageChanged {
+            image_id: 7,
+            revision: 2,
+            frame,
+        })
+        .unwrap();
+    let next = engine.GetPaintResult().unwrap();
+    assert_eq!(result.damaged_records.len(), 1);
+    assert_eq!(
+        result.damaged_records[0].visual_rect,
+        PaintRect {
+            x: 32.0,
+            y: 48.0,
+            width: 80.0,
+            height: 40.0
+        }
+    );
+    assert!(Arc::ptr_eq(&old.items, &next.items));
+    assert_eq!(old.recording_revision, next.recording_revision);
+    assert_eq!(old.resources.as_ref().unwrap().images[0].revision, 1);
+    assert_eq!(next.resources.as_ref().unwrap().images[0].revision, 2);
+}
+
 #[cfg(feature = "translation_in_progress")]
 use std::cell::RefCell;
 #[cfg(feature = "translation_in_progress")]
@@ -651,14 +823,7 @@ fn SameReplayResources(a: &PaintResources, b: &PaintResources) -> bool {
         .iter()
         .zip(&b.fonts)
         .all(|(left, right)| left.face_index == right.face_index && left.bytes == right.bytes);
-    same_fonts
-        && a.images.iter().zip(&b.images).all(|(left, right)| {
-            left.id == right.id
-                && left.width == right.width
-                && left.height == right.height
-                && left.resolution_scale == right.resolution_scale
-                && left.rgba8 == right.rgba8
-        })
+    same_fonts && a.images == b.images
 }
 
 // cpp: paint/paint_engine.cc:56-91
@@ -685,11 +850,9 @@ fn ValidateReplayResources(resources: Option<&PaintResources>) {
         let width = image.width as usize;
         let height = image.height as usize;
         let dimensions_fit = width != 0 && height != 0 && width <= usize::MAX / 4 / height;
-        let expected_bytes = if dimensions_fit {
-            width * height * 4
-        } else {
-            0
-        };
+        let bitmap_valid = image
+            .BitmapPixels()
+            .is_none_or(|pixels| dimensions_fit && pixels.len() == width * height * 4);
         if image.id == 0
             || !image_ids.insert(image.id)
             || image.width == 0
@@ -697,7 +860,7 @@ fn ValidateReplayResources(resources: Option<&PaintResources>) {
             || !image.resolution_scale.is_finite()
             || image.resolution_scale <= 0.0
             || !dimensions_fit
-            || image.rgba8.len() != expected_bytes
+            || !bitmap_valid
         {
             panic!("PaintResources images must have unique ids and valid RGBA data");
         }
@@ -826,6 +989,10 @@ fn RecordPaint(
         .iter()
         .map(|chunk| chunk.properties.clone())
         .collect();
+    output.image_dependencies = Arc::new(ImageDependencyIndex::build(
+        &output.items,
+        &output.display_items,
+    ));
     output.recording_revision = foundation::NewUniqueObjectId();
     if pre_paint.scroll_recording_basis.is_some()
         || pre_paint.stats.post_walk
@@ -927,6 +1094,62 @@ impl PaintEngine {
 
     pub fn GetPaintResult(&self) -> Option<&Arc<PaintArtifact>> {
         self.paint_result.as_ref()
+    }
+
+    /// Publish a new immutable resource catalog while retaining the recorded
+    /// display items and paint properties. This is the document-image analogue
+    /// of ImageResourceContent invalidation: stable resource ids let the
+    /// compositor damage only records that sample changed pixels.
+    pub fn UpdatePaintResources(&mut self, resources: Arc<PaintResources>) -> bool {
+        ValidateReplayResources(Some(&resources));
+        let Some(artifact) = self.paint_result.as_mut() else {
+            return false;
+        };
+        if artifact
+            .resources
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &resources))
+        {
+            return true;
+        }
+        Arc::make_mut(artifact).resources = Some(resources);
+        true
+    }
+
+    /// Apply a content-only image mutation to the committed artifact. Stable
+    /// display items remain shared; the retained dependency index identifies
+    /// exactly which paint clients LayerTile must invalidate.
+    pub fn ApplyMutation(&mut self, mutation: PaintMutation) -> Option<PaintMutationResult> {
+        let PaintMutation::ImageChanged {
+            image_id,
+            revision,
+            frame,
+        } = mutation;
+        if frame.resource_id != image_id || frame.revision != revision {
+            return None;
+        }
+        let artifact = self.paint_result.as_mut()?;
+        let old_resources = artifact.resources.as_ref()?.as_ref();
+        let old = old_resources
+            .images
+            .iter()
+            .find(|image| image.id == image_id)?;
+        if old.width != frame.intrinsic_size.width
+            || old.height != frame.intrinsic_size.height
+            || revision <= old.revision
+        {
+            return None;
+        }
+        let damaged_records = artifact.image_dependencies.dependencies(image_id).to_vec();
+        let mut resources = old_resources.clone();
+        let image = resources
+            .images
+            .iter_mut()
+            .find(|image| image.id == image_id)?;
+        image.revision = revision;
+        image.content = image_resource::PaintImageContent::Document(frame.record.clone());
+        Arc::make_mut(artifact).resources = Some(Arc::new(resources));
+        Some(PaintMutationResult { damaged_records })
     }
 
     /// Complete native client validation before publishing this artifact to

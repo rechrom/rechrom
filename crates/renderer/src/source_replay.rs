@@ -886,14 +886,17 @@ fn RegisterResources(canvas: &Canvas, list: &PaintArtifact) {
         return;
     };
     for image in &resources.images {
+        let Some(pixels) = image.BitmapPixels() else {
+            continue;
+        };
         let result = unsafe {
             LayoutngCanvasRegisterImage(
                 canvas.0,
                 image.id,
                 image.width,
                 image.height,
-                image.rgba8.as_ptr(),
-                image.rgba8.len(),
+                pixels.as_ptr(),
+                pixels.len(),
             )
         };
         assert_eq!(result, 1, "Skia could not register paint image");

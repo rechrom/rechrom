@@ -87,8 +87,9 @@ impl<'a> LogicalAlphaScanner<'a> {
         let source_y = (self.image_.height - 1).min(
             ((y as u64 * self.image_.height as u64) / self.target_size_.height() as u64) as u32,
         );
-        self.image_.rgba8
-            [((source_y as usize * self.image_.width as usize + source_x as usize) * 4) + 3]
+        self.image_.BitmapPixels().map_or(255, |pixels| {
+            pixels[((source_y as usize * self.image_.width as usize + source_x as usize) * 4) + 3]
+        })
     }
 }
 

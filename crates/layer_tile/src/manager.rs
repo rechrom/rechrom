@@ -25,6 +25,7 @@ const MAX_SOON_RASTER_TASKS_PER_FRAME: usize = 128;
 
 #[derive(Clone)]
 struct RecordState {
+    artifact_index: usize,
     id: DisplayItemId,
     rect: PaintRect,
     complete: bool,
@@ -556,8 +557,11 @@ impl LayerTileManager {
                 };
             }
         }
-        let resources =
-            ResourceComparison::new(self.resources.as_deref(), list.resources.as_deref());
+        let resources = ResourceComparison::new(
+            self.resources.as_deref(),
+            list.resources.as_deref(),
+            &list.image_dependencies,
+        );
         let old_layers = std::mem::take(&mut self.layers);
         let mut old_layers: Vec<Option<LayerState>> = old_layers.into_iter().map(Some).collect();
         let mut soon_tasks = Vec::new();
@@ -1598,6 +1602,7 @@ fn build_records(
                     .map_or_else(|| Arc::from(ops), |r| r.items.clone())
             };
             RecordState {
+                artifact_index: index,
                 id: record.id,
                 rect: content.map_or(record.visual_rect, |c| c.visual_rect),
                 complete: content.map_or(record.visual_rect_is_accurate, |c| c.bounds_are_complete),
@@ -1726,12 +1731,17 @@ struct ResourceComparison<'a> {
     old: Option<&'a PaintResources>,
     new: Option<&'a PaintResources>,
     changed_images: HashSet<u64>,
+    changed_records: HashSet<usize>,
     identical_catalog: bool,
     font_changes: RefCell<HashMap<(u32, u32), bool>>,
 }
 
 impl<'a> ResourceComparison<'a> {
-    fn new(old: Option<&'a PaintResources>, new: Option<&'a PaintResources>) -> Self {
+    fn new(
+        old: Option<&'a PaintResources>,
+        new: Option<&'a PaintResources>,
+        dependencies: &paint::paint_engine::ImageDependencyIndex,
+    ) -> Self {
         let identical_catalog = match (old, new) {
             (None, None) => true,
             (Some(a), Some(b)) => std::ptr::eq(a, b),
@@ -1742,6 +1752,7 @@ impl<'a> ResourceComparison<'a> {
                 old,
                 new,
                 changed_images: HashSet::new(),
+                changed_records: HashSet::new(),
                 identical_catalog,
                 font_changes: RefCell::new(HashMap::new()),
             };
@@ -1756,7 +1767,7 @@ impl<'a> ResourceComparison<'a> {
             .flat_map(|r| &r.images)
             .map(|image| (image.id, image))
             .collect();
-        let changed_images = old_images
+        let changed_images: HashSet<u64> = old_images
             .keys()
             .chain(new_images.keys())
             .copied()
@@ -1766,15 +1777,22 @@ impl<'a> ResourceComparison<'a> {
                     a.width != b.width
                         || a.height != b.height
                         || a.resolution_scale != b.resolution_scale
-                        || !(Arc::ptr_eq(&a.rgba8, &b.rgba8) || a.rgba8 == b.rgba8)
+                        || a.revision != b.revision
+                        || a.content != b.content
                 }
                 _ => true,
             })
+            .collect();
+        let changed_records = changed_images
+            .iter()
+            .flat_map(|id| dependencies.dependencies(*id))
+            .map(|dependency| dependency.record_index)
             .collect();
         Self {
             old,
             new,
             changed_images,
+            changed_records,
             identical_catalog,
             font_changes: RefCell::new(HashMap::new()),
         }
@@ -1814,6 +1832,9 @@ impl<'a> ResourceComparison<'a> {
         // cannot change while the exact catalogue Arc is retained.
         if self.identical_catalog || (!old.draws_content && !new.draws_content) {
             return false;
+        }
+        if old.id == new.id && self.changed_records.contains(&new.artifact_index) {
+            return true;
         }
         old.items
             .iter()

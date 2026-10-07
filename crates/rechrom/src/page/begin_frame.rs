@@ -61,6 +61,7 @@ impl Page {
         // Once readiness changes, RunTasks reaches UpdateFrameIfNeeded again.
         let demand = (self.IsRenderingReady()
             && (self.HasPendingFrameInput() || self.state.dirty.get() || self.hover_state_dirty))
+            || self.resources.HasAnimatedImages()
             || self
                 .scripts
                 .as_ref()
@@ -111,6 +112,17 @@ impl Page {
                 .then(Instant::now);
             if self.frame.is_none() {
                 self.UpdateFrameIfNeeded()?;
+            }
+            if self.resources.HasAnimatedImages() {
+                let mut client = ResourceClient {
+                    state: self.state.clone(),
+                    scripts: self.scripts.as_deref_mut(),
+                };
+                self.resources.SampleAnimatedImages(
+                    args.frame_time,
+                    args.sequence_number,
+                    &mut client,
+                )?;
             }
             // WebFrameWidgetImpl::BeginMainFrame performs this before Animate.
             // Clear first because listeners may force layout and mark it dirty

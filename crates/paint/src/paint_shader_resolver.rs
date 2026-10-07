@@ -115,7 +115,9 @@ pub fn ResolvePaintShader(
                 || image.height == 0
                 || !image.resolution_scale.is_finite()
                 || image.resolution_scale <= 0.0
-                || image.rgba8.len() != image.width as usize * image.height as usize * 4
+                || image.BitmapPixels().is_some_and(|pixels| {
+                    pixels.len() != image.width as usize * image.height as usize * 4
+                })
         }) {
             panic!("pattern shader image resource is invalid");
         }

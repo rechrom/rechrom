@@ -238,6 +238,44 @@ fn script_pause_accepts_network_input_without_parsing_past_insertion_point() {
 }
 
 #[test]
+fn head_whitespace_after_script_does_not_open_body() {
+    let mut owner = DOM::new();
+    let mut host = Host::default();
+    let mut parser = HTMLDocumentParserState::new(owner.GetDocumentMut(), &mut host);
+    parser.Append(
+        "<html><head><script type=importmap>{}</script>\n\
+         <link rel=stylesheet href=app.css></head><body><p>content</p>",
+    );
+    parser.FinishInput();
+    loop {
+        match parser.Pump(owner.GetDocumentMut(), &mut host, 1).status {
+            HTMLParserStatus::kYielded => {}
+            HTMLParserStatus::kWaitingForScript => {
+                parser.WithParser(owner.GetDocumentMut(), &mut host, |borrowed| {
+                    borrowed.ResumeAfterScript()
+                })
+            }
+            HTMLParserStatus::kFinished => break,
+            HTMLParserStatus::kNeedMoreInput => panic!("finished input requested more data"),
+        }
+    }
+    let inserted = |name: &str| {
+        host.0
+            .iter()
+            .position(|(_, element, phase)| {
+                element == name && *phase == ParserElementPhase::kInserted
+            })
+            .unwrap()
+    };
+    assert!(inserted("link") < inserted("body"));
+    let link = (0..owner.GetDocument().NodeCount())
+        .find(|&index| owner.GetDocument().Node(index).IsHTMLElement("link"))
+        .unwrap();
+    let parent = owner.GetDocument().Node(link).Parent().unwrap();
+    assert!(owner.GetDocument().Node(parent).IsHTMLElement("head"));
+}
+
+#[test]
 fn continuation_survives_unwinding_and_rejects_a_different_document() {
     let mut owner = DOM::new();
     let mut other = DOM::new();

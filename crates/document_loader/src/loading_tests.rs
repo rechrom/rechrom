@@ -271,15 +271,17 @@ impl image_decoder::image_decoder::ImageDecoder for Images {
     }
 }
 struct DocumentImages;
-impl image_decoder::document_image_decoder::DocumentImageDecoder for DocumentImages {
-    fn CanDecode(&self, _: &image_decoder::image_decoder::ImageDecodeInput<'_>) -> bool {
+impl image_resource::DocumentImageDecoder for DocumentImages {
+    fn can_decode(&self, _: &[u8], _: &str) -> bool {
         false
     }
-    fn Decode(
+    fn create(
         &mut self,
-        _: &image_decoder::image_decoder::ImageDecodeInput<'_>,
-        _: &layoutng_assembly::internal::layout_input::ConstraintSpace,
-    ) -> io::Result<image_decoder::image_decoder::DecodedImage> {
+        _: image_resource::ImageId,
+        _: std::sync::Arc<[u8]>,
+        _: &str,
+        _: &image_resource::ContainerKey,
+    ) -> io::Result<image_resource::CreatedDocumentImage> {
         panic!("ordinary image must use image decoder")
     }
 }
@@ -347,7 +349,10 @@ fn fetcher_deduplicates_image_requests_and_delivers_only_completed_mutations() {
         page_mutation::ResourceMutation::ImageResourceReady(image) => {
             assert_eq!(image.source, "image.png");
             assert_eq!(image.image.width, 1);
-            assert_eq!(image.image.rgba8.as_slice(), [1, 2, 3, 255]);
+            assert_eq!(
+                image.image.BitmapPixels().unwrap().as_slice(),
+                [1, 2, 3, 255]
+            );
         }
         _ => panic!("unexpected resource mutation"),
     }

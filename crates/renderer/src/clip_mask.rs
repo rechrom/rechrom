@@ -483,7 +483,9 @@ fn raster_coverage(
     canvas.set_raster_origin((device.left as i32, device.top as i32));
     for (clip, &matrix) in clips.iter().zip(&transforms) {
         install_transform(&mut canvas, matrix, device, &resources);
-        if let Some(rect) = clip.rect {
+        // A path node's rect is only its conservative scheduling bound.
+        // Clipping by that rect as well multiplies edge AA coverage twice.
+        if let Some(rect) = clip.rect.filter(|_| clip.clip_path.is_empty()) {
             canvas.replay_item(
                 &DrawCommand {
                     r#type: if clip.radii == Default::default() {
