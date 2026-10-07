@@ -10,7 +10,10 @@ use crate::{
 use dom::{persistent_document::DOMNodeType, Document, UserInteractionState};
 use layoutng_assembly::{fragment_tree::FragmentNode, internal::layout_input::Offset};
 use page_mutation::{InteractionStateMutation, PageMutation, PageMutationEmitter};
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 // cpp: interaction/interaction_engine.h:23-29
 pub type InteractionState = UserInteractionState;
 #[derive(Clone, Copy, Default, Debug)]
@@ -19,7 +22,43 @@ pub struct InteractionResult {
     pub default_prevented: bool,
     pub propagation_stopped: bool,
 }
-// cpp: interaction/interaction_engine.cc:17-36
+// Map a root-space point through the exact same transform and scroll state as paint.
+fn LocalPoint(fragment: &FragmentNode, point: Offset, parent: Offset) -> Option<(Offset, Offset)> {
+    let absolute = Offset {
+        x: parent.x + fragment.offset.x,
+        y: parent.y + fragment.offset.y,
+    };
+    let mut point = point;
+    if let Some(transform) = &fragment.paint.style.transform {
+        let matrix = paint::geometry_mapper::ResolveTransformAroundOrigin(
+            transform,
+            absolute,
+            fragment.size,
+            fragment.paint.style.transform_origin.as_ref(),
+        );
+        let inverse = paint::geometry_mapper::InvertTransform(&matrix)?;
+        let m = inverse.values;
+        let w = m[3] * point.x + m[7] * point.y + m[15];
+        if w == 0.0 {
+            return None;
+        }
+        point = Offset {
+            x: (m[0] * point.x + m[4] * point.y + m[12]) / w,
+            y: (m[1] * point.x + m[5] * point.y + m[13]) / w,
+        };
+    }
+    Some((point, absolute))
+}
+fn ChildOrigin(fragment: &FragmentNode, absolute: Offset) -> Offset {
+    if fragment.paint.establishes_paint_state {
+        Offset {
+            x: absolute.x - fragment.paint.scroll_offset.x,
+            y: absolute.y - fragment.paint.scroll_offset.y,
+        }
+    } else {
+        absolute
+    }
+}
 fn HitTest(
     document: &Document,
     fragment: &FragmentNode,
@@ -29,25 +68,57 @@ fn HitTest(
     if fragment.paint.hidden {
         return None;
     }
-    let absolute = Offset {
-        x: parent.x + fragment.offset.x,
-        y: parent.y + fragment.offset.y,
-    };
-    for child in fragment.children.iter().rev() {
-        if let Some(target) = HitTest(document, child, point, absolute) {
-            return Some(target);
-        }
-    }
+    let (point, absolute) = LocalPoint(fragment, point, parent)?;
     let inside = point.x >= absolute.x
         && point.y >= absolute.y
         && point.x < absolute.x + fragment.size.width
         && point.y < absolute.y + fragment.size.height;
-    // A pointer-events:none parent does not suppress an explicitly enabled child.
+    use layoutng_assembly::internal::layout_input::Overflow;
+    if (!inside && fragment.paint.scroll_container.is_some())
+        || (matches!(
+            fragment.paint.overflow_x,
+            Overflow::kHidden | Overflow::kClip | Overflow::kScroll | Overflow::kAuto
+        ) && (point.x < absolute.x || point.x >= absolute.x + fragment.size.width))
+        || (matches!(
+            fragment.paint.overflow_y,
+            Overflow::kHidden | Overflow::kClip | Overflow::kScroll | Overflow::kAuto
+        ) && (point.y < absolute.y || point.y >= absolute.y + fragment.size.height))
+    {
+        return None;
+    }
+    for child in fragment.children.iter().rev() {
+        if let Some(target) = HitTest(document, child, point, ChildOrigin(fragment, absolute)) {
+            return Some(target);
+        }
+    }
     (inside
         && !fragment.paint.style.pointer_events_none
         && fragment.paint.style.visible
         && document.FindNodeById(fragment.node_id).is_some())
     .then_some(fragment.node_id)
+}
+fn ControlPoint(
+    fragment: &FragmentNode,
+    id: u64,
+    point: Offset,
+    parent: Offset,
+) -> Option<(&FragmentNode, Offset)> {
+    let (point, absolute) = LocalPoint(fragment, point, parent)?;
+    if fragment.node_id == id && fragment.paint.text_control_caret_metrics.is_some() {
+        return Some((
+            fragment,
+            Offset {
+                x: point.x - absolute.x,
+                y: point.y - absolute.y,
+            },
+        ));
+    }
+    for child in &fragment.children {
+        if let Some(found) = ControlPoint(child, id, point, ChildOrigin(fragment, absolute)) {
+            return Some(found);
+        }
+    }
+    None
 }
 // cpp: interaction/interaction_engine.cc:38-45
 fn EventElement(document: &InteractionDocument, target: Option<u64>) -> Option<u64> {
@@ -207,6 +278,7 @@ pub struct Interaction<'a> {
     listeners: Rc<RefCell<Option<EventListenerDispatcher<'a>>>>,
     state: Rc<RefCell<InteractionState>>,
     editor: Rc<TextEditor>,
+    selection_drag: Rc<Cell<Option<u64>>>,
     submit_form: Rc<RefCell<Option<Rc<dyn Fn(u64, Option<u64>)>>>>,
     submitting_forms: Rc<RefCell<Vec<u64>>>,
 }
@@ -242,6 +314,7 @@ impl<'a> Interaction<'a> {
             listeners: Rc::new(RefCell::new(listeners)),
             state: Rc::new(RefCell::new(InteractionState::default())),
             editor: Rc::new(TextEditor::WithSelectionState(selections)),
+            selection_drag: Rc::new(Cell::new(None)),
             submit_form: Rc::new(RefCell::new(None)),
             submitting_forms: Rc::new(RefCell::new(Vec::new())),
         }
@@ -272,6 +345,7 @@ impl<'a> Interaction<'a> {
             listeners: Rc::new(RefCell::new(Some(listeners))),
             state: self.state.clone(),
             editor: self.editor.clone(),
+            selection_drag: self.selection_drag.clone(),
             submit_form: self.submit_form.clone(),
             submitting_forms: self.submitting_forms.clone(),
         }
@@ -339,6 +413,10 @@ impl<'a> Interaction<'a> {
     ) -> InteractionResult {
         let _emit_state = self.ExitGuard();
         let previous_hover = self.State().hovered_node_id;
+        if matches!(input, InputEvent::Mouse(v) if matches!(v.r#type, MouseEventType::kDown | MouseEventType::kUp))
+        {
+            self.selection_drag.set(None);
+        }
         let leaving =
             matches!(input, InputEvent::Mouse(event) if event.r#type == MouseEventType::kLeave);
         let mut target = ExplicitTarget(input);
@@ -468,7 +546,28 @@ impl<'a> Interaction<'a> {
                         && !IsDisabledFormControl(document, control)
                     {
                         focus.Focus(control, IsTextField(document, control));
+                        if v.button == MouseButton::kPrimary
+                            && self.State().focused_node_id == Some(control)
+                        {
+                            self.selection_drag.set(Some(control));
+                            self.PlaceCaretAtPoint(
+                                document,
+                                fragments,
+                                control,
+                                v.position,
+                                v.modifiers.shift,
+                            );
+                        }
                     }
+                }
+            }
+            if v.r#type == MouseEventType::kMove && !result.default_prevented {
+                if let Some(control) = self
+                    .selection_drag
+                    .get()
+                    .filter(|id| Some(*id) == self.State().focused_node_id)
+                {
+                    self.PlaceCaretAtPoint(document, fragments, control, v.position, true);
                 }
             }
         }
@@ -476,6 +575,22 @@ impl<'a> Interaction<'a> {
             target_node_id: result.target_node_id,
             default_prevented: result.default_prevented,
             propagation_stopped: result.propagation_stopped,
+        }
+    }
+    fn PlaceCaretAtPoint(
+        &self,
+        document: &InteractionDocument,
+        fragments: &FragmentNode,
+        id: u64,
+        point: Offset,
+        extend: bool,
+    ) {
+        if let Some((owner, local)) = ControlPoint(fragments, id, point, Offset::default()) {
+            let empty =
+                ReadNode(document, id, |d, _, i| d.ControlValue(i).is_empty()).unwrap_or(true);
+            let offset =
+                layoutng_assembly::caret::geometry::TextControlOffsetForPoint(owner, local, empty);
+            self.editor.PlaceCaret(document, id, offset, extend);
         }
     }
     // cpp: interaction/interaction_engine.cc:237-244

@@ -11,6 +11,7 @@ use std::rc::Rc;
 pub type SyntheticEventDispatcher<'a> = Rc<dyn Fn(&mut Event, u64) + 'a>;
 // cpp: interaction/text_editor.h:25-32
 pub use layoutng_assembly::caret::TextCaret;
+use layoutng_assembly::editing_state::ByteBoundary;
 pub use layoutng_assembly::editing_state::{Selection, SelectionState};
 
 // cpp: interaction/text_editor.h:23-43
@@ -79,6 +80,9 @@ impl TextEditor {
         })
         .flatten()
     }
+    pub fn FinishComposition(&self, id: u64) {
+        self.selections.SetComposition(id, None);
+    }
     // cpp: interaction/text_editor.cc:49-54
     pub fn Focus(&self, document: &InteractionDocument, id: u64) {
         if !IsTextControl(document, id) {
@@ -96,6 +100,33 @@ impl TextEditor {
     // cpp: interaction/text_editor.cc:56-60
     pub fn SelectionFor(&self, id: u64) -> Selection {
         self.selections.Get(id).unwrap_or_default()
+    }
+    pub fn PlaceCaret(&self, document: &InteractionDocument, id: u64, utf16: u32, extend: bool) {
+        if !IsTextControl(document, id) {
+            return;
+        }
+        let value = ReadNode(document, id, |d, _, i| d.ControlValue(i)).unwrap_or_default();
+        let mut units = 0;
+        let mut offset = value.len();
+        for (byte, ch) in value.char_indices() {
+            if units >= utf16 {
+                offset = byte;
+                break;
+            }
+            units += ch.len_utf16() as u32;
+        }
+        let anchor = if extend {
+            self.SelectionFor(id).anchor
+        } else {
+            offset
+        };
+        self.selections.Set(
+            id,
+            Selection {
+                anchor,
+                focus: offset,
+            },
+        );
     }
     // cpp: interaction/text_editor.cc:62-102
     fn CommitText(
@@ -121,8 +152,8 @@ impl TextEditor {
             anchor: value.len(),
             focus: value.len(),
         });
-        selection.anchor = selection.anchor.min(value.len());
-        selection.focus = selection.focus.min(value.len());
+        selection.anchor = ByteBoundary(&value, selection.anchor);
+        selection.focus = ByteBoundary(&value, selection.focus);
         let start = selection.Start();
         let end = selection.End();
         value.replace_range(start..end, &replacement);
@@ -189,8 +220,26 @@ impl TextEditor {
             }
             return false;
         }
-        if event.r#type == EventType::kCompositionEnd {
-            return self.CommitText(
+        // InputMethodController::SetComposition selects and replaces the previous
+        // composition, then applies the IME selection inside the inserted text.
+        if event.r#type == EventType::kCompositionStart {
+            self.selections
+                .SetComposition(id, Some(self.SelectionFor(id)));
+            event.default_handled = true;
+            return true;
+        }
+        if matches!(
+            event.r#type,
+            EventType::kCompositionUpdate | EventType::kCompositionEnd
+        ) {
+            let value = ReadNode(document, id, |d, _, i| d.ControlValue(i)).unwrap_or_default();
+            let range = self
+                .selections
+                .Composition(id)
+                .unwrap_or_else(|| self.SelectionFor(id));
+            self.selections.Set(id, range);
+            let start = ByteBoundary(&value, range.Start());
+            let updated = self.CommitText(
                 event,
                 document,
                 id,
@@ -199,6 +248,38 @@ impl TextEditor {
                 emit,
                 dispatch,
             );
+            if event.r#type == EventType::kCompositionUpdate {
+                let current =
+                    ReadNode(document, id, |d, _, i| d.ControlValue(i)).unwrap_or_default();
+                // A cancelled beforeinput must not create a range for text that
+                // was never inserted (or overwrite a listener's selection).
+                let mut expected = value.clone();
+                expected.replace_range(start..ByteBoundary(&value, range.End()), &event.text);
+                if current == expected {
+                    self.selections.SetComposition(
+                        id,
+                        Some(Selection {
+                            anchor: start,
+                            focus: start + event.text.len(),
+                        }),
+                    );
+                    let native = match &event.underlying_event {
+                        Some(InputEvent::Composition(v)) => v.selection,
+                        _ => None,
+                    }
+                    .unwrap_or((event.text.len(), event.text.len()));
+                    self.selections.Set(
+                        id,
+                        Selection {
+                            anchor: start + ByteBoundary(&event.text, native.0),
+                            focus: start + ByteBoundary(&event.text, native.1),
+                        },
+                    );
+                }
+            } else {
+                self.selections.SetComposition(id, None);
+            }
+            return updated;
         }
         if event.r#type == EventType::kTextInput
             && matches!(&event.underlying_event, Some(InputEvent::TextInput(_)))
@@ -221,8 +302,8 @@ impl TextEditor {
             anchor: value.len(),
             focus: value.len(),
         });
-        selection.anchor = selection.anchor.min(value.len());
-        selection.focus = selection.focus.min(value.len());
+        selection.anchor = ByteBoundary(&value, selection.anchor);
+        selection.focus = ByteBoundary(&value, selection.focus);
         self.selections.Set(id, selection);
         let command = event.modifiers.control || event.modifiers.meta;
         if command && (event.key == "a" || event.key == "A") {
@@ -242,10 +323,18 @@ impl TextEditor {
         ) {
             let mut next = selection.focus;
             if event.key == "ArrowLeft" {
-                next = PreviousCodePoint(&value, next)
+                next = if !event.modifiers.shift && !selection.Collapsed() {
+                    selection.Start()
+                } else {
+                    PreviousCodePoint(&value, next)
+                };
             }
             if event.key == "ArrowRight" {
-                next = NextCodePoint(&value, next)
+                next = if !event.modifiers.shift && !selection.Collapsed() {
+                    selection.End()
+                } else {
+                    NextCodePoint(&value, next)
+                };
             }
             if event.key == "Home" {
                 next = 0

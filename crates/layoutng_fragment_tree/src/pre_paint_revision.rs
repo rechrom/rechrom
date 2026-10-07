@@ -17,7 +17,9 @@ static NEXT_REVISION: AtomicU64 = AtomicU64::new(1);
 
 fn next_revision() -> u64 {
     NEXT_REVISION
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |revision| revision.checked_add(1))
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |revision| {
+            revision.checked_add(1)
+        })
         .expect("pre-paint revision exhausted")
 }
 
@@ -415,6 +417,10 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         replaced_content,
         resources: _,
         glyph_runs,
+        text_caret_positions,
+        text_control_host,
+        text_control_inner_editor,
+        text_control_empty_caret,
         list_marker_symbol,
         list_marker_inside,
         mathml,
@@ -480,6 +486,10 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && text_line_top_offset == &b.text_line_top_offset
         && replaced_content == &b.replaced_content
         && glyph_runs == &b.glyph_runs
+        && text_caret_positions == &b.text_caret_positions
+        && text_control_host == &b.text_control_host
+        && text_control_inner_editor == &b.text_control_inner_editor
+        && text_control_empty_caret == &b.text_control_empty_caret
         && list_marker_symbol == &b.list_marker_symbol
         && list_marker_inside == &b.list_marker_inside
         && mathml == &b.mathml

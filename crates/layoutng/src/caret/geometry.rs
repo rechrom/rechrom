@@ -1,6 +1,5 @@
-//! Caret geometry derived from the current exported layout fragments and shaped runs.
-//! This adapter covers bar carets in text controls; editing owns the selection.
-use crate::fragment_tree::{FragmentKind, FragmentNode, PaintGlyphRun};
+//! Shared layout positions for insertion carets, selection painting and hit testing.
+use crate::fragment_tree::{FragmentKind, FragmentNode};
 use crate::internal::layout_input::{Offset, Size, TextDirection};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -9,39 +8,77 @@ pub struct LocalCaretRect {
     pub size: Size,
 }
 
-fn inline_position(runs: &[PaintGlyphRun], offset: u32) -> Option<f64> {
-    let mut before: Option<(u32, f64)> = None;
-    let mut after: Option<(u32, f64)> = None;
-    for run in runs {
-        for glyph in &run.glyphs {
-            if glyph.character_index < offset {
-                if before.is_none_or(|(i, _)| glyph.character_index >= i) {
-                    before = Some((
-                        glyph.character_index,
-                        if run.rtl {
-                            glyph.offset.x
-                        } else {
-                            glyph.offset.x + glyph.advance
-                        },
-                    ));
-                }
-            } else if after.is_none_or(|(i, _)| glyph.character_index < i) {
-                after = Some((
-                    glyph.character_index,
-                    if run.rtl {
-                        glyph.offset.x + glyph.advance
-                    } else {
-                        glyph.offset.x
-                    },
-                ));
-            }
-        }
-    }
-    after.or(before).map(|(_, x)| x)
+pub fn TextInlinePosition(node: &FragmentNode, offset: u32) -> Option<f64> {
+    node.paint
+        .text_caret_positions
+        .iter()
+        .find(|(i, _)| *i == offset)
+        .map(|(_, x)| *x)
 }
 
-/// The offset is in the UTF-16 coordinate space used by the shaped layout runs.
-/// The result is local to the owning control; paint applies its property state.
+pub fn TextFragmentCaretRect(node: &FragmentNode, offset: u32) -> Option<LocalCaretRect> {
+    let x = TextInlinePosition(node, offset)?;
+    let run = node.paint.glyph_runs.first()?;
+    Some(LocalCaretRect {
+        offset: Offset { x, y: 0.0 },
+        size: Size {
+            width: 1.0,
+            height: node.size.height.max(run.font_size),
+        },
+    })
+}
+
+/// A text item is one visual bidi run. Clip range endpoints to its logical span.
+pub fn TextFragmentRangeRect(node: &FragmentNode, start: u32, end: u32) -> Option<LocalCaretRect> {
+    let start = start.max(node.text_start?);
+    let end = end.min(node.text_end?);
+    if start >= end {
+        return None;
+    }
+    let a = TextFragmentCaretRect(node, start)?;
+    let b = TextFragmentCaretRect(node, end)?;
+    Some(LocalCaretRect {
+        offset: Offset {
+            x: a.offset.x.min(b.offset.x),
+            y: a.offset.y,
+        },
+        size: Size {
+            width: (b.offset.x - a.offset.x).abs(),
+            height: a.size.height,
+        },
+    })
+}
+
+fn visit_text(node: &FragmentNode, parent: Offset, visit: &mut impl FnMut(&FragmentNode, Offset)) {
+    if node.paint.hidden {
+        return;
+    }
+    let position = Offset {
+        x: parent.x + node.offset.x,
+        y: parent.y + node.offset.y,
+    };
+    if matches!(
+        node.kind,
+        FragmentKind::kText | FragmentKind::kGeneratedText
+    ) {
+        visit(node, position);
+    }
+    let scroll = if node.paint.establishes_paint_state {
+        node.paint.scroll_offset
+    } else {
+        Offset::default()
+    };
+    let origin = Offset {
+        x: position.x - scroll.x,
+        y: position.y - scroll.y,
+    };
+    for child in &node.children {
+        visit_text(child, origin, visit);
+    }
+}
+
+/// UTF-16 offset, local to the control's border box. Use the inner editor for
+/// empty values (placeholder glyphs never determine the insertion position).
 #[allow(non_snake_case)]
 pub fn TextControlCaretRect(
     owner: &FragmentNode,
@@ -49,106 +86,120 @@ pub fn TextControlCaretRect(
     empty: bool,
 ) -> Option<LocalCaretRect> {
     let metrics = owner.paint.text_control_caret_metrics?;
-    let border = owner.paint.border;
-    let padding = owner.paint.padding;
-    let origin = Offset {
-        x: border.left + padding.left,
-        y: border.top + padding.top,
-    };
-    let width = (owner.size.width - origin.x - border.right - padding.right).max(0.0);
-    let height = (owner.size.height - origin.y - border.bottom - padding.bottom).max(0.0);
-    if width <= 0.0 || height <= 0.0 || metrics.font_height <= 0.0 {
-        return None;
-    }
-    let caret_height = metrics.font_height.min(height);
     let mut candidate: Option<(u32, LocalCaretRect)> = None;
-    fn visit(
-        node: &FragmentNode,
-        parent: Offset,
-        offset: u32,
-        font_height: f64,
-        ascent: f64,
-        candidate: &mut Option<(u32, LocalCaretRect)>,
-    ) {
-        if node.paint.hidden {
-            return;
+    if !empty {
+        for child in &owner.children {
+            visit_text(
+                child,
+                Offset {
+                    x: -owner.paint.scroll_offset.x,
+                    y: -owner.paint.scroll_offset.y,
+                },
+                &mut |node, position| {
+                    let start = node.text_start.unwrap_or(0);
+                    let end = node.text_end.unwrap_or(start);
+                    if start <= offset {
+                        if let Some(x) = TextInlinePosition(node, offset.min(end)) {
+                            let top = position.y + node.paint.text_line_top_offset.unwrap_or(0.0);
+                            let rect = LocalCaretRect {
+                                offset: Offset {
+                                    x: position.x + x,
+                                    y: position.y
+                                        + node
+                                            .paint
+                                            .glyph_runs
+                                            .first()
+                                            .map_or(0.0, |run| run.baseline - metrics.ascent)
+                                        + top.round()
+                                        - top,
+                                },
+                                size: Size {
+                                    width: 1.0,
+                                    height: metrics.font_height,
+                                },
+                            };
+                            if candidate.is_none_or(|(old, _)| start >= old) {
+                                candidate = Some((start, rect));
+                            }
+                        }
+                    }
+                },
+            );
         }
+    }
+    if let Some((_, rect)) = candidate {
+        return Some(rect);
+    }
+    fn editor(node: &FragmentNode, parent: Offset) -> Option<LocalCaretRect> {
         let position = Offset {
             x: parent.x + node.offset.x,
             y: parent.y + node.offset.y,
         };
-        if matches!(
-            node.kind,
-            FragmentKind::kText | FragmentKind::kGeneratedText
-        ) {
-            let start = node.text_start.unwrap_or(0);
-            let end = node.text_end.unwrap_or(start);
-            if start <= offset {
-                if let (Some(x), Some(run)) = (
-                    inline_position(&node.paint.glyph_runs, offset.min(end)),
-                    node.paint.glyph_runs.first(),
-                ) {
-                    let snap = node.paint.text_line_top_offset.map_or(0.0, |top| {
-                        let top = position.y + top;
-                        top.round() - top
-                    });
-                    let rect = LocalCaretRect {
-                        offset: Offset {
-                            x: position.x + x,
-                            y: position.y + run.baseline - ascent + snap,
-                        },
-                        size: Size {
-                            width: 1.0,
-                            height: font_height,
-                        },
-                    };
-                    if candidate.is_none_or(|(old, _)| start >= old) {
-                        *candidate = Some((start, rect));
-                    }
-                }
-            }
-        }
-        let mut child_origin = position;
-        if node.paint.establishes_paint_state {
-            child_origin.x -= node.paint.scroll_offset.x;
-            child_origin.y -= node.paint.scroll_offset.y;
+        if let Some(rect) = node.paint.text_control_empty_caret {
+            return Some(LocalCaretRect {
+                offset: Offset {
+                    x: position.x + rect.offset.x,
+                    y: position.y + rect.offset.y,
+                },
+                size: rect.size,
+            });
         }
         for child in &node.children {
-            visit(child, child_origin, offset, font_height, ascent, candidate);
+            if let Some(rect) = editor(child, position) {
+                return Some(rect);
+            }
+        }
+        None
+    }
+    for child in &owner.children {
+        if let Some(rect) = editor(child, Offset::default()) {
+            return Some(rect);
         }
     }
-    if !empty {
-        let parent = Offset {
-            x: -owner.paint.scroll_offset.x,
-            y: -owner.paint.scroll_offset.y,
-        };
-        for child in &owner.children {
-            visit(
-                child,
-                parent,
-                offset,
-                caret_height,
-                metrics.ascent,
-                &mut candidate,
-            );
-        }
-    }
-    Some(candidate.map_or(
-        LocalCaretRect {
-            offset: Offset {
-                x: origin.x
-                    + if owner.paint.direction == TextDirection::kRtl {
-                        width - 1.0
-                    } else {
-                        0.0
-                    },
-                y: origin.y + (metrics.line_height.min(height) - caret_height).max(0.0) * 0.5,
+    let b = owner.paint.border;
+    let p = owner.paint.padding;
+    Some(LocalCaretRect {
+        offset: Offset {
+            x: if owner.paint.direction == TextDirection::kRtl {
+                owner.size.width - b.right - p.right - 1.0
+            } else {
+                b.left + p.left
             },
-            size: Size {
-                width: 1.0,
-                height: caret_height,
-            },
+            y: b.top + p.top + (metrics.line_height - metrics.font_height) * 0.5,
         },
-        |(_, rect)| rect,
-    ))
+        size: Size {
+            width: 1.0,
+            height: metrics.font_height,
+        },
+    })
+}
+
+/// Hit test the closest shaped insertion boundary on the closest text line.
+#[allow(non_snake_case)]
+pub fn TextControlOffsetForPoint(owner: &FragmentNode, point: Offset, empty: bool) -> u32 {
+    if empty {
+        return 0;
+    }
+    let mut best: Option<(f64, f64, u32)> = None;
+    for child in &owner.children {
+        visit_text(
+            child,
+            Offset {
+                x: -owner.paint.scroll_offset.x,
+                y: -owner.paint.scroll_offset.y,
+            },
+            &mut |node, position| {
+                let dy = (position.y - point.y)
+                    .max(0.0)
+                    .max(point.y - position.y - node.size.height);
+                for &(offset, x) in &node.paint.text_caret_positions {
+                    let score = (dy, (position.x + x - point.x).abs(), offset);
+                    if best.is_none_or(|old| score < old) {
+                        best = Some(score);
+                    }
+                }
+            },
+        );
+    }
+    best.map_or(0, |(_, _, offset)| offset)
 }

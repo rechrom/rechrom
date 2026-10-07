@@ -1086,6 +1086,7 @@ fn AppendChildren<'a>(
                 false,
                 std::ptr::null(),
             ) as *mut LayoutObject;
+            let trailing_newline = textarea && !placeholder && value.ends_with('\n');
             if !value.is_empty() {
                 tree.AddText(
                     unsafe { &mut *editor },
@@ -1098,6 +1099,23 @@ fn AppendChildren<'a>(
                     }
                     .into(),
                     std::ptr::null(),
+                    false,
+                    std::ptr::null(),
+                );
+            }
+            // TextControlElement::AdjustPlaceholderBreakElement keeps a caret
+            // line after the final newline without changing the control value.
+            if trailing_newline {
+                let mut break_style = editor_style.clone();
+                break_style.display = Display::kInline;
+                break_style.extended.as_mut().unwrap().width_percent = None;
+                tree.AddBox(
+                    unsafe { &mut *editor },
+                    node.Id() | (1 << 50),
+                    &break_style,
+                    "::text-control-placeholder-break".into(),
+                    None,
+                    NodeKind::kLineBreak,
                     false,
                     std::ptr::null(),
                 );

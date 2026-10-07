@@ -202,6 +202,8 @@ pub struct KeyEvent {
 }
 #[derive(Clone, Debug, Default)]
 pub struct CompositionEvent {
+    /// UTF-8 byte offsets within preedit, as supplied by the native IME.
+    pub selection: Option<(usize, usize)>,
     pub r#type: CompositionEventType,
     pub data: String,
     pub target_node_id: Option<u64>,

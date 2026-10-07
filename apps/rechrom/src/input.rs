@@ -294,13 +294,18 @@ impl InputState {
                     ..Default::default()
                 })));
             }
-            WindowEvent::Ime(Ime::Preedit(data, _)) => {
+            WindowEvent::Ime(Ime::Preedit(data, selection)) => {
                 if !self.composing && !data.is_empty() {
                     self.composing = true;
                     result.push(composition(CompositionEventType::kStart, ""));
                 }
                 if self.composing {
-                    result.push(composition(CompositionEventType::kUpdate, data));
+                    result.push(Command::Input(InputEvent::Composition(CompositionEvent {
+                        r#type: CompositionEventType::kUpdate,
+                        data: data.clone(),
+                        selection: *selection,
+                        ..Default::default()
+                    })));
                 }
             }
             WindowEvent::Ime(Ime::Commit(data)) => {
@@ -321,6 +326,10 @@ impl InputState {
                 }
             }
             WindowEvent::Focused(false) => {
+                if self.composing {
+                    result.push(composition(CompositionEventType::kEnd, ""));
+                    self.composing = false;
+                }
                 if let Some(end) = self.take_pending_wheel_end() {
                     result.push(end);
                 }
@@ -555,6 +564,29 @@ mod tests {
         };
         assert!(wheel(4, 0, 1.0).CanCoalesce(&wheel(4, 0, 2.0)));
         assert!(!wheel(4, 0, 1.0).CanCoalesce(&wheel(0, 4, 2.0)));
+    }
+
+    #[test]
+    fn ime_preedit_preserves_native_byte_selection_and_cancels_on_focus_loss() {
+        let mut state = InputState::default();
+        let commands = state.event(
+            &WindowEvent::Ime(Ime::Preedit("你🙂好".into(), Some((3, 7)))),
+            2.0,
+        );
+        assert!(
+            matches!(&commands[1], Command::Input(InputEvent::Composition(event))
+            if event.r#type == CompositionEventType::kUpdate && event.selection == Some((3, 7)))
+        );
+        let commands = state.event(&WindowEvent::Focused(false), 2.0);
+        assert!(
+            matches!(&commands[0], Command::Input(InputEvent::Composition(event))
+            if event.r#type == CompositionEventType::kEnd && event.data.is_empty())
+        );
+        assert!(!state.composing);
+        let commands = state.event(&WindowEvent::Ime(Ime::Commit("新".into())), 2.0);
+        assert!(
+            matches!(&commands[0], Command::Input(InputEvent::TextInput(event)) if event.text == "新")
+        );
     }
 
     #[test]

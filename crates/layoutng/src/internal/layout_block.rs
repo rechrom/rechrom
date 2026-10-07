@@ -261,6 +261,12 @@ impl LayoutBlock {
     // cpp: layoutng/internal/layout_block.cc:199-206
     pub fn HasLineIfEmpty(&self) -> bool {
         self.CheckIsNotDestroyed();
+        // TextControlInnerEditorElement::CustomStyleForLayoutObject reserves
+        // an editable line even before text exists. The host projection does
+        // not run that DOM custom-style hook, so preserve its layout policy here.
+        if self.IsTextControlInnerEditor() {
+            return true;
+        }
         let element = DynamicTo::<Element>(self.GetNode());
         if !element.is_null() && unsafe { &*element }.InputIsRootEditable() {
             return true;

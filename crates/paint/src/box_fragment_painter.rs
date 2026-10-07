@@ -2087,6 +2087,46 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             return;
         }
+        let editing = self
+            .context
+            .borrow()
+            .caret
+            .filter(|state| fragment.paint.text_control_host == Some(state.node_id));
+        let range_rect = |range: (u32, u32)| {
+            layoutng_assembly::caret::geometry::TextFragmentRangeRect(fragment, range.0, range.1)
+                .map(|local| {
+                    let top = self.node.paint_offset.y
+                        + fragment.paint.text_line_top_offset.unwrap_or(0.0);
+                    PaintRect {
+                        x: self.node.paint_offset.x + local.offset.x,
+                        y: self.node.paint_offset.y + local.offset.y + self.node.RoundedPaintY(top)
+                            - top,
+                        width: local.size.width,
+                        height: local.size.height,
+                    }
+                })
+        };
+        let selection_rect = editing
+            .and_then(|state| state.selection)
+            .and_then(range_rect);
+        if let Some(rect) = selection_rect {
+            self.context.borrow_mut().Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kDrawRect,
+                    phase,
+                    node_id: fragment.node_id,
+                    rect,
+                    color: Color {
+                        red: 0.0,
+                        green: 0.4,
+                        blue: 1.0,
+                        alpha: 1.0,
+                    },
+                    ..Default::default()
+                },
+                self.node,
+            );
+        }
         let mut glyph_foregrounds = Vec::new();
         for input_run in &fragment.paint.glyph_runs {
             let make_item = |color: Color,
@@ -2253,8 +2293,68 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
         }
         self.PaintTextDecorations(phase, false);
-        for item in glyph_foregrounds {
-            self.context.borrow_mut().Append(item, self.node);
+        for item in &glyph_foregrounds {
+            self.context.borrow_mut().Append(item.clone(), self.node);
+        }
+        // Repaint selected glyphs under the selection clip, preserving ligatures
+        // and fallback runs rather than splitting glyph ids at character offsets.
+        if let Some(rect) = selection_rect {
+            let mut context = self.context.borrow_mut();
+            context.Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kSave,
+                    phase,
+                    node_id: fragment.node_id,
+                    ..Default::default()
+                },
+                self.node,
+            );
+            context.Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kClipRect,
+                    phase,
+                    node_id: fragment.node_id,
+                    rect,
+                    ..Default::default()
+                },
+                self.node,
+            );
+            for mut item in glyph_foregrounds {
+                item.color = Color {
+                    red: 1.0,
+                    green: 1.0,
+                    blue: 1.0,
+                    alpha: 1.0,
+                };
+                context.Append(item, self.node);
+            }
+            context.Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kRestore,
+                    phase,
+                    node_id: fragment.node_id,
+                    ..Default::default()
+                },
+                self.node,
+            );
+        }
+        if let Some(mut rect) = editing
+            .and_then(|state| state.composition)
+            .and_then(range_rect)
+        {
+            rect.y += rect.height - 1.0;
+            rect.height = 1.0;
+            self.context.borrow_mut().Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kDrawRect,
+                    phase,
+                    node_id: fragment.node_id,
+                    rect,
+                    color: style.color,
+                    ..Default::default()
+                },
+                self.node,
+            );
         }
         self.PaintTextDecorations(phase, true);
         if apply_svg_transform {

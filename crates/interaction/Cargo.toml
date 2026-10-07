@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+paint = { path = "../paint" }
 layoutng_assembly = { path = "../layoutng_assembly" }
 dom = { path = "../dom" }
 page_mutation = { path = "../page_mutation" }

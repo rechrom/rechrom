@@ -4,6 +4,7 @@ use std::sync::Arc;
 pub mod pre_paint_revision;
 pub use pre_paint_revision::SamePrePaintInput;
 
+pub use foundation::graphics_types::graphics::paint::display_item_client_types::RasterEffectOutset;
 use layoutng::internal::form_control_types::FormControlType;
 use layoutng::internal::layout_input::{
     BorderLineStyle, BoxDecorationBreak, Display, Edges, FloatSide, FontFace, FontSmoothing,
@@ -13,7 +14,6 @@ use layoutng::internal::layout_input::{
 };
 use layoutng::internal::layout_input_types::Color;
 use layoutng_style::style::appearance::AppearanceValue;
-pub use foundation::graphics_types::graphics::paint::display_item_client_types::RasterEffectOutset;
 
 /// A native physical ink rect, relative to the owning fragment's origin.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -500,6 +500,11 @@ pub struct PaintProperties {
     pub replaced_content: Option<ReplacedContentPaintData>,
     pub resources: Option<Arc<PaintResources>>,
     pub glyph_runs: Vec<PaintGlyphRun>,
+    /// Shaper caret stops, in this text fragment's local inline coordinates.
+    pub text_caret_positions: Vec<(u32, f64)>,
+    pub text_control_host: Option<u64>,
+    pub text_control_inner_editor: bool,
+    pub text_control_empty_caret: Option<FragmentPaintRect>,
     pub list_marker_symbol: Option<ListStyleType>,
     pub list_marker_inside: bool,
     pub mathml: Option<Arc<MathMLPaintData>>,
@@ -570,6 +575,10 @@ impl Default for PaintProperties {
             replaced_content: None,
             resources: None,
             glyph_runs: Vec::new(),
+            text_caret_positions: Vec::new(),
+            text_control_host: None,
+            text_control_inner_editor: false,
+            text_control_empty_caret: None,
             list_marker_symbol: None,
             list_marker_inside: false,
             mathml: None,

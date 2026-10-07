@@ -793,7 +793,26 @@ fn RecordPaint(
     output.display_items.reserve(display_item_capacity);
     output.chunks.reserve(chunk_capacity);
     output.resources = fragments.paint.resources.clone();
-    let context = RefCell::new(PaintContext::WithCaret(&mut output, caret));
+    // PrePaint's resident nodes deliberately omit FragmentNode.children.
+    // Resolve against the complete layout snapshot before painting that tree.
+    fn caret_owner(node: &FragmentNode, id: u64) -> Option<&FragmentNode> {
+        if node.node_id == id && node.paint.text_control_caret_metrics.is_some() {
+            return Some(node);
+        }
+        node.children
+            .iter()
+            .find_map(|child| caret_owner(child, id))
+    }
+    let caret_local_rect = caret.and_then(|state| {
+        layoutng_assembly::caret::geometry::TextControlCaretRect(
+            caret_owner(fragments, state.node_id)?,
+            state.offset,
+            state.empty,
+        )
+    });
+    let mut paint_context = PaintContext::WithCaret(&mut output, caret);
+    paint_context.caret_local_rect = caret_local_rect;
+    let context = RefCell::new(paint_context);
     context
         .borrow_mut()
         .SetNextPropertyId(pre_paint.next_property_id);

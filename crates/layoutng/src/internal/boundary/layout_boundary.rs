@@ -1222,6 +1222,54 @@ fn ExportPaintProperties(
         }
         output.svg_view_box = element_data.svg_view_box;
     }
+    // Preserve the real editor identity rather than reconstructing its synthetic id.
+    let mut ancestor = source as *const Node;
+    while !ancestor.is_null() {
+        let node = unsafe { &*ancestor };
+        if node.InputKind() == NodeKind::kFormControl {
+            output.text_control_host = Some(node.InputId());
+            break;
+        }
+        ancestor = node.parentNode().cast();
+    }
+    if element_data.is_some_and(|data| data.text_control_inner_editor) {
+        output.text_control_inner_editor = true;
+        let style = unsafe { &*object }.StyleRef();
+        let font = style.GetFontHeightForDefaultBaseline();
+        let font_height = Number(font.LineHeight());
+        let line_height = style.ComputedLineHeight() as f64;
+        let editor = unsafe { &*layout_box };
+        let size = editor.StitchedSize();
+        let border = output.border;
+        let padding = output.padding;
+        let left = border.left + padding.left;
+        let right = (Number(size.width) - border.right - padding.right - 1.0).max(left);
+        let align = paint_style
+            .extended
+            .as_ref()
+            .map_or(crate::internal::layout_input::TextAlign::kStart, |e| {
+                e.text_align
+            });
+        use crate::internal::layout_input::TextAlign;
+        let rtl = output.direction == TextDirection::kRtl;
+        let x = match align {
+            TextAlign::kCenter | TextAlign::kWebkitCenter => (left + right) * 0.5,
+            TextAlign::kRight | TextAlign::kWebkitRight => right,
+            TextAlign::kEnd if !rtl => right,
+            TextAlign::kStart | TextAlign::kJustify if rtl => right,
+            _ => left,
+        };
+        output.text_control_empty_caret = Some(FragmentPaintRect {
+            offset: Offset {
+                x,
+                y: border.top + padding.top + (line_height - font_height) * 0.5,
+            },
+            size: Size {
+                width: 1.0,
+                height: font_height,
+            },
+        });
+    }
     let appearance = paint_style
         .extended
         .as_ref()
@@ -2517,6 +2565,7 @@ fn ExportInlineInkOverflow(item: &FragmentItem, paint: &mut PaintProperties) {
 
 fn ExportInlineItem(
     item: &FragmentItem,
+    fragment_items: &layoutng_fragment_tree::fragment_items::FragmentItems,
     parent_offset: PhysicalOffset,
     containing_line_offset: Option<PhysicalOffset>,
     sources: &SourceMap,
@@ -2570,6 +2619,29 @@ fn ExportInlineItem(
             output.text_end = Some(item.EndOffset());
             ExportListMarkerSymbol(item, &mut output.paint);
             ExportGlyphRuns(item, &mut output.paint);
+            if output.paint.text_control_host.is_some() {
+                let text = item.Text(fragment_items);
+                let view = item.TextShapeResult();
+                let shape = (!view.is_null()).then(|| unsafe { &*view }.CreateShapeResult());
+                for offset in item.StartOffset()..=item.EndOffset() {
+                    let position = if let Some(shape) = shape {
+                        use font_engine::fonts::shaping::shape_result_types::AdjustMidCluster;
+                        LayoutUnit::FromFloatRound(
+                            unsafe { &*shape }.CaretPositionForOffset(
+                                offset - item.StartOffset(),
+                                &text,
+                                AdjustMidCluster::kToEnd,
+                            ) * item.GetTextFitScale(),
+                        )
+                    } else {
+                        item.CaretInlinePositionForOffset(text.clone(), offset)
+                    };
+                    output
+                        .paint
+                        .text_caret_positions
+                        .push((offset, Number(position)));
+                }
+            }
         }
         ItemType::kLine => {
             output.kind = FragmentKind::kLine;
@@ -2631,6 +2703,7 @@ fn ExportInlineItem(
                         while index < span.len() {
                             index = AppendInlineItemTree(
                                 span,
+                                unsafe { &*nested_items },
                                 index,
                                 span.len(),
                                 PhysicalOffset::default(),
@@ -2669,6 +2742,7 @@ fn ExportInlineItem(
 // cpp: layoutng/internal/boundary/layout_boundary.cc:1850-1889
 fn AppendInlineItemTree(
     items: &[FragmentItem],
+    fragment_items: &layoutng_fragment_tree::fragment_items::FragmentItems,
     index: usize,
     limit: usize,
     parent_offset: PhysicalOffset,
@@ -2691,6 +2765,7 @@ fn AppendInlineItemTree(
     let subtree_end = limit.min(index + subtree_size);
     let mut node = ExportInlineItem(
         item,
+        fragment_items,
         parent_offset,
         containing_line_offset,
         sources,
@@ -2705,6 +2780,7 @@ fn AppendInlineItemTree(
     while child_index < subtree_end {
         child_index = AppendInlineItemTree(
             items,
+            fragment_items,
             child_index,
             subtree_end,
             *item.OffsetInContainerFragment(),
@@ -2843,6 +2919,7 @@ fn ExportFragment(
         while index < span.len() {
             index = AppendInlineItemTree(
                 span,
+                unsafe { &*items },
                 index,
                 span.len(),
                 PhysicalOffset::default(),

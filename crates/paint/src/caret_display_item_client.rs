@@ -10,7 +10,7 @@ use crate::{
     pre_paint_tree_walk::PaintTreeNode,
     PaintRect,
 };
-use layoutng_assembly::{caret::geometry::TextControlCaretRect, fragment_tree::FragmentKind};
+use layoutng_assembly::fragment_tree::FragmentKind;
 use std::cell::RefCell;
 
 #[allow(non_snake_case)]
@@ -18,6 +18,9 @@ pub(crate) fn PaintCaret(node: &PaintTreeNode<'_>, context: &RefCell<PaintContex
     let Some(caret) = context.borrow().caret else {
         return;
     };
+    if caret.selection.is_some() && caret.composition.is_none() {
+        return;
+    }
     let fragment = node.fragment.as_deref().expect("caret owner");
     if fragment.node_id != caret.node_id
         || fragment.kind != FragmentKind::kBox
@@ -25,7 +28,7 @@ pub(crate) fn PaintCaret(node: &PaintTreeNode<'_>, context: &RefCell<PaintContex
     {
         return;
     }
-    let Some(local) = TextControlCaretRect(fragment, caret.offset, caret.empty) else {
+    let Some(local) = context.borrow().caret_local_rect else {
         return;
     };
     let rect = PaintRect {
@@ -48,8 +51,13 @@ pub(crate) fn PaintCaret(node: &PaintTreeNode<'_>, context: &RefCell<PaintContex
         context.borrow_mut().SetCaretGeometry(CaretGeometry {
             node_id: caret.node_id,
             rect: root_rect,
-            visible: caret.visible,
+            visible: caret.visible && caret.selection.is_none(),
         });
+    }
+    // A selected preedit still publishes its focus rectangle to the platform
+    // candidate window, while the selected text has no visible insertion bar.
+    if caret.selection.is_some() {
+        return;
     }
     let _caret_properties =
         crate::paint_context::ScopedPaintChunkProperties::caret(context, caret, node);

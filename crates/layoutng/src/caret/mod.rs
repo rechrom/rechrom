@@ -6,12 +6,14 @@ pub mod display_item_client;
 pub mod geometry;
 use display_item_client::CaretDisplayItemClient;
 
-/// A collapsed editing selection expressed in layout's UTF-16 offset space.
+/// Editing focus and marked ranges expressed in layout's UTF-16 offset space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextCaret {
     pub node_id: u64,
     pub utf16_offset: u32,
     pub empty: bool,
+    pub composition: Option<(u32, u32)>,
+    pub selection: Option<(u32, u32)>,
 }
 /// Current presentation state consumed by paint without DOM or window dependencies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,6 +21,8 @@ pub struct CaretPaintState {
     pub node_id: u64,
     pub offset: u32,
     pub empty: bool,
+    pub composition: Option<(u32, u32)>,
+    pub selection: Option<(u32, u32)>,
     pub visible: bool,
     pub display_item_client_id: u64,
     pub display_item_client_is_cacheable: bool,
@@ -74,6 +78,8 @@ impl FrameCaret {
             node_id: position.node_id,
             offset: position.utf16_offset,
             empty: position.empty,
+            composition: position.composition,
+            selection: position.selection,
             visible: self.visible,
             display_item_client_id: self.display_item_client.Id(),
             display_item_client_is_cacheable: self.display_item_client.IsCacheable(),

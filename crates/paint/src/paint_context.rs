@@ -126,6 +126,7 @@ pub fn CalculateRectKnownToBeOpaqueForRecord(
 pub struct PaintContext<'o> {
     output: &'o mut PaintArtifact,
     pub(crate) caret: Option<crate::paint_engine::CaretPosition>,
+    pub(crate) caret_local_rect: Option<layoutng_assembly::caret::geometry::LocalCaretRect>,
     chunker: PaintChunker,
     drawing_recorder: Option<(
         DisplayItemId,
@@ -148,6 +149,7 @@ impl<'o> PaintContext<'o> {
         Self {
             output,
             caret: None,
+            caret_local_rect: None,
             chunker: PaintChunker::default(),
             drawing_recorder: None,
             next_property_id: 1,
@@ -161,6 +163,7 @@ impl<'o> PaintContext<'o> {
         Self {
             output,
             caret,
+            caret_local_rect: None,
             chunker: PaintChunker::default(),
             drawing_recorder: None,
             next_property_id: 1,

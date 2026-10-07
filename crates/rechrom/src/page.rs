@@ -1067,6 +1067,7 @@ pub struct Page {
     cursor_hit_test_queries: usize,
     active: bool,
     selection_revision: u64,
+    editing_paint_dirty: bool,
 }
 impl Page {
     pub fn HasBlockingWheelListener(&self) -> bool {
@@ -1322,6 +1323,7 @@ impl Page {
             cursor_hit_test_queries: 0,
             active: true,
             selection_revision: 0,
+            editing_paint_dirty: false,
         }
     }
     pub fn SetPreferredColorScheme(&mut self, preference: PreferredColorScheme) {
@@ -1870,6 +1872,7 @@ impl Page {
         let selection_changed = self.selection_revision != revision;
         self.selection_revision = revision;
         if changed || selection_changed {
+            self.editing_paint_dirty = true;
             // Editing invalidates native layout below, so a snapshot captured
             // by an earlier CSSOM query cannot substitute for this lifecycle.
             self.state.InvalidateMeasurement();
@@ -2126,7 +2129,10 @@ impl Page {
         let reused_recordings = self.state.ApplyPendingScrollUpdates(self.frame.as_mut());
         trace.set("scroll_records_reused", reused_recordings as u8 as f64);
         let scroll_done = profile.map(|start| start.elapsed());
-        if self.frame.is_some() && self.state.document.borrow().GetStyleImpact().IsEmpty() {
+        if self.frame.is_some()
+            && !self.editing_paint_dirty
+            && self.state.document.borrow().GetStyleImpact().IsEmpty()
+        {
             trace.set("frame_retained", 1.0);
             // Keep the host's presentation/lifecycle contract while reusing
             // the existing fragments and display list for an ineffective edit.
@@ -2269,6 +2275,7 @@ impl Page {
             }
         }
         self.frame = Some(frame);
+        self.editing_paint_dirty = false;
         // LocalFrameView::PerformPostLayoutTasks marks hover dirty. The
         // synthetic move is deliberately deferred to BeginFrame so script
         // cannot re-enter the layout that just completed.

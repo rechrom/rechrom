@@ -79,6 +79,7 @@ impl<'a> FocusController<'a> {
         };
         if let Some(old) = old_id.filter(|&id| ReadNode(&self.document, id, |_, _, _| ()).is_some())
         {
+            self.editor.FinishComposition(old);
             let mut blur = MakeSyntheticEvent(EventType::kBlur, old);
             blur.related_target_node_id = Some(id);
             (self.dispatch)(&mut blur, old);
@@ -109,6 +110,7 @@ impl<'a> FocusController<'a> {
             state.focused_node_id = None;
             state.focus_visible_node_id = None;
         }
+        self.editor.FinishComposition(id);
         let mut blur = MakeSyntheticEvent(EventType::kBlur, id);
         (self.dispatch)(&mut blur, id);
         let mut focusout = MakeSyntheticEvent(EventType::kFocusOut, id);
