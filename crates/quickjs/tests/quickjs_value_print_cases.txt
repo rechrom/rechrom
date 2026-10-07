@@ -1,0 +1,34 @@
+undefined
+null
+true
+false
+-0
+(0/0)
+(1/0)
+1e300
+123
+123456789012345678901234567890n
+-123456789012345678901234567890n
+"ascii"
+"é中😀\u0000\ud800\udc00\udfff"
+[1,2,3,4,5]
+[1,,3]
+({a:1,"a b":2,"é":3})
+({a:{b:{c:{d:1}}}})
+({get x(){throw 1},set x(v){},get y(){throw 2},set z(v){}})
+(()=>{let a={};a.self=a;return a})()
+(()=>{let a=[];a[0]=a;return a})()
+(function named(a){return a+1})
+(function* gen(){yield 1})
+Symbol("é")
+Symbol.iterator
+(()=>{let m=new Map();m.set(1,2);m.set("x",{y:3});return m})()
+(()=>{let s=new Set();s.add(1);s.add(2);s.add(3);return s})()
+/a[b/c]d\/e/gim
+new Uint8Array([0,1,255])
+new Int32Array([-2147483648,0,2147483647])
+new BigInt64Array([-1n,12n])
+new Float64Array([1.25,-0,(0/0)])
+new ArrayBuffer(8)
+new Date(0)
+new Date(0/0)

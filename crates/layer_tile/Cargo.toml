@@ -1,0 +1,11 @@
+[package]
+name = "layer_tile"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+browser_tracing = { path = "../tracing" }
+paint = { path = "../paint" }
+layoutng_assembly = { path = "../layoutng_assembly" }
+# Shared matrix/point math only; raster execution remains in renderer.
+skia = { path = "../skia" }

@@ -1,0 +1,32 @@
+const rows=[];
+function value(fn){try{return fn();}catch(e){return e.name;}}
+function snapshot(name){rows.push([name,RegExp.$1,RegExp.$2,RegExp.$9,RegExp.input,RegExp.lastMatch,RegExp.lastParen,RegExp.leftContext,RegExp.rightContext]);}
+snapshot('initial');
+/(\.[a-z0-9]+)$/i.test('result_abc.js');snapshot('extension-test');
+/(\?[^#]*)$/.test('module.js?v=md5');snapshot('query-test');
+/(bad)/.test('unmatched');snapshot('failed-retains');
+/(a)(b)?/.exec('zazz');snapshot('optional-capture');
+/(x)/.exec('no-capture');snapshot('failed-exec-retains');
+'zabczz'.match(/(a)(bc)/);snapshot('string-match');
+'zabzz'.replace(/(a)(b)/,'$2$1');snapshot('string-replace');
+'xabxaby'.match(/(ab)/g);snapshot('global-match');
+'x,ab,y'.split(/(ab)/);snapshot('split');
+'xabz'.search(/(ab)/);snapshot('search');
+'😀x'.match(/(😀)(x)/u);snapshot('unicode');
+/(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)/.test('abcdefghij');snapshot('ten-captures');
+/(ab)/.test('xabz');
+rows.push(['aliases',RegExp['$&'],RegExp['$+'],RegExp['$`'],RegExp["$'"],RegExp['$_']]);
+const get=Object.getOwnPropertyDescriptor(RegExp,'$1')?.get;
+rows.push(['getter-brand',value(()=>get.call(RegExp)),value(()=>get.call({}))]);
+rows.push(['descriptors',Object.getOwnPropertyDescriptor(RegExp,'$1')?.enumerable,Object.getOwnPropertyDescriptor(RegExp,'$1')?.configurable,typeof Object.getOwnPropertyDescriptor(RegExp,'$1')?.set]);
+RegExp.input={toString(){/(inner)/.test('nested inner');return 'set-input';}};snapshot('input-set-coercion');
+RegExp.$1='ignored';snapshot('capture-setter-no-op');
+RegExp['$_']='alias-input';snapshot('input-alias-set');
+class Sub extends RegExp {};new Sub('(sub)').test('xsuby');snapshot('subclass');
+const saved=RegExp.$1;const custom={exec(){return ['changed'];}};RegExp.prototype.test.call(custom,'foo');snapshot('custom-exec-no-update');
+let conversions=0;/(outer)/.exec({toString(){conversions++;/(inner)/.test('inner');return 'outer';}});snapshot('nested-toString');rows.push(['single-conversion',conversions]);
+value(()=>RegExp.prototype.exec.call({},{toString(){conversions++;return 'invalid';}}));rows.push(['brand-before-conversion',conversions]);
+'aaab'.replace(/(a)/g,()=>RegExp.$1);snapshot('global-replace');
+Array.from('xabz'.matchAll(/(ab)/g));snapshot('matchAll');
+rows.push(['native-exec',RegExp.prototype.exec.name,RegExp.prototype.exec.length,Function.prototype.toString.call(RegExp.prototype.exec)]);
+JSON.stringify(rows);

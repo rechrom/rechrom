@@ -1,0 +1,28 @@
+[package]
+name = "quickjs_tools"
+version = "2026.6.4"
+edition = "2021"
+autotests = false
+rust-version = "1.85"
+license = "MIT"
+description = "Rust translation of official QuickJS host tools"
+
+[dependencies]
+quickjs = { path = "../quickjs" }
+
+# OS bindings belong to the command-line host. The QuickJS engine itself has
+# no dependency on libc or this tools crate, and uses no C QuickJS FFI.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[features]
+default = []
+# Explicit original HAVE_CLOSEFROM configuration; requires a supporting libc.
+host-have-closefrom = []
+unicode-use-test = []
+unicode-profile = ["unicode-use-test"]
+unicode-dump-case-conv-table = []
+unicode-dump-table-size = []
+unicode-dump-cc-table = []
+unicode-dump-decomp-table = []
+unicode-dump-case-folding-special-cases = []

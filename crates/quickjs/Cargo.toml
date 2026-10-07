@@ -1,0 +1,26 @@
+[package]
+name = "quickjs"
+version = "2026.6.4"
+edition = "2021"
+autotests = false
+rust-version = "1.85"
+license = "MIT"
+description = "File-by-file Rust translation of official Bellard QuickJS 2026-06-04"
+
+[dependencies]
+browser_tracing = { path = "../tracing" }
+
+[features]
+default = ["short-opcodes", "atomics"]
+short-opcodes = []
+atomics = []
+malloc-iter = []
+dump-read-object = []
+# Original FORCE_GC_AT_MALLOC: collect at each js_trigger_gc call to stress roots.
+force-gc-at-malloc = []
+# Original address-sanitizer allocation policy; no sanitizer instrumentation.
+malloc-large-blocks = []
+
+[[test]]
+name = "source_oracles"
+path = "tests/source_oracles.rs"

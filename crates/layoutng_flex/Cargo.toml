@@ -1,0 +1,11 @@
+[package]
+name = "layoutng_flex"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+font_engine = { path = "../font_engine" }
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+layoutng_assembly = { path = "../layoutng_assembly" }
+layoutng_geometry = { path = "../layoutng_geometry" }
+layoutng_style = { path = "../layoutng_style" }

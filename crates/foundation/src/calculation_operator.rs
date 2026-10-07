@@ -1,0 +1,38 @@
+// C++: src/foundation/blink_geometry/geometry/calculation_expression_node.h:17-53
+// cpp: foundation/blink_geometry/geometry/calculation_expression_node.h:17-53
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum CalculationOperator {
+    kAdd,
+    kSubtract,
+    kMultiply,
+    kInvert,
+    kMin,
+    kMax,
+    kClamp,
+    kRoundNearest,
+    kRoundUp,
+    kRoundDown,
+    kRoundToZero,
+    kMod,
+    kRem,
+    kLog,
+    kExp,
+    kSqrt,
+    kHypot,
+    kAbs,
+    kSign,
+    kProgress,
+    kContainerProgress,
+    kCalcSize,
+    kMediaProgress,
+    kPow,
+    kSin,
+    kCos,
+    kTan,
+    kAsin,
+    kAcos,
+    kAtan,
+    kAtan2,
+    kRandom,
+}

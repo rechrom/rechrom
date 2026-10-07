@@ -1,0 +1,22 @@
+[package]
+name = "layoutng_inline_assembly"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+font_engine = { path = "../font_engine" }
+layoutng_geometry = { path = "../layoutng_geometry" }
+layoutng_style = { path = "../layoutng_style" }
+layoutng_mathml = { path = "../layoutng_mathml" }
+icu_bidi = { path = "../icu_bidi" }
+cssom = { path = "../cssom" }
+layoutng_custom = { path = "../layoutng_custom" }
+
+[features]
+default = []
+translation_in_progress = []
+expensive_dchecks = []
+
+[lib]
+path = "src/lib.rs"

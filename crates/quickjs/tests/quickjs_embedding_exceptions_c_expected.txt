@@ -1,0 +1,5 @@
+["    at <eval> (parity.js:1:16)\n",{"value":"    at <eval> (parity.js:1:16)\n","writable":true,"enumerable":false,"configurable":true},[]]
+"first"
+[true,"    at <eval> (parity.js:1:18)\n"]
+["original",["close"]]
+["a","b"]

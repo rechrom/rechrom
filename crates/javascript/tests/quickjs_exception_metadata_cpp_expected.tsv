@@ -1,0 +1,25 @@
+primitive	https://test/primitive.js	2	0	throw 'primitive';	primitive
+finally-caught	https://test/finally-caught.js	2	1	 throw 'original';	original
+finally-overrides	https://test/finally-overrides.js	4	1	 throw 'replacement';	replacement
+nested-finally	https://test/nested-finally.js	2	7	 try { throw 'nested'; } finally {var a=1;}	nested
+caught-same	https://test/caught-same.js	2	0	throw 'same';	same
+crlf	https://test/crlf.js	2	1	 throw 'crlf';	crlf
+unicode	https://test/unicode.js	1	12	var s='😀'; throw 'unicode';	unicode
+separator	https://test/separator.js	2	1	 throw 'separator';	separator
+old-error	https://test/old-error.js	3	0	throw old;	Error: old
+caught-new	https://test/caught-new.js	2	0	throw 'new';	new
+rethrow	https://test/rethrow.js	4	1	 throw e;	caught
+finally	https://test/finally.js	2	1	 throw 'original';	original
+iterator-cleanup	https://test/iterator-cleanup.js	2	1	 throw 'original';	original
+getter	https://test/getter.js	2	0	nativeGetter;	TypeError: native getter failure
+coercion	https://test/coercion.js	2	0	+nativeObject;	TypeError: native coercion failure
+nested	https://test/nested.js	2	1	 throw 'inner';	inner
+call	https://test/call.js	2	1	 throw 'called';	called
+microtask	undefined	0	18446744073709551615		microtask
+microtask-error	https://test/microtask-error.js	2	7	 throw new Error('microtask error');	Error: microtask error
+microtask-old	undefined	0	18446744073709551615		Error: old
+microtask-unthrown	https://test/unthrown.js	1	15	var unthrown = new Error('unthrown');	Error: unthrown
+rejection-read	undefined	0	18446744073709551615		Unhandled rejection: Error: old
+rejection-read	undefined	0	18446744073709551615		Unhandled rejection: Error: read stack
+rejection	https://test/rejection.js	1	17	var rejectionOld=new Error('rejected old');	Unhandled rejection: Error: rejected old
+rejection	undefined	0	18446744073709551615		Unhandled rejection: primitive rejection

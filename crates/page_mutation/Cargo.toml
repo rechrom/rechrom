@@ -1,0 +1,9 @@
+[package]
+name = "page_mutation"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+dom = { path = "../dom" }
+cssom = { path = "../cssom" }
+layoutng_assembly = { path = "../layoutng_assembly" }

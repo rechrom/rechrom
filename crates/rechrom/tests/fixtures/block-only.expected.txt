@@ -1,0 +1,16 @@
+Reference: //src/main:layoutng_render_block
+Input: block-only.html
+Viewport: 400x320
+PNG: block-only-reference.png
+SHA-256: d42f8b2ea1aecf07135f5bade55c598249ae8ca1937dfdc9622e5e12e581238c
+
+FragmentNode id=3 kind=box offset=(0, 0) size=(400, 320)
+  FragmentNode id=7 kind=box offset=(0, 24) size=(400, 280)
+    FragmentNode id=8 kind=box offset=(24, 0) size=(360, 280)
+      FragmentNode id=9 kind=box offset=(20, 20) size=(140, 56)
+      FragmentNode id=10 kind=box offset=(44, 88) size=(220, 80)
+DisplayItemList items=11 chunks=1
+
+Both --input and --url http://127.0.0.1:8765/block-only.html produced
+identical fragment output and PNG bytes. The HTTP server was a temporary
+`python3 -m http.server` serving this directory and has been stopped.

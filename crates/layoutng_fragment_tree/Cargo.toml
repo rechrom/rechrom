@@ -1,0 +1,23 @@
+[package]
+name = "layoutng_fragment_tree"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+font_engine = { path = "../font_engine" }
+layoutng_geometry = { path = "../layoutng_geometry" }
+layoutng_style = { path = "../layoutng_style" }
+
+[lib]
+path = "src/lib.rs"
+
+# Pending Bazel dependencies: layoutng:internal_headers and shared_api,
+# foundation APIs: blink_base, blink_geometry, core_export, graphics_types,
+# layout_features, style_values and the transitive PaintLayer declaration;
+# remaining font_engine:engine behavior; icu_bidi:unicode_headers.
+# layoutng_inline: OffsetMapping type and the three InlineItemsData algorithm
+# methods declared in the fragment-tree header but defined in that package.
+# layoutng and layoutng_fragment_tree refer to each other. The block profile
+# compiles both original source module trees via layoutng_assembly; this crate
+# alone still cannot resolve layoutng's reciprocal declarations.

@@ -1,0 +1,28 @@
+[package]
+name = "skia"
+version = "0.0.1"
+edition = "2021"
+publish = false
+license = "BSD-3-Clause"
+
+[lib]
+path = "lib.rs"
+
+[features]
+default = ["std", "simd"]
+std = []
+simd = []
+profiling = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("png-format", "no-std-float"))'] }
+
+[dependencies]
+arrayref = "0.3.9"
+arrayvec = { version = "0.7", default-features = false }
+bytemuck = { version = "1.24", features = ["aarch64_simd"] }
+cfg-if = "1"
+log = "0.4"
+strict-num = { version = "0.1", default-features = false }
+ttf-parser = { version = "0.25.1", default-features = false, features = ["std", "variable-fonts", "gvar-alloc"] }
+half = "2.7.1"

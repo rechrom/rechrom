@@ -1,0 +1,14 @@
+[package]
+name = "layoutng_geometry"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+
+[lib]
+path = "src/lib.rs"
+
+# Pending foundation modules: base_support, blink_base,
+# blink_base_rendering_headers, core_export, text_values and related APIs.
+# Do not add a fake local implementation to satisfy these imports.

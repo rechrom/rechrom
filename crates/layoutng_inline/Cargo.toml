@@ -1,0 +1,18 @@
+[package]
+name = "layoutng_inline"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+font_engine = { path = "../font_engine" }
+icu_bidi = { path = "../icu_bidi" }
+
+[features]
+expensive_dchecks = []
+# Source modules that still require the shared LayoutNG/inline assembly are
+# kept out of the existing block-only host until that type identity is wired.
+translation_in_progress = []

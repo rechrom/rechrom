@@ -1,0 +1,13 @@
+[package]
+name = "paint"
+version = "0.0.1"
+edition = "2021"
+
+[features]
+translation_in_progress = []
+
+[dependencies]
+browser_tracing = { path = "../tracing" }
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+layoutng_assembly = { path = "../layoutng_assembly" }
+layoutng_style = { path = "../layoutng_style" }

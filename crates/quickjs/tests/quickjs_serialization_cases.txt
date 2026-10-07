@@ -1,0 +1,23 @@
+undefined
+null
+true
+false
+0
+-0
+42
+3.125
+1e300
+1e-300
+123456789012345678901234567890n
+-9223372036854775809n
+"hello"
+"\ud800\udc00\udfff\n\t\u0000"
+[1,"two",null,true,[3,4]]
+({a:1,b:{x:"hello"},c:[2,3],"123":4})
+(()=>{let x={a:1};return {x,y:x}})()
+(()=>{let x={};x.self=x;return x})()
+(()=>{let x=[];x[0]=x;return x})()
+(()=>{let x=[1,2];x.extra=3;return x})()
+(()=>{let x={a:1};Object.defineProperty(x,"b",{value:2,enumerable:false});return x})()
+(()=>{let x={get a(){return 3}};return x})()
+(function(a){return a+1})

@@ -1,0 +1,7 @@
+cpp_file	cpp_lines	rust_file	rust_lines	adjustment
+src/foundation/style_values/style/computed_style_base_constants.h	769-778	crates/foundation/src/style_flags.rs	50-59	unsigned C++ enum becomes repr(transparent) u32 value type
+src/foundation/style_values/style/computed_style_base_constants.h	779-810	crates/foundation/src/style_flags.rs	7-48	shared macro implements C++ bitwise operators and bit width
+src/foundation/style_values/style/computed_style_base_constants.h	916-925	crates/foundation/src/style_flags.rs	61-70	unsigned C++ enum becomes repr(transparent) u32 value type
+src/foundation/style_values/style/computed_style_base_constants.h	926-957	crates/foundation/src/style_flags.rs	7-48	shared macro implements C++ bitwise operators and bit width
+src/foundation/style_values/style/computed_style_base_constants.h	959-965	crates/foundation/src/style_flags.rs	72-78	unsigned C++ enum becomes repr(transparent) u32 value type
+src/foundation/style_values/style/computed_style_base_constants.h	966-997	crates/foundation/src/style_flags.rs	7-48	shared macro implements C++ bitwise operators and bit width

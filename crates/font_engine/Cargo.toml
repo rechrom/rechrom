@@ -1,0 +1,23 @@
+[package]
+name = "font_engine"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+icu_bidi = { path = "../icu_bidi" }
+rustybuzz = "0.20.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# C++ EXPENSIVE_DCHECKS_ARE_ON() is an opt-in build setting.
+expensive_dchecks = []
+
+# The remaining //src/font_engine targets still require HarfBuzz, ICU bidi,
+# graphics and the rest of foundation. This crate currently connects only the
+# complete source units listed in src/lib.rs and src/fonts/mod.rs.

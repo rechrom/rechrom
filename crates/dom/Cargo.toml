@@ -1,0 +1,22 @@
+[package]
+name = "dom"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+browser_tracing = { path = "../tracing" }
+cssom = { path = "../cssom" }
+layoutng_assembly = { path = "../layoutng_assembly" }
+
+css_parser = { path = "../css_parser", features = ["tokenizer"] }
+font_engine = { path = "../font_engine" }
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+layoutng_style = { path = "../layoutng_style" }
+
+[dev-dependencies]
+# Standalone DOM tests link the assembly dispatch's real replaced-object
+# provider; browser executables already supply it through their layout bundle.
+layoutng_replaced = { path = "../layoutng_replaced" }
+layoutng_block = { path = "../layoutng_block", features = ["block_only_host", "replaced_extension"] }
+
+layoutng_assembly = { path = "../layoutng_assembly", features = ["translation_in_progress"] }

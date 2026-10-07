@@ -1,0 +1,9 @@
+[package]
+name = "layoutng_replaced"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { path = "../foundation", package = "layoutng_foundation" }
+layoutng_assembly = { path = "../layoutng_assembly" }
+layoutng_style = { path = "../layoutng_style" }

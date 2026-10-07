@@ -1,0 +1,6 @@
+export const x=3;
+export function f(a){return a+1};export default f(4)
+const x=2;export {x as value};export class C {#x=1;get(){return this.#x}}
+export let x=1;x+=2;export default `result:${x}`
+export async function f(){return 7}
+import {x} from "missing";export {x}

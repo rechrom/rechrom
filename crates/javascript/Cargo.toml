@@ -1,0 +1,9 @@
+[package]
+name = "javascript"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+browser_tracing = { path = "../tracing" }
+icu_locale = "2.3"
+quickjs = { path = "../quickjs" }

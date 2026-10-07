@@ -1,0 +1,10 @@
+[package]
+name = "layoutng_out_of_flow"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+layoutng_geometry = { path = "../layoutng_geometry" }
+layoutng_assembly = { path = "../layoutng_assembly" }
+layoutng_style = { path = "../layoutng_style" }

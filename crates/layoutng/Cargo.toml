@@ -1,0 +1,23 @@
+[package]
+name = "layoutng"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+browser_tracing = { path = "../tracing" }
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+font_engine = { path = "../font_engine" }
+layoutng_geometry = { path = "../layoutng_geometry" }
+layoutng_style = { path = "../layoutng_style" }
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+expensive_dchecks = []
+
+# Pending Bazel dependencies include layoutng_fragment_tree, foundation APIs,
+# font_engine, and icu_bidi. The fragment-tree reference is cyclic at the
+# C++ package level. layoutng_assembly compiles both source module trees in
+# one unit without copying their implementations; this crate alone remains
+# blocked on the reciprocal declarations.

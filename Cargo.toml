@@ -1,0 +1,58 @@
+[workspace]
+members = [
+    "crates/tracing",
+    "crates/devtools",
+    "crates/skia",
+    "crates/quickjs",
+    "crates/quickjs_tools",
+    "crates/foundation",
+    "crates/font_engine",
+    "crates/layoutng_geometry",
+    "crates/layoutng_style",
+    "crates/layoutng_assembly",
+    "crates/layoutng_inline_assembly",
+    "crates/layoutng_block",
+    "crates/layoutng_flex",
+    "crates/layoutng_grid",
+    "crates/layoutng_table",
+    "crates/layoutng_float",
+    "crates/layoutng_forms",
+    "crates/layoutng_replaced",
+    "crates/layoutng_mathml",
+    "crates/layoutng_svg",
+    "crates/icu_bidi",
+    "crates/layoutng_inline",
+    "crates/layoutng_list",
+    "crates/layoutng_out_of_flow",
+    "crates/cssom",
+    "crates/layoutng_custom",
+    "crates/paint",
+    "crates/layer_tile",
+    "crates/renderer",
+    "crates/dom",
+    "crates/html",
+    "crates/css_parser",
+    "crates/http_transport",
+    "crates/xhr_transport",
+    "crates/url_loader",
+    "crates/document_loader",
+    "crates/image_decoder",
+    "crates/web_font",
+    "crates/javascript",
+    "crates/webapi",
+    "crates/interaction",
+    "crates/page_mutation",
+    "crates/rechrom",
+    "apps/rechrom",
+]
+# These source trees have reciprocal C++ dependencies and compile through
+# layoutng_assembly. They remain source modules rather than standalone builds.
+exclude = ["crates/layoutng", "crates/layoutng_fragment_tree", "vendor/softbuffer", "vendor/winit"]
+resolver = "2"
+
+[patch.crates-io]
+icu_locale_data = { path = "vendor/icu_locale_data-2.3.0" }
+zune-jpeg = { path = "vendor/zune-jpeg" }
+ttf-parser = { path = "vendor/ttf-parser" }
+softbuffer = { path = "vendor/softbuffer" }
+winit = { path = "vendor/winit" }

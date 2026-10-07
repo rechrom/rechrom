@@ -1,0 +1,15 @@
+[package]
+name = "layoutng_foundation"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+name = "foundation"
+path = "src/lib.rs"
+
+[dependencies]
+browser_tracing = { path = "../tracing" }
+# Reuse the source checkout's existing independently tested Rust foundation
+# without modifying or copying its implementation.
+foundation_base = { package = "foundation", path = "../../../layoutng/rust/foundation" }
+icu_bidi = { path = "../icu_bidi" }

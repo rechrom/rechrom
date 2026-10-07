@@ -1,0 +1,26 @@
+[package]
+name = "layoutng_assembly"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+browser_tracing = { path = "../tracing" }
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+font_engine = { path = "../font_engine" }
+layoutng_geometry = { path = "../layoutng_geometry" }
+layoutng_style = { path = "../layoutng_style" }
+layoutng_mathml = { path = "../layoutng_mathml" }
+icu_bidi = { path = "../icu_bidi" }
+cssom = { path = "../cssom" }
+layoutng_custom = { path = "../layoutng_custom" }
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+translation_in_progress = []
+expensive_dchecks = []
+
+# This is an assembly boundary, not a sixth translated Bazel package. Both
+# selected packages retain their source files and per-file source maps.

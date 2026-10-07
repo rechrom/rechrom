@@ -1,0 +1,17 @@
+[package]
+name = "layoutng_table"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+layoutng_assembly = { path = "../layoutng_assembly" }
+layoutng_block = { path = "../layoutng_block", features = ["block_only_host"] }
+layoutng_geometry = { path = "../layoutng_geometry" }
+layoutng_style = { path = "../layoutng_style" }
+
+[dev-dependencies]
+dom = { path = "../dom" }
+html = { path = "../html" }
+cssom = { path = "../cssom" }
+layoutng_replaced = { path = "../layoutng_replaced" }

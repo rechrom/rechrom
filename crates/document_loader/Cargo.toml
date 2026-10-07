@@ -1,0 +1,21 @@
+[package]
+name = "document_loader"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+url_loader = { path = "../url_loader" }
+html = { path = "../html" }
+dom = { path = "../dom" }
+cssom = { path = "../cssom" }
+image_decoder = { path = "../image_decoder" }
+layoutng_assembly = { path = "../layoutng_assembly" }
+page_mutation = { path = "../page_mutation" }
+web_font = { path = "../web_font" }
+font_engine = { path = "../font_engine" }
+javascript = { path = "../javascript" }
+
+[dev-dependencies]
+layoutng_replaced = { path = "../layoutng_replaced" }
+layoutng_assembly = { path = "../layoutng_assembly", features = ["translation_in_progress"] }

@@ -1,0 +1,13 @@
+[package]
+name = "css_parser"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+layoutng = { path = "../layoutng", optional = true }
+
+[features]
+tokenizer = []
+layoutng_values = ["dep:layoutng", "tokenizer"]
+translation_in_progress = ["tokenizer", "layoutng_values"]

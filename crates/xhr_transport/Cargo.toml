@@ -1,0 +1,7 @@
+[package]
+name = "xhr_transport"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+http_transport = { path = "../http_transport" }

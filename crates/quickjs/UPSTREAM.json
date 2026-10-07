@@ -1,0 +1,6 @@
+{
+  "source_release": "2026-06-04",
+  "upstream": "https://bellard.org/quickjs/quickjs-2026-06-04.tar.xz",
+  "source_root": "vendor/quickjs-2026-06-04",
+  "translation_policy": "Preserve C file boundaries, function names, data layout and control flow. Runtime Rust uses no C QuickJS FFI. C binaries are differential test oracles only. Third-party quickjs-rs source is reference material and never counted as this translation."
+}

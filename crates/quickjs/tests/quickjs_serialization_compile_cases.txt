@@ -1,0 +1,9 @@
+1+2*3
+(()=>{var n=1;return n + ++n})()
+(()=>{let x=3;return ()=>x})()()
+(()=>{let {a,b=2}={a:3};return a+b})()
+(()=>{class A{#x=7;f(){return this.#x}}return new A().f()})()
+(()=>{let x=`hello ${1+2}`;return x})()
+(()=>{function* g(){yield 1;return 2}return g().next().value})()
+(()=>{let x=0;for(let i=0;i<4;i++)x+=i;return x})()
+(()=>{try{throw 7}catch(e){return e}finally{}})()

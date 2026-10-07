@@ -1,0 +1,11 @@
+[package]
+name = "cssom"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+css_parser = { path = "../css_parser", features = ["tokenizer"] }
+
+[lib]
+path = "src/lib.rs"

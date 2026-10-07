@@ -1,0 +1,68 @@
+[
+  {
+    "name": "sampling-0-baseline",
+    "jpeg_sha256": "acbe750284e1c3fb49674ae92ba04d5453fba8ce16db832567ad1600779cc72e",
+    "native_rgba_sha256": "fd6fa3eb628be22bf178c2ade4c1b76978ed1cbc4c156da4505d048c1d97e2e2"
+  },
+  {
+    "name": "sampling-0-progressive",
+    "jpeg_sha256": "a9643be670944995f627bd3bd9b6c0272e505185b98028f7791ddeec51d2a87e",
+    "native_rgba_sha256": "fd6fa3eb628be22bf178c2ade4c1b76978ed1cbc4c156da4505d048c1d97e2e2"
+  },
+  {
+    "name": "sampling-1-baseline",
+    "jpeg_sha256": "b4c2572f6ece6cb3bf56c63779bc5613a0604761c54cf1ffcbae3abb915e8dbe",
+    "native_rgba_sha256": "0da3e15d4d0ed1f6f66c6eb962fa747796aff5d01e71215a502aa39c3aca7928"
+  },
+  {
+    "name": "sampling-1-progressive",
+    "jpeg_sha256": "c997f39998b069e032f27b696dce005158c918d64ba9b1c125c35eb91f9a1f14",
+    "native_rgba_sha256": "0da3e15d4d0ed1f6f66c6eb962fa747796aff5d01e71215a502aa39c3aca7928"
+  },
+  {
+    "name": "sampling-2-baseline",
+    "jpeg_sha256": "1a493a5c50556513c716a6a0a73e3a033d83394fc0f54f64a9ac65665b10dfe3",
+    "native_rgba_sha256": "13e535baf10809c361cc99df7cb430cb9bb12543fa91d7c70ffefeafc5271e1d"
+  },
+  {
+    "name": "sampling-2-progressive",
+    "jpeg_sha256": "4ee9321b674e9f3c7fb8edc6a5c2b283459e3b983ff9c6976f5302a22bd88157",
+    "native_rgba_sha256": "13e535baf10809c361cc99df7cb430cb9bb12543fa91d7c70ffefeafc5271e1d"
+  },
+  {
+    "name": "right-edge-1-baseline",
+    "size": [
+      38,
+      19
+    ],
+    "jpeg_sha256": "9489c9ad06bf9ece6830e5f7c190b84931520eb4c2449ea2af508cbe4bbe19d5",
+    "native_rgba_sha256": "afd85f95f2afe230589847523dbd4befb2474a11d64528354455bd984403864e"
+  },
+  {
+    "name": "right-edge-1-progressive",
+    "size": [
+      38,
+      19
+    ],
+    "jpeg_sha256": "6c4dfdb72cdd9df243d63dbe4386bd3b177b8ff502325671029735973bc08f30",
+    "native_rgba_sha256": "afd85f95f2afe230589847523dbd4befb2474a11d64528354455bd984403864e"
+  },
+  {
+    "name": "right-edge-2-baseline",
+    "size": [
+      38,
+      19
+    ],
+    "jpeg_sha256": "8c371aa207b059f829fac229e08dd3d114a154a0a88c066f77e98f3a8b5d9d3c",
+    "native_rgba_sha256": "832a839d63bb773f8c7366093fa78ffffc5940f67e7b51d427603543149b41e0"
+  },
+  {
+    "name": "right-edge-2-progressive",
+    "size": [
+      38,
+      19
+    ],
+    "jpeg_sha256": "4f82df5722a0c4b92d31688d79ec38ae073c78b8479fb6c80c904ad0e2bcdadc",
+    "native_rgba_sha256": "832a839d63bb773f8c7366093fa78ffffc5940f67e7b51d427603543149b41e0"
+  }
+]

@@ -1,0 +1,47 @@
+undefined
+null
+true
+false
+0
+-0
+42
+3.125
+1e300
+1e-300
+123456789012345678901234567890n
+-9223372036854775809n
+"hello"
+"\ud800\udc00\udfff\n\t\u0000"
+[1,"two",null,true,[3,4]]
+({a:1,b:{x:"hello"},c:[2,3],"123":4})
+(()=>{let x={a:1};return {x,y:x}})()
+(()=>{let x={};x.self=x;return x})()
+(()=>{let x=[];x[0]=x;return x})()
+(()=>{let x=[1,2];x.extra=3;return x})()
+(()=>{let x={a:1};Object.defineProperty(x,"b",{value:2,enumerable:false});return x})()
+(()=>{let x={get a(){return 3}};return x})()
+(function(a){return a+1})
+new ArrayBuffer(0)
+new ArrayBuffer(16)
+new ArrayBuffer(16,{maxByteLength:64})
+new Uint8Array([0,1,255])
+new Int8Array([-128,-1,0,127])
+new Int16Array([-32768,-1,32767])
+new Uint16Array([0,65535])
+new Int32Array([-2147483648,-1,2147483647])
+new Uint32Array([0,4294967295])
+new Float16Array([1.5,-0,Infinity,NaN])
+new Float32Array([1.25,-0,Infinity,NaN])
+new Float64Array([1e300,-0,Infinity,NaN])
+new BigInt64Array([-1n,0n,9223372036854775807n])
+new BigUint64Array([0n,18446744073709551615n])
+new DataView(new ArrayBuffer(16),2,8)
+(()=>{let b=new ArrayBuffer(16);let a=new Uint8Array(b,2,4);a[0]=17;a[3]=255;return {b,a,c:new Int16Array(b,2,2)}})()
+(()=>{let b=new ArrayBuffer(8,{maxByteLength:16});return [b,new Uint8Array(b),new Uint8Array(b,2,3)]})()
+new Date(0)
+new Date(NaN)
+new Number(3.25)
+new Boolean(true)
+new String("中")
+Object.freeze(["a","b"])
+(()=>{let x;function t(s){x=s;}t`a\n${1}b`;return x;})()

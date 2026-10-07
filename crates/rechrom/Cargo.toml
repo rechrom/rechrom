@@ -1,0 +1,48 @@
+[package]
+name = "rechrom"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+browser_tracing = { path = "../tracing" }
+url = "2"
+document_loader = { path = "../document_loader" }
+interaction = { path = "../interaction" }
+page_mutation = { path = "../page_mutation" }
+cssom = { path = "../cssom" }
+dom = { path = "../dom" }
+html = { path = "../html" }
+javascript = { path = "../javascript" }
+webapi = { path = "../webapi" }
+xhr_transport = { path = "../xhr_transport" }
+image_decoder = { path = "../image_decoder" }
+layoutng_assembly = { path = "../layoutng_assembly" }
+layoutng_block = { path = "../layoutng_block", features = ["block_only_host", "replaced_extension"] }
+layoutng_flex = { path = "../layoutng_flex" }
+layoutng_grid = { path = "../layoutng_grid" }
+layoutng_table = { path = "../layoutng_table" }
+layoutng_float = { path = "../layoutng_float" }
+layoutng_forms = { path = "../layoutng_forms" }
+layoutng_replaced = { path = "../layoutng_replaced" }
+layoutng_svg = { path = "../layoutng_svg" }
+layoutng_list = { path = "../layoutng_list" }
+layoutng_out_of_flow = { path = "../layoutng_out_of_flow", optional = true }
+paint = { path = "../paint" }
+url_loader = { path = "../url_loader" }
+renderer = { path = "../renderer" }
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+web_font = { path = "../web_font" }
+font_engine = { path = "../font_engine" }
+layer_tile = { path = "../layer_tile" }
+
+[dev-dependencies]
+layoutng_style = { path = "../layoutng_style" }
+
+[features]
+default = ["inline_layout", "pure_source_png"]
+inline_layout = ["layoutng_assembly/translation_in_progress", "layoutng_block/inline_extension", "dep:layoutng_out_of_flow"]
+native_text = ["renderer/text"]
+source_paint = ["paint/translation_in_progress", "image_decoder/source_document_images"]
+source_png = ["source_paint", "renderer/source_replay"]
+pure_source_png = ["source_paint", "renderer/pure_replay"]
+raster_profile = ["renderer/profiling"]

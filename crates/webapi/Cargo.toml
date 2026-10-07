@@ -1,0 +1,25 @@
+[package]
+name = "webapi"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+browser_tracing = { path = "../tracing" }
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+interaction = { path = "../interaction" }
+javascript = { path = "../javascript" }
+dom = { path = "../dom" }
+cssom = { path = "../cssom" }
+css_parser = { path = "../css_parser", features = ["tokenizer"] }
+layoutng_assembly = { path = "../layoutng_assembly" }
+xhr_transport = { path = "../xhr_transport" }
+url = "2.5.8"
+getrandom = "0.4"
+paint = { path = "../paint", features = ["translation_in_progress"] }
+
+[dev-dependencies]
+html = { path = "../html" }
+http_transport = { path = "../http_transport" }
+# Standalone Web API tests link the assembly dispatch's real replaced-object
+# provider; browser executables already supply it through their layout bundle.
+layoutng_replaced = { path = "../layoutng_replaced" }

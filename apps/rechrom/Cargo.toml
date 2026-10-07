@@ -1,0 +1,41 @@
+[package]
+name = "rechrom_app"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "rechrom"
+path = "src/main.rs"
+
+[build-dependencies]
+cc = "1"
+
+[features]
+profile_paint = ["renderer/profiling"]
+profile_native = ["profile_paint", "renderer/source_replay"]
+
+[dev-dependencies]
+foundation = { package = "layoutng_foundation", path = "../../crates/foundation" }
+
+[dependencies]
+browser_tracing = { path = "../../crates/tracing" }
+devtools = { path = "../../crates/devtools" }
+foundation = { package = "layoutng_foundation", path = "../../crates/foundation" }
+paint = { path = "../../crates/paint" }
+skia = { path = "../../crates/skia" }
+rechrom = { path = "../../crates/rechrom" }
+renderer = { path = "../../crates/renderer", features = ["pure_replay"] }
+layer_tile = { path = "../../crates/layer_tile" }
+interaction = { path = "../../crates/interaction" }
+page_mutation = { path = "../../crates/page_mutation" }
+dom = { path = "../../crates/dom" }
+image_decoder = { path = "../../crates/image_decoder" }
+url_loader = { path = "../../crates/url_loader" }
+xhr_transport = { path = "../../crates/xhr_transport" }
+javascript = { path = "../../crates/javascript" }
+layoutng_assembly = { path = "../../crates/layoutng_assembly" }
+url = "2.5"
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
+softbuffer = { version = "0.4.8", features = ["native-iosurface"] }
+raw-window-handle = "0.6.2"

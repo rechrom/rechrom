@@ -1,0 +1,10 @@
+[package]
+name = "interaction"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+layoutng_assembly = { path = "../layoutng_assembly" }
+dom = { path = "../dom" }
+page_mutation = { path = "../page_mutation" }
+foundation = { package = "layoutng_foundation", path = "../foundation" }

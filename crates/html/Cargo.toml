@@ -1,0 +1,14 @@
+[package]
+name = "html"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+dom = { path = "../dom" }
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+
+# DOM retains layout objects; standalone tests link the Rust replaced-object
+# boundary and the source inline implementation used by their destructor.
+[dev-dependencies]
+layoutng_replaced = { path = "../layoutng_replaced" }
+layoutng_assembly = { path = "../layoutng_assembly", features = ["translation_in_progress"] }

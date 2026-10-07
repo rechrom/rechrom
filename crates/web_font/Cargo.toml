@@ -1,0 +1,9 @@
+[package]
+name = "web_font"
+version = "0.0.1"
+edition = "2021"
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+wuff = "0.2.8"

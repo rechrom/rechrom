@@ -1,0 +1,8 @@
+/target/
+/artifacts/
+.DS_Store
+*.app/
+*.dSYM/
+*.profraw
+*.trace
+*.log

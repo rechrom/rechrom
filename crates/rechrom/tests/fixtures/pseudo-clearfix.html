@@ -1,0 +1,11 @@
+<!doctype html>
+<html><head><style>
+html, body { margin: 0; padding: 0; }
+.clear { width: 120px; padding: 5px; background: #ddd; }
+.clear::after { content: ''; display: block; clear: both; }
+.item { float: left; width: 50px; height: 30px; background: #f00; }
+.sibling { width: 130px; height: 20px; background: #00f; }
+</style></head><body>
+<div class="clear"><div class="item"></div></div>
+<div class="sibling"></div>
+</body></html>
