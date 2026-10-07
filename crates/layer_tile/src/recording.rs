@@ -6,7 +6,8 @@ use std::sync::Arc;
 use crate::RasterRecordContent;
 use layoutng_assembly::internal::layout_input::{PaintPathVerb, TransformMatrix};
 use layoutng_assembly::internal::paint_input::{
-    PaintBlendMode, PaintCornerRadii, PaintMaskComposite, PaintMaskMode, PaintShaderKind,
+    PaintBlendMode, PaintCornerRadii, PaintFilterOperation, PaintFilterType, PaintMaskComposite,
+    PaintMaskMode, PaintShaderKind,
 };
 use paint::paint_engine::{
     DisplayItem, DisplayItemType as Kind, PaintArtifact, PaintChunk, PaintRect, RecordedDisplayItem,
@@ -28,6 +29,23 @@ impl std::fmt::Display for ReplayUnsupported {
     }
 }
 impl std::error::Error for ReplayUnsupported {}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ExternalEffectScope {
+    cursor: usize,
+    node_id: u64,
+    opacity: f32,
+    filters: Vec<PaintFilterOperation>,
+}
+
+fn supported_external_filters(filters: &[PaintFilterOperation]) -> bool {
+    !filters.is_empty()
+        && filters.iter().all(|filter| {
+            filter.r#type == PaintFilterType::kBlur
+                && filter.amount.is_finite()
+                && filter.amount >= 0.0
+        })
+}
 
 fn contains(a: PaintRect, b: PaintRect) -> bool {
     b.is_empty()
@@ -893,6 +911,33 @@ fn update_state(
             // Alpha is applied once by its actual effect surface, not per
             // tile. The parallel scope walk validates effect identity and
             // records the native bounded-device clip for each PaintRecord.
+            stack.push(*state);
+        }
+        Kind::kSaveLayerBlend
+            if !external
+                && finite_rect(item.rect)
+                && item.opacity == 1.0
+                && item.blend_mode == PaintBlendMode::kNormal
+                && item.filters.is_empty()
+                && item.mask_layers.is_empty()
+                && item.paint_shader.is_none() =>
+        {
+            // This pass computes replay geometry; the raster canvas still
+            // receives the command and performs its isolated SrcOver surface.
+            stack.push(*state);
+        }
+        Kind::kSaveLayerFilter
+            if external
+                && finite_rect(item.rect)
+                && item.opacity == 1.0
+                && item.blend_mode == PaintBlendMode::kNormal
+                && supported_external_filters(&item.filters)
+                && item.mask_layers.is_empty()
+                && item.paint_shader.is_none() =>
+        {
+            // The retained effect tree owns the filter render pass. This walk
+            // binds the flat SaveLayerFilter wrapper to that effect and keeps
+            // only its state boundary in each tile record.
             stack.push(*state);
         }
         Kind::kSaveLayer
@@ -2172,7 +2217,7 @@ fn prepare_raster_content(
                 let mut effect = Some(chunk.properties.effect.clone());
                 while let Some(current) = effect {
                     effect = current.parent.clone();
-                    if current.opacity != 1.0 {
+                    if current.opacity != 1.0 || !current.filters.is_empty() {
                         effects.push(current);
                     }
                 }
@@ -2264,17 +2309,15 @@ fn prepare_raster_content(
     // Flat cursor identifies only this frame's source wrapper scope. Its
     // bidirectional binding is to a real retained effect entity, never a new
     // compositing ID or a product of per-layer alpha values.
-    let mut alpha_scopes: Vec<(usize, u64, f32)> = Vec::new();
+    let mut effect_scopes_flat: Vec<ExternalEffectScope> = Vec::new();
     let mut device_clip = None;
     let mut saved_effects = Vec::new();
     let mut rounded_scopes = Vec::new();
     let mut unsupported_complex = false;
     let mut shape_starts = vec![None; list.display_items.len()];
-    let mut effect_starts: Vec<Option<Vec<(usize, u64, f32)>>> =
+    let mut effect_starts: Vec<Option<Vec<ExternalEffectScope>>> =
         vec![None; list.display_items.len()];
-    let mut scope_effects: BTreeMap<usize, Arc<EffectPaintPropertyNode>> = BTreeMap::new();
     let mut scope_output_clips: BTreeMap<usize, Arc<[RoundedClip]>> = BTreeMap::new();
-    let mut effect_scopes = BTreeMap::new();
     let mut effect_output_shapes: BTreeMap<usize, Arc<[RoundedClip]>> = BTreeMap::new();
     for cursor in 0..=list.items.len() {
         if let Some(records) = ends.get(&cursor) {
@@ -2285,7 +2328,7 @@ fn prepare_raster_content(
                 if starts[index] != Some((state, stack.len())) {
                     return Err(ReplayUnsupported("record-state-escapes-boundary"));
                 }
-                if effect_starts[index].as_deref() != Some(alpha_scopes.as_slice()) {
+                if effect_starts[index].as_deref() != Some(effect_scopes_flat.as_slice()) {
                     return Err(ReplayUnsupported("record-effect-escapes-boundary"));
                 }
                 if shape_starts[index] != Some((rounded_scopes.len(), unsupported_complex)) {
@@ -2295,22 +2338,36 @@ fn prepare_raster_content(
         }
         if let Some(records) = begins.get(&cursor) {
             for &index in records {
+                // An empty DrawingDisplayItem contributes no commands or
+                // pixels, so it cannot bind an enclosing flat save-layer to
+                // its chunk effect identity. Chromium keeps such items for
+                // invalidation bookkeeping without replaying paint state.
+                if list.display_items[index].record_begin
+                    == list.display_items[index].record_end
+                {
+                    starts[index] = Some((state, stack.len()));
+                    effect_starts[index] = Some(effect_scopes_flat.clone());
+                    shape_starts[index] = Some((rounded_scopes.len(), unsupported_complex));
+                    continue;
+                }
                 let expected = properties[index].unwrap();
                 let effects = &expected_effects[index];
-                if effects.len() != alpha_scopes.len()
+                if effects.len() != effect_scopes_flat.len()
                     || effects
                         .iter()
-                        .zip(&alpha_scopes)
-                        .any(|(effect, scope)| effect.opacity != scope.2)
+                        .zip(&effect_scopes_flat)
+                        .any(|(effect, scope)| {
+                            effect.opacity != scope.opacity || effect.filters != scope.filters
+                        })
                 {
                     if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
-                        eprintln!("layer-replay alpha-mismatch record={index} wrappers={alpha_scopes:?} effects={:?}",
-                            effects.iter().map(|effect|(effect.id,effect.opacity)).collect::<Vec<_>>());
+                        eprintln!("layer-replay effect-mismatch record={index} wrappers={effect_scopes_flat:?} effects={:?}",
+                            effects.iter().map(|effect|(effect.id,effect.opacity,&effect.filters)).collect::<Vec<_>>());
                     }
-                    return Err(ReplayUnsupported("external-opacity-property-mismatch"));
+                    return Err(ReplayUnsupported("external-effect-property-mismatch"));
                 }
-                for (effect, scope) in effects.iter().zip(&alpha_scopes) {
-                    if bounded_scopes.contains(&scope.0) {
+                for (effect, scope) in effects.iter().zip(&effect_scopes_flat) {
+                    if bounded_scopes.contains(&scope.cursor) {
                         if let (Some(trees), Some(origins)) = (&current_trees, &current_origins) {
                             let current = trees
                                 .effects
@@ -2347,33 +2404,22 @@ fn prepare_raster_content(
                         ),
                     };
                     if scope_output_clips
-                        .get(&scope.0)
+                        .get(&scope.cursor)
                         .is_none_or(|actual| **actual != **output)
                     {
                         if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
                             eprintln!("layer-replay effect-output-clip-mismatch record={index} wrapper={scope:?} effect={} actual={:?} expected={output:?}",
-                                effect.id,scope_output_clips.get(&scope.0));
+                                effect.id,scope_output_clips.get(&scope.cursor));
                         }
                         return Err(ReplayUnsupported("external-effect-output-clip-mismatch"));
                     }
-                    let identity = Arc::as_ptr(&effect.lifecycle.identity);
-                    if scope_effects
-                        .get(&scope.0)
-                        .is_some_and(|old| !old.lifecycle.same_node(&effect.lifecycle))
-                        || effect_scopes
-                            .get(&identity)
-                            .is_some_and(|&old| old != scope.0)
-                    {
-                        if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
-                            eprintln!("layer-replay alpha-identity-mismatch record={index} wrapper={scope:?} effect={} previous_wrapper={:?} previous_effect={:?}",
-                                effect.id,effect_scopes.get(&identity),scope_effects.get(&scope.0).map(|node|node.id));
-                        }
-                        return Err(ReplayUnsupported(
-                            "external-opacity-scope-identity-mismatch",
-                        ));
-                    }
-                    scope_effects.insert(scope.0, effect.clone());
-                    effect_scopes.insert(identity, scope.0);
+                    // Chromium's PaintChunksToCcLayer::SwitchToEffect uses the
+                    // chunk property tree as the semantic effect hierarchy.
+                    // The flat saveLayer cursor is only redundant recording
+                    // state and is not required to have a one-to-one identity
+                    // with an EffectPaintPropertyNode. In particular, one
+                    // recorded wrapper can cover adjacent chunks whose effect
+                    // nodes are distinct but carry the same operation.
                 }
                 if unsupported_complex || &*record_rounded[index] != rounded_scopes.as_slice() {
                     if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
@@ -2400,7 +2446,7 @@ fn prepare_raster_content(
                     return Err(ReplayUnsupported("external-clip-property-mismatch"));
                 }
                 starts[index] = Some((state, stack.len()));
-                effect_starts[index] = Some(alpha_scopes.clone());
+                effect_starts[index] = Some(effect_scopes_flat.clone());
                 shape_starts[index] = Some((rounded_scopes.len(), unsupported_complex));
                 if let Some(bounds) = device_clip {
                     let local = shift(bounds, (-expected.translation.0, -expected.translation.1));
@@ -2427,22 +2473,27 @@ fn prepare_raster_content(
             owners[cursor].is_none(),
         )?;
         match item.r#type {
-            Kind::kSave | Kind::kSaveLayerDstIn => saved_effects.push((
-                alpha_scopes.len(),
+            Kind::kSave | Kind::kSaveLayerBlend | Kind::kSaveLayerDstIn => saved_effects.push((
+                effect_scopes_flat.len(),
                 device_clip,
                 rounded_scopes.len(),
                 unsupported_complex,
             )),
             Kind::kSaveLayer | Kind::kSaveLayerAlpha => {
                 saved_effects.push((
-                    alpha_scopes.len(),
+                    effect_scopes_flat.len(),
                     device_clip,
                     rounded_scopes.len(),
                     unsupported_complex,
                 ));
                 if item.opacity != 1.0 {
                     scope_output_clips.insert(cursor, Arc::from(rounded_scopes.clone()));
-                    alpha_scopes.push((cursor, item.node_id, item.opacity));
+                    effect_scopes_flat.push(ExternalEffectScope {
+                        cursor,
+                        node_id: item.node_id,
+                        opacity: item.opacity,
+                        filters: Vec::new(),
+                    });
                 }
                 if !item.rect.is_empty() {
                     // An opacity-one bounded wrapper has no corresponding
@@ -2469,11 +2520,26 @@ fn prepare_raster_content(
                         item.r#type,item.node_id,item.opacity,item.rect);
                 }
             }
+            Kind::kSaveLayerFilter => {
+                saved_effects.push((
+                    effect_scopes_flat.len(),
+                    device_clip,
+                    rounded_scopes.len(),
+                    unsupported_complex,
+                ));
+                scope_output_clips.insert(cursor, Arc::from(rounded_scopes.clone()));
+                effect_scopes_flat.push(ExternalEffectScope {
+                    cursor,
+                    node_id: item.node_id,
+                    opacity: 1.0,
+                    filters: item.filters.clone(),
+                });
+            }
             Kind::kRestore => {
                 let (depth, bounds, rounded_depth, unsupported) = saved_effects
                     .pop()
                     .ok_or(ReplayUnsupported("unbalanced-effect-scope"))?;
-                alpha_scopes.truncate(depth);
+                effect_scopes_flat.truncate(depth);
                 device_clip = bounds;
                 rounded_scopes.truncate(rounded_depth);
                 unsupported_complex = unsupported;
@@ -2510,7 +2576,7 @@ fn prepare_raster_content(
     }
     if !stack.is_empty()
         || !saved_effects.is_empty()
-        || !alpha_scopes.is_empty()
+        || !effect_scopes_flat.is_empty()
         || state != State::default()
     {
         return Err(ReplayUnsupported("unbalanced-external-state"));
@@ -2761,7 +2827,9 @@ fn prepare_raster_content(
                 // Bounds and state validation still consume current metadata;
                 // the equal Arc alone is only a payload allocation shortcut.
                 match item.r#type {
-                    Kind::kSave => stack.push(local),
+                    Kind::kSave | Kind::kSaveLayerBlend | Kind::kSaveLayerDstIn => {
+                        stack.push(local)
+                    }
                     Kind::kRestore => {
                         local = stack.pop().ok_or(ReplayUnsupported("unbalanced-record"))?
                     }
@@ -2776,7 +2844,7 @@ fn prepare_raster_content(
                 continue;
             }
             match item.r#type {
-                Kind::kSave => {
+                Kind::kSave | Kind::kSaveLayerBlend | Kind::kSaveLayerDstIn => {
                     stack.push(local);
                     items.push(item.clone());
                 }

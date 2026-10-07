@@ -352,6 +352,40 @@ fn apply(style: &mut ComputedStyle, property: &str, value: &str, viewport: (f64,
                 style.paint.svg_stroke_width = width;
             }
         }
+        "stroke-dasharray" => {
+            if value.eq_ignore_ascii_case("none") {
+                style.paint.svg_stroke_dash_array.clear();
+            } else {
+                // Chromium parses this in SVG attribute mode: commas and
+                // whitespace both separate nonnegative length/number values.
+                let mut dashes = Vec::new();
+                let mut valid = true;
+                for part in value.split(|c: char| c == ',' || c.is_ascii_whitespace()) {
+                    if part.is_empty() {
+                        continue;
+                    }
+                    let dash = border_radius::Length(part, font_size)
+                        .or_else(|| part.parse::<f64>().ok())
+                        .filter(|dash| dash.is_finite() && *dash >= 0.0);
+                    if let Some(dash) = dash {
+                        dashes.push(dash);
+                    } else {
+                        valid = false;
+                        break;
+                    }
+                }
+                if valid && !dashes.is_empty() {
+                    style.paint.svg_stroke_dash_array = dashes;
+                }
+            }
+        }
+        "stroke-dashoffset" => {
+            let offset = border_radius::Length(value, font_size)
+                .or_else(|| value.parse::<f64>().ok());
+            if let Some(offset) = offset.filter(|offset| offset.is_finite()) {
+                style.paint.svg_stroke_dash_offset = offset;
+            }
+        }
         "stroke-linecap" => match value {
             "butt" => style.paint.svg_stroke_line_cap = SvgStrokeLineCap::kButt,
             "round" => style.paint.svg_stroke_line_cap = SvgStrokeLineCap::kRound,

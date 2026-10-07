@@ -66,6 +66,8 @@ class Element extends Node {
 }
 class HTMLElement extends Element {}
 class SVGElement extends Element {}
+class SVGGeometryElement extends SVGElement {}
+class SVGPathElement extends SVGGeometryElement {}
 class MathMLElement extends Element {}
 class HTMLInputElement extends HTMLElement {}
 class HTMLTextAreaElement extends HTMLElement {}
@@ -111,6 +113,27 @@ class HTMLMediaElement extends HTMLElement {
 class HTMLVideoElement extends HTMLMediaElement {}
 class HTMLAudioElement extends HTMLMediaElement {}
 class Document extends Node {}
+const fontFaceSetToken = {};
+class FontFaceSet extends EventTarget {
+  constructor(token) {
+    if (token !== fontFaceSetToken) throw new TypeError('Illegal constructor');
+    super();
+    this.status = 'loaded';
+    this.ready = Promise.resolve(this);
+  }
+  check(font, text = ' ') { String(font); String(text); return true; }
+  load(font, text = ' ') { String(font); String(text); return Promise.resolve([]); }
+}
+Object.defineProperty(FontFaceSet.prototype, Symbol.toStringTag,
+  {value:'FontFaceSet', configurable:true});
+Object.defineProperty(globalThis, 'FontFaceSet',
+  {value:FontFaceSet, writable:true, configurable:true});
+const documentFontSets = new WeakMap();
+Object.defineProperty(Document.prototype, 'fonts', {configurable:true, enumerable:true, get() {
+  let fonts = documentFontSets.get(this);
+  if (!fonts) { fonts = new FontFaceSet(fontFaceSetToken); documentFontSets.set(this, fonts); }
+  return fonts;
+}});
 class DocumentFragment extends Node {}
 class ShadowRoot extends DocumentFragment {}
 class ElementInternals {
@@ -133,7 +156,8 @@ for (const [name, value] of Object.entries({ELEMENT_NODE:1, ATTRIBUTE_NODE:2, TE
   Object.defineProperty(Node, name, {value, enumerable:true});
   Object.defineProperty(Node.prototype, name, {value, enumerable:true});
 }
-for (const [name, cls] of Object.entries({EventTarget, Node, Element, HTMLElement, SVGElement, MathMLElement,
+for (const [name, cls] of Object.entries({EventTarget, Node, Element, HTMLElement, SVGElement,
+    SVGGeometryElement, SVGPathElement, MathMLElement,
     HTMLInputElement, HTMLTextAreaElement, HTMLButtonElement, HTMLFormElement,
     HTMLSelectElement, HTMLOptionElement, HTMLLabelElement, HTMLDetailsElement,
     HTMLDialogElement, HTMLScriptElement, HTMLStyleElement, HTMLLinkElement,
@@ -144,6 +168,7 @@ for (const [name, cls] of Object.entries({EventTarget, Node, Element, HTMLElemen
   Object.defineProperty(cls.prototype, Symbol.toStringTag, {value:name, configurable:true});
   install(name, cls.prototype);
 }
+SVGGeometryElement.prototype.getTotalLength=function(){return invoke(this,'getTotalLength');};
 globalThis.__domUpgradeCustomElement=function(element,constructor){
   Object.setPrototypeOf(element,constructor.prototype);
   customElementConstructionStack.push(element);
@@ -382,14 +407,17 @@ Object.defineProperty(HTMLElement.prototype,'sheet',{get(){
 }});
 const datasets = new WeakMap(), styles = new WeakMap(), classes = new WeakMap();
 const dataName = key => 'data-' + key.replace(/[A-Z]/g, c => '-' + c.toLowerCase());
-Object.defineProperty(HTMLElement.prototype, 'dataset', {get() {
+const datasetDescriptor = {get() {
   if (!datasets.has(this)) { const node = this; datasets.set(this, new Proxy({}, {
     get(_, key) { if (typeof key !== 'string') return undefined; return node.getAttribute(dataName(key)) ?? undefined; },
     set(_, key, value) { node.setAttribute(dataName(key), String(value)); return true; },
     deleteProperty(_, key) { node.removeAttribute(dataName(key)); return true; },
     has(_, key) { return node.hasAttribute(dataName(key)); }
   })); } return datasets.get(this);
-}});
+}};
+// HTMLOrSVGElement supplies dataset to both element families in Chromium.
+Object.defineProperty(HTMLElement.prototype, 'dataset', datasetDescriptor);
+Object.defineProperty(SVGElement.prototype, 'dataset', datasetDescriptor);
 const cssName = key => key === 'cssFloat' ? 'float' : key.replace(/[A-Z]/g, c => '-' + c.toLowerCase());
 Object.defineProperty(Element.prototype, 'style', {get() {
   if (!styles.has(this)) { const node = this; const methods = {

@@ -1,7 +1,7 @@
 //! CPU execution of persistent layer/tile plans. The planner owns identities;
 //! this renderer owns premultiplied tile pixels and draws into the borrowed output.
 use crate::clip_mask::{ClipMaskCache, MaskCoverage};
-use layoutng_assembly::internal::paint_input::PaintCornerRadii;
+use layoutng_assembly::internal::paint_input::{PaintCornerRadii, PaintFilterType};
 use paint::paint_property_tree::{ClipPaintPropertyNode, EffectPaintPropertyNode};
 use std::collections::HashMap;
 use std::io;
@@ -194,6 +194,60 @@ impl Scope {
         }
     }
 }
+
+fn effect_blur_sigmas(
+    scope: &Scope,
+    scale: f64,
+) -> io::Result<Vec<(f32, f32)>> {
+    let Scope::Effect(effect) = scope else {
+        return Ok(Vec::new());
+    };
+    if effect.filters.is_empty() {
+        return Ok(Vec::new());
+    }
+    let matrix = layer_tile::compositor_transform(&effect.local_transform_space, scale)
+        .map_err(|_| io::Error::new(io::ErrorKind::Unsupported, "filter-transform"))?;
+    let sx = matrix.values[0].hypot(matrix.values[1]);
+    let sy = matrix.values[4].hypot(matrix.values[5]);
+    effect
+        .filters
+        .iter()
+        .map(|filter| {
+            if filter.r#type != PaintFilterType::kBlur
+                || !filter.amount.is_finite()
+                || filter.amount < 0.0
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "filter-effect",
+                ));
+            }
+            Ok(((filter.amount * sx) as f32, (filter.amount * sy) as f32))
+        })
+        .collect()
+}
+
+fn expanded_for_blur(
+    bounds: Option<SurfaceBounds>,
+    sigmas: &[(f32, f32)],
+    width: u32,
+    height: u32,
+) -> Option<SurfaceBounds> {
+    let mut bounds = bounds?;
+    let x = sigmas
+        .iter()
+        .map(|(sigma, _)| (sigma * 3.0).ceil() as usize + 1)
+        .sum::<usize>();
+    let y = sigmas
+        .iter()
+        .map(|(_, sigma)| (sigma * 3.0).ceil() as usize + 1)
+        .sum::<usize>();
+    bounds.left = bounds.left.saturating_sub(x);
+    bounds.top = bounds.top.saturating_sub(y);
+    bounds.right = bounds.right.saturating_add(x).min(width as usize);
+    bounds.bottom = bounds.bottom.saturating_add(y).min(height as usize);
+    Some(bounds)
+}
 fn needs_clip_mask(clip: &ClipPaintPropertyNode, _scale: f64) -> bool {
     // PropertyTreeManager::SyntheticEffectType does not create an effect for
     // an axis-aligned plain rect, even at a fractional coordinate. Retained
@@ -278,6 +332,7 @@ fn composition_scopes(
                 append_clip_scopes(clip, &mut scopes, &mut seen, scale);
             }
         } else if effect.opacity != 1.0
+            || !effect.filters.is_empty()
             || masked_parents
                 .iter()
                 .any(|parent| parent.lifecycle.same_node(&effect.lifecycle))
@@ -313,6 +368,7 @@ struct EffectSurface {
     pixels: Vec<u32>,
     view: TargetView,
     touched: Option<SurfaceBounds>,
+    blur_sigmas: Vec<(f32, f32)>,
 }
 struct EffectScratch {
     pixels: Vec<u32>,
@@ -391,8 +447,12 @@ fn effect_allocation_plan(
                         .map(|(bounds, _, _)| bounds),
                 );
             }
-            for (_, index) in &active {
-                union_bounds(&mut runs[*index], bounds);
+            for (scope, index) in &active {
+                let sigmas = effect_blur_sigmas(scope, scale)?;
+                union_bounds(
+                    &mut runs[*index],
+                    expanded_for_blur(bounds, &sigmas, width, height),
+                );
             }
         }
         let direct_mask = direct_mask_partition(plan, layer, &chain, replay, width, height)?;
@@ -810,11 +870,48 @@ impl LayerRaster {
     ) {
         #[cfg(feature = "compose_work_profile")]
         layer_compose_profile::class(5);
-        let group = groups.pop().expect("active effect group");
+        let mut group = groups.pop().expect("active effect group");
         // Direct quads already performed this Mask effect, including exterior
         // clearing. Keep scope ordering/identity without allocating a source.
         if group.direct_dst_in || group.direct_clip {
             return;
+        }
+        if !group.blur_sigmas.is_empty() && !group.pixels.is_empty() {
+            let width = group.view.stride;
+            let height = group.pixels.len() / width;
+            // Effect surfaces store native little-endian RGBA words, the same
+            // premultiplied byte layout consumed by SkBlurEngine.
+            let bytes = unsafe {
+                std::slice::from_raw_parts_mut(
+                    group.pixels.as_mut_ptr().cast::<u8>(),
+                    group.pixels.len() * std::mem::size_of::<u32>(),
+                )
+            };
+            for &(sigma_x, sigma_y) in &group.blur_sigmas {
+                let ok = skia::cpu::layer_filters::blur_rgba(
+                    bytes,
+                    width as u32,
+                    height as u32,
+                    sigma_x,
+                    sigma_y,
+                );
+                debug_assert!(ok);
+                if let Some(mut touched) = group.touched {
+                    let x = (sigma_x * 3.0).ceil() as usize + 1;
+                    let y = (sigma_y * 3.0).ceil() as usize + 1;
+                    touched.left = touched.left.saturating_sub(x).max(group.view.origin.0);
+                    touched.top = touched.top.saturating_sub(y).max(group.view.origin.1);
+                    touched.right = touched
+                        .right
+                        .saturating_add(x)
+                        .min(group.view.origin.0 + width);
+                    touched.bottom = touched
+                        .bottom
+                        .saturating_add(y)
+                        .min(group.view.origin.1 + height);
+                    group.touched = Some(touched);
+                }
+            }
         }
         if let Scope::DstIn(effect) = &group.scope {
             let parent = groups
@@ -1597,6 +1694,7 @@ impl LayerRaster {
                     .expect("preflight validated effect dimensions");
                 let direct_dst_in = direct_mask.is_some() && matches!(&scope, Scope::DstIn(_));
                 let direct_clip = direct_clip.is_some_and(|candidate| candidate.opening_run == run);
+                let blur_sigmas = effect_blur_sigmas(&scope, scale)?;
                 let pixels = if direct_dst_in || direct_clip {
                     Vec::new()
                 } else {
@@ -1613,6 +1711,7 @@ impl LayerRaster {
                     pixels,
                     view,
                     touched: None,
+                    blur_sigmas,
                 });
             }
             if let Some(cost) = &mut compose_costs {

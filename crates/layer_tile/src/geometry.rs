@@ -1,6 +1,8 @@
 use crate::{CompositorScrollOffset, UnsupportedReason};
 use layoutng_assembly::internal::layout_input::TransformMatrix;
-use layoutng_assembly::internal::paint_input::{PaintBlendMode, PaintCornerRadii};
+use layoutng_assembly::internal::paint_input::{
+    PaintBlendMode, PaintCornerRadii, PaintFilterType,
+};
 use paint::paint_engine::{PaintRect, RasterEffectOutset};
 use paint::paint_property_tree::{
     ClipPaintPropertyNode, PropertyTreeState, TransformPaintPropertyNode,
@@ -647,7 +649,14 @@ fn resolve_with_record_clip_bounds(
         if node.blend_mode != PaintBlendMode::kNormal || node.isolates_blending {
             return Err(UnsupportedReason::BlendEffect);
         }
-        if !node.filters.is_empty() {
+        // Chromium promotes CSS filters to an isolated effect/render pass.
+        // This CPU path currently implements Skia's blur image filter; keep
+        // every other operation explicit instead of silently flattening it.
+        if node.filters.iter().any(|filter| {
+            filter.r#type != PaintFilterType::kBlur
+                || !filter.amount.is_finite()
+                || filter.amount < 0.0
+        }) {
             return Err(UnsupportedReason::FilterEffect);
         }
         // A Mask is a real DstIn effect child, not a compositor coverage

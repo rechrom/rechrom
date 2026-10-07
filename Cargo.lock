@@ -1444,6 +1444,7 @@ dependencies = [
  "layoutng_assembly",
  "layoutng_foundation",
  "page_mutation",
+ "paint",
 ]
 
 [[package]]
@@ -3759,6 +3760,7 @@ dependencies = [
  "layoutng_foundation",
  "layoutng_replaced",
  "paint",
+ "skia",
  "url",
  "xhr_transport",
 ]

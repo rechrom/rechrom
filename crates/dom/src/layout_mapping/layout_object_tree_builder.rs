@@ -1513,22 +1513,28 @@ fn append_children(
             }
             Child::Text(index) => {
                 let text = &document.texts[index];
+                let svg_text_parent = document.elements[parent_index].namespace
+                    == DOMNamespace::kSVG
+                    && matches!(
+                        document.elements[parent_index].tag.as_str(),
+                        "text" | "tspan" | "textPath" | "a"
+                    );
+                if document.elements[parent_index].namespace == DOMNamespace::kSVG
+                    && !svg_text_parent
+                {
+                    continue;
+                }
                 // cpp: dom_to_layout/layout_object_tree_builder.cc:1216-1245
                 if !preserves_breaks(&styles[parent_index])
                     && contains_only_collapsible_whitespace(text)
-                    && ((document.elements[parent_index].namespace == DOMNamespace::kSVG
-                        && !matches!(
-                            document.elements[parent_index].tag.as_str(),
-                            "text" | "tspan" | "textPath" | "a"
-                        ))
-                        || suppresses_collapsible_whitespace_children(
-                            tree,
-                            document,
-                            styles,
-                            generation,
-                            parent_index,
-                            unsafe { &*parent },
-                        ))
+                    && suppresses_collapsible_whitespace_children(
+                        tree,
+                        document,
+                        styles,
+                        generation,
+                        parent_index,
+                        unsafe { &*parent },
+                    )
                 {
                     continue;
                 }

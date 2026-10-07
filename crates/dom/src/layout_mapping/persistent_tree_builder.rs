@@ -752,17 +752,20 @@ fn AppendChildren<'a>(
     for &child in dom_parent.Children() {
         let node = document.Node(child);
         if node.Type() == DOMNodeType::kText {
+            // SVG character data creates layout text only in SVG text-content
+            // elements. Text under <g>, <defs>, shapes, etc. stays in the DOM
+            // but is not a child of SVGContentContainer in Chromium.
+            let svg_text_parent = dom_parent.Namespace() == DOMNamespace::kSVG
+                && matches!(dom_parent.Name(), "text" | "tspan" | "textPath" | "a");
+            if dom_parent.Namespace() == DOMNamespace::kSVG && !svg_text_parent {
+                continue;
+            }
             let style = flattened.or_else(|| document.ResolvedStyleFor(index).map(|r| &r.style));
-            let svg_whitespace = dom_parent.Namespace() == DOMNamespace::kSVG
-                && !["text", "tspan", "textPath", "a"]
-                    .iter()
-                    .any(|&name| dom_parent.IsHTMLElement(name));
             if style.is_some_and(|s| !preserves_breaks(s))
                 && contains_only_collapsible_whitespace(node.Data())
-                && (svg_whitespace
-                    || SuppressesCollapsibleWhitespaceChildren(document, index, tree, unsafe {
-                        &*parent
-                    }))
+                && SuppressesCollapsibleWhitespaceChildren(document, index, tree, unsafe {
+                    &*parent
+                })
             {
                 continue;
             }

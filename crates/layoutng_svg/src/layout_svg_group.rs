@@ -55,18 +55,36 @@ impl LayoutSVGGroup {
 
     // cpp: layoutng_svg/layout_svg_group.cc:12-17
     pub fn IsChildAllowed(&self, child: *mut LayoutObject, _style: &ComputedStyle) -> bool {
-        !child.is_null()
-            && (unsafe { &*child }.IsSVGShape()
-                || unsafe { &*child }.IsSVGText()
-                || unsafe { &*child }.IsSVGContainer())
+        if child.is_null() {
+            return false;
+        }
+        // Chromium's SVGContentContainer accepts every renderable SVG child
+        // except inline descendants and nested SVG roots. Restricting this to
+        // the three common concrete classes rejects valid SVG image/resource
+        // objects used by ordinary inline icons.
+        let child = unsafe { &*child };
+        child.IsSVG()
+            && !child.IsSVGInline()
+            && !child.IsSVGInlineText()
+            && !child.IsSVGRoot()
     }
 
     // cpp: layoutng_svg/layout_svg_group.cc:19-24
     pub fn AddChild(&mut self, child: *mut LayoutObject, before_child: *mut LayoutObject) {
         assert!(!child.is_null());
-        assert!(self
-            .flow
-            .IsChildAllowed(child, unsafe { &*child }.StyleRef()));
+        let child_ref = unsafe { &*child };
+        // Call the translated derived method directly. Calling through the
+        // embedded LayoutBlockFlow selects its HTML child policy, unlike the
+        // C++ LayoutSVGModelObject virtual dispatch used by Chromium.
+        assert!(
+            self.IsChildAllowed(child, child_ref.StyleRef()),
+            "class={:?} svg={} inline={} inline_text={} root={}",
+            child_ref.RuntimeClass(),
+            child_ref.IsSVG(),
+            child_ref.IsSVGInline(),
+            child_ref.IsSVGInlineText(),
+            child_ref.IsSVGRoot()
+        );
         self.flow.AddChild(child, before_child);
     }
 

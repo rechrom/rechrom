@@ -317,7 +317,9 @@ impl<'a> LayerReplay<'a> {
                 }
                 for item in &*source.items {
                     match item.r#type {
-                        Kind::kSave => saved.push((clip, complex_clip, record_transform)),
+                        Kind::kSave | Kind::kSaveLayerBlend | Kind::kSaveLayerDstIn => {
+                            saved.push((clip, complex_clip, record_transform))
+                        }
                         Kind::kRestore => {
                             (clip, complex_clip, record_transform) = saved
                                 .pop()

@@ -7,6 +7,7 @@ use std::rc::Rc;
 use dom::dom_mutation::{DOMMutation, DOMMutationEmitter, DOMMutationType};
 use dom::persistent_document::{DOMNamespace, DOMNodeType};
 use dom::{Document, DOM};
+use layoutng_assembly::internal::layout_input::PaintPathVerb;
 use javascript::javascript_runtime::{
     HostCall, HostContinuation, HostMethodRef, HostObjectId, HostObjectRef, HostOperation,
     HostResult, HostSymbol, HostValue, JavaScriptExceptionKind, JavaScriptFunction,
@@ -962,6 +963,54 @@ impl DOMJavaScriptBindings {
         };
         let node = document.Node(index);
         match member {
+            "getTotalLength"
+                if node.Type() == DOMNodeType::kElement
+                    && node.Namespace() == DOMNamespace::kSVG
+                    && node.Name() == "path" =>
+            {
+                let Some(data) = node.FindAttribute("d").map(|attribute| attribute.value.as_str())
+                else {
+                    return Self::value(HostValue::Number(0.0));
+                };
+                let Some(parsed) = dom::svg_path_parser::ParseSVGPathDefault(data) else {
+                    return Self::value(HostValue::Number(0.0));
+                };
+                let mut path = skia::PathBuilder::new();
+                for command in parsed.commands {
+                    match command.verb {
+                        PaintPathVerb::kMoveTo => path.move_to(
+                            command.point.x as f32,
+                            command.point.y as f32,
+                        ),
+                        PaintPathVerb::kLineTo => path.line_to(
+                            command.point.x as f32,
+                            command.point.y as f32,
+                        ),
+                        PaintPathVerb::kQuadraticTo => path.quad_to(
+                            command.control1.x as f32,
+                            command.control1.y as f32,
+                            command.point.x as f32,
+                            command.point.y as f32,
+                        ),
+                        PaintPathVerb::kCubicTo => path.cubic_to(
+                            command.control1.x as f32,
+                            command.control1.y as f32,
+                            command.control2.x as f32,
+                            command.control2.y as f32,
+                            command.point.x as f32,
+                            command.point.y as f32,
+                        ),
+                        PaintPathVerb::kClose => path.close(),
+                        PaintPathVerb::kConicTo => {
+                            return Self::type_error("invalid SVG path geometry")
+                        }
+                    }
+                }
+                let length = path.finish().map_or(0.0, |path| {
+                    f64::from(skia::src::core::SkContourMeasure::path_length(&path))
+                });
+                Self::value(HostValue::Number(length))
+            }
             "contains" => {
                 let Some(HostValue::Object(other)) = arguments.first() else {
                     return Self::value(HostValue::Boolean(false));
@@ -1680,7 +1729,10 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                     "audio" => "HTMLAudioElement",
                     _ => "HTMLElement",
                 },
-                DOMNamespace::kSVG => "SVGElement",
+                DOMNamespace::kSVG => match node.Name() {
+                    "path" => "SVGPathElement",
+                    _ => "SVGElement",
+                },
                 DOMNamespace::kMathML => "MathMLElement",
                 DOMNamespace::kNone => "Element",
             },

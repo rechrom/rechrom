@@ -20,6 +20,14 @@ pub(crate) struct SkContourMeasureIter<'a> {
     tolerance: f32,
 }
 
+/// Sum the lengths of every nonempty contour using Skia's contour
+/// subdivision and tolerance rules (the basis of SVGPathElement length APIs).
+pub fn path_length(path: &Path) -> f32 {
+    SkContourMeasureIter::new(path, 1.0)
+        .map(|contour| contour.length)
+        .sum()
+}
+
 impl<'a> SkContourMeasureIter<'a> {
     pub(crate) fn new(path: &'a Path, res_scale: f32) -> Self {
         // can't use tangents, since we need [0..1..................2] to be seen
