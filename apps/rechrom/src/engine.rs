@@ -3965,10 +3965,28 @@ fn escape(text: &str) -> String {
         .replace('"', "&quot;")
 }
 
-const HOME: &str = r#"<!doctype html><html><head><title>Rechrom</title><style>
-body{margin:0;background:#f7f9fc;color:#243247;font:17px sans-serif}main{max-width:760px;margin:80px auto;padding:32px;background:white;border:1px solid #dce3ed;border-radius:12px}
-h1{font-size:34px;color:#172033}p{line-height:1.7}a{color:#2865c7;margin-right:24px}input{font:17px sans-serif;padding:10px;border:1px solid #bbc8d8;border-radius:5px;width:300px}
-</style></head><body><main><h1>Rechrom</h1><p>Window, input and page rendering are connected to the Rechrom engine.</p><p>Enter a URL above, or press Ctrl / Cmd + L. Use Ctrl / Cmd + R to reload.</p><p><a href="https://www.baidu.com">Baidu</a><a href="https://www.qq.com">QQ</a></p><p><input placeholder="Try typing here"></p></main></body></html>"#;
+const HOME: &str = r#"<!doctype html><html><head><title>New Tab</title><style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%}
+body{display:flex;align-items:center;justify-content:center;background:#fdfefe;color:#062142;font:14px Arial,sans-serif}
+main{width:560px;margin:0}
+.brand{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:42px}
+.brand svg{width:48px;height:42px}
+h1{margin:0;font-size:30px;line-height:1;font-weight:700;letter-spacing:-1.1px}
+form{position:relative;width:100%}
+.search-icon{position:absolute;left:17px;top:15px;width:17px;height:17px;color:#687d99;pointer-events:none}
+input{display:block;width:100%;height:48px;padding:0 18px 0 48px;border:1px solid #cbd7e1;border-radius:8px;background:#fff;color:#062142;font:15px Arial,sans-serif;outline:none}
+input:focus{border-color:#15919d}
+.favorites{margin-top:66px}
+.favorites h2{display:none}
+.sites{display:flex;justify-content:center;gap:18px}
+.site{display:flex;flex-direction:column;align-items:center;gap:10px;width:88px;padding:10px 4px;border-radius:8px;color:#062142;text-decoration:none}
+.site:hover{background:#eef7f8}
+.icon{display:flex;align-items:center;justify-content:center;width:38px;height:38px;border:1px solid #d7e2e8;border-radius:8px;background:#fff;color:#15919d}
+.icon svg{width:24px;height:22px}
+.github svg{width:21px;height:21px;fill:#181717}
+.google svg{width:22px;height:22px}
+.label{font-size:13px}
+</style></head><body><main><header class="brand"><svg viewBox="0 0 220 190" aria-hidden="true"><g transform="translate(-111.5 -66.5) scale(.35)"><path fill='#15919d' d="M519 324V282C519 244 551 211 590 216L849 259C883 265 910 290 910 326V545C910 584 880 609 844 602L790 594V538L830 545C849 549 861 538 861 521V354C861 337 850 327 834 325L597 283C580 280 568 290 568 306V331Z"/><path fill='#062142' d="M355 388C355 347 386 320 427 327L728 376C757 381 775 403 775 432V476C760 454 745 446 717 441L441 392C422 388 409 399 409 419V575C409 591 418 602 434 605L701 648C714 651 722 645 722 631V461C750 467 775 486 775 512V651C775 692 747 716 710 709L410 660C377 654 355 630 355 595Z"/></g></svg><h1>Rechrom</h1></header><form action="https://www.google.com/search" method="get"><svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12.5 12.5L17 17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><input name="q" placeholder="Search the web" autofocus></form><section class="favorites"><h2>Favorites</h2><nav class="sites"><a class="site" href="https://rechrom.dev"><span class="icon"><svg viewBox="0 0 220 190" aria-hidden="true"><g transform="translate(-111.5 -66.5) scale(.35)"><path fill='#15919d' d="M519 324V282C519 244 551 211 590 216L849 259C883 265 910 290 910 326V545C910 584 880 609 844 602L790 594V538L830 545C849 549 861 538 861 521V354C861 337 850 327 834 325L597 283C580 280 568 290 568 306V331Z"/><path fill='#062142' d="M355 388C355 347 386 320 427 327L728 376C757 381 775 403 775 432V476C760 454 745 446 717 441L441 392C422 388 409 399 409 419V575C409 591 418 602 434 605L701 648C714 651 722 645 722 631V461C750 467 775 486 775 512V651C775 692 747 716 710 709L410 660C377 654 355 630 355 595Z"/></g></svg></span><span class="label">Rechrom</span></a><a class="site" href="https://www.google.com"><span class="icon google"><svg viewBox="0 0 48 48" aria-hidden="true"><path fill='#ffc107' d="M43.6 20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.1 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.7-.4-4Z"/><path fill='#ff3d00' d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.1 6.1 29.3 4 24 4c-7.7 0-14.3 4.3-17.7 10.7Z"/><path fill='#4caf50' d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.1 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.6 39.5 16.3 44 24 44Z"/><path fill='#1976d2' d="M43.6 20H24v8h11.3c-.8 2.3-2.3 4.2-4.2 5.6l6.2 5.2C41 35.5 44 30.2 44 24c0-1.3-.1-2.7-.4-4Z"/></svg></span><span class="label">Google</span></a><a class="site" href="https://github.com/rechrom/rechrom"><span class="icon github"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .7C5.6.7.4 5.9.4 12.3c0 5.1 3.3 9.4 7.8 10.9.6.1.8-.3.8-.6v-2.2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.4-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.5-.3-5.2-1.3-5.2-5.7 0-1.3.4-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2.9-.3 1.9-.4 2.9-.4s2 .1 2.9.4c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.9 1.2 1.9 1.2 3.1 0 4.4-2.7 5.4-5.2 5.7.4.3.8 1 .8 2v3c0 .4.2.7.8.6 4.5-1.5 7.8-5.8 7.8-10.9C23.6 5.9 18.4.7 12 .7Z"/></svg></span><span class="label">GitHub</span></a></nav></section></main></body></html>"#;
 
 #[cfg(test)]
 mod tests {
