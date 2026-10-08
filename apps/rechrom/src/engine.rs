@@ -75,6 +75,7 @@ impl FatalError {
 #[derive(Debug)]
 pub enum UserEvent {
     OpenDevTools,
+    CloseWindow,
     FrameReady,
     ChromeDragRegions {
         viewport: Viewport,
@@ -2596,6 +2597,10 @@ impl BrowserState {
                 page.StopLoading();
             }
         }
+        if self.tabs.is_only(id) {
+            (self.output.notify)(UserEvent::CloseWindow);
+            return Ok(());
+        }
         if self.tabs.close(id) {
             self.show_active_tab()
         } else {
@@ -2622,6 +2627,17 @@ impl BrowserState {
         let owner = self.toolbar.Document();
         let doc = owner.GetDocument();
         doc.ControlValue(doc.FindNodeById(self.address_id).unwrap())
+    }
+    fn select_all_address(&mut self) -> io::Result<()> {
+        self.toolbar.Dispatch(&InputEvent::Key(KeyEvent {
+            key: "a".into(),
+            modifiers: EventModifiers {
+                control: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }))?;
+        Ok(())
     }
     fn flush_frame_inputs(&mut self) -> io::Result<()> {
         self.toolbar.FlushFrameInputs()?;
@@ -2747,15 +2763,7 @@ impl BrowserState {
                     target_node_id: self.address_id,
                     ..Default::default()
                 }))?;
-                self.toolbar.Dispatch(&InputEvent::Key(KeyEvent {
-                    key: "a".into(),
-                    modifiers: EventModifiers {
-                        control: true,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }))?;
-                Ok(())
+                self.select_all_address()
             }
             Command::SetActive(active) => {
                 if !active {
@@ -3117,7 +3125,16 @@ impl BrowserState {
         }
         self.update_active_pages()?;
         if toolbar {
+            let address_was_focused = self.toolbar.FocusedNodeId() == Some(self.address_id);
             let result = self.toolbar.Dispatch(&input)?;
+            if matches!(&input, InputEvent::Mouse(event)
+                if event.r#type == MouseEventType::kDown
+                    && event.button == MouseButton::kPrimary)
+                && result.target_node_id == Some(self.address_id)
+                && !address_was_focused
+            {
+                self.select_all_address()?;
+            }
             if matches!(&input, InputEvent::Mouse(event) if matches!(event.r#type, MouseEventType::kMove | MouseEventType::kLeave))
             {
                 let target = if matches!(&input, InputEvent::Mouse(event) if event.r#type == MouseEventType::kLeave)
@@ -5344,6 +5361,19 @@ mod tests {
                 let mut state = BrowserState::new(viewport, output.clone()).unwrap();
                 state.navigate("about:home", true).unwrap();
                 while state.tabs.active.page.as_ref().is_some_and(Page::IsLoading) { state.tick().unwrap(); }
+                state.input(InputEvent::Mouse(MouseEvent {
+                    r#type: MouseEventType::kDown,
+                    position: Offset { x: 280.0, y: 60.0 },
+                    button: MouseButton::kPrimary,
+                    target_node_id: Some(state.address_id),
+                    ..Default::default()
+                })).unwrap();
+                state.input(InputEvent::TextInput(TextInputEvent {
+                    text: "selected".into(),
+                    ..Default::default()
+                })).unwrap();
+                assert_eq!(state.address(), "selected", "first omnibox click selects all");
+                state.set_address("about:home").unwrap();
                 host_task_pump_does_not_sleep_until_a_future_timer(&mut state);
                 // A webpack/AMD-style dependency chain must reach DOM bindings
                 // on the embedding's unoptimized translated VM stack.
@@ -5447,9 +5477,17 @@ mod tests {
             .unwrap();
     }
     fn tabs_preserve_documents_and_route_link_navigation() {
+        let close_window = Arc::new(AtomicBool::new(false));
         let output = Output {
             mailbox: Arc::new(Mutex::new(None)),
-            notify: Arc::new(|_| {}),
+            notify: {
+                let close_window = close_window.clone();
+                Arc::new(move |event| {
+                    if matches!(event, UserEvent::CloseWindow) {
+                        close_window.store(true, Ordering::Release);
+                    }
+                })
+            },
         };
         let mut state = BrowserState::new(
             Viewport {
@@ -5661,10 +5699,9 @@ mod tests {
         state.close_tab(second_id).unwrap();
         assert_eq!(state.tabs.active.id, first_id);
         state.close_tab(first_id).unwrap();
-        loaded(&mut state);
-        assert_eq!(state.tabs.active.location, "about:home");
+        assert!(close_window.load(Ordering::Acquire));
+        assert_eq!(state.tabs.active.id, first_id);
         assert!(state.tabs.background.is_empty());
-        assert!(find_id(&state.toolbar, "newtab").is_some());
         fn chrome_click(state: &mut BrowserState, name: &str) {
             let id = find_id(&state.toolbar, name).unwrap();
             fn center(fragment: &FragmentNode, id: u64, parent: Offset) -> Option<Offset> {

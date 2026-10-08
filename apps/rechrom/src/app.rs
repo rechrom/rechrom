@@ -409,6 +409,10 @@ impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::OpenDevTools => self.open_devtools(),
+            UserEvent::CloseWindow => {
+                self.send(Command::Stop);
+                event_loop.exit();
+            }
             UserEvent::FrameReady => {} // Diagnostic mailbox path only.
             UserEvent::ChromeDragRegions {
                 viewport,

@@ -57,13 +57,20 @@ impl<P> Tabs<P> {
         std::mem::swap(&mut self.active, &mut self.background[index]);
         true
     }
-    // Return true when the visible tab changed. Closing the final tab leaves a
-    // new home tab, so this command never implicitly quits the native window.
+    pub fn is_only(&self, id: u64) -> bool {
+        self.active.id == id && self.background.is_empty()
+    }
+    // Return true when the visible tab changed. The native host owns the
+    // final-tab/window decision, so the collection never fabricates a
+    // replacement tab when the active tab is the last one.
     pub fn close(&mut self, id: u64) -> bool {
         if id != self.active.id {
             if let Some(index) = self.background.iter().position(|tab| tab.id == id) {
                 self.background.remove(index);
             }
+            return false;
+        }
+        if self.background.is_empty() {
             return false;
         }
         if let Some(index) = self
@@ -74,10 +81,6 @@ impl<P> Tabs<P> {
             .map(|(i, _)| i)
         {
             self.active = self.background.remove(index);
-        } else {
-            let next = self.next_id;
-            self.next_id += 1;
-            self.active = Tab::new(next);
         }
         true
     }
@@ -123,9 +126,13 @@ mod tests {
             tabs.active.page.as_deref().map(String::as_str),
             Some("second document")
         );
-        assert!(tabs.close(second));
-        assert!(tabs.active.page.is_none());
-        assert_eq!(tabs.active.location, "about:home");
+        assert!(tabs.is_only(second));
+        assert!(!tabs.close(second));
+        assert_eq!(tabs.active.id, second);
+        assert_eq!(
+            tabs.active.page.as_deref().map(String::as_str),
+            Some("second document")
+        );
         assert!(tabs.background.is_empty());
     }
 }
