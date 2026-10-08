@@ -409,9 +409,13 @@ dependencies = [
 name = "compositor"
 version = "0.0.1"
 dependencies = [
+ "browser_tracing",
+ "interaction",
  "layer_tile",
  "layoutng_assembly",
+ "layoutng_foundation",
  "paint",
+ "raster",
 ]
 
 [[package]]

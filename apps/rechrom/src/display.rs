@@ -4,13 +4,15 @@
 //! knows nothing about threads, channels, or executors. `PresentationRuntime`
 //! delivers messages and routes the returned effects.
 use crate::{
-    compositor::{RasterBundle, SubmittedFrame},
     engine::{Output, UserEvent, Viewport},
     window_surface::{PreparedWindowFrame, WindowTarget},
 };
+use compositor::RasterBundle;
 use renderer::Renderer;
 use std::{io, sync::Arc, time::Instant};
 use viz::{SurfaceId, SwapId, VizEngine};
+
+type SubmittedFrame = compositor::SubmittedFrame<Viewport, Vec<crate::chrome::DragRegion>>;
 
 pub(crate) const TOOLBAR_SURFACE: SurfaceId = SurfaceId(1);
 pub(crate) const CONTENT_SURFACE: SurfaceId = SurfaceId(2);
@@ -176,7 +178,7 @@ impl Display {
             output,
             sequence,
             viewport: submitted.viewport,
-            drag_regions: submitted.drag_regions,
+            drag_regions: submitted.metadata,
         });
         browser_tracing::instant(
             "frame",

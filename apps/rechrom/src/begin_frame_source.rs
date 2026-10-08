@@ -31,6 +31,12 @@ impl std::ops::Deref for NativeBeginFrame {
     }
 }
 
+impl compositor::CompositorBeginFrame for NativeBeginFrame {
+    fn BeginFrameArgs(&self) -> &BeginFrameArgs {
+        &self.args
+    }
+}
+
 /// Correlate a diagnostic external WindowServer timestamp with tracing's
 /// Instant clock. Used only by the opt-in optical presentation probe.
 #[cfg(target_os = "macos")]

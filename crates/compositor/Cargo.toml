@@ -4,6 +4,10 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+browser_tracing = { path = "../tracing" }
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+interaction = { path = "../interaction" }
 layer_tile = { path = "../layer_tile" }
 layoutng_assembly = { path = "../layoutng_assembly" }
 paint = { path = "../paint", features = ["translation_in_progress"] }
+raster = { path = "../raster", features = ["pure_replay"] }

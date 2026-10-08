@@ -1,10 +1,11 @@
-//! Browser compositor coordinator.
+//! Retained compositor state, raster coordination, and CompositorFrame production.
 //!
-//! This message-driven state machine owns active/pending scroll and raster
-//! state. The backend-independent `compositor` crate produces the immutable
-//! frames submitted to Display. Neither layer knows its thread placement.
-use crate::{display, engine::Viewport};
-use ::compositor::{BeginFrameAck, CompositorFrame};
+//! The engine is independent of its thread, native window, display service, and
+//! application metadata. The embedding supplies concrete frame/viewport types
+//! and routes typed effects to raster ownership and Viz.
+
+use crate::{BeginFrameAck, CompositorFrame, DeviceRect, FrameBuilder, SolidColorDrawQuad};
+use foundation::begin_frame::BeginFrameArgs;
 use interaction::input_event::{ScrollGranularity, WheelEvent, WheelPhase};
 use layer_tile::{
     CompositorScrollOffset, FrameConfig, FramePlan, LayerTileEngine, UnsupportedReason,
@@ -15,89 +16,133 @@ use paint::{
 };
 use std::{io, sync::Arc, time::Instant};
 
-#[derive(Clone)]
-pub(crate) struct ArtifactSnapshot {
-    /// Scroll/property node ids are local to one Page document.  Carry the
-    /// owning tab generation so equal numeric ids from another document can
-    /// never inherit compositor deltas or resident-tree identity.
-    pub document: (u64, u64),
-    pub viewport: Viewport,
-    /// Explicit sampling time for viewport history. LayerTile never reads a
-    /// clock when computing its skewport.
-    pub frame_time: Instant,
-    pub signature: (u64, u64, Viewport),
-    pub toolbar: Arc<PaintArtifact>,
-    pub content: Option<Arc<PaintArtifact>>,
-    pub drag_regions: Vec<crate::chrome::DragRegion>,
-    pub async_root_scroll: bool,
-    pub blocking_wheel_regions: browser::page::BlockingWheelEventRegions,
+pub trait CompositorBeginFrame: Copy {
+    fn BeginFrameArgs(&self) -> &BeginFrameArgs;
 }
 
-pub(crate) enum Command {
-    Snapshot(ArtifactSnapshot),
-    InputBeginFrame(crate::begin_frame_source::NativeBeginFrame),
-    BeginFrame(crate::begin_frame_source::NativeBeginFrame),
-    DisplayBeginFrame(crate::begin_frame_source::NativeBeginFrame),
+impl CompositorBeginFrame for BeginFrameArgs {
+    fn BeginFrameArgs(&self) -> &BeginFrameArgs {
+        self
+    }
+}
+
+pub trait CompositorViewport: Copy + PartialEq {
+    fn Width(self) -> u32;
+    fn Height(self) -> u32;
+    fn Scale(self) -> f64;
+
+    fn LogicalWidth(self) -> f64 {
+        f64::from(self.Width()) / self.Scale()
+    }
+
+    fn ToolbarPixels(self, toolbar_height: f64) -> u32 {
+        (toolbar_height * self.Scale()).round() as u32
+    }
+
+    fn ContentHeight(self, toolbar_height: f64) -> f64 {
+        f64::from(
+            self.Height()
+                .saturating_sub(self.ToolbarPixels(toolbar_height))
+                .max(1),
+        ) / self.Scale()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BlockingWheelEventRegions {
+    pub covers_viewport: bool,
+    pub rects: Vec<PaintRect>,
+}
+
+impl BlockingWheelEventRegions {
+    pub fn Contains(&self, x: f64, y: f64) -> bool {
+        self.covers_viewport
+            || self.rects.iter().any(|rect| {
+                x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
+            })
+    }
+}
+
+#[derive(Clone)]
+pub struct ArtifactSnapshot<V, M> {
+    pub document: (u64, u64),
+    pub viewport: V,
+    pub toolbar_height: f64,
+    pub frame_time: Instant,
+    pub signature: (u64, u64, V),
+    pub toolbar: Arc<PaintArtifact>,
+    pub content: Option<Arc<PaintArtifact>>,
+    pub metadata: M,
+    pub async_root_scroll: bool,
+    pub blocking_wheel_regions: BlockingWheelEventRegions,
+}
+
+pub enum Command<V, F, M> {
+    Snapshot(ArtifactSnapshot<V, M>),
+    InputBeginFrame(F),
+    BeginFrame(F),
+    DisplayBeginFrame(F),
     Wheel {
         event: WheelEvent,
         queued_at: Instant,
     },
-    Resize(Viewport),
+    Resize(V),
     Redraw,
-    RasterReady(RasterReady),
+    RasterReady(RasterReady<V, M>),
     SpareBundle(RasterBundle),
     Stop,
 }
 
-pub(crate) enum Effect {
-    Raster(RasterJob),
-    Display(display::Message),
-    BeginMainFrame(crate::begin_frame_source::NativeBeginFrame),
+pub enum Effect<V, F, M> {
+    Raster(RasterJob<V, M>),
+    InstallRasterBundle(RasterBundle),
+    FrameProduced {
+        frame: F,
+        submitted: SubmittedFrame<V, M>,
+        scroll_active: bool,
+    },
+    Submit {
+        frame: F,
+        scroll_active: bool,
+    },
+    BeginMainFrame(F),
     RequestBeginFrame,
 }
 
 #[derive(Clone)]
-pub(crate) struct PlannedFrame {
-    pub(crate) snapshot: ArtifactSnapshot,
-    pub(crate) toolbar: FramePlan,
-    pub(crate) content: Option<FramePlan>,
+pub struct PlannedFrame<V, M> {
+    pub snapshot: ArtifactSnapshot<V, M>,
+    pub toolbar: FramePlan,
+    pub content: Option<FramePlan>,
     root_scroll: Option<RootScroll>,
-    /// Current impl-side position carried with the immutable compositor
-    /// frame. The root overlay scrollbar reads this directly, so its thumb
-    /// advances in the same compositor transaction as page pixels.
     visual_scroll: Option<(u64, f64)>,
-    /// Scroll position baked into tile selection/root placement. It may be
-    /// newer than the Page property's committed position.
     raster_scroll: Option<(u64, f64)>,
 }
 
-/// Immutable compositor output plus browser-host metadata which is not part of
-/// the graphics frame contract. Display never receives PaintArtifact or
-/// FramePlan through this path.
-pub(crate) struct SubmittedFrame {
-    pub(crate) viewport: Viewport,
-    pub(crate) toolbar: CompositorFrame,
-    pub(crate) content: Option<CompositorFrame>,
-    pub(crate) drag_regions: Vec<crate::chrome::DragRegion>,
+pub struct SubmittedFrame<V, M> {
+    pub viewport: V,
+    pub toolbar: CompositorFrame,
+    pub content: Option<CompositorFrame>,
+    pub metadata: M,
 }
 
 #[derive(Default)]
-pub(crate) struct RasterBundle {
-    pub(crate) toolbar_tiles: LayerTileEngine,
-    pub(crate) content_tiles: LayerTileEngine,
-    pub(crate) toolbar_raster: raster::RasterEngine,
-    pub(crate) content_raster: raster::RasterEngine,
+pub struct RasterBundle {
+    pub toolbar_tiles: LayerTileEngine,
+    pub content_tiles: LayerTileEngine,
+    pub toolbar_raster: raster::RasterEngine,
+    pub content_raster: raster::RasterEngine,
 }
 
-pub(crate) struct RasterJob {
-    pub(crate) snapshot: ArtifactSnapshot,
-    pub(crate) bundle: RasterBundle,
-    pub(crate) activation_target: Option<(u64, f64)>,
+pub struct RasterJob<V, M> {
+    pub snapshot: ArtifactSnapshot<V, M>,
+    pub bundle: RasterBundle,
+    pub activation_target: Option<(u64, f64)>,
 }
 
-pub(crate) struct RasterReady {
-    pub(crate) result: io::Result<PlannedFrame>,
-    pub(crate) bundle: RasterBundle,
+pub struct RasterReady<V, M> {
+    pub result: io::Result<PlannedFrame<V, M>>,
+    pub bundle: RasterBundle,
 }
 
 #[derive(Clone, Copy)]
@@ -107,10 +152,8 @@ struct RootScroll {
     maximum: f64,
 }
 
-impl PlannedFrame {
-    fn RootOverlayScrollbarQuad(
-        &self,
-    ) -> Option<(::compositor::SolidColorDrawQuad, ::compositor::DeviceRect)> {
+impl<V: CompositorViewport, M> PlannedFrame<V, M> {
+    fn RootOverlayScrollbarQuad(&self) -> Option<(SolidColorDrawQuad, DeviceRect)> {
         let root = self.root_scroll?;
         if root.maximum <= 0.0 {
             return None;
@@ -120,7 +163,11 @@ impl PlannedFrame {
             .filter(|(id, _)| *id == root.id)
             .map_or(root.committed, |(_, value)| value)
             .clamp(0.0, root.maximum);
-        let viewport = self.snapshot.viewport.content_height().max(1.0);
+        let viewport = self
+            .snapshot
+            .viewport
+            .ContentHeight(self.snapshot.toolbar_height)
+            .max(1.0);
         let contents = viewport + root.maximum;
         let inner_length = (viewport - 4.0).max(0.0);
         let thumb_length = (inner_length * viewport / contents)
@@ -131,29 +178,29 @@ impl PlannedFrame {
         }
         let travel = (inner_length - thumb_length).max(0.0);
         let top = 2.0 + travel * (offset / root.maximum).clamp(0.0, 1.0);
-        let right = self.snapshot.viewport.logical_width() - 3.0;
+        let right = self.snapshot.viewport.LogicalWidth() - 3.0;
         let rect = PaintRect {
             x: (right - 10.0).max(0.0),
             y: top,
             width: 10.0,
             height: thumb_length,
         };
-        let scale = self.snapshot.viewport.scale;
+        let scale = self.snapshot.viewport.Scale();
         let strip_width = (14.0 * scale).ceil() as u32;
-        let width = self.snapshot.viewport.width;
-        let height = self
-            .snapshot
-            .viewport
-            .height
-            .saturating_sub(self.snapshot.viewport.toolbar_pixels());
+        let width = self.snapshot.viewport.Width();
+        let height = self.snapshot.viewport.Height().saturating_sub(
+            self.snapshot
+                .viewport
+                .ToolbarPixels(self.snapshot.toolbar_height),
+        );
         Some((
-            ::compositor::SolidColorDrawQuad {
+            SolidColorDrawQuad {
                 rect,
                 visible_rect: rect,
                 color: [0, 0, 0, 128],
                 corner_radius: 5.0,
             },
-            ::compositor::DeviceRect::new(
+            DeviceRect::new(
                 width.saturating_sub(strip_width) as i32,
                 0,
                 strip_width.min(width),
@@ -163,30 +210,30 @@ impl PlannedFrame {
     }
 }
 
-pub(crate) struct CompositorEngine {
-    toolbar_frame_builder: ::compositor::FrameBuilder,
-    content_frame_builder: ::compositor::FrameBuilder,
+pub struct CompositorEngine<V, F, M> {
+    toolbar_frame_builder: FrameBuilder,
+    content_frame_builder: FrameBuilder,
     spare_bundle: Option<RasterBundle>,
     display_has_bundle: bool,
     raster_in_flight: bool,
-    pending_snapshot: Option<ArtifactSnapshot>,
+    pending_snapshot: Option<ArtifactSnapshot<V, M>>,
     pending_activation_target: Option<(u64, f64)>,
-    snapshot: Option<ArtifactSnapshot>,
-    planned: Option<PlannedFrame>,
+    snapshot: Option<ArtifactSnapshot<V, M>>,
+    planned: Option<PlannedFrame<V, M>>,
     committed_scroll: Option<(u64, f64)>,
     pending_scroll_delta: f64,
     scroll_active: bool,
     wheel_blocked_on_main: Option<bool>,
-    overlay_scrollbar_damage: Option<::compositor::DeviceRect>,
-    current_begin_frame: Option<crate::begin_frame_source::NativeBeginFrame>,
+    overlay_scrollbar_damage: Option<DeviceRect>,
+    current_begin_frame: Option<F>,
     dirty: bool,
 }
 
-impl Default for CompositorEngine {
+impl<V, F, M> Default for CompositorEngine<V, F, M> {
     fn default() -> Self {
         Self {
-            toolbar_frame_builder: ::compositor::FrameBuilder::default(),
-            content_frame_builder: ::compositor::FrameBuilder::default(),
+            toolbar_frame_builder: FrameBuilder::default(),
+            content_frame_builder: FrameBuilder::default(),
             spare_bundle: Some(RasterBundle::default()),
             display_has_bundle: false,
             raster_in_flight: false,
@@ -205,8 +252,13 @@ impl Default for CompositorEngine {
     }
 }
 
-impl CompositorEngine {
-    pub(crate) fn Handle(&mut self, command: Command) -> io::Result<Vec<Effect>> {
+impl<V, F, M> CompositorEngine<V, F, M>
+where
+    V: CompositorViewport,
+    F: CompositorBeginFrame,
+    M: Clone,
+{
+    pub fn Handle(&mut self, command: Command<V, F, M>) -> io::Result<Vec<Effect<V, F, M>>> {
         let mut effects = Vec::new();
         match command {
             Command::Snapshot(snapshot) => {
@@ -264,7 +316,11 @@ impl CompositorEngine {
                     input_id: browser_tracing::instant_id(queued_at),
                     ..Default::default()
                 });
-                if event.position.y < crate::engine::TOOLBAR_HEIGHT
+                let toolbar_height = self
+                    .snapshot
+                    .as_ref()
+                    .map_or(0.0, |snapshot| snapshot.toolbar_height);
+                if event.position.y < toolbar_height
                     || event.delta_units != ScrollGranularity::kScrollByPrecisePixel
                 {
                     return Ok(effects);
@@ -281,7 +337,7 @@ impl CompositorEngine {
                         planned.snapshot.async_root_scroll
                             && planned.snapshot.blocking_wheel_regions.Contains(
                                 event.position.x,
-                                event.position.y - crate::engine::TOOLBAR_HEIGHT
+                                event.position.y - planned.snapshot.toolbar_height
                                     + self.pending_scroll_delta,
                             )
                     });
@@ -373,23 +429,25 @@ impl CompositorEngine {
                 self.ScheduleRaster(&mut effects);
             }
             Command::InputBeginFrame(frame) => {
+                let args = frame.BeginFrameArgs();
                 browser_tracing::instant(
                     "input",
                     "InputBeginFrame",
                     &[
-                        ("source_id", frame.source_id as f64),
-                        ("sequence", frame.sequence_number as f64),
+                        ("source_id", args.source_id as f64),
+                        ("sequence", args.sequence_number as f64),
                     ],
                 );
             }
             Command::BeginFrame(frame) => {
                 self.current_begin_frame = Some(frame);
+                let args = frame.BeginFrameArgs();
                 browser_tracing::instant(
                     "frame",
                     "CompositorBeginFrame",
                     &[
-                        ("source_id", frame.source_id as f64),
-                        ("sequence", frame.sequence_number as f64),
+                        ("source_id", args.source_id as f64),
+                        ("sequence", args.sequence_number as f64),
                     ],
                 );
                 // cc's scheduler turns an impl-frame pulse into a main-frame
@@ -402,7 +460,7 @@ impl CompositorEngine {
         Ok(effects)
     }
 
-    fn ScheduleRaster(&mut self, effects: &mut Vec<Effect>) {
+    fn ScheduleRaster(&mut self, effects: &mut Vec<Effect<V, F, M>>) {
         if self.raster_in_flight {
             return;
         }
@@ -445,7 +503,11 @@ impl CompositorEngine {
         })
     }
 
-    fn InstallRaster(&mut self, ready: RasterReady, effects: &mut Vec<Effect>) -> io::Result<()> {
+    fn InstallRaster(
+        &mut self,
+        ready: RasterReady<V, M>,
+        effects: &mut Vec<Effect<V, F, M>>,
+    ) -> io::Result<()> {
         self.raster_in_flight = false;
         let mut planned = match ready.result {
             Ok(planned) => planned,
@@ -533,7 +595,7 @@ impl CompositorEngine {
             self.pending_scroll_delta = 0.0;
         }
         self.planned = Some(planned);
-        effects.push(Effect::Display(display::Message::Install(ready.bundle)));
+        effects.push(Effect::InstallRasterBundle(ready.bundle));
         // Bootstrap the second half of the fixed active/pending pair.  The
         // first Display::Install has no preceding active bundle to return;
         // every later install does.  Create exactly this one second owner,
@@ -550,24 +612,19 @@ impl CompositorEngine {
         Ok(())
     }
 
-    pub(crate) fn Draw(
-        &mut self,
-        frame: crate::begin_frame_source::NativeBeginFrame,
-    ) -> Vec<Effect> {
-        vec![Effect::Display(display::Message::Submit {
+    pub fn Draw(&mut self, frame: F) -> Vec<Effect<V, F, M>> {
+        vec![Effect::Submit {
             frame,
             scroll_active: self.scroll_active,
-        })]
+        }]
     }
 
-    pub(crate) fn Prepare(
-        &mut self,
-        frame: crate::begin_frame_source::NativeBeginFrame,
-    ) -> io::Result<Vec<Effect>> {
+    pub fn Prepare(&mut self, frame: F) -> io::Result<Vec<Effect<V, F, M>>> {
+        let args = frame.BeginFrameArgs();
         let _frame = browser_tracing::scope(browser_tracing::Context {
             target_id: 1,
-            source_id: frame.source_id,
-            frame_id: frame.sequence_number,
+            source_id: args.source_id,
+            frame_id: args.sequence_number,
             ..Default::default()
         });
         if !self.dirty {
@@ -587,8 +644,8 @@ impl CompositorEngine {
             return Ok(Vec::new());
         };
         let ack = BeginFrameAck {
-            source_id: frame.source_id,
-            sequence_number: frame.sequence_number,
+            source_id: args.source_id,
+            sequence_number: args.sequence_number,
             has_damage: true,
         };
         let toolbar = self
@@ -629,31 +686,35 @@ impl CompositorEngine {
             viewport: planned.snapshot.viewport,
             toolbar,
             content,
-            drag_regions: planned.snapshot.drag_regions.clone(),
+            metadata: planned.snapshot.metadata.clone(),
         };
         self.dirty = false;
-        Ok(vec![Effect::Display(display::Message::Prepare {
+        Ok(vec![Effect::FrameProduced {
             frame,
             submitted,
             scroll_active: self.scroll_active,
-        })])
+        }])
     }
 }
 
-pub(crate) fn PlanAndRaster(
+pub fn PlanAndRaster<V, M>(
     bundle: &mut RasterBundle,
-    snapshot: ArtifactSnapshot,
+    snapshot: ArtifactSnapshot<V, M>,
     activation_target: Option<(u64, f64)>,
-) -> io::Result<PlannedFrame> {
+) -> io::Result<PlannedFrame<V, M>>
+where
+    V: CompositorViewport,
+    M: Clone,
+{
     let mut trace = browser_tracing::span("raster", "RasterPendingTree");
     let toolbar_config = FrameConfig {
         viewport: PaintRect {
             x: 0.0,
             y: 0.0,
-            width: snapshot.viewport.logical_width(),
-            height: crate::engine::TOOLBAR_HEIGHT,
+            width: snapshot.viewport.LogicalWidth(),
+            height: snapshot.toolbar_height,
         },
-        raster_scale: snapshot.viewport.scale,
+        raster_scale: snapshot.viewport.Scale(),
         activation_scroll: None,
         frame_time: Some(snapshot.frame_time),
     };
@@ -681,10 +742,10 @@ pub(crate) fn PlanAndRaster(
                     viewport: PaintRect {
                         x: 0.0,
                         y: 0.0,
-                        width: snapshot.viewport.logical_width(),
-                        height: snapshot.viewport.content_height(),
+                        width: snapshot.viewport.LogicalWidth(),
+                        height: snapshot.viewport.ContentHeight(snapshot.toolbar_height),
                     },
-                    raster_scale: snapshot.viewport.scale,
+                    raster_scale: snapshot.viewport.Scale(),
                     activation_scroll: source_root_scroll.and_then(|root| {
                         activation_target
                             .filter(|(id, _)| *id == root.id)
@@ -712,8 +773,8 @@ pub(crate) fn PlanAndRaster(
     let toolbar_raster = bundle.toolbar_raster.prepare(
         &toolbar_update.frame_plan,
         &toolbar_update.raster_batch,
-        snapshot.viewport.width,
-        snapshot.viewport.toolbar_pixels(),
+        snapshot.viewport.Width(),
+        snapshot.viewport.ToolbarPixels(snapshot.toolbar_height),
     )?;
     bundle
         .toolbar_tiles
@@ -735,11 +796,11 @@ pub(crate) fn PlanAndRaster(
         let raster = bundle.content_raster.prepare(
             &content.frame_plan,
             &content.raster_batch,
-            snapshot.viewport.width,
+            snapshot.viewport.Width(),
             snapshot
                 .viewport
-                .height
-                .saturating_sub(snapshot.viewport.toolbar_pixels()),
+                .Height()
+                .saturating_sub(snapshot.viewport.ToolbarPixels(snapshot.toolbar_height)),
         )?;
         bundle.content_tiles.ApplyRasterResults(&raster.completions);
         let content_release = bundle
@@ -839,7 +900,7 @@ fn layer_has_scroll(transform: &Arc<TransformPaintPropertyNode>, id: u64) -> boo
     false
 }
 
-fn apply_scroll_offset(frame: &mut PlannedFrame, desired: f64) -> bool {
+fn apply_scroll_offset<V, M>(frame: &mut PlannedFrame<V, M>, desired: f64) -> bool {
     let (Some(content), Some(root)) = (&mut frame.content, frame.root_scroll) else {
         return true;
     };

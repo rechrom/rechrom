@@ -2,10 +2,11 @@
 //! The UI thread sends commands and receives presentation notifications; owned
 //! RGBA frames remain available through the diagnostic headless mailbox.
 use crate::begin_frame_source::NativeBeginFrame;
+use browser::page::{Page, PageClient};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use event_loop::{
-    EventLoopExecutor, EventLoopEngine, EventLoopMutation, ExecutionContextId, ScheduledTask, TaskId,
-    TaskSource, WakeRequest,
+    EventLoopEngine, EventLoopExecutor, EventLoopMutation, ExecutionContextId, ScheduledTask,
+    TaskId, TaskSource, WakeRequest,
 };
 use foundation::begin_frame::{BeginFrameArgs, BeginFrameSource};
 use interaction::input_event::*;
@@ -14,7 +15,6 @@ use layoutng_assembly::{
     internal::layout_input::{Offset, Size},
 };
 use page_mutation::PageMutation;
-use browser::page::{Page, PageClient};
 use skia::compat::surface::RasterSurface;
 use std::{
     cell::{Cell, RefCell},
@@ -51,6 +51,20 @@ impl Viewport {
             && self.scale.is_finite()
             && self.scale > 0.0
             && u64::from(self.width) * u64::from(self.height) <= 64 * 1024 * 1024
+    }
+}
+
+impl ::compositor::CompositorViewport for Viewport {
+    fn Width(self) -> u32 {
+        self.width
+    }
+
+    fn Height(self) -> u32 {
+        self.height
+    }
+
+    fn Scale(self) -> f64 {
+        self.scale
     }
 }
 pub struct WindowFrame {
@@ -243,7 +257,9 @@ pub fn spawn(
     )?;
     let begin_frame_compositor = compositor.clone();
     compositor_frames.SetClient(Arc::new(move |frame| {
-        let _ = begin_frame_compositor.send(crate::compositor::Command::BeginFrame(frame));
+        let _ = begin_frame_compositor.send(
+            crate::presentation_runtime::CompositorCommand::BeginFrame(frame),
+        );
     }))?;
     let loading_sender = page_sender.clone();
     let compositor_dispatch = compositor.clone();
@@ -254,8 +270,9 @@ pub fn spawn(
             while let Ok(command) = receiver.recv() {
                 match &command {
                     Command::BeginFrame(frame) => {
-                        let _ = compositor_dispatch
-                            .send(crate::compositor::Command::BeginFrame(*frame));
+                        let _ = compositor_dispatch.send(
+                            crate::presentation_runtime::CompositorCommand::BeginFrame(*frame),
+                        );
                         if !page_frame_requested.swap(false, Ordering::AcqRel) {
                             continue;
                         }
@@ -265,26 +282,33 @@ pub fn spawn(
                         queued_at,
                         ..
                     } => {
-                        let _ = compositor_dispatch.send(crate::compositor::Command::Wheel {
-                            event: event.clone(),
-                            queued_at: *queued_at,
-                        });
+                        let _ = compositor_dispatch.send(
+                            crate::presentation_runtime::CompositorCommand::Wheel {
+                                event: event.clone(),
+                                queued_at: *queued_at,
+                            },
+                        );
                     }
                     Command::Input(InputEvent::Wheel(event)) => {
-                        let _ = compositor_dispatch.send(crate::compositor::Command::Wheel {
-                            event: event.clone(),
-                            queued_at: Instant::now(),
-                        });
+                        let _ = compositor_dispatch.send(
+                            crate::presentation_runtime::CompositorCommand::Wheel {
+                                event: event.clone(),
+                                queued_at: Instant::now(),
+                            },
+                        );
                     }
                     Command::Resize(viewport) => {
-                        let _ =
-                            compositor_dispatch.send(crate::compositor::Command::Resize(*viewport));
+                        let _ = compositor_dispatch.send(
+                            crate::presentation_runtime::CompositorCommand::Resize(*viewport),
+                        );
                     }
                     Command::Redraw => {
-                        let _ = compositor_dispatch.send(crate::compositor::Command::Redraw);
+                        let _ = compositor_dispatch
+                            .send(crate::presentation_runtime::CompositorCommand::Redraw);
                     }
                     Command::Stop => {
-                        let _ = compositor_dispatch.send(crate::compositor::Command::Stop);
+                        let _ = compositor_dispatch
+                            .send(crate::presentation_runtime::CompositorCommand::Stop);
                     }
                     _ => {}
                 }
@@ -342,7 +366,7 @@ fn run(
     address: String,
     output: Output,
     frame_source: Arc<dyn BeginFrameSource>,
-    compositor_sender: mpsc::Sender<crate::compositor::Command>,
+    compositor_sender: mpsc::Sender<crate::presentation_runtime::CompositorCommand>,
 ) -> io::Result<()> {
     let _target_scope = browser_tracing::scope(browser_tracing::Context {
         target_id: 1,
@@ -1121,7 +1145,7 @@ struct LateScrollFrame {
 
 enum PresentationHost {
     Readback,
-    Composited(mpsc::Sender<crate::compositor::Command>),
+    Composited(mpsc::Sender<crate::presentation_runtime::CompositorCommand>),
 }
 
 impl PresentationHost {
@@ -1129,7 +1153,7 @@ impl PresentationHost {
         matches!(self, Self::Composited(_))
     }
 
-    fn Compositor(&self) -> Option<&mpsc::Sender<crate::compositor::Command>> {
+    fn Compositor(&self) -> Option<&mpsc::Sender<crate::presentation_runtime::CompositorCommand>> {
         match self {
             Self::Readback => None,
             Self::Composited(sender) => Some(sender),
@@ -1552,17 +1576,21 @@ impl BrowserState {
             .map(Page::BlockingWheelEventRegions)
             .unwrap_or_default();
         sender
-            .send(crate::compositor::Command::Snapshot(
-                crate::compositor::ArtifactSnapshot {
+            .send(crate::presentation_runtime::CompositorCommand::Snapshot(
+                crate::presentation_runtime::ArtifactSnapshot {
                     document: (self.tabs.active.id, self.tabs.active.document_generation),
                     viewport: self.viewport,
+                    toolbar_height: TOOLBAR_HEIGHT,
                     frame_time: Instant::now(),
                     signature,
                     toolbar: toolbar.display_items.clone(),
                     content,
-                    drag_regions,
+                    metadata: drag_regions,
                     async_root_scroll,
-                    blocking_wheel_regions,
+                    blocking_wheel_regions: ::compositor::BlockingWheelEventRegions {
+                        covers_viewport: blocking_wheel_regions.covers_viewport,
+                        rects: blocking_wheel_regions.rects,
+                    },
                 },
             ))
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "compositor stopped"))

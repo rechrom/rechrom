@@ -1,10 +1,13 @@
-//! Backend-independent compositor frame construction.
+//! Backend-independent compositor scheduling and frame construction.
 //!
-//! `layer_tile` publishes immutable raster work and retained tile placement.
-//! This crate lowers the drawable part of that plan into a `CompositorFrame`.
-//! The frame contains resource identities, shared quad state and draw quads;
-//! it never contains PaintArtifact operations, raster tasks, pixels, a native
-//! surface, or knowledge of which thread will consume it.
+//! `CompositorEngine` owns active/pending compositor state, coordinates
+//! `layer_tile` and `raster`, and uses `FrameBuilder` to publish immutable
+//! `CompositorFrame`s. A frame contains resource identities, shared quad state
+//! and draw quads; this crate has no native surface, Viz aggregation, renderer,
+//! window, or knowledge of which thread consumes its effects.
+
+mod engine;
+pub use engine::*;
 
 use layer_tile::{
     resolved_compositor_properties_with_scroll, FramePlan, LayerId, LayerPlan, TileId,
