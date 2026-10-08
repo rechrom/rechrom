@@ -53,3 +53,77 @@ pub fn IsSpaceOrNewline(c: u16) -> bool {
         unsafe { icu_bidi::native::u_charDirection(c as i32) == 9 }
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WordBoundaryClass {
+    Word,
+    Space,
+    Other,
+}
+
+fn WordClass(character: char) -> WordBoundaryClass {
+    // ICU UCharCategory values. Letters, combining marks and numbers form a
+    // word; connector punctuation keeps identifiers such as `foo_bar`
+    // together. Space separators form their own selection unit.
+    let category = unsafe { icu_bidi::native::u_charType(character as i32) };
+    if (1..=11).contains(&category) || category == 22 {
+        WordBoundaryClass::Word
+    } else if (12..=14).contains(&category) || character.is_whitespace() {
+        WordBoundaryClass::Space
+    } else {
+        WordBoundaryClass::Other
+    }
+}
+
+/// Returns the UTF-8 byte range selected by word-granularity editing at
+/// `offset`. This is a text service; input routing and selection ownership stay
+/// in their respective modules.
+pub fn WordBoundaryRange(text: &str, offset: usize) -> std::ops::Range<usize> {
+    if text.is_empty() {
+        return 0..0;
+    }
+    let mut offset = offset.min(text.len());
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    let probe = if offset == text.len() {
+        text.char_indices()
+            .next_back()
+            .map_or(0, |(index, _)| index)
+    } else {
+        offset
+    };
+    let class = WordClass(
+        text[probe..]
+            .chars()
+            .next()
+            .expect("probe is a character boundary"),
+    );
+    let mut start = probe;
+    for (index, character) in text[..probe].char_indices().rev() {
+        if WordClass(character) != class {
+            break;
+        }
+        start = index;
+    }
+    let mut end = probe;
+    for character in text[probe..].chars() {
+        if WordClass(character) != class {
+            break;
+        }
+        end += character.len_utf8();
+    }
+    start..end
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn word_boundary_range_groups_unicode_word_characters() {
+        assert_eq!(WordBoundaryRange("alpha beta", 7), 6..10);
+        assert_eq!(WordBoundaryRange("alpha beta", 10), 6..10);
+        assert_eq!(WordBoundaryRange("cafe\u{301} noir", 5), 0..6);
+    }
+}
