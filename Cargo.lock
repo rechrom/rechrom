@@ -1517,6 +1517,7 @@ dependencies = [
  "layoutng_foundation",
  "page_mutation",
  "paint",
+ "unicode-segmentation",
 ]
 
 [[package]]

@@ -3163,6 +3163,14 @@ impl BrowserState {
             {
                 self.select_all_address()?;
             }
+            if matches!(&input, InputEvent::Mouse(event)
+                if event.r#type == MouseEventType::kDoubleClick
+                    && event.button == MouseButton::kPrimary)
+                && result.target_node_id == Some(self.address_id)
+                && !result.default_prevented
+            {
+                self.select_all_address()?;
+            }
             if matches!(&input, InputEvent::Mouse(event) if matches!(event.r#type, MouseEventType::kMove | MouseEventType::kLeave))
             {
                 let target = if matches!(&input, InputEvent::Mouse(event) if event.r#type == MouseEventType::kLeave)

@@ -7,6 +7,7 @@ use crate::{
 };
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use std::rc::Rc;
+use unicode_segmentation::UnicodeSegmentation;
 // cpp: interaction/text_editor.h:18-19
 pub type SyntheticEventDispatcher<'a> = Rc<dyn Fn(&mut Event, u64) + 'a>;
 // cpp: interaction/text_editor.h:25-32
@@ -40,6 +41,31 @@ fn NextCodePoint(value: &str, mut offset: usize) -> usize {
         offset += 1
     }
     offset
+}
+
+fn WordSelection(value: &str, offset: usize) -> Selection {
+    if value.is_empty() {
+        return Selection::default();
+    }
+    let offset = ByteBoundary(value, offset.min(value.len()));
+    let probe = if offset == value.len() {
+        PreviousCodePoint(value, offset)
+    } else {
+        offset
+    };
+    value
+        .split_word_bound_indices()
+        .find_map(|(start, segment)| {
+            let end = start + segment.len();
+            (probe >= start && probe < end).then_some(Selection {
+                anchor: start,
+                focus: end,
+            })
+        })
+        .unwrap_or(Selection {
+            anchor: offset,
+            focus: offset,
+        })
 }
 // cpp: interaction/text_editor.cc:33-44
 fn IsTextControl(document: &InteractionDocument, id: u64) -> bool {
@@ -127,6 +153,22 @@ impl TextEditor {
                 focus: offset,
             },
         );
+    }
+    pub fn SelectWordAt(&self, document: &InteractionDocument, id: u64, utf16: u32) {
+        if !IsTextControl(document, id) {
+            return;
+        }
+        let value = ReadNode(document, id, |d, _, i| d.ControlValue(i)).unwrap_or_default();
+        let mut units = 0;
+        let mut offset = value.len();
+        for (byte, ch) in value.char_indices() {
+            if units >= utf16 {
+                offset = byte;
+                break;
+            }
+            units += ch.len_utf16() as u32;
+        }
+        self.selections.Set(id, WordSelection(&value, offset));
     }
     // cpp: interaction/text_editor.cc:62-102
     fn CommitText(
@@ -405,5 +447,28 @@ impl TextEditor {
             );
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn word_selection_uses_unicode_word_boundaries() {
+        assert_eq!(
+            WordSelection("alpha beta", 7),
+            Selection {
+                anchor: 6,
+                focus: 10,
+            }
+        );
+        assert_eq!(
+            WordSelection("alpha beta", 10),
+            Selection {
+                anchor: 6,
+                focus: 10,
+            }
+        );
     }
 }

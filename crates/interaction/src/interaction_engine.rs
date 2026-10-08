@@ -725,6 +725,21 @@ impl<'a> Interaction<'a> {
         }
         let result = dispatcher.Dispatch(&mut event, target);
         if let InputEvent::Mouse(v) = input {
+            if v.r#type == MouseEventType::kDoubleClick
+                && v.button == MouseButton::kPrimary
+                && !result.default_prevented
+            {
+                if let Some(control) = FocusElement(document, target) {
+                    if IsFocusableControl(document, control)
+                        && !IsDisabledFormControl(document, control)
+                    {
+                        focus.Focus(control, IsTextField(document, control));
+                        if self.State().focused_node_id == Some(control) {
+                            self.SelectWordAtPoint(document, fragments, control, v.position);
+                        }
+                    }
+                }
+            }
             if v.r#type == MouseEventType::kDown && !result.default_prevented {
                 if let Some(control) = FocusElement(document, target) {
                     if IsFocusableControl(document, control)
@@ -776,6 +791,21 @@ impl<'a> Interaction<'a> {
             let offset =
                 layoutng_assembly::caret::geometry::TextControlOffsetForPoint(owner, local, empty);
             self.editor.PlaceCaret(document, id, offset, extend);
+        }
+    }
+    fn SelectWordAtPoint(
+        &self,
+        document: &InteractionDocument,
+        fragments: &FragmentNode,
+        id: u64,
+        point: Offset,
+    ) {
+        if let Some((owner, local)) = ControlPoint(fragments, id, point, Offset::default(), point) {
+            let empty =
+                ReadNode(document, id, |d, _, i| d.ControlValue(i).is_empty()).unwrap_or(true);
+            let offset =
+                layoutng_assembly::caret::geometry::TextControlOffsetForPoint(owner, local, empty);
+            self.editor.SelectWordAt(document, id, offset);
         }
     }
     // cpp: interaction/interaction_engine.cc:237-244
