@@ -63,12 +63,11 @@ fn axis_caps_match_skia() {
                                 items,
                                 ..Default::default()
                             };
-                            let a = renderer::source_replay::RasterizeSourceDisplayItemList(
+                            let a = raster::source_replay::RasterizeSourceDisplayItemList(
                                 &list, 512, 64,
                             );
-                            let b = renderer::pure_replay::RasterizeSourceDisplayItemList(
-                                &list, 512, 64,
-                            );
+                            let b =
+                                raster::pure_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
                             let diffs: Vec<_> = a
                                 .chunks_exact(4)
                                 .zip(b.chunks_exact(4))

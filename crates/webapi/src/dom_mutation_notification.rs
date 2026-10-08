@@ -20,7 +20,13 @@ impl DOMJavaScriptBindings {
         &self,
         mutation: &DOMMutation,
     ) -> Option<MutationNotification> {
-        if !self.runtime_realm.IsValid() || !self.method_wrappers.contains_key("__mutationRecord") {
+        // Blink builds a MutationObserverInterestGroup before allocating old
+        // values, child snapshots or mutation records. Keep the same fast path:
+        // most documents have no active observer and must pay nothing here.
+        if !self.mutation_observers_active
+            || !self.runtime_realm.IsValid()
+            || !self.method_wrappers.contains_key("__mutationRecord")
+        {
             return None;
         }
         let owner = self.document.borrow();

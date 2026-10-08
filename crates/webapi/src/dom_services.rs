@@ -504,8 +504,19 @@ impl DOMJavaScriptBindings {
         member: &str,
         arguments: &[HostValue],
     ) -> Option<HostResult> {
+        if member == "mutationObserverState" {
+            let [HostValue::Number(count)] = arguments else {
+                return Some(Self::type_error("Invalid mutation observer state"));
+            };
+            if !count.is_finite() || *count < 0.0 {
+                return Some(Self::type_error("Invalid mutation observer count"));
+            }
+            self.mutation_observers_active = *count > 0.0;
+            return Some(HostResult::default());
+        }
         // cpp: webapi/dom_bindings.cc:562-569
         if member == "animationSample" {
+            let mut trace = browser_tracing::span("animation", "AnimationSampleHost");
             let [HostValue::Number(effect), HostValue::Number(time), HostValue::String(text)] =
                 arguments
             else {
@@ -514,13 +525,10 @@ impl DOMJavaScriptBindings {
             if self.node(receiver).is_none() {
                 return Some(Self::type_error("Invalid animation sample"));
             }
+            let declarations = cssom::ParseCSSDeclarationList(text);
+            trace.set("declarations", declarations.len() as f64);
             if let Some(sample) = self.services.host.sample_animation.as_mut() {
-                sample(
-                    receiver,
-                    *effect as u64,
-                    *time,
-                    cssom::ParseCSSDeclarationList(text),
-                );
+                sample(receiver, *effect as u64, *time, declarations);
             }
             return Some(HostResult::default());
         }

@@ -1,7 +1,8 @@
 #![allow(non_snake_case)]
 use crate::persistent_document::DOMNode;
 use crate::style_resolver::selector::{
-    ExtractTerminalPseudo, ParseSelector, ParsedSelector, SplitSelectorList,
+    ExtractTerminalPseudo, ParseSelector, ParseStrictSelectorList, ParsedSelector,
+    SplitSelectorList,
 };
 use cssom::{CSSStyleRule, CSSStyleSheet};
 use std::collections::BTreeMap;
@@ -102,11 +103,10 @@ pub(crate) fn BuildStyleRuleIndex(sheets: &[CSSStyleSheet]) -> StyleRuleIndex<'_
             result.declaration_count += rule.declarations.len();
             let mut keys = Vec::new();
             let mut universal = false;
-            for item in SplitSelectorList(&rule.selector_text) {
-                let mut selector = ParseSelector(&item);
-                if !selector.valid {
-                    continue;
-                }
+            let Some(selectors) = ParseStrictSelectorList(&rule.selector_text) else {
+                continue;
+            };
+            for mut selector in selectors {
                 ExtractTerminalPseudo(&mut selector);
                 let Some(key) = FastKeyForSelector(&selector) else {
                     universal = true;
@@ -197,15 +197,21 @@ impl<'a> ActiveStyleRuleIndexes<'a> {
 pub(crate) fn CompileSelectors(
     text: &str,
 ) -> std::sync::Arc<[cssom::compiled_rules::CompiledSelector]> {
-    SplitSelectorList(text)
+    let mut selectors = SplitSelectorList(text)
         .into_iter()
         .map(|item| {
             let mut selector = ParseSelector(&item);
             let target = ExtractTerminalPseudo(&mut selector);
             cssom::compiled_rules::CompiledSelector { selector, target }
         })
-        .collect::<Vec<_>>()
-        .into()
+        .collect::<Vec<_>>();
+    if selectors.is_empty() || selectors.iter().any(|item| !item.selector.valid) {
+        for item in &mut selectors {
+            item.selector.valid = false;
+            item.target = cssom::compiled_rules::PseudoTarget::Invalid;
+        }
+    }
+    selectors.into()
 }
 
 #[path = "attribute_dependencies.rs"]

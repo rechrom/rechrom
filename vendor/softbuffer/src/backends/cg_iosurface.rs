@@ -3,9 +3,11 @@
 //! buffers, server-in-use check, lock -> full CPU paint -> unlock -> contents.
 use crate::SoftBufferError;
 use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained};
+use objc2_core_graphics::kCGColorSpaceSRGB;
 use objc2_io_surface::{
     kIOSurfaceAllocSize, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight,
-    kIOSurfacePixelFormat, kIOSurfaceWidth, IOSurfaceLockOptions, IOSurfaceRef,
+    kIOSurfaceColorSpace, kIOSurfacePixelFormat, kIOSurfaceWidth, IOSurfaceLockOptions,
+    IOSurfaceRef,
 };
 use std::{ptr::NonNull, slice, sync::Arc};
 
@@ -95,6 +97,14 @@ impl TargetPool {
                 unsafe { IOSurfaceRef::new(props.as_opaque()) }
                     .ok_or_else(|| error("IOSurfaceCreate failed"))?,
             );
+            // Match Chromium's gfx::IOSurfaceSetColorSpace(CreateSRGB()).
+            // Untagged bytes are otherwise treated as display-native RGB, so
+            // CSS sRGB colors bypass the display transform on wide-gamut Macs.
+            unsafe {
+                surface
+                    .0
+                    .set_value(kIOSurfaceColorSpace, kCGColorSpaceSRGB.as_ref());
+            }
             if surface.0.width() != width
                 || surface.0.height() != height
                 || surface.0.bytes_per_row() != stride

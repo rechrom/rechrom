@@ -8,7 +8,9 @@ use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSRunningApplication,
 };
-use objc2_foundation::{MainThreadMarker, NSNotification, NSObject, NSObjectProtocol};
+use objc2_foundation::{
+    MainThreadMarker, NSArray, NSNotification, NSObject, NSObjectProtocol, NSURL,
+};
 
 use super::event_handler::EventHandler;
 use super::event_loop::{notify_windows_of_exit, stop_app_immediately, ActiveEventLoop, PanicInfo};
@@ -40,6 +42,7 @@ pub(super) struct AppState {
     start_time: Cell<Option<Instant>>,
     wait_timeout: Cell<Option<Instant>>,
     pending_redraw: RefCell<Vec<WindowId>>,
+    pending_open_urls: RefCell<Vec<String>>,
     // NOTE: This is strongly referenced by our `NSWindowDelegate` and our `NSView` subclass, and
     // as such should be careful to not add fields that, in turn, strongly reference those.
 }
@@ -70,6 +73,11 @@ declare_class!(
         fn app_will_terminate(&self, notification: &NSNotification) {
             self.will_terminate(notification)
         }
+
+        #[method(application:openURLs:)]
+        fn application_open_urls(&self, _application: &NSApplication, urls: &NSArray<NSURL>) {
+            self.open_urls(urls)
+        }
     }
 );
 
@@ -98,6 +106,7 @@ impl ApplicationDelegate {
             start_time: Cell::new(None),
             wait_timeout: Cell::new(None),
             pending_redraw: RefCell::new(vec![]),
+            pending_open_urls: RefCell::new(vec![]),
         });
         unsafe { msg_send_id![super(this), init] }
     }
@@ -125,8 +134,11 @@ impl ApplicationDelegate {
             // See:
             // - https://github.com/rust-windowing/winit/issues/261
             // - https://github.com/rust-windowing/winit/issues/3958
-            let is_bundled =
-                unsafe { NSRunningApplication::currentApplication().bundleIdentifier().is_some() };
+            let is_bundled = unsafe {
+                NSRunningApplication::currentApplication()
+                    .bundleIdentifier()
+                    .is_some()
+            };
             if !is_bundled {
                 app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
             }
@@ -169,6 +181,22 @@ impl ApplicationDelegate {
         let app = NSApplication::sharedApplication(mtm);
         notify_windows_of_exit(&app);
         self.internal_exit();
+    }
+
+    fn open_urls(&self, urls: &NSArray<NSURL>) {
+        let urls: Vec<String> = urls
+            .into_iter()
+            .filter_map(|url| unsafe { url.absoluteString() })
+            .map(|url| url.to_string())
+            .collect();
+        if urls.is_empty() {
+            return;
+        }
+        if self.is_running() && self.ivars().event_handler.ready() {
+            self.maybe_queue_event(Event::OpenUrls(urls));
+        } else {
+            self.ivars().pending_open_urls.borrow_mut().extend(urls);
+        }
     }
 
     pub fn get(mtm: MainThreadMarker) -> Retained<Self> {
@@ -263,15 +291,24 @@ impl ApplicationDelegate {
     }
 
     pub fn maybe_queue_window_event(&self, window_id: WindowId, event: WindowEvent) {
-        self.maybe_queue_event(Event::WindowEvent { window_id: RootWindowId(window_id), event });
+        self.maybe_queue_event(Event::WindowEvent {
+            window_id: RootWindowId(window_id),
+            event,
+        });
     }
 
     pub fn handle_window_event(&self, window_id: WindowId, event: WindowEvent) {
-        self.handle_event(Event::WindowEvent { window_id: RootWindowId(window_id), event });
+        self.handle_event(Event::WindowEvent {
+            window_id: RootWindowId(window_id),
+            event,
+        });
     }
 
     pub fn maybe_queue_device_event(&self, event: DeviceEvent) {
-        self.maybe_queue_event(Event::DeviceEvent { device_id: DEVICE_ID, event });
+        self.maybe_queue_event(Event::DeviceEvent {
+            device_id: DEVICE_ID,
+            event,
+        });
     }
 
     pub fn handle_redraw(&self, window_id: WindowId) {
@@ -313,15 +350,22 @@ impl ApplicationDelegate {
         if !self.ivars().event_handler.in_use() {
             self.handle_event(event);
         } else {
-            tracing::debug!(?event, "had to queue event since another is currently being handled");
+            tracing::debug!(
+                ?event,
+                "had to queue event since another is currently being handled"
+            );
             let this = self.retain();
-            self.ivars().run_loop.queue_closure(move || this.handle_event(event));
+            self.ivars()
+                .run_loop
+                .queue_closure(move || this.handle_event(event));
         }
     }
 
     #[track_caller]
     fn handle_event(&self, event: Event<HandlePendingUserEvents>) {
-        self.ivars().event_handler.handle_event(event, &ActiveEventLoop::new_root(self.retain()))
+        self.ivars()
+            .event_handler
+            .handle_event(event, &ActiveEventLoop::new_root(self.retain()))
     }
 
     /// dispatch `NewEvents(Init)` + `Resumed`
@@ -330,6 +374,10 @@ impl ApplicationDelegate {
         // NB: For consistency all platforms must emit a 'resumed' event even though macOS
         // applications don't themselves have a formal suspend/resume lifecycle.
         self.handle_event(Event::Resumed);
+        let urls = mem::take(&mut *self.ivars().pending_open_urls.borrow_mut());
+        if !urls.is_empty() {
+            self.handle_event(Event::OpenUrls(urls));
+        }
     }
 
     // Called by RunLoopObserver after finishing waiting for new events
@@ -352,14 +400,23 @@ impl ApplicationDelegate {
         let start = self.ivars().start_time.get().unwrap();
         let cause = match self.control_flow() {
             ControlFlow::Poll => StartCause::Poll,
-            ControlFlow::Wait => StartCause::WaitCancelled { start, requested_resume: None },
+            ControlFlow::Wait => StartCause::WaitCancelled {
+                start,
+                requested_resume: None,
+            },
             ControlFlow::WaitUntil(requested_resume) => {
                 if Instant::now() >= requested_resume {
-                    StartCause::ResumeTimeReached { start, requested_resume }
+                    StartCause::ResumeTimeReached {
+                        start,
+                        requested_resume,
+                    }
                 } else {
-                    StartCause::WaitCancelled { start, requested_resume: Some(requested_resume) }
+                    StartCause::WaitCancelled {
+                        start,
+                        requested_resume: Some(requested_resume),
+                    }
                 }
-            },
+            }
         };
 
         self.handle_event(Event::NewEvents(cause));
@@ -408,7 +465,10 @@ impl ApplicationDelegate {
             ControlFlow::Poll => Some(Instant::now()),
             ControlFlow::WaitUntil(instant) => Some(instant),
         };
-        self.ivars().waker.borrow_mut().start_at(min_timeout(wait_timeout, app_timeout));
+        self.ivars()
+            .waker
+            .borrow_mut()
+            .start_at(min_timeout(wait_timeout, app_timeout));
     }
 }
 
@@ -419,7 +479,9 @@ pub(crate) struct HandlePendingUserEvents;
 /// equates to an infinite timeout, not a zero timeout (so can't just use
 /// `Option::min`)
 fn min_timeout(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
-    a.map_or(b, |a_timeout| b.map_or(Some(a_timeout), |b_timeout| Some(a_timeout.min(b_timeout))))
+    a.map_or(b, |a_timeout| {
+        b.map_or(Some(a_timeout), |b_timeout| Some(a_timeout.min(b_timeout)))
+    })
 }
 
 /// A hack to make activation of multiple windows work when creating them before

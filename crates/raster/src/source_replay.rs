@@ -1,9 +1,11 @@
 #![allow(non_snake_case)]
 
+use std::collections::HashMap;
 use std::ffi::{c_void, CString};
 
 use layoutng_assembly::internal::layout_input::{
     FontSmoothing, PaintPathCommand, PaintPathVerb, TextDecorationStyle, TransformMatrix,
+    WritingMode,
 };
 use layoutng_assembly::internal::layout_input_types::Color;
 use layoutng_assembly::internal::paint_input::{
@@ -302,6 +304,23 @@ unsafe extern "C" {
         variations: *const NativeVariation,
         variation_count: usize,
     );
+    fn LayoutngCanvasClipOutGlyphRunIntercepts(
+        canvas: *mut c_void,
+        face_index: usize,
+        font_size: f32,
+        ids: *const u16,
+        xy: *const f32,
+        glyph_count: usize,
+        origin_x: f32,
+        origin_y: f32,
+        synthetic_bold: bool,
+        synthetic_italic: bool,
+        variations: *const NativeVariation,
+        variation_count: usize,
+        decoration_top: f32,
+        decoration_height: f32,
+        dilation: f32,
+    );
     fn LayoutngCanvasReadRgba(canvas: *mut c_void, rgba: *mut u8, length: usize) -> i32;
 }
 
@@ -433,6 +452,62 @@ fn DrawGlyphs(canvas: &Canvas, item: &DisplayItem) {
             variations.as_ptr(),
             variations.len(),
         );
+    }
+}
+
+// cpp: core/paint/text_painter.cc:574-627
+// Blink asks Skia for the glyph ink intervals crossing the decoration stripe,
+// then clips those intervals out before painting the underline. Keep that
+// backend-specific query in Renderer: PaintArtifact only records the stable
+// text fragment identity and the CSS skip-ink decision.
+fn ClipOutGlyphIntercepts(
+    canvas: &Canvas,
+    glyph_runs: &[&DisplayItem],
+    decoration_top: f64,
+    decoration_height: f64,
+    dilation: f64,
+) {
+    for item in glyph_runs {
+        if item.glyphs.is_empty()
+            || item.writing_mode != WritingMode::kHorizontalTb
+            || item.transform != TransformMatrix::default()
+        {
+            continue;
+        }
+        let mut ids = Vec::with_capacity(item.glyphs.len());
+        let mut xy = Vec::with_capacity(item.glyphs.len() * 2);
+        for glyph in &item.glyphs {
+            ids.push(glyph.id as u16);
+            xy.push(glyph.offset.x as f32);
+            xy.push(glyph.offset.y as f32);
+        }
+        let variations: Vec<NativeVariation> = item
+            .font_variations
+            .iter()
+            .map(|axis| NativeVariation {
+                tag: axis.tag,
+                value: axis.value,
+            })
+            .collect();
+        unsafe {
+            LayoutngCanvasClipOutGlyphRunIntercepts(
+                canvas.0,
+                item.font_face_index as usize,
+                item.font_size as f32,
+                ids.as_ptr(),
+                xy.as_ptr(),
+                ids.len(),
+                item.text_blob_origin.x as f32,
+                item.text_blob_origin.y as f32,
+                item.synthetic_bold,
+                item.synthetic_italic,
+                variations.as_ptr(),
+                variations.len(),
+                decoration_top as f32,
+                decoration_height as f32,
+                dilation as f32,
+            );
+        }
     }
 }
 
@@ -686,7 +761,7 @@ fn DrawShader(canvas: &Canvas, item: &DisplayItem) {
 // cpp: skia_renderer/skia_renderer.cc:983-1091
 // cpp: skia_renderer/skia_renderer.cc:1140-1203
 // cpp: skia_renderer/skia_renderer.cc:1358-1360
-fn ReplayItem(canvas: &Canvas, item: &DisplayItem) {
+fn ReplayItem(canvas: &Canvas, item: &DisplayItem, glyph_runs: &[&DisplayItem]) {
     let rect = item.rect.into();
     match item.r#type {
         DisplayItemType::kSave => unsafe { LayoutngCanvasSave(canvas.0) },
@@ -773,18 +848,33 @@ fn ReplayItem(canvas: &Canvas, item: &DisplayItem) {
             {
                 let thickness = item.stroke_width.floor().max(1.0);
                 let draw = |y: f64| unsafe {
+                    let top = (y + 0.5).floor();
+                    let clip_ink = item.skip_ink && !glyph_runs.is_empty();
+                    if clip_ink {
+                        LayoutngCanvasSave(canvas.0);
+                        ClipOutGlyphIntercepts(
+                            canvas,
+                            glyph_runs,
+                            top,
+                            thickness,
+                            item.stroke_width.min(13.0),
+                        );
+                    }
                     LayoutngCanvasDrawRect(
                         canvas.0,
                         PaintRect {
                             x: item.rect.x,
-                            y: (y + 0.5).floor(),
+                            y: top,
                             width: item.rect.width,
                             height: thickness,
                         }
                         .into(),
                         ItemColor(item),
                         item.antialias,
-                    )
+                    );
+                    if clip_ink {
+                        LayoutngCanvasRestore(canvas.0);
+                    }
                 };
                 draw(item.rect.y);
                 if item.decoration_style == TextDecorationStyle::kDouble {
@@ -931,6 +1021,15 @@ fn RegisterResources(canvas: &Canvas, list: &PaintArtifact) {
 // cpp: skia_renderer/skia_renderer.cc:542-546
 fn Replay(canvas: &Canvas, list: &PaintArtifact) {
     RegisterResources(canvas, list);
+    let mut glyph_runs: HashMap<u64, Vec<&DisplayItem>> = HashMap::new();
+    for item in list.items.iter() {
+        if item.r#type == DisplayItemType::kDrawGlyphRun && !item.is_shadow && !item.stroke_glyphs {
+            glyph_runs
+                .entry(item.fragment_instance_id)
+                .or_default()
+                .push(item);
+        }
+    }
     let mut masks = Vec::new();
     for item in list.items.iter() {
         match item.r#type {
@@ -1014,7 +1113,14 @@ fn Replay(canvas: &Canvas, list: &PaintArtifact) {
                     LayoutngCanvasRestore(canvas.0);
                 }
             }
-            _ => ReplayItem(canvas, item),
+            _ => ReplayItem(
+                canvas,
+                item,
+                glyph_runs
+                    .get(&item.fragment_instance_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            ),
         }
     }
     while unsafe { LayoutngCanvasSaveCount(canvas.0) } > 1 {

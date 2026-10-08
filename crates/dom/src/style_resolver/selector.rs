@@ -172,10 +172,121 @@ pub(crate) fn ParseSelector(text: &str) -> ParsedSelector {
         result.compounds.push(text[begin..i].to_owned());
         needs_descendant = true;
     }
-    if result.compounds.is_empty() || result.combinators.len() + 1 != result.compounds.len() {
+    if result.compounds.is_empty()
+        || result.combinators.len() + 1 != result.compounds.len()
+        || result
+            .compounds
+            .iter()
+            .any(|part| !CompoundSyntaxValid(part))
+    {
         result.valid = false;
     }
     result
+}
+
+// A selector list is invalid as a whole when one of its ordinary selectors is
+// syntactically invalid. Keep this validation independent from matching: a
+// malformed selector must not start matching merely because another selector
+// in the same comma-separated rule is valid.
+fn CompoundSyntaxValid(compound: &str) -> bool {
+    let bytes = compound.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let mut i = 0;
+    if bytes[0] == b'*' {
+        i = 1;
+    } else if !matches!(bytes[0], b'.' | b'#' | b'[' | b':') {
+        while i < bytes.len() && !matches!(bytes[i], b'.' | b'#' | b'[' | b':') {
+            i += 1;
+        }
+    }
+    while i < bytes.len() {
+        match bytes[i] {
+            b'.' | b'#' => {
+                i += 1;
+                let start = i;
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'-' | b'_'))
+                {
+                    i += 1;
+                }
+                if i == start {
+                    return false;
+                }
+            }
+            b'[' => {
+                i += 1;
+                let start = i;
+                let mut quote = 0;
+                while i < bytes.len() {
+                    let c = bytes[i];
+                    if quote != 0 {
+                        if c == quote && (i == 0 || bytes[i - 1] != b'\\') {
+                            quote = 0;
+                        }
+                    } else if matches!(c, b'\'' | b'"') {
+                        quote = c;
+                    } else if c == b']' {
+                        break;
+                    }
+                    i += 1;
+                }
+                if i == bytes.len() || i == start {
+                    return false;
+                }
+                i += 1;
+            }
+            b':' => {
+                i += 1;
+                if bytes.get(i) == Some(&b':') {
+                    i += 1;
+                }
+                let start = i;
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'-' | b'_'))
+                {
+                    i += 1;
+                }
+                if i == start {
+                    return false;
+                }
+                if bytes.get(i) == Some(&b'(') {
+                    i += 1;
+                    let mut depth = 1;
+                    let mut quote = 0;
+                    while i < bytes.len() && depth > 0 {
+                        let c = bytes[i];
+                        if quote != 0 {
+                            if c == quote && bytes[i - 1] != b'\\' {
+                                quote = 0;
+                            }
+                        } else if matches!(c, b'\'' | b'"') {
+                            quote = c;
+                        } else if c == b'(' {
+                            depth += 1;
+                        } else if c == b')' {
+                            depth -= 1;
+                        }
+                        i += 1;
+                    }
+                    if depth != 0 {
+                        return false;
+                    }
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+pub(crate) fn ParseStrictSelectorList(text: &str) -> Option<Vec<ParsedSelector>> {
+    let selectors: Vec<_> = SplitSelectorList(text)
+        .into_iter()
+        .map(|item| ParseSelector(&item))
+        .collect();
+    (!selectors.is_empty() && selectors.iter().all(|selector| selector.valid)).then_some(selectors)
 }
 
 fn attribute<'a>(element: &'a Element, name: &str) -> Option<&'a str> {
@@ -563,11 +674,10 @@ pub fn MatchSelectorTarget(
     text: &str,
     target: PseudoTarget,
 ) -> Option<Specificity> {
-    SplitSelectorList(text)
+    ParseStrictSelectorList(text)?
         .into_iter()
-        .filter_map(|item| {
-            let mut selector = ParseSelector(&item);
-            if !selector.valid || ExtractTerminalPseudo(&mut selector) != target {
+        .filter_map(|mut selector| {
+            if ExtractTerminalPseudo(&mut selector) != target {
                 return None;
             }
             let mut specificity =
@@ -600,5 +710,12 @@ mod tests {
                 types: 2,
             })
         );
+    }
+
+    #[test]
+    fn invalid_selector_invalidates_the_entire_list() {
+        let page = crate::test_html::Parse("<html><body><h1>title</h1></body></html>");
+        assert!(MatchSelector(&page, 2, "h1, h2").is_some());
+        assert!(MatchSelector(&page, 2, "h1, h5.").is_none());
     }
 }

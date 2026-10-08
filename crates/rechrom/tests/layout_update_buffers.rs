@@ -260,7 +260,7 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
             #[cfg(feature = "pure_source_png")]
             {
                 let pixels = |fragment: &FragmentNode| {
-                    renderer::pure_replay::RasterizeDisplayItemList(
+                    raster::pure_replay::RasterizeDisplayItemList(
                         &paint::paint_engine::Paint(fragment),
                         320,
                         240,

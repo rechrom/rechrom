@@ -1,21 +1,22 @@
-//! CPU execution of persistent layer/tile plans. The planner owns identities;
-//! this renderer owns premultiplied tile pixels and draws into the borrowed output.
+//! CPU execution of immutable compositor frames. `raster` owns premultiplied
+//! tile pixels; this backend resolves them and writes the borrowed output.
 use crate::clip_mask::{ClipMaskCache, MaskCoverage};
 use layoutng_assembly::internal::paint_input::{PaintCornerRadii, PaintFilterType};
 use paint::paint_property_tree::{ClipPaintPropertyNode, EffectPaintPropertyNode};
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
+use viz::{AggregatedRenderPass, DrawQuad};
 
-use layer_tile::{
-    FramePlan, RasterTask, TileId, TilePlacement, TileResourceOwner, UnsupportedReason,
-};
+use crate::renderer::RenderUpdate;
+use layer_tile::{TileId, TilePlacement};
 use paint::paint_engine::PaintRect;
-use skia::src::core::SkCanvas::RasterImageCache;
-
-use crate::layer_replay::{LayerComposition, LayerReplay};
-use crate::layer_tile_renderer::RasterUpdate;
-use crate::tile_worker::{PendingTiles, TileJob, TileProduct, TileWorkerPool};
+use paint::paint_property_tree::PropertyTreeState;
+use raster::{
+    RasterResource as CachedTile, RasterResourceProvider, RasterRowSupport as TileRowSupport,
+    RasterStats as LayerTileRasterStats, RowSupport,
+};
+use viz::LayerComposition;
 
 #[path = "layer_clip_quad.rs"]
 mod layer_clip_quad;
@@ -30,12 +31,109 @@ mod layer_direct_clip;
 mod layer_occlusion;
 #[path = "layer_solid.rs"]
 pub(crate) mod layer_solid;
-#[path = "layer_solid_analysis.rs"]
-mod layer_solid_analysis;
 
 // Bounded stack storage for software sampling spans; larger tiles use the
 // existing general path. Tile geometry itself comes exclusively from FramePlan.
 const TILE_SIZE: u32 = 256;
+
+#[cfg(test)]
+fn sampled_opaque_device_rect_for_test(
+    rect: PaintRect,
+    scale: f64,
+    translation: (f64, f64),
+) -> io::Result<Option<viz::DeviceRect>> {
+    if rect.is_empty() {
+        return Ok(None);
+    }
+    let tx = translation.0.ceil();
+    let ty = translation.1.ceil();
+    let x = (rect.x * scale).ceil() + tx;
+    let y = (rect.y * scale).ceil() + ty;
+    let right = ((rect.x + rect.width) * scale).floor() + tx - f64::from(tx != translation.0);
+    let bottom = ((rect.y + rect.height) * scale).floor() + ty - f64::from(ty != translation.1);
+    if ![x, y, right, bottom]
+        .into_iter()
+        .all(|value| value.is_finite() && value.abs() <= i32::MAX as f64)
+    {
+        return Err(io::Error::other("invalid opaque bounds"));
+    }
+    Ok((right > x && bottom > y).then_some(viz::DeviceRect::new(
+        x as i32,
+        y as i32,
+        (right - x) as u32,
+        (bottom - y) as u32,
+    )))
+}
+
+/// Borrow-free execution view of one immutable aggregated render pass. It
+/// contains only quad state and tile placements; surface submission state,
+/// PaintArtifact and RasterTask cannot cross the renderer boundary.
+struct CompositionPlan {
+    frame_id: u64,
+    viewport: PaintRect,
+    scale: f64,
+    raster_task_count: usize,
+    root_damage: Option<SurfaceBounds>,
+    layers: Vec<CompositionLayer>,
+    solid_quads: Vec<viz::SolidColorDrawQuad>,
+}
+
+struct CompositionLayer {
+    properties: PropertyTreeState,
+    composition: LayerComposition,
+    retained_clips: Arc<[Arc<ClipPaintPropertyNode>]>,
+    compositor_scroll: Option<layer_tile::CompositorScrollOffset>,
+    tiles: Vec<TilePlacement>,
+}
+
+impl CompositionPlan {
+    fn from_pass(pass: &AggregatedRenderPass) -> io::Result<Self> {
+        let mut tiles = vec![Vec::new(); pass.SharedQuadStates().len()];
+        let mut solid_quads = Vec::new();
+        for quad in pass.Quads() {
+            match quad {
+                DrawQuad::Tile(quad) => {
+                    pass.SharedQuadStates()
+                        .get(quad.shared_quad_state_index)
+                        .ok_or_else(|| io::Error::other("draw quad has no shared state"))?;
+                    let resource = pass
+                        .Resources()
+                        .iter()
+                        .find(|resource| resource.id == quad.resource_id)
+                        .ok_or_else(|| io::Error::other("draw quad resource is not listed"))?;
+                    if resource.tile_id != quad.tile.tile_id
+                        || resource.generation != quad.tile.generation
+                    {
+                        return Err(io::Error::other("draw quad identity changed"));
+                    }
+                    tiles[quad.shared_quad_state_index].push(quad.tile.clone());
+                }
+                DrawQuad::SolidColor(quad) => solid_quads.push(quad.clone()),
+            }
+        }
+        let layers = pass
+            .SharedQuadStates()
+            .iter()
+            .zip(tiles)
+            .map(|(state, tiles)| CompositionLayer {
+                properties: state.properties.clone(),
+                composition: state.composition,
+                retained_clips: state.retained_clips.clone(),
+                compositor_scroll: state.compositor_scroll,
+                tiles,
+            })
+            .collect();
+        Ok(Self {
+            frame_id: pass.SourceFrameId(),
+            viewport: pass.LogicalViewport(),
+            scale: pass.DeviceScaleFactor(),
+            raster_task_count: pass.RasterTaskCount(),
+            root_damage: compositor_damage_bounds(pass.DamageRect(), pass.Viewport())?,
+            layers,
+            solid_quads,
+        })
+    }
+}
 
 #[derive(Default)]
 struct ComposeCosts {
@@ -62,77 +160,47 @@ struct ComposeCosts {
     direct_clip_layers: usize,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LayerTileRasterStats {
-    pub layers: usize,
-    /// Visible tiles in the current plan.
-    pub tiles: usize,
-    pub raster_tasks: usize,
-    pub reused_tiles: usize,
-    /// Includes retained offscreen tiles until the planner retires them.
-    pub resident_bytes: usize,
-    pub unsupported_reason: Option<&'static str>,
-}
-
-struct CachedTile {
-    raster_frame: u64,
-    generation: u64,
-    pixel_size: (u32, u32),
-    raster_scale: f64,
-    white_backing: bool,
-    rgba: Vec<u8>,
-    // The macOS software output device and Chromium's native N32 resources
-    // are BGRA. Keep that backend representation with the retained tile so an
-    // unchanged integer tile is a row copy, rather than a fresh channel
-    // permutation on every compositor frame. RGBA remains the canonical
-    // sampler input for fractional edges, masks and isolated effects.
-    bgra: Vec<u32>,
-    // True byte-exact transparent margins, computed only for a fresh product.
-    // Include RGB too: zero alpha alone does not prove an identity source.
-    row_support: TileRowSupport,
-}
-
-#[derive(Clone, Copy)]
-struct RowSupport {
-    extent: (usize, usize),
-    // Exact source alpha=255 throughout extent, even when other tile rows
-    // or its transparent padding prevent the whole-tile opacity proof.
-    opaque: bool,
-    // A dense row uses its extent directly, without duplicating that span.
-    runs: (usize, usize),
-}
-
-pub(crate) struct TileRowSupport {
-    rows: Vec<RowSupport>,
-    runs: Vec<(usize, usize)>,
-    // Exact pixel proof, retained with this tile generation.
-    opaque: bool,
-    draw_mode: layer_solid::TileDrawMode,
-}
-
-impl TileRowSupport {
-    pub(crate) fn len(&self) -> usize {
-        self.rows.len()
-    }
-
-    fn spans(&self, y: usize) -> &[(usize, usize)] {
-        let row = &self.rows[y];
-        if row.runs.0 != row.runs.1 {
-            &self.runs[row.runs.0..row.runs.1]
-        } else if row.extent.0 != row.extent.1 {
-            std::slice::from_ref(&row.extent)
-        } else {
-            &[]
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SurfaceBounds {
     left: usize,
     top: usize,
     right: usize,
     bottom: usize,
+}
+
+fn compositor_damage_bounds(
+    damage: viz::DeviceRect,
+    viewport: viz::DeviceRect,
+) -> io::Result<Option<SurfaceBounds>> {
+    if damage.width == 0 || damage.height == 0 {
+        return Ok(None);
+    }
+    if damage.x < viewport.x || damage.y < viewport.y {
+        return Err(io::Error::other(
+            "aggregated render-pass damage is outside viewport",
+        ));
+    }
+    let left = usize::try_from(damage.x - viewport.x)
+        .map_err(|_| io::Error::other("invalid compositor damage"))?;
+    let top = usize::try_from(damage.y - viewport.y)
+        .map_err(|_| io::Error::other("invalid compositor damage"))?;
+    let right = left
+        .checked_add(damage.width as usize)
+        .ok_or_else(|| io::Error::other("invalid compositor damage"))?;
+    let bottom = top
+        .checked_add(damage.height as usize)
+        .ok_or_else(|| io::Error::other("invalid compositor damage"))?;
+    if right > viewport.width as usize || bottom > viewport.height as usize {
+        return Err(io::Error::other(
+            "aggregated render-pass damage is outside viewport",
+        ));
+    }
+    Ok(Some(SurfaceBounds {
+        left,
+        top,
+        right,
+        bottom,
+    }))
 }
 // Pixel storage can cover a subrectangle, while paint/mask coordinates remain
 // global. Never substitute the destination stride/origin for the source view.
@@ -160,6 +228,75 @@ fn union_bounds(current: &mut Option<SurfaceBounds>, next: Option<SurfaceBounds>
         }));
     }
 }
+fn intersect_bounds(a: SurfaceBounds, b: SurfaceBounds) -> Option<SurfaceBounds> {
+    let bounds = SurfaceBounds {
+        left: a.left.max(b.left),
+        top: a.top.max(b.top),
+        right: a.right.min(b.right),
+        bottom: a.bottom.min(b.bottom),
+    };
+    (bounds.left < bounds.right && bounds.top < bounds.bottom).then_some(bounds)
+}
+
+fn compose_solid_color_quad(
+    buffer: &mut [u32],
+    view: TargetView,
+    format: skia::PixelFormat,
+    quad: &viz::SolidColorDrawQuad,
+    scale: f64,
+    damage: SurfaceBounds,
+) {
+    let rect = quad.rect;
+    let visible = quad.visible_rect;
+    if rect.is_empty() || visible.is_empty() || quad.color[3] == 0 {
+        return;
+    }
+    let left = (rect.x * scale).floor().max(0.0);
+    let top = (rect.y * scale).floor().max(0.0);
+    let right = ((rect.x + rect.width) * scale).ceil();
+    let bottom = ((rect.y + rect.height) * scale).ceil();
+    let visible_left = (visible.x * scale).floor().max(0.0);
+    let visible_top = (visible.y * scale).floor().max(0.0);
+    let visible_right = ((visible.x + visible.width) * scale).ceil();
+    let visible_bottom = ((visible.y + visible.height) * scale).ceil();
+    let bounds = SurfaceBounds {
+        left: left.max(visible_left) as usize,
+        top: top.max(visible_top) as usize,
+        right: right.min(visible_right).max(0.0) as usize,
+        bottom: bottom.min(visible_bottom).max(0.0) as usize,
+    };
+    let Some(bounds) = intersect_bounds(bounds, damage) else {
+        return;
+    };
+    let radius = (quad.corner_radius * scale)
+        .max(0.0)
+        .min((right - left).min(bottom - top) * 0.5);
+    let center_x = (left + right) * 0.5;
+    let cap_top = top + radius;
+    let cap_bottom = bottom - radius;
+    for y in bounds.top..bounds.bottom {
+        let py = y as f64 + 0.5;
+        let nearest_y = py.clamp(cap_top, cap_bottom.max(cap_top));
+        for x in bounds.left..bounds.right {
+            let px = x as f64 + 0.5;
+            let coverage = if radius == 0.0 {
+                1.0
+            } else {
+                let distance = ((px - center_x).powi(2) + (py - nearest_y).powi(2)).sqrt();
+                (radius + 0.5 - distance).clamp(0.0, 1.0)
+            };
+            if coverage == 0.0 {
+                continue;
+            }
+            let source = quad
+                .color
+                .map(|channel| (f64::from(channel) * coverage).round().clamp(0.0, 255.0) as u8);
+            let index = view.row_start(y, x);
+            buffer[index] = source_over_word(buffer[index], source, format);
+        }
+    }
+}
+
 #[derive(Clone)]
 enum Scope {
     Clip(Arc<ClipPaintPropertyNode>),
@@ -242,6 +379,7 @@ fn expanded_for_blur(
     bounds.bottom = bounds.bottom.saturating_add(y).min(height as usize);
     Some(bounds)
 }
+
 fn needs_clip_mask(clip: &ClipPaintPropertyNode, scale: f64) -> bool {
     // PropertyTreeManager::SyntheticEffectType does not create an effect for
     // an axis-aligned plain rect, even at a fractional coordinate. Retained
@@ -283,9 +421,7 @@ fn append_clip_scopes(
 // Actual Mask effects require their content parent to be a render surface,
 // including opacity-one parents. Derive this from all committed mask layers,
 // not just visible tiles: a fully transparent/offscreen source still clears DstIn.
-fn masked_content_effects(
-    plan: &layer_tile::FramePlan,
-) -> io::Result<Vec<Arc<EffectPaintPropertyNode>>> {
+fn masked_content_effects(plan: &CompositionPlan) -> io::Result<Vec<Arc<EffectPaintPropertyNode>>> {
     let mut parents: Vec<Arc<EffectPaintPropertyNode>> = Vec::new();
     for layer in &plan.layers {
         let mut node = Some(layer.properties.effect.clone());
@@ -385,8 +521,7 @@ struct LayerEffectPlan {
 // Enclose all actual visible tile writes in that run, including nested groups.
 // Bounds affect allocation only; real mask coverage still runs at group exit.
 fn effect_allocation_plan(
-    plan: &layer_tile::FramePlan,
-    replay: &LayerReplay<'_>,
+    plan: &CompositionPlan,
     width: u32,
     height: u32,
     scale: f64,
@@ -406,7 +541,7 @@ fn effect_allocation_plan(
         }
         let chain = composition_scopes(
             &layer.properties.effect,
-            &replay.retained_clip_nodes(layer.id),
+            &layer.retained_clips,
             &masked_parents,
             scale,
         )?;
@@ -435,9 +570,7 @@ fn effect_allocation_plan(
             opened_runs.push(index);
         }
         if !active.is_empty() {
-            let composition = replay
-                .composition(layer.id)
-                .ok_or_else(|| io::Error::other("paint layer has no composition"))?;
+            let composition = layer.composition;
             let mut bounds = None;
             for tile in &layer.tiles {
                 union_bounds(
@@ -454,7 +587,7 @@ fn effect_allocation_plan(
                 );
             }
         }
-        let direct_mask = direct_mask_partition(plan, layer, &chain, replay, width, height)?;
+        let direct_mask = direct_mask_partition(plan, layer, &chain, width, height)?;
         layers.push(LayerEffectPlan {
             chain,
             opened_runs,
@@ -468,10 +601,9 @@ fn effect_allocation_plan(
 // one actual layer with no child surface can draw its tile quads directly.
 // Reuse the existing tile sampler, retaining its ownership and AA convention.
 fn direct_mask_partition(
-    plan: &layer_tile::FramePlan,
-    layer: &layer_tile::LayerPlan,
+    plan: &CompositionPlan,
+    layer: &CompositionLayer,
     chain: &[Scope],
-    replay: &LayerReplay<'_>,
     width: u32,
     height: u32,
 ) -> io::Result<Option<Vec<SurfaceBounds>>> {
@@ -497,16 +629,14 @@ fn direct_mask_partition(
     {
         return Ok(None);
     }
-    let composition = replay
-        .composition(layer.id)
-        .ok_or_else(|| io::Error::other("mask layer has no composition"))?;
+    let composition = layer.composition;
     if composition.white_backing {
         return Ok(None);
     }
     layer_tile_partition(layer, composition, width, height)
 }
 fn layer_tile_partition(
-    layer: &layer_tile::LayerPlan,
+    layer: &CompositionLayer,
     composition: LayerComposition,
     width: u32,
     height: u32,
@@ -561,42 +691,6 @@ fn partition_covers_viewport(rectangles: &[SurfaceBounds], width: u32, height: u
     right == width as usize && bottom == height as usize
 }
 
-impl CachedTile {
-    fn matches(&self, tile: &TilePlacement, composition: LayerComposition) -> bool {
-        self.generation == tile.generation
-            && self.pixel_size == tile.pixel_size
-            && self.raster_scale == tile.raster_scale
-            && self.white_backing == composition.white_backing
-    }
-
-    fn matches_task(&self, task: &RasterTask, composition: LayerComposition) -> bool {
-        self.generation == task.generation
-            && self.pixel_size == task.pixel_size
-            && self.raster_scale == task.raster_scale
-            && self.white_backing == composition.white_backing
-    }
-
-    fn from_product(
-        frame_id: u64,
-        task: &RasterTask,
-        composition: LayerComposition,
-        rgba: Vec<u8>,
-        bgra: Vec<u32>,
-        row_support: TileRowSupport,
-    ) -> Self {
-        Self {
-            raster_frame: frame_id,
-            generation: task.generation,
-            pixel_size: task.pixel_size,
-            raster_scale: task.raster_scale,
-            white_backing: composition.white_backing,
-            rgba,
-            bgra,
-            row_support,
-        }
-    }
-}
-
 #[inline]
 fn compact_solid_color(pixels: &CachedTile) -> Option<u32> {
     match pixels.row_support.draw_mode {
@@ -617,245 +711,37 @@ fn valid_tile_storage(pixels: &CachedTile, pixel_size: (u32, u32)) -> io::Result
     )
 }
 
-fn valid_product_storage(product: &TileProduct) -> io::Result<bool> {
-    let bytes = tile_bytes(product.task.pixel_size)?;
-    let compact_solid = matches!(
-        product.row_support.draw_mode,
-        layer_solid::TileDrawMode::SolidColor { .. }
-    ) && product.rgba.is_empty()
-        && product.bgra.is_empty();
-    Ok((product.rgba.len() == bytes && product.bgra.len() == bytes / 4) || compact_solid)
-}
-
-pub(crate) struct LayerRaster {
-    resource_owner: Option<TileResourceOwner>,
-    raster_committed: bool,
-    prepared_frame_id: Option<u64>,
-    prepared_damage_pixels: usize,
-    pixels: HashMap<TileId, CachedTile>,
-    halo_scratch: Vec<u8>,
-    worker_pool: Option<TileWorkerPool>,
-    prepaint_worker_pool: Option<TileWorkerPool>,
-    pending_prepaint: Option<PendingPrepaint>,
+pub(crate) struct RenderPassRenderer {
     effect_scratch: Vec<EffectScratch>,
+    // Persistent root render-pass backing; native presentation surfaces rotate.
+    composed_pixels: Vec<u32>,
+    composed_format: Option<skia::PixelFormat>,
     clip_masks: ClipMaskCache,
     stats: LayerTileRasterStats,
 }
 
-struct PendingPrepaint {
-    owner: TileResourceOwner,
-    tasks: Vec<(TileId, u64)>,
-    pending: PendingTiles,
-}
-
-impl Default for LayerRaster {
+impl Default for RenderPassRenderer {
     fn default() -> Self {
         Self {
-            resource_owner: None,
-            raster_committed: false,
-            prepared_frame_id: None,
-            prepared_damage_pixels: 0,
-            pixels: HashMap::new(),
-            halo_scratch: Vec::new(),
-            worker_pool: None,
-            prepaint_worker_pool: None,
-            pending_prepaint: None,
             effect_scratch: Vec::new(),
+            composed_pixels: Vec::new(),
+            composed_format: None,
             clip_masks: ClipMaskCache::default(),
             stats: LayerTileRasterStats::default(),
         }
     }
 }
 
-impl Drop for LayerRaster {
-    fn drop(&mut self) {
-        // The persistent engine can outlive this backend. Its ready tiles must
-        // not refer to resources which disappear with the renderer.
-        if let Some(owner) = &self.resource_owner {
-            owner.invalidate();
-        }
-    }
-}
-
-impl LayerRaster {
-    pub(crate) fn stats(&self) -> LayerTileRasterStats {
-        self.stats
-    }
-
-    fn publish_prepaint(
-        &mut self,
-        owner: &TileResourceOwner,
-        products: Vec<TileProduct>,
-    ) -> io::Result<()> {
-        let mut published = 0usize;
-        for product in products {
-            if !valid_product_storage(&product)?
-                || product.row_support.len() != product.task.pixel_size.1 as usize
-            {
-                return Err(io::Error::other(
-                    "background raster returned invalid tile storage",
-                ));
-            }
-            if owner.raster_complete(product.task.tile_id, product.task.generation) {
-                self.pixels.insert(
-                    product.task.tile_id,
-                    CachedTile::from_product(
-                        0,
-                        &product.task,
-                        product.composition,
-                        product.rgba,
-                        product.bgra,
-                        product.row_support,
-                    ),
-                );
-                published += 1;
-            }
-        }
-        if published != 0 {
-            browser_tracing::instant(
-                "raster",
-                "RasterPrepaintPublished",
-                &[("tiles", published as f64)],
-            );
-        }
-        Ok(())
-    }
-
-    fn collect_prepaint(&mut self, required: &[RasterTask]) -> io::Result<()> {
-        let Some(mut batch) = self.pending_prepaint.take() else {
-            return Ok(());
-        };
-        let needed_now = required.iter().any(|task| {
-            batch
-                .tasks
-                .iter()
-                .any(|&(id, generation)| id == task.tile_id && generation == task.generation)
-        });
-        if needed_now {
-            let products = batch.pending.finish()?;
-            return self.publish_prepaint(&batch.owner, products);
-        }
-        match batch.pending.try_finish() {
-            None => {
-                self.pending_prepaint = Some(batch);
-                Ok(())
-            }
-            Some(Ok(products)) => self.publish_prepaint(&batch.owner, products),
-            Some(Err(_)) => {
-                // SOON work is speculative. Drop a failed lane and let the
-                // planner offer the still-unready tile again; visible NOW
-                // resources and this frame remain valid.
-                self.prepaint_worker_pool = None;
-                Ok(())
-            }
-        }
-    }
-
-    fn schedule_prepaint(
-        &mut self,
-        plan: &FramePlan,
-        replay: &mut LayerReplay<'_>,
-        draw_modes: &[layer_solid::TileDrawMode],
-        first_task: usize,
-        clip_limit: usize,
-    ) -> io::Result<usize> {
-        if first_task >= plan.tasks.len() || self.pending_prepaint.is_some() {
-            return Ok(0);
-        }
-        let mut unresolved = Vec::new();
-        for (plan_index, (task, mode)) in plan
-            .tasks
-            .iter()
-            .zip(draw_modes)
-            .enumerate()
-            .skip(first_task)
-        {
-            let composition = replay
-                .composition(task.layer_id)
-                .ok_or_else(|| io::Error::other("prepaint task has no layer composition"))?;
-            if self
-                .pixels
-                .get(&task.tile_id)
-                .is_some_and(|pixels| pixels.matches_task(task, composition))
-            {
-                continue;
-            }
-            unresolved.push((plan_index, task, *mode));
-        }
-        if unresolved.is_empty() {
-            if !plan.DidRasterizeTasks(&plan.tasks[first_task..]) {
-                return Err(io::Error::other(
-                    "completed prepaint no longer matches current tile generations",
-                ));
-            }
-            return Ok(0);
-        }
-        if self.prepaint_worker_pool.is_none() {
-            self.prepaint_worker_pool = Some(TileWorkerPool::new_prepaint(clip_limit)?);
-        }
-        let mut jobs = Vec::with_capacity(unresolved.len());
-        let mut task_keys = Vec::with_capacity(unresolved.len());
-        for (plan_index, task, mode) in unresolved {
-            let layer = replay
-                .prepaint_layer(task)
-                .ok_or_else(|| io::Error::other("prepaint task has incomplete prepared records"))?;
-            let reuse = task
-                .previous_tile_id
-                .and_then(|id| self.pixels.remove(&id))
-                .map(|pixels| pixels.rgba)
-                .unwrap_or_default();
-            let solid_color = match mode {
-                layer_solid::TileDrawMode::SolidColor { premul_rgba } => Some(premul_rgba),
-                layer_solid::TileDrawMode::Resource => None,
-            };
-            task_keys.push((task.tile_id, task.generation));
-            jobs.push(TileJob {
-                plan_index,
-                task: task.clone(),
-                layer,
-                reuse,
-                solid_color,
-            });
-        }
-        let scheduled = jobs.len();
-        let owner = plan
-            .ResourceOwner()
-            .ok_or_else(|| io::Error::other("prepaint plan has no tile resource owner"))?;
-        let pending = self
-            .prepaint_worker_pool
-            .as_mut()
-            .expect("initialized prepaint pool")
-            .submit(plan.GetPaintArtifact().resources.clone(), jobs);
-        self.pending_prepaint = Some(PendingPrepaint {
-            owner,
-            tasks: task_keys,
-            pending,
-        });
-        Ok(scheduled)
-    }
-
-    fn reset_tiles(&mut self) {
-        if let Some(owner) = &self.resource_owner {
-            owner.invalidate();
-        }
-        self.pending_prepaint = None;
-        self.raster_committed = false;
-        self.prepared_frame_id = None;
-        self.prepared_damage_pixels = 0;
-        self.pixels.clear();
-        self.clip_masks = ClipMaskCache::default();
-    }
-
+impl RenderPassRenderer {
     pub(crate) fn invalidate(&mut self) {
-        self.reset_tiles();
+        self.composed_pixels.clear();
+        self.composed_format = None;
+        self.clip_masks = ClipMaskCache::default();
         self.stats = LayerTileRasterStats::default();
     }
 
-    fn unsupported(&mut self, reason: &'static str) -> io::Result<RasterUpdate> {
-        self.reset_tiles();
-        self.stats.resident_bytes = 0;
-        self.stats.raster_tasks = 0;
-        self.stats.reused_tiles = 0;
+    fn unsupported(&mut self, reason: &'static str) -> io::Result<RenderUpdate> {
+        self.invalidate();
         self.stats.unsupported_reason = Some(reason);
         Err(io::Error::new(io::ErrorKind::Unsupported, reason))
     }
@@ -996,127 +882,71 @@ impl LayerRaster {
         }
     }
 
-    /// Unsupported input is an error with its reason recorded in public stats.
-    /// The plan already contains all metadata. Raster products become reusable
-    /// after task validation; composition is preflighted before output writes.
-    pub(crate) fn paint(
-        &mut self,
-        plan: &FramePlan,
-        width: u32,
-        height: u32,
-        buffer: &mut [u32],
-        format: skia::PixelFormat,
-        row_stride: usize,
-        image_cache: &mut RasterImageCache,
-        clip_cache: &mut skia::RasterClipProductCache,
-    ) -> io::Result<RasterUpdate> {
-        self.prepare(plan, width, height, image_cache, clip_cache)?;
-        self.compose(
-            plan,
-            width,
-            height,
-            buffer,
-            format,
-            row_stride,
-            image_cache,
-            clip_cache,
-        )
-    }
-
-    pub(crate) fn prepare(
-        &mut self,
-        plan: &FramePlan,
-        width: u32,
-        height: u32,
-        image_cache: &mut RasterImageCache,
-        clip_cache: &mut skia::RasterClipProductCache,
-    ) -> io::Result<()> {
-        let mut render_trace = browser_tracing::span("render", "LayerTilePrepare");
-        render_trace.set("frame_id", plan.frame_id as f64);
-        if plan.unsupported.is_none() && !plan.IsCurrentFrame() {
-            return Err(io::Error::other(
-                "FramePlan is no longer current or its engine was released",
-            ));
-        }
-        if self.prepared_frame_id == Some(plan.frame_id) {
-            render_trace.set("no_work", 1.0);
-            return Ok(());
-        }
-        let owner = plan
-            .ResourceOwner()
-            .ok_or_else(|| io::Error::other("FramePlan has no tile resource owner"))?;
-        if !self
-            .resource_owner
-            .as_ref()
-            .is_some_and(|previous| previous.same_engine(&owner))
-        {
-            self.reset_tiles();
-            self.resource_owner = Some(owner);
-        }
-        self.raster_committed = false;
-        let result = self
-            .paint_frame(
-                plan,
-                width,
-                height,
-                &mut [],
-                skia::PixelFormat::Bgra8888,
-                width as usize,
-                image_cache,
-                clip_cache,
-                false,
-            )
-            .map(|_| ());
-        if let Err(error) = &result {
-            if !self.raster_committed
-                && (error.kind() != io::ErrorKind::Unsupported
-                    || self.stats.unsupported_reason.is_none())
-            {
-                self.invalidate();
-            }
-        }
-        render_trace.set("succeeded", if result.is_ok() { 1.0 } else { 0.0 });
-        if result.is_ok() {
-            render_trace.set("layers", self.stats.layers as f64);
-            render_trace.set("tiles", self.stats.tiles as f64);
-            render_trace.set("raster_tasks", self.stats.raster_tasks as f64);
-            render_trace.set("resident_bytes", self.stats.resident_bytes as f64);
-            render_trace.set("damage_pixels", self.prepared_damage_pixels as f64);
-        }
-        result
-    }
-
     pub(crate) fn compose(
         &mut self,
-        plan: &FramePlan,
+        pass: &AggregatedRenderPass,
+        resources: &dyn RasterResourceProvider,
         width: u32,
         height: u32,
         buffer: &mut [u32],
         format: skia::PixelFormat,
         row_stride: usize,
-        image_cache: &mut RasterImageCache,
-        clip_cache: &mut skia::RasterClipProductCache,
-    ) -> io::Result<RasterUpdate> {
+    ) -> io::Result<RenderUpdate> {
         let mut render_trace = browser_tracing::span("render", "LayerTilePaint");
-        render_trace.set("frame_id", plan.frame_id as f64);
-        if self.prepared_frame_id != Some(plan.frame_id)
-            || (plan.unsupported.is_none() && !plan.IsCurrentFrame())
-        {
+        render_trace.set("frame_id", pass.SourceFrameId() as f64);
+        if resources.prepared_frame_id() != Some(pass.SourceFrameId()) {
             return Err(io::Error::other(
-                "FramePlan raster resources are not prepared",
+                "aggregated render-pass raster resources are not prepared",
             ));
         }
+        let plan = CompositionPlan::from_pass(pass)?;
+        self.stats = resources.stats();
+        let output_len = row_stride
+            .checked_mul(height as usize)
+            .filter(|&len| row_stride >= width as usize && buffer.len() == len)
+            .ok_or_else(|| io::Error::other("invalid layer output storage extent"))?;
+        debug_assert_eq!(output_len, buffer.len());
+        let retained_len = (width as usize)
+            .checked_mul(height as usize)
+            .filter(|&len| len > 0 && len <= isize::MAX as usize / 4)
+            .ok_or_else(|| io::Error::other("invalid retained output storage extent"))?;
+        if self.composed_pixels.len() != retained_len || self.composed_format != Some(format) {
+            self.composed_pixels.resize(retained_len, 0);
+            self.composed_format = Some(format);
+        }
+        // Keep one renderer-owned root render-pass backing. Native IOSurfaces
+        // are a rotating presentation queue, so repainting them directly would
+        // otherwise discard unchanged pixels on every animation frame.
+        let mut composed = std::mem::take(&mut self.composed_pixels);
         let result = self.paint_frame(
-            plan,
+            &plan,
             width,
             height,
-            buffer,
+            &mut composed,
             format,
-            row_stride,
-            image_cache,
-            clip_cache,
-            true,
+            width as usize,
+            resources.resources(),
+            resources.prepared_damage_pixels(),
         );
+        self.composed_pixels = composed;
+        let result = result.map(|mut update| {
+            for (source, destination) in self
+                .composed_pixels
+                .chunks_exact(width as usize)
+                .zip(buffer.chunks_exact_mut(row_stride))
+            {
+                destination[..width as usize].copy_from_slice(source);
+                if row_stride > width as usize {
+                    destination[width as usize..].fill(0);
+                }
+            }
+            update.copied_bytes = retained_len * std::mem::size_of::<u32>();
+            update
+        });
+        if result.is_err() {
+            // A failed draw may have modified part of the retained target.
+            // Never expose it as the previous root pass on the next attempt.
+        }
         render_trace.set("succeeded", if result.is_ok() { 1.0 } else { 0.0 });
         if let Ok(update) = &result {
             render_trace.set("layers", self.stats.layers as f64);
@@ -1131,42 +961,31 @@ impl LayerRaster {
 
     fn paint_frame(
         &mut self,
-        plan: &FramePlan,
+        plan: &CompositionPlan,
         width: u32,
         height: u32,
         buffer: &mut [u32],
         format: skia::PixelFormat,
         row_stride: usize,
-        image_cache: &mut RasterImageCache,
-        clip_cache: &mut skia::RasterClipProductCache,
-        compose: bool,
-    ) -> io::Result<RasterUpdate> {
-        let list = plan.GetPaintArtifact();
-        let scale = plan.config.raster_scale;
+        resident: &HashMap<TileId, CachedTile>,
+        raster_damage_pixels: usize,
+    ) -> io::Result<RenderUpdate> {
+        let scale = plan.scale;
         let timing = (std::env::var_os("LAYOUTNG_LAYER_PROFILE").is_some()
             || std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some())
         .then(std::time::Instant::now);
-        let replay_trace = browser_tracing::span("render", "PrepareLayerReplay");
         if width == 0 || !scale.is_finite() || scale <= 0.0 || !cfg!(target_endian = "little") {
-            return Err(io::Error::other(
-                "unsupported layer target dimensions or byte order",
-            ));
+            return Err(io::Error::other("unsupported compositor target"));
         }
-        if compose {
-            let expected = row_stride
-                .checked_mul(height as usize)
-                .filter(|&n| n > 0 && n <= isize::MAX as usize / 4)
-                .ok_or_else(|| io::Error::other("invalid layer target storage extent"))?;
-            if row_stride < width as usize
-                || row_stride > u32::MAX as usize
-                || buffer.len() != expected
-            {
-                return Err(io::Error::other(
-                    "unsupported layer target dimensions or byte order",
-                ));
-            }
+        let expected = row_stride
+            .checked_mul(height as usize)
+            .filter(|&n| n > 0 && n <= isize::MAX as usize / 4)
+            .ok_or_else(|| io::Error::other("invalid compositor target storage extent"))?;
+        if row_stride < width as usize || row_stride > u32::MAX as usize || buffer.len() != expected
+        {
+            return Err(io::Error::other("invalid compositor target storage extent"));
         }
-        if plan.config.viewport
+        if plan.viewport
             != (PaintRect {
                 x: 0.0,
                 y: 0.0,
@@ -1175,27 +994,10 @@ impl LayerRaster {
             })
         {
             return Err(io::Error::other(
-                "FramePlan viewport does not match the raster target",
+                "aggregated render-pass viewport does not match target",
             ));
         }
-        if !compose {
-            self.stats = LayerTileRasterStats {
-                layers: plan.layers.len(),
-                tiles: plan.layers.iter().map(|layer| layer.tiles.len()).sum(),
-                ..LayerTileRasterStats::default()
-            };
-        }
-        if let Some(reason) = plan.unsupported {
-            return self.unsupported(unsupported_reason(reason));
-        }
-        let required_tasks = plan.RequiredRasterTaskCount();
-        self.collect_prepaint(&plan.tasks[..required_tasks.min(plan.tasks.len())])?;
-        let mut replay = match LayerReplay::new(plan) {
-            Ok(replay) => replay,
-            Err(reason) => return self.unsupported(reason.reason()),
-        };
-        // Fractional phase is a backend capability decision, never a failed
-        // raster transaction. Reject it before any task executes.
+        let replay_trace = browser_tracing::span("render", "ValidateAggregatedRenderPass");
         if plan
             .layers
             .iter()
@@ -1207,325 +1009,56 @@ impl LayerRaster {
         {
             return self.unsupported("fractional-pixel-placement");
         }
-        // Keep unchanged cached buffers in place, allocating only dirty products.
         let replay_done = timing.map(|start| start.elapsed());
         drop(replay_trace);
-        if !compose {
-            let mut raster_trace = browser_tracing::span("raster", "RasterTiles");
-            // RasterTiles measures work which blocks this pending tree. SOON
-            // tasks are published by RasterWorkerBatch after this span ends.
-            raster_trace.set("raster_tasks", required_tasks as f64);
-            raster_trace.set("planned_raster_tasks", plan.tasks.len() as f64);
-            raster_trace.set("visible_raster_tasks", required_tasks as f64);
-            raster_trace.set(
-                "prepaint_raster_tasks",
-                plan.tasks.len().saturating_sub(required_tasks) as f64,
-            );
-            let mut staged = HashMap::with_capacity(plan.tasks.len());
-            let mut damage_pixels = 0usize;
-            let profile_tiles = std::env::var_os("BROWSER_PROFILE_TILES").is_some();
-            let mut tile_calls = std::time::Duration::ZERO;
-            let mut tile_support = std::time::Duration::ZERO;
-            // TileManager performs bounded PaintOp solid-color analysis before
-            // raster. Keep its result with the corresponding actual generation;
-            // never derive this mode by scanning the resulting pixel buffer.
-            let draw_modes: Vec<_> = plan
-                .tasks
-                .iter()
-                .map(|task| match replay.solid_analysis_commands(task) {
-                    Ok(records) => layer_solid_analysis::analyze(task, records),
-                    Err(_) => layer_solid::TileDrawMode::Resource,
-                })
-                .collect();
-            if required_tasks == 0 && !plan.tasks.is_empty() {
-                let clip_limit =
-                    (clip_cache.accounting().configured_byte_limit / 2).min(1024 * 1024);
-                let scheduled =
-                    self.schedule_prepaint(plan, &mut replay, &draw_modes, 0, clip_limit)?;
-                raster_trace.set("async_prepaint_tasks", scheduled as f64);
-                for tile in &plan.retired_tiles {
-                    self.pixels.remove(tile);
-                }
-                plan.DidReleaseTileResources();
-                self.raster_committed = true;
-                self.prepared_frame_id = Some(plan.frame_id);
-                self.prepared_damage_pixels = 0;
-                self.stats.raster_tasks = 0;
-                self.stats.resident_bytes = self
-                    .pixels
-                    .values()
-                    .map(|tile| tile.rgba.len() + tile.bgra.len() * std::mem::size_of::<u32>())
-                    .sum();
-                raster_trace.set("worker_tasks", 0.0);
-                raster_trace.set("damage_pixels", 0.0);
-                return Ok(RasterUpdate {
-                    mode: "layer-tiles-prepared",
-                    reason: "scheduled-prepaint-tiles",
-                    damage_pixels: 0,
-                    copied_bytes: 0,
-                });
-            }
-            // Every prepared record and resource payload is immutable. Mutable
-            // Canvas/image/clip caches stay worker-local.
-            let foreground_tasks = &plan.tasks[..required_tasks.min(plan.tasks.len())];
-            let worker_layers: Vec<_> = foreground_tasks
-                .iter()
-                .map(|task| replay.worker_layer(task))
-                .collect();
-            let eligible = worker_layers.iter().filter(|layer| layer.is_some()).count();
-            if self.worker_pool.is_none() && eligible >= 4 {
-                let clip_limit =
-                    (clip_cache.accounting().configured_byte_limit / 2).min(1024 * 1024);
-                self.worker_pool = Some(TileWorkerPool::new(clip_limit)?);
-            }
-            let parallel = eligible >= 2
-                && self
-                    .worker_pool
-                    .as_ref()
-                    .is_some_and(TileWorkerPool::available);
-            let mut worker_jobs = Vec::new();
-            let mut caller_jobs = Vec::new();
-            let mut products = Vec::with_capacity(foreground_tasks.len());
-            for (plan_index, (task, layer)) in
-                foreground_tasks.iter().zip(worker_layers).enumerate()
-            {
-                // The old identity is already unpublished; transfer its allocation
-                // exactly once to the task producing this plan's new generation.
-                let reuse = task
-                    .previous_tile_id
-                    .and_then(|id| self.pixels.remove(&id))
-                    .map(|pixels| pixels.rgba)
-                    .unwrap_or_default();
-                if let Some(layer) = layer.filter(|_| parallel) {
-                    worker_jobs.push(TileJob {
-                        plan_index,
-                        task: task.clone(),
-                        layer,
-                        reuse,
-                        solid_color: match draw_modes[plan_index] {
-                            layer_solid::TileDrawMode::SolidColor { premul_rgba } => {
-                                Some(premul_rgba)
-                            }
-                            layer_solid::TileDrawMode::Resource => None,
-                        },
-                    });
-                } else if let layer_solid::TileDrawMode::SolidColor { premul_rgba } =
-                    draw_modes[plan_index]
-                {
-                    let composition = replay
-                        .composition(task.layer_id)
-                        .ok_or_else(|| io::Error::other("solid task has no layer composition"))?;
-                    products.push(layer_solid::raster_product(
-                        plan_index,
-                        task,
-                        composition,
-                        premul_rgba,
-                        reuse,
-                        profile_tiles,
-                    )?);
-                } else {
-                    caller_jobs.push((plan_index, task, reuse));
-                }
-            }
-            let worker_tasks = worker_jobs.len();
-            let pending = if worker_jobs.is_empty() {
-                None
-            } else {
-                Some(
-                    self.worker_pool
-                        .as_mut()
-                        .expect("initialized raster pool")
-                        .submit(list.resources.clone(), worker_jobs),
-                )
-            };
-            let has_caller_jobs = !caller_jobs.is_empty();
-            if has_caller_jobs {
-                replay.set_scratch(std::mem::take(&mut self.halo_scratch));
-            }
-            let mut caller_error = None;
-            for (plan_index, task, reuse) in caller_jobs {
-                let mut trace = browser_tracing::span("raster", "RasterTile");
-                trace.set("tile_id", task.tile_id.0 as f64);
-                trace.set("layer_id", task.layer_id.0 as f64);
-                let result = (|| -> io::Result<TileProduct> {
-                    let composition = replay
-                        .composition(task.layer_id)
-                        .ok_or_else(|| io::Error::other("raster task has no layer composition"))?;
-                    let started = profile_tiles.then(std::time::Instant::now);
-                    let rgba =
-                        replay.raster_tile_with_pixels(task, image_cache, clip_cache, reuse)?;
-                    let call_time = started.map_or(std::time::Duration::ZERO, |s| s.elapsed());
-                    let started = profile_tiles.then(std::time::Instant::now);
-                    let row_support = tile_row_support(
-                        &rgba,
-                        task.pixel_size.0 as usize,
-                        composition.white_backing,
-                    );
-                    let bgra = cached_bgra(&rgba);
-                    Ok(TileProduct {
-                        plan_index,
-                        task: task.clone(),
-                        composition,
-                        rgba,
-                        bgra,
-                        row_support,
-                        call_time,
-                        support_time: started.map_or(std::time::Duration::ZERO, |s| s.elapsed()),
-                    })
-                })();
-                match result {
-                    Ok(product) => products.push(product),
-                    Err(error) => {
-                        caller_error = Some(error);
-                        break;
-                    }
-                }
-            }
-            if has_caller_jobs {
-                self.halo_scratch = replay.take_scratch();
-            }
-            // Always drain background work before returning an error. Tiles become
-            // publishable only after all lanes' products match the original plan.
-            if let Some(pending) = pending {
-                match pending.finish() {
-                    Ok(mut ready) => products.append(&mut ready),
-                    Err(error) => {
-                        caller_error.get_or_insert(error);
-                    }
-                }
-            }
-            if let Some(error) = caller_error {
-                self.worker_pool = None;
-                return Err(error);
-            }
-            products.sort_unstable_by_key(|product| product.plan_index);
-            if products.len() != foreground_tasks.len() {
-                return Err(io::Error::other(
-                    "raster lanes returned an incomplete task plan",
-                ));
-            }
-            for (index, (task, mut product)) in foreground_tasks.iter().zip(products).enumerate() {
-                if product.plan_index != index
-                    || product.task.tile_id != task.tile_id
-                    || product.task.layer_id != task.layer_id
-                    || product.task.generation != task.generation
-                    || product.task.tile_rect != task.tile_rect
-                    || product.task.raster_scale != task.raster_scale
-                    || product.task.pixel_size != task.pixel_size
-                    || product.task.record_indices != task.record_indices
-                    || replay.composition(task.layer_id) != Some(product.composition)
-                {
-                    return Err(io::Error::other(
-                        "raster lane product differs from its submitted tile generation",
-                    ));
-                }
-                let expected_bytes = tile_bytes(task.pixel_size)?;
-                if !valid_product_storage(&product)?
-                    || product.row_support.len() != task.pixel_size.1 as usize
-                {
-                    return Err(io::Error::other(
-                        "raster task returned invalid pixel storage",
-                    ));
-                }
-                damage_pixels = damage_pixels.saturating_add(expected_bytes / 4);
-                tile_calls += product.call_time;
-                tile_support += product.support_time;
-                product.row_support.draw_mode = draw_modes[index];
-                if staged
-                    .insert(
-                        task.tile_id,
-                        CachedTile::from_product(
-                            plan.frame_id,
-                            task,
-                            product.composition,
-                            product.rgba,
-                            product.bgra,
-                            product.row_support,
-                        ),
-                    )
-                    .is_some()
-                {
-                    return Err(io::Error::other("duplicate raster task tile identity"));
-                }
-            }
-            if profile_tiles {
-                eprintln!("tile-raster-overhead tasks={} worker_tasks={} calls_ms={:.3} row_support_ms={:.3}",
-                foreground_tasks.len(), worker_tasks, tile_calls.as_secs_f64()*1000.0, tile_support.as_secs_f64()*1000.0);
-            }
-            if !plan.DidRasterizeTasks(foreground_tasks) {
-                return Err(io::Error::other(
-                    "raster completion no longer matches planned generation",
-                ));
-            }
-            // Publish successful tile resources before composition, as cc does.
-            // A later composition error cannot discard valid raster products.
-            self.pixels.extend(std::mem::take(&mut staged));
-            let clip_limit = (clip_cache.accounting().configured_byte_limit / 2).min(1024 * 1024);
-            let scheduled = self.schedule_prepaint(
-                plan,
-                &mut replay,
-                &draw_modes,
-                foreground_tasks.len(),
-                clip_limit,
-            )?;
-            for tile in &plan.retired_tiles {
-                self.pixels.remove(tile);
-            }
-            plan.DidReleaseTileResources();
-            self.raster_committed = true;
-            let raster_done = timing.map(|start| start.elapsed());
-            raster_trace.set("worker_tasks", worker_tasks as f64);
-            raster_trace.set("async_prepaint_tasks", scheduled as f64);
-            raster_trace.set("damage_pixels", damage_pixels as f64);
-            drop(raster_trace);
-
-            self.prepared_frame_id = Some(plan.frame_id);
-            self.prepared_damage_pixels = damage_pixels;
-            self.stats.raster_tasks = foreground_tasks.len();
-            self.stats.resident_bytes = self
-                .pixels
-                .values()
-                .map(|tile| tile.rgba.len() + tile.bgra.len() * std::mem::size_of::<u32>())
-                .sum();
-            return Ok(RasterUpdate {
-                mode: "layer-tiles-prepared",
-                reason: if plan.tasks.is_empty() {
-                    "reused-visible-tiles"
-                } else {
-                    "rasterized-dirty-tiles"
-                },
-                damage_pixels,
-                copied_bytes: 0,
-            });
-        }
-
         let staged: HashMap<TileId, CachedTile> = HashMap::new();
-        let damage_pixels = self.prepared_damage_pixels;
+        let compose_damage = plan.root_damage;
+        let damage_pixels = compose_damage.map_or(0, |bounds| {
+            (bounds.right - bounds.left) * (bounds.bottom - bounds.top)
+        });
         let raster_done = replay_done;
 
         let observe_costs = timing.is_some() || browser_tracing::enabled();
         let mut compose_trace = browser_tracing::span("compose", "ComposeTiles");
+        compose_trace.set("raster_damage_pixels", raster_damage_pixels as f64);
+        compose_trace.set("output_damage_pixels", damage_pixels as f64);
+        let Some(compose_damage) = compose_damage else {
+            compose_trace.set("retained_root_pass", 1.0);
+            self.stats.raster_tasks = plan.raster_task_count;
+            self.stats.reused_tiles = plan.layers.iter().map(|layer| layer.tiles.len()).sum();
+            return Ok(RenderUpdate {
+                mode: "layer-tiles",
+                reason: "retained-root-pass",
+                damage_pixels: 0,
+                copied_bytes: 0,
+            });
+        };
         let mut preflight_trace = browser_tracing::span("compose", "ComposePreflight");
         let white = if format == skia::PixelFormat::Bgrx8888 {
             0x00ff_ffff
         } else {
             u32::MAX
         };
-        let (effect_plans, effect_bounds) =
-            effect_allocation_plan(plan, &replay, width, height, scale)?;
+        let (effect_plans, mut effect_bounds) = effect_allocation_plan(plan, width, height, scale)?;
+        for bounds in &mut effect_bounds {
+            *bounds = bounds.and_then(|bounds| intersect_bounds(bounds, compose_damage));
+        }
         preflight_trace.set("effect_runs", effect_bounds.len() as f64);
-        let direct_clips =
-            layer_direct_clip::eligible_runs(plan, &effect_plans, &replay, width, height)?;
-        let visible_rects = layer_occlusion::visible_rects(
+        let direct_clips = layer_direct_clip::eligible_runs(plan, &effect_plans, width, height)?;
+        let mut visible_rects = layer_occlusion::visible_rects(
             plan,
             &effect_plans,
             &direct_clips,
-            &replay,
             &staged,
-            &self.pixels,
+            resident,
             width,
             height,
         )?;
+        for layer in &mut visible_rects {
+            for bounds in layer {
+                *bounds = bounds.and_then(|bounds| intersect_bounds(bounds, compose_damage));
+            }
+        }
         let clip_observations = self.clip_masks.observations();
         let prepared = match layer_composition_preflight::prepare(
             plan,
@@ -1533,8 +1066,7 @@ impl LayerRaster {
             &effect_bounds,
             &direct_clips,
             &visible_rects,
-            &replay,
-            &self.pixels,
+            resident,
             &mut self.clip_masks,
             width,
             height,
@@ -1573,24 +1105,33 @@ impl LayerRaster {
         // SoftwareRenderer leaves an opaque root framebuffer uncleared. Here
         // skip only when the actual first white-backed layer proves every
         // visible pixel will be overwritten, including fractional neighbors.
-        let root_clear_skipped = if let (Some(layer), Some(effects)) =
-            (plan.layers.first(), effect_plans.first())
-        {
-            let composition = replay
-                .composition(layer.id)
-                .ok_or_else(|| io::Error::other("first paint layer has no composition"))?;
-            composition.white_backing
-                && effects.chain.is_empty()
-                && layer.tiles.iter().all(|tile| {
-                    staged
-                        .get(&tile.tile_id)
-                        .or_else(|| self.pixels.get(&tile.tile_id))
-                        .is_some_and(|pixels| {
-                            pixels.matches(tile, composition) && pixels.row_support.opaque
-                        })
-                })
-                && layer_tile_partition(layer, composition, width, height)?
-                    .is_some_and(|rectangles| partition_covers_viewport(&rectangles, width, height))
+        let full_damage = compose_damage
+            == (SurfaceBounds {
+                left: 0,
+                top: 0,
+                right: width as usize,
+                bottom: height as usize,
+            });
+        let root_clear_skipped = if full_damage {
+            if let (Some(layer), Some(effects)) = (plan.layers.first(), effect_plans.first()) {
+                let composition = layer.composition;
+                composition.white_backing
+                    && effects.chain.is_empty()
+                    && layer.tiles.iter().all(|tile| {
+                        staged
+                            .get(&tile.tile_id)
+                            .or_else(|| resident.get(&tile.tile_id))
+                            .is_some_and(|pixels| {
+                                pixels.matches(tile, composition.white_backing)
+                                    && pixels.row_support.opaque
+                            })
+                    })
+                    && layer_tile_partition(layer, composition, width, height)?.is_some_and(
+                        |rectangles| partition_covers_viewport(&rectangles, width, height),
+                    )
+            } else {
+                false
+            }
         } else {
             false
         };
@@ -1608,7 +1149,10 @@ impl LayerRaster {
                 }
             }
         } else {
-            buffer.fill(white);
+            for y in compose_damage.top..compose_damage.bottom {
+                buffer[frame_view.row_range(y, compose_damage.left, compose_damage.right)]
+                    .fill(white);
+            }
         }
         let mut reused = 0usize;
         let mut groups: Vec<EffectSurface> = Vec::new();
@@ -1628,11 +1172,7 @@ impl LayerRaster {
             if layer.properties.effect.is_mask {
                 if let Some(cost) = &mut compose_costs {
                     cost.mask_layers += 1;
-                    cost.mask_raster_tasks += plan
-                        .tasks
-                        .iter()
-                        .filter(|task| task.layer_id == layer.id)
-                        .count();
+                    cost.mask_raster_tasks += layer.tiles.len();
                 }
             }
             // Keep the resident layer's identity, but a layer with no visible
@@ -1725,9 +1265,7 @@ impl LayerRaster {
                     cost.direct_clip_layers += 1;
                 }
             }
-            let composition = replay
-                .composition(layer.id)
-                .expect("preflight validated layer composition");
+            let composition = layer.composition;
             let blit_start = compose_costs.as_ref().map(|_| std::time::Instant::now());
             if let Some(rectangles) = &direct_mask {
                 let index = groups
@@ -1766,7 +1304,7 @@ impl LayerRaster {
             for tile in layer.tiles.iter().filter(|_| needs_neighbors) {
                 let pixels = staged
                     .get(&tile.tile_id)
-                    .or_else(|| self.pixels.get(&tile.tile_id))
+                    .or_else(|| resident.get(&tile.tile_id))
                     .expect("preflight validated resident tile");
                 neighbors.insert(
                     (
@@ -1828,8 +1366,7 @@ impl LayerRaster {
                 let pixels = if let Some(pixels) = staged.get(&tile.tile_id) {
                     pixels
                 } else {
-                    let cached = self
-                        .pixels
+                    let cached = resident
                         .get(&tile.tile_id)
                         .expect("preflight validated resident tile");
                     if cached.raster_frame != plan.frame_id {
@@ -1840,11 +1377,11 @@ impl LayerRaster {
                             }
                         }
                     }
-                    self.pixels
+                    resident
                         .get(&tile.tile_id)
                         .expect("preflight validated resident tile")
                 };
-                debug_assert!(pixels.matches(tile, composition));
+                debug_assert!(pixels.matches(tile, composition.white_backing));
                 if let Some(cost) = &mut compose_costs {
                     if let Some((original, _, _)) =
                         tile_composition_geometry(tile, composition, width, height)
@@ -2024,6 +1561,9 @@ impl LayerRaster {
         while !groups.is_empty() {
             self.finish_effect_group(&mut groups, buffer, frame_view, format);
         }
+        for quad in &plan.solid_quads {
+            compose_solid_color_quad(buffer, frame_view, format, quad, scale, compose_damage);
+        }
         if let Some(cost) = &mut compose_costs {
             cost.close += close_start.unwrap().elapsed();
         }
@@ -2084,20 +1624,15 @@ impl LayerRaster {
         drop(draw_trace);
         compose_trace.set("layers", self.stats.layers as f64);
         compose_trace.set("tiles", self.stats.tiles as f64);
-        compose_trace.set("raster_tasks", plan.tasks.len() as f64);
+        compose_trace.set("raster_tasks", plan.raster_task_count as f64);
         compose_trace.set("reused_tiles", reused as f64);
         compose_trace.set(
             "root_clear_skipped",
             if root_clear_skipped { 1.0 } else { 0.0 },
         );
         drop(compose_trace);
-        self.stats.raster_tasks = plan.tasks.len();
+        self.stats.raster_tasks = plan.raster_task_count;
         self.stats.reused_tiles = reused;
-        self.stats.resident_bytes = self
-            .pixels
-            .values()
-            .map(|tile| tile.rgba.len() + tile.bgra.len() * std::mem::size_of::<u32>())
-            .sum();
         if let Some(start) = timing {
             let ms = |time: std::time::Duration| time.as_secs_f64() * 1000.0;
             let replay_time = replay_done.unwrap();
@@ -2119,9 +1654,9 @@ impl LayerRaster {
         }
         #[cfg(feature = "compose_work_profile")]
         layer_compose_profile::end();
-        Ok(RasterUpdate {
+        Ok(RenderUpdate {
             mode: "layer-tiles",
-            reason: if plan.tasks.is_empty() {
+            reason: if plan.raster_task_count == 0 {
                 "reused-visible-tiles"
             } else {
                 "rasterized-dirty-tiles"
@@ -2318,6 +1853,7 @@ mod sparse_support_test {
             tile_rect: rect,
             raster_scale: 1.0,
             pixel_size: (width, height),
+            ready: true,
         };
         let pixels = CachedTile {
             raster_frame: 0,
@@ -2653,6 +2189,7 @@ mod sparse_support_test {
                 tile_rect: rect,
                 raster_scale: 1.0,
                 pixel_size: (256, 256),
+                ready: true,
             };
             let base = LayerComposition {
                 translation: (0.0, -0.25),
@@ -5144,24 +4681,6 @@ fn multiply_255(channel: u8, alpha: u8) -> u16 {
     (product + (product >> 8)) >> 8
 }
 
-fn unsupported_reason(reason: UnsupportedReason) -> &'static str {
-    match reason {
-        UnsupportedReason::InvalidFrameGeometry => "invalid-frame-geometry",
-        UnsupportedReason::MissingSemanticRecords => "missing-semantic-records",
-        UnsupportedReason::InvalidChunkRange => "invalid-chunk-range",
-        UnsupportedReason::InvalidRecordRange => "invalid-record-range",
-        UnsupportedReason::NonTranslationTransform => "non-translation-transform",
-        UnsupportedReason::FractionalPixelPlacement => "fractional-pixel-placement",
-        UnsupportedReason::UnsupportedClip => "unsupported-clip",
-        UnsupportedReason::OpacityEffect => "opacity-effect",
-        UnsupportedReason::BlendEffect => "blend-effect",
-        UnsupportedReason::FilterEffect => "filter-effect",
-        UnsupportedReason::MaskEffect => "mask-effect",
-        UnsupportedReason::ForeignLayer => "foreign-layer",
-        UnsupportedReason::TileBudgetExceeded => "tile-budget-exceeded",
-    }
-}
-
 #[cfg(all(test, target_arch = "aarch64"))]
 mod effect_row_test {
     use super::*;
@@ -5228,7 +4747,7 @@ mod direct_mask_quad_test {
         let (width, height) = (112u32, 14u32);
         let composition = LayerComposition {
             translation: (3.625, 2.6875),
-            clip: Some(crate::layer_replay::DeviceRect {
+            clip: Some(viz::DeviceRect {
                 x: 5,
                 y: 3,
                 width: 85,
@@ -5256,6 +4775,7 @@ mod direct_mask_quad_test {
                 tile_rect: rect,
                 raster_scale: 1.0,
                 pixel_size: (48, 4),
+                ready: true,
             };
             let rgba: Vec<u8> = (0..4usize)
                 .flat_map(|y| {
@@ -5397,6 +4917,7 @@ mod opaque_quad_test {
             tile_rect: rect,
             raster_scale: 1.0,
             pixel_size: (32, 20),
+            ready: true,
         };
         let rgba: Vec<u8> = (0..20usize)
             .flat_map(|y| {
@@ -5433,10 +4954,9 @@ mod opaque_quad_test {
                 skia::PixelFormat::Bgra8888,
                 skia::PixelFormat::Bgrx8888,
             ] {
-                let opaque =
-                    crate::layer_replay::sampled_opaque_device_rect(proof, 1.0, translation)
-                        .unwrap()
-                        .unwrap();
+                let opaque = sampled_opaque_device_rect_for_test(proof, 1.0, translation)
+                    .unwrap()
+                    .unwrap();
                 let safe = SurfaceBounds {
                     left: opaque.x.max(0) as usize,
                     top: opaque.y.max(0) as usize,

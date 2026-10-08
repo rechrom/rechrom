@@ -99,10 +99,6 @@ impl Default for LayerTileManager {
 }
 
 impl LayerTileManager {
-    pub(crate) fn frame_id(&self) -> u64 {
-        self.frame_id
-    }
-
     /// Resource loss does not delete resident layer/tile objects. Re-request
     /// raster on their existing grid identities when they become visible.
     pub(crate) fn invalidate_resources(&mut self) {
@@ -206,56 +202,38 @@ impl LayerTileManager {
 
     /// For a backend pixel-cache eviction: request raster again without
     /// pretending the content changed or recycling an unrelated tile object.
-    pub fn mark_tile_missing(&mut self, id: TileId) -> bool {
-        let Some((layer_id, scale, index)) = self.tile_lookup.get(&id).copied() else {
-            return false;
-        };
-        let Some(layer) = self.layers.iter_mut().find(|l| l.id == layer_id) else {
-            return false;
-        };
-        let Some(tiling) = layer
-            .tilings
-            .iter_mut()
-            .find(|t| t.scale.to_bits() == scale)
-        else {
-            return false;
-        };
-        let Some(tile) = tiling.tiles.get_mut(&index) else {
-            return false;
-        };
-        tile.ready = false;
-        true
-    }
-
-    /// Use backend-proven canonical local records for the legacy flat replay
-    /// stream. Native chunk IDs and property identities still govern layer
-    /// matching; canonical payload/bounds govern content invalidation/tiling.
+    /// Consume backend-proven canonical records. Native chunk IDs and property
+    /// identities govern layer matching; canonical payload and bounds govern
+    /// content invalidation and tiling.
     pub fn update_with_raster_content(
         &mut self,
         list: &Arc<PaintArtifact>,
         config: FrameConfig,
+        prepaint_scroll: Option<CompositorScrollOffset>,
         content: &[RasterRecordContent],
     ) -> FramePlan {
-        self.update_internal(list, config, Some(content))
+        self.update_internal(list, config, prepaint_scroll, content)
     }
 
     fn update_internal(
         &mut self,
         list: &Arc<PaintArtifact>,
         config: FrameConfig,
-        content: Option<&[RasterRecordContent]>,
+        prepaint_scroll: Option<CompositorScrollOffset>,
+        content: &[RasterRecordContent],
     ) -> FramePlan {
         self.frame_id += 1;
         let mut plan = FramePlan {
+            layer_tree_id: LayerTreeId(0),
             frame_id: self.frame_id,
             config,
             layers: Vec::new(),
+            raster_task_count: 0,
             tasks: Vec::new(),
             retired_tiles: Vec::new(),
             unsupported: None,
             source: list.clone(),
             raster_records: Arc::from([]),
-            resource_owner: None,
         };
         if !finite(config.viewport)
             || !config.raster_scale.is_finite()
@@ -268,9 +246,11 @@ impl LayerTileManager {
             plan.unsupported = Some(reason);
             return plan;
         }
-        let canonical: Option<HashMap<usize, &RasterRecordContent>> =
-            content.map(|records| records.iter().map(|r| (r.record_index, r)).collect());
-        let pending = match group_chunks(list, canonical.as_ref(), config.raster_scale) {
+        let canonical: HashMap<usize, &RasterRecordContent> = content
+            .iter()
+            .map(|record| (record.record_index, record))
+            .collect();
+        let pending = match group_chunks(list, &canonical, config.raster_scale) {
             Ok(pending) => pending,
             Err(reason) => {
                 plan.unsupported = Some(reason);
@@ -411,10 +391,7 @@ impl LayerTileManager {
                 for &index in &layer.records {
                     let record = &list.display_items[index];
                     if record.draws_content {
-                        let rect = canonical
-                            .as_ref()
-                            .and_then(|c| c.get(&index))
-                            .map_or(record.visual_rect, |r| r.visual_rect);
+                        let rect = canonical[&index].visual_rect;
                         raster_bounds.union(outset(rect, record.raster_effect_outset));
                     }
                 }
@@ -453,6 +430,17 @@ impl LayerTileManager {
                         {
                             eprintln!("[layer_tile budget layer] index={} tiles={:?} chunks={} records={} complete={} bounds={:?} transform={} clip={} effect={} singleton={}", index, tiles, layer.chunks.len(), layer.records.len(), layer.complete, layer.bounds, layer.properties.transform.id, layer.properties.clip.id, layer.properties.effect.id, layer.singleton_chunk);
                         }
+                        if let Some(layer) = pending.get(layer_tile_counts.len().saturating_sub(1))
+                        {
+                            for &record_index in &layer.records {
+                                let record = &list.display_items[record_index];
+                                let kinds = list.items[record.record_begin..record.record_end]
+                                    .iter()
+                                    .map(|item| item.r#type)
+                                    .collect::<Vec<_>>();
+                                eprintln!("[layer_tile budget record] index={} accurate={} rect={:?} kinds={:?}", record_index, record.visual_rect_is_accurate, record.visual_rect, kinds);
+                            }
+                        }
                     }
                     plan.unsupported = Some(UnsupportedReason::TileBudgetExceeded);
                     return plan;
@@ -489,7 +477,7 @@ impl LayerTileManager {
             // active tree's draw transform. Do the same: union the current
             // visible rect with the impl-side scroll target only for interest
             // selection. `translation` and visible quads remain committed.
-            if let Some(predicted) = config.prepaint_scroll.and_then(|scroll| {
+            if let Some(predicted) = prepaint_scroll.and_then(|scroll| {
                 scroll_target_rect(
                     &layer.properties,
                     scroll,
@@ -669,7 +657,7 @@ impl LayerTileManager {
             let backing_changed = is_first_layer
                 && state.requires_transparent_backing != requires_transparent_backing;
             let full_invalidation = was_first != is_first_layer || backing_changed;
-            let records = build_records(list, &pending.records, canonical.as_ref(), &state.records);
+            let records = build_records(list, &pending.records, &canonical);
             if std::env::var_os("BROWSER_PROFILE_TILES").is_some() {
                 let unknown = records
                     .iter()
@@ -808,6 +796,7 @@ impl LayerTileManager {
                         tile_rect: rect,
                         raster_scale: config.raster_scale,
                         pixel_size: (self.tile_size, self.tile_size),
+                        ready: tile.ready,
                     });
                     if !tile.ready {
                         let selected = records
@@ -873,6 +862,7 @@ impl LayerTileManager {
                         tile_rect: rect,
                         raster_scale: config.raster_scale,
                         pixel_size: (self.tile_size, self.tile_size),
+                        ready: tile.ready,
                     });
                     if !tile.ready {
                         let selected = records
@@ -1149,10 +1139,25 @@ fn opacity_zero_skips_raster_but_preserves_hidden_damage_and_mask_semantics() {
         viewport: rect,
         raster_scale: 1.0,
         activation_scroll: None,
-        prepaint_scroll: None,
+        frame_time: None,
+    };
+    let update = |manager: &mut LayerTileManager, artifact: &Arc<PaintArtifact>| {
+        let records = artifact
+            .display_items
+            .iter()
+            .enumerate()
+            .map(|(record_index, record)| RasterRecordContent {
+                record_index,
+                items: Arc::from(&artifact.items[record.record_begin..record.record_end]),
+                visual_rect: record.visual_rect,
+                rect_known_to_be_opaque: PaintRect::default(),
+                bounds_are_complete: record.visual_rect_is_accurate,
+            })
+            .collect::<Vec<_>>();
+        manager.update_with_raster_content(artifact, config, None, &records)
     };
     let mut manager = LayerTileManager::new(256);
-    let first = manager.update_internal(&list, config, None);
+    let first = update(&mut manager, &list);
     assert!(first.unsupported.is_none());
     assert_eq!(first.tasks.len(), 1);
     let old_tile = first.tasks[0].tile_id;
@@ -1162,7 +1167,7 @@ fn opacity_zero_skips_raster_but_preserves_hidden_damage_and_mask_semantics() {
     Arc::make_mut(&mut hidden.chunks[0].properties.effect).opacity = 0.0;
     Arc::make_mut(&mut hidden.items)[0].rect.width = 32.0;
     let hidden = Arc::new(hidden);
-    let hidden_plan = manager.update_internal(&hidden, config, None);
+    let hidden_plan = update(&mut manager, &hidden);
     assert_eq!(
         hidden_plan.layers.len(),
         1,
@@ -1180,7 +1185,7 @@ fn opacity_zero_skips_raster_but_preserves_hidden_damage_and_mask_semantics() {
 
     let mut shown = (*hidden).clone();
     Arc::make_mut(&mut shown.chunks[0].properties.effect).opacity = 0.5;
-    let shown_plan = manager.update_internal(&Arc::new(shown), config, None);
+    let shown_plan = update(&mut manager, &Arc::new(shown));
     assert_eq!(shown_plan.layers[0].id, first.layers[0].id);
     assert_eq!(
         shown_plan.tasks.len(),
@@ -1197,7 +1202,7 @@ fn opacity_zero_skips_raster_but_preserves_hidden_damage_and_mask_semantics() {
     node.is_mask = true;
     node.opacity = 1.0;
     let mut mask_manager = LayerTileManager::new(256);
-    let mask_plan = mask_manager.update_internal(&Arc::new(mask), config, None);
+    let mask_plan = update(&mut mask_manager, &Arc::new(mask));
     assert!(mask_plan.unsupported.is_none());
     assert_eq!(mask_plan.tasks.len(), 1);
     let mut descendant = (*hidden).clone();
@@ -1208,7 +1213,7 @@ fn opacity_zero_skips_raster_but_preserves_hidden_damage_and_mask_semantics() {
     child.is_mask = true;
     child.parent = Some(descendant.chunks[0].properties.effect.clone());
     descendant.chunks[0].properties.effect = Arc::new(child);
-    let descendant = manager.update_internal(&Arc::new(descendant), config, None);
+    let descendant = update(&mut manager, &Arc::new(descendant));
     assert!(descendant.unsupported.is_none());
     assert_eq!(descendant.layers.len(), 1);
     assert!(descendant.layers[0].properties.effect.is_mask);
@@ -1228,7 +1233,7 @@ fn requires_own_chunk(chunk: &PaintChunk) -> bool {
 
 fn group_chunks(
     list: &PaintArtifact,
-    canonical: Option<&HashMap<usize, &RasterRecordContent>>,
+    canonical: &HashMap<usize, &RasterRecordContent>,
     raster_scale: f64,
 ) -> Result<Vec<PendingLayer>, UnsupportedReason> {
     let mut groups: Vec<PendingLayer> = Vec::new();
@@ -1242,11 +1247,6 @@ fn group_chunks(
             lowered_states.insert(key, lowered.clone());
             lowered
         };
-        // Native records in the omitted transform's coordinates require a
-        // renderer-proven record conversion before bounds/pixels can be tiled.
-        if canonical.is_none() && !properties.same_nodes(&chunk.properties) {
-            return Err(UnsupportedReason::NonTranslationTransform);
-        }
         // A direct-compositing anchor separates property groups, not every
         // chunk within that group. PendingLayer::CanUpcastWith accepts chunks
         // at the same real transform/effect; only foreign/scrollbar entities
@@ -1262,27 +1262,18 @@ fn group_chunks(
             complete: true,
             singleton_chunk: own,
         };
-        if let Some(canonical) = canonical {
-            for record in chunk.begin_index as usize..chunk.end_index as usize {
-                let content = canonical[&record];
-                group.bounds.union(content.visual_rect);
-                group.rect_known_to_be_opaque = PaintRect::maximum_covered_rect(
-                    group.rect_known_to_be_opaque,
-                    content.rect_known_to_be_opaque,
-                );
-                group.overlap_bounds.union(outset(
-                    content.visual_rect,
-                    list.display_items[record].raster_effect_outset,
-                ));
-                group.complete &= content.bounds_are_complete;
-            }
-        } else {
-            group.bounds.union(chunk.bounds);
-            group.rect_known_to_be_opaque = chunk.rect_known_to_be_opaque;
-            group
-                .overlap_bounds
-                .union(outset(chunk.bounds, chunk.raster_effect_outset));
-            group.complete &= chunk.bounds_are_complete;
+        for record in chunk.begin_index as usize..chunk.end_index as usize {
+            let content = canonical[&record];
+            group.bounds.union(content.visual_rect);
+            group.rect_known_to_be_opaque = PaintRect::maximum_covered_rect(
+                group.rect_known_to_be_opaque,
+                content.rect_known_to_be_opaque,
+            );
+            group.overlap_bounds.union(outset(
+                content.visual_rect,
+                list.display_items[record].raster_effect_outset,
+            ));
+            group.complete &= content.bounds_are_complete;
         }
         // Keep the established adjacent merge path unchanged. Non-adjacent
         // reordering additionally requires backend-certified complete ink.
@@ -1306,11 +1297,7 @@ fn group_chunks(
             group
                 .records
                 .extend(chunk.begin_index as usize..chunk.end_index as usize);
-            if canonical.is_some() {
-                append_with_overlap_merge(&mut groups, group, raster_scale);
-            } else {
-                groups.push(group);
-            }
+            append_with_overlap_merge(&mut groups, group, raster_scale);
         }
     }
     Ok(groups)
@@ -1479,7 +1466,7 @@ fn state_snapshot_key(state: &PropertyTreeState) -> (usize, usize, usize) {
 
 fn validate(
     list: &PaintArtifact,
-    content: Option<&[RasterRecordContent]>,
+    content: &[RasterRecordContent],
 ) -> Result<(), UnsupportedReason> {
     if std::env::var_os("LAYOUTNG_LAYER_REPLAY_VERBOSE").is_some() {
         for item in list
@@ -1499,7 +1486,7 @@ fn validate(
             }
         }
     }
-    // An empty artifact may still carry balanced legacy state wrappers (for
+    // An empty artifact may still carry balanced state wrappers (for
     // example Save/viewport ClipRect/Restore before the document first paints).
     // Inspect the actual commands: an empty canonical record list alone is
     // never evidence that an unrecorded draw is safe to ignore.
@@ -1535,18 +1522,16 @@ fn validate(
         }
         previous_end = record.record_end;
     }
-    if let Some(content) = content {
-        let mut seen = HashSet::new();
-        if content.len() != list.display_items.len() {
+    let mut seen = HashSet::new();
+    if content.len() != list.display_items.len() {
+        return Err(UnsupportedReason::InvalidRecordRange);
+    }
+    for record in content {
+        if record.record_index >= list.display_items.len()
+            || !seen.insert(record.record_index)
+            || !finite(record.visual_rect)
+        {
             return Err(UnsupportedReason::InvalidRecordRange);
-        }
-        for record in content {
-            if record.record_index >= list.display_items.len()
-                || !seen.insert(record.record_index)
-                || !finite(record.visual_rect)
-            {
-                return Err(UnsupportedReason::InvalidRecordRange);
-            }
         }
     }
     Ok(())
@@ -1580,35 +1565,21 @@ fn balanced_state_only(items: &[DisplayItem]) -> bool {
 fn build_records(
     list: &PaintArtifact,
     indices: &[usize],
-    canonical: Option<&HashMap<usize, &RasterRecordContent>>,
-    old: &[RecordState],
+    canonical: &HashMap<usize, &RasterRecordContent>,
 ) -> Vec<RecordState> {
-    let by_id: Option<HashMap<_, _>> = canonical
-        .is_none()
-        .then(|| old.iter().map(|r| (r.id, r)).collect());
     indices
         .iter()
         .map(|&index| {
             let record = &list.display_items[index];
-            let content = canonical.and_then(|c| c.get(&index).copied());
-            let items = if let Some(content) = content {
-                content.items.clone()
-            } else {
-                let ops = &list.items[record.record_begin..record.record_end];
-                by_id
-                    .as_ref()
-                    .and_then(|by_id| by_id.get(&record.id))
-                    .filter(|r| r.items.as_ref() == ops)
-                    .map_or_else(|| Arc::from(ops), |r| r.items.clone())
-            };
+            let content = canonical[&index];
             RecordState {
                 artifact_index: index,
                 id: record.id,
-                rect: content.map_or(record.visual_rect, |c| c.visual_rect),
-                complete: content.map_or(record.visual_rect_is_accurate, |c| c.bounds_are_complete),
+                rect: content.visual_rect,
+                complete: content.bounds_are_complete,
                 draws_content: record.draws_content,
                 raster_effect_outset: record.raster_effect_outset,
-                items,
+                items: content.items.clone(),
             }
         })
         .collect()

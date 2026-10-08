@@ -115,11 +115,10 @@ fn full_image_scaling_alpha_and_hard_clips_match_skia() {
                             resources: Some(resources.clone()),
                             ..Default::default()
                         };
-                        let source = renderer::source_replay::RasterizeSourceDisplayItemList(
-                            &list, 320, 320,
-                        );
+                        let source =
+                            raster::source_replay::RasterizeSourceDisplayItemList(&list, 320, 320);
                         let rust =
-                            renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 320, 320);
+                            raster::pure_replay::RasterizeSourceDisplayItemList(&list, 320, 320);
                         let differences = source
                             .chunks_exact(4)
                             .zip(rust.chunks_exact(4))
@@ -215,8 +214,8 @@ fn image_sampling_uses_clipped_layer_device_origin() {
             .into(),
             ..Default::default()
         };
-        let native = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
-        let rust = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+        let native = raster::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+        let rust = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
         assert_eq!(
             native
                 .chunks_exact(4)
@@ -330,8 +329,8 @@ fn rounded_image_aa_runs_and_layer_restore_match_skia() {
                 resources: Some(resources.clone()),
                 ..Default::default()
             };
-            let a = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
-            let b = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+            let a = raster::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+            let b = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
             let different: Vec<_> = a
                 .chunks_exact(4)
                 .zip(b.chunks_exact(4))
@@ -443,9 +442,9 @@ fn scaled_bitmap_matrix_and_cropped_layer_match_native_skia() {
                         ..Default::default()
                     };
                     let actual =
-                        renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 600, 600);
+                        raster::pure_replay::RasterizeSourceDisplayItemList(&list, 600, 600);
                     let expected =
-                        renderer::source_replay::RasterizeSourceDisplayItemList(&list, 600, 600);
+                        raster::source_replay::RasterizeSourceDisplayItemList(&list, 600, 600);
                     let diff = actual.iter().zip(&expected).filter(|(a, b)| a != b).count();
 
                     assert_eq!(
@@ -585,9 +584,9 @@ fn integer_translated_image_rows_and_aa_clips_match_native_skia() {
                         ..Default::default()
                     };
                     let actual =
-                        renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 320, 300);
+                        raster::pure_replay::RasterizeSourceDisplayItemList(&list, 320, 300);
                     let expected =
-                        renderer::source_replay::RasterizeSourceDisplayItemList(&list, 320, 300);
+                        raster::source_replay::RasterizeSourceDisplayItemList(&list, 320, 300);
                     let diff = actual.iter().zip(&expected).filter(|(a, b)| a != b).count();
                     assert_eq!(
                         diff, 0,

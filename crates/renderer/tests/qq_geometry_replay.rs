@@ -10,8 +10,8 @@ fn compare(items: Vec<DisplayItem>, label: &str) {
         items,
         ..Default::default()
     };
-    let native = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
-    let rust = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+    let native = raster::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+    let rust = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
     let differences: Vec<_> = native
         .chunks_exact(4)
         .zip(rust.chunks_exact(4))

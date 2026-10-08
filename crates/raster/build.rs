@@ -48,7 +48,7 @@ fn main() {
         .args(&objects)
         .status()
         .expect("ar is required for Skia text replay");
-    assert!(status.success(), "Skia text replay archive failed");
+    assert!(status.success(), "Skia raster replay archive failed");
     println!("cargo:rustc-link-search=native={}", output.display());
     println!(
         "cargo:rustc-link-search=native={}",

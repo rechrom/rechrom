@@ -107,9 +107,8 @@ fn positive_axis_float_nested_and_cropped_rrect_clips_match_native() {
                     items,
                     ..Default::default()
                 };
-                let native =
-                    renderer::source_replay::RasterizeSourceDisplayItemList(&list, 520, 360);
-                let actual = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 520, 360);
+                let native = raster::source_replay::RasterizeSourceDisplayItemList(&list, 520, 360);
+                let actual = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 520, 360);
                 let differences = actual
                     .chunks_exact(4)
                     .zip(native.chunks_exact(4))

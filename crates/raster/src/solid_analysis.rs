@@ -4,7 +4,7 @@
 //! opaque full-canvas rectangle can restore a previously non-solid result.
 //! TileManager::AssignGpuMemoryToTiles limits analysis to five draw operations.
 //! This subset rejects unsupported operations; it never inspects raster pixels.
-use super::layer_solid::TileDrawMode;
+use super::solid::RasterDrawMode;
 use crate::layer_replay::ReplayUnsupported;
 use layer_tile::RasterTask;
 use skia::compat::commands::{CommandKind as Kind, DrawCommand, PaintBlendMode, PaintRect};
@@ -71,7 +71,7 @@ impl State {
 pub(super) fn analyze<'a>(
     task: &RasterTask,
     records: impl Iterator<Item = Result<&'a [DrawCommand], ReplayUnsupported>>,
-) -> TileDrawMode {
+) -> RasterDrawMode {
     let (width, height) = task.pixel_size;
     let scale = task.raster_scale as f32;
     let tx = (-task.tile_rect.x * task.raster_scale) as f32;
@@ -89,7 +89,7 @@ pub(super) fn analyze<'a>(
             .into_iter()
             .all(|v| v.is_finite() && v.fract() == 0.0 && v.abs() <= ((1u32 << 22) as f32))
     {
-        return TileDrawMode::Resource;
+        return RasterDrawMode::Resource;
     }
     analyze_records(
         State {
@@ -111,7 +111,7 @@ pub(super) fn analyze<'a>(
 fn analyze_records<'a>(
     initial: State,
     records: impl Iterator<Item = Result<&'a [DrawCommand], ReplayUnsupported>>,
-) -> TileDrawMode {
+) -> RasterDrawMode {
     let canvas = initial.clip;
     let mut state = initial;
     let mut saved = Vec::with_capacity(2);
@@ -121,14 +121,14 @@ fn analyze_records<'a>(
     let mut draws = 0;
     for record in records {
         let Ok(commands) = record else {
-            return TileDrawMode::Resource;
+            return RasterDrawMode::Resource;
         };
         for command in commands {
             match command.r#type {
                 Kind::kSave => saved.push(state),
                 Kind::kRestore => {
                     let Some(previous) = saved.pop() else {
-                        return TileDrawMode::Resource;
+                        return RasterDrawMode::Resource;
                     };
                     state = previous;
                 }
@@ -138,7 +138,7 @@ fn analyze_records<'a>(
                     if m.iter().enumerate().any(|(i, &v)| {
                         !v.is_finite() || (!matches!(i, 12 | 13) && v != identity.values[i])
                     }) {
-                        return TileDrawMode::Resource;
+                        return RasterDrawMode::Resource;
                     }
                     let dx = m[12] as f32 * state.sx;
                     let dy = m[13] as f32 * state.sy;
@@ -146,21 +146,21 @@ fn analyze_records<'a>(
                         .into_iter()
                         .all(|v| v.is_finite() && v.fract() == 0.0)
                     {
-                        return TileDrawMode::Resource;
+                        return RasterDrawMode::Resource;
                     }
                     state.tx += dx;
                     state.ty += dy;
                 }
                 Kind::kClipRect => {
                     let Some(rect) = state.map(command.rect) else {
-                        return TileDrawMode::Resource;
+                        return RasterDrawMode::Resource;
                     };
                     state.clip = state.clip.intersect(rect);
                 }
                 Kind::kDrawRect => {
                     draws += 1;
                     if draws > 5 {
-                        return TileDrawMode::Resource;
+                        return RasterDrawMode::Resource;
                     }
                     // IsSolidColorPaint's fill/SrcOver/no-effects subset.
                     if command.blend_mode != PaintBlendMode::kNormal
@@ -169,21 +169,21 @@ fn analyze_records<'a>(
                         || !command.mask_layers.is_empty()
                         || command.resource_id != 0
                     {
-                        return TileDrawMode::Resource;
+                        return RasterDrawMode::Resource;
                     }
                     let color = command.color;
                     if ![color.red, color.green, color.blue, color.alpha]
                         .into_iter()
                         .all(|v| v.is_finite() && (0.0..=1.0).contains(&v))
                     {
-                        return TileDrawMode::Resource;
+                        return RasterDrawMode::Resource;
                     }
                     // CheckIfSolidShape first respects flags.nothingToDraw().
                     if color.alpha == 0.0 {
                         continue;
                     }
                     let Some(rect) = state.map(command.rect) else {
-                        return TileDrawMode::Resource;
+                        return RasterDrawMode::Resource;
                     };
                     // IsFullQuad requires both the clip and shape to cover the
                     // complete analysis canvas. Mac IsSolidColorPaint also
@@ -205,17 +205,19 @@ fn analyze_records<'a>(
                         None
                     };
                 }
-                _ => return TileDrawMode::Resource,
+                _ => return RasterDrawMode::Resource,
             }
         }
         // Each compiled record is a real independently saved DrawRecord.
         if !saved.is_empty() {
-            return TileDrawMode::Resource;
+            return RasterDrawMode::Resource;
         }
         state = initial;
     }
-    solid.map_or(TileDrawMode::Resource, |rgba| TileDrawMode::SolidColor {
-        premul_rgba: u32::from_le_bytes(rgba),
+    solid.map_or(RasterDrawMode::Resource, |rgba| {
+        RasterDrawMode::SolidColor {
+            premul_rgba: u32::from_le_bytes(rgba),
+        }
     })
 }
 
@@ -255,7 +257,7 @@ mod tests {
         let mut partial = full.clone();
         partial.rect.width = 8.0;
         let input = [partial, full.clone()];
-        let expected = TileDrawMode::SolidColor {
+        let expected = RasterDrawMode::SolidColor {
             premul_rgba: u32::from_le_bytes(skia::src::core::SkColor::premultiply(SkColor4f::new(
                 0.2, 0.4, 0.6, 1.0,
             ))),
@@ -272,17 +274,17 @@ mod tests {
         let six = vec![full.clone(); 6];
         assert_eq!(
             analyze_records(state, std::iter::once(Ok(six.as_slice()))),
-            TileDrawMode::Resource
+            RasterDrawMode::Resource
         );
         assert_eq!(
             analyze_records(state, [Ok(&six[..3]), Ok(&six[3..])].into_iter()),
-            TileDrawMode::Resource
+            RasterDrawMode::Resource
         );
         let mut shader = full;
         shader.paint_shader = Some(PaintShader::default());
         assert_eq!(
             analyze_records(state, std::iter::once(Ok(std::slice::from_ref(&shader)))),
-            TileDrawMode::Resource
+            RasterDrawMode::Resource
         );
     }
 }

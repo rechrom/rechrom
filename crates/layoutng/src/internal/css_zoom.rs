@@ -49,6 +49,18 @@ pub fn ZoomedStyle(style: &ComputedStyle) -> Cow<'_, ComputedStyle> {
     EdgesScale(&mut output.margin, zoom);
     EdgesScale(&mut output.padding, zoom);
     EdgesScale(&mut output.border, zoom);
+    if let Some(clip) = &mut output.css_clip {
+        for side in [
+            &mut clip.top,
+            &mut clip.right,
+            &mut clip.bottom,
+            &mut clip.left,
+        ] {
+            if let Some(px) = side {
+                *px *= zoom;
+            }
+        }
+    }
     // Blink preserves at least one device pixel for a nonzero CSS border.
     for width in [
         &mut output.border.top,

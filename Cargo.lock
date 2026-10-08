@@ -364,6 +364,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor"
+version = "0.0.1"
+dependencies = [
+ "layer_tile",
+ "layoutng_assembly",
+ "paint",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -561,6 +570,7 @@ dependencies = [
 name = "devtools"
 version = "0.0.1"
 dependencies = [
+ "base64 0.22.1",
  "browser_tracing",
  "serde_json",
 ]
@@ -792,6 +802,10 @@ dependencies = [
  "libc",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "event_loop"
+version = "0.0.1"
 
 [[package]]
 name = "exr"
@@ -1606,7 +1620,7 @@ dependencies = [
  "layoutng_geometry",
  "layoutng_style",
  "paint",
- "renderer",
+ "raster",
 ]
 
 [[package]]
@@ -2650,6 +2664,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "raster"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "font_engine",
+ "image_resource",
+ "layer_tile",
+ "layoutng_assembly",
+ "paint",
+ "skia",
+]
+
+[[package]]
 name = "raw-cpuid"
 version = "11.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2675,6 +2702,7 @@ name = "rechrom"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "compositor",
  "cssom",
  "document_image",
  "document_loader",
@@ -2701,9 +2729,11 @@ dependencies = [
  "layoutng_table",
  "page_mutation",
  "paint",
+ "raster",
  "renderer",
  "url",
  "url_loader",
+ "viz",
  "web_font",
  "webapi",
  "xhr_transport",
@@ -2715,9 +2745,11 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "cc",
+ "compositor",
  "devtools",
  "document_image",
  "dom",
+ "event_loop",
  "image_decoder",
  "image_resource",
  "interaction",
@@ -2727,6 +2759,8 @@ dependencies = [
  "layoutng_foundation",
  "page_mutation",
  "paint",
+ "png",
+ "raster",
  "raw-window-handle",
  "rechrom",
  "renderer",
@@ -2735,6 +2769,7 @@ dependencies = [
  "softbuffer",
  "url",
  "url_loader",
+ "viz",
  "winit",
  "xhr_transport",
 ]
@@ -2771,12 +2806,13 @@ name = "renderer"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "font_engine",
- "image_resource",
+ "compositor",
  "layer_tile",
  "layoutng_assembly",
  "paint",
+ "raster",
  "skia",
+ "viz",
 ]
 
 [[package]]
@@ -3537,6 +3573,14 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "viz"
+version = "0.0.1"
+dependencies = [
+ "compositor",
+ "paint",
+]
 
 [[package]]
 name = "walkdir"

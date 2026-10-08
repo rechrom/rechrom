@@ -487,6 +487,7 @@ fn to_js(ctx: &mut Context, state: &Rc<RefCell<State>>, value: &HostValue) -> Js
         HostValue::Boolean(v) => Value::Bool(*v),
         HostValue::Number(v) => Value::number(*v),
         HostValue::String(v) => Value::Str(ctx.intern(v)),
+        HostValue::Bytes(v) => ctx.new_array_buffer_copy(v)?,
         HostValue::Record(fields) => {
             let object = ctx.try_new_object()?;
             for (name, value) in fields {
@@ -581,6 +582,33 @@ impl ModuleLoader for Loader {
     }
     fn compiled(&self, specifier: &str) -> Option<Value> {
         self.compiled.get(specifier).cloned()
+    }
+    fn request_dynamic(&mut self, base: &str, specifier: &str) -> Result<Option<String>, String> {
+        self.host
+            .as_ref()
+            .ok_or_else(|| format!("Unresolved dynamic module import: {specifier}"))?
+            .RequestDynamicModule(specifier, base)
+            .map_err(|error| error.to_string())
+    }
+    fn poll_dynamic(&mut self, url: &str) -> Result<Option<()>, String> {
+        let Some(source) = self
+            .host
+            .as_ref()
+            .ok_or_else(|| "No dynamic module resolver".to_owned())?
+            .PollDynamicModule(url)
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(None);
+        };
+        if let Some(module) = source.module {
+            let value = module
+                .Implementation::<Value>()
+                .cloned()
+                .ok_or_else(|| "Module belongs to another engine".to_owned())?;
+            self.compiled.insert(source.url.clone(), value);
+        }
+        self.sources.insert(source.url.clone(), source.source);
+        Ok(Some(()))
     }
 }
 
@@ -1664,6 +1692,79 @@ mod tests {
             errors[0].message,
             "Unhandled rejection: Error: module rejection"
         );
+    }
+
+    #[test]
+    fn dynamic_import_waits_for_host_graph_and_resolves_namespace() {
+        use crate::javascript_runtime::{JavaScriptModuleResolver, JavaScriptModuleSource};
+        struct DynamicLoader {
+            available: std::cell::Cell<bool>,
+        }
+        impl JavaScriptModuleResolver for DynamicLoader {
+            fn ResolveModule(
+                &self,
+                specifier: &str,
+                _referrer: &str,
+            ) -> std::io::Result<Option<JavaScriptModuleSource>> {
+                if specifier != "./chunk.js" || !self.available.get() {
+                    return Ok(None);
+                }
+                Ok(Some(JavaScriptModuleSource {
+                    module: None,
+                    url: "https://test/chunk.js".into(),
+                    source: "export const answer=42".into(),
+                }))
+            }
+            fn RequestDynamicModule(
+                &self,
+                specifier: &str,
+                _referrer: &str,
+            ) -> std::io::Result<Option<String>> {
+                Ok((specifier == "./chunk.js").then(|| "https://test/chunk.js".into()))
+            }
+            fn PollDynamicModule(
+                &self,
+                url: &str,
+            ) -> std::io::Result<Option<JavaScriptModuleSource>> {
+                if url != "https://test/chunk.js" || !self.available.get() {
+                    return Ok(None);
+                }
+                Ok(Some(JavaScriptModuleSource {
+                    module: None,
+                    url: url.into(),
+                    source: "export const answer=42".into(),
+                }))
+            }
+        }
+        let loader = Rc::new(DynamicLoader {
+            available: std::cell::Cell::new(false),
+        });
+        let mut runtime = QuickJsJavaScriptRuntime::new();
+        let realm = runtime.CreateRealm(Rc::new(RefCell::new(EmptyHost)));
+        let result = runtime.EvaluateModule(
+            &realm,
+            "globalThis.dynamicAnswer='pending'; import('./chunk.js').then(m=>dynamicAnswer=m.answer)",
+            "https://test/root.js",
+            Some(loader.clone()),
+        );
+        assert!(result.Succeeded(), "{:?}", result.exception);
+        runtime.PerformMicrotaskCheckpoint();
+        assert!(runtime
+            .Evaluate(&realm, "dynamicAnswer==='pending'", "pending-check.js")
+            .value
+            .Implementation::<JsValue>()
+            .unwrap()
+            .as_boolean()
+            .unwrap());
+        loader.available.set(true);
+        runtime.PerformMicrotaskCheckpoint();
+        assert!(runtime
+            .Evaluate(&realm, "dynamicAnswer===42", "resolved-check.js")
+            .value
+            .Implementation::<JsValue>()
+            .unwrap()
+            .as_boolean()
+            .unwrap());
     }
 
     #[test]

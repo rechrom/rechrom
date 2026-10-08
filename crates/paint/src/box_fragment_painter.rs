@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 use layoutng_assembly::fragment_tree::FragmentKind;
 use layoutng_assembly::internal::layout_input::{
     BorderLineStyle, Display, Edges, ListStyleType, NodeKind, ObjectFit, Offset, PaintImage,
-    PaintPathCommand, PaintPathVerb, Size, TextDecorationStyle, TransformMatrix, WritingMode,
+    PaintPathCommand, PaintPathVerb, Size, TextDecorationPaint, TextDecorationStyle,
+    TransformMatrix, WritingMode,
 };
 use layoutng_assembly::internal::layout_input_types::Color;
 use layoutng_assembly::internal::paint_input::{
@@ -2005,11 +2006,28 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // moved by the physical fragment offset, then enclosed to pixels.
         let in_drawing = self.context.borrow().InDrawingRecorder();
         let _drawing = (!in_drawing).then(|| {
+            let mut visual_rect = FragmentVisualRect(self.node);
+            // SkGlyphRunPainter's analytic/LCD coverage may touch the native
+            // pixel immediately outside the geometric glyph bounds. Blink's
+            // cc raster backing does not clip that coverage at a tight content
+            // layer edge. Our retained layers can be content-tight, so carry
+            // the same one-device-pixel raster fringe into their bounds.
+            let scale = fragment
+                .paint
+                .resources
+                .as_ref()
+                .map_or(1.0, |resources| resources.device_pixel_ratio)
+                .max(1.0);
+            let fringe = 1.0 / scale;
+            visual_rect.x -= fringe;
+            visual_rect.y -= fringe;
+            visual_rect.width += fringe * 2.0;
+            visual_rect.height += fringe * 2.0;
             DrawingRecorder::new(
                 self.context,
                 self.node,
                 DisplayItemIdType::PaintPhaseToDrawingType(phase),
-                FragmentVisualRect(self.node),
+                visual_rect,
             )
         });
         let apply_svg_transform = svg.is_some_and(|svg| svg.has_transform);
@@ -2379,37 +2397,43 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let style = &*fragment.paint.style;
-        let decoration = &style.text_decoration;
         if fragment.paint.glyph_runs.is_empty() {
             return;
         }
-        if if line_through {
-            !decoration.line_through
-        } else {
-            !decoration.underline && !decoration.overline
-        } {
-            return;
-        }
-        let run = &fragment.paint.glyph_runs[0];
-        let color = decoration.color.unwrap_or(style.color);
-        let used_thickness = |fallback: f64| {
-            let resolved = decoration.thickness.unwrap_or(fallback);
-            if !resolved.is_finite() {
-                panic!("text decoration geometry is invalid");
-            }
-            resolved.max(if fragment.paint.svg_text.is_some() {
-                0.0
+        let paint_decoration = |decoration: &TextDecorationPaint| {
+            if if line_through {
+                !decoration.line_through
             } else {
-                1.0
-            })
-        };
-        let paint_line = |line: PaintRect, default_thickness: f64, skip_ink: bool| {
-            let thickness = used_thickness(default_thickness);
-            if !decoration.underline_offset.is_finite() {
-                panic!("text decoration geometry is invalid");
+                !decoration.underline && !decoration.overline
+            } {
+                return;
             }
-            let make_item =
-                |item_color: Color, shadow_offset: Offset, blur_radius: f64, is_shadow: bool| {
+            let run = &fragment.paint.glyph_runs[0];
+            let color = decoration.color.unwrap_or(style.color);
+            // Blink resolves the initial `text-decoration-thickness: auto` to one
+            // tenth of the used font size. Font underline metrics are used only by
+            // the distinct `from-font` value, not by `auto`.
+            let auto_thickness = run.font_size / 10.0;
+            let used_thickness = |fallback: f64| {
+                let resolved = decoration.thickness.unwrap_or(fallback);
+                if !resolved.is_finite() {
+                    panic!("text decoration geometry is invalid");
+                }
+                resolved.max(if fragment.paint.svg_text.is_some() {
+                    0.0
+                } else {
+                    1.0
+                })
+            };
+            let paint_line = |line: PaintRect, default_thickness: f64, skip_ink: bool| {
+                let thickness = used_thickness(default_thickness);
+                if !decoration.underline_offset.is_finite() {
+                    panic!("text decoration geometry is invalid");
+                }
+                let make_item = |item_color: Color,
+                                 shadow_offset: Offset,
+                                 blur_radius: f64,
+                                 is_shadow: bool| {
                     let mut item = DisplayItem {
                         r#type: if decoration.style == TextDecorationStyle::kWavy {
                             DisplayItemType::kStrokeWavyLine
@@ -2429,152 +2453,182 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         skip_ink,
                         ..Default::default()
                     };
-                    if decoration.style == TextDecorationStyle::kDashed {
-                        item.dash_intervals = vec![3.0 * thickness, 3.0 * thickness];
-                    } else if decoration.style == TextDecorationStyle::kDotted {
-                        item.dash_intervals = vec![0.0, 2.0 * thickness];
-                        item.round_cap = true;
+                    if matches!(
+                        decoration.style,
+                        TextDecorationStyle::kDashed | TextDecorationStyle::kDotted
+                    ) {
+                        // DecorationLinePainter::DrawLineAsStroke snaps the
+                        // center line and rounds StyledStrokeData thickness
+                        // before creating its dash path effect.
+                        let stroke_thickness = thickness.round().max(1.0);
+                        let snapped_left = line.x.trunc();
+                        let snapped_right = (line.x + line.width).trunc();
+                        item.rect.x = snapped_left;
+                        item.rect.width = (snapped_right - snapped_left).max(0.0);
+                        item.rect.y = (line.y + (stroke_thickness / 2.0).max(0.5)).floor();
+                        if stroke_thickness as i64 % 2 != 0 {
+                            item.rect.y += 0.5;
+                        }
+                        if decoration.style == TextDecorationStyle::kDashed {
+                            let dash_ratio = if stroke_thickness >= 3.0 { 2.0 } else { 3.0 };
+                            let gap_ratio = if stroke_thickness >= 3.0 { 1.0 } else { 2.0 };
+                            item.dash_intervals =
+                                vec![dash_ratio * stroke_thickness, gap_ratio * stroke_thickness];
+                        } else if stroke_thickness <= 3.0 {
+                            item.dash_intervals = vec![stroke_thickness, stroke_thickness];
+                        } else {
+                            item.dash_intervals = vec![0.0, 2.0 * stroke_thickness - 0.01];
+                            item.round_cap = true;
+                            item.rect.x += stroke_thickness / 2.0;
+                            item.rect.width = (item.rect.width - stroke_thickness).max(0.0);
+                        }
                     }
                     item
                 };
-            for shadow in style.text_shadows.iter().rev() {
-                if shadow.color.alpha <= 0.0 {
-                    continue;
+                for shadow in style.text_shadows.iter().rev() {
+                    if shadow.color.alpha <= 0.0 {
+                        continue;
+                    }
+                    let item = make_item(shadow.color, shadow.offset, shadow.blur_radius, true);
+                    let mut bounds = PaintRect {
+                        x: item.rect.x + shadow.offset.x,
+                        y: item.rect.y + shadow.offset.y,
+                        width: item.rect.width,
+                        height: item.rect.height,
+                    };
+                    let outset = 1.5 * shadow.blur_radius + thickness;
+                    bounds.x -= outset;
+                    bounds.y -= outset;
+                    bounds.width += 2.0 * outset;
+                    bounds.height += 2.0 * outset;
+                    if IsVisible(self.node, &bounds) {
+                        self.context.borrow_mut().Append(item, self.node);
+                    }
                 }
-                let item = make_item(shadow.color, shadow.offset, shadow.blur_radius, true);
-                let mut bounds = PaintRect {
-                    x: item.rect.x + shadow.offset.x,
-                    y: item.rect.y + shadow.offset.y,
-                    width: item.rect.width,
-                    height: item.rect.height,
-                };
-                let outset = 1.5 * shadow.blur_radius + thickness;
-                bounds.x -= outset;
-                bounds.y -= outset;
-                bounds.width += 2.0 * outset;
-                bounds.height += 2.0 * outset;
+                let mut bounds = line;
+                bounds.x -= thickness;
+                bounds.y -= thickness;
+                bounds.width += 2.0 * thickness;
+                bounds.height += 2.0 * thickness;
                 if IsVisible(self.node, &bounds) {
-                    self.context.borrow_mut().Append(item, self.node);
+                    self.context
+                        .borrow_mut()
+                        .Append(make_item(color, Offset::default(), 0.0, false), self.node);
+                }
+            };
+            let origin = TextPaintOrigin(self.node);
+            let paint_size = TextPaintSize(self.node);
+            let x = origin.x;
+            let y = origin.y;
+            let horizontal = run.writing_mode == WritingMode::kHorizontalTb;
+            if line_through {
+                if horizontal {
+                    let thickness = used_thickness(auto_thickness);
+                    paint_line(
+                        PaintRect {
+                            x,
+                            y: y + 2.0 * run.ascent / 3.0 - thickness / 2.0,
+                            width: paint_size.width,
+                            height: 0.0,
+                        },
+                        thickness,
+                        false,
+                    );
+                } else {
+                    paint_line(
+                        PaintRect {
+                            x: x + paint_size.width / 2.0,
+                            y,
+                            width: 0.0,
+                            height: paint_size.height,
+                        },
+                        auto_thickness,
+                        false,
+                    );
+                }
+                return;
+            }
+            if decoration.overline {
+                if horizontal {
+                    paint_line(
+                        PaintRect {
+                            x,
+                            y: y + auto_thickness / 2.0,
+                            width: paint_size.width,
+                            height: 0.0,
+                        },
+                        auto_thickness,
+                        decoration.skip_ink,
+                    );
+                } else {
+                    let line_x = if run.writing_mode == WritingMode::kVerticalRl {
+                        x + paint_size.width
+                    } else {
+                        x
+                    };
+                    paint_line(
+                        PaintRect {
+                            x: line_x,
+                            y,
+                            width: 0.0,
+                            height: paint_size.height,
+                        },
+                        auto_thickness,
+                        decoration.skip_ink,
+                    );
                 }
             }
-            let mut bounds = line;
-            bounds.x -= thickness;
-            bounds.y -= thickness;
-            bounds.width += 2.0 * thickness;
-            bounds.height += 2.0 * thickness;
-            if IsVisible(self.node, &bounds) {
-                self.context
-                    .borrow_mut()
-                    .Append(make_item(color, Offset::default(), 0.0, false), self.node);
+            if decoration.underline {
+                if horizontal {
+                    let baseline_offset = if decoration.underline_offset_auto {
+                        (used_thickness(auto_thickness) / 2.0).ceil().max(1.0)
+                    } else {
+                        decoration.underline_offset.round()
+                    };
+                    let wavy_offset = if decoration.style == TextDecorationStyle::kWavy {
+                        used_thickness(auto_thickness) + 1.0
+                    } else {
+                        0.0
+                    };
+                    paint_line(
+                        PaintRect {
+                            x,
+                            y: y + run.baseline + baseline_offset + wavy_offset,
+                            width: paint_size.width,
+                            height: 0.0,
+                        },
+                        auto_thickness,
+                        decoration.skip_ink,
+                    );
+                } else {
+                    let direction = if run.writing_mode == WritingMode::kVerticalRl {
+                        -1.0
+                    } else {
+                        1.0
+                    };
+                    let line_x = (if direction < 0.0 {
+                        x
+                    } else {
+                        x + paint_size.width
+                    }) + direction * decoration.underline_offset;
+                    paint_line(
+                        PaintRect {
+                            x: line_x,
+                            y,
+                            width: 0.0,
+                            height: paint_size.height,
+                        },
+                        auto_thickness,
+                        decoration.skip_ink,
+                    );
+                }
             }
         };
-        let origin = TextPaintOrigin(self.node);
-        let paint_size = TextPaintSize(self.node);
-        let x = origin.x;
-        let y = origin.y;
-        let horizontal = run.writing_mode == WritingMode::kHorizontalTb;
-        if line_through {
-            if horizontal {
-                let thickness = used_thickness(run.strikeout_thickness);
-                paint_line(
-                    PaintRect {
-                        x,
-                        y: y + 2.0 * run.ascent / 3.0 - thickness / 2.0,
-                        width: paint_size.width,
-                        height: 0.0,
-                    },
-                    thickness,
-                    false,
-                );
-            } else {
-                paint_line(
-                    PaintRect {
-                        x: x + paint_size.width / 2.0,
-                        y,
-                        width: 0.0,
-                        height: paint_size.height,
-                    },
-                    run.strikeout_thickness,
-                    false,
-                );
-            }
-            return;
-        }
-        if decoration.overline {
-            if horizontal {
-                paint_line(
-                    PaintRect {
-                        x,
-                        y: y + run.underline_thickness / 2.0,
-                        width: paint_size.width,
-                        height: 0.0,
-                    },
-                    run.underline_thickness,
-                    decoration.skip_ink,
-                );
-            } else {
-                let line_x = if run.writing_mode == WritingMode::kVerticalRl {
-                    x + paint_size.width
-                } else {
-                    x
-                };
-                paint_line(
-                    PaintRect {
-                        x: line_x,
-                        y,
-                        width: 0.0,
-                        height: paint_size.height,
-                    },
-                    run.underline_thickness,
-                    decoration.skip_ink,
-                );
-            }
-        }
-        if decoration.underline {
-            if horizontal {
-                let baseline_offset = if decoration.underline_offset_auto {
-                    (used_thickness(run.underline_thickness) / 2.0)
-                        .ceil()
-                        .max(1.0)
-                } else {
-                    decoration.underline_offset.round()
-                };
-                let wavy_offset = if decoration.style == TextDecorationStyle::kWavy {
-                    used_thickness(run.underline_thickness) + 1.0
-                } else {
-                    0.0
-                };
-                paint_line(
-                    PaintRect {
-                        x,
-                        y: y + run.baseline + baseline_offset + wavy_offset,
-                        width: paint_size.width,
-                        height: 0.0,
-                    },
-                    run.underline_thickness,
-                    decoration.skip_ink,
-                );
-            } else {
-                let direction = if run.writing_mode == WritingMode::kVerticalRl {
-                    -1.0
-                } else {
-                    1.0
-                };
-                let line_x = (if direction < 0.0 {
-                    x
-                } else {
-                    x + paint_size.width
-                }) + direction * decoration.underline_offset;
-                paint_line(
-                    PaintRect {
-                        x: line_x,
-                        y,
-                        width: 0.0,
-                        height: paint_size.height,
-                    },
-                    run.underline_thickness,
-                    decoration.skip_ink,
-                );
+        if style.applied_text_decorations.is_empty() {
+            paint_decoration(&style.text_decoration);
+        } else {
+            for decoration in &style.applied_text_decorations {
+                paint_decoration(decoration);
             }
         }
     }

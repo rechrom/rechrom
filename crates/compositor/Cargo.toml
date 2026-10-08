@@ -1,0 +1,9 @@
+[package]
+name = "compositor"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+layer_tile = { path = "../layer_tile" }
+layoutng_assembly = { path = "../layoutng_assembly" }
+paint = { path = "../paint", features = ["translation_in_progress"] }

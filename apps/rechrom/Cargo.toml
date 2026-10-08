@@ -12,21 +12,25 @@ path = "src/main.rs"
 cc = "1"
 
 [features]
-profile_paint = ["renderer/profiling"]
-profile_native = ["profile_paint", "renderer/source_replay"]
+profile_paint = ["raster/profiling"]
+profile_native = ["profile_paint", "raster/source_replay"]
 
 [dev-dependencies]
 foundation = { package = "layoutng_foundation", path = "../../crates/foundation" }
 
 [dependencies]
 browser_tracing = { path = "../../crates/tracing" }
+event_loop = { path = "../../crates/event_loop" }
 devtools = { path = "../../crates/devtools" }
 foundation = { package = "layoutng_foundation", path = "../../crates/foundation" }
 paint = { path = "../../crates/paint" }
 skia = { path = "../../crates/skia" }
 rechrom = { path = "../../crates/rechrom" }
-renderer = { path = "../../crates/renderer", features = ["pure_replay"] }
+renderer = { path = "../../crates/renderer" }
+raster = { path = "../../crates/raster", features = ["pure_replay"] }
 layer_tile = { path = "../../crates/layer_tile" }
+compositor = { path = "../../crates/compositor" }
+viz = { path = "../../crates/viz" }
 interaction = { path = "../../crates/interaction" }
 page_mutation = { path = "../../crates/page_mutation" }
 dom = { path = "../../crates/dom" }
@@ -39,6 +43,7 @@ javascript = { path = "../../crates/javascript" }
 layoutng_assembly = { path = "../../crates/layoutng_assembly" }
 url = "2.5"
 serde_json = "1"
+png = "0.18"
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 softbuffer = { version = "0.4.8", features = ["native-iosurface"] }
 raw-window-handle = "0.6.2"

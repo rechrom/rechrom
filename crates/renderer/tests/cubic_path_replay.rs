@@ -66,9 +66,8 @@ fn convex_cubic_contours_match_native_skia() {
                             ..Default::default()
                         };
                         let a =
-                            renderer::source_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
-                        let b =
-                            renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
+                            raster::source_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
+                        let b = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
                         let diffs: Vec<_> = a
                             .chunks_exact(4)
                             .zip(b.chunks_exact(4))
@@ -125,9 +124,8 @@ fn cubic_ring_winding_and_even_odd_match_native_skia() {
                             ..Default::default()
                         };
                         let a =
-                            renderer::source_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
-                        let b =
-                            renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
+                            raster::source_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
+                        let b = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
                         let diffs: Vec<_> = a
                             .chunks_exact(4)
                             .zip(b.chunks_exact(4))
@@ -175,8 +173,8 @@ fn live_svg_ring_contours_match_native_skia() {
                         .into(),
                         ..Default::default()
                     };
-                    let a = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
-                    let b = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
+                    let a = raster::source_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
+                    let b = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
                     let diffs: Vec<_> = a
                         .chunks_exact(4)
                         .zip(b.chunks_exact(4))
@@ -274,8 +272,8 @@ fn clipped_svg_rings_match_native_skia() {
                         items,
                         ..Default::default()
                     };
-                    let a = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
-                    let b = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
+                    let a = raster::source_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
+                    let b = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 512, 64);
                     let diffs: Vec<_> = a
                         .chunks_exact(4)
                         .zip(b.chunks_exact(4))

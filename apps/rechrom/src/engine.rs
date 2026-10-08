@@ -3,6 +3,10 @@
 //! RGBA frames remain available through the diagnostic headless mailbox.
 use crate::begin_frame_source::NativeBeginFrame;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
+use event_loop::{
+    EventLoopExecutor, EventLoopEngine, EventLoopMutation, ExecutionContextId, ScheduledTask, TaskId,
+    TaskSource, WakeRequest,
+};
 use foundation::begin_frame::{BeginFrameArgs, BeginFrameSource};
 use interaction::input_event::*;
 use layoutng_assembly::{
@@ -86,6 +90,7 @@ pub enum UserEvent {
 }
 #[derive(Clone)]
 pub enum Command {
+    Navigate(String),
     Resize(Viewport),
     VSyncDisplayChanged(u32),
     Redraw,
@@ -98,6 +103,10 @@ pub enum Command {
     FocusAddress,
     SetActive(bool),
     Reload,
+    Evaluate {
+        source: String,
+        reply: mpsc::Sender<Result<(), String>>,
+    },
     NewTab,
     CloseActiveTab,
     CycleTab(isize),
@@ -105,12 +114,6 @@ pub enum Command {
     Forward,
     Stop,
     WakeLoading,
-    /// SoftwareOutputSurface swap ACK. On macOS this is the asynchronously
-    /// posted completion of the CALayer transaction update, not scanout.
-    SwapAck {
-        sequence: u64,
-        finished: Instant,
-    },
     BeginFrame(NativeBeginFrame),
 }
 impl Command {
@@ -151,7 +154,7 @@ pub struct Output {
     pub notify: Arc<dyn Fn(UserEvent) + Send + Sync>,
 }
 impl Output {
-    fn publish(&self, frame: WindowFrame) {
+    pub(crate) fn publish(&self, frame: WindowFrame) {
         let mut mailbox = self.mailbox.lock().unwrap();
         let wake = mailbox.is_none();
         *mailbox = Some(frame);
@@ -212,25 +215,35 @@ pub fn spawn(
 ) -> io::Result<mpsc::Sender<Command>> {
     let (sender, receiver) = mpsc::channel();
     let page_frame_requested = Arc::new(AtomicBool::new(true));
-    let frame_sender = sender.clone();
-    let frame_source = crate::begin_frame_source::create(
-        Arc::new(move |args| {
-            let _ = frame_sender.send(Command::BeginFrame(args.into()));
-        }),
-        fallback_interval,
-        display_id,
-    )?;
+    let frame_source = crate::begin_frame_source::create(fallback_interval, display_id)?;
+    let input_frames = frame_source.GetFrameSource(0)?;
+    let compositor_frames = frame_source.GetFrameSource(1)?;
+    let display_frames = frame_source.GetFrameSource(2)?;
     let page_frame_source: Arc<dyn BeginFrameSource> = Arc::new(PageBeginFrameSource {
         native: frame_source.clone(),
         requested: page_frame_requested.clone(),
     });
+    let (page_sender, page_receiver) = mpsc::channel();
+    let begin_frame_page = page_sender.clone();
+    let begin_frame_requested = page_frame_requested.clone();
+    let begin_main_frame: crate::presentation_runtime::BeginMainFrameClient =
+        Arc::new(move |frame| {
+            if begin_frame_requested.swap(false, Ordering::AcqRel) {
+                let _ = begin_frame_page.send(Command::BeginFrame(frame));
+            }
+        });
     let compositor = crate::presentation_runtime::Spawn(
         presentation_config,
         window_target,
         output.clone(),
-        frame_source.clone(),
+        input_frames,
+        display_frames,
+        begin_main_frame,
     )?;
-    let (page_sender, page_receiver) = mpsc::channel();
+    let begin_frame_compositor = compositor.clone();
+    compositor_frames.SetClient(Arc::new(move |frame| {
+        let _ = begin_frame_compositor.send(crate::compositor::Command::BeginFrame(frame));
+    }))?;
     let loading_sender = page_sender.clone();
     let compositor_dispatch = compositor.clone();
     let page_dispatch = page_sender.clone();
@@ -334,15 +347,21 @@ fn run(
         target_id: 1,
         ..Default::default()
     });
-    let mut state = BrowserState::new(viewport, output)?;
+    let mut state = BrowserState::WithPresentation(
+        viewport,
+        output,
+        PresentationHost::Composited(compositor_sender),
+    )?;
     state.loading_sender = Some(loading_sender);
-    state.compositor_sender = Some(compositor_sender);
     state
         .toolbar
         .SetBeginFrameSource(Some(frame_source.clone()));
     state.frame_source = Some(frame_source);
     state.navigate(&address, true)?;
     let mut pending = VecDeque::new();
+    let mut event_loop = EventLoopEngine::<BrowserEventLoopTask, NativeBeginFrame>::New();
+    let mut scheduling = BrowserEventLoopScheduling::default();
+    QueueForegroundTurn(&mut event_loop, &mut scheduling, Instant::now());
     loop {
         if state
             .late_scroll
@@ -353,52 +372,54 @@ fn run(
                 state.output.message(error);
             }
         }
-        let timeout = state
-            .late_scroll
-            .as_ref()
-            .map_or(Duration::from_millis(16), |frame| {
-                let now = Instant::now();
-                frame
+        let now = Instant::now();
+        let event_loop_deadline = match event_loop.NextWakeRequest(now) {
+            WakeRequest::Now => Some(now),
+            WakeRequest::At(deadline) => Some(deadline),
+            WakeRequest::None => state.NextTaskDeadline(now),
+            WakeRequest::Stop => break,
+        };
+        let timeout = state.late_scroll.as_ref().map_or_else(
+            || {
+                event_loop_deadline.map_or(Duration::from_secs(60 * 60), |deadline| {
+                    deadline.saturating_duration_since(now)
+                })
+            },
+            |frame| {
+                let frame_deadline = frame
                     .input_deadline
                     .filter(|deadline| now < *deadline)
                     .unwrap_or(frame.deadline)
-                    .min(frame.deadline)
+                    .min(frame.deadline);
+                event_loop_deadline
+                    .map_or(frame_deadline, |deadline| deadline.min(frame_deadline))
                     .saturating_duration_since(now)
-            });
+            },
+        );
+        let mut received_external_work = false;
         match receive_command(&receiver, &mut pending, timeout) {
             Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Ok(Command::BeginFrame(frame)) => {
+                event_loop.Apply(
+                    EventLoopMutation::BeginMainFrame {
+                        context: ExecutionContextId(1),
+                        frame,
+                    },
+                    Instant::now(),
+                );
+                received_external_work = true;
+            }
             Ok(command) => {
-                let batch_started = Instant::now();
-                let frame_boundary = matches!(&command, Command::BeginFrame(_));
-                if let Err(error) =
-                    dispatch_host_command(&mut state, command, &receiver, &mut pending)
-                {
-                    state.output.message(error);
-                }
-                // A native frame is one complete input/RAF/lifecycle/present
-                // turn. Continuous input only requests that turn.
-                for _ in 0..if frame_boundary { 0 } else { 63 } {
-                    // Continuous input must yield to lifecycle/presentation, not
-                    // postpone a frame until 64 expensive commands complete.
-                    if batch_started.elapsed() >= Duration::from_millis(8) {
-                        break;
-                    }
-                    match receive_command(&receiver, &mut pending, Duration::ZERO) {
-                        Ok(Command::Stop) => return Ok(()),
-                        Ok(command) => {
-                            let frame_boundary = matches!(&command, Command::BeginFrame(_));
-                            if let Err(error) =
-                                dispatch_host_command(&mut state, command, &receiver, &mut pending)
-                            {
-                                state.output.message(error);
-                            }
-                            if frame_boundary {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
+                let source = BrowserTaskSource(&command);
+                QueueBrowserTask(
+                    &mut event_loop,
+                    &mut scheduling,
+                    source,
+                    BrowserEventLoopTask::Command(command),
+                    None,
+                    Instant::now(),
+                );
+                received_external_work = true;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if state
@@ -419,15 +440,214 @@ fn run(
                     if let Err(error) = state.resume_late_scroll_production(false) {
                         state.output.message(error);
                     }
+                } else if matches!(
+                    event_loop.NextWakeRequest(Instant::now()),
+                    WakeRequest::None
+                ) {
+                    // A Page task source reached the exact deadline returned
+                    // by NextTaskDeadline. Execute one complete foreground
+                    // turn; further ready work requests another immediate wake.
+                    QueueForegroundTurn(&mut event_loop, &mut scheduling, Instant::now());
                 }
             }
         }
-        if state.late_scroll.is_some() {
+
+        if state.late_scroll.is_none()
+            && received_external_work
+            && matches!(
+                event_loop.NextWakeRequest(Instant::now()),
+                WakeRequest::None
+            )
+        {
+            QueueForegroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+        }
+
+        if !matches!(event_loop.NextWakeRequest(Instant::now()), WakeRequest::Now) {
             continue;
         }
-        finish_host_turn(&mut state, &receiver, &mut pending)?;
+        let mut executor = BrowserEventLoopExecutor {
+            state: &mut state,
+            receiver: &receiver,
+            pending: &mut pending,
+            scheduling: &mut scheduling,
+            request_foreground: false,
+            request_background: false,
+        };
+        if let Err(error) = event_loop.OnWake(Instant::now(), &mut executor) {
+            executor.state.output.message(error);
+        }
+        let request_foreground = executor.request_foreground;
+        let request_background = executor.request_background;
+        drop(executor);
+        if state.late_scroll.is_none() && request_foreground {
+            QueueForegroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+        }
+        if request_background {
+            QueueBackgroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+        }
     }
     Ok(())
+}
+
+enum BrowserEventLoopTask {
+    Command(Command),
+    Foreground,
+    Background,
+}
+
+#[derive(Default)]
+struct BrowserEventLoopScheduling {
+    next_task_id: u64,
+    foreground_queued: bool,
+    background_queued: bool,
+}
+
+fn BrowserTaskSource(command: &Command) -> TaskSource {
+    if command.input().is_some()
+        || matches!(
+            command,
+            Command::FocusAddress
+                | Command::Navigate(_)
+                | Command::Reload
+                | Command::NewTab
+                | Command::CloseActiveTab
+                | Command::CycleTab(_)
+                | Command::Back
+                | Command::Forward
+        )
+    {
+        TaskSource::UserInteraction
+    } else if matches!(command, Command::WakeLoading) {
+        TaskSource::Networking
+    } else {
+        TaskSource::Internal
+    }
+}
+
+fn QueueBrowserTask(
+    event_loop: &mut EventLoopEngine<BrowserEventLoopTask, NativeBeginFrame>,
+    scheduling: &mut BrowserEventLoopScheduling,
+    source: TaskSource,
+    payload: BrowserEventLoopTask,
+    ready_at: Option<Instant>,
+    now: Instant,
+) {
+    let id = TaskId(scheduling.next_task_id);
+    scheduling.next_task_id = scheduling.next_task_id.wrapping_add(1);
+    event_loop.Apply(
+        EventLoopMutation::PostTask(ScheduledTask {
+            id,
+            context: ExecutionContextId(1),
+            source,
+            ready_at,
+            payload,
+        }),
+        now,
+    );
+}
+
+fn QueueForegroundTurn(
+    event_loop: &mut EventLoopEngine<BrowserEventLoopTask, NativeBeginFrame>,
+    scheduling: &mut BrowserEventLoopScheduling,
+    now: Instant,
+) {
+    if scheduling.foreground_queued {
+        return;
+    }
+    scheduling.foreground_queued = true;
+    QueueBrowserTask(
+        event_loop,
+        scheduling,
+        TaskSource::DomManipulation,
+        BrowserEventLoopTask::Foreground,
+        None,
+        now,
+    );
+}
+
+fn QueueBackgroundTurn(
+    event_loop: &mut EventLoopEngine<BrowserEventLoopTask, NativeBeginFrame>,
+    scheduling: &mut BrowserEventLoopScheduling,
+    now: Instant,
+) {
+    if scheduling.background_queued {
+        return;
+    }
+    scheduling.background_queued = true;
+    QueueBrowserTask(
+        event_loop,
+        scheduling,
+        TaskSource::Internal,
+        BrowserEventLoopTask::Background,
+        None,
+        now,
+    );
+}
+
+struct BrowserEventLoopExecutor<'a> {
+    state: &'a mut BrowserState,
+    receiver: &'a mpsc::Receiver<Command>,
+    pending: &'a mut VecDeque<Command>,
+    scheduling: &'a mut BrowserEventLoopScheduling,
+    request_foreground: bool,
+    request_background: bool,
+}
+
+impl EventLoopExecutor<BrowserEventLoopTask, NativeBeginFrame> for BrowserEventLoopExecutor<'_> {
+    type Error = io::Error;
+
+    fn RunTask(
+        &mut self,
+        _context: ExecutionContextId,
+        _source: TaskSource,
+        task: BrowserEventLoopTask,
+    ) -> io::Result<()> {
+        match task {
+            BrowserEventLoopTask::Command(command) => {
+                dispatch_host_command(self.state, command, self.receiver, self.pending)?;
+                self.request_foreground = true;
+            }
+            BrowserEventLoopTask::Foreground => {
+                self.scheduling.foreground_queued = false;
+                self.state.publish()?;
+                let gesture_frame_pending = self.state.has_priority_frame();
+                self.state.tick_foreground(|| {
+                    native_command_waiting(self.receiver, self.pending, gesture_frame_pending)
+                })?;
+                self.state.publish()?;
+                self.request_background = true;
+            }
+            BrowserEventLoopTask::Background => {
+                self.scheduling.background_queued = false;
+                if native_command_waiting(
+                    self.receiver,
+                    self.pending,
+                    self.state.has_priority_frame(),
+                ) {
+                    self.request_background = true;
+                } else {
+                    self.state.tick_background()?;
+                    self.state.publish()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn UpdateRendering(
+        &mut self,
+        _context: ExecutionContextId,
+        frame: NativeBeginFrame,
+    ) -> io::Result<()> {
+        dispatch_host_command(
+            self.state,
+            Command::BeginFrame(frame),
+            self.receiver,
+            self.pending,
+        )?;
+        self.request_foreground = true;
+        Ok(())
+    }
 }
 fn dispatch_host_command(
     state: &mut BrowserState,
@@ -444,7 +664,7 @@ fn dispatch_host_command(
         if state.late_scroll.is_some()
             && !wheel
             && !aligned
-            && !matches!(&command, Command::WakeLoading | Command::SwapAck { .. })
+            && !matches!(&command, Command::WakeLoading)
         {
             state.finish_late_scroll(false)?;
         }
@@ -492,12 +712,6 @@ fn prepare_begin_frame(
         };
         if let Command::BeginFrame(newer) = next {
             args = latest_native_frame(args, newer);
-        } else if matches!(next, Command::SwapAck { .. }) {
-            // Swap ACK is scheduler control work, not an input ordering
-            // boundary. Consume it before snapshotting the continuous-input
-            // prefix so it cannot turn a 60Hz gesture into alternating empty
-            // and submitted BeginFrames.
-            queue_input(next);
         } else if next.input().is_some_and(
             interaction::frame_aligned_input_queue::FrameAlignedInputQueue::IsFrameAligned,
         ) {
@@ -521,6 +735,7 @@ fn latest_native_frame(current: NativeBeginFrame, next: NativeBeginFrame) -> Nat
 }
 // Ordinary tasks remain independent of display ticks. publish only requests
 // a frame here; native raster/compose/present runs inside BeginFrame.
+#[cfg(test)]
 fn finish_host_turn(
     state: &mut BrowserState,
     receiver: &mpsc::Receiver<Command>,
@@ -903,14 +1118,22 @@ struct LateScrollFrame {
     compositor_input_ready_at: Option<Instant>,
 }
 
-struct PreparedBrowserFrame {
-    output: crate::window_surface::PreparedWindowFrame,
-    signature: (u64, u64, Viewport),
-    sequence: u64,
-    viewport: Viewport,
-    input_trace: Option<NativeInputTrace>,
-    drag_regions: Vec<crate::chrome::DragRegion>,
-    ready_at: Instant,
+enum PresentationHost {
+    Readback,
+    Composited(mpsc::Sender<crate::compositor::Command>),
+}
+
+impl PresentationHost {
+    fn IsComposited(&self) -> bool {
+        matches!(self, Self::Composited(_))
+    }
+
+    fn Compositor(&self) -> Option<&mpsc::Sender<crate::compositor::Command>> {
+        match self {
+            Self::Readback => None,
+            Self::Composited(sender) => Some(sender),
+        }
+    }
 }
 
 fn late_scroll_deadline(
@@ -931,15 +1154,13 @@ fn late_scroll_deadline(
 }
 
 fn display_draw_deadline(frame: NativeBeginFrame) -> Instant {
-    // DisplayScheduler::OnBeginFrameContinuation reserves the final third of
-    // the interval for display draw/swap. Keep the source BeginFrameArgs intact
-    // for Page/animation consumers and apply the offset only at this boundary.
-    let reserved = frame.interval / 3;
-    frame
-        .deadline
-        .checked_sub(reserved)
-        .unwrap_or(frame.frame_time)
-        .max(frame.frame_time)
+    viz::FrameTiming {
+        frame_time: frame.frame_time,
+        interval: frame.interval,
+        source_deadline: frame.deadline,
+    }
+    .Deadlines()
+    .draw_and_swap
 }
 
 // Chromium raises compositor/input work above ordinary main-thread work during
@@ -948,6 +1169,7 @@ fn display_draw_deadline(frame: NativeBeginFrame) -> Instant {
 // queued, then uses the first queue gap for one complete Page task. Keeping the
 // gesture bit itself as a blanket veto loses DocumentLoader wakeups and can
 // leave a progressively loaded page frozen until scrolling stops.
+#[cfg(test)]
 fn defer_foreground_for_priority(priority_waiting: bool) -> bool {
     priority_waiting
 }
@@ -962,8 +1184,6 @@ struct BrowserState {
     reload_loading: Option<bool>,
     content_press_discarded: bool,
     presented_sequence: u64,
-    pending_swap: Option<u64>,
-    last_frame_ready_at: Option<Instant>,
     pending_native_input: Option<NativeInputTrace>,
     dispatching_native_input: bool,
     dispatch_input_timing: Option<(Instant, usize)>,
@@ -972,7 +1192,6 @@ struct BrowserState {
     handling_begin_frame: bool,
     scroll_active: bool,
     late_scroll: Option<LateScrollFrame>,
-    prepared_frame: Option<PreparedBrowserFrame>,
     address_id: u64,
     // Static toolbar controls survive tabstrip replacement, like address_id.
     chrome_id: u64,
@@ -990,11 +1209,45 @@ struct BrowserState {
     last_frame: Option<(u64, u64, Viewport)>,
     failed_frame: Option<(u64, u64, Viewport)>,
     output: Output,
-    window_target: Option<crate::window_surface::WindowTarget>,
-    compositor_sender: Option<mpsc::Sender<crate::compositor::Command>>,
+    presentation: PresentationHost,
 }
 impl BrowserState {
+    fn NextTaskDeadline(&self, now: Instant) -> Option<Instant> {
+        let mut wake = self.toolbar.NextTaskDeadline(now);
+        let mut include = |candidate: Option<Instant>| {
+            if let Some(candidate) = candidate {
+                wake = Some(wake.map_or(candidate, |current| current.min(candidate)));
+            }
+        };
+        include(
+            self.tabs
+                .active
+                .page
+                .as_ref()
+                .and_then(|page| page.NextTaskDeadline(now)),
+        );
+        if let Some(popup) = &self.popup {
+            include(popup.page.NextTaskDeadline(now));
+        }
+        for tab in &self.tabs.background {
+            include(
+                tab.page
+                    .as_ref()
+                    .and_then(|page| page.NextTaskDeadline(now)),
+            );
+        }
+        wake
+    }
+    #[cfg(test)]
     fn new(viewport: Viewport, output: Output) -> io::Result<Self> {
+        Self::WithPresentation(viewport, output, PresentationHost::Readback)
+    }
+
+    fn WithPresentation(
+        viewport: Viewport,
+        output: Output,
+        presentation: PresentationHost,
+    ) -> io::Result<Self> {
         if !viewport.valid() {
             return Err(io::Error::other("invalid window viewport"));
         }
@@ -1018,7 +1271,7 @@ impl BrowserState {
         // Open runs the normal stylesheet collection path, including <style>.
         toolbar.Open(&data_url(&crate::chrome::document()), 16384, 4096)?;
         while toolbar.IsLoading() {
-            toolbar.RunTasks(0.0)?;
+            toolbar.RunTask()?;
         }
         toolbar.SetActive(false)?;
         let address_id = find_id(&toolbar, "address")
@@ -1037,8 +1290,6 @@ impl BrowserState {
             reload_loading: None,
             content_press_discarded: false,
             presented_sequence: 0,
-            pending_swap: None,
-            last_frame_ready_at: None,
             pending_native_input: None,
             dispatching_native_input: false,
             dispatch_input_timing: None,
@@ -1047,7 +1298,6 @@ impl BrowserState {
             handling_begin_frame: false,
             scroll_active: false,
             late_scroll: None,
-            prepared_frame: None,
             address_id,
             chrome_id,
             omnibox_id,
@@ -1064,8 +1314,7 @@ impl BrowserState {
             last_frame: None,
             failed_frame: None,
             output,
-            window_target: None,
-            compositor_sender: None,
+            presentation,
         })
     }
     #[cfg(test)]
@@ -1087,7 +1336,7 @@ impl BrowserState {
                 .is_some_and(|popup| popup.page.HasPendingFrameInput())
     }
     fn async_root_scroll_eligible(&self) -> bool {
-        self.compositor_sender.is_some() && self.popup.is_none()
+        self.presentation.IsComposited() && self.popup.is_none()
     }
     fn has_priority_frame(&self) -> bool {
         if !self.async_root_scroll_eligible()
@@ -1125,7 +1374,7 @@ impl BrowserState {
                 ..Default::default()
             });
             let _trace = browser_tracing::span("task", "ToolbarTasks");
-            self.toolbar.RunTasks(0.0)?;
+            self.toolbar.RunTask()?;
         }
         // Chrome and content are separate complete Page tasks. Input which
         // arrived during Chrome's task gets the next host turn before starting
@@ -1135,7 +1384,7 @@ impl BrowserState {
         }
         let result = if let Some(page) = &mut self.tabs.active.page {
             let _trace = browser_tracing::span("task", "ContentTasks");
-            page.RunTasks(0.0)
+            page.RunTask()
         } else {
             Ok(())
         };
@@ -1217,13 +1466,13 @@ impl BrowserState {
                 target_id: 2,
                 ..Default::default()
             });
-            self.toolbar.OnBeginFrame(args)?;
+            self.toolbar.UpdateRendering(args)?;
         }
         if let Some(page) = &mut self.tabs.active.page {
-            page.OnBeginFrame(args)?;
+            page.UpdateRendering(args)?;
         }
         if let Some(popup) = &mut self.popup {
-            popup.page.OnBeginFrame(args)?;
+            popup.page.UpdateRendering(args)?;
         }
         self.record_frame_input_dispatches();
         self.drain_navigation_requests()?;
@@ -1231,41 +1480,16 @@ impl BrowserState {
     }
 
     fn prepare_compositor_input(&self) -> io::Result<()> {
-        if self.compositor_sender.is_some() {
+        if self.presentation.IsComposited() {
             return self.send_compositor_snapshot();
         }
-        if self.window_target.is_none() {
-            return Ok(());
-        }
-        let _trace = browser_tracing::span("raster", "PrepareCompositorInput");
-        self.toolbar.PrepareCurrentRaster(
-            self.viewport.width,
-            self.viewport.toolbar_pixels(),
-            self.viewport.scale,
-        )?;
-        // Retained scroll scheduling is disabled while a popup overlay is
-        // present; that transient combined artifact stays on the ordinary
-        // all-in-one path.
-        if self.popup.is_none() {
-            if let Some(page) = &self.tabs.active.page {
-                // A committed navigation may not have produced its first
-                // PaintArtifact yet. Chromium has no content layer to raster
-                // in that state; repeatedly treating it as a raster failure
-                // only floods the host loop and delays DocumentLoader work.
-                if page.CurrentFrame().is_some() {
-                    page.PrepareCurrentRaster(
-                        self.viewport.width,
-                        self.viewport.height - self.viewport.toolbar_pixels(),
-                        self.viewport.scale,
-                    )?;
-                }
-            }
-        }
+        // Protocol readback renders through Page::PaintInto when publish()
+        // materializes its image. It has no native presentation surface.
         Ok(())
     }
 
     fn send_compositor_snapshot(&self) -> io::Result<()> {
-        let Some(sender) = &self.compositor_sender else {
+        let Some(sender) = self.presentation.Compositor() else {
             return Ok(());
         };
         let toolbar = self
@@ -1331,6 +1555,7 @@ impl BrowserState {
                 crate::compositor::ArtifactSnapshot {
                     document: (self.tabs.active.id, self.tabs.active.document_generation),
                     viewport: self.viewport,
+                    frame_time: Instant::now(),
                     signature,
                     toolbar: toolbar.display_items.clone(),
                     content,
@@ -1372,7 +1597,6 @@ impl BrowserState {
                 frame.compositor_input_ready_at = Some(Instant::now());
             }
         }
-        let result = result.and_then(|_| self.prepare_window_frame().map(|_| ()));
         self.handling_begin_frame = previous;
         result
     }
@@ -1417,7 +1641,7 @@ impl BrowserState {
                 * 1000.0,
         );
         browser_tracing::interval("frame", "BeginFrameQueue", args.frame_time, started, &[]);
-        if self.compositor_sender.is_some() {
+        if self.presentation.IsComposited() {
             // Threaded scrolling and Draw/Swap have their own display owner.
             // A BeginMainFrame performs only main-thread input/lifecycle and
             // publishes an immutable artifact; it never waits for Viz's draw
@@ -1458,7 +1682,7 @@ impl BrowserState {
             .page
             .as_ref()
             .is_some_and(Page::HasPendingWheelFrameInput);
-        let retained = (self.window_target.is_some() || self.compositor_sender.is_some())
+        let retained = self.presentation.IsComposited()
             && self.popup.is_none()
             && self
                 .tabs
@@ -1513,7 +1737,7 @@ impl BrowserState {
                     target_id: 2,
                     ..Default::default()
                 });
-                self.toolbar.OnBeginFrame(args)?;
+                self.toolbar.UpdateRendering(args)?;
             }
             if schedule_draw && input_deadline.is_some() {
                 // Chromium blocks BeginMainFrame while WAIT_FOR_SCROLL is
@@ -1535,7 +1759,6 @@ impl BrowserState {
                 self.prepare_compositor_input()?;
                 if schedule_draw {
                     let compositor_input_ready_at = Instant::now();
-                    self.prepare_window_frame()?;
                     self.late_scroll = Some(LateScrollFrame {
                         frame,
                         started,
@@ -1616,14 +1839,10 @@ impl BrowserState {
         });
         let input_wait = input_wait_end.saturating_duration_since(frame.opened_at);
         let wait = draw_started.saturating_duration_since(frame.opened_at);
-        let current_signature = self.current_frame_signature().ok();
-        let display_wait_start = self
-            .prepared_frame
-            .as_ref()
-            .filter(|candidate| Some(candidate.signature) == current_signature)
-            .map_or(frame.opened_at, |candidate| {
-                candidate.ready_at.min(draw_started)
-            });
+        let display_wait_start = frame
+            .compositor_input_ready_at
+            .unwrap_or(frame.opened_at)
+            .min(draw_started);
         frame_trace.set("source_id", frame.frame.source_id as f64);
         frame_trace.set("input_arrived", if input_arrived { 1.0 } else { 0.0 });
         frame_trace.set("input_dispatched", frame.input_dispatched as u8 as f64);
@@ -1653,7 +1872,6 @@ impl BrowserState {
                 self.produce_frame_lifecycle(frame.frame.args, false)?;
                 self.prepare_compositor_input()?;
                 frame.compositor_input_ready_at = Some(Instant::now());
-                self.prepare_window_frame()?;
             } else if frame.input_dispatched {
                 self.drain_navigation_requests()?;
             }
@@ -1691,12 +1909,10 @@ impl BrowserState {
                 }
                 Ok(())
             } else {
-                // Candidate construction normally completed after the input
-                // window closed. Keep this idempotent fallback for ordinary or
-                // unusually late production, then publish at the fixed display
-                // deadline like Viz's DrawAndSwap phase.
-                self.prepare_window_frame()?;
-                self.present_ready_frame(frame.deadline).map(|_| ())
+                // Display owns DrawAndSwap and swap throttling. Page only
+                // publishes the immutable compositor input selected for this
+                // frame; there is no second native presentation path here.
+                Ok(())
             }
         })();
         self.handling_begin_frame = false;
@@ -1725,17 +1941,9 @@ impl BrowserState {
         let args = frame.args;
         let draw_deadline = display_draw_deadline(frame);
         let submitted = self.presented_sequence != submitted_before;
-        let ready_margin_ms = frame
-            .display_time
-            .zip(self.last_frame_ready_at)
-            .filter(|_| submitted)
-            .map_or(f64::NAN, |(target, ready)| {
-                if target >= ready {
-                    target.duration_since(ready).as_secs_f64() * 1000.0
-                } else {
-                    -ready.duration_since(target).as_secs_f64() * 1000.0
-                }
-            });
+        // Native readiness and swap timing belong to Display and are traced
+        // there. Page owns only main-frame/compositor-input readiness.
+        let ready_margin_ms = f64::NAN;
         let target_offset_ms = frame.display_time.map_or(f64::NAN, |target| {
             target
                 .saturating_duration_since(args.frame_time)
@@ -1873,7 +2081,7 @@ impl BrowserState {
             let tab = &mut self.tabs.background[index];
             trace.set("tab_id", tab.id as f64);
             if let Some(page) = &mut tab.page {
-                if let Err(error) = page.RunTasks(0.0) {
+                if let Err(error) = page.RunTask() {
                     self.output.message(error);
                 }
             }
@@ -2209,7 +2417,7 @@ impl BrowserState {
             4096,
         )?;
         while page.IsLoading() {
-            page.RunTasks(0.0)?;
+            page.RunTask()?;
         }
         page.SetBeginFrameSource(self.frame_source.clone());
         self.popup = Some(ChromePopup {
@@ -2433,6 +2641,7 @@ impl BrowserState {
             &command,
             Command::FocusAddress
                 | Command::SetActive(_)
+                | Command::Navigate(_)
                 | Command::Reload
                 | Command::NewTab
                 | Command::CloseActiveTab
@@ -2444,12 +2653,27 @@ impl BrowserState {
             self.flush_frame_inputs()?;
         }
         match command {
+            Command::Navigate(address) => self.navigate(&address, true),
             Command::Redraw => {
                 self.last_frame = None;
                 self.failed_frame = None;
                 Ok(())
             }
             Command::Reload => self.navigate(&self.tabs.active.location.clone(), false),
+            Command::Evaluate { source, reply } => {
+                let result = match self.tabs.active.page.as_mut() {
+                    Some(page) => match page.Evaluate(&source, "devtools:Runtime.evaluate") {
+                        Ok(result) => match result.exception {
+                            Some(exception) => Err(exception.message),
+                            None => Ok(()),
+                        },
+                        Err(error) => Err(error.to_string()),
+                    },
+                    None => Err("No active page".into()),
+                };
+                let _ = reply.send(result);
+                Ok(())
+            }
             Command::Back => self.history(-1),
             Command::Forward => self.history(1),
             Command::NewTab => self.new_tab("about:home", true),
@@ -2700,21 +2924,6 @@ impl BrowserState {
                 // Acknowledge before pumping so newly arriving work can wake
                 // the following turn. Bytes/events stay in each loader queue.
                 self.loading_wake_pending.store(false, Ordering::Release);
-                Ok(())
-            }
-            Command::SwapAck { sequence, finished } => {
-                if self.pending_swap == Some(sequence) {
-                    self.pending_swap = None;
-                    browser_tracing::instant_at(
-                        "present",
-                        "SwapAck",
-                        finished,
-                        &[
-                            ("present_sequence", sequence as f64),
-                            ("pending_swaps", 0.0),
-                        ],
-                    );
-                }
                 Ok(())
             }
             Command::Stop => Ok(()),
@@ -3210,264 +3419,6 @@ impl BrowserState {
         ))
     }
 
-    fn prepare_window_frame(&mut self) -> io::Result<bool> {
-        if self.compositor_sender.is_some() {
-            self.send_compositor_snapshot()?;
-            return Ok(true);
-        }
-        let toolbar = self
-            .toolbar
-            .CurrentFrame()
-            .ok_or_else(|| io::Error::other("toolbar has no frame"))?;
-        let page = self.tabs.active.page.as_ref().and_then(Page::CurrentFrame);
-        let signature = self.current_frame_signature()?;
-        if self.last_frame == Some(signature)
-            || self
-                .prepared_frame
-                .as_ref()
-                .is_some_and(|frame| frame.signature == signature)
-        {
-            return Ok(false);
-        }
-        if self.failed_frame == Some(signature) {
-            self.finish_native_input_trace("presentation-failed", Instant::now());
-            return Ok(false);
-        }
-        let overlay_content = self
-            .popup
-            .as_ref()
-            .map(|popup| {
-                crate::chrome::content_with_popup(
-                    page.map(|frame| frame.display_items.as_ref()),
-                    popup.page.CurrentFrame().unwrap().display_items.as_ref(),
-                )
-            })
-            .transpose()?
-            .map(Arc::new);
-        let mut drag_regions = vec![crate::chrome::DragRegion {
-            x: 92.0,
-            y: 0.0,
-            width: (self.viewport.logical_width() - 92.0).max(0.0),
-            height: 6.0,
-        }];
-        {
-            let id = self.dragspace_id;
-            fn bounds(
-                fragment: &FragmentNode,
-                id: u64,
-                parent: Offset,
-            ) -> Option<crate::chrome::DragRegion> {
-                let origin = Offset {
-                    x: parent.x + fragment.offset.x,
-                    y: parent.y + fragment.offset.y,
-                };
-                if fragment.node_id == id {
-                    return Some(crate::chrome::DragRegion {
-                        x: origin.x,
-                        y: origin.y,
-                        width: fragment.size.width,
-                        height: fragment.size.height,
-                    });
-                }
-                fragment
-                    .children
-                    .iter()
-                    .find_map(|child| bounds(child, id, origin))
-            }
-            if let Some(region) = bounds(&toolbar.fragments, id, Offset::default()) {
-                drag_regions.push(region);
-            }
-        }
-        let Some(target) = &mut self.window_target else {
-            return Ok(false);
-        };
-        let sequence = self.presented_sequence.wrapping_add(1);
-        let content = self.tabs.active.page.as_ref().filter(|_| page.is_some());
-        let output = match target.prepare(
-            &self.toolbar,
-            content,
-            overlay_content.as_ref(),
-            self.viewport,
-            sequence,
-        ) {
-            Ok(output) => output,
-            Err(error) => {
-                if error.kind() == io::ErrorKind::Unsupported {
-                    self.failed_frame = Some(signature);
-                }
-                self.finish_native_input_trace("presentation-failed", Instant::now());
-                return Err(error);
-            }
-        };
-        self.failed_frame = None;
-        let ready_at = Instant::now();
-        if let Some(previous) = self.prepared_frame.take() {
-            browser_tracing::instant(
-                "frame",
-                "FrameSuperseded",
-                &[
-                    ("present_sequence", previous.sequence as f64),
-                    (
-                        "ready_age_ms",
-                        ready_at
-                            .saturating_duration_since(previous.ready_at)
-                            .as_secs_f64()
-                            * 1000.0,
-                    ),
-                ],
-            );
-        }
-        self.prepared_frame = Some(PreparedBrowserFrame {
-            output,
-            signature,
-            sequence,
-            viewport: self.viewport,
-            input_trace: self.pending_native_input.take(),
-            drag_regions,
-            ready_at,
-        });
-        if let Some(previous) = self.last_frame_ready_at {
-            if std::env::var_os("BROWSER_PROFILE_FRAMES").is_some() {
-                eprintln!(
-                    "native-ready-cadence sequence={} gap_ms={:.3}",
-                    sequence,
-                    ready_at.saturating_duration_since(previous).as_secs_f64() * 1000.0
-                );
-            }
-        }
-        if std::env::var_os("BROWSER_PROFILE_FRAMES").is_some() || browser_tracing::enabled() {
-            self.last_frame_ready_at = Some(ready_at);
-        }
-        browser_tracing::instant(
-            "frame",
-            "FrameCandidateReady",
-            &[
-                ("present_sequence", sequence as f64),
-                ("content_sequence", signature.1 as f64),
-            ],
-        );
-        Ok(true)
-    }
-
-    fn present_ready_frame(&mut self, draw_deadline: Instant) -> io::Result<bool> {
-        if self.compositor_sender.is_some() {
-            // The display owner consumes the immutable snapshot at its own
-            // deadline.  Main-thread completion is not a swap acknowledgement.
-            return Ok(true);
-        }
-        if let Some(sequence) = self.pending_swap {
-            browser_tracing::instant(
-                "present",
-                "SwapThrottled",
-                &[
-                    ("present_sequence", sequence as f64),
-                    ("pending_swaps", 1.0),
-                    ("max_pending_swaps", 1.0),
-                ],
-            );
-            return Ok(false);
-        }
-        let Some(candidate) = self.prepared_frame.as_ref() else {
-            browser_tracing::instant("frame", "FrameRepeated", &[("reason", 0.0)]);
-            return Ok(false);
-        };
-        if candidate.signature != self.current_frame_signature()? {
-            let obsolete = self.prepared_frame.take().unwrap();
-            browser_tracing::instant(
-                "frame",
-                "FrameCandidateDropped",
-                &[
-                    ("present_sequence", obsolete.sequence as f64),
-                    ("reason", 1.0),
-                ],
-            );
-            self.prepare_window_frame()?;
-            if let Some(source) = &self.frame_source {
-                source.request_begin_frame();
-            }
-            return Ok(false);
-        }
-        // DisplayScheduler's regular deadline is when it invokes
-        // DrawAndSwap, after reserving the estimated draw/swap duration. It is
-        // not a post-draw expiry time. Once this cycle has produced a current
-        // candidate, submit it even if production completed after the
-        // scheduled draw point; discarding completed work here turns a small
-        // overrun into a full repeated display interval. Chromium likewise
-        // calls DrawAndSwap from OnBeginFrameDeadline without rejecting the
-        // result based on its completion timestamp.
-        let candidate = self.prepared_frame.take().unwrap();
-        let draw_deadline_overrun_ms = candidate
-            .ready_at
-            .checked_duration_since(draw_deadline)
-            .map_or(0.0, |late| late.as_secs_f64() * 1000.0);
-        let notify = self.output.notify.clone();
-        let swap_ack = self.loading_sender.clone();
-        let profile_input = std::env::var_os("BROWSER_APP_TRACE_INPUT").is_some()
-            || std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
-        let input_trace = candidate.input_trace;
-        let sequence = candidate.sequence;
-        let viewport = candidate.viewport;
-        let callback: softbuffer::PresentCallback = Box::new(move |_, finished| {
-            if let Some(trace) = input_trace {
-                let _input_scope = browser_tracing::scope(browser_tracing::Context {
-                    input_id: browser_tracing::instant_id(trace.queued_at),
-                    ..Default::default()
-                });
-                browser_tracing::interval(
-                    "input",
-                    "InputToPresentReturn",
-                    trace.queued_at,
-                    finished,
-                    &[
-                        ("samples", trace.samples as f64),
-                        ("commands", trace.commands as f64),
-                        ("present_sequence", sequence as f64),
-                    ],
-                );
-                if profile_input {
-                    eprintln!("native-input-frame outcome=native-present-return frame_sequence={} samples={} commands={} enqueue_to_present_return_ms={:.3}",
-                        sequence, trace.samples, trace.commands,
-                        finished.saturating_duration_since(trace.queued_at).as_secs_f64() * 1000.0);
-                }
-            }
-            (notify)(UserEvent::FramePresented(viewport));
-            if let Some(sender) = swap_ack {
-                let _ = sender.send(Command::SwapAck { sequence, finished });
-            }
-        });
-        let Some(target) = &mut self.window_target else {
-            return Ok(false);
-        };
-        if let Err(error) = target.present_prepared(candidate.output, sequence, callback) {
-            self.failed_frame = Some(candidate.signature);
-            return Err(error);
-        }
-        self.presented_sequence = sequence;
-        self.pending_swap = Some(sequence);
-        self.last_frame = Some(candidate.signature);
-        (self.output.notify)(UserEvent::ChromeDragRegions {
-            viewport,
-            frame_sequence: sequence,
-            regions: candidate.drag_regions,
-        });
-        browser_tracing::instant(
-            "frame",
-            "FramePresentedToNative",
-            &[
-                ("present_sequence", sequence as f64),
-                (
-                    "ready_before_deadline_ms",
-                    draw_deadline
-                        .saturating_duration_since(candidate.ready_at)
-                        .as_secs_f64()
-                        * 1000.0,
-                ),
-                ("draw_deadline_overrun_ms", draw_deadline_overrun_ms),
-            ],
-        );
-        Ok(true)
-    }
-
     fn publish(&mut self) -> io::Result<()> {
         self.set_chrome_attribute(
             "chrome",
@@ -3494,7 +3445,7 @@ impl BrowserState {
         if self.late_scroll.is_some() {
             return Ok(());
         }
-        if self.compositor_sender.is_some() {
+        if self.presentation.IsComposited() {
             if !self.handling_begin_frame {
                 if let Some(source) = &self.frame_source {
                     source.request_begin_frame();
@@ -3504,17 +3455,9 @@ impl BrowserState {
             }
             return Ok(());
         }
-        if self.window_target.is_some() {
-            if !self.handling_begin_frame {
-                if let Some(source) = &self.frame_source {
-                    source.request_begin_frame();
-                    return Ok(());
-                }
-            }
-            self.prepare_window_frame()?;
-            self.present_ready_frame(Instant::now())?;
-            return Ok(());
-        }
+        // This is an explicit protocol readback host. The
+        // native application always uses the compositor/Viz/Display pipeline;
+        // there is no Page-direct window fallback.
         let toolbar = self
             .toolbar
             .CurrentFrame()
@@ -3546,21 +3489,6 @@ impl BrowserState {
         // artifact/viewport or explicit redraw permits another attempt.
         if self.failed_frame == Some(signature) {
             self.finish_native_input_trace("presentation-failed", Instant::now());
-            return Ok(());
-        }
-        // SoftwareOutputDevice::MaxFramesPending() is one. Its macOS ACK is
-        // posted asynchronously after the native layer update returns. Do not
-        // let a second frame overwrite CALayer.contents before that ACK turn.
-        if let Some(sequence) = self.pending_swap {
-            browser_tracing::instant(
-                "present",
-                "SwapThrottled",
-                &[
-                    ("present_sequence", sequence as f64),
-                    ("pending_swaps", 1.0),
-                    ("max_pending_swaps", 1.0),
-                ],
-            );
             return Ok(());
         }
         if !self.handling_begin_frame {
@@ -3614,7 +3542,7 @@ impl BrowserState {
                 drag_regions.push(region);
             }
         }
-        // Headless readback shares the same Page-owned tile path as native presentation.
+        // Protocol readback shares the same Page-owned tile path as native presentation.
         let readback =
             |page: &Page, artifact: Option<&Arc<paint::paint_engine::PaintArtifact>>, height| {
                 let mut pixels = vec![u32::MAX; self.viewport.width as usize * height as usize];
@@ -4109,13 +4037,13 @@ mod tests {
                 "ending the gesture returns animation-only pulses to ordinary priority");
             let mut page = create_page(320.0, 160.0, 1.0, true, state.pointer.clone(), false, 1, 0).unwrap();
             page.Open(&data_url("<!doctype html><style>body{margin:0;height:4000px}</style>scroll"), 16384, 4096).unwrap();
-            while page.IsLoading() { page.RunTasks(0.0).unwrap(); }
+            while page.IsLoading() { page.RunTask().unwrap(); }
             page.SetBeginFrameSource(Some(Arc::new(Source)));
             assert!(page.Evaluate("var rafCount=0;requestAnimationFrame(()=>{rafCount++;requestAnimationFrame(()=>rafCount++);});", "test:late-scroll").unwrap().Succeeded());
             let base = Instant::now();
             let args = BeginFrameArgs { source_id: 7, sequence_number: 1, frame_time: base,
                 interval: Duration::from_secs(1), deadline: base + Duration::from_secs(1) };
-            page.OnBeginFrame(args).unwrap();
+            page.UpdateRendering(args).unwrap();
             page.QueueFrameInput(InputEvent::Wheel(WheelEvent { phase: WheelPhase::kChanged,
                 delta_units: ScrollGranularity::kScrollByPrecisePixel, position: Offset { x: 10.0, y: 10.0 },
                 delta: Offset { x: 0.0, y: 20.0 }, ..Default::default() }), Instant::now(), 1).unwrap();
@@ -4160,7 +4088,7 @@ mod tests {
             let expired = BeginFrameArgs { source_id: 7, sequence_number: 3,
                 frame_time: expired_base, interval: Duration::from_millis(16),
                 deadline: expired_base + Duration::from_millis(16) };
-            page.OnBeginFrame(expired).unwrap();
+            page.UpdateRendering(expired).unwrap();
             page.QueueFrameInput(InputEvent::Wheel(WheelEvent { phase: WheelPhase::kChanged,
                 delta_units: ScrollGranularity::kScrollByPrecisePixel,
                 position: Offset { x: 10.0, y: 10.0 },
@@ -4202,7 +4130,7 @@ mod tests {
                 )
                 .unwrap();
                 while page.IsLoading() {
-                    page.RunTasks(0.0).unwrap();
+                    page.RunTask().unwrap();
                 }
                 let source: Arc<dyn BeginFrameSource> = Arc::new(Source);
                 page.SetBeginFrameSource(Some(source.clone()));
@@ -5030,10 +4958,10 @@ mod tests {
                 let start = Instant::now();
                 let frame = if direct {
                     let (top,bottom)=buffer.split_at_mut(viewport.width as usize * viewport.toolbar_pixels() as usize);
-                    renderer::surface::RenderDisplayItemListIntoWindowBufferWithFormat(
+                    raster::surface::RenderDisplayItemListIntoWindowBufferWithFormat(
                         &state.toolbar.CurrentFrame().unwrap().display_items,viewport.width,viewport.toolbar_pixels(),viewport.scale,top,format,
                     ).unwrap();
-                    renderer::surface::RenderDisplayItemListIntoWindowBufferWithFormat(
+                    raster::surface::RenderDisplayItemListIntoWindowBufferWithFormat(
                         &state.tabs.active.page.as_ref().unwrap().CurrentFrame().unwrap().display_items,viewport.width,viewport.height-viewport.toolbar_pixels(),viewport.scale,bottom,format,
                     ).unwrap();
                     None
@@ -5175,7 +5103,7 @@ mod tests {
     }
     #[cfg(feature = "profile_paint")]
     fn profile_paint(state: &BrowserState) {
-        use renderer::pure_replay::{
+        use raster::pure_replay::{
             ProfileSourceDisplayItemListWithScale, RasterizeSourceDisplayItemListWithScale,
         };
         for (name, page, height) in [
@@ -5225,7 +5153,7 @@ mod tests {
                 // three measured repetitions of this exact command list.
                 for iteration in 0..4 {
                     let (pixels, stages) =
-                        renderer::source_replay::ProfileSourceDisplayItemListWithScale(
+                        raster::source_replay::ProfileSourceDisplayItemListWithScale(
                             list,
                             state.viewport.width,
                             height,
@@ -5299,7 +5227,7 @@ mod tests {
             }
             if name == "content" {
                 let body = &list.items[2];
-                for (variant, duration, equal) in renderer::pure_replay::ProfileConstantMaskBlit(
+                for (variant, duration, equal) in raster::pure_replay::ProfileConstantMaskBlit(
                     body.color,
                     state.viewport.width,
                     height - (body.rect.y * state.viewport.scale) as u32,
@@ -5316,7 +5244,7 @@ mod tests {
                         item.r#type == paint::paint_engine::DisplayItemType::kDrawRoundedRect
                     })
                     .unwrap();
-                let (duration, rejected) = renderer::pure_replay::ProfileRoundedRectAttempt(
+                let (duration, rejected) = raster::pure_replay::ProfileRoundedRectAttempt(
                     card.rect,
                     card.corner_radii,
                     state.viewport.width,
@@ -5369,8 +5297,8 @@ mod tests {
                 let toolbar_pixels = state.viewport.toolbar_pixels();
                 let mut buffer = vec![0u32; width as usize * height as usize];
                 let (top, bottom) = buffer.split_at_mut(width as usize * toolbar_pixels as usize);
-                renderer::surface::RenderDisplayItemListIntoWindowBufferWithFormat(&state.toolbar.CurrentFrame().unwrap().display_items, width, toolbar_pixels, state.viewport.scale, top, skia::PixelFormat::Bgra8888).unwrap();
-                renderer::surface::RenderDisplayItemListIntoWindowBufferWithFormat(&state.tabs.active.page.as_ref().unwrap().CurrentFrame().unwrap().display_items, width, height-toolbar_pixels, state.viewport.scale, bottom, skia::PixelFormat::Bgra8888).unwrap();
+                raster::surface::RenderDisplayItemListIntoWindowBufferWithFormat(&state.toolbar.CurrentFrame().unwrap().display_items, width, toolbar_pixels, state.viewport.scale, top, skia::PixelFormat::Bgra8888).unwrap();
+                raster::surface::RenderDisplayItemListIntoWindowBufferWithFormat(&state.tabs.active.page.as_ref().unwrap().CurrentFrame().unwrap().display_items, width, height-toolbar_pixels, state.viewport.scale, bottom, skia::PixelFormat::Bgra8888).unwrap();
                 let raster_ms = start.elapsed().as_secs_f64() * 1000.0;
                 commands += 1;
                 println!("resize-profile command={commands} width={width} layout_js_ms={layout_ms:.3} allocate_full_raster_ms={raster_ms:.3}");
@@ -5768,7 +5696,7 @@ mod tests {
             "actual chrome hit testing reaches the new-tab button"
         );
         if let Ok(path) = std::env::var("BROWSER_APP_TABS_CAPTURE") {
-            let surface = renderer::surface::RenderDisplayItemListToSurface(
+            let surface = raster::surface::RenderDisplayItemListToSurface(
                 &state.toolbar.CurrentFrame().unwrap().display_items,
                 state.viewport.width,
                 state.viewport.toolbar_pixels(),
@@ -5808,7 +5736,7 @@ mod tests {
             .display_items
             .clone();
         let viewport = state.viewport;
-        let base = renderer::surface::RenderDisplayItemListToSurface(
+        let base = raster::surface::RenderDisplayItemListToSurface(
             &base_items,
             viewport.width,
             viewport.height - viewport.toolbar_pixels(),
@@ -5823,7 +5751,7 @@ mod tests {
             &popup.page.CurrentFrame().unwrap().display_items,
         )
         .unwrap();
-        let over = renderer::surface::RenderDisplayItemListToSurface(
+        let over = raster::surface::RenderDisplayItemListToSurface(
             &combined,
             viewport.width,
             viewport.height - viewport.toolbar_pixels(),
@@ -5841,7 +5769,7 @@ mod tests {
             "popup paints over the content without clearing it"
         );
         if let Ok(path) = std::env::var("BROWSER_APP_TABS_CAPTURE") {
-            let top = renderer::surface::RenderDisplayItemListToSurface(
+            let top = raster::surface::RenderDisplayItemListToSurface(
                 &state.toolbar.CurrentFrame().unwrap().display_items,
                 viewport.width,
                 viewport.toolbar_pixels(),
@@ -6898,7 +6826,7 @@ mod tests {
         };
         let render = |page: &Page| {
             let mut pixels = vec![0; 320 * 192];
-            renderer::surface::RenderDisplayItemListIntoWindowBuffer(
+            raster::surface::RenderDisplayItemListIntoWindowBuffer(
                 &page.CurrentFrame().unwrap().display_items,
                 320,
                 192,
@@ -7029,7 +6957,7 @@ mod tests {
             layout_result_for(engine.GetLayoutTree().unwrap(), sibling_id)
         };
         let mut on_pixels = vec![0_u32; 640 * 432];
-        renderer::surface::RenderDisplayItemListIntoWindowBuffer(
+        raster::surface::RenderDisplayItemListIntoWindowBuffer(
             &page.CurrentFrame().unwrap().display_items,
             640,
             432,
@@ -7038,7 +6966,7 @@ mod tests {
         )
         .unwrap();
         std::thread::sleep(Duration::from_millis(550));
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         let off_caret = page.Caret().unwrap();
         assert!(!off_caret.visible);
         assert_eq!(
@@ -7062,7 +6990,7 @@ mod tests {
             "local caret invalidation must retain an unaffected sibling result"
         );
         let mut off_pixels = vec![0_u32; 640 * 432];
-        renderer::surface::RenderDisplayItemListIntoWindowBuffer(
+        raster::surface::RenderDisplayItemListIntoWindowBuffer(
             &page.CurrentFrame().unwrap().display_items,
             640,
             432,

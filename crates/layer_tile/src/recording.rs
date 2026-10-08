@@ -1064,9 +1064,16 @@ fn update_state(
             stack.push(*state)
         }
         Kind::kRestore => {
-            *state = stack
-                .pop()
-                .ok_or(ReplayUnsupported("unbalanced-replay-state"))?
+            let Some(saved) = stack.pop() else {
+                if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+                    eprintln!(
+                        "layer-replay unbalanced-restore external={} node={} rect={:?}",
+                        external, item.node_id, item.rect
+                    );
+                }
+                return Err(ReplayUnsupported("unbalanced-replay-state"));
+            };
+            *state = saved;
         }
         Kind::kConcat => concatenate_affine(state, &item.transform)?,
         Kind::kClipRect => {
@@ -2552,8 +2559,13 @@ fn prepare_raster_content(
                         })
                 {
                     if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
-                        eprintln!("layer-replay effect-mismatch record={index} wrappers={effect_scopes_flat:?} effects={:?}",
-                            effects.iter().map(|effect|(effect.id,effect.opacity,&effect.filters)).collect::<Vec<_>>());
+                        let record = &list.display_items[index];
+                        let nearby_begin = record.record_begin.saturating_sub(8);
+                        let nearby_end = (record.record_end + 8).min(list.items.len());
+                        eprintln!("layer-replay effect-mismatch record={index} id={:?} range={}..{} wrappers={effect_scopes_flat:?} effects={:?} nearby={:?}",
+                            record.id, record.record_begin, record.record_end,
+                            effects.iter().map(|effect|(effect.id,effect.opacity,&effect.filters)).collect::<Vec<_>>(),
+                            list.items[nearby_begin..nearby_end].iter().enumerate().map(|(offset,item)|(nearby_begin+offset,item.r#type,item.node_id,item.opacity)).collect::<Vec<_>>());
                     }
                     return Err(ReplayUnsupported("external-effect-property-mismatch"));
                 }
@@ -2639,8 +2651,15 @@ fn prepare_raster_content(
                     baked.extend(extra);
                     baked_rounded[index] = Arc::from(baked);
                 }
-                // If any flat external clip is not represented by properties,
-                // removing the wrapper would omit actual pixels/state.
+                // A non-composited SVG/viewBox affine can leave its clip in
+                // the flat record wrapper while the property tree carries the
+                // semantically identical clip through a separate f64 path.
+                // Skia's f32 edge construction may put their conservative
+                // pixel enclosures one pixel apart. Preserve the actual flat
+                // clip in the record's ancestor-layer space; the affine prefix
+                // below then replays both the clip and drawing exactly. This
+                // is the clip counterpart of retaining the SVG transform,
+                // rather than weakening the comparison or dropping state.
                 if !raster_clips_equivalent(state.clip, expected.clip, scale)
                     && !has_baked_flat_clip
                     && !rect_record_clips_are_redundant(
@@ -2651,12 +2670,25 @@ fn prepare_raster_content(
                         scale,
                     )
                 {
-                    if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
-                        let record = &list.display_items[index];
-                        eprintln!("layer-replay record={index} id={:?} bounds={:?} expected={expected:?} actual={state:?}",
-                            record.id,record.visual_rect);
+                    let affine_record =
+                        state.axis_scale != (1.0, 1.0) || state.cross_axis != (0.0, 0.0);
+                    if affine_record {
+                        let actual_clip = state
+                            .clip
+                            .ok_or(ReplayUnsupported("external-clip-property-mismatch"))?;
+                        let local = shift(
+                            actual_clip,
+                            (-expected.translation.0, -expected.translation.1),
+                        );
+                        record_clips[index] = intersect(record_clips[index], local);
+                    } else {
+                        if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+                            let record = &list.display_items[index];
+                            eprintln!("layer-replay record={index} id={:?} bounds={:?} expected={expected:?} actual={state:?}",
+                                record.id,record.visual_rect);
+                        }
+                        return Err(ReplayUnsupported("external-clip-property-mismatch"));
                     }
-                    return Err(ReplayUnsupported("external-clip-property-mismatch"));
                 }
                 starts[index] = Some((state, stack.len()));
                 effect_starts[index] = Some(effect_scopes_flat.clone());
@@ -2830,14 +2862,21 @@ fn prepare_raster_content(
             &list.items[record.record_begin..record.record_end],
             mask_records[record_index],
         )?;
-        // The source ink contract is proven for text records. Keep the
-        // existing backend bounds for mixed/SVG/decoration records whose
-        // adapter metadata can still be conservative or in a local space.
-        let accurate_source_ink = record.visual_rect_is_accurate
-            && raw.iter().any(|item| item.r#type == Kind::kDrawGlyphRun)
+        // Text ink and image destination rectangles both carry a complete
+        // source-space visual bound. Mixed/SVG path records remain
+        // conservative until their actual op bounds are proven below.
+        let glyph_only = raw.iter().any(|item| item.r#type == Kind::kDrawGlyphRun)
             && raw
                 .iter()
                 .all(|item| !is_draw(item.r#type) || item.r#type == Kind::kDrawGlyphRun);
+        let image_only = raw
+            .iter()
+            .any(|item| matches!(item.r#type, Kind::kDrawImageRect | Kind::kDrawTiledImage))
+            && raw.iter().all(|item| {
+                !is_draw(item.r#type)
+                    || matches!(item.r#type, Kind::kDrawImageRect | Kind::kDrawTiledImage)
+            });
+        let accurate_source_ink = record.visual_rect_is_accurate && (glyph_only || image_only);
         let scaled = actual.axis_scale != (1.0, 1.0)
             || actual.cross_axis != (0.0, 0.0)
             || raw.iter().any(|item| {
@@ -2949,10 +2988,12 @@ fn prepare_raster_content(
                 visual_rect,
                 rect_known_to_be_opaque: PaintRect::default(),
                 // A clip-only/translation prefix cannot add ink outside the
-                // original complete source bounds. Scale still lacks a proven
-                // glyph/stroke ink mapping and keeps all records in tasks.
+                // original complete source bounds. Affine mapping preserves
+                // the completeness of image destinations and glyph ink; only
+                // unproven path/stroke records still require backend bounds.
                 bounds_are_complete: rect_bounds.is_some()
-                    || (!scaled && record.visual_rect_is_accurate),
+                    || (!scaled && record.visual_rect_is_accurate)
+                    || (scaled && accurate_source_ink),
             });
             continue;
         }

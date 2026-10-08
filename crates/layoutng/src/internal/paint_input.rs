@@ -522,6 +522,11 @@ pub struct PaintStyleData {
     pub border_image: Option<NinePieceImagePaint>,
     pub box_shadows: Vec<PaintShadow>,
     pub text_shadows: Vec<PaintShadow>,
+    /// Resolved decorating-box chain, in ancestor-to-descendant order. This
+    /// mirrors Blink's AppliedTextDecorationVector; text-decoration is
+    /// propagated by the formatting model rather than inherited as a CSS
+    /// property.
+    pub applied_text_decorations: Vec<TextDecorationPaint>,
     pub text_decoration: TextDecorationPaint,
     pub border_colors: [Color; 4],
     pub column_rule_width: f64,
@@ -596,6 +601,7 @@ impl Default for PaintStyleData {
             border_image: None,
             box_shadows: Vec::new(),
             text_shadows: Vec::new(),
+            applied_text_decorations: Vec::new(),
             text_decoration: TextDecorationPaint::default(),
             border_colors: [Color::default(); 4],
             column_rule_width: 0.0,

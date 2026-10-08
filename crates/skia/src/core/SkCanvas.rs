@@ -13,6 +13,93 @@ use crate::raster::{
 };
 use ttf_parser::{Face, GlyphId, OutlineBuilder, Tag};
 
+fn path_gap(path: &Path, top: f32, bottom: f32) -> Option<(f32, f32)> {
+    use crate::raster::path64::{cubic64::Cubic64, line_cubic_intersections, point64::Point64};
+    use crate::src::core::SkPath::PathSegment;
+    let mut left = f32::INFINITY;
+    let mut right = f32::NEG_INFINITY;
+    let mut expand = |x: f32| {
+        if x.is_finite() {
+            left = left.min(x);
+            right = right.max(x);
+        }
+    };
+    let mut current = Point::zero();
+    for segment in path.segments() {
+        let points: Vec<Point> = match segment {
+            PathSegment::MoveTo(point) => {
+                current = point;
+                continue;
+            }
+            PathSegment::LineTo(end) => vec![current, end],
+            PathSegment::QuadTo(control, end) => vec![current, control, end],
+            PathSegment::CubicTo(control1, control2, end) => {
+                vec![current, control1, control2, end]
+            }
+            PathSegment::Close => continue,
+        };
+        current = *points.last().unwrap();
+        let segment_top = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+        let segment_bottom = points.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+        if top > segment_bottom || segment_top > bottom {
+            continue;
+        }
+        for point in &points {
+            if top < point.y && point.y < bottom {
+                expand(point.x);
+            }
+        }
+        for y in [top, bottom] {
+            match points.as_slice() {
+                [a, b] => {
+                    let t = (y - a.y) / (b.y - a.y);
+                    if (0.0..1.0).contains(&t) {
+                        expand(a.x + t * (b.x - a.x));
+                    }
+                }
+                [a, b, c] => {
+                    let roots = crate::src::core::SkQuads::RootsReal(
+                        f64::from(a.y - 2.0 * b.y + c.y),
+                        f64::from(2.0 * (b.y - a.y)),
+                        f64::from(a.y - y),
+                    );
+                    // SkBezierQuad::Intersect accepts both endpoints. This is
+                    // deliberately different from the line case's half-open
+                    // range and matters for glyph contours whose extrema land
+                    // exactly on the decoration stripe.
+                    for t in roots.into_iter().filter(|t| (0.0..=1.0).contains(t)) {
+                        let u = 1.0 - t;
+                        expand(
+                            (u * u * f64::from(a.x)
+                                + 2.0 * u * t * f64::from(b.x)
+                                + t * t * f64::from(c.x)) as f32,
+                        );
+                    }
+                }
+                [a, b, c, d] => {
+                    let cubic = Cubic64::new([
+                        Point64::from_point(*a),
+                        Point64::from_point(*b),
+                        Point64::from_point(*c),
+                        Point64::from_point(*d),
+                    ]);
+                    let mut roots = [0.0; 3];
+                    let count = line_cubic_intersections::horizontal_intersect(
+                        &cubic,
+                        f64::from(y),
+                        &mut roots,
+                    );
+                    for &t in &roots[..count] {
+                        expand(cubic.point_at_t(t).x as f32);
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+    (left < right).then_some((left, right))
+}
+
 use crate::cpu::hvgl::HvglTable;
 use crate::cpu::image_sampling::{build_mip_image, draw_image_bitmap_opaque, mip_level_for_size};
 
@@ -1303,6 +1390,51 @@ impl SkCanvas {
         }
     }
 
+    /// Draws a filled rectangle while retaining Skia's edge coverage.
+    ///
+    /// Blink's text-decoration painter snaps the block axis, but keeps the
+    /// fractional inline end and asks GraphicsContext::DrawRect for edge AA.
+    /// Generic layout rectangles intentionally take `drawRect`'s aliased
+    /// rect-preserving fast path; this entry point is therefore limited to
+    /// decoration geometry whose paint contract explicitly requests AA.
+    pub(crate) fn drawTextDecorationRect(&mut self, bounds: Rect, color_value: Color) {
+        let transform = self.state.transform;
+        let (bounds, transform) = if transform.kx == 0.0 && transform.ky == 0.0 {
+            let Some(device_bounds) = bounds.transform(transform) else {
+                return;
+            };
+            // RasterPipeline's dedicated rect scanner carries 8-bit edge
+            // coverage. Supplying the already mapped device rect avoids the
+            // generic transformed-path fallback and its coarser path AA.
+            (device_bounds, Transform::identity())
+        } else {
+            (bounds, transform)
+        };
+        if self.f16_surface.is_some() {
+            let mut mask = Mask::new(self.pixmap.width(), self.pixmap.height())
+                .expect("valid decoration mask");
+            mask.fill_path(
+                &PathBuilder::from_rect(bounds),
+                FillRule::Winding,
+                true,
+                transform,
+            );
+            self.blend_f16_mask_rows(
+                &mask,
+                color_value,
+                0,
+                self.pixmap.width() as usize,
+                0,
+                self.pixmap.height() as usize,
+            );
+            return;
+        }
+        self.ensure_clip_mask();
+        let paint = solid_paint(color_value, true);
+        self.pixmap
+            .fill_rect(bounds, &paint, transform, self.state.clip.as_deref());
+    }
+
     pub(crate) fn blend_coverage(&mut self, index: usize, color: Color, coverage: u8, pair: bool) {
         if self.state.clip.is_none() {
             if let Some(clip) = self.state.clip_summary {
@@ -2001,6 +2133,135 @@ impl SkCanvas {
             self.state.transform,
             self.state.clip.as_deref().or(fallback_clip.as_ref()),
         );
+    }
+
+    pub(crate) fn glyph_run_intercepts(
+        list: &ResourceContext,
+        item: &DrawCommand,
+        top: f64,
+        bottom: f64,
+    ) -> Vec<(f64, f64)> {
+        if item.glyphs.is_empty()
+            || item.transform != TransformMatrix::default()
+            || item.glyphs.iter().any(|glyph| glyph.canvas_rotation != 0)
+        {
+            return Vec::new();
+        }
+        let Some(font) = list
+            .resources
+            .as_ref()
+            .and_then(|resources| resources.fonts.get(item.font_face_index as usize))
+        else {
+            return Vec::new();
+        };
+        let variations = if item.font_variations.is_empty() {
+            &font.variations
+        } else {
+            &item.font_variations
+        };
+        let descriptor = crate::compat::glyph_paths::Descriptor {
+            font: 0,
+            face_index: font.face_index,
+            size: (item.font_size as f32).to_bits(),
+            variations: variations
+                .iter()
+                .map(|axis| (axis.tag, axis.value.to_bits()))
+                .collect(),
+            italic: item.synthetic_italic,
+            stroke_width: 0,
+            resolution: 1.0f32.to_bits(),
+            expand_stroke: false,
+        };
+        let relative_top = top - item.text_blob_origin.y;
+        let relative_bottom = bottom - item.text_blob_origin.y;
+        crate::compat::glyph_paths::with_paths(font.bytes, descriptor, |strike| {
+            let mut face_data = None;
+            let mut intervals = Vec::new();
+            for glyph in &item.glyphs {
+                let cached = strike.prepare_path(
+                    glyph.id as u16,
+                    || {
+                        let (face, hvgl, scale, normalized_axes) =
+                            face_data.get_or_insert_with(|| {
+                                let mut face = Face::parse(&font.bytes, font.face_index & 0xffff)
+                                    .expect("pure Rust rasterizer could not parse the font face");
+                                let hvgl = if face.tables().glyf.is_none()
+                                    && face.tables().cff.is_none()
+                                    && face.tables().cff2.is_none()
+                                {
+                                    let data = face
+                                        .raw_face()
+                                        .table(Tag::from_bytes(b"hvgl"))
+                                        .unwrap_or_else(|| {
+                                            panic!(
+                                                "font {} has no supported vector outlines",
+                                                font.family
+                                            )
+                                        });
+                                    Some(
+                                        HvglTable::parse(data)
+                                            .expect("invalid HVGL glyph outline table"),
+                                    )
+                                } else {
+                                    None
+                                };
+                                for axis in variations {
+                                    let _ = face.set_variation(
+                                        Tag::from_bytes(&axis.tag.to_be_bytes()),
+                                        axis.value,
+                                    );
+                                }
+                                let optical_size = Tag::from_bytes(b"opsz");
+                                if face
+                                    .variation_axes()
+                                    .into_iter()
+                                    .any(|axis| axis.tag == optical_size)
+                                {
+                                    let _ = face.set_variation(optical_size, item.font_size as f32);
+                                }
+                                let scale = item.font_size as f32 / f32::from(face.units_per_em());
+                                let normalized_axes: Vec<f32> = face
+                                    .variation_coordinates()
+                                    .iter()
+                                    .map(|coordinate| f32::from(coordinate.get()) / 16384.0)
+                                    .collect();
+                                (face, hvgl, scale, normalized_axes)
+                            });
+                        let id = GlyphId(glyph.id as u16);
+                        let mut outline =
+                            GlyphPathBuilder::new(0.0, 0.0, *scale, item.synthetic_italic);
+                        let has_outline = if let Some(table) = hvgl {
+                            table
+                                .outline_glyph(id.0, normalized_axes, &mut outline)
+                                .expect("invalid HVGL glyph outline")
+                        } else {
+                            face.outline_glyph(id, &mut outline).is_some()
+                        };
+                        if !has_outline {
+                            return None;
+                        }
+                        outline
+                            .path
+                            .finish()
+                            .map(|fill| crate::compat::glyph_paths::GlyphPaths {
+                                fill,
+                                stroke: None,
+                            })
+                    },
+                    crate::compat::glyph_paths::GlyphPaths::heap_bytes,
+                );
+                let Some(path) = cached else { continue };
+                let glyph_top = (relative_top - glyph.offset.y) as f32;
+                let glyph_bottom = (relative_bottom - glyph.offset.y) as f32;
+                if let Some((left, right)) = path_gap(&path.fill, glyph_top, glyph_bottom) {
+                    intervals.push((
+                        item.text_blob_origin.x + glyph.offset.x + f64::from(left),
+                        item.text_blob_origin.x + glyph.offset.x + f64::from(right),
+                    ));
+                }
+            }
+            intervals
+        })
     }
 
     pub(crate) fn drawGlyphRunList(&mut self, item: &DrawCommand, list: &ResourceContext) {

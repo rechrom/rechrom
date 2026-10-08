@@ -949,6 +949,9 @@ pub struct ExtendedStyle {
     pub margin_calculated: [bool; 4],
     pub padding_calculated: [bool; 4],
     pub margin_auto: [bool; 4],
+    /// Blink's UA-only `__qem` marker. Quirky margins participate in the
+    /// special body/heading/list margin-collapse rules in quirks mode.
+    pub margin_quirks: [bool; 4],
     pub auto_margin_inline_start: bool,
     pub auto_margin_inline_end: bool,
     pub row_gap: Option<f64>,
@@ -1116,6 +1119,7 @@ impl Default for ExtendedStyle {
             margin_calculated: [false; 4],
             padding_calculated: [false; 4],
             margin_auto: [false; 4],
+            margin_quirks: [false; 4],
             auto_margin_inline_start: false,
             auto_margin_inline_end: false,
             row_gap: None,
@@ -1793,6 +1797,17 @@ impl Default for ElementData {
 }
 
 // cpp: layoutng/internal/layout_input.h:944-986
+/// Resolved CSS 2.1 `clip: rect(...)` sides in CSS pixels. `None` on an
+/// individual side represents the legacy `auto` keyword; `ComputedStyle`'s
+/// outer `Option` distinguishes the whole-property `clip: auto` value.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CssClipRect {
+    pub top: Option<f64>,
+    pub right: Option<f64>,
+    pub bottom: Option<f64>,
+    pub left: Option<f64>,
+}
+
 #[derive(Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
@@ -1820,6 +1835,7 @@ pub struct ComputedStyle {
     pub top: Option<f64>,
     pub right: Option<f64>,
     pub bottom: Option<f64>,
+    pub css_clip: Option<CssClipRect>,
     pub floating: FloatSide,
     pub column_count: u32,
     pub grid_template_columns: Vec<f64>,
@@ -1840,12 +1856,18 @@ impl ComputedStyle {
         if (self.paint.background_color.alpha > 0.0) != (other.paint.background_color.alpha > 0.0) {
             return false;
         }
-        // A transform or filter establishes a containing block for positioned
-        // descendants. Its value can change without layout once both sides
-        // agree on whether that containing block exists.
-        if self.paint.transform.is_some() != other.paint.transform.is_some()
-            || self.paint.filters.is_empty() != other.paint.filters.is_empty()
-        {
+        // Blink treats ordinary transform changes, including adding/removing
+        // the transform property node, as paint-property updates. LayoutBox
+        // only escalates them to layout for anchor-positioning fragments whose
+        // propagated anchor geometry depends on the transform. Rechrom does
+        // not yet expose that anchor dependency, so making every transform
+        // animation establish/remove a layout boundary is both more
+        // conservative than Chromium and turns staggered animation completion
+        // into repeated full-document layouts.
+        //
+        // Filter presence still changes the native layer/containing-block
+        // model represented by this translated layout tree.
+        if self.paint.filters.is_empty() != other.paint.filters.is_empty() {
             return false;
         }
         let mut normalized = self.clone();
@@ -1875,15 +1897,23 @@ mod computed_style_layout_equivalence_tests {
     }
 
     #[test]
-    fn containing_block_and_inline_box_transitions_require_layout() {
+    fn transform_property_nodes_are_paint_only() {
         let old = ComputedStyle::default();
         let mut transformed = old.clone();
         transformed.paint.transform = Some(PaintTransform::default());
-        assert!(!old.LayoutEquivalent(&transformed));
+        assert!(old.LayoutEquivalent(&transformed));
+    }
 
+    #[test]
+    fn native_layer_and_inline_box_transitions_require_layout() {
+        let old = ComputedStyle::default();
         let mut painted_background = old.clone();
         painted_background.paint.background_color.alpha = 1.0;
         assert!(!old.LayoutEquivalent(&painted_background));
+
+        let mut filtered = old.clone();
+        filtered.paint.filters.push(Default::default());
+        assert!(!old.LayoutEquivalent(&filtered));
     }
 }
 
@@ -1915,6 +1945,7 @@ impl Default for ComputedStyle {
             top: None,
             right: None,
             bottom: None,
+            css_clip: None,
             floating: FloatSide::kNone,
             column_count: 1,
             grid_template_columns: Vec::new(),

@@ -177,9 +177,9 @@ fn scene(indices: &[usize], layer: bool) -> PaintArtifact {
 }
 fn compare(list: &PaintArtifact, width: u32, height: u32, scale: f64) {
     let (native, _) =
-        renderer::source_replay::ProfileSourceDisplayItemListWithScale(list, width, height, scale);
+        raster::source_replay::ProfileSourceDisplayItemListWithScale(list, width, height, scale);
     let owned =
-        renderer::pure_replay::RasterizeSourceDisplayItemListWithScale(list, width, height, scale);
+        raster::pure_replay::RasterizeSourceDisplayItemListWithScale(list, width, height, scale);
     let mut failures = Vec::new();
     let different = owned
         .chunks_exact(4)
@@ -202,7 +202,7 @@ fn compare(list: &PaintArtifact, width: u32, height: u32, scale: f64) {
         let guard = 0x9d_a7_b3_c5u32;
         let mut storage = vec![guard; (width * height) as usize + 32];
         let target = &mut storage[16..16 + (width * height) as usize];
-        renderer::surface::RenderDisplayItemListIntoWindowBufferWithFormat(
+        raster::surface::RenderDisplayItemListIntoWindowBufferWithFormat(
             list, width, height, scale, target, format,
         )
         .unwrap();

@@ -297,6 +297,7 @@ mod test {
                 tile_rect: rect,
                 raster_scale: 1.0,
                 pixel_size: (32, 16),
+                ready: true,
             };
             let rgba: Vec<u8> = (0..16usize)
                 .flat_map(|y| {

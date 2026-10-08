@@ -1,9 +1,8 @@
 #![allow(non_snake_case)]
 use dom::{UserInteractionState, DOM};
 use layoutng_assembly::{
-    fragment_tree::FragmentNode,
-    internal::layout_input::ConstraintSpace,
-    layout_engine::{LayoutEngine, LayoutMutation},
+    fragment_tree::FragmentNode, internal::layout_input::ConstraintSpace,
+    layout_engine::LayoutEngine,
 };
 use std::rc::Rc;
 
@@ -63,6 +62,54 @@ pub(crate) fn LayoutDocumentWithEngine(
             (elapsed - layout_done.unwrap()).as_secs_f64() * 1000.0,
             elapsed.as_secs_f64() * 1000.0);
     }
+}
+
+/// Synchronize paint-only style inputs and export a current fragment snapshot
+/// from the resident layout result. This is Blink's ordinary paint-only style
+/// lifecycle: style and PrePaint/Paint advance, while layout geometry remains
+/// the previously committed result.
+pub(crate) fn ExportPaintOnlyDocumentWithEngine(
+    engine: &mut LayoutEngine,
+    owner: &mut DOM,
+    interaction: &UserInteractionState,
+) -> Option<Rc<FragmentNode>> {
+    let _trace = browser_tracing::span("layout", "Page.ExportPaintOnlyDocumentWithEngine");
+    let mut heap_scope = foundation::LayoutHeapScope::new();
+    owner.EmitLayoutMutations(interaction, |mutation| {
+        engine.ApplyMutation(mutation);
+    });
+    if !engine.ExportPaintOnly() {
+        return None;
+    }
+    heap_scope.AllowUnchangedReuse();
+    engine.TakeLayoutResult()
+}
+
+/// Direct animation update for compositor-friendly paint properties. The Page
+/// supplies only nodes sampled in the current animation batch; any missing or
+/// geometry-dirty native object rejects the whole fast path.
+pub(crate) fn ExportTargetedPaintOnlyDocumentWithEngine(
+    engine: &mut LayoutEngine,
+    owner: &DOM,
+    nodes: &[u64],
+) -> Option<Rc<FragmentNode>> {
+    let _trace = browser_tracing::span("layout", "Page.ExportTargetedPaintOnlyDocumentWithEngine");
+    if nodes.is_empty() {
+        return None;
+    }
+    for &node_id in nodes {
+        let mut applied = false;
+        if !owner.EmitPaintStyle(node_id, |mutation| {
+            applied = engine.ApplyMutation(mutation);
+        }) || !applied
+        {
+            return None;
+        }
+    }
+    if !engine.ExportTargetedPaintOnly() {
+        return None;
+    }
+    engine.TakeLayoutResult()
 }
 
 /// A proven offset-only change retains the completed frame's geometry. Mixed
@@ -245,7 +292,7 @@ mod tests {
             let object = native(root, id);
             let object_result = cached(object);
             let pixels = |f: &FragmentNode| {
-                renderer::pure_replay::RasterizeDisplayItemList(
+                raster::pure_replay::RasterizeDisplayItemList(
                     &paint::paint_engine::Paint(f),
                     320,
                     200,
@@ -426,7 +473,7 @@ mod tests {
                             &cs,
                         );
                         let pixels = |tree: &FragmentNode| {
-                            renderer::pure_replay::RasterizeDisplayItemList(
+                            raster::pure_replay::RasterizeDisplayItemList(
                                 &paint::paint_engine::Paint(tree),
                                 320,
                                 200,
@@ -503,7 +550,7 @@ mod tests {
                 &cs,
             );
             let pixels = |tree: &FragmentNode| {
-                renderer::pure_replay::RasterizeDisplayItemList(
+                raster::pure_replay::RasterizeDisplayItemList(
                     &paint::paint_engine::Paint(tree),
                     320,
                     200,
@@ -592,7 +639,7 @@ mod tests {
                     &cs,
                 );
                 let pixels = |tree: &FragmentNode| {
-                    renderer::pure_replay::RasterizeDisplayItemList(
+                    raster::pure_replay::RasterizeDisplayItemList(
                         &paint::paint_engine::Paint(tree),
                         320,
                         200,
@@ -826,7 +873,7 @@ mod tests {
                 &cs,
             );
             let pixels = |tree: &FragmentNode| {
-                renderer::pure_replay::RasterizeDisplayItemList(
+                raster::pure_replay::RasterizeDisplayItemList(
                     &paint::paint_engine::Paint(tree),
                     320,
                     200,

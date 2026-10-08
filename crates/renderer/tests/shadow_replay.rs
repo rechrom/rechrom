@@ -12,8 +12,8 @@ fn render_pair(items: Vec<DisplayItem>, width: u32, height: u32) -> (Vec<u8>, Ve
         ..Default::default()
     };
     (
-        renderer::source_replay::RasterizeSourceDisplayItemList(&list, width, height),
-        renderer::pure_replay::RasterizeSourceDisplayItemList(&list, width, height),
+        raster::source_replay::RasterizeSourceDisplayItemList(&list, width, height),
+        raster::pure_replay::RasterizeSourceDisplayItemList(&list, width, height),
     )
 }
 

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/tracing",
+    "crates/event_loop",
     "crates/devtools",
     "crates/skia",
     "crates/quickjs",
@@ -28,6 +29,9 @@ members = [
     "crates/layoutng_custom",
     "crates/paint",
     "crates/layer_tile",
+    "crates/raster",
+    "crates/compositor",
+    "crates/viz",
     "crates/renderer",
     "crates/dom",
     "crates/html",

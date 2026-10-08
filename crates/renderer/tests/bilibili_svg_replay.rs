@@ -40,8 +40,8 @@ fn compare(items: Vec<DisplayItem>, label: &str) {
         items,
         ..Default::default()
     };
-    let native = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
-    let rust = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+    let native = raster::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+    let rust = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
     assert_eq!(
         native
             .chunks_exact(4)

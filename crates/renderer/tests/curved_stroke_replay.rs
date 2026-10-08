@@ -154,10 +154,10 @@ fn closed_svg_strokes_and_outlined_fills_match_source() {
                                 items,
                                 ..Default::default()
                             };
-                            let native = renderer::source_replay::RasterizeSourceDisplayItemList(
+                            let native = raster::source_replay::RasterizeSourceDisplayItemList(
                                 &list, 512, 300,
                             );
-                            let rust = renderer::pure_replay::RasterizeSourceDisplayItemList(
+                            let rust = raster::pure_replay::RasterizeSourceDisplayItemList(
                                 &list, 512, 300,
                             );
                             let diffs = native

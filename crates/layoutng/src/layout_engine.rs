@@ -34,6 +34,21 @@ pub enum LayoutEngineError {
     RuntimeError(&'static str),
 }
 
+fn UpdateFragmentPaintStyle(
+    fragment: &mut FragmentNode,
+    node_id: u64,
+    style: &crate::internal::layout_input::PaintStyle,
+    found: &mut bool,
+) {
+    if fragment.node_id == node_id {
+        fragment.paint.style = style.clone();
+        *found = true;
+    }
+    for child in &mut fragment.children {
+        UpdateFragmentPaintStyle(child, node_id, style, found);
+    }
+}
+
 // cpp: layoutng/layout_engine.h:19-31
 /// Mutations of the engine-owned input tree. TreeUpdate reconciles one complete
 /// DOM projection using the existing native insert/style/text/remove logic;
@@ -41,6 +56,10 @@ pub enum LayoutEngineError {
 pub enum LayoutMutation<'a> {
     Constraints(&'a ConstraintSpace),
     TreeUpdate(&'a mut dyn FnMut(&mut LayoutTreeUpdate<'_>)),
+    PaintStyle {
+        node_id: u64,
+        style: &'a crate::internal::layout_input::ComputedStyle,
+    },
     ReplaceTree(LayoutObjectTree),
     ScrollOffset {
         node_id: u64,
@@ -96,7 +115,10 @@ impl LayoutEngine {
         // Native topology, style, constraints and layout results may change at
         // all other mutation entries. Never keep borrowed native pointers or
         // exported paths across them, even if the mutation later proves a noop.
-        if !matches!(&mutation, LayoutMutation::ScrollOffset { .. }) {
+        if !matches!(
+            &mutation,
+            LayoutMutation::ScrollOffset { .. } | LayoutMutation::PaintStyle { .. }
+        ) {
             self.scroll_paint_index_ = None;
             self.pending_scroll_ids_.clear();
         }
@@ -122,6 +144,28 @@ impl LayoutEngine {
                     update(&mut attachment);
                 });
                 true
+            }
+            LayoutMutation::PaintStyle { node_id, style } => {
+                let applied = self
+                    .tree_
+                    .as_mut()
+                    .is_some_and(|tree| tree.UpdatePaintStyle(node_id, style));
+                if applied {
+                    if let Some(fragments) = &mut self.fragments {
+                        let mut found = false;
+                        UpdateFragmentPaintStyle(
+                            Rc::make_mut(fragments),
+                            node_id,
+                            &style.paint,
+                            &mut found,
+                        );
+                        if !found {
+                            self.fragments = None;
+                            return false;
+                        }
+                    }
+                }
+                applied
             }
             LayoutMutation::ReplaceTree(tree) => {
                 self.fragments = None;
@@ -203,6 +247,81 @@ impl LayoutEngine {
             self.pre_paint_inputs_ = inputs;
             trace.set("published", 1.0);
         }
+    }
+
+    /// Re-export paint inputs from the resident layout result without running
+    /// layout. Blink's paint-only style path updates ObjectPaintProperties from
+    /// the existing layout geometry; transform/opacity animation samples must
+    /// not turn into a full layout solely to refresh the fragment snapshot.
+    ///
+    /// The DOM adapter may conservatively classify an update as paint-only.
+    /// The native tree is the final guard: if synchronization marked any
+    /// layout object dirty, reject this path and let the caller run Layout().
+    pub fn ExportPaintOnly(&mut self) -> bool {
+        let mut trace = browser_tracing::span("layout", "LayoutEngine.ExportPaintOnly");
+        if self.tree_.is_none() {
+            trace.set("rejected", 1.0);
+            return false;
+        }
+        let root = self.RootPointer();
+        let root_box = DynamicTo::<LayoutBox>(root);
+        if root_box.is_null()
+            || unsafe { &*root }.NeedsLayout()
+            || unsafe { &*root_box }.GetLayoutResults().is_empty()
+            || unsafe { &*root_box }.GetLayoutResult(0).is_null()
+        {
+            trace.set("native_needs_layout", 1.0);
+            return false;
+        }
+        let assembly = LayoutAssembly {
+            algorithms: self.algorithms_,
+            objects: self.objects_,
+            boundary: self.boundary_,
+        };
+        let mut fragments = assembly.ExportFragments(unsafe { &mut *root }, &self.constraints_);
+        let mut inputs = std::mem::take(&mut self.pre_paint_inputs_);
+        {
+            let _trace = browser_tracing::span("prepaint", "LayoutEngine.CertifyPaintInputs");
+            inputs.update(&mut fragments);
+        }
+        self.scroll_paint_index_ = Some({
+            let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
+            ScrollPaintPropertyIndex::new(unsafe { &mut *root }, &fragments)
+        });
+        self.pending_scroll_ids_.clear();
+        self.fragments = Some(Rc::new(fragments));
+        self.pre_paint_inputs_ = inputs;
+        trace.set("published", 1.0);
+        true
+    }
+
+    /// Publish paint-only values already applied to the retained fragment
+    /// snapshot. Chromium updates FragmentData/ObjectPaintProperties in place;
+    /// this immutable Rust boundary uses copy-on-write once per frame, then
+    /// refreshes the same subtree revision proof consumed by PrePaint.
+    pub fn ExportTargetedPaintOnly(&mut self) -> bool {
+        let mut trace = browser_tracing::span("layout", "LayoutEngine.ExportTargetedPaintOnly");
+        let Some(fragments) = &mut self.fragments else {
+            trace.set("rejected", 1.0);
+            return false;
+        };
+        let root = self
+            .tree_
+            .as_ref()
+            .map(LayoutObjectTree::Root)
+            .expect("targeted paint update requires a layout tree");
+        let root_box = DynamicTo::<LayoutBox>(root as *const _ as *mut LayoutObject);
+        if root_box.is_null()
+            || root.NeedsLayout()
+            || unsafe { &*root_box }.GetLayoutResults().is_empty()
+            || unsafe { &*root_box }.GetLayoutResult(0).is_null()
+        {
+            trace.set("native_needs_layout", 1.0);
+            return false;
+        }
+        self.pre_paint_inputs_.update(Rc::make_mut(fragments));
+        trace.set("published", 1.0);
+        true
     }
 
     /// The latest successful exported layout snapshot. Reading it does not

@@ -62,7 +62,7 @@ fn editing_fixture() -> Page {
     page.Open("https://page.test/page.html", 16384, 4096)
         .unwrap();
     for _ in 0..100 {
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         if !page.IsLoading() {
             break;
         }
@@ -275,7 +275,7 @@ fn text_control_selection_paints_blue_and_tracks_drag_shift_and_collapse() {
         assert_eq!(edit_selection(&page, id).End(), 9);
         let blue_pixels = |page: &Page| {
             let mut pixels = vec![0; 640 * 480];
-            renderer::surface::RenderDisplayItemListIntoWindowBuffer(
+            raster::surface::RenderDisplayItemListIntoWindowBuffer(
                 &page.CurrentFrame().unwrap().display_items,
                 640,
                 480,
@@ -292,7 +292,7 @@ fn text_control_selection_paints_blue_and_tracks_drag_shift_and_collapse() {
         );
         let selected_pixels = blue_pixels(&page);
         std::thread::sleep(std::time::Duration::from_millis(550));
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         assert_eq!(
             blue_pixels(&page),
             selected_pixels,

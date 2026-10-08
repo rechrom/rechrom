@@ -37,6 +37,11 @@ pub(crate) fn FragmentMetric(root: &FragmentNode, id: u64, name: &str) -> f64 {
     match name {
         "offsetWidth" => unzoom(fragment.size.width).round(),
         "offsetHeight" => unzoom(fragment.size.height).round(),
+        // Fragment offsets are relative to their containing fragment. This is
+        // the same coordinate space CSSOM View exposes for offsetLeft/Top in
+        // the common unfragmented offset-parent case.
+        "offsetLeft" => unzoom(fragment.offset.x).round(),
+        "offsetTop" => unzoom(fragment.offset.y).round(),
         "clientWidth" => {
             unzoom(fragment.content_size.width + p.padding.left + p.padding.right).round()
         }

@@ -4,7 +4,7 @@
 //! can place Display on its own presentation thread or co-locate it with the
 //! Compositor while retaining the same mailbox boundary.
 use crate::{
-    compositor::{self, Compositor},
+    compositor::{self, CompositorEngine},
     display::{self, Display},
     engine::{Output, UserEvent},
     window_surface::WindowTarget,
@@ -27,12 +27,7 @@ pub(crate) enum DisplayExecutor {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Config {
     pub display_executor: DisplayExecutor,
-}
-
-#[derive(Clone, Copy)]
-struct PendingCycle {
-    frame: crate::begin_frame_source::NativeBeginFrame,
-    prepared: bool,
+    pub capture_frames: bool,
 }
 
 enum LocalMessage {
@@ -40,13 +35,27 @@ enum LocalMessage {
     Display(display::Message),
 }
 
+pub(crate) type BeginMainFrameClient =
+    Arc<dyn Fn(crate::begin_frame_source::NativeBeginFrame) + Send + Sync>;
+
 pub(crate) fn Spawn(
     config: Config,
     target: WindowTarget,
     output: Output,
-    frame_source: Arc<dyn BeginFrameSource>,
+    input_frame_source: Arc<crate::begin_frame_source::LogicalBeginFrameSource>,
+    display_frame_source: Arc<crate::begin_frame_source::LogicalBeginFrameSource>,
+    begin_main_frame: BeginMainFrameClient,
 ) -> io::Result<mpsc::Sender<compositor::Command>> {
     let (compositor_sender, compositor_receiver) = mpsc::channel();
+    let input_sender = compositor_sender.clone();
+    input_frame_source.SetClient(Arc::new(move |frame| {
+        let _ = input_sender.send(compositor::Command::InputBeginFrame(frame));
+    }))?;
+    let display_sender = compositor_sender.clone();
+    display_frame_source.SetClient(Arc::new(move |frame| {
+        let _ = display_sender.send(compositor::Command::DisplayBeginFrame(frame));
+    }))?;
+    let frame_source: Arc<dyn BeginFrameSource> = display_frame_source;
     let raster_sender = SpawnRasterOwner(compositor_sender.clone())?;
     match config.display_executor {
         DisplayExecutor::DedicatedThread => SpawnDedicated(
@@ -56,6 +65,8 @@ pub(crate) fn Spawn(
             compositor_sender.clone(),
             compositor_receiver,
             raster_sender,
+            config.capture_frames,
+            begin_main_frame,
         )?,
         DisplayExecutor::CompositorThread => SpawnShared(
             target,
@@ -63,6 +74,8 @@ pub(crate) fn Spawn(
             frame_source,
             compositor_receiver,
             raster_sender,
+            config.capture_frames,
+            begin_main_frame,
         )?,
     }
     Ok(compositor_sender)
@@ -81,12 +94,8 @@ fn SpawnRasterOwner(
                 ..Default::default()
             });
             while let Ok(mut job) = raster_receiver.recv() {
-                let result = compositor::PlanAndRaster(
-                    &mut job.bundle,
-                    job.snapshot,
-                    job.activation_target,
-                    job.prepaint_target,
-                );
+                let result =
+                    compositor::PlanAndRaster(&mut job.bundle, job.snapshot, job.activation_target);
                 if compositor_sender
                     .send(compositor::Command::RasterReady(compositor::RasterReady {
                         result,
@@ -108,6 +117,8 @@ fn SpawnDedicated(
     compositor_sender: mpsc::Sender<compositor::Command>,
     compositor_receiver: mpsc::Receiver<compositor::Command>,
     raster_sender: mpsc::Sender<compositor::RasterJob>,
+    capture_frames: bool,
+    begin_main_frame: BeginMainFrameClient,
 ) -> io::Result<()> {
     let (display_sender, display_receiver) = mpsc::channel::<display::Message>();
     let display_reply = display_sender.clone();
@@ -119,7 +130,7 @@ fn SpawnDedicated(
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
             SetPresentationThreadPriority();
-            let mut display = Display::New(target, display_output.notify.clone());
+            let mut display = Display::New(target, display_output.clone(), capture_frames);
             let post_swap_ack: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |sequence| {
                 let _ = display_reply.send(display::Message::SwapAck(sequence));
             });
@@ -169,6 +180,7 @@ fn SpawnDedicated(
                 raster_sender,
                 display_sender,
                 frame_source,
+                begin_main_frame,
             ) {
                 (output.notify)(UserEvent::Fatal(crate::engine::FatalError::new(
                     "compositor",
@@ -184,11 +196,12 @@ fn RunDedicatedCompositor(
     raster_sender: mpsc::Sender<compositor::RasterJob>,
     display_sender: mpsc::Sender<display::Message>,
     frame_source: Arc<dyn BeginFrameSource>,
+    begin_main_frame: BeginMainFrameClient,
 ) -> io::Result<()> {
-    let mut compositor = Compositor::default();
-    let mut pending_cycle: Option<PendingCycle> = None;
+    let mut compositor = CompositorEngine::default();
+    let mut scheduler = viz::DisplayScheduler::default();
     loop {
-        let timeout = PendingTimeout(pending_cycle);
+        let timeout = PendingTimeout(&scheduler);
         match receiver.recv_timeout(timeout) {
             Ok(compositor::Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let _ = display_sender.send(display::Message::Stop);
@@ -197,74 +210,88 @@ fn RunDedicatedCompositor(
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 AdvanceCycle(
                     &mut compositor,
-                    &mut pending_cycle,
+                    &mut scheduler,
                     &raster_sender,
                     &display_sender,
                     &frame_source,
+                    &begin_main_frame,
                 )?;
             }
-            Ok(compositor::Command::BeginFrame(frame)) => {
-                if let Some(previous) = pending_cycle.replace(PendingCycle {
-                    frame,
-                    prepared: false,
-                }) {
-                    if !previous.prepared {
+            Ok(compositor::Command::DisplayBeginFrame(frame)) => {
+                if let Some(previous) = scheduler.BeginFrame(frame, FrameTiming(frame)) {
+                    if !previous.IsPrepared() {
                         RouteDedicated(
-                            compositor.Prepare(previous.frame),
+                            compositor.Prepare(previous.Payload())?,
                             &raster_sender,
                             &display_sender,
                             &frame_source,
+                            &begin_main_frame,
                         )?;
                     }
                     RouteDedicated(
-                        compositor.Draw(previous.frame),
+                        compositor.Draw(previous.Payload()),
                         &raster_sender,
                         &display_sender,
                         &frame_source,
+                        &begin_main_frame,
                     )?;
                 }
             }
+            Ok(compositor::Command::BeginFrame(frame)) => RouteDedicated(
+                compositor.Handle(compositor::Command::BeginFrame(frame))?,
+                &raster_sender,
+                &display_sender,
+                &frame_source,
+                &begin_main_frame,
+            )?,
             Ok(message) => RouteDedicated(
                 compositor.Handle(message)?,
                 &raster_sender,
                 &display_sender,
                 &frame_source,
+                &begin_main_frame,
             )?,
         }
         AdvanceCycle(
             &mut compositor,
-            &mut pending_cycle,
+            &mut scheduler,
             &raster_sender,
             &display_sender,
             &frame_source,
+            &begin_main_frame,
         )?;
     }
 }
 
 fn AdvanceCycle(
-    compositor: &mut Compositor,
-    pending_cycle: &mut Option<PendingCycle>,
+    compositor: &mut CompositorEngine,
+    scheduler: &mut viz::DisplayScheduler<crate::begin_frame_source::NativeBeginFrame>,
     raster_sender: &mpsc::Sender<compositor::RasterJob>,
     display_sender: &mpsc::Sender<display::Message>,
     frame_source: &Arc<dyn BeginFrameSource>,
+    begin_main_frame: &BeginMainFrameClient,
 ) -> io::Result<()> {
-    if let Some(cycle) = pending_cycle {
-        if !cycle.prepared && Instant::now() >= CompositorPrepareDeadline(cycle.frame) {
-            RouteDedicated(
-                compositor.Prepare(cycle.frame),
-                raster_sender,
-                display_sender,
-                frame_source,
-            )?;
-            cycle.prepared = true;
-        }
-    }
-    if pending_cycle.is_some_and(|cycle| Instant::now() >= DisplayDrawDeadline(cycle.frame)) {
+    let now = Instant::now();
+    if scheduler.NeedsPrepare(now) {
+        let frame = scheduler
+            .PendingPayload()
+            .expect("Viz scheduler reported pending prepare without a frame");
         RouteDedicated(
-            compositor.Draw(pending_cycle.take().unwrap().frame),
+            compositor.Prepare(frame)?,
             raster_sender,
             display_sender,
             frame_source,
+            begin_main_frame,
+        )?;
+        scheduler.MarkPrepared();
+    }
+    if let Some(frame) = scheduler.TakeIfDrawDue(now) {
+        RouteDedicated(
+            compositor.Draw(frame),
+            raster_sender,
+            display_sender,
+            frame_source,
+            begin_main_frame,
         )?;
     }
     Ok(())
@@ -275,6 +302,7 @@ fn RouteDedicated(
     raster_sender: &mpsc::Sender<compositor::RasterJob>,
     display_sender: &mpsc::Sender<display::Message>,
     frame_source: &Arc<dyn BeginFrameSource>,
+    begin_main_frame: &BeginMainFrameClient,
 ) -> io::Result<()> {
     for effect in effects {
         match effect {
@@ -284,6 +312,7 @@ fn RouteDedicated(
             compositor::Effect::Display(message) => display_sender
                 .send(message)
                 .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "display stopped"))?,
+            compositor::Effect::BeginMainFrame(frame) => begin_main_frame(frame),
             compositor::Effect::RequestBeginFrame => frame_source.request_begin_frame(),
         }
     }
@@ -296,6 +325,8 @@ fn SpawnShared(
     frame_source: Arc<dyn BeginFrameSource>,
     receiver: mpsc::Receiver<compositor::Command>,
     raster_sender: mpsc::Sender<compositor::RasterJob>,
+    capture_frames: bool,
+    begin_main_frame: BeginMainFrameClient,
 ) -> io::Result<()> {
     std::thread::Builder::new()
         .name("browser-presentation".into())
@@ -312,6 +343,8 @@ fn SpawnShared(
                 frame_source,
                 receiver,
                 raster_sender,
+                capture_frames,
+                begin_main_frame,
             ) {
                 (output.notify)(UserEvent::Fatal(crate::engine::FatalError::new(
                     "presentation",
@@ -328,10 +361,12 @@ fn RunShared(
     frame_source: Arc<dyn BeginFrameSource>,
     receiver: mpsc::Receiver<compositor::Command>,
     raster_sender: mpsc::Sender<compositor::RasterJob>,
+    capture_frames: bool,
+    begin_main_frame: BeginMainFrameClient,
 ) -> io::Result<()> {
-    let mut compositor = Compositor::default();
-    let mut display = Display::New(target, output.notify.clone());
-    let mut pending_cycle: Option<PendingCycle> = None;
+    let mut compositor = CompositorEngine::default();
+    let mut display = Display::New(target, output, capture_frames);
+    let mut scheduler = viz::DisplayScheduler::default();
     let mut local = VecDeque::new();
     let (ack_sender, ack_receiver) = mpsc::channel();
     let wake_frames = frame_source.clone();
@@ -344,7 +379,7 @@ fn RunShared(
             local.push_back(LocalMessage::Display(display::Message::SwapAck(sequence)));
         }
         if local.is_empty() {
-            match receiver.recv_timeout(PendingTimeout(pending_cycle)) {
+            match receiver.recv_timeout(PendingTimeout(&scheduler)) {
                 Ok(compositor::Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     let _ = display.Handle(display::Message::Stop, &post_swap_ack)?;
                     return Ok(());
@@ -355,26 +390,34 @@ fn RunShared(
         }
         while let Some(message) = local.pop_front() {
             match message {
-                LocalMessage::Compositor(compositor::Command::BeginFrame(frame)) => {
-                    if let Some(previous) = pending_cycle.replace(PendingCycle {
-                        frame,
-                        prepared: false,
-                    }) {
-                        if !previous.prepared {
+                LocalMessage::Compositor(compositor::Command::DisplayBeginFrame(frame)) => {
+                    if let Some(previous) = scheduler.BeginFrame(frame, FrameTiming(frame)) {
+                        if !previous.IsPrepared() {
                             RouteSharedCompositor(
-                                compositor.Prepare(previous.frame),
+                                compositor.Prepare(previous.Payload())?,
                                 &mut local,
                                 &raster_sender,
                                 &frame_source,
+                                &begin_main_frame,
                             )?;
                         }
                         RouteSharedCompositor(
-                            compositor.Draw(previous.frame),
+                            compositor.Draw(previous.Payload()),
                             &mut local,
                             &raster_sender,
                             &frame_source,
+                            &begin_main_frame,
                         )?;
                     }
+                }
+                LocalMessage::Compositor(compositor::Command::BeginFrame(frame)) => {
+                    RouteSharedCompositor(
+                        compositor.Handle(compositor::Command::BeginFrame(frame))?,
+                        &mut local,
+                        &raster_sender,
+                        &frame_source,
+                        &begin_main_frame,
+                    )?;
                 }
                 LocalMessage::Compositor(compositor::Command::Stop) => {
                     let _ = display.Handle(display::Message::Stop, &post_swap_ack)?;
@@ -385,6 +428,7 @@ fn RunShared(
                     &mut local,
                     &raster_sender,
                     &frame_source,
+                    &begin_main_frame,
                 )?,
                 LocalMessage::Display(message) => {
                     for effect in display.Handle(message, &post_swap_ack)? {
@@ -400,23 +444,27 @@ fn RunShared(
                 }
             }
         }
-        if let Some(cycle) = &mut pending_cycle {
-            if !cycle.prepared && Instant::now() >= CompositorPrepareDeadline(cycle.frame) {
-                RouteSharedCompositor(
-                    compositor.Prepare(cycle.frame),
-                    &mut local,
-                    &raster_sender,
-                    &frame_source,
-                )?;
-                cycle.prepared = true;
-            }
-        }
-        if pending_cycle.is_some_and(|cycle| Instant::now() >= DisplayDrawDeadline(cycle.frame)) {
+        let now = Instant::now();
+        if scheduler.NeedsPrepare(now) {
+            let frame = scheduler
+                .PendingPayload()
+                .expect("Viz scheduler reported pending prepare without a frame");
             RouteSharedCompositor(
-                compositor.Draw(pending_cycle.take().unwrap().frame),
+                compositor.Prepare(frame)?,
                 &mut local,
                 &raster_sender,
                 &frame_source,
+                &begin_main_frame,
+            )?;
+            scheduler.MarkPrepared();
+        }
+        if let Some(frame) = scheduler.TakeIfDrawDue(now) {
+            RouteSharedCompositor(
+                compositor.Draw(frame),
+                &mut local,
+                &raster_sender,
+                &frame_source,
+                &begin_main_frame,
             )?;
         }
     }
@@ -427,6 +475,7 @@ fn RouteSharedCompositor(
     local: &mut VecDeque<LocalMessage>,
     raster_sender: &mpsc::Sender<compositor::RasterJob>,
     frame_source: &Arc<dyn BeginFrameSource>,
+    begin_main_frame: &BeginMainFrameClient,
 ) -> io::Result<()> {
     for effect in effects {
         match effect {
@@ -434,35 +483,29 @@ fn RouteSharedCompositor(
                 .send(job)
                 .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "raster owner stopped"))?,
             compositor::Effect::Display(message) => local.push_back(LocalMessage::Display(message)),
+            compositor::Effect::BeginMainFrame(frame) => begin_main_frame(frame),
             compositor::Effect::RequestBeginFrame => frame_source.request_begin_frame(),
         }
     }
     Ok(())
 }
 
-fn PendingTimeout(cycle: Option<PendingCycle>) -> Duration {
-    cycle.map_or(Duration::from_millis(50), |cycle| {
-        let deadline = if cycle.prepared {
-            DisplayDrawDeadline(cycle.frame)
-        } else {
-            CompositorPrepareDeadline(cycle.frame)
-        };
-        deadline.saturating_duration_since(Instant::now())
-    })
+fn PendingTimeout(
+    scheduler: &viz::DisplayScheduler<crate::begin_frame_source::NativeBeginFrame>,
+) -> Duration {
+    scheduler
+        .NextDeadline()
+        .map_or(Duration::from_millis(50), |deadline| {
+            deadline.saturating_duration_since(Instant::now())
+        })
 }
 
-pub(crate) fn CompositorPrepareDeadline(
-    frame: crate::begin_frame_source::NativeBeginFrame,
-) -> Instant {
-    frame.frame_time + frame.interval / 3
-}
-
-pub(crate) fn DisplayDrawDeadline(frame: crate::begin_frame_source::NativeBeginFrame) -> Instant {
-    frame
-        .deadline
-        .checked_sub(frame.interval / 3)
-        .unwrap_or(frame.frame_time)
-        .max(frame.frame_time)
+fn FrameTiming(frame: crate::begin_frame_source::NativeBeginFrame) -> viz::FrameTiming {
+    viz::FrameTiming {
+        frame_time: frame.frame_time,
+        interval: frame.interval,
+        source_deadline: frame.deadline,
+    }
 }
 
 fn SetPresentationThreadPriority() {

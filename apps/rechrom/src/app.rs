@@ -39,7 +39,38 @@ pub fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     // winit owns the native application's main thread (required on macOS).
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
-    let mailbox = Arc::new(Mutex::new(None));
+    let mailbox: engine::FrameMailbox = Arc::new(Mutex::new(None));
+    let screenshot_mailbox = mailbox.clone();
+    devtools::set_screenshot_handler(Arc::new(move |target_id| {
+        let frame = screenshot_mailbox.lock().unwrap();
+        let frame = frame.as_ref().ok_or("No completed frame")?;
+        let surface = match target_id {
+            1 => &frame.content,
+            2 => &frame.toolbar,
+            _ => return Err("target_id must be 1 (page) or 2 (browser toolbar)".into()),
+        };
+        let (width, height) = surface.size();
+        // Page.captureScreenshot returns the composited page against its
+        // default canvas background. Keep the protocol image opaque like
+        // Chromium unless transparent-background emulation is explicitly
+        // added later. Some otherwise blank tiles retain zero alpha in the
+        // internal surface even though native presentation is opaque.
+        let mut pixels = surface.pixels().to_vec();
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel[3] = 255;
+        }
+        let mut encoded = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut encoded, width, height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+            writer
+                .write_image_data(&pixels)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(encoded)
+    }));
     let output = Output {
         mailbox: mailbox.clone(),
         notify: Arc::new(move |event| {
@@ -206,11 +237,40 @@ impl App {
     }
 }
 impl ApplicationHandler<UserEvent> for App {
+    fn open_urls(&mut self, _: &ActiveEventLoop, urls: Vec<String>) {
+        let mut opened = 0;
+        for raw in urls {
+            let address = match crate::options::normalize_address(&raw) {
+                Ok(address) => address,
+                Err(error) => {
+                    eprintln!("open-url: {error}");
+                    continue;
+                }
+            };
+            if opened > 0 {
+                self.send(Command::NewTab);
+            }
+            self.send(Command::Navigate(address));
+            opened += 1;
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
+            // DevTools Page.captureScreenshot addresses the content target, so
+            // headless --height follows CDP viewport semantics.  The hidden
+            // host still owns a toolbar Page; allocate its height outside the
+            // requested content viewport instead of silently shrinking
+            // window.innerHeight and changing responsive layout.
+            let window_height = self.options.height
+                + if self.options.headless {
+                    crate::chrome::HEIGHT as u32
+                } else {
+                    0
+                };
             let attributes = Window::default_attributes()
                 .with_title("Rechrom")
-                .with_inner_size(LogicalSize::new(self.options.width, self.options.height))
+                .with_inner_size(LogicalSize::new(self.options.width, window_height))
                 .with_min_inner_size(LogicalSize::new(320, 200))
                 .with_visible(!self.options.headless);
             #[cfg(target_os = "macos")]
@@ -263,6 +323,7 @@ impl ApplicationHandler<UserEvent> for App {
                     } else {
                         crate::presentation_runtime::DisplayExecutor::DedicatedThread
                     },
+                    capture_frames: self.options.headless,
                 },
             ) {
                 Ok(commands) => {
@@ -271,6 +332,16 @@ impl ApplicationHandler<UserEvent> for App {
                         reload_commands
                             .send(Command::Reload)
                             .map_err(|error| error.to_string())
+                    }));
+                    let evaluate_commands = commands.clone();
+                    devtools::set_evaluate_handler(Arc::new(move |source| {
+                        let (reply, result) = mpsc::channel();
+                        evaluate_commands
+                            .send(Command::Evaluate { source, reply })
+                            .map_err(|error| error.to_string())?;
+                        result
+                            .recv_timeout(Duration::from_secs(10))
+                            .map_err(|error| error.to_string())?
                     }));
                     let wheel_commands = commands.clone();
                     devtools::set_wheel_handler(Arc::new(move |wheel| {

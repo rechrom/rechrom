@@ -40,7 +40,7 @@ fn page(html: &str, width: u32, height: u32, scale: f64) -> Page {
     );
     page.Open("https://viewport.test/", 8192, 4096).unwrap();
     while page.IsLoading() {
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
     }
     page
 }
@@ -79,7 +79,7 @@ fn shape(page: &Page) -> *const font_engine::fonts::shaping::shape_result::Shape
     panic!("text layout object missing")
 }
 fn pixels(page: &Page, width: u32, height: u32, scale: f64) -> Vec<u8> {
-    renderer::surface::RenderDisplayItemListToSurface(
+    raster::surface::RenderDisplayItemListToSurface(
         &page.CurrentFrame().unwrap().display_items,
         width,
         height,

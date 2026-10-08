@@ -89,6 +89,16 @@ pub trait ApplicationHandler<T: 'static = ()> {
         let _ = (event_loop, event);
     }
 
+    /// Emitted when the operating system asks the application to open one or
+    /// more URLs.
+    ///
+    /// URLs retain their serialized form so applications can apply their own
+    /// scheme policy. Platforms which do not expose application URL-open
+    /// requests do not call this method.
+    fn open_urls(&mut self, event_loop: &ActiveEventLoop, urls: Vec<String>) {
+        let _ = (event_loop, urls);
+    }
+
     /// Emitted when the OS sends an event to a winit window.
     fn window_event(
         &mut self,

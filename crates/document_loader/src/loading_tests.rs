@@ -359,6 +359,24 @@ fn fetcher_deduplicates_image_requests_and_delivers_only_completed_mutations() {
     assert_eq!(fetcher.PollPendingImages(&mut client), 0);
     assert_eq!(drops.get(), 1);
 }
+
+#[test]
+fn lazy_image_does_not_delay_load_and_an_eager_consumer_promotes_it() {
+    let (backend, _) = backend(Ok(URLResponse::default()), 10);
+    let fetcher = fetcher(backend.clone());
+    fetcher
+        .QueueImageWithLoadBlocking("shared.png", None, false)
+        .unwrap();
+    assert!(!fetcher.HasPendingImages());
+    assert!(!fetcher.HasPendingLoadBlockingImages());
+    assert!(backend.borrow().requests.borrow().is_empty());
+    fetcher
+        .QueueImageWithLoadBlocking("shared.png", None, true)
+        .unwrap();
+    assert!(fetcher.HasPendingImages());
+    assert!(fetcher.HasPendingLoadBlockingImages());
+    assert_eq!(backend.borrow().requests.borrow().len(), 1);
+}
 struct FailingLoader(Rc<RefCell<Vec<String>>>);
 impl URLLoader for FailingLoader {
     fn Load(&mut self, request: &URLRequest) -> io::Result<Box<dyn URLLoadOperation>> {

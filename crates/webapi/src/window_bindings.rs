@@ -36,7 +36,7 @@ struct NetworkJob {
     error: String,
 }
 // Rust borrow adapter for the Page-owned runtime captured by C++ host tasks.
-// The task receives RunTasks' active runtime after the Window borrow is released.
+// The task receives the turn's active runtime after the Window borrow is released.
 type RuntimeTask = Box<dyn FnOnce(&mut dyn JavaScriptRuntime, &JavaScriptRealm)>;
 enum HostTaskCallback {
     Plain(Box<dyn FnOnce()>),
@@ -242,6 +242,34 @@ impl WindowJavaScriptBindings {
     }
     pub fn HasPendingAnimationFrames(&self) -> bool {
         !self.animation_callbacks.is_empty()
+    }
+    /// Earliest owner-thread turn which can advance a Window task source.
+    /// The embedding event loop supplies `now`; Window never blocks or owns a
+    /// clock-driven message pump.
+    pub fn NextTaskDeadline(&self, now: Instant) -> Option<Instant> {
+        let mut wake = self.next_timer().map(|(_, due)| due);
+        if let Some(due) = self.animation_fallback_due {
+            wake = Some(wake.map_or(due, |current| current.min(due)));
+        }
+        if !self.network_jobs.is_empty() {
+            // XMLHttpRequestOperation is a poll interface. Polling remains a
+            // Window task until the transport grows a typed wake callback.
+            let due = now + Duration::from_millis(1);
+            wake = Some(wake.map_or(due, |current| current.min(due)));
+        }
+        if !self.host_tasks.is_empty() {
+            let ready = self
+                .host_tasks
+                .iter()
+                .any(|task| task.ready.as_ref().is_none_or(|ready| ready()));
+            let due = if ready {
+                now
+            } else {
+                now + Duration::from_millis(1)
+            };
+            wake = Some(wake.map_or(due, |current| current.min(due)));
+        }
+        wake
     }
     fn ScheduleAnimationFrame(&mut self) {
         if !self.HasPendingAnimationFrames() {
@@ -1006,7 +1034,7 @@ impl WindowJavaScriptBindings {
 
     // cpp: webapi/window_bindings.cc:362-453
     // Borrow Window only to pick a task; callbacks can reenter its host API.
-    pub fn RunTasks(
+    pub fn RunTaskTurn(
         window: &Rc<RefCell<Self>>,
         runtime: &mut dyn JavaScriptRuntime,
         realm: &JavaScriptRealm,
@@ -1102,9 +1130,7 @@ impl WindowJavaScriptBindings {
                                 &HostValue::Object(HostObjectRef { id: 0 }),
                                 &[
                                     HostValue::Number(response.status as f64),
-                                    HostValue::String(
-                                        String::from_utf8_lossy(&response.body).into_owned(),
-                                    ),
+                                    HostValue::Bytes(response.body.into()),
                                     HostValue::String(response.final_url),
                                     HostValue::String(response.mime_type),
                                 ],
@@ -1359,7 +1385,7 @@ mod tests {
         // must regain control between tasks; their Promise jobs finish first.
         enqueue(&window, 32);
         for expected in 1..=32 {
-            WindowJavaScriptBindings::RunTasks(&window, &mut runtime, &realm, 0.0, &mut |error| {
+            WindowJavaScriptBindings::RunTaskTurn(&window, &mut runtime, &realm, 0.0, &mut |error| {
                 panic!("unexpected script error: {error:?}")
             });
             assert_script(
@@ -1469,7 +1495,7 @@ mod tests {
             if(!rejected)throw Error('blob validation');
             queueMicrotask(()=>log.push('queued'));
             Promise.resolve().then(()=>log.push('promise'));
-            __request('POST','../endpoint','payload','X-One: one\nX-Two:two', (s,b,u,m)=>{if(s!==201||b!=='reply'||m!=='text/plain')throw Error('response');log.push('network');queueMicrotask(()=>log.push('network-job'));}, e=>{throw Error(e)});
+            __request('POST','../endpoint','payload','X-One: one\nX-Two:two', (s,b,u,m)=>{if(s!==201||new TextDecoder().decode(b)!=='reply'||m!=='text/plain')throw Error('response');log.push('network');queueMicrotask(()=>log.push('network-job'));}, e=>{throw Error(e)});
             var canceled=__request('GET','cancel','','',()=>{throw Error('canceled callback ran')},()=>{throw Error('canceled failure ran')});
             __cancelRequest(canceled);
             __request('GET','fail','','',()=>{throw Error('unexpected success')},e=>{if(e!=='network failure')throw Error('failure');log.push('failure')});
@@ -1501,7 +1527,7 @@ mod tests {
         let mut errors = Vec::new();
         // Explicitly pump separate host turns to complete this finite fixture.
         for _ in 0..8 {
-            WindowJavaScriptBindings::RunTasks(&window, &mut runtime, &realm, 0.0, &mut |e| {
+            WindowJavaScriptBindings::RunTaskTurn(&window, &mut runtime, &realm, 0.0, &mut |e| {
                 errors.push(e.clone())
             });
         }
@@ -1530,7 +1556,7 @@ mod tests {
             true
         "#,
         );
-        WindowJavaScriptBindings::RunTasks(&window, &mut runtime, &realm, 30.0, &mut |e| {
+        WindowJavaScriptBindings::RunTaskTurn(&window, &mut runtime, &realm, 30.0, &mut |e| {
             errors.push(e.clone())
         });
         assert_eq!(errors.len(), 1, "{errors:?}");
@@ -1598,7 +1624,7 @@ mod tests {
         );
         assert!(source.0.load(std::sync::atomic::Ordering::Relaxed) > 0);
         let mut errors = Vec::new();
-        WindowJavaScriptBindings::RunTasks(&window, &mut runtime, &realm, 0.0, &mut |error| {
+        WindowJavaScriptBindings::RunTaskTurn(&window, &mut runtime, &realm, 0.0, &mut |error| {
             errors.push(error.clone())
         });
         assert_script(
@@ -1628,7 +1654,7 @@ mod tests {
             first_time,
             &mut |error| errors.push(error.clone()),
         );
-        WindowJavaScriptBindings::RunTasks(&window, &mut runtime, &realm, 0.0, &mut |error| {
+        WindowJavaScriptBindings::RunTaskTurn(&window, &mut runtime, &realm, 0.0, &mut |error| {
             errors.push(error.clone())
         });
         assert_script(&mut runtime, &realm, "frameLog.length===4");

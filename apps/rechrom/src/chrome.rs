@@ -71,9 +71,9 @@ pub fn popup_document(rows: &[(String, String, String)], width: f64, x: f64) -> 
 /// Compose two paint artifacts in paint order. Popup font slots and both
 /// semantic index spaces are rebased; native IDs/property references survive.
 pub fn content_with_popup(
-    content: Option<&renderer::surface::PaintArtifact>,
-    popup: &renderer::surface::PaintArtifact,
-) -> std::io::Result<renderer::surface::PaintArtifact> {
+    content: Option<&raster::surface::PaintArtifact>,
+    popup: &raster::surface::PaintArtifact,
+) -> std::io::Result<raster::surface::PaintArtifact> {
     use paint::paint_engine::{DisplayItem, DisplayItemType};
     let mut list = content.cloned().unwrap_or_default();
     let mut resources = list.resources.as_deref().cloned().unwrap_or_default();

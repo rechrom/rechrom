@@ -111,9 +111,9 @@ fn bounded_nested_n32_f16_and_empty_layers_match_native_skia() {
                         ..Default::default()
                     };
                     let expected =
-                        renderer::source_replay::RasterizeSourceDisplayItemList(&list, 400, 340);
+                        raster::source_replay::RasterizeSourceDisplayItemList(&list, 400, 340);
                     let actual =
-                        renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 400, 340);
+                        raster::pure_replay::RasterizeSourceDisplayItemList(&list, 400, 340);
                     let diff = actual.iter().zip(&expected).filter(|(a, b)| a != b).count();
                     assert_eq!(diff, 0, "x={x} y={y} kind={kind:?} aa={aa} nested={nested}");
                 }
@@ -157,8 +157,8 @@ fn blur_layer_samples_outside_output_clip_and_keeps_padding_transparent() {
                 .into(),
                 ..Default::default()
             };
-            let expected = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 320, 320);
-            let actual = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 320, 320);
+            let expected = raster::source_replay::RasterizeSourceDisplayItemList(&list, 320, 320);
+            let actual = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 320, 320);
             let diff = actual.iter().zip(&expected).filter(|(a, b)| a != b).count();
             assert_eq!(diff, 0, "x={x} y={y} sigma={sigma}");
         }

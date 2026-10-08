@@ -6,3 +6,4 @@
 *.profraw
 *.trace
 *.log
+/rechrom-crash-reports/

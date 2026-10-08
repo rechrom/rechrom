@@ -88,9 +88,8 @@ fn filtered_n32_children_restore_into_f16_parent_matches_original_skia() {
                     .into(),
                     ..Default::default()
                 };
-                let native =
-                    renderer::source_replay::RasterizeSourceDisplayItemList(&list, 520, 220);
-                let actual = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 520, 220);
+                let native = raster::source_replay::RasterizeSourceDisplayItemList(&list, 520, 220);
+                let actual = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 520, 220);
                 assert_eq!(actual.len(), native.len());
                 let different = actual
                     .chunks_exact(4)
@@ -173,9 +172,9 @@ fn f16_rounded_spans_match_original_skia() {
                         ..Default::default()
                     };
                     let native =
-                        renderer::source_replay::RasterizeSourceDisplayItemList(&list, 520, 220);
+                        raster::source_replay::RasterizeSourceDisplayItemList(&list, 520, 220);
                     let actual =
-                        renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 520, 220);
+                        raster::pure_replay::RasterizeSourceDisplayItemList(&list, 520, 220);
                     assert_eq!(actual.len(), native.len());
                     let different = actual
                         .chunks_exact(4)

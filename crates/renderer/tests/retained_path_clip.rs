@@ -13,6 +13,76 @@ use paint::paint_property_tree::{
 };
 use std::sync::Arc;
 
+#[derive(Default)]
+struct TestPipeline {
+    raster: raster::RasterEngine,
+    compositor: compositor::FrameBuilder,
+    viz: viz::VizEngine,
+    renderer: renderer::Renderer,
+}
+
+impl TestPipeline {
+    fn paint(
+        &mut self,
+        engine: &mut layer_tile::LayerTileEngine,
+        update: layer_tile::PendingTreeUpdate,
+        width: u32,
+        height: u32,
+        target: &mut [u32],
+        format: skia::PixelFormat,
+    ) -> std::io::Result<()> {
+        let raster =
+            self.raster
+                .prepare(&update.frame_plan, &update.raster_batch, width, height)?;
+        engine.ApplyRasterResults(&raster.completions);
+        let release = engine
+            .ActivatePending()
+            .ok_or_else(|| std::io::Error::other("pending tree did not become ready"))?;
+        let released = self.raster.release_resources(&release)?;
+        engine.AcknowledgeResourceRelease(&released);
+        let plan = engine.GetActiveFramePlan().expect("active test plan");
+        let frame = self
+            .compositor
+            .BuildFrame(plan)
+            .map_err(std::io::Error::other)?;
+        let surface = viz::SurfaceId(1);
+        self.viz
+            .SubmitFrame(surface, frame)
+            .map_err(std::io::Error::other)?;
+        let output = compositor::DeviceRect::new(0, 0, width, height);
+        let frame = self
+            .viz
+            .Aggregate(
+                output,
+                &[viz::SurfacePlacement {
+                    surface_id: surface,
+                    destination: output,
+                }],
+            )
+            .map_err(std::io::Error::other)?;
+        let resources = renderer::SingleSurfaceResources {
+            surface_id: surface,
+            resources: &self.raster,
+        };
+        self.renderer.Render(
+            &frame,
+            &resources,
+            renderer::RenderTarget {
+                width,
+                height,
+                pixels: target,
+                format,
+                row_stride: width as usize,
+            },
+        )?;
+        Ok(())
+    }
+
+    fn stats(&self) -> raster::RasterStats {
+        self.raster.stats()
+    }
+}
+
 fn point(verb: PaintPathVerb, x: f64, y: f64) -> PaintPathCommand {
     PaintPathCommand {
         verb,
@@ -173,31 +243,36 @@ fn retained_path_clips_match_full_canvas_across_tiles_and_device_scales() {
                 ..Default::default()
             });
             let mut engine = layer_tile::LayerTileEngine::default();
-            engine.SetFrameConfig(layer_tile::FrameConfig {
-                viewport: PaintRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 400.0,
-                    height: 400.0,
-                },
-                raster_scale: scale,
-                activation_scroll: None,
-                prepaint_scroll: None,
-            });
-            engine.Update(&list).unwrap();
+            let update = engine
+                .UpdatePending(
+                    &list,
+                    layer_tile::FrameConfig {
+                        viewport: PaintRect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 400.0,
+                            height: 400.0,
+                        },
+                        raster_scale: scale,
+                        activation_scroll: None,
+                        frame_time: None,
+                    },
+                )
+                .unwrap();
             let size = (400.0 * scale) as u32;
             let mut actual = vec![0; size as usize * size as usize];
-            let mut renderer = renderer::layer_tile_renderer::LayerTileRenderer::default();
+            let mut renderer = TestPipeline::default();
             renderer
                 .paint(
-                    engine.GetFramePlan().unwrap(),
+                    &mut engine,
+                    update,
                     size,
                     size,
                     &mut actual,
                     skia::PixelFormat::Bgra8888,
                 )
                 .unwrap();
-            let expected = renderer::surface::RenderDisplayItemListIntoTarget(
+            let expected = raster::surface::RenderDisplayItemListIntoTarget(
                 &list,
                 size,
                 size,
@@ -212,7 +287,7 @@ fn retained_path_clips_match_full_canvas_across_tiles_and_device_scales() {
                 &expected,
                 &format!("scale={scale} property_path={property_path} even_odd={even_odd}"),
             );
-            assert!(renderer.layer_tile_stats().raster_tasks > 1);
+            assert!(renderer.stats().raster_tasks > 1);
         }
     }
 }
@@ -309,29 +384,34 @@ fn flat_path_clip_outside_opacity_group_is_retained() {
         ..Default::default()
     });
     let mut engine = layer_tile::LayerTileEngine::default();
-    engine.SetFrameConfig(layer_tile::FrameConfig {
-        viewport: PaintRect {
-            width: 400.0,
-            height: 400.0,
-            ..Default::default()
-        },
-        raster_scale: 1.0,
-        activation_scroll: None,
-        prepaint_scroll: None,
-    });
-    engine.Update(&list).unwrap();
+    let update = engine
+        .UpdatePending(
+            &list,
+            layer_tile::FrameConfig {
+                viewport: PaintRect {
+                    width: 400.0,
+                    height: 400.0,
+                    ..Default::default()
+                },
+                raster_scale: 1.0,
+                activation_scroll: None,
+                frame_time: None,
+            },
+        )
+        .unwrap();
     let mut actual = vec![0; 400 * 400];
-    let mut renderer = renderer::layer_tile_renderer::LayerTileRenderer::default();
+    let mut renderer = TestPipeline::default();
     renderer
         .paint(
-            engine.GetFramePlan().unwrap(),
+            &mut engine,
+            update,
             400,
             400,
             &mut actual,
             skia::PixelFormat::Bgra8888,
         )
         .unwrap();
-    let expected = renderer::surface::RenderDisplayItemListIntoTarget(
+    let expected = raster::surface::RenderDisplayItemListIntoTarget(
         &list,
         400,
         400,
@@ -457,29 +537,34 @@ fn retained_affine_rect_clip_matches_full_canvas() {
         ..Default::default()
     });
     let mut engine = layer_tile::LayerTileEngine::default();
-    engine.SetFrameConfig(layer_tile::FrameConfig {
-        viewport: PaintRect {
-            width: 120.0,
-            height: 100.0,
-            ..Default::default()
-        },
-        raster_scale: 2.0,
-        activation_scroll: None,
-        prepaint_scroll: None,
-    });
-    engine.Update(&list).unwrap();
+    let update = engine
+        .UpdatePending(
+            &list,
+            layer_tile::FrameConfig {
+                viewport: PaintRect {
+                    width: 120.0,
+                    height: 100.0,
+                    ..Default::default()
+                },
+                raster_scale: 2.0,
+                activation_scroll: None,
+                frame_time: None,
+            },
+        )
+        .unwrap();
     let mut actual = vec![0; 240 * 200];
-    let mut renderer = renderer::layer_tile_renderer::LayerTileRenderer::default();
+    let mut renderer = TestPipeline::default();
     renderer
         .paint(
-            engine.GetFramePlan().unwrap(),
+            &mut engine,
+            update,
             240,
             200,
             &mut actual,
             skia::PixelFormat::Bgra8888,
         )
         .unwrap();
-    let expected = renderer::surface::RenderDisplayItemListIntoTarget(
+    let expected = raster::surface::RenderDisplayItemListIntoTarget(
         &list,
         240,
         200,

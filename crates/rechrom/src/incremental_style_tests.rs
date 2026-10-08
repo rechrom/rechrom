@@ -250,7 +250,7 @@ fn inline_style_control_native_geometry_computed_style_and_pixels_match_old_fall
                 old_rects,
                 "retained old geometry snapshot is immutable"
             );
-            let pixels = renderer::pure_replay::RasterizeDisplayItemList(
+            let pixels = raster::pure_replay::RasterizeDisplayItemList(
                 &paint::paint_engine::Paint(&current),
                 320,
                 200,
@@ -1199,7 +1199,7 @@ fn bounded_has_native_control_cssom_geometry_pixels_match_full_recalc() {
                 paint::paint_engine::FragmentClientRects(&before, qid),
                 old_rects
             );
-            let pixels = renderer::pure_replay::RasterizeDisplayItemList(
+            let pixels = raster::pure_replay::RasterizeDisplayItemList(
                 &paint::paint_engine::Paint(&current),
                 320,
                 200,
@@ -1308,12 +1308,12 @@ fn parent_changed_stops_at_unchanged_children_and_matches_native_fresh_pixels() 
                 "old fragment snapshot remains immutable"
             );
             assert_eq!(
-                renderer::pure_replay::RasterizeDisplayItemList(
+                raster::pure_replay::RasterizeDisplayItemList(
                     &paint::paint_engine::Paint(&actual),
                     320,
                     200
                 ),
-                renderer::pure_replay::RasterizeDisplayItemList(
+                raster::pure_replay::RasterizeDisplayItemList(
                     &paint::paint_engine::Paint(&expected),
                     320,
                     200

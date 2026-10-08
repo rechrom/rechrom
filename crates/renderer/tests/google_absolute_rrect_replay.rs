@@ -63,9 +63,9 @@ fn scene(x: f64, y: f64, width: f64, height: f64, radius: f64) -> PaintArtifact 
 }
 fn compare(list: &PaintArtifact, width: u32, height: u32, scale: f64) {
     let (native, _) =
-        renderer::source_replay::ProfileSourceDisplayItemListWithScale(list, width, height, scale);
+        raster::source_replay::ProfileSourceDisplayItemListWithScale(list, width, height, scale);
     let owned =
-        renderer::pure_replay::RasterizeSourceDisplayItemListWithScale(list, width, height, scale);
+        raster::pure_replay::RasterizeSourceDisplayItemListWithScale(list, width, height, scale);
     let mut failures = Vec::new();
     let different = owned
         .chunks_exact(4)
@@ -88,7 +88,7 @@ fn compare(list: &PaintArtifact, width: u32, height: u32, scale: f64) {
         let guard = 0x9d_a7_b3_c5u32;
         let mut storage = vec![guard; (width * height) as usize + 32];
         let target = &mut storage[16..16 + (width * height) as usize];
-        renderer::surface::RenderDisplayItemListIntoWindowBufferWithFormat(
+        raster::surface::RenderDisplayItemListIntoWindowBufferWithFormat(
             list, width, height, scale, target, format,
         )
         .unwrap();
@@ -291,11 +291,11 @@ mod whole_canvas_f16_regressions {
                         .into(),
                         ..Default::default()
                     };
-                    let native = renderer::source_replay::ProfileSourceDisplayItemListWithScale(
+                    let native = raster::source_replay::ProfileSourceDisplayItemListWithScale(
                         &list, 520, 220, 1.0,
                     )
                     .0;
-                    let actual = renderer::pure_replay::RasterizeSourceDisplayItemListWithScale(
+                    let actual = raster::pure_replay::RasterizeSourceDisplayItemListWithScale(
                         &list, 520, 220, 1.0,
                     );
                     assert_eq!(actual.len(), native.len());
@@ -379,12 +379,11 @@ mod whole_canvas_f16_regressions {
                             items,
                             ..Default::default()
                         };
-                        let native =
-                            renderer::source_replay::ProfileSourceDisplayItemListWithScale(
-                                &list, 520, 220, 1.0,
-                            )
-                            .0;
-                        let actual = renderer::pure_replay::RasterizeSourceDisplayItemListWithScale(
+                        let native = raster::source_replay::ProfileSourceDisplayItemListWithScale(
+                            &list, 520, 220, 1.0,
+                        )
+                        .0;
+                        let actual = raster::pure_replay::RasterizeSourceDisplayItemListWithScale(
                             &list, 520, 220, 1.0,
                         );
                         assert_eq!(actual.len(), native.len());

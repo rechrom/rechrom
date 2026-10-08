@@ -12,7 +12,7 @@ layoutng_style = { path = "../layoutng_style" }
 
 [dev-dependencies]
 paint = { path = "../paint" }
-renderer = { path = "../renderer" }
+raster = { path = "../raster" }
 
 [features]
 default = []

@@ -1,7 +1,6 @@
 //! Eligibility for a direct leaf rounded-clip quad, without a clip RGBA plane.
 //! Only planning lives here: real AA coverage and sampling stay in the renderer.
 use super::*;
-use layer_tile::FramePlan;
 use layoutng_assembly::internal::paint_input::PaintBlendMode;
 use paint::paint_property_tree::TransformPaintPropertyNode;
 use std::collections::{BTreeMap, HashSet};
@@ -26,9 +25,8 @@ struct Candidate {
 /// source quad, and multiplying its AA coverage before SrcOver preserves the
 /// isolated clip-plane result. Overlapping, nested and mask runs stay isolated.
 pub(super) fn eligible_runs(
-    plan: &FramePlan,
+    plan: &CompositionPlan,
     effects: &[LayerEffectPlan],
-    replay: &LayerReplay<'_>,
     width: u32,
     height: u32,
 ) -> io::Result<Vec<Option<DirectClipRun>>> {
@@ -125,9 +123,7 @@ pub(super) fn eligible_runs(
         let mut valid = true;
         for &layer_index in &candidate.layers {
             let layer = &plan.layers[layer_index];
-            let composition = replay
-                .composition(layer.id)
-                .ok_or_else(|| io::Error::other("direct clip layer has no composition"))?;
+            let composition = layer.composition;
             if composition.white_backing {
                 valid = false;
                 break;
@@ -314,15 +310,25 @@ mod test {
             ..Default::default()
         });
         let mut engine = layer_tile::LayerTileEngine::default();
-        engine.SetFrameConfig(layer_tile::FrameConfig {
-            viewport,
-            raster_scale: 1.0,
-            activation_scroll: None,
-            prepaint_scroll: None,
-        });
-        engine.Update(&artifact).unwrap();
-        let mut plan = engine.GetFramePlan().unwrap().clone();
-        plan.tasks.clear();
+        let update = engine
+            .UpdatePending(
+                &artifact,
+                layer_tile::FrameConfig {
+                    viewport,
+                    raster_scale: 1.0,
+                    activation_scroll: None,
+                    frame_time: None,
+                },
+            )
+            .unwrap();
+        let mut plan = update.frame_plan;
+        for tile in plan
+            .layers
+            .iter_mut()
+            .flat_map(|layer| layer.tiles.iter_mut())
+        {
+            tile.ready = true;
+        }
         let clip = Arc::new(ClipPaintPropertyNode {
             lifecycle: Default::default(),
             id: 1,
@@ -375,6 +381,7 @@ mod test {
                 tile_rect: rect,
                 raster_scale: 1.0,
                 pixel_size: (rect.width as u32, rect.height as u32),
+                ready: true,
             }],
         };
         // Staggered sibling grids, including real AA corner coverage.

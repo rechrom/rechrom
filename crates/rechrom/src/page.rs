@@ -49,20 +49,130 @@ use webapi::{
 #[cfg(feature = "pure_source_png")]
 use layer_tile::{FrameConfig, LayerTileEngine};
 #[cfg(feature = "pure_source_png")]
-use renderer::{
-    layer_tile_renderer::{LayerTileRasterStats, LayerTileRenderer, RasterUpdate},
-    PixelFormat,
-};
+use raster::{RasterEngine, RasterStats};
+#[cfg(feature = "pure_source_png")]
+use renderer::{PixelFormat, RenderTarget, RenderUpdate, Renderer, SingleSurfaceResources};
 
 #[cfg(feature = "pure_source_png")]
 #[derive(Default)]
-struct PageRaster {
+struct PageRenderPipeline {
     tiles: LayerTileEngine,
-    renderer: LayerTileRenderer,
+    resources: RasterEngine,
+    compositor: compositor::FrameBuilder,
+    viz: viz::VizEngine,
+    renderer: Renderer,
     // Identity-only marker. A strong Arc here would force PaintEngine's next
     // property-only scroll update to deep-copy the complete PaintArtifact.
     prepared_artifact: Option<std::sync::Weak<paint::PaintArtifact>>,
     prepared_config: Option<FrameConfig>,
+}
+
+#[cfg(feature = "pure_source_png")]
+impl PageRenderPipeline {
+    fn Render(
+        &mut self,
+        artifact: &Arc<paint::PaintArtifact>,
+        width: u32,
+        height: u32,
+        scale: f64,
+        target: &mut [u32],
+        format: PixelFormat,
+        stride: usize,
+    ) -> io::Result<RenderUpdate> {
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "raster scale must be positive",
+            ));
+        }
+
+        // Page is the composition root. Every stage keeps its own retained
+        // state, while immutable protocol values cross each boundary directly.
+        let config = FrameConfig {
+            viewport: paint::PaintRect {
+                x: 0.0,
+                y: 0.0,
+                width: width as f64 / scale,
+                height: height as f64 / scale,
+            },
+            raster_scale: scale,
+            activation_scroll: None,
+            frame_time: None,
+        };
+        let already_prepared = self.prepared_config == Some(config)
+            && self
+                .prepared_artifact
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .is_some_and(|prepared| Arc::ptr_eq(&prepared, artifact));
+        if !already_prepared {
+            let pending = self
+                .tiles
+                .UpdatePending(artifact, config)
+                .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error.reason()))?;
+            let raster = self.resources.prepare(
+                &pending.frame_plan,
+                &pending.raster_batch,
+                width,
+                height,
+            )?;
+            self.tiles.ApplyRasterResults(&raster.completions);
+            let release = self.tiles.ActivatePending().ok_or_else(|| {
+                io::Error::other("pending Page layer tree is not ready for activation")
+            })?;
+            let released = self.resources.release_resources(&release)?;
+            self.tiles.AcknowledgeResourceRelease(&released);
+            self.prepared_artifact = Some(Arc::downgrade(artifact));
+            self.prepared_config = Some(config);
+        }
+
+        let compositor_frame = self
+            .compositor
+            .BuildFrame(
+                self.tiles
+                    .GetActiveFramePlan()
+                    .expect("prepared Page has FramePlan"),
+            )
+            .map_err(io::Error::other)?;
+        let surface = viz::SurfaceId(1);
+        self.viz
+            .SubmitFrame(surface, compositor_frame)
+            .map_err(io::Error::other)?;
+        let output = compositor::DeviceRect::new(0, 0, width, height);
+        let aggregated_frame = self
+            .viz
+            .Aggregate(
+                output,
+                &[viz::SurfacePlacement {
+                    surface_id: surface,
+                    destination: output,
+                }],
+            )
+            .map_err(io::Error::other)?;
+        let resources = SingleSurfaceResources {
+            surface_id: surface,
+            resources: &self.resources,
+        };
+        self.renderer.Render(
+            &aggregated_frame,
+            &resources,
+            RenderTarget {
+                width,
+                height,
+                pixels: target,
+                format,
+                row_stride: stride,
+            },
+        )
+    }
+
+    fn InvalidatePreparedArtifact(&mut self) {
+        // FramePlan owns the artifact used by its raster tasks. Tile identity
+        // and resident pixels remain retained by their respective engines.
+        self.tiles.ReleaseFramePlans();
+        self.prepared_artifact = None;
+        self.prepared_config = None;
+    }
 }
 
 // cpp: browser/browser.h:47-51
@@ -149,7 +259,7 @@ struct PageState {
     layout_engine: RefCell<layoutng_assembly::layout_engine::LayoutEngine>,
     paint_engine: RefCell<paint::PaintEngine>,
     #[cfg(feature = "pure_source_png")]
-    raster: RefCell<PageRaster>,
+    rendering: RefCell<PageRenderPipeline>,
     constraints: Rc<RefCell<ConstraintSpace>>,
     interaction: Rc<RefCell<UserInteractionState>>,
     layout_editing: Rc<layoutng_assembly::editing_state::LayoutEditingState>,
@@ -175,18 +285,26 @@ struct PageState {
     full_layout_lifecycles: Cell<usize>,
     scroll_updates: RefCell<Vec<(u64, Offset)>>,
     animation_time: Cell<f64>,
+    animation_paint_nodes: RefCell<HashSet<u64>>,
+    animation_paint_direct: Cell<bool>,
+    animation_paint_batch_compatible: Cell<bool>,
     preferred_color_scheme: Cell<PreferredColorScheme>,
 }
 impl PageState {
-    fn new(constraints: ConstraintSpace, client: Rc<RefCell<dyn PageClient>>) -> Rc<Self> {
+    fn WithEngines(
+        document: Rc<RefCell<DOM>>,
+        layout_engine: layoutng_assembly::layout_engine::LayoutEngine,
+        paint_engine: paint::PaintEngine,
+        #[cfg(feature = "pure_source_png")] rendering: PageRenderPipeline,
+        constraints: ConstraintSpace,
+        client: Rc<RefCell<dyn PageClient>>,
+    ) -> Rc<Self> {
         Rc::new(Self {
-            document: Rc::new(RefCell::new(DOM::new())),
-            layout_engine: RefCell::new(layoutng_assembly::layout_engine::LayoutEngine::new(
-                &crate::CreateLayoutAssembly(),
-            )),
-            paint_engine: RefCell::new(paint::PaintEngine::new()),
+            document,
+            layout_engine: RefCell::new(layout_engine),
+            paint_engine: RefCell::new(paint_engine),
             #[cfg(feature = "pure_source_png")]
-            raster: RefCell::new(Default::default()),
+            rendering: RefCell::new(rendering),
             constraints: Rc::new(RefCell::new(constraints)),
             interaction: Rc::new(RefCell::new(UserInteractionState::default())),
             layout_editing: Rc::new(Default::default()),
@@ -209,11 +327,41 @@ impl PageState {
             full_layout_lifecycles: Cell::new(0),
             scroll_updates: RefCell::new(Vec::new()),
             animation_time: Cell::new(0.0),
+            animation_paint_nodes: RefCell::new(HashSet::new()),
+            animation_paint_direct: Cell::new(false),
+            animation_paint_batch_compatible: Cell::new(true),
             preferred_color_scheme: Cell::new(Default::default()),
         })
     }
 
+    #[cfg(test)]
+    fn new(constraints: ConstraintSpace, client: Rc<RefCell<dyn PageClient>>) -> Rc<Self> {
+        Self::WithEngines(
+            Rc::new(RefCell::new(DOM::new())),
+            layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly()),
+            paint::PaintEngine::new(),
+            #[cfg(feature = "pure_source_png")]
+            PageRenderPipeline::default(),
+            constraints,
+            client,
+        )
+    }
+
+    #[track_caller]
     fn InvalidateMeasurement(&self) {
+        let had_snapshot = self.measurement.borrow().is_some();
+        let had_candidate = self.measurement_candidate.borrow().is_some();
+        if had_snapshot || had_candidate {
+            browser_tracing::instant(
+                "layout",
+                "MeasurementInvalidated",
+                &[
+                    ("caller_line", std::panic::Location::caller().line() as f64),
+                    ("had_snapshot", had_snapshot as u8 as f64),
+                    ("had_candidate", had_candidate as u8 as f64),
+                ],
+            );
+        }
         self.measurement.borrow_mut().take();
         self.measurement_candidate.borrow_mut().take();
     }
@@ -346,12 +494,20 @@ impl PageState {
         notify: &mut dyn FnMut(),
         dispatch_image: &mut dyn FnMut(u64, bool),
     ) {
-        let inline_style = matches!(
+        let attribute_mutation = matches!(
             m.mutation_type,
             DOMMutationType::kSetAttribute | DOMMutationType::kRemoveAttribute
-        ) && m.namespace_uri.is_empty()
-            && m.name == "style";
-        if inline_style {
+        );
+        // Blink invalidates style first and only invalidates layout geometry
+        // after the computed style diff proves that it changed. Every attribute
+        // can participate in selectors, presentation hints or SVG styling, so
+        // keep the last geometry snapshot provisionally for all attribute
+        // writes. ResolveStyles bumps measurement_geometry_revision when the
+        // resulting style actually changes geometry, while resource metadata
+        // and tree mutations use their explicit geometry invalidation paths.
+        // Eagerly dropping the snapshot here makes paint-only data/ARIA/SVG
+        // attributes force synchronous full layout before geometry reads.
+        if attribute_mutation {
             self.PreserveMeasurementGeometry();
         } else {
             self.InvalidateMeasurement();
@@ -389,7 +545,7 @@ impl PageState {
         crate::dom_mutation::ApplyDOMTreeMutation(&mut self.document.borrow_mut(), m);
         // A synchronous mutation notification may read CSSOM geometry. Mark
         // style and measurement stale before it can flush the lifecycle.
-        if inline_style {
+        if attribute_mutation {
             self.InvalidateStylePreservingGeometry();
         } else {
             self.InvalidateStyle();
@@ -503,17 +659,20 @@ impl PageState {
                                 n.Id(),
                                 a.value.clone(),
                                 tree.ImageResourceFor(&a.value).is_some(),
+                                !n.FindAttribute("loading").is_some_and(|loading| {
+                                    loading.value.eq_ignore_ascii_case("lazy")
+                                }),
                             )
                         })
                 } else {
                     None
                 }
             };
-            if let Some((id, src, cached)) = image {
+            if let Some((id, src, cached, blocks_load)) = image {
                 if cached {
                     dispatch_image(id, true);
                 } else {
-                    resources.QueueImage(&src, None)?;
+                    resources.QueueImageWithLoadBlocking(&src, None, blocks_load)?;
                 }
             }
             // Release document borrows before event registration. Style text
@@ -589,8 +748,16 @@ impl PageState {
     fn ConnectResources(self: &Rc<Self>, resources: Rc<ResourceFetcher>) {
         // Commit into the parser's supplied arena. That arena owns its CSSOM
         // collection, just as Blink's Document owns its StyleEngine collection.
-        resources
-            .SetStyleSheetReceiver(Rc::new(|document, sheet| document.AppendStyleSheet(sheet)));
+        let state = Rc::downgrade(self);
+        resources.SetStyleSheetReceiver(Rc::new(move |document, sheet| {
+            document.AppendStyleSheet(sheet);
+            if let Some(state) = state.upgrade() {
+                // A newly connected sheet can change both geometry and the set
+                // of referenced @font-face/image resources. CSSOM owns rule
+                // invalidation; Page owns lifecycle and resource discovery.
+                state.InvalidateStyle();
+            }
+        }));
         *self.resources.borrow_mut() = Some(resources);
     }
     fn ConnectDOM(self: &Rc<Self>) -> Rc<RefCell<DOMJavaScriptBindings>> {
@@ -756,10 +923,7 @@ impl PageState {
                 // release only the publication so Arc::make_mut below does not
                 // clone the complete PaintArtifact. Tile identities and pixels
                 // remain resident in their owning engines.
-                let mut raster = self.raster.borrow_mut();
-                raster.tiles.ReleaseFramePlan();
-                raster.prepared_artifact = None;
-                raster.prepared_config = None;
+                self.rendering.borrow_mut().InvalidatePreparedArtifact();
             }
             // The frame and Engine reference the same committed artifact.
             // Move the frame's reference back before a property-only update.
@@ -829,6 +993,10 @@ impl PageState {
     fn EnsureMeasurement(&self) {
         let mut trace = browser_tracing::span("layout", "Page.EnsureMeasurement");
         trace.set(
+            "candidate",
+            self.measurement_candidate.borrow().is_some() as u8 as f64,
+        );
+        trace.set(
             "cache_hit",
             self.measurement.borrow().is_some() as u8 as f64,
         );
@@ -837,6 +1005,10 @@ impl PageState {
         }
         self.ResolveStyles();
         let revision = self.document.borrow().GetMeasurementGeometryRevision();
+        trace.set("geometry_revision", revision as f64);
+        if let Some(snapshot) = self.measurement_candidate.borrow().as_ref() {
+            trace.set("candidate_revision", snapshot.GeometryRevision() as f64);
+        }
         if let Some(snapshot) = self
             .measurement_candidate
             .borrow_mut()
@@ -871,6 +1043,19 @@ impl PageState {
 
     // cpp: browser/browser.cc:947-1044
     fn ApplyMutation(&self, mutation: PageMutation) {
+        // One BeginFrame can deliver several Element.animate() samples and a
+        // document-image frame. Neither is an unrelated outer-document edit:
+        // keep accumulating the targeted paint batch until this lifecycle is
+        // committed. Geometry/style mutations still revoke the proof.
+        if !matches!(
+            &mutation,
+            PageMutation::AnimationTick(_)
+                | PageMutation::ResourceMutation(ResourceMutation::DocumentImageFrameChanged(_))
+        ) {
+            self.animation_paint_nodes.borrow_mut().clear();
+            self.animation_paint_direct.set(false);
+            self.animation_paint_batch_compatible.set(false);
+        }
         match mutation {
             PageMutation::DOMMutation(m) => {
                 // Runtime-independent callers are no-JS Page mutations and
@@ -1010,6 +1195,23 @@ impl PageState {
                     dom::error::invalid_argument("animation time must be finite and monotonic");
                 }
                 self.animation_time.set(m.monotonic_time);
+                let eligible = m.samples.iter().all(|sample| {
+                    sample.declarations.iter().all(|declaration| {
+                        matches!(
+                            declaration.property.as_str(),
+                            "opacity" | "transform" | "transform-origin"
+                        )
+                    })
+                });
+                // The JS binding invokes this once per animation effect. A
+                // dirty Page may therefore mean an earlier eligible effect in
+                // this same frame, not a conflicting mutation.
+                let direct = eligible && self.animation_paint_batch_compatible.get();
+                let nodes = m
+                    .samples
+                    .iter()
+                    .map(|sample| sample.node_id)
+                    .collect::<Vec<_>>();
                 let mut owner = self.document.borrow_mut();
                 for sample in m.samples {
                     if owner.GetDocument().FindNodeById(sample.node_id).is_none() {
@@ -1018,6 +1220,14 @@ impl PageState {
                     owner.SetAnimationStyle(sample.node_id, sample.effect_id, sample.declarations);
                     self.InvalidateStylePreservingGeometry();
                 }
+                drop(owner);
+                if direct {
+                    self.animation_paint_nodes.borrow_mut().extend(nodes);
+                } else {
+                    self.animation_paint_nodes.borrow_mut().clear();
+                    self.animation_paint_batch_compatible.set(false);
+                }
+                self.animation_paint_direct.set(direct);
             }
         }
     }
@@ -1142,7 +1352,7 @@ pub struct ScriptEnvironment {
 pub struct Page {
     begin_frame: begin_frame::PageBeginFrame,
     state: Rc<PageState>,
-    engine: interaction::Interaction<'static>,
+    interaction: interaction::Interaction<'static>,
     loader: Rc<RefCell<dyn URLLoader>>,
     document_loader: DocumentLoader,
     resources: Rc<ResourceFetcher>,
@@ -1155,7 +1365,7 @@ pub struct Page {
     loading: bool,
     loading_failure: Option<String>,
     load_budget: DocumentLoadBudget,
-    // RunTasks admits resource completions with its task budget. BeginFrame
+    // A task turn admits resource completions with its budget. Rendering
     // and input-boundary lifecycle use zero so they cannot run extra tasks.
     resource_completion_budget: Option<usize>,
     cursor_position: Option<Offset>,
@@ -1275,74 +1485,6 @@ impl Page {
         regions
     }
 
-    fn RasterConfig(width: u32, height: u32, scale: f64) -> FrameConfig {
-        FrameConfig {
-            viewport: paint::PaintRect {
-                x: 0.0,
-                y: 0.0,
-                width: width as f64 / scale,
-                height: height as f64 / scale,
-            },
-            raster_scale: scale,
-            activation_scroll: None,
-            prepaint_scroll: None,
-        }
-    }
-
-    /// Build the layer/tile plan and raster dirty tile resources without
-    /// borrowing or writing the final window surface.
-    pub fn PrepareCurrentRaster(&self, width: u32, height: u32, scale: f64) -> io::Result<()> {
-        let artifact = &self
-            .CurrentFrame()
-            .ok_or_else(|| io::Error::other("Page has no frame"))?
-            .display_items;
-        self.PreparePaintArtifactRaster(artifact, width, height, scale)
-    }
-
-    pub fn PreparePaintArtifactRaster(
-        &self,
-        artifact: &Arc<paint::PaintArtifact>,
-        width: u32,
-        height: u32,
-        scale: f64,
-    ) -> io::Result<()> {
-        if !scale.is_finite() || scale <= 0.0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "raster scale must be positive",
-            ));
-        }
-        let config = Self::RasterConfig(width, height, scale);
-        let mut raster = self.state.raster.borrow_mut();
-        let already_prepared = raster.prepared_config == Some(config)
-            && raster
-                .prepared_artifact
-                .as_ref()
-                .and_then(std::sync::Weak::upgrade)
-                .is_some_and(|prepared| Arc::ptr_eq(&prepared, artifact));
-        if already_prepared {
-            return Ok(());
-        }
-        let PageRaster {
-            tiles,
-            renderer,
-            prepared_artifact,
-            prepared_config,
-        } = &mut *raster;
-        tiles.SetFrameConfig(config);
-        tiles
-            .Update(artifact)
-            .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error.reason()))?;
-        renderer.prepare(
-            tiles.GetFramePlan().expect("updated Page has FramePlan"),
-            width,
-            height,
-        )?;
-        *prepared_artifact = Some(Arc::downgrade(artifact));
-        *prepared_config = Some(config);
-        Ok(())
-    }
-
     // cpp: browser/browser.cc:610-737,1834-1856
     pub fn Create(
         loader: Rc<RefCell<dyn URLLoader>>,
@@ -1352,8 +1494,27 @@ impl Page {
         scripting: Option<ScriptEnvironment>,
         client: Option<Rc<RefCell<dyn PageClient>>>,
     ) -> Self {
+        // Keep the complete Page dependency graph visible in this one
+        // composition root. The individual services remain independent and
+        // communicate through their existing typed inputs and immutable
+        // snapshots; Page only owns their lifetime and routing.
         let client = client.unwrap_or_else(|| Rc::new(RefCell::new(NullPageClient)));
-        let state = PageState::new(constraints, client.clone());
+        let document_loader = DocumentLoader::new(loader.clone());
+        let document = Rc::new(RefCell::new(DOM::new()));
+        let layout_engine =
+            layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly());
+        let paint_engine = paint::PaintEngine::new();
+        #[cfg(feature = "pure_source_png")]
+        let rendering = PageRenderPipeline::default();
+        let state = PageState::WithEngines(
+            document,
+            layout_engine,
+            paint_engine,
+            #[cfg(feature = "pure_source_png")]
+            rendering,
+            constraints,
+            client.clone(),
+        );
         let resources = Rc::new(ResourceFetcher::new(
             loader.clone(),
             images,
@@ -1372,7 +1533,7 @@ impl Page {
                 script_client.clone(),
             ))
         });
-        let engine = if let Some(scripts) = &scripts {
+        let interaction = if let Some(scripts) = &scripts {
             scripts.Engine()
         } else {
             let mutate = state.clone();
@@ -1383,7 +1544,7 @@ impl Page {
             )
         };
         let submit_state = Rc::downgrade(&state);
-        engine.SetFormSubmissionHandler(Some(Rc::new(move |form, submitter| {
+        interaction.SetFormSubmissionHandler(Some(Rc::new(move |form, submitter| {
             let Some(state) = submit_state.upgrade() else {
                 return;
             };
@@ -1415,8 +1576,8 @@ impl Page {
         Self {
             begin_frame: begin_frame::PageBeginFrame::default(),
             state,
-            engine,
-            document_loader: DocumentLoader::new(loader.clone()),
+            interaction,
+            document_loader,
             loader,
             resources,
             scripts,
@@ -1453,8 +1614,8 @@ impl Page {
     }
     // cpp: browser/browser.cc:740-799
     /// Start navigation without waiting for headers, body or parser completion.
-    /// The host event loop drives RunTasks; later failures reach DidFail and
-    /// RunTasks's result. IsLoading includes pending document resources/scripts.
+    /// The host event loop drives `RunTask`; later failures reach DidFail and
+    /// that task's result. IsLoading includes pending document resources/scripts.
     pub fn Open(&mut self, url: &str, chunk_size: usize, token_budget: usize) -> io::Result<()> {
         self.OpenRequest(
             &URLRequest {
@@ -1518,7 +1679,7 @@ impl Page {
         Ok(())
     }
     /// The C++ golden fixtures describe serialized, complete-source loading.
-    /// Keep that fixture driver explicit; window navigation uses Open + RunTasks.
+    /// Keep that fixture driver explicit; window navigation uses Open + RunTask.
     #[cfg(test)]
     pub(crate) fn OpenSynchronously(
         &mut self,
@@ -1699,14 +1860,14 @@ impl Page {
                 .as_ref()
                 .is_some_and(|s| s.HasPendingDynamicScripts())
             && self.state.pending_image_events.borrow().is_empty()
-            && !self.resources.HasPendingImages()
-            && !self.resources.HasPendingFonts()
+            && !self.resources.HasPendingLoadBlockingImages()
         {
             if let Some(scripts) = &mut self.scripts {
                 scripts.FinishLoad();
             }
             self.loading = false;
             self.state.client.borrow_mut().DidFinishLoad();
+            self.resources.StartDeferredImages(4);
         }
         Ok(())
     }
@@ -1810,12 +1971,22 @@ impl Page {
         self.UpdateFrameIfNeeded()?;
         Ok(result)
     }
-    /// Pump loading and scheduled script work, then update the frame lifecycle.
-    /// Zero advances one ready script task or resource response completion,
-    /// preserving each script/event's complete microtask checkpoint;
-    /// a positive duration pumps tasks within that time and may wait for work.
-    pub fn RunTasks(&mut self, milliseconds: f64) -> io::Result<()> {
-        let mut trace = browser_tracing::span("lifecycle", "Page.RunTasks");
+    /// Execute one complete Page task turn, including its microtask checkpoint
+    /// and any lifecycle update caused by that task. Task selection and wake
+    /// delivery remain the responsibility of the embedding event loop.
+    pub fn RunTask(&mut self) -> io::Result<()> {
+        self.RunTaskTurn(0.0)
+    }
+
+    /// Drive Page tasks for a bounded interval. This is an explicit embedding
+    /// helper for synchronous document bootstrap and tests; native operation
+    /// uses `RunTask`, one event-loop turn at a time.
+    pub fn RunFor(&mut self, budget: std::time::Duration) -> io::Result<()> {
+        self.RunTaskTurn(budget.as_secs_f64() * 1000.0)
+    }
+
+    fn RunTaskTurn(&mut self, milliseconds: f64) -> io::Result<()> {
+        let mut trace = browser_tracing::span("lifecycle", "Page.RunTask");
         trace.set("budget_ms", milliseconds);
         trace.set("loading", self.loading as u8 as f64);
         if self.begin_frame.source.is_none() {
@@ -1831,6 +2002,9 @@ impl Page {
                 scripts.BeginTaskTurn(milliseconds);
             }
             self.PumpLoading()?;
+            if !self.loading {
+                self.resources.StartDeferredImages(4);
+            }
             // A clean frame does not imply that late image/font requests have no
             // work. Continue their transport/completion lifecycle after window load.
             if !was_loading
@@ -1840,11 +2014,11 @@ impl Page {
             }
             let loading_done = started.map(|start| start.elapsed());
             if let Some(scripts) = &mut self.scripts {
-                scripts.RunTasks(milliseconds)?;
+                scripts.RunTaskTurn(milliseconds)?;
             }
             // Hosts without a BeginFrameSource treat this task turn as their
             // rendering opportunity. Native hosts dispatch the same queue in
-            // Page::OnBeginFrame before rAF.
+            // Page::UpdateRendering before rAF.
             if self.begin_frame.source.is_none() {
                 if !self.state.scroll_event_targets.borrow().is_empty() {
                     self.state.ApplyPendingScrollUpdates(self.frame.as_mut());
@@ -1882,6 +2056,14 @@ impl Page {
         // Evaluate/Apply/Dispatch or the explicit synchronous parser adapter.
         self.resource_completion_budget = None;
         result
+    }
+    /// Earliest ordinary Window task deadline. Document/resource transports
+    /// wake the owner through `SetLoadingWakeCallback`; this value covers
+    /// timers and the remaining poll-based Window task sources.
+    pub fn NextTaskDeadline(&self, now: std::time::Instant) -> Option<std::time::Instant> {
+        self.scripts
+            .as_ref()
+            .and_then(|scripts| scripts.NextTaskDeadline(now))
     }
     pub fn ResizeViewport(&mut self, width: f64, height: f64, device_scale: f64) -> io::Result<()> {
         if !width.is_finite()
@@ -1948,7 +2130,7 @@ impl Page {
         let result = if let Some(scripts) = &mut self.scripts {
             scripts.Dispatch(input, &frame.fragments)?
         } else {
-            self.engine
+            self.interaction
                 .Dispatch(input, &self.state.document, &frame.fragments)
         };
         let restart = matches!(
@@ -1979,13 +2161,13 @@ impl Page {
     fn UpdateCaret(&mut self, restart: bool) {
         let position = self
             .active
-            .then(|| self.engine.State().focused_node_id)
+            .then(|| self.interaction.State().focused_node_id)
             .flatten()
-            .and_then(|id| self.engine.Editor().CaretFor(&self.state.document, id));
+            .and_then(|id| self.interaction.Editor().CaretFor(&self.state.document, id));
         let mut caret = self.state.layout_editing.caret.borrow_mut();
         let old_owner = caret.paint_state().map(|state| state.node_id);
         let changed = caret.update(position, std::time::Instant::now(), restart);
-        let new_owner = self.engine.State().focused_node_id;
+        let new_owner = self.interaction.State().focused_node_id;
         drop(caret);
         let revision = self.state.layout_editing.selections.Revision();
         let selection_changed = self.selection_revision != revision;
@@ -2070,7 +2252,7 @@ impl Page {
         }
         let cursor = match (self.cursor_position, self.frame.as_ref()) {
             (Some(point), Some(frame)) => {
-                self.engine
+                self.interaction
                     .CursorAt(&self.state.document, &frame.fragments, point)
             }
             _ => Cursor::kDefault,
@@ -2108,7 +2290,7 @@ impl Page {
     fn FinishSuppliedDocumentResources(&mut self) -> io::Result<()> {
         self.state.ResolveStyles();
         self.resources.QueueReferencedImages()?;
-        self.resources.DiscardUnusedFontFaces();
+        self.resources.SelectUsedFontFaces();
         self.resources.StartPendingFonts();
         let mut client = ResourceClient {
             state: self.state.clone(),
@@ -2149,7 +2331,7 @@ impl Page {
             drop(image_discovery);
             images_discovered_done = elapsed();
             let font_discovery = browser_tracing::span("lifecycle", "Page.DiscoverFonts");
-            self.resources.DiscardUnusedFontFaces();
+            self.resources.SelectUsedFontFaces();
             self.resources.StartPendingFonts();
             drop(font_discovery);
             fonts_discovered_done = elapsed();
@@ -2236,7 +2418,7 @@ impl Page {
         // Resource completions are separate Page tasks. An offset-only input
         // must not synchronously decode images or dispatch unrelated load
         // listeners before presenting its already committed paint artifact.
-        // RunTasks continues polling those completions with its normal budget.
+        // Subsequent task turns continue polling those completions normally.
         let retained_input_only = (self.state.scroll_only.get()
             || self.state.paint_resources_dirty.get())
             && self.frame.is_some()
@@ -2251,6 +2433,11 @@ impl Page {
         let reused_recordings = self.state.ApplyPendingScrollUpdates(self.frame.as_mut());
         trace.set("scroll_records_reused", reused_recordings as u8 as f64);
         let scroll_done = profile.map(|start| start.elapsed());
+        let paint_only_style = self.frame.is_some() && !self.editing_paint_dirty && {
+            let impact = self.state.document.borrow().GetStyleImpact();
+            impact.paint && !impact.layout && !impact.reattach
+        };
+        trace.set("paint_only_style", paint_only_style as u8 as f64);
         if self.frame.is_some()
             && !self.editing_paint_dirty
             && self.state.document.borrow().GetStyleImpact().IsEmpty()
@@ -2313,10 +2500,58 @@ impl Page {
             }
             None => (None, None),
         };
-        // CommitPaint updates native client lifecycle flags in this snapshot.
-        // Do not retain an extra engine reference while that mutation happens.
-        self.state.layout_engine.borrow_mut().ReleaseLayoutResult();
-        let mut fragments = measured.unwrap_or_else(|| {
+        let animation_paint_nodes = if paint_only_style && self.state.animation_paint_direct.get() {
+            let mut nodes = self
+                .state
+                .animation_paint_nodes
+                .borrow()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
+            nodes.sort_unstable();
+            nodes
+        } else {
+            Vec::new()
+        };
+        // A targeted paint mutation updates the retained FragmentData-style
+        // snapshot before taking it for Paint. Generic export replaces the
+        // snapshot, so release its old reference first. Either path leaves no
+        // extra engine reference while CommitPaint mutates client lifecycle.
+        if animation_paint_nodes.is_empty() {
+            self.state.layout_engine.borrow_mut().ReleaseLayoutResult();
+        } else if let Some(fragments) = &measured {
+            self.state
+                .layout_engine
+                .borrow_mut()
+                .PublishLayoutResult(fragments.clone());
+        }
+        trace.set(
+            "targeted_animation_paint",
+            (!animation_paint_nodes.is_empty()) as u8 as f64,
+        );
+        let paint_only_fragments = paint_only_style
+            .then(|| {
+                let mut layout = self.state.layout_engine.borrow_mut();
+                if animation_paint_nodes.is_empty() {
+                    crate::persistent_layout::ExportPaintOnlyDocumentWithEngine(
+                        &mut layout,
+                        &mut self.state.document.borrow_mut(),
+                        &self.state.interaction.borrow(),
+                    )
+                } else {
+                    crate::persistent_layout::ExportTargetedPaintOnlyDocumentWithEngine(
+                        &mut layout,
+                        &self.state.document.borrow(),
+                        &animation_paint_nodes,
+                    )
+                }
+            })
+            .flatten();
+        trace.set(
+            "paint_only_geometry_reused",
+            paint_only_fragments.is_some() as u8 as f64,
+        );
+        let mut fragments = paint_only_fragments.or(measured).unwrap_or_else(|| {
             trace.set("full_layout", 1.0);
             #[cfg(test)]
             self.state
@@ -2410,6 +2645,9 @@ impl Page {
         self.state.document.borrow_mut().DidCommitPaint();
         self.state.paint_resources_dirty.set(false);
         self.state.pending_paint_mutations.borrow_mut().clear();
+        self.state.animation_paint_nodes.borrow_mut().clear();
+        self.state.animation_paint_direct.set(false);
+        self.state.animation_paint_batch_compatible.set(true);
         self.state.scroll_only.set(false);
         self.state.dirty.set(false);
         if let Some(scripts) = &mut self.scripts {
@@ -2769,7 +3007,7 @@ pub fn OpenUrl(
     );
     page.Open(url, 16384, 4096)?;
     while page.IsLoading() {
-        page.RunTasks(1.0)?;
+        page.RunFor(std::time::Duration::from_millis(1))?;
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     Ok(page)
@@ -2790,7 +3028,7 @@ impl Page {
         target: &mut [u32],
         format: PixelFormat,
         stride: usize,
-    ) -> io::Result<RasterUpdate> {
+    ) -> io::Result<RenderUpdate> {
         let artifact = &self
             .CurrentFrame()
             .ok_or_else(|| io::Error::other("Page has no frame"))?
@@ -2799,7 +3037,8 @@ impl Page {
     }
 
     /// The host may append transient chrome content to this Page's recording.
-    /// Both paths keep the same Page-owned resource lifetime and FramePlan input.
+    /// Both paths use the same Page-owned LayerTile, Raster, Compositor, Viz
+    /// and Renderer instances, so retained identities stay coherent.
     pub fn PaintArtifactInto(
         &self,
         artifact: &Arc<paint::PaintArtifact>,
@@ -2809,37 +3048,14 @@ impl Page {
         target: &mut [u32],
         format: PixelFormat,
         stride: usize,
-    ) -> io::Result<RasterUpdate> {
-        if !scale.is_finite() || scale <= 0.0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "raster scale must be positive",
-            ));
-        }
-        self.PreparePaintArtifactRaster(artifact, width, height, scale)?;
-        let config = Self::RasterConfig(width, height, scale);
-        let mut raster = self.state.raster.borrow_mut();
-        debug_assert!(
-            raster.prepared_config == Some(config)
-                && raster
-                    .prepared_artifact
-                    .as_ref()
-                    .is_some_and(|prepared| prepared.as_ptr() == Arc::as_ptr(artifact))
-        );
-        let PageRaster {
-            tiles, renderer, ..
-        } = &mut *raster;
-        renderer.compose_with_stride(
-            tiles.GetFramePlan().expect("prepared Page has FramePlan"),
-            width,
-            height,
-            target,
-            format,
-            stride,
-        )
+    ) -> io::Result<RenderUpdate> {
+        self.state
+            .rendering
+            .borrow_mut()
+            .Render(artifact, width, height, scale, target, format, stride)
     }
 
-    pub fn LayerTileStats(&self) -> LayerTileRasterStats {
-        self.state.raster.borrow().renderer.layer_tile_stats()
+    pub fn LayerTileStats(&self) -> RasterStats {
+        self.state.rendering.borrow().resources.stats()
     }
 }

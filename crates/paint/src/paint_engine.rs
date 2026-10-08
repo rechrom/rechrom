@@ -757,7 +757,7 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
         .ApplyMutation(PaintMutation::ImageChanged {
             image_id: 7,
             revision: 2,
-            frame,
+            frame: frame.clone(),
         })
         .unwrap();
     let next = engine.GetPaintResult().unwrap();
@@ -775,6 +775,14 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
     assert_eq!(old.recording_revision, next.recording_revision);
     assert_eq!(old.resources.as_ref().unwrap().images[0].revision, 1);
     assert_eq!(next.resources.as_ref().unwrap().images[0].revision, 2);
+    let subsumed = engine
+        .ApplyMutation(PaintMutation::ImageChanged {
+            image_id: 7,
+            revision: 2,
+            frame,
+        })
+        .expect("the committed immutable revision subsumes its queued invalidation");
+    assert!(subsumed.damaged_records.is_empty());
 }
 
 #[cfg(feature = "translation_in_progress")]
@@ -1134,11 +1142,24 @@ impl PaintEngine {
             .images
             .iter()
             .find(|image| image.id == image_id)?;
-        if old.width != frame.intrinsic_size.width
-            || old.height != frame.intrinsic_size.height
-            || revision <= old.revision
-        {
+        if old.width != frame.intrinsic_size.width || old.height != frame.intrinsic_size.height {
             return None;
+        }
+        // A full Paint can commit the same image frame before Page drains a
+        // queued client-level invalidation. Chromium treats that invalidation
+        // as subsumed by the newer paint controller commit. It is not a bad
+        // resource transition and must not terminate the page. Preserve the
+        // immutable-revision contract by accepting an equal revision only
+        // when it names the exact record already published.
+        if revision <= old.revision {
+            if revision == old.revision
+                && !matches!(&old.content,
+                    image_resource::PaintImageContent::Document(record)
+                    if Arc::ptr_eq(record, &frame.record))
+            {
+                return None;
+            }
+            return Some(PaintMutationResult::default());
         }
         let damaged_records = artifact.image_dependencies.dependencies(image_id).to_vec();
         let mut resources = old_resources.clone();

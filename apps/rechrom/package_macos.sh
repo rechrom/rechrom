@@ -27,5 +27,9 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-printf '%s
-' "$app_dir"
+# Replacing the executable or Info.plist invalidates the linker's ad-hoc
+# signature. Sign the completed bundle, matching Chromium's mac packaging
+# order, so direct launches never stall in dyld validation.
+codesign --force --deep --sign - "$app_dir"
+codesign --verify --deep --strict "$app_dir"
+printf '%s\n' "$app_dir"

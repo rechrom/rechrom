@@ -16,15 +16,16 @@ use foundation::{
     EColumnFill, EColumnSpan, EColumnWrap, EContinue, EDisplay, EEmptyCells, EFieldSizing,
     EFlexDirection, EFloat, EInlineBlockBaselineEdge, EIsolation, EListStylePosition, EMathShift,
     EMathStyle, EObjectFit, EOverflow, EOverflowWrap, EPosition, ERubyAlign, ERubyOverhang,
-    EScrollbarWidth, ETableLayout, ETextAlign, ETextAlignLast, ETextCombine, ETextOrientation,
-    ETextTransform, EWordBreak, HeapVector, Hyphens as NativeHyphens, LayoutUnit, Length,
-    LengthPoint, LengthValueRange, LineBreak as NativeLineBreak, MakeGarbageCollected, Member,
+    EScrollbarWidth, ETableLayout, ETextAlign, ETextAlignLast, ETextCombine,
+    ETextDecorationSkipInk, ETextDecorationStyle, ETextOrientation, ETextTransform, EWordBreak,
+    HeapVector, Hyphens as NativeHyphens, LayoutUnit, Length, LengthBox, LengthPoint,
+    LengthValueRange, LineBreak as NativeLineBreak, MakeGarbageCollected, Member,
     PhysicalDirection, PixelsAndPercent, RubyPosition as NativeRubyPosition, ScopedCSSName,
     ScopedCSSNameList, String as BlinkString, StyleAspectRatio, StyleInitialLetter, StyleNameScope,
-    StyleNameScopeType, TabSize, TabSizeValueType, TextDirection as NativeTextDirection,
-    TextWrapMode as NativeTextWrapMode, TextWrapStyle as NativeTextWrapStyle, TransformOperations,
-    UnicodeBidi as NativeUnicodeBidi, Vector, WritingDirectionMode,
-    WritingMode as NativeWritingMode,
+    StyleNameScopeType, TabSize, TabSizeValueType, TextDecorationLine, TextDecorationThickness,
+    TextDirection as NativeTextDirection, TextWrapMode as NativeTextWrapMode,
+    TextWrapStyle as NativeTextWrapStyle, TransformOperations, UnicodeBidi as NativeUnicodeBidi,
+    Vector, WritingDirectionMode, WritingMode as NativeWritingMode,
 };
 
 use layoutng_geometry::geometry::logical_size::LogicalSize;
@@ -88,9 +89,9 @@ use crate::internal::layout_input::{
     NativeNodeConstructionData, NodeKind, ObjectFit, Overflow, OverflowAlignment,
     OverflowClipReferenceBox, OverflowWrap, Position, RubyAlign, RubyOverhang, RubyPosition,
     ScrollbarGutter, ScrollbarWidth, SelfAlignment, ShapeCoordinate, ShapeOutsideKind, ShapePoint,
-    ShapeRadiusKind, ShapeReferenceBox, TextAlign, TextAlignLast, TextCombine, TextDirection,
-    TextOrientation, TextTransform, TextWrapMode, TextWrapStyle, UnicodeBidi, VerticalAlign,
-    WhiteSpace, WordBreak, WritingMode,
+    ShapeRadiusKind, ShapeReferenceBox, TextAlign, TextAlignLast, TextCombine, TextDecorationStyle,
+    TextDirection, TextOrientation, TextTransform, TextWrapMode, TextWrapStyle, UnicodeBidi,
+    VerticalAlign, WhiteSpace, WordBreak, WritingMode,
 };
 use crate::internal::paint_input::{PaintBlendMode, PaintFilterType, PaintTransformOperationKind};
 
@@ -454,6 +455,19 @@ fn EdgeLength(
         return Length::Percent(Number(value, field, nonnegative));
     }
     Pixels(pixels, field, nonnegative)
+}
+
+fn MarginLength(
+    pixels: f64,
+    percent: Option<f64>,
+    automatic: bool,
+    calculated: bool,
+    quirk: bool,
+    field: &str,
+) -> Length {
+    let mut length = EdgeLength(pixels, percent, automatic, calculated, field, false);
+    length.SetQuirk(quirk);
+    length
 }
 
 // cpp: layoutng/internal/boundary/native_input.cc:215-225
@@ -1597,13 +1611,13 @@ fn ApplyNativeStyleBoxEdges(
         true,
     ));
 
-    builder.SetMarginTop(&EdgeLength(
+    builder.SetMarginTop(&MarginLength(
         input.margin.top,
         extra.margin_percentages[0],
         extra.margin_auto[0],
         extra.margin_calculated[0],
+        extra.margin_quirks[0],
         "margin_top",
-        false,
     ));
     builder.SetPaddingTop(&EdgeLength(
         input.padding.top,
@@ -1616,13 +1630,13 @@ fn ApplyNativeStyleBoxEdges(
     builder.SetBorderTopWidthOwned(BorderWidth(input.border.top));
     builder.SetBorderTopStyle(ConvertBorderLineStyle(input.border_styles[0]));
 
-    builder.SetMarginRight(&EdgeLength(
+    builder.SetMarginRight(&MarginLength(
         input.margin.right,
         extra.margin_percentages[1],
         extra.margin_auto[1],
         extra.margin_calculated[1],
+        extra.margin_quirks[1],
         "margin_right",
-        false,
     ));
     builder.SetPaddingRight(&EdgeLength(
         input.padding.right,
@@ -1635,13 +1649,13 @@ fn ApplyNativeStyleBoxEdges(
     builder.SetBorderRightWidthOwned(BorderWidth(input.border.right));
     builder.SetBorderRightStyle(ConvertBorderLineStyle(input.border_styles[1]));
 
-    builder.SetMarginBottom(&EdgeLength(
+    builder.SetMarginBottom(&MarginLength(
         input.margin.bottom,
         extra.margin_percentages[2],
         extra.margin_auto[2],
         extra.margin_calculated[2],
+        extra.margin_quirks[2],
         "margin_bottom",
-        false,
     ));
     builder.SetPaddingBottom(&EdgeLength(
         input.padding.bottom,
@@ -1654,13 +1668,13 @@ fn ApplyNativeStyleBoxEdges(
     builder.SetBorderBottomWidthOwned(BorderWidth(input.border.bottom));
     builder.SetBorderBottomStyle(ConvertBorderLineStyle(input.border_styles[2]));
 
-    builder.SetMarginLeft(&EdgeLength(
+    builder.SetMarginLeft(&MarginLength(
         input.margin.left,
         extra.margin_percentages[3],
         extra.margin_auto[3],
         extra.margin_calculated[3],
+        extra.margin_quirks[3],
         "margin_left",
-        false,
     ));
     builder.SetPaddingLeft(&EdgeLength(
         input.padding.left,
@@ -1918,7 +1932,56 @@ fn ApplyNativeStyleGridTableAndBreaks(
 }
 
 // cpp: layoutng/internal/boundary/native_input.cc:1478-1534
-fn ApplyNativeStyleText(builder: &mut ComputedStyleBuilder, extra: &ExtendedStyle) {
+fn ApplyNativeTextDecoration(builder: &mut ComputedStyleBuilder, input: &ComputedStyle) {
+    let decoration = &input.paint.text_decoration;
+    let mut lines = TextDecorationLine::kNone;
+    if decoration.underline {
+        lines |= TextDecorationLine::kUnderline;
+    }
+    if decoration.overline {
+        lines |= TextDecorationLine::kOverline;
+    }
+    if decoration.line_through {
+        lines |= TextDecorationLine::kLineThrough;
+    }
+    builder.SetTextDecorationLine(lines);
+    builder.SetTextDecorationStyle(match decoration.style {
+        TextDecorationStyle::kSolid => ETextDecorationStyle::kSolid,
+        TextDecorationStyle::kDouble => ETextDecorationStyle::kDouble,
+        TextDecorationStyle::kDotted => ETextDecorationStyle::kDotted,
+        TextDecorationStyle::kDashed => ETextDecorationStyle::kDashed,
+        TextDecorationStyle::kWavy => ETextDecorationStyle::kWavy,
+    });
+    let color = decoration.color.unwrap_or(input.paint.color);
+    builder.SetTextDecorationColorOwned(StyleColor::from_color(foundation::Color::FromRGBAFloat(
+        color.red,
+        color.green,
+        color.blue,
+        color.alpha,
+    )));
+    let thickness = decoration
+        .thickness
+        .map_or_else(|| Length::Auto().clone(), Length::Fixed);
+    builder.SetTextDecorationThicknessOwned(TextDecorationThickness::new(&thickness));
+    let underline_offset = if decoration.underline_offset_auto {
+        Length::Auto().clone()
+    } else {
+        Length::Fixed(decoration.underline_offset)
+    };
+    builder.SetTextUnderlineOffsetOwned(underline_offset);
+    builder.SetTextDecorationSkipInk(if decoration.skip_ink {
+        ETextDecorationSkipInk::kAuto
+    } else {
+        ETextDecorationSkipInk::kNone
+    });
+}
+
+fn ApplyNativeStyleText(
+    builder: &mut ComputedStyleBuilder,
+    input: &ComputedStyle,
+    extra: &ExtendedStyle,
+) {
+    ApplyNativeTextDecoration(builder, input);
     builder.SetWhiteSpace(ConvertWhiteSpace(extra.white_space));
     match extra.text_wrap_mode {
         TextWrapMode::kFromWhiteSpace => {}
@@ -1994,6 +2057,21 @@ fn ApplyNativeStyleText(builder: &mut ComputedStyleBuilder, extra: &ExtendedStyl
 // cpp: core/style/computed_style.h:3345-3348
 // cpp: core/style/computed_style.cc:2913-2949
 fn ApplyNativeStylePaintGrouping(builder: &mut ComputedStyleBuilder, input: &ComputedStyle) {
+    if let Some(clip) = input.css_clip {
+        let side = |value: Option<f64>| {
+            value
+                .map(Length::Fixed)
+                .unwrap_or_else(|| Length::Auto().clone())
+        };
+        builder.SetClip(&LengthBox::new(
+            side(clip.top),
+            side(clip.right),
+            side(clip.bottom),
+            side(clip.left),
+        ));
+    } else {
+        builder.SetHasAutoClip();
+    }
     builder.SetClipPath(
         input
             .paint
@@ -2304,6 +2382,19 @@ fn FinishNativeStyle(
         };
         AdjustComputedDisplayForLayout(builder, parent, &display_context);
     }
+    // core/css/resolver/style_adjuster.cc:1289-1298. Text decorations are
+    // propagated through the layout-parent chain as applied decorating boxes;
+    // they are not ordinary inherited CSS values.
+    if !layout_parent_style.is_null()
+        && !builder.IsAtomicInlineDisplayType()
+        && !builder.IsFloating()
+        && !builder.HasOutOfFlowPosition()
+        && builder.Display() != EDisplay::kRubyText
+    {
+        builder.SetBaseTextDecorationData(Member::from_ptr(
+            unsafe { &*layout_parent_style }.AppliedTextDecorationData(),
+        ));
+    }
     let effective_direction =
         WritingDirectionMode::new(builder.GetWritingMode(), builder.Direction());
     if extra.auto_margin_inline_start {
@@ -2390,7 +2481,7 @@ pub fn PrepareNativeStyle(
     ApplyNativeStyleOverflowAndScrollbars(&mut builder, extra);
     ApplyNativeTriggerScope(&mut builder, extra);
     ApplyNativeStyleContainmentAndAspect(&mut builder, extra);
-    ApplyNativeStyleText(&mut builder, extra);
+    ApplyNativeStyleText(&mut builder, input, extra);
     FinishNativeStyle(
         &mut builder,
         node,

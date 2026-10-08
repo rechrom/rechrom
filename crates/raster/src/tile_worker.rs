@@ -3,7 +3,7 @@
 //! shared by Arc.
 use crate::{
     convert::resources,
-    layer_replay::{LayerComposition, LayerReplay, PreparedLayer},
+    layer_replay::{LayerReplay, PreparedLayer, RasterLayerState},
 };
 use layer_tile::RasterTask;
 use layoutng_assembly::fragment_tree::PaintResources;
@@ -18,30 +18,28 @@ use std::{
     thread,
 };
 
-pub(crate) struct TileJob {
+pub(crate) struct RasterJob {
     pub plan_index: usize,
     pub task: RasterTask,
     pub layer: Arc<PreparedLayer>,
     pub reuse: Vec<u8>,
     pub solid_color: Option<u32>,
 }
-pub(crate) struct TileProduct {
+pub(crate) struct RasterProduct {
     pub plan_index: usize,
     pub task: RasterTask,
-    pub composition: LayerComposition,
+    pub composition: RasterLayerState,
     pub rgba: Vec<u8>,
     pub bgra: Vec<u32>,
-    pub row_support: crate::layer_raster::TileRowSupport,
-    pub call_time: std::time::Duration,
-    pub support_time: std::time::Duration,
+    pub row_support: crate::engine::RasterRowSupport,
 }
 struct Batch {
     frame: u64,
     trace_context: browser_tracing::Context,
     resources: Option<Arc<PaintResources>>,
-    jobs: Arc<Mutex<VecDeque<TileJob>>>,
+    jobs: Arc<Mutex<VecDeque<RasterJob>>>,
     layers: Arc<BTreeMap<layer_tile::LayerId, Arc<PreparedLayer>>>,
-    reply: mpsc::Sender<(u64, io::Result<Vec<TileProduct>>)>,
+    reply: mpsc::Sender<(u64, io::Result<Vec<RasterProduct>>)>,
 }
 struct Worker {
     sender: Option<mpsc::Sender<Batch>>,
@@ -57,19 +55,19 @@ impl Drop for Worker {
         }
     }
 }
-pub(crate) struct TileWorkerPool {
+pub(crate) struct RasterWorkerPool {
     workers: Vec<Worker>,
     next_frame: u64,
 }
 pub(crate) struct PendingTiles {
     frame: u64,
-    receiver: mpsc::Receiver<(u64, io::Result<Vec<TileProduct>>)>,
+    receiver: mpsc::Receiver<(u64, io::Result<Vec<RasterProduct>>)>,
     outstanding: usize,
     error: Option<io::Error>,
-    products: Vec<TileProduct>,
+    products: Vec<RasterProduct>,
 }
 impl PendingTiles {
-    fn accept(&mut self, frame: u64, result: io::Result<Vec<TileProduct>>) {
+    fn accept(&mut self, frame: u64, result: io::Result<Vec<RasterProduct>>) {
         self.outstanding -= 1;
         if frame != self.frame {
             self.error
@@ -85,7 +83,7 @@ impl PendingTiles {
     }
     /// Collect a completed background batch without waiting on the frame
     /// thread. None means workers still own at least one accepted batch.
-    pub fn try_finish(&mut self) -> Option<io::Result<Vec<TileProduct>>> {
+    pub fn try_finish(&mut self) -> Option<io::Result<Vec<RasterProduct>>> {
         use std::sync::mpsc::TryRecvError;
         while self.outstanding != 0 {
             match self.receiver.try_recv() {
@@ -105,7 +103,7 @@ impl PendingTiles {
             Ok(std::mem::take(&mut self.products))
         })
     }
-    pub fn finish(mut self) -> io::Result<Vec<TileProduct>> {
+    pub fn finish(mut self) -> io::Result<Vec<RasterProduct>> {
         let _wait = browser_tracing::span("raster", "RasterWorkerWait");
         // Drain every accepted batch even when another lane failed. No reply,
         // allocation or unfinished cache transaction can enter a later frame.
@@ -137,7 +135,7 @@ impl Drop for PendingTiles {
         }
     }
 }
-impl TileWorkerPool {
+impl RasterWorkerPool {
     pub fn new(clip_limit: usize) -> io::Result<Self> {
         // content/browser/gpu/compositor_util.cc::NumberOfRendererRasterThreads:
         // half the logical processors, clamped to [1, 4].
@@ -176,7 +174,7 @@ impl TileWorkerPool {
     pub fn submit(
         &mut self,
         resources: Option<Arc<PaintResources>>,
-        jobs: Vec<TileJob>,
+        jobs: Vec<RasterJob>,
     ) -> PendingTiles {
         self.next_frame = self.next_frame.wrapping_add(1);
         let frame = self.next_frame;
@@ -263,7 +261,6 @@ fn worker_loop(receiver: mpsc::Receiver<Batch>, clip_limit: usize, image_limit: 
             );
             let result = (|| {
                 let mut products = Vec::new();
-                let profile = std::env::var_os("BROWSER_PROFILE_TILES").is_some();
                 loop {
                     let Some(job) = batch
                         .jobs
@@ -280,40 +277,34 @@ fn worker_loop(receiver: mpsc::Receiver<Batch>, clip_limit: usize, image_limit: 
                         .composition(job.task.layer_id)
                         .ok_or_else(|| io::Error::other("worker job has no prepared layer"))?;
                     if let Some(premul_rgba) = job.solid_color {
-                        products.push(crate::layer_raster::layer_solid::raster_product(
+                        products.push(crate::solid::raster_product(
                             job.plan_index,
                             &job.task,
                             composition,
                             premul_rgba,
                             job.reuse,
-                            profile,
                         )?);
                         continue;
                     }
-                    let started = profile.then(std::time::Instant::now);
                     let rgba = replay.raster_tile_with_pixels(
                         &job.task,
                         &mut images,
                         &mut clips,
                         job.reuse,
                     )?;
-                    let call_time = started.map_or(std::time::Duration::ZERO, |s| s.elapsed());
-                    let started = profile.then(std::time::Instant::now);
-                    let row_support = crate::layer_raster::tile_row_support(
+                    let row_support = crate::engine::tile_row_support(
                         &rgba,
                         job.task.pixel_size.0 as usize,
                         composition.white_backing,
                     );
-                    let bgra = crate::layer_raster::cached_bgra(&rgba);
-                    products.push(TileProduct {
+                    let bgra = crate::engine::cached_bgra(&rgba);
+                    products.push(RasterProduct {
                         plan_index: job.plan_index,
                         task: job.task,
                         composition,
                         rgba,
                         bgra,
                         row_support,
-                        call_time,
-                        support_time: started.map_or(std::time::Duration::ZERO, |s| s.elapsed()),
                     });
                 }
                 trace.set("raster_tasks", products.len() as f64);

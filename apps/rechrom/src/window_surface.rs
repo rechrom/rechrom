@@ -1,9 +1,6 @@
 //! Software window target backed by softbuffer and winit native handles.
-use layer_tile::FramePlan;
-use paint::paint_engine::PaintArtifact;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use renderer::layer_tile_renderer::LayerTileRenderer;
-#[cfg(test)]
+use renderer::{RasterResourceRegistry, RenderTarget, Renderer};
 use skia::compat::surface::RasterSurface;
 use std::{io, num::NonZeroU32, sync::Arc};
 pub(crate) type WindowTarget =
@@ -32,6 +29,64 @@ pub(crate) struct PreparedWindowFrame {
     row_stride: usize,
 }
 
+struct WindowRasterResources<'a> {
+    toolbar: &'a raster::RasterEngine,
+    content: Option<&'a raster::RasterEngine>,
+}
+
+impl RasterResourceRegistry for WindowRasterResources<'_> {
+    fn ResourcesFor(
+        &self,
+        surface_id: viz::SurfaceId,
+    ) -> Option<&dyn raster::RasterResourceProvider> {
+        match surface_id {
+            crate::display::TOOLBAR_SURFACE => Some(self.toolbar),
+            crate::display::CONTENT_SURFACE => self
+                .content
+                .map(|resources| resources as &dyn raster::RasterResourceProvider),
+            _ => None,
+        }
+    }
+}
+
+impl PreparedWindowFrame {
+    /// Copy the completed software compositor target before native color
+    /// management/presentation. This is enabled only by headless diagnostics.
+    pub(crate) fn readback_rgba(
+        &self,
+        viewport: crate::engine::Viewport,
+    ) -> io::Result<crate::engine::WindowFrame> {
+        #[cfg(target_os = "macos")]
+        let (pixels, row_stride, has_alpha) =
+            (self.buffer.pixels(), self.buffer.row_stride(), true);
+        #[cfg(not(target_os = "macos"))]
+        let (pixels, row_stride, has_alpha) = (self.pixels.as_slice(), self.row_stride, false);
+        let rows = |start_y: u32, height: u32| -> io::Result<RasterSurface> {
+            let mut rgba = Vec::with_capacity(viewport.width as usize * height as usize * 4);
+            for y in start_y..start_y + height {
+                let row = &pixels
+                    [y as usize * row_stride..y as usize * row_stride + viewport.width as usize];
+                for &pixel in row {
+                    let bytes = pixel.to_ne_bytes();
+                    rgba.extend_from_slice(&[
+                        bytes[2],
+                        bytes[1],
+                        bytes[0],
+                        if has_alpha { bytes[3] } else { 255 },
+                    ]);
+                }
+            }
+            RasterSurface::from_pixels(viewport.width, height, rgba)
+        };
+        let toolbar_height = viewport.toolbar_pixels();
+        Ok(crate::engine::WindowFrame {
+            viewport,
+            toolbar: rows(0, toolbar_height)?,
+            content: rows(toolbar_height, viewport.height - toolbar_height)?,
+        })
+    }
+}
+
 fn error(error: softbuffer::SoftBufferError) -> io::Error {
     io::Error::other(error.to_string())
 }
@@ -57,13 +112,14 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         Ok(())
     }
 
-    /// Produce a complete output surface without publishing it to the native
-    /// compositor. The display scheduler may submit it at a later deadline.
-    pub(crate) fn prepare(
+    /// Render Viz aggregate output into a prepared native buffer. Page never
+    /// reaches this platform boundary; it publishes immutable frame inputs.
+    pub(crate) fn render_aggregated_frame(
         &mut self,
-        toolbar: &rechrom::page::Page,
-        content: Option<&rechrom::page::Page>,
-        overlay: Option<&Arc<PaintArtifact>>,
+        frame: &viz::AggregatedFrame,
+        renderer: &mut Renderer,
+        toolbar_raster: &raster::RasterEngine,
+        content_raster: Option<&raster::RasterEngine>,
         viewport: crate::engine::Viewport,
         present_sequence: u64,
     ) -> io::Result<PreparedWindowFrame> {
@@ -76,175 +132,6 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         if self.width != viewport.width || self.height != viewport.height {
             self.resize(viewport.width, viewport.height)?;
         }
-        let profile = std::env::var_os("BROWSER_APP_PROFILE_WINDOW")
-            .is_some()
-            .then(std::time::Instant::now);
-        let content_height = self.height - viewport.toolbar_pixels();
-        let acquire_trace = browser_tracing::span("present", "AcquirePreparedBuffer");
-        #[cfg(target_os = "macos")]
-        let mut buffer = self.surface.prepared_buffer().map_err(error)?;
-        #[cfg(not(target_os = "macos"))]
-        let mut buffer = vec![0u32; self.width as usize * self.height as usize];
-        #[cfg(target_os = "macos")]
-        let row_stride = buffer.row_stride();
-        #[cfg(not(target_os = "macos"))]
-        let row_stride = self.width as usize;
-        let acquired = profile.map(|_| std::time::Instant::now());
-        drop(acquire_trace);
-        #[cfg(target_os = "macos")]
-        let format = match buffer.pixel_format() {
-            softbuffer::BufferFormat::Xrgb8888 => skia::PixelFormat::Bgrx8888,
-            softbuffer::BufferFormat::Argb8888 => skia::PixelFormat::Bgra8888,
-        };
-        #[cfg(not(target_os = "macos"))]
-        let format = skia::PixelFormat::Bgrx8888;
-        #[cfg(target_os = "macos")]
-        let pixels = buffer.pixels_mut();
-        #[cfg(not(target_os = "macos"))]
-        let pixels = buffer.as_mut_slice();
-        let toolbar_len = row_stride * viewport.toolbar_pixels() as usize;
-        let (top, bottom) = pixels.split_at_mut(toolbar_len);
-        let toolbar_update = {
-            let _target = browser_tracing::scope(browser_tracing::Context {
-                target_id: 2,
-                ..Default::default()
-            });
-            let mut trace = browser_tracing::span("render", "Toolbar");
-            let update = toolbar.PaintInto(
-                self.width,
-                viewport.toolbar_pixels(),
-                viewport.scale,
-                top,
-                format,
-                row_stride,
-            )?;
-            trace.set("damage_pixels", update.damage_pixels as f64);
-            update
-        };
-        let toolbar_done = profile.map(|_| std::time::Instant::now());
-        let content_update = {
-            let _target = browser_tracing::scope(browser_tracing::Context {
-                target_id: 1,
-                ..Default::default()
-            });
-            let mut trace = browser_tracing::span("render", "Content");
-            let update = if let Some(page) = content {
-                if let Some(artifact) = overlay {
-                    page.PaintArtifactInto(
-                        artifact,
-                        self.width,
-                        content_height,
-                        viewport.scale,
-                        bottom,
-                        format,
-                        row_stride,
-                    )?
-                } else {
-                    page.PaintInto(
-                        self.width,
-                        content_height,
-                        viewport.scale,
-                        bottom,
-                        format,
-                        row_stride,
-                    )?
-                }
-            } else {
-                bottom.fill(0x00ff_ffff);
-                renderer::layer_tile_renderer::RasterUpdate {
-                    mode: "empty",
-                    reason: "no-page",
-                    damage_pixels: self.width as usize * content_height as usize,
-                    copied_bytes: 0,
-                }
-            };
-            trace.set("damage_pixels", update.damage_pixels as f64);
-            update
-        };
-        let content_done = profile.map(|_| std::time::Instant::now());
-        static OPTICAL_PROBE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let optical_probe = *OPTICAL_PROBE.get_or_init(|| {
-            std::env::var_os("BROWSER_PRESENTATION_PROBE").is_some_and(|v| v == "1")
-        });
-        if optical_probe {
-            paint_optical_sequence(
-                pixels,
-                row_stride,
-                viewport.width,
-                viewport.height,
-                viewport.scale,
-                format,
-                present_sequence,
-            );
-            #[cfg(target_os = "macos")]
-            let (marker_time, host_time_ns) = crate::begin_frame_source::sample_host_clock();
-            #[cfg(not(target_os = "macos"))]
-            let (marker_time, host_time_ns) = (std::time::Instant::now(), f64::NAN);
-            browser_tracing::instant_at(
-                "present",
-                "OpticalFrameMarker",
-                marker_time,
-                &[
-                    ("present_sequence", present_sequence as f64),
-                    ("encoded_sequence", (present_sequence & 0xfff) as f64),
-                    ("host_time_ns", host_time_ns),
-                ],
-            );
-        }
-        frame_trace.set("damage_pixels", content_update.damage_pixels as f64);
-        frame_trace.set(
-            "copied_bytes",
-            (toolbar_update.copied_bytes + content_update.copied_bytes) as f64,
-        );
-        frame_trace.set("succeeded", 1.0);
-        if let Some(start) = profile {
-            let (acquired, toolbar_done, content_done) = (
-                acquired.unwrap(),
-                toolbar_done.unwrap(),
-                content_done.unwrap(),
-            );
-            let tile_stats = content
-                .map(rechrom::page::Page::LayerTileStats)
-                .unwrap_or_default();
-            println!("window-prepare-frame acquire_ms={:.3} toolbar_ms={:.3} content_ms={:.3} total_ms={:.3} app_copied_bytes={} app_format_passes=0 toolbar_mode={} content_mode={} content_reason={} damage_pixels={} layers={} tiles={} raster_tasks={} reused_tiles={}",(acquired-start).as_secs_f64()*1000.0,(toolbar_done-acquired).as_secs_f64()*1000.0,(content_done-toolbar_done).as_secs_f64()*1000.0,start.elapsed().as_secs_f64()*1000.0,toolbar_update.copied_bytes+content_update.copied_bytes,toolbar_update.mode,content_update.mode,content_update.reason,content_update.damage_pixels,tile_stats.layers,tile_stats.tiles,tile_stats.raster_tasks,tile_stats.reused_tiles);
-        }
-        #[cfg(target_os = "macos")]
-        {
-            Ok(PreparedWindowFrame { buffer })
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Ok(PreparedWindowFrame {
-                pixels: buffer,
-                row_stride,
-            })
-        }
-    }
-
-    /// Viz-side equivalent of the Page-based path above.  The Page publishes
-    /// immutable paint artifacts; layer/tile planning and resident pixel
-    /// resources stay on the display owner so main-thread JavaScript cannot
-    /// stop an already committed scroll tree from drawing.
-    pub(crate) fn compose_prepared_plans(
-        &mut self,
-        toolbar: &FramePlan,
-        toolbar_renderer: &mut LayerTileRenderer,
-        content: Option<&FramePlan>,
-        content_renderer: &mut LayerTileRenderer,
-        viewport: crate::engine::Viewport,
-        present_sequence: u64,
-        overlay_scrollbar: Option<crate::compositor::OverlayScrollbar>,
-    ) -> io::Result<PreparedWindowFrame> {
-        let mut frame_trace = browser_tracing::span("present", "PrepareWindowFrame");
-        frame_trace.set("present_sequence", present_sequence as f64);
-        frame_trace.set("width", viewport.width as f64);
-        frame_trace.set("height", viewport.height as f64);
-        frame_trace.set("device_scale", viewport.scale);
-        frame_trace.set("succeeded", 0.0);
-        if self.width != viewport.width || self.height != viewport.height {
-            self.resize(viewport.width, viewport.height)?;
-        }
-        let content_height = self.height - viewport.toolbar_pixels();
         let acquire_trace = browser_tracing::span("present", "AcquirePreparedBuffer");
         #[cfg(target_os = "macos")]
         let mut buffer = self.surface.prepared_buffer().map_err(error)?;
@@ -266,55 +153,27 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         let pixels = buffer.pixels_mut();
         #[cfg(not(target_os = "macos"))]
         let pixels = buffer.as_mut_slice();
-        let toolbar_len = row_stride * viewport.toolbar_pixels() as usize;
-        let (top, bottom) = pixels.split_at_mut(toolbar_len);
-        let toolbar_update = {
-            let _target = browser_tracing::scope(browser_tracing::Context {
-                target_id: 2,
-                ..Default::default()
-            });
-            toolbar_renderer.compose_with_stride(
-                toolbar,
-                self.width,
-                viewport.toolbar_pixels(),
-                top,
-                format,
-                row_stride,
-            )?
+        let resources = WindowRasterResources {
+            toolbar: toolbar_raster,
+            content: content_raster,
         };
-        let content_update = if let Some(content) = content {
+        let render_update = {
             let _target = browser_tracing::scope(browser_tracing::Context {
                 target_id: 1,
                 ..Default::default()
             });
-            content_renderer.compose_with_stride(
-                content,
-                self.width,
-                content_height,
-                bottom,
-                format,
-                row_stride,
+            renderer.Render(
+                frame,
+                &resources,
+                RenderTarget {
+                    width: self.width,
+                    height: self.height,
+                    pixels,
+                    format,
+                    row_stride,
+                },
             )?
-        } else {
-            bottom.fill(0x00ff_ffff);
-            renderer::layer_tile_renderer::RasterUpdate {
-                mode: "empty",
-                reason: "no-page",
-                damage_pixels: self.width as usize * content_height as usize,
-                copied_bytes: 0,
-            }
         };
-        if let Some(scrollbar) = overlay_scrollbar {
-            paint_overlay_scrollbar(
-                bottom,
-                row_stride,
-                self.width,
-                content_height,
-                viewport.scale,
-                format,
-                scrollbar,
-            );
-        }
         static OPTICAL_PROBE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let optical_probe = *OPTICAL_PROBE.get_or_init(|| {
             std::env::var_os("BROWSER_PRESENTATION_PROBE").is_some_and(|v| v == "1")
@@ -330,11 +189,8 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
                 present_sequence,
             );
         }
-        frame_trace.set("damage_pixels", content_update.damage_pixels as f64);
-        frame_trace.set(
-            "copied_bytes",
-            (toolbar_update.copied_bytes + content_update.copied_bytes) as f64,
-        );
+        frame_trace.set("damage_pixels", render_update.damage_pixels as f64);
+        frame_trace.set("copied_bytes", render_update.copied_bytes as f64);
         frame_trace.set("succeeded", 1.0);
         #[cfg(target_os = "macos")]
         {
@@ -455,75 +311,6 @@ fn native_transaction_observer(
     })
 }
 
-/// Viz/cc-style solid-color overlay scrollbar. Its geometry comes from the
-/// compositor scroll tree and is drawn into the final output after page layer
-/// composition, so moving the thumb never invalidates or rerasterizes page
-/// tiles. The shape follows NativeThemeMac's overlay thumb: transparent track,
-/// black at 50% opacity, and a rounded capsule inset from the viewport edge.
-fn paint_overlay_scrollbar(
-    pixels: &mut [u32],
-    stride: usize,
-    width: u32,
-    height: u32,
-    scale: f64,
-    _format: skia::PixelFormat,
-    scrollbar: crate::compositor::OverlayScrollbar,
-) {
-    if width == 0 || height == 0 || scrollbar.maximum <= 0.0 {
-        return;
-    }
-    let scale = scale.max(1.0);
-    let viewport = scrollbar.viewport_length.max(1.0);
-    let contents = viewport + scrollbar.maximum;
-    let edge_inset = 3.0 * scale;
-    let length_inset = 2.0 * scale;
-    let thumb_width = 10.0 * scale;
-    let inner_length = (height as f64 - length_inset * 2.0).max(0.0);
-    let thumb_length = (inner_length * viewport / contents)
-        .max(24.0 * scale)
-        .min(inner_length);
-    if thumb_width <= 0.0 || thumb_length <= 0.0 {
-        return;
-    }
-    let travel = (inner_length - thumb_length).max(0.0);
-    let progress = (scrollbar.offset / scrollbar.maximum).clamp(0.0, 1.0);
-    let top = length_inset + travel * progress;
-    let bottom = top + thumb_length;
-    let right = width as f64 - edge_inset;
-    let left = (right - thumb_width).max(0.0);
-    let radius = thumb_width * 0.5;
-    let center_x = (left + right) * 0.5;
-    let cap_top = top + radius;
-    let cap_bottom = bottom - radius;
-    let y_start = top.floor().max(0.0) as usize;
-    let y_end = bottom.ceil().min(height as f64) as usize;
-    let x_start = left.floor().max(0.0) as usize;
-    let x_end = right.ceil().min(width as f64) as usize;
-    for y in y_start..y_end {
-        let py = y as f64 + 0.5;
-        let nearest_y = py.clamp(cap_top, cap_bottom.max(cap_top));
-        for x in x_start..x_end {
-            let px = x as f64 + 0.5;
-            let distance = ((px - center_x).powi(2) + (py - nearest_y).powi(2)).sqrt();
-            let coverage = (radius + 0.5 - distance).clamp(0.0, 1.0);
-            if coverage == 0.0 {
-                continue;
-            }
-            let alpha = (128.0 * coverage).round() as u32;
-            let inverse = 255 - alpha;
-            let pixel = &mut pixels[y * stride + x];
-            let high = *pixel & 0xff00_0000;
-            let red_blue = (((*pixel & 0x00ff_00ff) * inverse) >> 8) & 0x00ff_00ff;
-            let green = (((*pixel & 0x0000_ff00) * inverse) >> 8) & 0x0000_ff00;
-            *pixel = high | red_blue | green;
-        }
-    }
-}
-
-/// Eight 3×4 CSS cells at (8,48): magic 5; four low-to-high 3-bit
-/// sequence digits; two checksum digits; magic 3. RGB channels encode bits.
-/// Public capture sees only these 24×4 CSS pixels; no page pixel readback is
-/// required. The sequence wraps at 4096; PresentReturn retains its full value.
 fn paint_optical_sequence(
     pixels: &mut [u32],
     stride: usize,

@@ -38,12 +38,11 @@ pub(super) struct PreparedComposition {
 }
 
 pub(super) fn prepare(
-    plan: &FramePlan,
+    plan: &CompositionPlan,
     effects: &[LayerEffectPlan],
     bounds: &[Option<SurfaceBounds>],
     direct_clips: &[Option<layer_direct_clip::DirectClipRun>],
     visible: &[Vec<Option<SurfaceBounds>>],
-    replay: &LayerReplay<'_>,
     pixels: &HashMap<TileId, CachedTile>,
     clips: &mut ClipMaskCache,
     width: u32,
@@ -196,14 +195,12 @@ pub(super) fn prepare(
         if visible.len() != layer.tiles.len() {
             return Err(io::Error::other("composition tile plan extent changed"));
         }
-        let composition = replay
-            .composition(layer.id)
-            .ok_or_else(|| io::Error::other("paint layer has no composition"))?;
+        let composition = layer.composition;
         for (tile, visible) in layer.tiles.iter().zip(visible) {
             let pixels = pixels
                 .get(&tile.tile_id)
                 .ok_or_else(|| io::Error::other("ready tile has no resident pixels"))?;
-            if !pixels.matches(tile, composition) {
+            if !pixels.matches(tile, composition.white_backing) {
                 return Err(io::Error::other(
                     "tile generation or raster backing changed without invalidation",
                 ));

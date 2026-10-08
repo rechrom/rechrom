@@ -25,9 +25,8 @@ fn check(items: Vec<DisplayItem>, scale: f64, context: &str) {
             ..Default::default()
         },
     );
-    let native = renderer::source_replay::RasterizeSourceDisplayItemList(&reference, 600, 400);
-    let rust =
-        renderer::pure_replay::RasterizeSourceDisplayItemListWithScale(&list, 600, 400, scale);
+    let native = raster::source_replay::RasterizeSourceDisplayItemList(&reference, 600, 400);
+    let rust = raster::pure_replay::RasterizeSourceDisplayItemListWithScale(&list, 600, 400, scale);
     let mut count = 0;
     let mut first = None;
     for (i, (a, b)) in native.chunks_exact(4).zip(rust.chunks_exact(4)).enumerate() {

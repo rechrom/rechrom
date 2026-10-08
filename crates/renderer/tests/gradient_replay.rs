@@ -101,8 +101,8 @@ fn constant_gradient_soft_clip_matches_skia() {
                     .into(),
                     ..Default::default()
                 };
-                let a = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
-                let b = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+                let a = raster::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+                let b = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
                 let diffs: Vec<_> = a
                     .chunks_exact(4)
                     .zip(b.chunks_exact(4))
@@ -229,9 +229,9 @@ fn opaque_uniform_stop_gradient_dithering_matches_skia() {
                         ..Default::default()
                     };
                     let source =
-                        renderer::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+                        raster::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
                     let rust =
-                        renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+                        raster::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
                     let differing_pixels = source
                         .chunks_exact(4)
                         .zip(rust.chunks_exact(4))
@@ -361,8 +361,8 @@ fn nonuniform_alpha_gradient_mask_uses_canvas_coordinates_and_layer_origin() {
             .into(),
             ..Default::default()
         };
-        let native = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
-        let rust = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+        let native = raster::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+        let rust = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
         assert_eq!(
             native
                 .chunks_exact(4)
@@ -451,9 +451,9 @@ fn vertical_multistop_gradient_rows_match_skia_with_soft_clips() {
                     .into(),
                     ..Default::default()
                 };
-                let actual = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 320, 320);
+                let actual = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 320, 320);
                 let expected =
-                    renderer::source_replay::RasterizeSourceDisplayItemList(&list, 320, 320);
+                    raster::source_replay::RasterizeSourceDisplayItemList(&list, 320, 320);
                 let diff = actual.iter().zip(&expected).filter(|(a, b)| a != b).count();
                 assert_eq!(
                     diff, 0,
@@ -594,11 +594,11 @@ fn diagonal_multistop_gradient_segments_and_bounded_layers_native_oracle() {
                                     ..Default::default()
                                 },
                             );
-                            let expected = renderer::source_replay::RasterizeSourceDisplayItemList(
+                            let expected = raster::source_replay::RasterizeSourceDisplayItemList(
                                 &reference, dimension, dimension,
                             );
                             let actual =
-                                renderer::pure_replay::RasterizeSourceDisplayItemListWithScale(
+                                raster::pure_replay::RasterizeSourceDisplayItemListWithScale(
                                     &list, dimension, dimension, scale,
                                 );
                             let differences =

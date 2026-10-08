@@ -123,6 +123,7 @@ pub struct DOMJavaScriptBindings {
     records: RefCell<HashMap<HostObjectId, HashMap<String, HostValue>>>,
     next_collection_id: Cell<HostObjectId>,
     listeners: RefCell<HashMap<HostObjectId, HashMap<String, Vec<Listener>>>>,
+    mutation_observers_active: bool,
 }
 
 impl DOMJavaScriptBindings {
@@ -182,6 +183,7 @@ impl DOMJavaScriptBindings {
             records: RefCell::new(HashMap::new()),
             next_collection_id: Cell::new(1 << 62),
             listeners: RefCell::new(HashMap::new()),
+            mutation_observers_active: false,
         }
     }
 
@@ -539,6 +541,9 @@ impl DOMJavaScriptBindings {
             {
                 Self::value(HostValue::String(inner_html(document, index)))
             }
+            "outerHTML" if node.Type() == DOMNodeType::kElement => {
+                Self::value(HostValue::String(outer_html(document, index)))
+            }
             "parentNode" => Self::node_reference(document, node.Parent()),
             "firstChild" => Self::node_reference(document, node.Children().first().copied()),
             "lastChild" => Self::node_reference(document, node.Children().last().copied()),
@@ -674,6 +679,8 @@ impl DOMJavaScriptBindings {
             _ => return Self::type_error("property is not writable"),
         };
         drop(owner);
+        let mut trace = browser_tracing::span("dom", "DOMMutationHost");
+        trace.set("mutation_type", mutation_type as u8 as f64);
         (self.emit_mutation)(&DOMMutation {
             mutation_type,
             target_node_id: receiver,
@@ -1474,6 +1481,15 @@ impl DOMJavaScriptBindings {
                 // The emitter synchronously applies the mutation to this
                 // arena; release the read borrow before invoking it.
                 drop(owner);
+                let mut trace = browser_tracing::span("dom", "DOMMutationHost");
+                trace.set(
+                    "mutation_type",
+                    if member == "setAttribute" {
+                        DOMMutationType::kSetAttribute as u8 as f64
+                    } else {
+                        DOMMutationType::kRemoveAttribute as u8 as f64
+                    },
+                );
                 (self.emit_mutation)(&DOMMutation {
                     mutation_type: if member == "setAttribute" {
                         DOMMutationType::kSetAttribute
@@ -1534,6 +1550,27 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         // cpp: webapi/dom_bindings.cc:773-774
         if self.node(id).is_none() {
             return None;
+        }
+        // Attribute writes only need the two-phase continuation when applying
+        // the mutation can reenter JavaScript. Blink similarly skips mutation
+        // observer record delivery when no observer has attribute interest.
+        // Keep image request attributes on the scoped path because a cached
+        // resource may synchronously dispatch its completion event.
+        if call.operation == HostOperation::kCall
+            && matches!(member, "setAttribute" | "removeAttribute")
+            && !self.mutation_observers_active
+        {
+            let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
+                &call.arguments[2..]
+            } else {
+                call.arguments
+            };
+            let resource_request = arguments.first().is_some_and(|value| {
+                matches!(value, HostValue::String(name) if matches!(name.to_ascii_lowercase().as_str(), "src" | "srcset" | "sizes" | "referrerpolicy"))
+            });
+            if !resource_request {
+                return None;
+            }
         }
         // cpp: webapi/dom_bindings.cc:818-821
         // Copy callback out of bindings
@@ -1723,7 +1760,9 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                     "meta" => "HTMLMetaElement",
                     "iframe" => "HTMLIFrameElement",
                     "img" => "HTMLImageElement",
+                    "canvas" => "HTMLCanvasElement",
                     "template" => "HTMLTemplateElement",
+                    "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "HTMLHeadingElement",
                     "a" => "HTMLAnchorElement",
                     "video" => "HTMLVideoElement",
                     "audio" => "HTMLAudioElement",
@@ -2063,6 +2102,14 @@ fn inner_html(document: &Document, index: usize) -> String {
     output
 }
 
+// DOM Parsing and Serialization: Element.outerHTML serializes the element
+// itself, whereas innerHTML serializes only its child fragment.
+fn outer_html(document: &Document, index: usize) -> String {
+    let mut output = String::new();
+    serialize_node(document, index, &mut output);
+    output
+}
+
 // cpp: webapi/dom_bindings.cc:140-161
 fn node_type_number(node_type: DOMNodeType) -> f64 {
     match node_type {
@@ -2320,6 +2367,8 @@ mod tests {
             const template = document.getElementById('tpl');
             check(template.content.nodeType === 11 && template.content.ownerDocument === document && template.textContent === '', 'template ownership');
             check(template.innerHTML === '<span data-quote="&quot;&amp;&lt;>">nested &amp;&lt;&gt;</span><!-- c --><br>', 'template serialization');
+            check(template.outerHTML === '<template id="tpl"><span data-quote="&quot;&amp;&lt;>">nested &amp;&lt;&gt;</span><!-- c --><br></template>', 'outerHTML serializes the element and template contents');
+            check(document.getElementById('vector').outerHTML === '<svg id="vector"></svg>', 'SVG outerHTML serialization');
             check(document.getElementById('vector').namespaceURI === 'http://www.w3.org/2000/svg', 'SVG namespace');
             box.setAttribute('rounded', 1.23456789); box.setAttribute('scientific', 1000000); box.setAttribute('large-fixed', 100000); box.setAttribute('infinity', Infinity);
             check(box.getAttribute('rounded') === '1.23457' && box.getAttribute('scientific') === '1e+06' && box.getAttribute('large-fixed') === '100000' && box.getAttribute('infinity') === 'Infinity', 'source number formatting');

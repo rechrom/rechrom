@@ -101,7 +101,7 @@ fn has_id(page: &Page, id: &str) -> bool {
 }
 fn finish(page: &mut Page) {
     for _ in 0..1000 {
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         if !page.IsLoading() {
             return;
         }
@@ -142,7 +142,7 @@ fn pump_module_until(
         // Preserve real one-task turns while draining already-ready parser and
         // scheduler work. No elapsed-time sleep stands in for worker readiness.
         for _ in 0..40 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
             if ready(page) {
                 return;
             }
@@ -200,7 +200,7 @@ fn module_graph_waits_yield_frames_and_async_defer_order_matches_browser_rules()
             "order.push('defer');",
         );
         for _ in 0..20 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         assert_script(
             &mut page,
@@ -235,7 +235,7 @@ fn async_module_can_execute_while_css_and_deferred_scripts_are_waiting() {
         ]);
         page.Open("https://stream.test/", 4096, 4096).unwrap();
         for _ in 0..20 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         script_response(
             &resources,
@@ -280,7 +280,7 @@ fn failed_dependency_does_not_execute_root_or_stall_later_deferred_scripts() {
             "import './bad-dependency.js'; order.push('must-not-execute');",
         );
         for _ in 0..10 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         assert!(page.IsLoading());
         assert!(page.CurrentFrame().is_some());
@@ -355,7 +355,7 @@ fn stopping_navigation_cancels_unfinished_module_graph_without_execution() {
             "import './pending.js'; globalThis.executed=true;",
         );
         for _ in 0..20 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         assert!(page.IsLoading());
         assert!(page.CurrentFrame().is_some());
@@ -366,7 +366,7 @@ fn stopping_navigation_cancels_unfinished_module_graph_without_execution() {
             "export const x=1;",
         );
         for _ in 0..10 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         assert!(!page.IsLoading());
         assert_eq!(finished.get(), 0);
@@ -385,14 +385,14 @@ fn first_frame() {
     page.Open("https://stream.test/", 13, 3).unwrap();
     assert!(page.IsLoading());
     assert!(page.CurrentFrame().is_none());
-    page.RunTasks(0.0).unwrap();
+    page.RunTask().unwrap();
     assert!(page.CurrentFrame().is_none());
     body.borrow_mut().extend([
         response(),
         URLLoadEvent::Data(b"<body><p id=early>Early</p>".to_vec()),
     ]);
     for _ in 0..100 {
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         if has_id(&page, "early") && page.CurrentFrame().is_some() {
             break;
         }
@@ -405,11 +405,11 @@ fn first_frame() {
     let frame = page.CurrentFrame().unwrap().sequence;
     // Waiting on network input must not keep presenting identical frames.
     for _ in 0..100 {
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
     }
     let stable = page.CurrentFrame().unwrap().sequence;
     for _ in 0..10 {
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
     }
     assert_eq!(page.CurrentFrame().unwrap().sequence, stable);
     assert!(stable >= frame);
@@ -422,7 +422,7 @@ fn first_frame() {
     finish(&mut page);
     assert!(has_id(&page, "late"));
     assert_eq!(finished.get(), 1);
-    page.RunTasks(0.0).unwrap();
+    page.RunTask().unwrap();
     assert_eq!(finished.get(), 1);
     assert_eq!(page.Document().GetDocument().RootHandle(), root);
 }
@@ -442,7 +442,7 @@ fn blocking_script() {
     ]);
     page.Open("https://stream.test/", 4096, 4096).unwrap();
     for _ in 0..8 {
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
     }
     assert!(has_id(&page, "early"));
     assert!(!has_id(&page, "late"));
@@ -481,7 +481,7 @@ fn blocking_style() {
     ]);
     page.Open("https://stream.test/", 4096, 4096).unwrap();
     for _ in 0..8 {
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
     }
     assert!(has_id(&page, "early"));
     assert!(!page.IsRenderingReady());
@@ -515,7 +515,7 @@ fn head_stylesheet_before_first_paint_blocks_and_failure_unblocks() {
             ]);
             page.Open("https://stream.test/", 4096, 4096).unwrap();
             for _ in 0..8 {
-                page.RunTasks(0.0).unwrap();
+                page.RunTask().unwrap();
             }
             assert!(has_id(&page, "early"));
             assert!(!page.IsRenderingReady());
@@ -563,7 +563,7 @@ fn post_body_stylesheets_do_not_freeze_typing_or_caret() {
             ]);
             page.Open("https://stream.test/", 4096, 4096).unwrap();
             for _ in 0..8 {
-                page.RunTasks(0.0).unwrap();
+                page.RunTask().unwrap();
             }
             let first = page.CurrentFrame().unwrap().sequence;
             body.borrow_mut().extend([
@@ -571,7 +571,7 @@ fn post_body_stylesheets_do_not_freeze_typing_or_caret() {
                 URLLoadEvent::Finished,
             ]);
             for _ in 0..8 {
-                page.RunTasks(0.0).unwrap();
+                page.RunTask().unwrap();
             }
             assert!(resources
                 .borrow()
@@ -684,7 +684,7 @@ fn real_http() {
     page.Open(&address, 16384, 4096).unwrap();
     let deadline = start + Duration::from_secs(5);
     while page.CurrentFrame().is_none() || !has_id(&page, "early") {
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -697,7 +697,7 @@ fn real_http() {
     assert!(wakes.load(Ordering::Relaxed) > 0);
     release.send(()).unwrap();
     while page.IsLoading() {
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -780,7 +780,7 @@ fn real_http_module_dependency_wait_keeps_page_frames_and_tasks_running() {
         page.Open(&address, 16384, 4096).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while !waiting.load(Ordering::Acquire) || page.CurrentFrame().is_none() {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
             assert!(
                 Instant::now() < deadline,
                 "dependency fetch failed to start"
@@ -790,7 +790,7 @@ fn real_http_module_dependency_wait_keeps_page_frames_and_tasks_running() {
         assert!(page.IsLoading());
         assert!(has_id(&page, "early"));
         assert_script(&mut page, "setTimeout(()=>ticks++,0);");
-        page.RunTasks(1.0).unwrap();
+        page.RunFor(std::time::Duration::from_millis(1)).unwrap();
         assert_script(&mut page,"if(ticks!==1 || typeof moduleAnswer!=='undefined') throw Error('page task blocked by module fetch');");
         page.ResizeViewport(360.0, 220.0, 1.0).unwrap();
         assert!(page.CurrentFrame().is_some());
@@ -799,7 +799,7 @@ fn real_http_module_dependency_wait_keeps_page_frames_and_tasks_running() {
         );
         release.send(()).unwrap();
         while page.IsLoading() {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -827,7 +827,7 @@ fn resource_completion_after_load_is_polled_without_another_dom_edit() {
         // The creation frame consumes its dirty state while the transport is
         // still pending. Completion must be driven by a later ordinary turn.
         for _ in 0..3 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         *resources.borrow()["https://stream.test/later.svg"].borrow_mut() = Some(URLResponse {
             final_url: "https://stream.test/later.svg".into(),
@@ -837,7 +837,7 @@ fn resource_completion_after_load_is_polled_without_another_dom_edit() {
             body: br#"<svg xmlns="http://www.w3.org/2000/svg" width="7" height="11"><rect width="7" height="11" fill="red"/></svg>"#.to_vec(),
         });
         for _ in 0..5 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         assert_script(&mut page, "if(imageLoads!==1||!later.complete||later.naturalWidth!==7||later.naturalHeight!==11)throw Error('late resource did not complete');if(document.readyState!=='complete')throw Error('load restarted');");
         assert!(!page.IsLoading());
@@ -864,7 +864,7 @@ fn nonblocking_page_turn_returns_between_ready_scripts_and_timer() {
         ]);
         page.Open("https://stream.test/", 4096, 4096).unwrap();
         for _ in 0..20 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         assert!(page.IsLoading());
         assert_eq!(finished.get(), 0);
@@ -878,7 +878,7 @@ fn nonblocking_page_turn_returns_between_ready_scripts_and_timer() {
         );
         for _ in 0..12 {
             assert_script(&mut page, "turnRuns=0;");
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
             assert_script(&mut page, "if(turnRuns>1)throw Error('multiple script jobs in one host turn: '+turnRuns);for(var n of ['a','b','c']){var i=order.indexOf(n);if(i>=0&&order[i+1]!=='m'+n)throw Error('microtask checkpoint split')}");
         }
         assert_script(&mut page, "if(order.filter(x=>['a','b','c','timer'].includes(x)).length!==4)throw Error('script lost or duplicated');if(order.indexOf('c')>order.indexOf('dom')||order.indexOf('dom')>order.indexOf('load'))throw Error('load ordering');if(document.readyState!=='complete')throw Error('readyState');");
@@ -898,7 +898,7 @@ fn resource_turn_budget_is_shared_by_loading_lifecycle_and_no_script_page() {
         ]);
         page.Open("https://stream.test/", 4096, 4096).unwrap();
         for _ in 0..20 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         assert!(page.CurrentFrame().is_some());
         assert!(page.IsLoading());
@@ -922,7 +922,7 @@ fn resource_turn_budget_is_shared_by_loading_lifecycle_and_no_script_page() {
             );
         }
         for remaining in [2, 1, 0] {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
             let waiting = resources
                 .borrow()
                 .values()
@@ -968,7 +968,7 @@ fn image_completion_and_timer_have_separate_turns_with_complete_checkpoints() {
         ]);
         page.Open("https://stream.test/", 4096, 4096).unwrap();
         for _ in 0..20 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         assert_script(&mut page, "document.getElementById('first').onload=()=>{turnRuns++;order.push('image');Promise.resolve().then(()=>order.push('mimage'))};setTimeout(()=>{turnRuns++;order.push('timer');Promise.resolve().then(()=>order.push('mtimer'))},0);");
         *resources.borrow()["https://stream.test/first.svg"].borrow_mut() = Some(URLResponse {
@@ -978,7 +978,7 @@ fn image_completion_and_timer_have_separate_turns_with_complete_checkpoints() {
         });
         for _ in 0..5 {
             assert_script(&mut page, "turnRuns=0;");
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
             assert_script(&mut page, "if(turnRuns>1)throw Error('resource, load or timer jobs merged');for(var n of ['image','timer','complete']){var i=order.indexOf(n);if(i>=0&&order[i+1]!=='m'+n)throw Error('unfinished checkpoint')}");
         }
         assert_script(&mut page, "if(order.indexOf('image')<0||order.indexOf('timer')<0||order.indexOf('complete')>order.indexOf('load')||order.indexOf('mcomplete')>order.indexOf('load'))throw Error('completion/lifecycle order: '+JSON.stringify(order));");
@@ -1002,7 +1002,7 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
         ]);
         page.Open("https://stream.test/", 4096, 4096).unwrap();
         for _ in 0..5 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         assert!(page.CurrentFrame().is_some());
         assert!(page.IsLoading());
@@ -1033,7 +1033,7 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
         // A real viewport change forces another ordinary Page lifecycle. This
         // is not old-frame reuse and the pixels remain complete and immutable.
         page.ResizeViewport(321.0, 200.0, 1.0).unwrap();
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         let second = page
             .CurrentFrame()
             .unwrap()
@@ -1050,7 +1050,7 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
             image_resource::PaintImageContent::Bitmap(_) => unreachable!(),
         };
         assert!(std::sync::Arc::ptr_eq(&first_record, second_record));
-        let current_pixels = renderer::pure_replay::RasterizeDisplayItemList(
+        let current_pixels = raster::pure_replay::RasterizeDisplayItemList(
             &page.CurrentFrame().unwrap().display_items,
             321,
             200,
@@ -1075,7 +1075,7 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
         });
         fresh.Open("https://stream.test/", 4096, 4096).unwrap();
         finish(&mut fresh);
-        let fresh_pixels = renderer::pure_replay::RasterizeDisplayItemList(
+        let fresh_pixels = raster::pure_replay::RasterizeDisplayItemList(
             &fresh.CurrentFrame().unwrap().display_items,
             321,
             200,
@@ -1110,7 +1110,7 @@ fn image_dom_tasks_defer_load_error_and_cancel_replaced_requests() {
         ]);
         page.Open("https://stream.test/", 4096, 4096).unwrap();
         for _ in 0..20 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         assert_script(&mut page, "var good=document.getElementById('good'),bad=document.getElementById('bad');good.onload=()=>{order.push('good');Promise.resolve().then(()=>order.push('mgood'))};bad.onerror=()=>{order.push('bad');Promise.resolve().then(()=>order.push('mbad'))};");
         *resources.borrow()["https://stream.test/good.svg"].borrow_mut() = Some(URLResponse {
@@ -1118,13 +1118,13 @@ fn image_dom_tasks_defer_load_error_and_cancel_replaced_requests() {
             mime_type: "image/svg+xml".into(), text_encoding: "utf-8".into(),
             body: br#"<svg xmlns="http://www.w3.org/2000/svg" width="7" height="11"><rect width="7" height="11" fill="red"/></svg>"#.to_vec(),
         });
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         assert_script(
             &mut page,
             "if(order.length)throw Error('load fired during resource commit');",
         );
         assert_eq!(finished.get(), 0);
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         assert_script(
             &mut page,
             "if(order.join(',')!=='good,mgood')throw Error('load/checkpoint '+order);",
@@ -1137,13 +1137,13 @@ fn image_dom_tasks_defer_load_error_and_cancel_replaced_requests() {
             text_encoding: "utf-8".into(),
             body: b"invalid image".to_vec(),
         });
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         assert_script(
             &mut page,
             "if(order.join(',')!=='good,mgood')throw Error('error fired during resource commit');",
         );
         assert_eq!(finished.get(), 0);
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         assert_script(
             &mut page,
             "if(order.join(',')!=='good,mgood,bad,mbad')throw Error('error/checkpoint '+order);",
@@ -1151,12 +1151,12 @@ fn image_dom_tasks_defer_load_error_and_cancel_replaced_requests() {
         finish(&mut page);
         assert_script(&mut page, "if(order.join(',')!=='good,mgood,bad,mbad,window')throw Error('document load order '+order);order=[];var changed=document.createElement('img');changed.onload=()=>{order.push('changed');Promise.resolve().then(()=>order.push('mchanged'))};changed.onerror=()=>order.push('stale-error');changed.src='good.svg';document.body.appendChild(changed);changed.src='other.svg';changed.src='good.svg';document.body.style.color='red';if(order.length)throw Error('cached load must be deferred');");
         for _ in 0..4 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         assert_script(&mut page, "if(order.join(',')!=='changed,mchanged')throw Error('stale or duplicated request event '+order);");
         assert_script(&mut page, "order=[];changed.setAttribute('class','loaded');changed.style.opacity='.9';changed.setAttribute('alt','loaded image');changed.setAttribute('data-ready','1');");
         for _ in 0..4 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         assert_script(
             &mut page,
@@ -1179,7 +1179,7 @@ pub(crate) fn check_cached_image_external_apply_dom_tasks() {
     ]);
     page.Open("https://stream.test/", 4096, 4096).unwrap();
     for _ in 0..20 {
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
     }
     *resources.borrow()["https://stream.test/good.svg"].borrow_mut() = Some(URLResponse {
         final_url: "https://stream.test/good.svg".into(), status_code: 200,
@@ -1188,7 +1188,7 @@ pub(crate) fn check_cached_image_external_apply_dom_tasks() {
     });
     finish(&mut page);
     assert_script(&mut page, "var order=[];var host=document.createElement('img');host.onload=()=>{order.push('host');Promise.resolve().then(()=>order.push('mhost'))};host.src='good.svg';document.body.appendChild(host);order.push('returned');if(order.join(',')!=='returned')throw Error('host mutation fired load synchronously');");
-    page.RunTasks(0.0).unwrap();
+    page.RunTask().unwrap();
     assert_script(&mut page, "if(order.join(',')!=='returned,host,mhost')throw Error('host task/checkpoint '+order);order=[];");
     let (document, body, id) = {
         let owner = page.Document();
@@ -1246,7 +1246,7 @@ pub(crate) fn check_cached_image_external_apply_dom_tasks() {
     // getElementById only finds connected elements. The queued load task has
     // not started, so its listener can be installed after the public mutation.
     assert_script(&mut page, "if(order.length)throw Error('Page::Apply fired load synchronously');document.getElementById('external').onload=()=>{order.push('external');Promise.resolve().then(()=>order.push('mexternal'))};");
-    page.RunTasks(0.0).unwrap();
+    page.RunTask().unwrap();
     assert_script(
         &mut page,
         "if(order.join(',')!=='external,mexternal')throw Error('external task/checkpoint '+order);",

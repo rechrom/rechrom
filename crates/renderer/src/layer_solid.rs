@@ -5,62 +5,7 @@
 //! As in cc::TileDrawInfo::SOLID_COLOR_MODE, a proven solid owns no pixel
 //! resource. Tile identity and damage retain their existing ownership.
 use super::*;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum TileDrawMode {
-    Resource,
-    /// Actual uniform opaque premultiplied color, in little-endian RGBA order.
-    SolidColor {
-        premul_rgba: u32,
-    },
-}
-
-/// TileManager::AssignGpuMemoryToTiles admits analyzed solids without raster
-/// work (cc/tiles/tile_manager.cc:949-976). Preserve only the exact analyzed
-/// color; generic edge sampling reads that value when unlike neighbors meet.
-pub(crate) fn raster_product(
-    plan_index: usize,
-    task: &layer_tile::RasterTask,
-    composition: LayerComposition,
-    premul_rgba: u32,
-    mut rgba: Vec<u8>,
-    profile: bool,
-) -> io::Result<TileProduct> {
-    debug_assert_eq!(
-        premul_rgba >> 24,
-        255,
-        "PaintOp analysis proved an opaque color"
-    );
-    let started = profile.then(std::time::Instant::now);
-    tile_bytes(task.pixel_size)?;
-    rgba.clear();
-    let call_time = started.map_or(std::time::Duration::ZERO, |start| start.elapsed());
-    let started = profile.then(std::time::Instant::now);
-    let (width, height) = (task.pixel_size.0 as usize, task.pixel_size.1 as usize);
-    let mut rows = Vec::with_capacity(height);
-    rows.resize_with(height, || RowSupport {
-        extent: (0, width),
-        opaque: true,
-        runs: (0, 0),
-    });
-    let row_support = TileRowSupport {
-        rows,
-        runs: Vec::new(),
-        opaque: true,
-        draw_mode: TileDrawMode::SolidColor { premul_rgba },
-    };
-    let bgra = Vec::new();
-    Ok(TileProduct {
-        plan_index,
-        task: task.clone(),
-        composition,
-        rgba,
-        bgra,
-        row_support,
-        call_time,
-        support_time: started.map_or(std::time::Duration::ZERO, |start| start.elapsed()),
-    })
-}
+pub(super) use raster::RasterDrawMode as TileDrawMode;
 
 fn neighbors_have_color(
     color: u32,

@@ -1,0 +1,21 @@
+[package]
+name = "raster"
+version = "0.0.1"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+browser_tracing = { path = "../tracing" }
+image_resource = { path = "../image_resource" }
+layer_tile = { path = "../layer_tile" }
+layoutng_assembly = { path = "../layoutng_assembly" }
+paint = { path = "../paint", features = ["translation_in_progress"] }
+skia = { path = "../skia" }
+font_engine = { path = "../font_engine", optional = true }
+
+[features]
+default = []
+text = []
+source_replay = ["dep:font_engine"]
+pure_replay = []
+profiling = ["pure_replay", "skia/profiling"]

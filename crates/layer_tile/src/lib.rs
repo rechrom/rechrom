@@ -8,11 +8,9 @@
 //! priorities or raster execution.
 //!
 //! LayerTileEngine owns resident metadata and lowers records into a complete
-//! FramePlan. Renderer owns pixels, backend record compilation and composition.
-//! Validated raster completion updates tile readiness independently of final
-//! composition. Retirement notifications remain pending until consumed, and
-//! resource loss invalidates readiness without recycling tile IDs. Rejected
-//! replay topologies are explicit; a plan is not proof a backend supports it.
+//! FramePlan. Raster owns pixels and backend record compilation; compositor
+//! owns final frame construction. Raster completion and resource retirement
+//! return through explicit messages, never through callbacks hidden in a plan.
 
 mod engine;
 mod geometry;
@@ -21,7 +19,7 @@ mod plan;
 #[doc(hidden)]
 pub mod recording;
 
-pub use engine::{LayerTileEngine, TileResourceOwner};
+pub use engine::LayerTileEngine;
 pub use geometry::{
     compositor_transform, compositor_transform_with_scroll, needs_transparent_backing,
     raster_properties, resolved_compositor_properties, resolved_compositor_properties_with_scroll,

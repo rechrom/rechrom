@@ -405,7 +405,7 @@ impl PageScripts {
         while !self.state.pending_image_events.borrow().is_empty() {
             self.FlushTasks();
             let client = self.state.client.clone();
-            WindowJavaScriptBindings::RunTasks(
+            WindowJavaScriptBindings::RunTaskTurn(
                 &self.window,
                 &mut *self.runtime,
                 &self.realm,
@@ -452,6 +452,9 @@ impl PageScripts {
     pub(super) fn HasPendingAnimationFrames(&self) -> bool {
         self.window.borrow().HasPendingAnimationFrames()
     }
+    pub(super) fn NextTaskDeadline(&self, now: std::time::Instant) -> Option<std::time::Instant> {
+        self.window.borrow().NextTaskDeadline(now)
+    }
     pub(super) fn RunAnimationFrameCallbacks(
         &mut self,
         frame_time: std::time::Instant,
@@ -470,7 +473,7 @@ impl PageScripts {
         self.FlushTasks();
         Ok(())
     }
-    pub(super) fn RunTasks(&mut self, milliseconds: f64) -> io::Result<()> {
+    pub(super) fn RunTaskTurn(&mut self, milliseconds: f64) -> io::Result<()> {
         self.FlushTasks();
         if let Some(scheduler) = &mut self.scheduler {
             if !scheduler.HasTaskBudget() {
@@ -487,7 +490,7 @@ impl PageScripts {
             }
         }
         let client = self.state.client.clone();
-        WindowJavaScriptBindings::RunTasks(
+        WindowJavaScriptBindings::RunTaskTurn(
             &self.window,
             &mut *self.runtime,
             &self.realm,

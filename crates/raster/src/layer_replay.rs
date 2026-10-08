@@ -2,47 +2,21 @@
 use crate::convert::{resources, ToSkia};
 pub use layer_tile::recording::ReplayUnsupported;
 use layer_tile::recording::{
-    aligned_rect, concatenate_affine, finite_rect, intersect, intersection, is_draw, is_rect_draw,
-    mapped_rect, record_pixel_bounds, State,
+    aligned_rect, concatenate_affine, intersect, intersection, is_draw, is_rect_draw, mapped_rect,
+    record_pixel_bounds, State,
 };
 use layer_tile::{FramePlan, LayerId, RasterTask};
-use layoutng_assembly::internal::layout_input::FontSmoothing;
 use paint::paint_engine::{DisplayItem, DisplayItemType as Kind, PaintRect};
-use paint::paint_property_tree::ClipPaintPropertyNode;
 use skia::compat::commands::{DrawCommand, ResourceContext};
 use skia::src::core::SkCanvas::RasterImageCache;
 use skia::RasterClipProductCache;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DeviceRect {
-    pub x: i32,
-    pub y: i32,
-    pub width: u32,
-    pub height: u32,
-}
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LayerComposition {
-    pub translation: (f64, f64),
-    pub clip: Option<DeviceRect>,
-    /// Output-quad limit from complete retained drawing support, in target
-    /// device coordinates. This is separate from the external clip and leaves
-    /// source tile coordinates/UVs intact. Unknown or white-backed support is
-    /// unbounded here; enclosure follows the true scale and placement.
-    pub content_bounds: Option<DeviceRect>,
-    /// Destination cells whose complete bilinear sample footprint is opaque.
-    pub opaque_bounds: Option<DeviceRect>,
-    /// The first layer starts on the original full-canvas white backdrop.
-    /// layer_tile invalidates tiles when this paint-order role changes.
-    pub white_backing: bool,
-    /// First allocated source column/row. A fractional leading filter fringe
-    /// belongs only to this grid edge; interior seams keep one quad owner.
-    pub grid_min: Option<(i32, i32)>,
-}
 struct PreparedRecord {
     commands: Vec<DrawCommand>,
     source_items: Vec<Option<DisplayItem>>,
+    decoration_glyph_runs: Vec<Vec<DrawCommand>>,
     draw_support: Vec<Option<PaintRect>>,
     raster_guard: u32,
     shadow_regions: Vec<PaintRect>,
@@ -96,9 +70,13 @@ fn shadow_support(item: &DisplayItem, state: State, scale: f64) -> PaintRect {
     bounds
 }
 pub(crate) struct PreparedLayer {
-    composition: LayerComposition,
+    composition: RasterLayerState,
     records: BTreeMap<usize, PreparedRecord>,
-    retained_clips: Arc<[Arc<ClipPaintPropertyNode>]>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RasterLayerState {
+    pub white_backing: bool,
 }
 pub struct LayerReplay<'a> {
     resources: ResourceContext<'a>,
@@ -106,59 +84,6 @@ pub struct LayerReplay<'a> {
     layers: BTreeMap<LayerId, Arc<PreparedLayer>>,
     scratch: Vec<u8>,
 }
-fn contains(a: PaintRect, b: PaintRect) -> bool {
-    b.is_empty()
-        || (a.x <= b.x
-            && a.y <= b.y
-            && a.x + a.width >= b.x + b.width
-            && a.y + a.height >= b.y + b.height)
-}
-fn device_rect(rect: PaintRect, scale: f64) -> Result<DeviceRect, ReplayUnsupported> {
-    if !finite_rect(rect) {
-        return Err(ReplayUnsupported("invalid-composition-clip"));
-    }
-    // cc::ComputeLayerClipAndVisibleRect uses ToEnclosingClipRect for the
-    // retained layer clip; SoftwareRenderer::SetClipRect applies that integer
-    // scissor without AA. Rounded/path coverage remains a separate operation.
-    // Descendant AA clips are already recorded in the layer's local raster
-    // space by Prepare (PaintChunksToCcLayer::StartClip), not by this scissor.
-    let left = (rect.x * scale).floor();
-    let top = (rect.y * scale).floor();
-    Ok(DeviceRect {
-        x: left as i32,
-        y: top as i32,
-        width: ((rect.x + rect.width) * scale - left).ceil().max(0.0) as u32,
-        height: ((rect.y + rect.height) * scale - top).ceil().max(0.0) as u32,
-    })
-}
-fn content_device_rect(
-    rect: PaintRect,
-    scale: f64,
-    translation: (f64, f64),
-) -> Result<DeviceRect, ReplayUnsupported> {
-    // CoverageIterator clips quad geometry to recorded content bounds while
-    // retaining the tile's texture coordinates. Enclose only after applying
-    // the true device placement. Complete source support already includes
-    // the record's raster-effect outset; do not add destination padding.
-    if rect.is_empty() {
-        return Ok(DeviceRect {
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-        });
-    }
-    device_rect(
-        PaintRect {
-            x: rect.x * scale + translation.0,
-            y: rect.y * scale + translation.1,
-            width: rect.width * scale,
-            height: rect.height * scale,
-        },
-        1.0,
-    )
-}
-
 pub(crate) fn document_records(
     artifact: &paint::paint_engine::PaintArtifact,
 ) -> BTreeMap<u64, Arc<dyn image_resource::DocumentPaintRecord>> {
@@ -333,7 +258,7 @@ impl<'a> LayerReplay<'a> {
             scratch,
         }
     }
-    pub fn new(plan: &'a FramePlan) -> Result<Self, ReplayUnsupported> {
+    pub fn new(plan: &'a FramePlan, tasks: &[RasterTask]) -> Result<Self, ReplayUnsupported> {
         let list = plan.GetPaintArtifact();
         let documents = document_records(list);
         let content = plan.GetRasterRecords();
@@ -342,8 +267,7 @@ impl<'a> LayerReplay<'a> {
         }
         let scale = plan.config.raster_scale;
         let mut layers = BTreeMap::new();
-        let needed: BTreeSet<_> = plan
-            .tasks
+        let needed: BTreeSet<_> = tasks
             .iter()
             .flat_map(|task| {
                 task.record_indices
@@ -354,50 +278,9 @@ impl<'a> LayerReplay<'a> {
         let needed_layers: BTreeSet<_> = needed.iter().map(|&(layer, _)| layer).collect();
         let mut image_is_opaque = BTreeMap::new();
         for layer in &plan.layers {
-            let (root_translation, root_clip) =
-                layer_tile::resolved_compositor_properties_with_scroll(
-                    &layer.properties,
-                    scale,
-                    layer.compositor_scroll,
-                )
-                .map_err(|_| ReplayUnsupported("unsupported-compositor-properties"))?;
-            if ![root_translation.0, root_translation.1]
-                .iter()
-                .all(|v| v.is_finite() && v.abs() <= (1 << 22) as f64)
-            {
-                return Err(ReplayUnsupported("large-property-placement"));
-            }
-            let translation = root_translation;
-            let white_backing = layer.is_first_layer && !layer.requires_transparent_backing;
-            let composition = LayerComposition {
-                translation,
-                clip: root_clip.map(|r| device_rect(r, 1.0)).transpose()?,
-                content_bounds: if white_backing {
-                    None
-                } else {
-                    layer
-                        .raster_content_bounds
-                        .map(|r| content_device_rect(r, scale, translation))
-                        .transpose()?
-                },
-                opaque_bounds: sampled_opaque_device_rect(
-                    layer.rect_known_to_be_opaque,
-                    scale,
-                    translation,
-                )?,
-                white_backing,
-                grid_min: layer
-                    .tiles
-                    .iter()
-                    .map(|tile| tile.tile_index)
-                    .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1))),
+            let composition = RasterLayerState {
+                white_backing: layer.is_first_layer && !layer.requires_transparent_backing,
             };
-            let mut retained_clips = Vec::new();
-            let mut clip = Some(layer.properties.clip.clone());
-            while let Some(node) = clip {
-                clip = node.parent.clone();
-                retained_clips.push(node);
-            }
             let mut records = BTreeMap::new();
             let mut opaque_rects = Vec::new();
             for &index in layer
@@ -434,6 +317,11 @@ impl<'a> LayerReplay<'a> {
                 } else {
                     Vec::new()
                 };
+                let mut decoration_glyph_runs = if compile {
+                    Vec::with_capacity(source.items.len() + 2)
+                } else {
+                    Vec::new()
+                };
                 if compile {
                     commands.push(
                         DisplayItem {
@@ -444,6 +332,7 @@ impl<'a> LayerReplay<'a> {
                     );
                     draw_support.push(None);
                     source_items.push(None);
+                    decoration_glyph_runs.push(Vec::new());
                 }
                 for item in &*source.items {
                     match item.r#type {
@@ -542,30 +431,33 @@ impl<'a> LayerReplay<'a> {
                             shadow_regions.push(shadow_support(item, record_transform, scale));
                         }
                         let mut command = item.to_skia();
-                        if item.r#type == Kind::kDrawGlyphRun
-                            && !composition.white_backing
-                            && item.font_smoothing != FontSmoothing::kNone
-                        {
-                            let support = clip.map_or(source.visual_rect, |c| {
-                                intersection(c, source.visual_rect)
-                            });
-                            // SkCanvas.cpp::internalSaveLayer uses unknown
-                            // pixel geometry unless preserve-LCD is requested.
-                            // SkGlyphRunPainter then selects A8. Keep platform glyph
-                            // masks; do not substitute outline rasterization.
-                            if !source.bounds_are_complete
-                                || !opaque_rects.iter().any(|&r| contains(r, support))
-                            {
-                                if std::env::var_os("LAYOUTNG_LAYER_REPLAY_VERBOSE").is_some() {
-                                    eprintln!("layer-replay glyph-A8 layer={:?} record={index} complete={} visual={:?} support={support:?} opaque={opaque_rects:?} prefix={record_transform:?}",
-                                        layer.id,source.bounds_are_complete,source.visual_rect);
-                                }
-                                command.font_smoothing =
-                                    skia::compat::commands::FontSmoothing::kAntialiased;
-                            }
-                        }
+                        // Keep the CSS/platform FontSmoothingMode attached to
+                        // the run. Chromium lets Skia downgrade LCD coverage
+                        // when the raster target has unknown pixel geometry;
+                        // it does not rewrite the font description to
+                        // `-webkit-font-smoothing: antialiased`, which would
+                        // also disable CoreText hinting on macOS.
                         commands.push(command);
                         source_items.push(Some(item.clone()));
+                        let decoration_runs = if item.r#type == Kind::kStrokeLine
+                            && item.is_text_decoration
+                            && item.skip_ink
+                        {
+                            source
+                                .items
+                                .iter()
+                                .filter(|glyph| {
+                                    glyph.r#type == Kind::kDrawGlyphRun
+                                        && glyph.fragment_instance_id == item.fragment_instance_id
+                                        && !glyph.is_shadow
+                                        && !glyph.stroke_glyphs
+                                })
+                                .map(ToSkia::to_skia)
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        decoration_glyph_runs.push(decoration_runs);
                     }
                 }
                 if !saved.is_empty() {
@@ -581,11 +473,13 @@ impl<'a> LayerReplay<'a> {
                     );
                     draw_support.push(None);
                     source_items.push(None);
+                    decoration_glyph_runs.push(Vec::new());
                     records.insert(
                         index,
                         PreparedRecord {
                             commands,
                             source_items,
+                            decoration_glyph_runs,
                             draw_support,
                             raster_guard,
                             shadow_regions,
@@ -598,11 +492,10 @@ impl<'a> LayerReplay<'a> {
                 Arc::new(PreparedLayer {
                     composition,
                     records,
-                    retained_clips: Arc::from(retained_clips),
                 }),
             );
         }
-        let resources = if plan.tasks.is_empty() {
+        let resources = if tasks.is_empty() {
             ResourceContext::default()
         } else {
             resources(list)
@@ -634,36 +527,14 @@ impl<'a> LayerReplay<'a> {
             scratch: Vec::new(),
         })
     }
-    pub fn composition(&self, id: LayerId) -> Option<LayerComposition> {
+    pub fn composition(&self, id: LayerId) -> Option<RasterLayerState> {
         self.layers.get(&id).map(|l| l.composition)
-    }
-    /// Unbaked actual property nodes, leaf to root. Retained axis-aligned rects
-    /// use the compositor scissor. Rounded/path nodes retain real coverage,
-    /// excluding effect-output ancestors handled by the corresponding group.
-    pub fn retained_clip_nodes(&self, id: LayerId) -> Arc<[Arc<ClipPaintPropertyNode>]> {
-        self.layers
-            .get(&id)
-            .map_or_else(|| Arc::from([]), |layer| layer.retained_clips.clone())
-    }
-    /// SoftwareRenderer::SetClipRect uses a non-AA enclosing scissor, whereas
-    /// SetClipRRect uses AA. This is external compositor ownership only;
-    /// StartClip's recorded descendant rects still use AA=true in Prepare.
-    pub fn retained_clip_antialias(&self, node: &Arc<ClipPaintPropertyNode>) -> bool {
-        node.radii.HasRadius() || !node.clip_path.is_empty()
     }
     pub fn set_scratch(&mut self, scratch: Vec<u8>) {
         self.scratch = scratch;
     }
     pub fn take_scratch(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.scratch)
-    }
-    pub fn raster_tile(
-        &mut self,
-        task: &RasterTask,
-        image_cache: &mut RasterImageCache,
-        clip_cache: &mut RasterClipProductCache,
-    ) -> std::io::Result<Vec<u8>> {
-        self.raster_tile_with_pixels(task, image_cache, clip_cache, Vec::new())
     }
     pub fn raster_tile_with_pixels(
         &mut self,
@@ -778,11 +649,12 @@ impl<'a> LayerReplay<'a> {
                 .records
                 .get(&record)
                 .ok_or_else(|| bad("task record does not belong to layer"))?;
-            for ((command, support), source_item) in record
+            for (((command, support), source_item), decoration_glyph_runs) in record
                 .commands
                 .iter()
                 .zip(&record.draw_support)
                 .zip(&record.source_items)
+                .zip(&record.decoration_glyph_runs)
             {
                 if support.is_some_and(|rect| intersection(rect, target_rect).is_empty()) {
                     culled_draws += 1;
@@ -799,7 +671,15 @@ impl<'a> LayerReplay<'a> {
                         )
                 });
                 if !replayed_document {
-                    canvas.replay_item(command, &self.resources);
+                    if decoration_glyph_runs.is_empty() {
+                        canvas.replay_item(command, &self.resources);
+                    } else {
+                        canvas.replay_text_decoration_with_skip_ink(
+                            command,
+                            decoration_glyph_runs,
+                            &self.resources,
+                        );
+                    }
                 }
                 if let Some(started) = started {
                     let cost = &mut costs[command.r#type as usize];
@@ -838,333 +718,4 @@ impl<'a> LayerReplay<'a> {
         }
         Ok(reuse)
     }
-}
-
-#[cfg(test)]
-mod affine_upcast_regression {
-    use super::*;
-    use layer_tile::recording::PrepareRasterContent;
-    use layoutng_assembly::internal::layout_input::TransformMatrix;
-    use layoutng_assembly::internal::layout_input_types::Color;
-    use paint::paint_engine::PaintArtifact;
-    use paint::paint_engine::{RasterEffectOutset, RecordedDisplayItemKind};
-    use paint::paint_property_tree::PropertyTreeState;
-    use paint::paint_property_tree::{ScrollPaintPropertyNode, TransformPaintPropertyNode};
-
-    #[test]
-    fn baidu_half_turn_omitted_transform_tiles_match_full_canvas() {
-        half_turn_tiles_match_full_canvas(false);
-    }
-
-    #[test]
-    fn half_turn_shared_affine_rounded_clip_tiles_match_full_canvas() {
-        half_turn_tiles_match_full_canvas(true);
-    }
-
-    fn half_turn_tiles_match_full_canvas(with_clip: bool) {
-        let root = PropertyTreeState::default();
-        let scroll = Arc::new(ScrollPaintPropertyNode {
-            lifecycle: Default::default(),
-            id: 6,
-            parent: root.transform.scroll.clone(),
-            overflow_clip: None,
-            container_rect: PaintRect {
-                x: 0.0,
-                y: 0.0,
-                width: 512.0,
-                height: 512.0,
-            },
-            contents_rect: PaintRect {
-                x: 0.0,
-                y: 0.0,
-                width: 512.0,
-                height: 1024.0,
-            },
-            user_scrollable_horizontal: false,
-            user_scrollable_vertical: true,
-        });
-        let anchor = Arc::new(TransformPaintPropertyNode {
-            lifecycle: Default::default(),
-            id: 7,
-            parent: Some(root.transform.clone()),
-            matrix: TransformMatrix::default(),
-            origin: [0.0; 3],
-            scroll: Some(scroll),
-            direct_compositing_reasons: Vec::new(),
-        });
-        // Exact matrix from the first real Baidu rejection, including sin(pi).
-        let matrix = TransformMatrix {
-            values: [
-                -1.0,
-                1.2246467991473532e-16,
-                0.0,
-                0.0,
-                -1.2246467991473532e-16,
-                -1.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                328.0,
-                411.0,
-                0.0,
-                1.0,
-            ],
-        };
-        let transform = Arc::new(TransformPaintPropertyNode {
-            lifecycle: Default::default(),
-            id: 10,
-            parent: Some(anchor.clone()),
-            matrix,
-            origin: [0.0; 3],
-            scroll: None,
-            direct_compositing_reasons: Vec::new(),
-        });
-        // Both clip dimensions exceed the 256px tile size, including when
-        // the local tiling grid starts at this clip's own enclosed bounds.
-        // Put tile seams through straight clip edges, not the middle of a
-        // corner curve. Original Skia clips/subdivides curves before building
-        // analytic edges, so a different raster clip may change corner AA.
-        let clip_rect = PaintRect {
-            x: 20.0,
-            y: 25.0,
-            width: 280.0,
-            height: 280.0,
-        };
-        let clip = if with_clip {
-            Arc::new(paint::paint_property_tree::ClipPaintPropertyNode {
-                lifecycle: Default::default(),
-                id: 11,
-                parent: Some(root.clip.clone()),
-                local_transform_space: transform.clone(),
-                rect: Some(clip_rect),
-                radii: layoutng_assembly::internal::paint_input::PaintCornerRadii {
-                    top_left: layoutng_assembly::internal::paint_input::PaintCornerRadius {
-                        x: 13.0,
-                        y: 13.0,
-                    },
-                    top_right: layoutng_assembly::internal::paint_input::PaintCornerRadius {
-                        x: 13.0,
-                        y: 13.0,
-                    },
-                    bottom_right: layoutng_assembly::internal::paint_input::PaintCornerRadius {
-                        x: 13.0,
-                        y: 13.0,
-                    },
-                    bottom_left: layoutng_assembly::internal::paint_input::PaintCornerRadius {
-                        x: 13.0,
-                        y: 13.0,
-                    },
-                },
-                clip_path: Vec::new(),
-                clip_path_even_odd: false,
-                pixel_moving_filter: None,
-            })
-        } else {
-            root.clip.clone()
-        };
-        let properties = PropertyTreeState {
-            transform,
-            clip,
-            ..root
-        };
-        let rect = PaintRect {
-            x: 8.0,
-            y: 18.0,
-            width: 300.0,
-            height: if with_clip { 300.0 } else { 280.0 },
-        };
-        let mut list = PaintArtifact {
-            items: vec![
-                DisplayItem {
-                    r#type: Kind::kSave,
-                    ..Default::default()
-                },
-                DisplayItem {
-                    r#type: Kind::kConcat,
-                    transform: matrix,
-                    ..Default::default()
-                },
-                DisplayItem {
-                    r#type: Kind::kDrawRect,
-                    rect,
-                    antialias: true,
-                    color: Color {
-                        red: 0.2,
-                        green: 0.4,
-                        blue: 0.7,
-                        alpha: 1.0,
-                    },
-                    ..Default::default()
-                },
-                DisplayItem {
-                    r#type: Kind::kRestore,
-                    ..Default::default()
-                },
-            ]
-            .into(),
-            display_items: vec![paint::paint_engine::RecordedDisplayItem {
-                kind: RecordedDisplayItemKind::Drawing,
-                id: Default::default(),
-                visual_rect: rect,
-                visual_rect_is_accurate: true,
-                draws_content: true,
-                raster_effect_outset: RasterEffectOutset::kNone,
-                record_begin: 2,
-                record_end: 3,
-                scroll_translation: Some(anchor.clone()),
-            }],
-            chunks: vec![paint::paint_engine::PaintChunk {
-                end_index: 1,
-                bounds: rect,
-                drawable_bounds: rect,
-                properties,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        if with_clip {
-            std::sync::Arc::make_mut(&mut list.items).insert(
-                2,
-                DisplayItem {
-                    r#type: Kind::kClipRoundedRect,
-                    rect: clip_rect,
-                    corner_radii: list.chunks[0].properties.clip.radii,
-                    antialias: true,
-                    ..Default::default()
-                },
-            );
-            list.display_items[0].record_begin += 1;
-            list.display_items[0].record_end += 1;
-        }
-        let lowered = layer_tile::raster_properties(&list.chunks[0].properties).unwrap();
-        assert!(lowered.transform.lifecycle.same_node(&anchor.lifecycle));
-        let canonical = PrepareRasterContent(&list, 1.0).unwrap();
-        let prefix = canonical[0]
-            .items
-            .iter()
-            .find(|item| item.r#type == Kind::kConcat)
-            .unwrap();
-        assert_eq!(prefix.transform.values[1], matrix.values[1] as f32 as f64);
-        assert_ne!(prefix.transform.values[1], 0.0);
-        if with_clip {
-            let prefix_index = canonical[0]
-                .items
-                .iter()
-                .position(|item| item.r#type == Kind::kConcat)
-                .unwrap();
-            let clip = &canonical[0].items[prefix_index + 1];
-            assert_eq!(clip.r#type, Kind::kClipRoundedRect);
-            assert_eq!(clip.rect, clip_rect);
-            assert_eq!(clip.corner_radii, list.chunks[0].properties.clip.radii);
-            assert!(clip.antialias);
-        }
-        let mut actual = vec![0u32; 512 * 512];
-        let mut renderer = crate::layer_tile_renderer::LayerTileRenderer::default();
-        let list = Arc::new(list);
-        let mut engine = layer_tile::LayerTileEngine::default();
-        engine.SetFrameConfig(layer_tile::FrameConfig {
-            viewport: PaintRect {
-                x: 0.0,
-                y: 0.0,
-                width: 512.0,
-                height: 512.0,
-            },
-            raster_scale: 1.0,
-            activation_scroll: None,
-            prepaint_scroll: None,
-        });
-        engine.Update(&list).unwrap();
-        renderer
-            .paint(
-                engine.GetFramePlan().unwrap(),
-                512,
-                512,
-                &mut actual,
-                skia::PixelFormat::Bgra8888,
-            )
-            .unwrap();
-        assert!(renderer.layer_tile_stats().raster_tasks > 1);
-        let expected = crate::surface::RenderDisplayItemListIntoTarget(
-            &list,
-            512,
-            512,
-            1.0,
-            skia::PixelStorage::owned(vec![0; 512 * 512 * 4]),
-            skia::PixelFormat::Bgra8888,
-        )
-        .unwrap()
-        .into_vec();
-        if with_clip {
-            let canonical_list = PaintArtifact {
-                items: canonical[0].items.to_vec().into(),
-                ..(*list).clone()
-            };
-            let canonical_pixels = crate::surface::RenderDisplayItemListIntoTarget(
-                &canonical_list,
-                512,
-                512,
-                1.0,
-                skia::PixelStorage::owned(vec![0; 512 * 512 * 4]),
-                skia::PixelFormat::Bgra8888,
-            )
-            .unwrap()
-            .into_vec();
-            for (index, (canonical, expected)) in canonical_pixels
-                .chunks_exact(4)
-                .zip(expected.chunks_exact(4))
-                .enumerate()
-            {
-                assert_eq!(
-                    canonical,
-                    expected,
-                    "canonical ClipOp full-canvas pixel {},{}",
-                    index % 512,
-                    index / 512
-                );
-            }
-        }
-        for (index, (actual, expected)) in actual.iter().zip(expected.chunks_exact(4)).enumerate() {
-            assert_eq!(
-                actual.to_ne_bytes().as_slice(),
-                expected,
-                "pixel {},{}",
-                index % 512,
-                index / 512
-            );
-        }
-    }
-}
-
-// GeometryMapper maps an enclosed opacity proof, never its outer enclosure.
-// This software sampler reads base + one pixel on each fractional axis; keep
-// that full source footprint inside the proof before selecting an Src kernel.
-pub(crate) fn sampled_opaque_device_rect(
-    rect: PaintRect,
-    scale: f64,
-    translation: (f64, f64),
-) -> Result<Option<DeviceRect>, ReplayUnsupported> {
-    if rect.is_empty() {
-        return Ok(None);
-    }
-    let tx = translation.0.ceil();
-    let ty = translation.1.ceil();
-    let x = (rect.x * scale).ceil() + tx;
-    let y = (rect.y * scale).ceil() + ty;
-    let right = ((rect.x + rect.width) * scale).floor() + tx - f64::from(tx != translation.0);
-    let bottom = ((rect.y + rect.height) * scale).floor() + ty - f64::from(ty != translation.1);
-    if ![x, y, right, bottom]
-        .iter()
-        .all(|v| v.is_finite() && v.abs() <= i32::MAX as f64)
-    {
-        return Err(ReplayUnsupported("invalid-opaque-device-bounds"));
-    }
-    Ok((right > x && bottom > y).then_some(DeviceRect {
-        x: x as i32,
-        y: y as i32,
-        width: (right - x).max(0.0) as u32,
-        height: (bottom - y).max(0.0) as u32,
-    }))
 }

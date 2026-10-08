@@ -123,7 +123,7 @@ pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
     #[cfg(feature = "source_png")]
     {
         space.font_backend_factory = Some(std::sync::Arc::new(
-            renderer::font_backend::SkiaFontBackendFactory,
+            raster::font_backend::SkiaFontBackendFactory,
         ));
     }
     if let Some(started) = started {
@@ -188,14 +188,14 @@ fn RenderWithStyleLoader(
 
 fn RenderFragmentPng(fragments: &FragmentNode, width: u32, height: u32) -> Vec<u8> {
     #[cfg(feature = "pure_source_png")]
-    let rgba = renderer::pure_replay::RasterizeSourceDisplayItemList(
+    let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(
         &paint::paint_engine::Paint(fragments),
         width,
         height,
     );
     #[cfg(not(feature = "pure_source_png"))]
-    let rgba = renderer::RasterizeDisplayItemList(&paint::Paint(fragments), width, height);
-    renderer::EncodeRgbaPng(&rgba, width, height)
+    let rgba = raster::RasterizeDisplayItemList(&paint::Paint(fragments), width, height);
+    raster::EncodeRgbaPng(&rgba, width, height)
 }
 
 fn LayoutWithStyleLoader(
@@ -437,7 +437,7 @@ pub fn LayoutUrl(url: &str, width: u32, height: u32) -> io::Result<FragmentNode>
         height,
         std::rc::Rc::new(RefCell::new(page::NullPageClient)),
     )?;
-    page.RunTasks(0.0)?;
+    page.RunTask()?;
     page.CurrentFrame()
         .map(|frame| frame.fragments.as_ref().clone())
         .ok_or_else(|| io::Error::other("page has no frame"))
@@ -552,7 +552,7 @@ pub fn BuildSourceDisplayListUrl(
         height,
         std::rc::Rc::new(RefCell::new(page::NullPageClient)),
     )?;
-    page.RunTasks(0.0)?;
+    page.RunTask()?;
     page.CurrentFrame()
         .map(|frame| (*frame.display_items).clone())
         .ok_or_else(|| io::Error::other("page has no frame"))
@@ -561,16 +561,15 @@ pub fn BuildSourceDisplayListUrl(
 #[cfg(feature = "source_png")]
 pub fn RenderUrlSourcePng(url: &str, width: u32, height: u32) -> io::Result<Vec<u8>> {
     let display_list = BuildSourceDisplayListUrl(url, width, height)?;
-    let rgba =
-        renderer::source_replay::RasterizeSourceDisplayItemList(&display_list, width, height);
-    Ok(renderer::EncodeRgbaPng(&rgba, width, height))
+    let rgba = raster::source_replay::RasterizeSourceDisplayItemList(&display_list, width, height);
+    Ok(raster::EncodeRgbaPng(&rgba, width, height))
 }
 
 #[cfg(feature = "pure_source_png")]
 pub fn RenderUrlPureSourcePng(url: &str, width: u32, height: u32) -> io::Result<Vec<u8>> {
     let display_list = BuildSourceDisplayListUrl(url, width, height)?;
-    let rgba = renderer::pure_replay::RasterizeSourceDisplayItemList(&display_list, width, height);
-    Ok(renderer::EncodeRgbaPng(&rgba, width, height))
+    let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(&display_list, width, height);
+    Ok(raster::EncodeRgbaPng(&rgba, width, height))
 }
 
 #[cfg(test)]

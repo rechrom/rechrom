@@ -1,9 +1,10 @@
-//! Renderer-side compositor state.
+//! Browser compositor coordinator.
 //!
-//! The compositor is a message-driven state machine. It owns scroll/layer
-//! state and produces effects, but deliberately knows nothing about threads,
-//! channels, executors, or the final native display surface.
+//! This message-driven state machine owns active/pending scroll and raster
+//! state. The backend-independent `compositor` crate produces the immutable
+//! frames submitted to Display. Neither layer knows its thread placement.
 use crate::{display, engine::Viewport};
+use ::compositor::{BeginFrameAck, CompositorFrame};
 use interaction::input_event::{ScrollGranularity, WheelEvent, WheelPhase};
 use layer_tile::{
     CompositorScrollOffset, FrameConfig, FramePlan, LayerTileEngine, UnsupportedReason,
@@ -12,7 +13,6 @@ use paint::{
     paint_engine::{PaintArtifact, PaintRect},
     paint_property_tree::TransformPaintPropertyNode,
 };
-use renderer::layer_tile_renderer::LayerTileRenderer;
 use std::{io, sync::Arc, time::Instant};
 
 #[derive(Clone)]
@@ -22,6 +22,9 @@ pub(crate) struct ArtifactSnapshot {
     /// never inherit compositor deltas or resident-tree identity.
     pub document: (u64, u64),
     pub viewport: Viewport,
+    /// Explicit sampling time for viewport history. LayerTile never reads a
+    /// clock when computing its skewport.
+    pub frame_time: Instant,
     pub signature: (u64, u64, Viewport),
     pub toolbar: Arc<PaintArtifact>,
     pub content: Option<Arc<PaintArtifact>>,
@@ -32,7 +35,9 @@ pub(crate) struct ArtifactSnapshot {
 
 pub(crate) enum Command {
     Snapshot(ArtifactSnapshot),
+    InputBeginFrame(crate::begin_frame_source::NativeBeginFrame),
     BeginFrame(crate::begin_frame_source::NativeBeginFrame),
+    DisplayBeginFrame(crate::begin_frame_source::NativeBeginFrame),
     Wheel {
         event: WheelEvent,
         queued_at: Instant,
@@ -47,6 +52,7 @@ pub(crate) enum Command {
 pub(crate) enum Effect {
     Raster(RasterJob),
     Display(display::Message),
+    BeginMainFrame(crate::begin_frame_source::NativeBeginFrame),
     RequestBeginFrame,
 }
 
@@ -65,19 +71,28 @@ pub(crate) struct PlannedFrame {
     raster_scroll: Option<(u64, f64)>,
 }
 
+/// Immutable compositor output plus browser-host metadata which is not part of
+/// the graphics frame contract. Display never receives PaintArtifact or
+/// FramePlan through this path.
+pub(crate) struct SubmittedFrame {
+    pub(crate) viewport: Viewport,
+    pub(crate) toolbar: CompositorFrame,
+    pub(crate) content: Option<CompositorFrame>,
+    pub(crate) drag_regions: Vec<crate::chrome::DragRegion>,
+}
+
 #[derive(Default)]
 pub(crate) struct RasterBundle {
     pub(crate) toolbar_tiles: LayerTileEngine,
     pub(crate) content_tiles: LayerTileEngine,
-    pub(crate) toolbar_renderer: LayerTileRenderer,
-    pub(crate) content_renderer: LayerTileRenderer,
+    pub(crate) toolbar_raster: raster::RasterEngine,
+    pub(crate) content_raster: raster::RasterEngine,
 }
 
 pub(crate) struct RasterJob {
     pub(crate) snapshot: ArtifactSnapshot,
     pub(crate) bundle: RasterBundle,
     pub(crate) activation_target: Option<(u64, f64)>,
-    pub(crate) prepaint_target: Option<(u64, f64)>,
 }
 
 pub(crate) struct RasterReady {
@@ -92,66 +107,105 @@ struct RootScroll {
     maximum: f64,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct OverlayScrollbar {
-    pub(crate) offset: f64,
-    pub(crate) maximum: f64,
-    pub(crate) viewport_length: f64,
-}
-
 impl PlannedFrame {
-    pub(crate) fn RootOverlayScrollbar(&self) -> Option<OverlayScrollbar> {
+    fn RootOverlayScrollbarQuad(
+        &self,
+    ) -> Option<(::compositor::SolidColorDrawQuad, ::compositor::DeviceRect)> {
         let root = self.root_scroll?;
+        if root.maximum <= 0.0 {
+            return None;
+        }
         let offset = self
             .visual_scroll
             .filter(|(id, _)| *id == root.id)
             .map_or(root.committed, |(_, value)| value)
             .clamp(0.0, root.maximum);
-        Some(OverlayScrollbar {
-            offset,
-            maximum: root.maximum,
-            viewport_length: self.snapshot.viewport.content_height(),
-        })
+        let viewport = self.snapshot.viewport.content_height().max(1.0);
+        let contents = viewport + root.maximum;
+        let inner_length = (viewport - 4.0).max(0.0);
+        let thumb_length = (inner_length * viewport / contents)
+            .max(24.0)
+            .min(inner_length);
+        if thumb_length <= 0.0 {
+            return None;
+        }
+        let travel = (inner_length - thumb_length).max(0.0);
+        let top = 2.0 + travel * (offset / root.maximum).clamp(0.0, 1.0);
+        let right = self.snapshot.viewport.logical_width() - 3.0;
+        let rect = PaintRect {
+            x: (right - 10.0).max(0.0),
+            y: top,
+            width: 10.0,
+            height: thumb_length,
+        };
+        let scale = self.snapshot.viewport.scale;
+        let strip_width = (14.0 * scale).ceil() as u32;
+        let width = self.snapshot.viewport.width;
+        let height = self
+            .snapshot
+            .viewport
+            .height
+            .saturating_sub(self.snapshot.viewport.toolbar_pixels());
+        Some((
+            ::compositor::SolidColorDrawQuad {
+                rect,
+                visible_rect: rect,
+                color: [0, 0, 0, 128],
+                corner_radius: 5.0,
+            },
+            ::compositor::DeviceRect::new(
+                width.saturating_sub(strip_width) as i32,
+                0,
+                strip_width.min(width),
+                height,
+            ),
+        ))
     }
 }
 
-pub(crate) struct Compositor {
+pub(crate) struct CompositorEngine {
+    toolbar_frame_builder: ::compositor::FrameBuilder,
+    content_frame_builder: ::compositor::FrameBuilder,
     spare_bundle: Option<RasterBundle>,
     display_has_bundle: bool,
     raster_in_flight: bool,
     pending_snapshot: Option<ArtifactSnapshot>,
     pending_activation_target: Option<(u64, f64)>,
-    pending_prepaint_target: Option<(u64, f64)>,
     snapshot: Option<ArtifactSnapshot>,
     planned: Option<PlannedFrame>,
     committed_scroll: Option<(u64, f64)>,
     pending_scroll_delta: f64,
     scroll_active: bool,
     wheel_blocked_on_main: Option<bool>,
+    overlay_scrollbar_damage: Option<::compositor::DeviceRect>,
+    current_begin_frame: Option<crate::begin_frame_source::NativeBeginFrame>,
     dirty: bool,
 }
 
-impl Default for Compositor {
+impl Default for CompositorEngine {
     fn default() -> Self {
         Self {
+            toolbar_frame_builder: ::compositor::FrameBuilder::default(),
+            content_frame_builder: ::compositor::FrameBuilder::default(),
             spare_bundle: Some(RasterBundle::default()),
             display_has_bundle: false,
             raster_in_flight: false,
             pending_snapshot: None,
             pending_activation_target: None,
-            pending_prepaint_target: None,
             snapshot: None,
             planned: None,
             committed_scroll: None,
             pending_scroll_delta: 0.0,
             scroll_active: false,
             wheel_blocked_on_main: None,
+            overlay_scrollbar_damage: None,
+            current_begin_frame: None,
             dirty: true,
         }
     }
 }
 
-impl Compositor {
+impl CompositorEngine {
     pub(crate) fn Handle(&mut self, command: Command) -> io::Result<Vec<Effect>> {
         let mut effects = Vec::new();
         match command {
@@ -164,6 +218,8 @@ impl Compositor {
                     old.document != snapshot.document || old.signature != snapshot.signature
                 });
                 if document_changed {
+                    self.toolbar_frame_builder.Invalidate();
+                    self.content_frame_builder.Invalidate();
                     // Paint property node ids are scoped to a document.  A
                     // newly created Page commonly starts its root scroll node
                     // at the same small numeric id as the preceding Page; that
@@ -173,7 +229,6 @@ impl Compositor {
                     self.committed_scroll = None;
                     self.pending_scroll_delta = 0.0;
                     self.pending_activation_target = None;
-                    self.pending_prepaint_target = None;
                     self.wheel_blocked_on_main = None;
                     self.scroll_active = false;
                     browser_tracing::instant(
@@ -200,7 +255,6 @@ impl Compositor {
                     } else {
                         self.current_scroll_position()
                     };
-                    self.pending_prepaint_target = self.pending_activation_target;
                     self.ScheduleRaster(&mut effects);
                 }
             }
@@ -254,30 +308,12 @@ impl Compositor {
                                 self.pending_scroll_delta += desired - before;
                                 let _ = apply_scroll_offset(planned, desired);
                                 self.dirty = true;
-                                // PictureLayerTilingSet predicts roughly one
-                                // second of scroll motion and caps the skewport
-                                // at 2000 screen pixels.  This target expands
-                                // raster interest only; it never changes this
-                                // frame's draw transform or logical offset.
-                                let scale = self
-                                    .snapshot
-                                    .as_ref()
-                                    .map_or(1.0, |snapshot| snapshot.viewport.scale.max(1.0));
-                                let limit = 2000.0 / scale;
-                                let projected = (event.delta.y * 60.0).clamp(-limit, limit);
-                                let raster_target = (desired + projected).clamp(0.0, root.maximum);
-                                self.pending_snapshot = self.snapshot.clone();
+                                self.pending_snapshot =
+                                    self.snapshot.clone().map(|mut snapshot| {
+                                        snapshot.frame_time = queued_at;
+                                        snapshot
+                                    });
                                 self.pending_activation_target = Some((root.id, desired));
-                                self.pending_prepaint_target = Some((root.id, raster_target));
-                                browser_tracing::instant(
-                                    "raster",
-                                    "ScrollRasterPrediction",
-                                    &[
-                                        ("desired", desired),
-                                        ("predicted", raster_target),
-                                        ("limit", limit),
-                                    ],
-                                );
                                 self.ScheduleRaster(&mut effects);
                             }
                         }
@@ -336,7 +372,32 @@ impl Compositor {
                 self.spare_bundle = Some(bundle);
                 self.ScheduleRaster(&mut effects);
             }
-            Command::BeginFrame(_) | Command::Stop => {}
+            Command::InputBeginFrame(frame) => {
+                browser_tracing::instant(
+                    "input",
+                    "InputBeginFrame",
+                    &[
+                        ("source_id", frame.source_id as f64),
+                        ("sequence", frame.sequence_number as f64),
+                    ],
+                );
+            }
+            Command::BeginFrame(frame) => {
+                self.current_begin_frame = Some(frame);
+                browser_tracing::instant(
+                    "frame",
+                    "CompositorBeginFrame",
+                    &[
+                        ("source_id", frame.source_id as f64),
+                        ("sequence", frame.sequence_number as f64),
+                    ],
+                );
+                // cc's scheduler turns an impl-frame pulse into a main-frame
+                // request. The Page never observes the physical source
+                // directly; its owner event loop receives this effect.
+                effects.push(Effect::BeginMainFrame(frame));
+            }
+            Command::DisplayBeginFrame(_) | Command::Stop => {}
         }
         Ok(effects)
     }
@@ -346,8 +407,8 @@ impl Compositor {
             return;
         }
         // RasterBundle is the retained pending-tree resource owner: its
-        // LayerTileEngines and renderers carry tile identities, pixels and
-        // worker-local caches across updates.  While Display owns the active
+        // LayerTileEngines and RasterEngines carry tile identities, pixels and
+        // raster caches across updates. While Display owns the active
         // bundle and the raster owner owns the pending bundle, wait for
         // Display::Install to return the old active bundle.  Creating a third,
         // empty bundle here loses every retained tile and turns an otherwise
@@ -361,7 +422,6 @@ impl Compositor {
             return;
         };
         let activation_target = self.pending_activation_target.take();
-        let prepaint_target = self.pending_prepaint_target.take();
         let bundle = self
             .spare_bundle
             .take()
@@ -370,7 +430,6 @@ impl Compositor {
             snapshot,
             bundle,
             activation_target,
-            prepaint_target,
         }));
         self.raster_in_flight = true;
     }
@@ -464,7 +523,6 @@ impl Compositor {
                 self.spare_bundle = Some(ready.bundle);
                 self.pending_snapshot = self.snapshot.clone();
                 self.pending_activation_target = Some((root.id, desired));
-                self.pending_prepaint_target = Some((root.id, desired));
                 self.ScheduleRaster(effects);
                 return Ok(());
             }
@@ -505,7 +563,7 @@ impl Compositor {
     pub(crate) fn Prepare(
         &mut self,
         frame: crate::begin_frame_source::NativeBeginFrame,
-    ) -> Vec<Effect> {
+    ) -> io::Result<Vec<Effect>> {
         let _frame = browser_tracing::scope(browser_tracing::Context {
             target_id: 1,
             source_id: frame.source_id,
@@ -513,7 +571,7 @@ impl Compositor {
             ..Default::default()
         });
         if !self.dirty {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         if let Some(root) = self
             .planned
@@ -526,14 +584,59 @@ impl Compositor {
             }
         }
         let Some(planned) = self.planned.clone() else {
-            return Vec::new();
+            return Ok(Vec::new());
+        };
+        let ack = BeginFrameAck {
+            source_id: frame.source_id,
+            sequence_number: frame.sequence_number,
+            has_damage: true,
+        };
+        let toolbar = self
+            .toolbar_frame_builder
+            .BuildFrame(&planned.toolbar)
+            .map_err(io::Error::other)?
+            .WithBeginFrameAck(ack);
+        let mut content = if let Some(plan) = planned.content.as_ref() {
+            Some(
+                self.content_frame_builder
+                    .BuildFrame(plan)
+                    .map_err(io::Error::other)?
+                    .WithBeginFrameAck(ack),
+            )
+        } else {
+            self.content_frame_builder.Invalidate();
+            None
+        };
+        let overlay = self
+            .scroll_active
+            .then(|| planned.RootOverlayScrollbarQuad())
+            .flatten();
+        let next_overlay_damage = overlay.as_ref().map(|(_, damage)| *damage);
+        if let Some(frame) = content.take() {
+            content = Some(match overlay {
+                Some((quad, damage)) => frame.WithSolidColorQuad(quad, damage),
+                None => match self.overlay_scrollbar_damage {
+                    Some(damage) => frame.WithRootDamage(damage),
+                    None => frame,
+                },
+            });
+        }
+        self.overlay_scrollbar_damage = next_overlay_damage;
+        if content.is_none() {
+            self.overlay_scrollbar_damage = None;
+        }
+        let submitted = SubmittedFrame {
+            viewport: planned.snapshot.viewport,
+            toolbar,
+            content,
+            drag_regions: planned.snapshot.drag_regions.clone(),
         };
         self.dirty = false;
-        vec![Effect::Display(display::Message::Prepare {
+        Ok(vec![Effect::Display(display::Message::Prepare {
             frame,
-            planned,
+            submitted,
             scroll_active: self.scroll_active,
-        })]
+        })])
     }
 }
 
@@ -541,7 +644,6 @@ pub(crate) fn PlanAndRaster(
     bundle: &mut RasterBundle,
     snapshot: ArtifactSnapshot,
     activation_target: Option<(u64, f64)>,
-    prepaint_target: Option<(u64, f64)>,
 ) -> io::Result<PlannedFrame> {
     let mut trace = browser_tracing::span("raster", "RasterPendingTree");
     let toolbar_config = FrameConfig {
@@ -553,19 +655,13 @@ pub(crate) fn PlanAndRaster(
         },
         raster_scale: snapshot.viewport.scale,
         activation_scroll: None,
-        prepaint_scroll: None,
+        frame_time: Some(snapshot.frame_time),
     };
-    bundle.toolbar_tiles.SetFrameConfig(toolbar_config);
-    bundle
+    let toolbar_update = bundle
         .toolbar_tiles
-        .Update(&snapshot.toolbar)
+        .UpdatePending(&snapshot.toolbar, toolbar_config)
         .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error.reason()))?;
-    let toolbar = bundle
-        .toolbar_tiles
-        .GetFramePlan()
-        .expect("toolbar plan")
-        .clone();
-    if toolbar.unsupported == Some(UnsupportedReason::TileBudgetExceeded) {
+    if toolbar_update.frame_plan.unsupported == Some(UnsupportedReason::TileBudgetExceeded) {
         return Err(io::Error::new(
             io::ErrorKind::OutOfMemory,
             "toolbar tile budget exceeded",
@@ -577,69 +673,91 @@ pub(crate) fn PlanAndRaster(
         .and_then(find_root_scroll_artifact);
     let raster_scroll = source_root_scroll.map(|root| (root.id, root.committed));
     let content = if let Some(artifact) = &snapshot.content {
-        bundle.content_tiles.SetFrameConfig(FrameConfig {
-            viewport: PaintRect {
-                x: 0.0,
-                y: 0.0,
-                width: snapshot.viewport.logical_width(),
-                height: snapshot.viewport.content_height(),
-            },
-            raster_scale: snapshot.viewport.scale,
-            activation_scroll: source_root_scroll.and_then(|root| {
-                activation_target
-                    .filter(|(id, _)| *id == root.id)
-                    .map(|(_, desired)| CompositorScrollOffset {
-                        scroll_node_id: root.id,
-                        translation_y: root.committed - desired,
-                    })
-            }),
-            prepaint_scroll: source_root_scroll.and_then(|root| {
-                prepaint_target
-                    .filter(|(id, _)| *id == root.id)
-                    .map(|(_, desired)| CompositorScrollOffset {
-                        scroll_node_id: root.id,
-                        translation_y: root.committed - desired,
-                    })
-            }),
-        });
-        bundle
+        let content_update = bundle
             .content_tiles
-            .Update(artifact)
+            .UpdatePending(
+                artifact,
+                FrameConfig {
+                    viewport: PaintRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: snapshot.viewport.logical_width(),
+                        height: snapshot.viewport.content_height(),
+                    },
+                    raster_scale: snapshot.viewport.scale,
+                    activation_scroll: source_root_scroll.and_then(|root| {
+                        activation_target
+                            .filter(|(id, _)| *id == root.id)
+                            .map(|(_, desired)| CompositorScrollOffset {
+                                scroll_node_id: root.id,
+                                translation_y: root.committed - desired,
+                            })
+                    }),
+                    frame_time: Some(snapshot.frame_time),
+                },
+            )
             .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error.reason()))?;
-        Some(
-            bundle
-                .content_tiles
-                .GetFramePlan()
-                .expect("content plan")
-                .clone(),
-        )
+        Some(content_update)
     } else {
         None
     };
-    if content
-        .as_ref()
-        .is_some_and(|plan| plan.unsupported == Some(UnsupportedReason::TileBudgetExceeded))
-    {
+    if content.as_ref().is_some_and(|update| {
+        update.frame_plan.unsupported == Some(UnsupportedReason::TileBudgetExceeded)
+    }) {
         return Err(io::Error::new(
             io::ErrorKind::OutOfMemory,
             "content tile budget exceeded",
         ));
     }
-    bundle.toolbar_renderer.prepare(
-        &toolbar,
+    let toolbar_raster = bundle.toolbar_raster.prepare(
+        &toolbar_update.frame_plan,
+        &toolbar_update.raster_batch,
         snapshot.viewport.width,
         snapshot.viewport.toolbar_pixels(),
     )?;
-    if let Some(content) = &content {
-        bundle.content_renderer.prepare(
-            content,
+    bundle
+        .toolbar_tiles
+        .ApplyRasterResults(&toolbar_raster.completions);
+    let toolbar_release = bundle
+        .toolbar_tiles
+        .ActivatePending()
+        .ok_or_else(|| io::Error::other("toolbar tiles are not ready for activation"))?;
+    let toolbar_released = bundle.toolbar_raster.release_resources(&toolbar_release)?;
+    bundle
+        .toolbar_tiles
+        .AcknowledgeResourceRelease(&toolbar_released);
+    let toolbar = bundle
+        .toolbar_tiles
+        .GetActiveFramePlan()
+        .expect("activated toolbar plan")
+        .clone();
+    let content = if let Some(content) = &content {
+        let raster = bundle.content_raster.prepare(
+            &content.frame_plan,
+            &content.raster_batch,
             snapshot.viewport.width,
             snapshot
                 .viewport
                 .height
                 .saturating_sub(snapshot.viewport.toolbar_pixels()),
         )?;
-    }
+        bundle.content_tiles.ApplyRasterResults(&raster.completions);
+        let content_release = bundle
+            .content_tiles
+            .ActivatePending()
+            .ok_or_else(|| io::Error::other("content tiles are not ready for activation"))?;
+        let released = bundle.content_raster.release_resources(&content_release)?;
+        bundle.content_tiles.AcknowledgeResourceRelease(&released);
+        Some(
+            bundle
+                .content_tiles
+                .GetActiveFramePlan()
+                .expect("activated content plan")
+                .clone(),
+        )
+    } else {
+        None
+    };
     let root_scroll = content.as_ref().and_then(find_root_scroll);
     trace.set("succeeded", 1.0);
     Ok(PlannedFrame {

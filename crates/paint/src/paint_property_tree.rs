@@ -373,6 +373,7 @@ pub(crate) enum PaintPropertyRole {
     Transform,
     SvgLocalTransform,
     ClipPathClip,
+    CssClip,
     MaskClip,
     Effect,
     Mask,

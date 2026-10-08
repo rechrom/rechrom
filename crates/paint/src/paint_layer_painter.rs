@@ -196,6 +196,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         // Finish the flat filter before recording the source Mask drawing, as
         // PaintFragmentWithPhase(kMask) uses the Mask child's property state.
         self.context.borrow_mut().EndFilter(self.layer);
+        self.context.borrow_mut().EndCssClip(self.layer);
         self.context.borrow_mut().EndMaskClip(self.layer);
         if self.layer.applies_mask {
             BoxFragmentPainter::PaintFragment(
@@ -293,7 +294,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             BoxFragmentPainter::PaintFragment(node, paint_info);
         }
         let paint_self_outside_clip = enter_node
-            && node.applies_clip
+            && node.applies_overflow_clip
             && !node.is_paint_layer
             && matches!(
                 phase,
@@ -302,12 +303,21 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
                     | PaintPhase::kOutline
                     | PaintPhase::kDescendantOutlinesOnly
             );
-        if paint_self_outside_clip {
-            BoxFragmentPainter::PaintFragment(node, paint_info);
-        }
         if enter_node {
-            self.context.borrow_mut().BeginNode(node);
-            if !paint_self_outside_clip {
+            if paint_self_outside_clip {
+                // The box's own background is outside its overflow clip, but
+                // it is still inside the node's transform, clip-path and
+                // effect. Keep the same ordering as Blink's property-tree
+                // conversion: outer geometry/effect, self paint, then the
+                // escapable overflow clip used by descendants.
+                let mut context = self.context.borrow_mut();
+                context.BeginGeometry(node);
+                context.BeginEffects(node);
+                drop(context);
+                BoxFragmentPainter::PaintFragment(node, paint_info);
+                self.context.borrow_mut().BeginEscapableGeometry(node, None);
+            } else {
+                self.context.borrow_mut().BeginNode(node);
                 BoxFragmentPainter::PaintFragment(node, paint_info);
             }
         }

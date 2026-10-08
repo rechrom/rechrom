@@ -163,9 +163,9 @@ fn clip_out_rrect_matches_original_skia_all_pixels() {
                             ..Default::default()
                         };
                         let native =
-                            renderer::source_replay::RasterizeSourceDisplayItemList(&list, 96, 80);
+                            raster::source_replay::RasterizeSourceDisplayItemList(&list, 96, 80);
                         let actual =
-                            renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 96, 80);
+                            raster::pure_replay::RasterizeSourceDisplayItemList(&list, 96, 80);
                         assert_eq!(native.len(), 96 * 80 * 4);
                         assert_eq!(actual.len(), native.len());
                         let different = actual.iter().zip(&native).filter(|(a, b)| a != b).count();

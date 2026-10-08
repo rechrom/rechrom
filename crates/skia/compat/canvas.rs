@@ -1089,6 +1089,69 @@ impl SkCanvas {
         }
     }
 
+    // core/paint/text_painter.cc:574-627. Paint records the CSS decision and
+    // Renderer associates the immutable glyph runs; the raster backend owns
+    // the outline query and clip implementation.
+    pub fn replay_text_decoration_with_skip_ink(
+        &mut self,
+        item: &DrawCommand,
+        glyph_runs: &[DrawCommand],
+        list: &ResourceContext,
+    ) {
+        if item.r#type != CommandKind::kStrokeLine
+            || !item.is_text_decoration
+            || item.rect.height != 0.0
+            || !matches!(
+                item.decoration_style,
+                TextDecorationStyle::kSolid | TextDecorationStyle::kDouble
+            )
+        {
+            self.replay_item(item, list);
+            return;
+        }
+        let thickness = item.stroke_width.floor().max(1.0);
+        let top = (item.rect.y + 0.5).floor();
+        let bottom = if item.decoration_style == TextDecorationStyle::kDouble {
+            (item.rect.y + (item.stroke_width + 1.0).floor() + 0.5).floor() + thickness
+        } else {
+            top + thickness
+        };
+        // TextPainter queries DecorationLinePainter::Bounds before
+        // DrawLineAsRect snaps/rounds the raster rectangle. In particular the
+        // default 1.6px geometry must not collapse to the 1px painted stripe.
+        let query_top = item.rect.y + 0.5;
+        let query_bottom = item.rect.y
+            + item.stroke_width
+            + if item.decoration_style == TextDecorationStyle::kDouble {
+                item.stroke_width + 1.0
+            } else {
+                0.0
+            }
+            - 0.5;
+        let dilation = item.stroke_width.min(13.0);
+        self.save();
+        for run in glyph_runs {
+            for (left, right) in Self::glyph_run_intercepts(list, run, query_top, query_bottom) {
+                self.replay_item(
+                    &DrawCommand {
+                        r#type: CommandKind::kClipOutRect,
+                        rect: PaintRect {
+                            x: left - dilation,
+                            y: top - 1.0,
+                            width: right - left + 2.0 * dilation,
+                            height: bottom - top + 2.0,
+                        },
+                        antialias: false,
+                        ..Default::default()
+                    },
+                    list,
+                );
+            }
+        }
+        self.stroke_line(item);
+        self.restore();
+    }
+
     fn draw_glyph_run(&mut self, item: &DrawCommand, list: &ResourceContext) {
         if item.blur_radius <= 0.0 {
             self.drawGlyphRunList(item, list);
@@ -1325,6 +1388,33 @@ impl SkCanvas {
     fn stroke_line(&mut self, item: &DrawCommand) {
         if item.is_text_decoration
             && item.rect.height == 0.0
+            && item.decoration_style == TextDecorationStyle::kDotted
+            && item.stroke_width.round() <= 3.0
+        {
+            // StyledStrokeData uses square dashes for thin dotted lines. The
+            // dash geometry is based on the rounded thickness, while Skia
+            // retains the fractional stroke width for edge coverage.
+            let dash_width = item.stroke_width.round().max(1.0);
+            let step = dash_width * 2.0;
+            let end = item.rect.x + item.rect.width;
+            let mut x = item.rect.x;
+            while x < end {
+                let width = dash_width.min(end - x);
+                let Some(rect) = Rect::from_ltrb(
+                    x as f32,
+                    (item.rect.y - item.stroke_width / 2.0) as f32,
+                    (x + width) as f32,
+                    (item.rect.y + item.stroke_width / 2.0) as f32,
+                ) else {
+                    break;
+                };
+                self.drawTextDecorationRect(rect, item.color);
+                x += step;
+            }
+            return;
+        }
+        if item.is_text_decoration
+            && item.rect.height == 0.0
             && matches!(
                 item.decoration_style,
                 TextDecorationStyle::kSolid | TextDecorationStyle::kDouble
@@ -1332,24 +1422,36 @@ impl SkCanvas {
         {
             let thickness = item.stroke_width.floor().max(1.0);
             let first_y = (item.rect.y + 0.5).floor();
-            self.drawRect(
+            let draw_decoration_rect = |canvas: &mut Self, rect: PaintRect| {
+                let Some(rect) = Rect::from_ltrb(
+                    rect.x as f32,
+                    rect.y as f32,
+                    (rect.x + rect.width) as f32,
+                    (rect.y + rect.height) as f32,
+                ) else {
+                    return;
+                };
+                // GraphicsContext::DrawRect retains FillFlags edge AA for the
+                // fractional inline end even though the block-axis geometry
+                // was snapped by DecorationLinePainter::SnapYAxis.
+                canvas.drawTextDecorationRect(rect, item.color);
+            };
+            draw_decoration_rect(
+                self,
                 PaintRect {
                     y: first_y,
                     height: thickness,
                     ..item.rect
                 },
-                item.color,
-                item.antialias,
             );
             if item.decoration_style == TextDecorationStyle::kDouble {
-                self.drawRect(
+                draw_decoration_rect(
+                    self,
                     PaintRect {
                         y: (item.rect.y + (item.stroke_width + 1.0).floor() + 0.5).floor(),
                         height: thickness,
                         ..item.rect
                     },
-                    item.color,
-                    item.antialias,
                 );
             }
             return;

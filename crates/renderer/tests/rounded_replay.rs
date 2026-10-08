@@ -52,8 +52,8 @@ fn rectangular_rrect_clips_match_skia_bw_and_aa_dispatch() {
                 .into(),
                 ..Default::default()
             };
-            let native = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 48, 40);
-            let rust = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 48, 40);
+            let native = raster::source_replay::RasterizeSourceDisplayItemList(&list, 48, 40);
+            let rust = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 48, 40);
             assert_eq!(rust, native, "x={x}, antialias={antialias}");
         }
     }
@@ -110,8 +110,8 @@ fn large_search_round_fill_on_colored_background_matches_skia() {
                 .into(),
                 ..Default::default()
             };
-            let a = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
-            let b = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+            let a = raster::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+            let b = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
             let diff: Vec<_> = a
                 .chunks_exact(4)
                 .zip(b.chunks_exact(4))
@@ -211,9 +211,8 @@ fn rounded_fill_colors_positions_and_clips_match_skia() {
                         items,
                         ..Default::default()
                     };
-                    let a =
-                        renderer::source_replay::RasterizeSourceDisplayItemList(&list, 512, 320);
-                    let b = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 512, 320);
+                    let a = raster::source_replay::RasterizeSourceDisplayItemList(&list, 512, 320);
+                    let b = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 512, 320);
                     let diffs: Vec<_> = a
                         .chunks_exact(4)
                         .zip(b.chunks_exact(4))
@@ -270,8 +269,8 @@ fn repeated_gray_round_fills_across_vertical_tiles_match_skia() {
             items: vec![item.clone(), item].into(),
             ..Default::default()
         };
-        let a = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
-        let b = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+        let a = raster::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+        let b = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
         assert_eq!(
             a.chunks_exact(4)
                 .zip(b.chunks_exact(4))

@@ -174,6 +174,10 @@ fn IsHTMLInlineBlockElement(name: &str) -> bool {
 // cpp: style_resolver/style_resolver.cc:3876-3910
 fn initial(node: &impl NodeView, parent: Option<&ComputedStyle>, pseudo: bool) -> ComputedStyle {
     let mut style = ComputedStyle::default();
+    // Blink resolves an unspecified `font-family` through the document's
+    // standard generic family. The browser host maps `serif` to the platform
+    // standard face (Times on macOS).
+    Extra(&mut style).font_families = vec!["serif".into()];
     let name = node.name();
     let ns = node.namespace();
     style.display = Display::kInline;

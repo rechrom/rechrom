@@ -91,8 +91,8 @@ fn transformed_cubic_dot_resolves_device_space_convexity() {
                     items,
                     ..Default::default()
                 };
-                let a = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
-                let b = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+                let a = raster::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+                let b = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
                 let diffs: Vec<_> = a
                     .chunks_exact(4)
                     .zip(b.chunks_exact(4))
@@ -156,11 +156,10 @@ fn conic_fills_strokes_and_open_round_caps_match_source() {
                             items,
                             ..Default::default()
                         };
-                        let a = renderer::source_replay::RasterizeSourceDisplayItemList(
-                            &list, 512, 300,
-                        );
+                        let a =
+                            raster::source_replay::RasterizeSourceDisplayItemList(&list, 512, 300);
                         let b =
-                            renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 512, 300);
+                            raster::pure_replay::RasterizeSourceDisplayItemList(&list, 512, 300);
                         let diffs: Vec<_> = a
                             .chunks_exact(4)
                             .zip(b.chunks_exact(4))

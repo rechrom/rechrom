@@ -46,6 +46,71 @@ pub(crate) fn ParseFontFamilies(input: &str) -> Option<Vec<String>> {
     }
     (!families.is_empty()).then_some(families)
 }
+
+pub(crate) fn IsSoleMonospace(style: &ComputedStyle) -> bool {
+    style.extended.as_ref().is_some_and(|extra| {
+        extra.font_families.len() == 1 && extra.font_families[0].eq_ignore_ascii_case("monospace")
+    })
+}
+
+pub(crate) fn ResolveComputedFontFamilies(
+    cascade: &[CascadedDeclaration],
+    properties: &crate::style_resolver::CustomProperties,
+    initial: &CSSWideSource<'_>,
+    inherited: &CSSWideSource<'_>,
+    unset: &CSSWideSource<'_>,
+    reverted: &CSSWideSource<'_>,
+) -> Vec<String> {
+    let families_of = |style: &ComputedStyle| {
+        style
+            .extended
+            .as_ref()
+            .map_or_else(|| vec!["serif".into()], |extra| extra.font_families.clone())
+    };
+    let mut result = families_of(reverted.style);
+    for item in cascade {
+        if item.declaration.property.starts_with("--") {
+            continue;
+        }
+        let declaration = ResolveDeclarationVariables(&item.declaration, properties)
+            .unwrap_or_else(|| cssom::CSSDeclaration {
+                property: item.declaration.property.clone(),
+                value: "unset".into(),
+                ..Default::default()
+            });
+        if !matches!(
+            declaration.property.as_str(),
+            "font-family" | "font" | "all"
+        ) {
+            continue;
+        }
+        if let Some(source) =
+            CSSWideKeywordSource(&declaration.value, initial, inherited, unset, reverted)
+        {
+            result = families_of(source.style);
+        } else if declaration.property == "font-family" {
+            if let Some(parsed) = ParseFontFamilies(&declaration.value) {
+                result = parsed;
+            }
+        } else if declaration.property == "font" {
+            if let Some(parsed) =
+                ParseFontShorthand(&declaration.value, FontSizeOf(inherited.style))
+            {
+                result = parsed.families;
+            }
+        }
+    }
+    result
+}
+
+pub(crate) fn FontSizeWasSpecified(cascade: &[CascadedDeclaration]) -> bool {
+    cascade.iter().any(|item| {
+        matches!(
+            item.declaration.property.as_str(),
+            "font-size" | "font" | "all"
+        )
+    })
+}
 // cpp: style_resolver/style_resolver.cc:3707-3713
 pub(crate) struct ParsedFontShorthand {
     pub computed_size: f64,

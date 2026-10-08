@@ -55,6 +55,20 @@ pub unsafe fn JS_SetModuleEmbeddingHooks(
         });
     }
 }
+
+/// Resume a host-deferred dynamic import after its module graph is available.
+/// The resolve/reject functions and attributes are borrowed for this call.
+pub unsafe fn JS_HostResumeDynamicImport(
+    ctx: *mut JSContext,
+    resolve: JSValueConst,
+    reject: JSValueConst,
+    base: *const std::ffi::c_char,
+    specifier: *const std::ffi::c_char,
+    attributes: JSValueConst,
+) {
+    let mut resolving = [resolve, reject];
+    JS_LoadModuleInternal(ctx, base, specifier, resolving.as_mut_ptr(), attributes);
+}
 unsafe fn js_clear_module_embedding_hooks(runtime: *mut JSRuntime) {
     JS_SetModuleEmbeddingHooks(runtime, None, None, ptr::null_mut());
 }

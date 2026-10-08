@@ -4,8 +4,56 @@ use crate::style_resolver::{
 };
 use css_parser::length_percentage_parser::ParseLengthPercentage;
 use layoutng_assembly::internal::layout_input::{
-    ComputedStyle, Display, FlexBasisSizing, IntrinsicSizing, TextDirection, WritingMode,
+    ComputedStyle, CssClipRect, Display, FlexBasisSizing, IntrinsicSizing, TextDirection,
+    WritingMode,
 };
+
+// cpp: core/css/properties/longhands/clip.cc
+// CSS 2.1 legacy clip applies only to positioned boxes, but parsing belongs
+// to style resolution. LayoutObject::HasCSSClip performs the positioned-box
+// check, exactly as Blink does.
+pub(crate) fn ApplyClip(style: &mut ComputedStyle, input: &str) {
+    let value = input
+        .trim_matches(|c: char| c.source_space())
+        .to_ascii_lowercase();
+    if value == "auto" {
+        style.css_clip = None;
+        return;
+    }
+    let Some(body) = value
+        .strip_prefix("rect(")
+        .and_then(|v| v.strip_suffix(')'))
+    else {
+        return;
+    };
+    let normalized = body.replace(',', " ");
+    let parts: Vec<_> = normalized.split_whitespace().collect();
+    if parts.len() != 4 {
+        return;
+    }
+    let font_size = style.extended.as_ref().map_or(16.0, |e| e.font_size);
+    let parse_side = |part: &str| {
+        if part == "auto" {
+            Some(None)
+        } else {
+            Length(part, font_size).map(Some)
+        }
+    };
+    let (Some(top), Some(right), Some(bottom), Some(left)) = (
+        parse_side(parts[0]),
+        parse_side(parts[1]),
+        parse_side(parts[2]),
+        parse_side(parts[3]),
+    ) else {
+        return;
+    };
+    style.css_clip = Some(CssClipRect {
+        top,
+        right,
+        bottom,
+        left,
+    });
+}
 
 // cpp: style_resolver/style_resolver.cc:3646-3676
 pub(crate) fn ApplyInsetValue(

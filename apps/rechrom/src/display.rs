@@ -4,17 +4,22 @@
 //! knows nothing about threads, channels, or executors. `PresentationRuntime`
 //! delivers messages and routes the returned effects.
 use crate::{
-    compositor::{PlannedFrame, RasterBundle},
-    engine::{UserEvent, Viewport},
+    compositor::{RasterBundle, SubmittedFrame},
+    engine::{Output, UserEvent, Viewport},
     window_surface::{PreparedWindowFrame, WindowTarget},
 };
+use renderer::Renderer;
 use std::{io, sync::Arc, time::Instant};
+use viz::{SurfaceId, SwapId, VizEngine};
+
+pub(crate) const TOOLBAR_SURFACE: SurfaceId = SurfaceId(1);
+pub(crate) const CONTENT_SURFACE: SurfaceId = SurfaceId(2);
 
 pub(crate) enum Message {
     Install(RasterBundle),
     Prepare {
         frame: crate::begin_frame_source::NativeBeginFrame,
-        planned: PlannedFrame,
+        submitted: SubmittedFrame,
         scroll_active: bool,
     },
     Submit {
@@ -30,7 +35,7 @@ pub(crate) enum Effect {
     RequestBeginFrame,
 }
 
-struct PreparedCompositorFrame {
+struct PreparedDisplayFrame {
     output: PreparedWindowFrame,
     sequence: u64,
     viewport: Viewport,
@@ -40,21 +45,25 @@ struct PreparedCompositorFrame {
 pub(crate) struct Display {
     target: WindowTarget,
     active_bundle: Option<RasterBundle>,
-    prepared: Option<PreparedCompositorFrame>,
-    pending_swap: Option<u64>,
+    prepared: Option<PreparedDisplayFrame>,
     sequence: u64,
     notify: Arc<dyn Fn(UserEvent) + Send + Sync>,
+    diagnostic_output: Option<Output>,
+    viz: VizEngine,
+    renderer: Renderer,
 }
 
 impl Display {
-    pub(crate) fn New(target: WindowTarget, notify: Arc<dyn Fn(UserEvent) + Send + Sync>) -> Self {
+    pub(crate) fn New(target: WindowTarget, output: Output, capture_frames: bool) -> Self {
         Self {
             target,
             active_bundle: None,
             prepared: None,
-            pending_swap: None,
             sequence: 0,
-            notify,
+            notify: output.notify.clone(),
+            diagnostic_output: capture_frames.then_some(output),
+            viz: VizEngine::New(),
+            renderer: Renderer::default(),
         }
     }
 
@@ -73,10 +82,10 @@ impl Display {
                 .collect()),
             Message::Prepare {
                 frame,
-                planned,
+                submitted,
                 scroll_active,
             } => {
-                self.Prepare(frame, planned, scroll_active)?;
+                self.Prepare(frame, submitted, scroll_active)?;
                 Ok(Vec::new())
             }
             Message::Submit {
@@ -84,9 +93,7 @@ impl Display {
                 scroll_active,
             } => self.Submit(frame, scroll_active, post_swap_ack),
             Message::SwapAck(sequence) => {
-                if self.pending_swap == Some(sequence) {
-                    self.pending_swap = None;
-                }
+                self.viz.DidReceiveSwapAck(SwapId(sequence));
                 Ok(if self.prepared.is_some() {
                     vec![Effect::RequestBeginFrame]
                 } else {
@@ -99,8 +106,8 @@ impl Display {
     fn Prepare(
         &mut self,
         frame: crate::begin_frame_source::NativeBeginFrame,
-        planned: PlannedFrame,
-        scroll_active: bool,
+        submitted: SubmittedFrame,
+        _scroll_active: bool,
     ) -> io::Result<()> {
         let _frame = browser_tracing::scope(browser_tracing::Context {
             target_id: 1,
@@ -113,23 +120,63 @@ impl Display {
         };
         self.sequence = self.sequence.wrapping_add(1);
         let sequence = self.sequence;
-        let overlay_scrollbar = scroll_active
-            .then(|| planned.RootOverlayScrollbar())
-            .flatten();
-        let output = self.target.compose_prepared_plans(
-            &planned.toolbar,
-            &mut bundle.toolbar_renderer,
-            planned.content.as_ref(),
-            &mut bundle.content_renderer,
-            planned.snapshot.viewport,
+        self.viz
+            .SubmitFrame(TOOLBAR_SURFACE, submitted.toolbar)
+            .map_err(io::Error::other)?;
+        let has_content = if let Some(content) = submitted.content {
+            self.viz
+                .SubmitFrame(CONTENT_SURFACE, content)
+                .map_err(io::Error::other)?;
+            true
+        } else {
+            self.viz.DestroySurface(CONTENT_SURFACE);
+            self.renderer.InvalidateSurface(CONTENT_SURFACE);
+            false
+        };
+        let toolbar_height = submitted.viewport.toolbar_pixels();
+        let output_rect = ::compositor::DeviceRect::new(
+            0,
+            0,
+            submitted.viewport.width,
+            submitted.viewport.height,
+        );
+        let mut placements = vec![viz::SurfacePlacement {
+            surface_id: TOOLBAR_SURFACE,
+            destination: ::compositor::DeviceRect::new(
+                0,
+                0,
+                submitted.viewport.width,
+                toolbar_height,
+            ),
+        }];
+        if has_content {
+            placements.push(viz::SurfacePlacement {
+                surface_id: CONTENT_SURFACE,
+                destination: ::compositor::DeviceRect::new(
+                    0,
+                    toolbar_height as i32,
+                    submitted.viewport.width,
+                    submitted.viewport.height.saturating_sub(toolbar_height),
+                ),
+            });
+        }
+        let aggregated = self
+            .viz
+            .Aggregate(output_rect, &placements)
+            .map_err(io::Error::other)?;
+        let output = self.target.render_aggregated_frame(
+            &aggregated,
+            &mut self.renderer,
+            &bundle.toolbar_raster,
+            has_content.then_some(&bundle.content_raster),
+            submitted.viewport,
             sequence,
-            overlay_scrollbar,
         )?;
-        self.prepared = Some(PreparedCompositorFrame {
+        self.prepared = Some(PreparedDisplayFrame {
             output,
             sequence,
-            viewport: planned.snapshot.viewport,
-            drag_regions: planned.snapshot.drag_regions,
+            viewport: submitted.viewport,
+            drag_regions: submitted.drag_regions,
         });
         browser_tracing::instant(
             "frame",
@@ -174,9 +221,15 @@ impl Display {
         );
         frame_trace.set(
             "deadline_ms",
-            crate::presentation_runtime::DisplayDrawDeadline(frame)
-                .saturating_duration_since(frame.frame_time)
-                .as_secs_f64()
+            viz::FrameTiming {
+                frame_time: frame.frame_time,
+                interval: frame.interval,
+                source_deadline: frame.deadline,
+            }
+            .Deadlines()
+            .draw_and_swap
+            .saturating_duration_since(frame.frame_time)
+            .as_secs_f64()
                 * 1000.0,
         );
         frame_trace.set(
@@ -193,7 +246,7 @@ impl Display {
                 .as_secs_f64()
                 * 1000.0,
         );
-        if self.pending_swap.is_some() {
+        if !self.viz.CanDrawAndSwap() {
             frame_trace.set("submitted", 0.0);
             return Ok(vec![Effect::RequestBeginFrame]);
         }
@@ -201,12 +254,15 @@ impl Display {
             frame_trace.set("submitted", 0.0);
             return Ok(Vec::new());
         };
-        let PreparedCompositorFrame {
+        let PreparedDisplayFrame {
             output,
             sequence,
             viewport,
             drag_regions,
         } = prepared;
+        if let Some(diagnostic) = &self.diagnostic_output {
+            diagnostic.publish(output.readback_rgba(viewport)?);
+        }
         let notify = self.notify.clone();
         let post_swap_ack = post_swap_ack.clone();
         self.target.present_prepared(
@@ -217,7 +273,9 @@ impl Display {
                 (post_swap_ack)(sequence);
             }),
         )?;
-        self.pending_swap = Some(sequence);
+        self.viz
+            .DidSubmitSwap(SwapId(sequence))
+            .map_err(io::Error::other)?;
         frame_trace.set("submitted", 1.0);
         frame_trace.set(
             "deadline_missed",

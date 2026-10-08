@@ -406,6 +406,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         sticky_offset,
         overflow_x,
         overflow_y,
+        css_clip,
         overflow_clip_margin_outsets,
         scroll_offset,
         scroll_size,
@@ -476,6 +477,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && sticky_offset == &b.sticky_offset
         && overflow_x == &b.overflow_x
         && overflow_y == &b.overflow_y
+        && css_clip == &b.css_clip
         && overflow_clip_margin_outsets == &b.overflow_clip_margin_outsets
         && scroll_offset == &b.scroll_offset
         && scroll_size == &b.scroll_size

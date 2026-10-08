@@ -23,8 +23,8 @@ fn compare(item: DisplayItem, clip: Option<DisplayItem>, label: &str) -> usize {
         items,
         ..Default::default()
     };
-    let a = renderer::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
-    let b = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+    let a = raster::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+    let b = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
     let diff: Vec<_> = a
         .chunks_exact(4)
         .zip(b.chunks_exact(4))

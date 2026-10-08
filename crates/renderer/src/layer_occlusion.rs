@@ -1,16 +1,14 @@
 //! Conservative draw-quad occlusion within one continuous composition target.
-//! Child of layer_raster: resources, sampling and effect execution stay there.
+//! Child of render_pass: resources, sampling and effect execution stay there.
 use super::*;
-use layer_tile::FramePlan;
 use layoutng_assembly::internal::paint_input::PaintBlendMode;
 
 /// Device-space visible rectangles, in exactly the plan's layer/tile order.
 /// Neither tile resources nor sampling origins/UVs are changed by this pass.
 pub(super) fn visible_rects(
-    plan: &FramePlan,
+    plan: &CompositionPlan,
     effects: &[LayerEffectPlan],
     direct_clips: &[Option<layer_direct_clip::DirectClipRun>],
-    replay: &LayerReplay<'_>,
     staged: &HashMap<TileId, CachedTile>,
     resident: &HashMap<TileId, CachedTile>,
     width: u32,
@@ -21,9 +19,7 @@ pub(super) fn visible_rects(
     }
     let mut visible = Vec::with_capacity(plan.layers.len());
     for layer in &plan.layers {
-        let composition = replay
-            .composition(layer.id)
-            .ok_or_else(|| io::Error::other("occlusion layer has no composition"))?;
+        let composition = layer.composition;
         let rectangles = layer
             .tiles
             .iter()
@@ -63,9 +59,7 @@ pub(super) fn visible_rects(
         // hide. Actual execution remains in the original back-to-front order.
         for index in (start..end).rev() {
             let layer = &plan.layers[index];
-            let composition = replay
-                .composition(layer.id)
-                .ok_or_else(|| io::Error::other("occlusion layer has no composition"))?;
+            let composition = layer.composition;
             let fractional = composition.translation.0.fract() != 0.0
                 || composition.translation.1.fract() != 0.0;
             let mut neighbors =
@@ -169,7 +163,9 @@ fn checked_pixels<'a>(
         .get(&tile.tile_id)
         .or_else(|| resident.get(&tile.tile_id))
         .ok_or_else(|| io::Error::other("occlusion tile has no resident pixels"))?;
-    if !pixels.matches(tile, composition) || !valid_tile_storage(pixels, tile.pixel_size)? {
+    if !pixels.matches(tile, composition.white_backing)
+        || !valid_tile_storage(pixels, tile.pixel_size)?
+    {
         return Err(io::Error::other(
             "occlusion tile generation or extent changed",
         ));

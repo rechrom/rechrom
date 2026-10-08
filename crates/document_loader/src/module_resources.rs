@@ -495,6 +495,24 @@ impl JavaScriptModuleResolver for ModuleResources {
         };
         self.ResolvePreparedURL(&url)
     }
+
+    fn RequestDynamicModule(&self, specifier: &str, referrer: &str) -> io::Result<Option<String>> {
+        let Some(url) = self.ResolveSpecifier(specifier, referrer)? else {
+            return Ok(None);
+        };
+        self.StartModuleLoad(&url, referrer);
+        Ok(Some(url))
+    }
+
+    fn PollDynamicModule(&self, url: &str) -> io::Result<Option<JavaScriptModuleSource>> {
+        let key = self.URLKey(url);
+        match self.GraphResult(&key) {
+            None => Ok(None),
+            Some(Err(ModuleLoadError::Resource { message, .. })) => Err(io::Error::other(message)),
+            Some(Err(ModuleLoadError::Compilation(error))) => Err(io::Error::other(error.message)),
+            Some(Ok(())) => self.ResolvePreparedURL(url),
+        }
+    }
 }
 impl ModuleResources {
     fn ResolvePreparedURL(&self, url: &str) -> io::Result<Option<JavaScriptModuleSource>> {
@@ -536,5 +554,18 @@ impl JavaScriptModuleResolver for InlineResolver {
             referrer
         };
         self.resources.ResolveModule(specifier, base)
+    }
+
+    fn RequestDynamicModule(&self, specifier: &str, referrer: &str) -> io::Result<Option<String>> {
+        let base = if referrer == self.source_url {
+            &self.base_url
+        } else {
+            referrer
+        };
+        self.resources.RequestDynamicModule(specifier, base)
+    }
+
+    fn PollDynamicModule(&self, url: &str) -> io::Result<Option<JavaScriptModuleSource>> {
+        self.resources.PollDynamicModule(url)
     }
 }

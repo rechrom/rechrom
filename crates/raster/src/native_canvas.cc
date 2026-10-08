@@ -784,6 +784,84 @@ void LayoutngCanvasDrawGlyphRun(void* canvas, size_t face_index,
   target->surface->getCanvas()->drawTextBlob(blob, origin_x, origin_y, paint);
 }
 
+void LayoutngCanvasClipOutGlyphRunIntercepts(
+    void* canvas, size_t face_index, float font_size, const uint16_t* ids,
+    const float* xy, size_t glyph_count, float origin_x, float origin_y,
+    bool synthetic_bold, bool synthetic_italic,
+    const NativeVariation* variations, size_t variation_count,
+    float decoration_top, float decoration_height, float dilation) {
+  NativeCanvasState* target = static_cast<NativeCanvasState*>(canvas);
+  if (face_index >= target->typefaces.size() ||
+      !target->typefaces[face_index] || !ids || !xy || !glyph_count ||
+      decoration_height <= 0) {
+    return;
+  }
+  std::vector<NativeVariation> run_variations;
+  if (variations && variation_count)
+    run_variations.assign(variations, variations + variation_count);
+  if (run_variations.empty())
+    run_variations = target->font_variations[face_index];
+  if (target->font_supports_optical_size[face_index]) {
+    constexpr uint32_t kOpsz = SkSetFourByteTag('o', 'p', 's', 'z');
+    auto optical = std::find_if(run_variations.begin(), run_variations.end(),
+                                [](const auto& axis) { return axis.tag == kOpsz; });
+    if (optical == run_variations.end())
+      run_variations.push_back({kOpsz, font_size});
+    else
+      optical->value = font_size;
+  }
+  sk_sp<SkTypeface> typeface = CloneWithVariations(
+      target->typefaces[face_index], target->font_face_indices[face_index],
+      run_variations);
+  SkFont font(typeface, font_size);
+  font.setEmbeddedBitmaps(false);
+  font.setSubpixel(true);
+  font.setLinearMetrics(true);
+  font.setEmbolden(synthetic_bold);
+  if (synthetic_italic) font.setSkewX(-0.25f);
+
+  SkTextBlobBuilder builder;
+  bool horizontal = true;
+  for (size_t i = 0; i < glyph_count; ++i) horizontal &= xy[i * 2 + 1] == 0;
+  if (horizontal) {
+    const auto buffer =
+        builder.allocRunPosH(font, static_cast<int>(glyph_count), 0);
+    for (size_t i = 0; i < glyph_count; ++i) {
+      buffer.glyphs[i] = ids[i];
+      buffer.pos[i] = xy[i * 2];
+    }
+  } else {
+    const auto buffer = builder.allocRunPos(font, static_cast<int>(glyph_count));
+    for (size_t i = 0; i < glyph_count; ++i) {
+      buffer.glyphs[i] = ids[i];
+      buffer.points()[i] = {xy[i * 2], xy[i * 2 + 1]};
+    }
+  }
+  const auto blob = builder.make();
+  if (!blob) return;
+
+  // Match TextPainter::ClipDecorationLine: ignore intersections smaller than
+  // half a CSS pixel, then dilate horizontally by the decoration thickness and
+  // vertically by one pixel before clipping them out.
+  const SkScalar bounds[2] = {
+      decoration_top + 0.5f - origin_y,
+      decoration_top + decoration_height - 0.5f - origin_y,
+  };
+  const int count = blob->getIntercepts(bounds, nullptr, nullptr);
+  if (count <= 0) return;
+  std::vector<SkScalar> intervals(static_cast<size_t>(count));
+  blob->getIntercepts(bounds, intervals.data(), nullptr);
+  SkCanvas* sk_canvas = target->surface->getCanvas();
+  for (int i = 0; i + 1 < count; i += 2) {
+    const float left = origin_x + intervals[i] - dilation;
+    const float right = origin_x + intervals[i + 1] + dilation;
+    sk_canvas->clipRect(
+        SkRect::MakeLTRB(left, decoration_top - 1.0f, right,
+                         decoration_top + decoration_height + 1.0f),
+        SkClipOp::kDifference, false);
+  }
+}
+
 int LayoutngCanvasReadRgba(void* canvas, uint8_t* rgba, size_t length) {
   NativeCanvasState* target = static_cast<NativeCanvasState*>(canvas);
   const int width = target->surface->width();

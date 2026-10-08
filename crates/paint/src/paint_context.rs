@@ -32,6 +32,19 @@ fn TightenDrawingVisualRect(
         {
             return (EnclosingRectInPropertySpace(op.rect, delta), true);
         }
+        // SkCanvas image draws cannot write outside their destination/tile
+        // rectangle unless an image filter, shadow or blur expands the op.
+        // Treating ordinary DrawImage records as unknown made LayerTile fall
+        // back to the whole viewport for each animated image layer.
+        if matches!(
+            op.r#type,
+            DisplayItemType::kDrawImageRect | DisplayItemType::kDrawTiledImage
+        ) && op.filters.is_empty()
+            && !op.is_shadow
+            && op.blur_radius == 0.0
+        {
+            return (EnclosingRectInPropertySpace(op.rect, delta), true);
+        }
     }
     (EnclosingRectInPropertySpace(visual_rect, delta), false)
 }
@@ -645,6 +658,7 @@ impl<'o> PaintContext<'o> {
                 node,
             );
         }
+        self.BeginCssClip(node);
         if node.applies_filter {
             let mut item = DisplayItem {
                 r#type: DisplayItemType::kSaveLayerFilter,
@@ -710,8 +724,65 @@ impl<'o> PaintContext<'o> {
 
     pub fn EndEffects(&mut self, node: &PaintTreeNode<'_>) {
         self.EndFilter(node);
+        self.EndCssClip(node);
         self.EndMaskClip(node);
         self.EndEffectsAfterFilter(node);
+    }
+
+    fn BeginCssClip(&mut self, node: &PaintTreeNode<'_>) {
+        let fragment = node
+            .fragment
+            .as_deref()
+            .expect("PrePaint node must own a fragment");
+        if !fragment.paint.has_source
+            || !fragment.paint.establishes_paint_state
+            || !node.applies_css_clip
+        {
+            return;
+        }
+        let rect = node.local_css_clip.expect("CSS clip checked above");
+        self.Append(
+            DisplayItem {
+                r#type: DisplayItemType::kSave,
+                phase: PaintPhase::kForeground,
+                node_id: fragment.node_id,
+                ..Default::default()
+            },
+            node,
+        );
+        self.Append(
+            DisplayItem {
+                r#type: DisplayItemType::kClipRect,
+                phase: PaintPhase::kForeground,
+                node_id: fragment.node_id,
+                rect,
+                antialias: true,
+                ..Default::default()
+            },
+            node,
+        );
+    }
+
+    pub(crate) fn EndCssClip(&mut self, node: &PaintTreeNode<'_>) {
+        let fragment = node
+            .fragment
+            .as_deref()
+            .expect("PrePaint node must own a fragment");
+        if !fragment.paint.has_source
+            || !fragment.paint.establishes_paint_state
+            || !node.applies_css_clip
+        {
+            return;
+        }
+        self.Append(
+            DisplayItem {
+                r#type: DisplayItemType::kRestore,
+                phase: PaintPhase::kForeground,
+                node_id: fragment.node_id,
+                ..Default::default()
+            },
+            node,
+        );
     }
 
     pub(crate) fn EndEffectsAfterFilter(&mut self, node: &PaintTreeNode<'_>) {

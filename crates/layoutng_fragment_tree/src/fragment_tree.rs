@@ -487,6 +487,10 @@ pub struct PaintProperties {
     pub sticky_offset: Offset,
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
+    /// CSS 2.1 `clip: rect(...)` in the box's local stitched coordinate space.
+    /// This is distinct from overflow clipping: it clips the box's own paint
+    /// as well as descendants and is ordered between Effect and Filter.
+    pub css_clip: Option<FragmentPaintRect>,
     pub overflow_clip_margin_outsets: Option<Edges>,
     pub scroll_offset: Offset,
     pub scroll_size: Size,
@@ -564,6 +568,7 @@ impl Default for PaintProperties {
             sticky_offset: Offset::default(),
             overflow_x: Overflow::kVisible,
             overflow_y: Overflow::kVisible,
+            css_clip: None,
             overflow_clip_margin_outsets: None,
             scroll_offset: Offset::default(),
             scroll_size: Size::default(),

@@ -105,8 +105,12 @@ impl HTMLParserHost for ParserHost {
             }
             if node.IsHTMLElement("img") && !attr("src").is_empty() {
                 if let Some(page) = &resources.page {
-                    page.QueueImage(attr("src"), None)
-                        .expect("source URL resolution");
+                    page.QueueImageWithLoadBlocking(
+                        attr("src"),
+                        None,
+                        !attr("loading").eq_ignore_ascii_case("lazy"),
+                    )
+                    .expect("source URL resolution");
                 }
             }
             if node.IsHTMLElement("link")

@@ -953,6 +953,44 @@ impl LayoutObjectTree {
         found
     }
 
+    /// Update the source style for one real element after style resolution has
+    /// proved that geometry and tree attachment are unchanged. This is the
+    /// targeted counterpart of the paint-only branch in Create(): the native
+    /// layout style/result remain resident, while fragment export reads the new
+    /// paint data from the element metadata.
+    pub fn UpdatePaintStyle(&mut self, id: u64, style: &ComputedStyle) -> bool {
+        let storage = unsafe { &mut *self.storage_ };
+        assert!(!storage.updating);
+        let eligible = storage.managed.values().filter(|record| {
+            record.input.id == id
+                && !record.input.style_generated
+                && record.input.kind != NodeKind::kText
+        });
+        let mut found = false;
+        for record in eligible {
+            found = true;
+            if !record.input.style.LayoutEquivalent(style)
+                || !record.effective_style.LayoutEquivalent(style)
+            {
+                return false;
+            }
+        }
+        if !found {
+            return false;
+        }
+        for record in storage.managed.values_mut().filter(|record| {
+            record.input.id == id
+                && !record.input.style_generated
+                && record.input.kind != NodeKind::kText
+        }) {
+            record.input.style = style.clone();
+            record.effective_style = style.clone();
+            unsafe { &mut *record.node.cast::<super::layout_node_metadata::Element>() }
+                .UpdateElementInput(&record.input);
+        }
+        true
+    }
+
     /// Exclusive access to the tree-owned root for the layout entry point.
     pub fn RootMut(&mut self) -> &mut LayoutObject {
         let root = unsafe { &mut *self.storage_ }.root.Get();

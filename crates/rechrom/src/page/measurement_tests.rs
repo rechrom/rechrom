@@ -192,6 +192,45 @@ fn actual_dom_change_flushes_style_before_synchronous_notification_reads_geometr
         );
     });
 }
+
+#[test]
+fn paint_selector_attribute_mutations_preserve_provisional_measurement_geometry() {
+    crate::native_test_thread::run(|| {
+        let state = state(
+            "<html><body><div id=b class=stable style='width:40px;height:20px'></div></body></html>",
+        );
+        let node = id(&state, "b");
+        let expected = geometry(&state, node);
+        let before = held(&state);
+        state.ApplyDOMMutation(
+            &DOMMutation {
+                mutation_type: DOMMutationType::kSetAttribute,
+                target_node_id: node,
+                name: "class".into(),
+                value: "stable".into(),
+                ..Default::default()
+            },
+            &mut || {},
+            &mut |_, _| panic!("unexpected image callback"),
+        );
+        assert!(Rc::ptr_eq(&before, &held(&state)));
+        assert_eq!(geometry(&state, node), expected);
+        state.ApplyDOMMutation(
+            &DOMMutation {
+                mutation_type: DOMMutationType::kSetAttribute,
+                target_node_id: node,
+                name: "data-active".into(),
+                value: "true".into(),
+                ..Default::default()
+            },
+            &mut || {},
+            &mut |_, _| panic!("unexpected image callback"),
+        );
+        assert!(Rc::ptr_eq(&before, &held(&state)));
+        assert_eq!(geometry(&state, node), expected);
+    });
+}
+
 #[test]
 fn changed_scroll_animation_viewport_font_and_image_invalidate_snapshot() {
     crate::native_test_thread::run(|| {
@@ -352,7 +391,7 @@ fn style_write_geometry_and_frame_share_one_layout_snapshot_and_match_fresh_pixe
             1,
             "frame must retain the geometry index"
         );
-        let actual = renderer::pure_replay::RasterizeDisplayItemList(
+        let actual = raster::pure_replay::RasterizeDisplayItemList(
             &page.frame.as_ref().unwrap().display_items,
             320,
             200,
@@ -368,7 +407,7 @@ fn style_write_geometry_and_frame_share_one_layout_snapshot_and_match_fresh_pixe
             &dom::UserInteractionState::default(),
             &page.state.constraints.borrow(),
         );
-        let expected = renderer::pure_replay::RasterizeDisplayItemList(
+        let expected = raster::pure_replay::RasterizeDisplayItemList(
             &paint::paint_engine::Paint(&fresh),
             320,
             200,
@@ -432,10 +471,10 @@ fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
         page.UpdateFrameIfNeeded().unwrap();
         assert_eq!(
             page.state.full_layout_lifecycles.get(),
-            2,
-            "Paint must export the new color and opacity"
+            1,
+            "paint-only style must export current paint without rerunning layout"
         );
-        let actual = renderer::pure_replay::RasterizeDisplayItemList(
+        let actual = raster::pure_replay::RasterizeDisplayItemList(
             &page.frame.as_ref().unwrap().display_items,
             320,
             200,
@@ -451,7 +490,7 @@ fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
         );
         assert_eq!(
             actual,
-            renderer::pure_replay::RasterizeDisplayItemList(
+            raster::pure_replay::RasterizeDisplayItemList(
                 &paint::paint_engine::Paint(&fresh),
                 320,
                 200

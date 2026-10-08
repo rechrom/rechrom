@@ -202,7 +202,7 @@ mod block_fixture_test {
         );
 
         let display_items = paint::Paint(&result);
-        let rgba = renderer::RasterizeDisplayItemList(&display_items, 400, 320);
+        let rgba = raster::RasterizeDisplayItemList(&display_items, 400, 320);
         let pixel =
             |x: usize, y: usize| -> &[u8] { &rgba[(y * 400 + x) * 4..(y * 400 + x) * 4 + 4] };
         assert_eq!(pixel(0, 0), [255, 255, 255, 255]);
@@ -211,13 +211,8 @@ mod block_fixture_test {
         assert_eq!(pixel(28, 28), [227, 235, 245, 255]);
         assert_eq!(pixel(44, 44), [48, 107, 179, 255]);
         if let Ok(path) = std::env::var("LAYOUTNG_BLOCK_PNG") {
-            renderer::WriteDisplayItemListPng(
-                &display_items,
-                400,
-                320,
-                std::path::Path::new(&path),
-            )
-            .unwrap();
+            raster::WriteDisplayItemListPng(&display_items, 400, 320, std::path::Path::new(&path))
+                .unwrap();
         }
     }
 }

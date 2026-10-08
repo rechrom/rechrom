@@ -4,9 +4,9 @@
 use std::io;
 use std::sync::Arc;
 
-use crate::convert::ToSkia;
 use layer_tile::CompositorScrollOffset;
 use paint::paint_property_tree::{ClipPaintPropertyNode, TransformPaintPropertyNode};
+use raster::convert::ToSkia;
 use skia::compat::commands::{CommandKind, DrawCommand, PaintRect, ResourceContext};
 
 #[path = "layer_aa_clip.rs"]

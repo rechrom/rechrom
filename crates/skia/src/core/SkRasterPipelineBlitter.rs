@@ -444,6 +444,25 @@ impl Blitter for SkRasterPipelineBlitter<'_, '_> {
     }
 
     fn blit_v(&mut self, x: u32, y: u32, height: LengthU32, alpha: AlphaU8) {
+        if let Some(source) = self.solid_color {
+            if self.mask.is_none() {
+                // SkARGB32_Blitter::blitV scales the premultiplied color with
+                // SkAlpha255To256 and blends each destination row directly.
+                // Routing a vertical rect edge through the A8 mask pipeline
+                // changes the last-bit rounding for non-black colors.
+                for row in y..y + height.get() {
+                    let offset = self.pixmap.offset(x as usize, row as usize) * 4;
+                    crate::src::core::SkBlitRow_D32::blend_span_format(
+                        &mut self.pixmap.data[offset..offset + 4],
+                        source,
+                        alpha,
+                        false,
+                        self.pixmap.format,
+                    );
+                }
+                return;
+            }
+        }
         let bounds = ScreenIntRect::from_xywh_safe(x, y, LENGTH_U32_ONE, height);
 
         let mask = Mask {

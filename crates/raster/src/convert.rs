@@ -1,6 +1,6 @@
 //! Convert paint inputs into independent Skia raster commands.
 use skia::compat::commands as target;
-pub(crate) trait ToSkia {
+pub trait ToSkia {
     type Output;
     fn to_skia(&self) -> Self::Output;
 }
@@ -497,7 +497,7 @@ impl ToSkia for paint::paint_engine::DisplayItem {
     }
 }
 
-pub(crate) fn resources(list: &paint::paint_engine::PaintArtifact) -> target::ResourceContext<'_> {
+pub fn resources(list: &paint::paint_engine::PaintArtifact) -> target::ResourceContext<'_> {
     target::ResourceContext {
         resources: list.resources.as_ref().map(|r| target::ResourceCatalog {
             fonts: r

@@ -24,9 +24,10 @@ use font_engine::{
 use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use foundation::graphics_types::graphics::paint::display_item_client::DisplayItemClient;
 use foundation::{
-    gfx, AtomicString, DynamicTo, EBorderStyle, EBoxDecorationBreak, EDisplay, ETextTransform,
+    gfx, AtomicString, DynamicTo, EBorderStyle, EBoxDecorationBreak, EDisplay,
+    ETextDecorationSkipInk, ETextDecorationStyle as NativeTextDecorationStyle, ETextTransform,
     LayoutUnit, Length, MakeGarbageCollected, Member, Persistent, PhysicalOffset, PhysicalRect,
-    PhysicalSize, String as BlinkString, TextOffsetMap, To, UnsupportedLayout,
+    PhysicalSize, String as BlinkString, TextDecorationLine, TextOffsetMap, To, UnsupportedLayout,
     WritingMode as NativeWritingMode,
 };
 use layoutng_fragment_tree::block_break_token::BlockBreakToken;
@@ -78,7 +79,8 @@ use crate::internal::layout_input::{
     BorderLineStyle, BoxDecorationBreak, ComputedStyle, ConstraintSpace, Display, Edges,
     ExtendedStyle, FontFace, FontSmoothing, FontVariation, HyphenationProvider,
     NativeNodeConstructionData, NodeKind, Offset, PaintImage, PhraseBreakProvider, Position, Size,
-    TextDirection, TextTransform, TextTransformProvider, TransformMatrix, WritingMode,
+    TextDecorationPaint, TextDecorationStyle, TextDirection, TextTransform, TextTransformProvider,
+    TransformMatrix, WritingMode,
 };
 use crate::internal::layout_invalidation_reason::{kFontsChanged, kStyleChange};
 use crate::internal::layout_node_metadata::{Element, NativeNodeMetadataRelations, Node};
@@ -1076,6 +1078,61 @@ fn Number(value: LayoutUnit) -> f64 {
     value.ToDouble()
 }
 
+fn ExportAppliedTextDecorations(style: &NativeComputedStyle) -> Vec<TextDecorationPaint> {
+    let skip_ink = style.TextDecorationSkipInk() != ETextDecorationSkipInk::kNone;
+    let decorations = style.AppliedTextDecorationData();
+    if decorations.is_null() {
+        return Vec::new();
+    }
+    unsafe { &*decorations }
+        .iter()
+        .map(|applied| {
+            let lines = applied.Lines();
+            let native_color = applied.GetColor();
+            let thickness = applied.Thickness();
+            let underline_offset = applied.UnderlineOffset();
+            TextDecorationPaint {
+                underline: (lines & TextDecorationLine::kUnderline) != TextDecorationLine::kNone,
+                overline: (lines & TextDecorationLine::kOverline) != TextDecorationLine::kNone,
+                line_through: (lines & TextDecorationLine::kLineThrough)
+                    != TextDecorationLine::kNone,
+                color: Some(crate::internal::layout_input_types::Color {
+                    // foundation::Color stores kSRGBLegacy channels in the
+                    // Chromium-compatible 0..255 representation; the public
+                    // paint input uses normalized channels.
+                    red: native_color.Param0() / 255.0,
+                    green: native_color.Param1() / 255.0,
+                    blue: native_color.Param2() / 255.0,
+                    alpha: native_color.Alpha(),
+                }),
+                style: match applied.Style() {
+                    NativeTextDecorationStyle::kSolid => TextDecorationStyle::kSolid,
+                    NativeTextDecorationStyle::kDouble => TextDecorationStyle::kDouble,
+                    NativeTextDecorationStyle::kDotted => TextDecorationStyle::kDotted,
+                    NativeTextDecorationStyle::kDashed => TextDecorationStyle::kDashed,
+                    NativeTextDecorationStyle::kWavy => TextDecorationStyle::kWavy,
+                },
+                thickness: if thickness.IsAuto() {
+                    None
+                } else if thickness.IsFromFont() {
+                    None
+                } else if thickness.Thickness().IsFixed() {
+                    Some(f64::from(thickness.Thickness().Pixels()))
+                } else {
+                    None
+                },
+                underline_offset: if underline_offset.IsFixed() {
+                    f64::from(underline_offset.Pixels())
+                } else {
+                    0.0
+                },
+                underline_offset_auto: underline_offset.IsAuto(),
+                skip_ink,
+            }
+        })
+        .collect()
+}
+
 // cpp: layoutng/internal/boundary/layout_boundary.cc:697-703
 fn InputId(object: *const LayoutObject) -> u64 {
     if !object.is_null() {
@@ -1132,6 +1189,9 @@ fn ExportPaintProperties(
         // the DisplayItemClient base default (layout_box.cc:4099-4108).
         output.display_item_raster_effect_outset =
             unsafe { &*layout_box }.VisualRectOutsetForRasterEffects();
+        if unsafe { &*layout_box }.HasCSSClip() {
+            output.css_clip = Some(ExportNativeInkRect(unsafe { &*layout_box }.CSSClipRect()));
+        }
     } else if unsafe { &*object }.IsSVGShape() {
         // layout_svg_shape.cc:664-674: hairline raster expansion is metadata,
         // not an inflation of the stored VisualRect or chunk bounds.
@@ -1186,6 +1246,12 @@ fn ExportPaintProperties(
         .as_ref()
         .map_or(1.0, |e| e.effective_zoom);
     output.style = paint_style.paint.clone();
+    let native_paint_style = if effective_style.is_null() {
+        unsafe { &*object }.StyleRef()
+    } else {
+        unsafe { &*effective_style }
+    };
+    output.style.applied_text_decorations = ExportAppliedTextDecorations(native_paint_style);
     output.border = paint_style.border;
     output.border_styles = paint_style.border_styles;
     output.padding = paint_style.padding;
@@ -2521,7 +2587,8 @@ fn ExportInlineInkOverflow(item: &FragmentItem, paint: &mut PaintProperties) {
     // Only the implemented plain-text branch is computed here. Decoration
     // boxes, emphasis, shadows and selection/marker overflow require the
     // original InlinePaintContext lifecycle; do not mark those as computed.
-    let plain = !style.HasAppliedTextDecorations()
+    let plain = paint.style.applied_text_decorations.is_empty()
+        && !style.HasAppliedTextDecorations()
         && !(decoration.underline || decoration.overline || decoration.line_through)
         && style.TextShadow().is_null()
         && paint.style.text_shadows.is_empty()

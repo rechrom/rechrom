@@ -364,6 +364,40 @@ fn LoadDemoFontsWithReader(
             ..FontFace::default()
         });
     }
+    for (path, weight, italic) in [
+        (
+            "/System/Library/Fonts/Supplemental/Verdana.ttf",
+            400.0,
+            false,
+        ),
+        (
+            "/System/Library/Fonts/Supplemental/Verdana Bold.ttf",
+            700.0,
+            false,
+        ),
+        (
+            "/System/Library/Fonts/Supplemental/Verdana Italic.ttf",
+            400.0,
+            true,
+        ),
+        (
+            "/System/Library/Fonts/Supplemental/Verdana Bold Italic.ttf",
+            700.0,
+            true,
+        ),
+    ] {
+        if let Ok(bytes) = ReadFont(path) {
+            faces.push(FontFace {
+                family: "Verdana".into(),
+                native_family: "Verdana".into(),
+                metrics_family: "Verdana".into(),
+                weight,
+                italic,
+                bytes: bytes.into(),
+                ..FontFace::default()
+            });
+        }
+    }
     if !sfns.is_empty() {
         for family in ["-apple-system", "system-ui"] {
             for weight in [400.0, 500.0, 600.0, 700.0] {
@@ -383,13 +417,44 @@ fn LoadDemoFontsWithReader(
         }
     }
     if let Ok(bytes) = ReadFont("/System/Library/Fonts/Times.ttc") {
-        faces.push(FontFace {
-            family: "serif".into(),
-            native_family: "Times".into(),
-            metrics_family: "Times".into(),
-            bytes: bytes.into(),
-            ..FontFace::default()
-        });
+        let bytes: SharedFontBytes = bytes.into();
+        for (face_index, weight, italic) in [
+            (0, 400.0, false),
+            (1, 700.0, false),
+            (2, 400.0, true),
+            (3, 700.0, true),
+        ] {
+            faces.push(FontFace {
+                family: "serif".into(),
+                native_family: "Times".into(),
+                metrics_family: "Times".into(),
+                weight,
+                italic,
+                face_index,
+                bytes: bytes.clone(),
+                ..FontFace::default()
+            });
+        }
+    }
+    if let Ok(bytes) = ReadFont("/System/Library/Fonts/Menlo.ttc") {
+        let bytes: SharedFontBytes = bytes.into();
+        for (face_index, weight, italic) in [
+            (0, 400.0, false),
+            (1, 700.0, false),
+            (2, 400.0, true),
+            (3, 700.0, true),
+        ] {
+            faces.push(FontFace {
+                family: "monospace".into(),
+                native_family: "Menlo".into(),
+                metrics_family: "Menlo".into(),
+                weight,
+                italic,
+                face_index,
+                bytes: bytes.clone(),
+                ..FontFace::default()
+            });
+        }
     }
     if faces.is_empty() {
         faces.push(FontFace {
@@ -418,7 +483,7 @@ mod tests {
         #[cfg(target_os = "macos")]
         assert_eq!(
             actual.len(),
-            28,
+            39,
             "all host faces must remain in the catalog"
         );
         for (a, b) in actual.iter().zip(&reference) {
@@ -602,6 +667,7 @@ mod tests {
             "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
             "/System/Library/Fonts/Helvetica.ttc",
             "/System/Library/Fonts/Times.ttc",
+            "/System/Library/Fonts/Menlo.ttc",
         ];
         let mut checked = 0;
         let mut total_bytes = 0u64;

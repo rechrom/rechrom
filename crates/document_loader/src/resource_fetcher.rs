@@ -41,6 +41,7 @@ struct PendingFontFace {
     metadata: crate::web_fonts::PendingFontFace,
     next_url: usize,
     loaded: bool,
+    selected: bool,
     resource: Option<ResourceLoader>,
 }
 // cpp: browser/browser.cc:1241-1245
@@ -48,6 +49,12 @@ struct PendingImage {
     source: String,
     url: String,
     resource: ResourceLoader,
+    blocks_load: bool,
+}
+
+struct DeferredImage {
+    source: String,
+    url: String,
 }
 
 struct AnimatedImage {
@@ -82,6 +89,7 @@ pub struct ResourceFetcher {
     image_event_sources: RefCell<HashMap<u64, String>>,
     image_event_subtrees: RefCell<Option<ImageEventSubtrees>>,
     pending_images: RefCell<Vec<PendingImage>>,
+    deferred_images: RefCell<Vec<DeferredImage>>,
     animated_images: RefCell<Vec<AnimatedImage>>,
     loaded_font_urls: RefCell<HashSet<String>>,
     pending_fonts: RefCell<Vec<PendingFontFace>>,
@@ -109,6 +117,7 @@ impl ResourceFetcher {
             image_event_sources: RefCell::new(HashMap::new()),
             image_event_subtrees: RefCell::new(None),
             pending_images: RefCell::new(Vec::new()),
+            deferred_images: RefCell::new(Vec::new()),
             animated_images: RefCell::new(Vec::new()),
             loaded_font_urls: RefCell::new(HashSet::new()),
             pending_fonts: RefCell::new(Vec::new()),
@@ -219,12 +228,19 @@ impl ResourceFetcher {
             metadata,
             next_url: 0,
             loaded: false,
+            // Standalone callers may explicitly queue and poll a face. The
+            // document lifecycle narrows this after computed-style discovery.
+            selected: true,
             resource: None,
         });
         Ok(())
     }
-    // cpp: browser/browser.cc:1174-1196
-    pub fn DiscardUnusedFontFaces(&self) {
+    // Keep @font-face definitions resident. A stylesheet can arrive before the
+    // rule which first references its family (or vice versa), and Blink's
+    // FontFaceSet can activate such a face after a later style recalc. Removing
+    // an unused definition here made that later activation impossible.
+    // cpp: core/css/font_face_set_document.cc; core/css/css_font_selector.cc
+    pub fn SelectUsedFontFaces(&self) {
         if self.pending_fonts.borrow().is_empty() {
             return;
         }
@@ -250,14 +266,14 @@ impl ResourceFetcher {
         let owner = self.document.borrow();
         let d = owner.GetDocument();
         node(d, d.Root(), &mut used);
-        self.pending_fonts
-            .borrow_mut()
-            .retain(|f| used.contains(&f.metadata.family.to_ascii_lowercase()));
+        for face in &mut *self.pending_fonts.borrow_mut() {
+            face.selected = used.contains(&face.metadata.family.to_ascii_lowercase());
+        }
     }
     // cpp: browser/browser.cc:1198-1208
     pub fn StartPendingFonts(&self) {
         for face in &mut *self.pending_fonts.borrow_mut() {
-            if face.resource.is_some() {
+            if face.resource.is_some() || !face.selected {
                 continue;
             }
             while !face.loaded
@@ -355,11 +371,65 @@ impl ResourceFetcher {
     }
     // cpp: browser/browser.cc:1247-1258
     pub fn QueueImage(&self, source: &str, resolved: Option<&str>) -> io::Result<()> {
+        self.QueueImageWithLoadBlocking(source, resolved, true)
+    }
+
+    /// Chromium's ImageLoader neither starts a deferred lazy image immediately
+    /// nor holds the document load event for it.  Keep the request dormant
+    /// until the document has loaded; an eager consumer of the same source
+    /// promotes it immediately without creating a duplicate request.
+    pub fn QueueImageWithLoadBlocking(
+        &self,
+        source: &str,
+        resolved: Option<&str>,
+        blocks_load: bool,
+    ) -> io::Result<()> {
         let url = match resolved {
             Some(url) => url.into(),
             None => ResolveUrl(&self.base_url.borrow(), source)?,
         };
         if !self.loaded_image_sources.borrow_mut().insert(source.into()) {
+            if blocks_load {
+                if let Some(image) = self
+                    .pending_images
+                    .borrow_mut()
+                    .iter_mut()
+                    .find(|image| image.source == source)
+                {
+                    image.blocks_load = true;
+                    return Ok(());
+                }
+                let deferred = self
+                    .deferred_images
+                    .borrow()
+                    .iter()
+                    .position(|image| image.source == source);
+                if let Some(index) = deferred {
+                    let image = self.deferred_images.borrow_mut().remove(index);
+                    let resource = StartResource(
+                        &mut *self.loader.borrow_mut(),
+                        &URLRequest {
+                            url: image.url.clone(),
+                            referrer: self.current_url.borrow().clone(),
+                            destination: RequestDestination::kImage,
+                            ..Default::default()
+                        },
+                    );
+                    self.pending_images.borrow_mut().push(PendingImage {
+                        source: image.source,
+                        url: image.url,
+                        resource,
+                        blocks_load: true,
+                    });
+                }
+            }
+            return Ok(());
+        }
+        if !blocks_load {
+            self.deferred_images.borrow_mut().push(DeferredImage {
+                source: source.into(),
+                url,
+            });
             return Ok(());
         }
         let resource = StartResource(
@@ -375,8 +445,38 @@ impl ResourceFetcher {
             source: source.into(),
             url,
             resource,
+            blocks_load,
         });
         Ok(())
+    }
+
+    /// Admit a bounded number of deferred lazy requests after window load.
+    /// The cap preserves transport capacity for scripts and other high-priority
+    /// resources while still allowing below-the-fold content to make progress.
+    pub fn StartDeferredImages(&self, max_active: usize) -> usize {
+        let active = self.pending_images.borrow().len();
+        let count = max_active
+            .saturating_sub(active)
+            .min(self.deferred_images.borrow().len());
+        for _ in 0..count {
+            let image = self.deferred_images.borrow_mut().remove(0);
+            let resource = StartResource(
+                &mut *self.loader.borrow_mut(),
+                &URLRequest {
+                    url: image.url.clone(),
+                    referrer: self.current_url.borrow().clone(),
+                    destination: RequestDestination::kImage,
+                    ..Default::default()
+                },
+            );
+            self.pending_images.borrow_mut().push(PendingImage {
+                source: image.source,
+                url: image.url,
+                resource,
+                blocks_load: false,
+            });
+        }
+        count
     }
     // cpp: browser/browser.cc:1260-1291
     fn ApplyImageResult(
@@ -664,28 +764,33 @@ impl ResourceFetcher {
         fn request<'a>(
             source: &'a str,
             resolve: bool,
+            blocks_load: bool,
             admitted: &HashSet<String>,
             seen: &mut HashSet<&'a str>,
-            requests: &mut Vec<(String, bool)>,
+            requests: &mut Vec<(String, bool, bool)>,
         ) {
             // QueueImage uses this exact source key for admission. Keep the
             // first occurrence, without cloning/resolving every repeated owner.
             // CSS sources already carry their stylesheet base via ResolveCSSURLs;
             // distinct DOM/CSS source strings remain distinct requests.
             if !admitted.contains(source) && seen.insert(source) {
-                requests.push((source.to_owned(), resolve));
+                requests.push((source.to_owned(), resolve, blocks_load));
+            } else if blocks_load {
+                if let Some(request) = requests.iter_mut().find(|request| request.0 == source) {
+                    request.2 = true;
+                }
             }
         }
         fn style<'a>(
             s: &'a ComputedStyle,
             admitted: &HashSet<String>,
             seen: &mut HashSet<&'a str>,
-            requests: &mut Vec<(String, bool)>,
+            requests: &mut Vec<(String, bool, bool)>,
         ) {
             let mut layer =
                 |l: &'a layoutng_assembly::internal::paint_input::BackgroundImageLayer| {
                     if l.shader.is_none() && l.resource_id == 0 && !l.source_url.is_empty() {
-                        request(&l.source_url, true, admitted, seen, requests);
+                        request(&l.source_url, true, true, admitted, seen, requests);
                     }
                 };
             for l in &s.paint.background_images {
@@ -700,13 +805,16 @@ impl ResourceFetcher {
             i: usize,
             admitted: &HashSet<String>,
             seen: &mut HashSet<&'a str>,
-            requests: &mut Vec<(String, bool)>,
+            requests: &mut Vec<(String, bool, bool)>,
         ) {
             let n = d.Node(i);
             if n.IsHTMLElement("img") {
                 if let Some(a) = n.FindAttribute("src") {
                     if !a.value.is_empty() && d.ImageResourceFor(&a.value).is_none() {
-                        request(&a.value, false, admitted, seen, requests);
+                        let lazy = n
+                            .FindAttribute("loading")
+                            .is_some_and(|loading| loading.value.eq_ignore_ascii_case("lazy"));
+                        request(&a.value, false, !lazy, admitted, seen, requests);
                     }
                 }
             }
@@ -734,18 +842,24 @@ impl ResourceFetcher {
             let mut seen = HashSet::new();
             node(d, d.Root(), &admitted, &mut seen, &mut requests);
         }
-        for (source, resolve) in requests {
+        for (source, resolve, blocks_load) in requests {
             let url = if resolve {
                 Some(ResolveUrl(&self.base_url.borrow(), &source)?)
             } else {
                 None
             };
-            self.QueueImage(&source, url.as_deref())?;
+            self.QueueImageWithLoadBlocking(&source, url.as_deref(), blocks_load)?;
         }
         Ok(())
     }
     pub fn HasPendingImages(&self) -> bool {
         !self.pending_images.borrow().is_empty()
+    }
+    pub fn HasPendingLoadBlockingImages(&self) -> bool {
+        self.pending_images
+            .borrow()
+            .iter()
+            .any(|image| image.blocks_load)
     }
     pub fn HasAnimatedImages(&self) -> bool {
         self.animated_images
@@ -819,7 +933,8 @@ impl ResourceFetcher {
     }
     pub fn HasPendingFonts(&self) -> bool {
         self.pending_fonts.borrow().iter().any(|face| {
-            face.resource.is_some() || (!face.loaded && face.next_url < face.metadata.urls.len())
+            face.resource.is_some()
+                || (face.selected && !face.loaded && face.next_url < face.metadata.urls.len())
         })
     }
     /// Poll the current image set once. Page receives mutations/events only for

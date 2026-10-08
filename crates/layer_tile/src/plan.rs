@@ -1,9 +1,10 @@
 use paint::paint_engine::{DisplayItem, PaintArtifact, PaintRect};
 use paint::paint_property_tree::PropertyTreeState;
 use std::sync::Arc;
+use std::time::Instant;
 
-/// Backend-proven replay in the original chunk's property coordinates. This
-/// adapts the legacy folded-scroll ABI without rewriting native chunk identity.
+/// Backend-proven replay in the original chunk's property coordinates. Chunk
+/// identity remains native while the record is lowered into raster space.
 #[derive(Clone)]
 pub struct RasterRecordContent {
     pub record_index: usize,
@@ -20,6 +21,9 @@ pub struct LayerId(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TileId(pub u64);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LayerTreeId(pub u64);
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameConfig {
     /// Visible root property-tree space; never used as a layer's bounds/origin.
@@ -28,9 +32,9 @@ pub struct FrameConfig {
     /// Current pending-tree viewport. Tiles in this target are foreground
     /// work required before activation.
     pub activation_scroll: Option<CompositorScrollOffset>,
-    /// Impl-side root-scroll placement while the Page commit trails the
-    /// compositor scroll tree. Applied only below `scroll_node_id`.
-    pub prepaint_scroll: Option<CompositorScrollOffset>,
+    /// Explicit compositor sample time. LayerTile combines it with retained
+    /// visible-viewport history to compute skewport; it never reads a clock.
+    pub frame_time: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -59,21 +63,20 @@ pub enum UnsupportedReason {
 
 #[derive(Clone)]
 pub struct FramePlan {
+    pub layer_tree_id: LayerTreeId,
     pub frame_id: u64,
     pub config: FrameConfig,
     /// Paint order after proven-disjoint layer reordering. Each layer retains
     /// the source order of its merged chunks/records.
     pub layers: Vec<LayerPlan>,
-    /// Dirty or unacknowledged tiles in priority order: every visible NOW
-    /// tile first, followed by a bounded set of SOON prepaint tiles. The
-    /// latter become resident resources but never appear in LayerPlan::tiles
-    /// until they are actually visible.
-    pub tasks: Vec<RasterTask>,
-    pub retired_tiles: Vec<TileId>,
+    /// Diagnostic count only. Raster work is published separately through
+    /// `RasterBatch`; a display frame never owns executable backend work.
+    pub raster_task_count: usize,
     pub unsupported: Option<UnsupportedReason>,
     pub(crate) source: Arc<PaintArtifact>,
     pub(crate) raster_records: Arc<[RasterRecordContent]>,
-    pub(crate) resource_owner: Option<crate::engine::TileResourceOwner>,
+    pub(crate) tasks: Vec<RasterTask>,
+    pub(crate) retired_tiles: Vec<TileId>,
 }
 
 impl std::fmt::Debug for FramePlan {
@@ -82,8 +85,7 @@ impl std::fmt::Debug for FramePlan {
             .field("frame_id", &self.frame_id)
             .field("config", &self.config)
             .field("layers", &self.layers)
-            .field("tasks", &self.tasks)
-            .field("retired_tiles", &self.retired_tiles)
+            .field("raster_task_count", &self.raster_task_count)
             .field("unsupported", &self.unsupported)
             .field("raster_records", &self.raster_records.len())
             .finish()
@@ -99,84 +101,44 @@ impl FramePlan {
         &self.raster_records
     }
 
-    /// Tasks required before this plan can draw or activate. Remaining tasks
-    /// are bounded SOON prepaint work and may complete asynchronously.
-    pub fn RequiredRasterTaskCount(&self) -> usize {
-        self.tasks
-            .iter()
-            .filter(|task| {
-                task.required_for_activation
-                    || self
-                        .layers
-                        .iter()
-                        .any(|layer| layer.tiles.iter().any(|tile| tile.tile_id == task.tile_id))
-            })
-            .count()
-    }
-
-    #[doc(hidden)]
-    pub fn ResourceOwner(&self) -> Option<crate::engine::TileResourceOwner> {
-        self.resource_owner.clone()
-    }
-
     pub fn TileIsReady(&self, tile: &TilePlacement) -> bool {
-        self.resource_owner
-            .as_ref()
-            .is_some_and(|owner| owner.raster_is_ready(tile.tile_id, tile.generation))
+        tile.ready
     }
+}
 
-    #[doc(hidden)]
-    pub fn IsCurrentFrame(&self) -> bool {
-        self.resource_owner
-            .as_ref()
-            .and_then(|owner| owner.0.upgrade())
-            .is_some_and(|state| {
-                let state = state.lock().expect("layer/tile state poisoned");
-                state.valid_plan && state.manager.frame_id() == self.frame_id
-            })
-    }
+/// Immutable raster work selected by LayerTile. NOW/activation work is the
+/// prefix ending at `required_task_count`; the remaining tasks are speculative
+/// SOON work and may finish later.
+#[derive(Clone, Debug)]
+pub struct RasterBatch {
+    pub layer_tree_id: LayerTreeId,
+    pub frame_id: u64,
+    pub tasks: Arc<[RasterTask]>,
+    pub required_task_count: usize,
+}
 
-    /// Backend-only completion protocol; failed, superseded or retired tile
-    /// generations never become drawable. This is independent of composition.
-    #[doc(hidden)]
-    pub fn DidRasterize(&self) -> bool {
-        self.DidRasterizeTasks(&self.tasks)
-    }
+#[derive(Clone, Debug)]
+pub struct TileResourceRelease {
+    pub layer_tree_id: LayerTreeId,
+    pub frame_id: u64,
+    pub tile_ids: Arc<[TileId]>,
+}
 
-    /// A backend may finish the foreground queue before speculative SOON work.
-    /// Acknowledge exactly the completed generations so pending-tree activation
-    /// is independent of background prepaint progress.
-    #[doc(hidden)]
-    pub fn DidRasterizeTasks(&self, tasks: &[RasterTask]) -> bool {
-        let Some(state) = self
-            .resource_owner
-            .as_ref()
-            .and_then(|owner| owner.0.upgrade())
-        else {
-            return false;
-        };
-        let mut state = state.lock().expect("layer/tile state poisoned");
-        if !state.valid_plan || state.manager.frame_id() != self.frame_id {
-            return false;
-        }
-        tasks
-            .iter()
-            .all(|task| state.manager.mark_rasterized(task.tile_id, task.generation))
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RasterCompletion {
+    pub layer_tree_id: LayerTreeId,
+    pub frame_id: u64,
+    pub tile_id: TileId,
+    pub generation: u64,
+}
 
-    #[doc(hidden)]
-    pub fn DidReleaseTileResources(&self) {
-        if let Some(state) = self
-            .resource_owner
-            .as_ref()
-            .and_then(|owner| owner.0.upgrade())
-        {
-            let mut state = state.lock().expect("layer/tile state poisoned");
-            for id in &self.retired_tiles {
-                state.retired_tiles.remove(id);
-            }
-        }
-    }
+/// One atomic pending-tree publication. The display snapshot and executable
+/// raster work are separate typed values. Resource retirement is deliberately
+/// absent: only successful activation can publish a `TileResourceRelease`.
+#[derive(Clone, Debug)]
+pub struct PendingTreeUpdate {
+    pub frame_plan: FramePlan,
+    pub raster_batch: RasterBatch,
 }
 
 #[derive(Clone, Debug)]
@@ -258,6 +220,9 @@ pub struct TilePlacement {
     pub tile_rect: PaintRect,
     pub raster_scale: f64,
     pub pixel_size: (u32, u32),
+    /// Readiness is snapshotted when LayerTile publishes or refreshes a plan.
+    /// Raster cannot mutate this value through a back-reference.
+    pub ready: bool,
 }
 
 #[derive(Clone, Debug)]

@@ -2,22 +2,23 @@
 name = "renderer"
 version = "0.0.1"
 edition = "2021"
-build = "build.rs"
 
 [dependencies]
 browser_tracing = { path = "../tracing" }
 skia = { path = "../skia" }
 paint = { path = "../paint" }
 layer_tile = { path = "../layer_tile" }
+viz = { path = "../viz" }
+raster = { path = "../raster" }
 layoutng_assembly = { path = "../layoutng_assembly" }
-font_engine = { path = "../font_engine", optional = true }
-image_resource = { path = "../image_resource" }
 
 [features]
 default = []
-text = []
-source_replay = ["dep:font_engine"]
-pure_replay = []
+text = ["raster/text"]
+source_replay = ["raster/source_replay"]
+pure_replay = ["raster/pure_replay"]
 compose_work_profile = []
-profiling = ["pure_replay", "skia/profiling"]
-window = ["pure_replay"] # Compatibility feature; presentation lives in rechrom_app.
+profiling = ["raster/profiling", "skia/profiling"]
+
+[dev-dependencies]
+compositor = { path = "../compositor" }

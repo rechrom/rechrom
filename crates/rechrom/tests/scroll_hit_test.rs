@@ -43,7 +43,7 @@ fn fixture(body: &'static [u8]) -> Page {
     );
     page.Open("https://page.test/", 16384, 4096).unwrap();
     for _ in 0..100 {
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         if !page.IsLoading() {
             break;
         }

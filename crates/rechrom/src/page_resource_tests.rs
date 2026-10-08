@@ -208,7 +208,7 @@ fn body() {
         .unwrap();
     crate::style_services::ResolveLayoutStyles(&mut document.borrow_mut(), &constraints.borrow());
     resources.QueueReferencedImages().unwrap();
-    resources.DiscardUnusedFontFaces();
+    resources.SelectUsedFontFaces();
     resources.StartPendingFonts();
     resources.LoadPendingImages(&mut client);
     resources.LoadPendingFonts(&mut client);
@@ -263,7 +263,7 @@ fn body() {
         ));
     }
     let reference = include_str!("../../../artifacts/cpp-reference/page-resources/results.tsv");
-    let pixels = renderer::pure_replay::RasterizeDisplayItemList(&items, 160, 96);
+    let pixels = raster::pure_replay::RasterizeDisplayItemList(&items, 160, 96);
     let expected = include_bytes!("../../../artifacts/cpp-reference/page-resources/frame.rgba");
     let differing = pixels
         .chunks_exact(4)

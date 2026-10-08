@@ -3,6 +3,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 // cpp: javascript/javascript_runtime.h:17-17
 pub type HostObjectId = u64;
@@ -149,6 +150,9 @@ pub enum HostValue {
     Boolean(bool),
     Number(f64),
     String(String),
+    /// Immutable binary payload materialized as an ArrayBuffer in the target
+    /// realm.  This keeps Fetch/XHR bytes lossless across the host boundary.
+    Bytes(Arc<[u8]>),
     Object(HostObjectRef),
     // Owned internal data snapshot; materialized in the current realm,
     // without persistent host identity or proxy/getter registration.
@@ -335,6 +339,21 @@ pub trait JavaScriptModuleResolver {
         specifier: &str,
         referrer_url: &str,
     ) -> std::io::Result<Option<JavaScriptModuleSource>>;
+
+    /// Start an asynchronously evaluated `import()` request without waiting
+    /// for transport. The returned URL is a stable key for polling.
+    fn RequestDynamicModule(
+        &self,
+        _specifier: &str,
+        _referrer_url: &str,
+    ) -> std::io::Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// Return `None` while the requested graph is still loading.
+    fn PollDynamicModule(&self, _url: &str) -> std::io::Result<Option<JavaScriptModuleSource>> {
+        Ok(None)
+    }
 }
 
 /// Engine-owner-thread job handle. Only owned compiler payload crosses threads.

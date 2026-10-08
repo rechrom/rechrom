@@ -437,6 +437,10 @@ struct DocumentTreeBuilder<'a> {
     current_script_start_: Option<HTMLSourcePosition>,
     pending_script_: Option<ParserScript>,
     fragment_context_: Option<usize>,
+    // HTML "initial" insertion mode.  A document without a conforming
+    // doctype enters quirks mode when the first non-space, non-comment token
+    // is seen.  This is document state, so it must survive streaming pauses.
+    in_initial_insertion_mode_: bool,
 }
 
 impl<'a> DocumentTreeBuilder<'a> {
@@ -462,11 +466,40 @@ impl<'a> DocumentTreeBuilder<'a> {
             current_script_start_: None,
             pending_script_: None,
             fragment_context_: fragment_context,
+            in_initial_insertion_mode_: fragment_context.is_none(),
         }
     }
 
     // cpp: html/html_parser.cc:158-210
     fn Process(&mut self, token: &HTMLToken, token_position: HTMLSourcePosition) {
+        if self.fragment_context_.is_none() {
+            if self.in_initial_insertion_mode_ {
+                match token.GetType() {
+                    TokenType::kComment => {}
+                    TokenType::kCharacter
+                        if BufferToUtf8(token.Characters())
+                            .bytes()
+                            .all(|byte| byte.is_ascii_whitespace()) =>
+                    {
+                        // The HTML initial insertion mode ignores leading
+                        // whitespace and continues looking for a doctype.
+                        return;
+                    }
+                    TokenType::DOCTYPE => {
+                        self.in_initial_insertion_mode_ = false;
+                    }
+                    _ => {
+                        self.site_
+                            .OwnerDocumentMut()
+                            .SetCompatibilityMode(CompatibilityMode::kQuirks);
+                        self.in_initial_insertion_mode_ = false;
+                    }
+                }
+            } else if token.GetType() == TokenType::DOCTYPE {
+                // A doctype outside the initial insertion mode is ignored.
+                return;
+            }
+        }
         match token.GetType() {
             TokenType::DOCTYPE => {
                 self.ProcessDoctype(token);
@@ -1461,9 +1494,6 @@ impl<'a> DocumentTreeBuilder<'a> {
             return;
         }
         let root = self.site_.OwnerDocument().Root();
-        if !self.site_.OwnerDocument().Node(root).Children().is_empty() {
-            return;
-        }
         let doctype = self.site_.OwnerDocumentMut().CreateDocumentType(
             BufferToUtf8(token.GetName()),
             IdentifierToUtf8(token.PublicIdentifier()),
@@ -1933,6 +1963,7 @@ struct DocumentTreeBuilderState {
     current_script_start_: Option<HTMLSourcePosition>,
     pending_script_: Option<ParserScript>,
     fragment_context_: Option<usize>,
+    in_initial_insertion_mode_: bool,
 }
 /// Scoped adapter for existing script tasks. Drop restores the continuation
 /// even when a host callback unwinds, without extending any Rust lifetime.
@@ -2155,6 +2186,7 @@ impl<'a> HTMLDocumentParser<'a> {
             current_script_start_,
             pending_script_,
             fragment_context_,
+            in_initial_insertion_mode_,
         } = tree_builder;
         HTMLDocumentParserState {
             decoder_: None,
@@ -2172,6 +2204,7 @@ impl<'a> HTMLDocumentParser<'a> {
                     current_script_start_,
                     pending_script_,
                     fragment_context_,
+                    in_initial_insertion_mode_,
                 },
                 input,
                 tokenizer,
@@ -2217,6 +2250,7 @@ impl<'a> HTMLDocumentParser<'a> {
             current_script_start_,
             pending_script_,
             fragment_context_,
+            in_initial_insertion_mode_,
         } = tree;
         Self {
             storage_: Box::new(HTMLDocumentParserStorage {
@@ -2232,6 +2266,7 @@ impl<'a> HTMLDocumentParser<'a> {
                     current_script_start_,
                     pending_script_,
                     fragment_context_,
+                    in_initial_insertion_mode_,
                 },
                 input,
                 tokenizer,

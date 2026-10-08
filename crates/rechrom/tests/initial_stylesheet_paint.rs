@@ -92,7 +92,7 @@ fn response() -> URLLoadEvent {
 
 fn pump(page: &mut Page, condition: impl Fn(&Page) -> bool) {
     for _ in 0..100 {
-        page.RunTasks(0.0).unwrap();
+        page.RunTask().unwrap();
         if condition(page) {
             return;
         }
@@ -113,7 +113,7 @@ fn first_content_frame_waits_for_head_stylesheets_only() {
         ]);
         styled.Open("https://stream.test/", 4096, 4096).unwrap();
         for _ in 0..8 {
-            styled.RunTasks(0.0).unwrap();
+            styled.RunTask().unwrap();
         }
         assert!(!styled.IsRenderingReady());
         assert!(styled.CurrentFrame().is_none());

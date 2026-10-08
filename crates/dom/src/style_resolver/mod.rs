@@ -240,6 +240,7 @@ fn apply(style: &mut ComputedStyle, property: &str, value: &str, viewport: (f64,
                 style.display = display;
             }
         }
+        "clip" => box_properties::ApplyClip(style, value),
         // cpp: style_resolver/style_resolver.cc:5144-5184
         "inset" | "top" | "right" | "bottom" | "left" => {
             box_properties::ApplyInset(style, property, value)
@@ -761,9 +762,25 @@ fn prepare_cascade(
         logical_direction: style.direction,
     };
     let [initial, inherited, unset, reverted] = states.sources(parent, parent_box, parent_contents);
-    let computed_font_size = fonts::ResolveComputedFontSize(
+    let mut computed_font_size = fonts::ResolveComputedFontSize(
         cascade, properties, &initial, &inherited, &unset, &reverted,
     );
+    let computed_font_families = fonts::ResolveComputedFontFamilies(
+        cascade, properties, &initial, &inherited, &unset, &reverted,
+    );
+    let becomes_monospace = computed_font_families.len() == 1
+        && computed_font_families[0].eq_ignore_ascii_case("monospace");
+    let parent_is_monospace = fonts::IsSoleMonospace(inherited.style);
+    // Blink scales an inherited, unspecified size when the resolved generic
+    // family crosses the sole-monospace boundary. macOS defaults are 13/16.
+    if becomes_monospace != parent_is_monospace && !fonts::FontSizeWasSpecified(cascade) {
+        const FIXED_TO_STANDARD: f64 = 13.0 / 16.0;
+        computed_font_size *= if becomes_monospace {
+            FIXED_TO_STANDARD
+        } else {
+            1.0 / FIXED_TO_STANDARD
+        };
+    }
     let computed_font_weight = fonts::ResolveComputedFontWeight(
         cascade, properties, &initial, &inherited, &unset, &reverted,
     );

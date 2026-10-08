@@ -5,10 +5,137 @@ use dom::ParsedDocument;
 
 // cpp: browser/user_agent_styles.cc:10-42
 const HTML_USER_AGENT_CSS: &str = r#"
-  /* Blink html.css: a:-webkit-any-link and area defaults. HTML links
-     use href presence; keep this in UA CSS so author cursor rules win. */
+  /* Keep the core rules in the same order and with the same values as
+     Blink's html.css.  These are observable even on the oldest unstyled
+     documents, so omitting them changes both typography and block geometry. */
+  body {
+    display: block;
+    margin: 8px;
+  }
+  div {
+    display: block;
+  }
+  article, aside, footer, header, hgroup, main, nav, search, section {
+    display: block;
+  }
+  p {
+    display: block;
+    margin-block-start: 1__qem;
+    margin-block-end: 1__qem;
+    margin-inline-start: 0;
+    margin-inline-end: 0;
+  }
+  h1 {
+    display: block;
+    font-size: 2em;
+    margin-block-start: 0.67__qem;
+    margin-block-end: 0.67em;
+    margin-inline-start: 0;
+    margin-inline-end: 0;
+    font-weight: bold;
+  }
+  h2 {
+    display: block;
+    font-size: 1.5em;
+    margin-block-start: 0.83__qem;
+    margin-block-end: 0.83em;
+    margin-inline-start: 0;
+    margin-inline-end: 0;
+    font-weight: bold;
+  }
+  h3 {
+    display: block;
+    font-size: 1.17em;
+    margin-block-start: 1__qem;
+    margin-block-end: 1em;
+    margin-inline-start: 0;
+    margin-inline-end: 0;
+    font-weight: bold;
+  }
+  h4 {
+    display: block;
+    margin-block-start: 1.33__qem;
+    margin-block-end: 1.33em;
+    margin-inline-start: 0;
+    margin-inline-end: 0;
+    font-weight: bold;
+  }
+  h5 {
+    display: block;
+    font-size: 0.83em;
+    margin-block-start: 1.67__qem;
+    margin-block-end: 1.67em;
+    margin-inline-start: 0;
+    margin-inline-end: 0;
+    font-weight: bold;
+  }
+  h6 {
+    display: block;
+    font-size: 0.67em;
+    margin-block-start: 2.33__qem;
+    margin-block-end: 2.33em;
+    margin-inline-start: 0;
+    margin-inline-end: 0;
+    font-weight: bold;
+  }
+  dl {
+    display: block;
+    margin-block-start: 1__qem;
+    margin-block-end: 1em;
+  }
+  dt { display: block; }
+  dd {
+    display: block;
+    margin-inline-start: 40px;
+  }
+  ul, menu, dir {
+    display: block;
+    list-style-type: disc;
+    margin-block-start: 1__qem;
+    margin-block-end: 1em;
+    padding-inline-start: 40px;
+  }
+  ol {
+    display: block;
+    list-style-type: decimal;
+    margin-block-start: 1__qem;
+    margin-block-end: 1em;
+    padding-inline-start: 40px;
+  }
+  li { display: list-item; }
+  blockquote {
+    display: block;
+    margin-block-start: 1__qem;
+    margin-block-end: 1em;
+    margin-inline-start: 40px;
+    margin-inline-end: 40px;
+  }
+  /* Blink html.css a:-webkit-any-link defaults. HTML links use href
+     presence here because the selector engine exposes that state directly. */
+  a[href] {
+    color: #0000ee;
+    text-decoration: underline;
+  }
   a[href], area[href] {
     cursor: pointer;
+  }
+  u, ins {
+    text-decoration: underline;
+  }
+  abbr[title], acronym[title] {
+    text-decoration: dotted underline;
+  }
+  tt, code, kbd, samp {
+    font-family: monospace;
+  }
+  pre, xmp, plaintext, listing {
+    display: block;
+    font-family: monospace;
+    white-space: pre;
+    margin-block-start: 1__qem;
+    margin-block-end: 1__qem;
+    margin-inline-start: 0;
+    margin-inline-end: 0;
   }
   table {
     border-spacing: 2px;

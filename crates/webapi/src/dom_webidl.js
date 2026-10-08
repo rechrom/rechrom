@@ -84,7 +84,14 @@ class HTMLLinkElement extends HTMLElement {}
 class HTMLMetaElement extends HTMLElement {}
 class HTMLIFrameElement extends HTMLElement {}
 class HTMLImageElement extends HTMLElement {}
+class HTMLCanvasElement extends HTMLElement {
+  // A conforming canvas returns null for a context type that the user agent
+  // does not support. Keep feature detection deterministic until a rendering
+  // backend is installed; callers must not observe a missing method.
+  getContext(contextId) { String(contextId); return null; }
+}
 class HTMLTemplateElement extends HTMLElement {}
+class HTMLHeadingElement extends HTMLElement {}
 class HTMLAnchorElement extends HTMLElement {
   get href() { const value=this.getAttribute('href'); if(value===null)return ''; try{return new URL(value,document.URL).href;}catch{return value;} }
   set href(value) { this.setAttribute('href',String(value)); }
@@ -161,8 +168,8 @@ for (const [name, cls] of Object.entries({EventTarget, Node, Element, HTMLElemen
     HTMLInputElement, HTMLTextAreaElement, HTMLButtonElement, HTMLFormElement,
     HTMLSelectElement, HTMLOptionElement, HTMLLabelElement, HTMLDetailsElement,
     HTMLDialogElement, HTMLScriptElement, HTMLStyleElement, HTMLLinkElement,
-    HTMLMetaElement, HTMLIFrameElement, HTMLImageElement, HTMLTemplateElement,
-    HTMLAnchorElement, HTMLMediaElement, HTMLVideoElement, HTMLAudioElement,
+    HTMLMetaElement, HTMLIFrameElement, HTMLImageElement, HTMLCanvasElement, HTMLTemplateElement,
+    HTMLHeadingElement, HTMLAnchorElement, HTMLMediaElement, HTMLVideoElement, HTMLAudioElement,
     Document, DocumentFragment, ShadowRoot, ElementInternals, Text, Comment, NodeList, HTMLCollection})) {
   Object.defineProperty(globalThis, name, {value:cls, writable:true, configurable:true});
   Object.defineProperty(cls.prototype, Symbol.toStringTag, {value:name, configurable:true});
@@ -228,12 +235,38 @@ Object.defineProperty(Node.prototype, 'lastElementChild', {get() { return this.c
 Object.defineProperty(Node.prototype, 'childElementCount', {get() { return this.children?.length || 0; }});
 Element.prototype.append = function(...nodes) { for (let node of nodes) this.appendChild(node instanceof Node ? node : document.createTextNode(String(node))); };
 Element.prototype.prepend = function(...nodes) { const first = this.firstChild; for (let node of nodes) this.insertBefore(node instanceof Node ? node : document.createTextNode(String(node)), first); };
-Element.prototype.remove = function() { if (this.parentNode) this.parentNode.removeChild(this); };
 Element.prototype.replaceChildren = function(...nodes) { while (this.firstChild) this.removeChild(this.firstChild); this.append(...nodes); };
 for(const prototype of [Document.prototype,DocumentFragment.prototype]) {
   prototype.append=Element.prototype.append;
   prototype.prepend=Element.prototype.prepend;
   prototype.replaceChildren=Element.prototype.replaceChildren;
+}
+function childNodeValue(node) {
+  return node instanceof Node ? node : document.createTextNode(String(node));
+}
+function childBefore(...nodes) {
+  const parent=this.parentNode;
+  if(!parent)return;
+  for(const node of nodes)parent.insertBefore(childNodeValue(node),this);
+}
+function childAfter(...nodes) {
+  const parent=this.parentNode;
+  if(!parent)return;
+  const reference=this.nextSibling;
+  for(const node of nodes)parent.insertBefore(childNodeValue(node),reference);
+}
+function childReplaceWith(...nodes) {
+  const parent=this.parentNode;
+  if(!parent)return;
+  childBefore.apply(this,nodes);
+  if(this.parentNode===parent)parent.removeChild(this);
+}
+function childRemove() { if(this.parentNode)this.parentNode.removeChild(this); }
+for(const prototype of [Element.prototype,Text.prototype,Comment.prototype]) {
+  prototype.before=childBefore;
+  prototype.after=childAfter;
+  prototype.replaceWith=childReplaceWith;
+  prototype.remove=childRemove;
 }
 Element.prototype.toggleAttribute = function(name, force) {
   name=String(name); const present=this.hasAttribute(name);
@@ -475,9 +508,9 @@ class MutationObserver {
     if(o.characterData===undefined && o.characterDataOldValue!==undefined)o.characterData=true;
     if(!(o.childList||o.attributes||o.characterData) || (!o.attributes&&(o.attributeOldValue||o.attributeFilter)) || (!o.characterData&&o.characterDataOldValue))throw new TypeError('Invalid mutation observer options');
     if(o.attributeFilter!==undefined)o.attributeFilter=Array.from(o.attributeFilter,String);
-    this._targets.set(target,o);observers.add(this);
+    this._targets.set(target,o);const changed=!observers.has(this);observers.add(this);if(changed)invoke(document,'mutationObserverState',observers.size);
   }
-  disconnect(){this._targets.clear();this._records=[];observers.delete(this);}
+  disconnect(){this._targets.clear();this._records=[];if(observers.delete(this))invoke(document,'mutationObserverState',observers.size);}
   takeRecords(){const records=this._records;this._records=[];return records;}
 }
 Object.assign(globalThis,{MutationObserver,MutationRecord});
@@ -529,7 +562,7 @@ globalThis.getComputedStyle = function(node) {
     }));
   } return computedStyles.get(node);
 };
-for (const property of ['offsetWidth','offsetHeight','clientWidth','clientHeight','clientLeft','clientTop','scrollWidth','scrollHeight'])
+for (const property of ['offsetWidth','offsetHeight','offsetLeft','offsetTop','clientWidth','clientHeight','clientLeft','clientTop','scrollWidth','scrollHeight'])
   Object.defineProperty(HTMLElement.prototype,property,{get(){return invoke(this,'metric',property);}});
 for (const [property,axis] of [['scrollLeft','x'],['scrollTop','y']])
   Object.defineProperty(Element.prototype,property,{configurable:true,enumerable:true,get(){return invoke(this,'scrollOffset',axis);},set(value){invoke(this,'scrollOffset',axis,Number(value));}});

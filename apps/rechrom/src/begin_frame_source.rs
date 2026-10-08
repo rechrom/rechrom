@@ -66,6 +66,101 @@ pub(crate) fn sample_host_clock() -> (Instant, f64) {
 type QueuedFrameNotify = Arc<dyn Fn(NativeBeginFrame) + Send + Sync>;
 static NEXT_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
 
+const LOGICAL_FRAME_SOURCE_COUNT: usize = 3;
+
+#[derive(Default)]
+struct OrderedFrameDispatch {
+    clients: Mutex<[Option<QueuedFrameNotify>; LOGICAL_FRAME_SOURCE_COUNT]>,
+}
+
+impl OrderedFrameDispatch {
+    fn issue(&self, frame: NativeBeginFrame) {
+        // Clone one callback at a time and release the lock before invoking
+        // client code. The physical source is the sole dispatcher, so this
+        // preserves phase order without holding a lock across a mailbox send.
+        for index in 0..LOGICAL_FRAME_SOURCE_COUNT {
+            let client = self.clients.lock().unwrap()[index].clone();
+            if let Some(client) = client {
+                client(frame);
+            }
+        }
+    }
+
+    fn set_client(&self, index: usize, client: QueuedFrameNotify) -> io::Result<()> {
+        let mut clients = self.clients.lock().unwrap();
+        let Some(slot) = clients.get_mut(index) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "begin-frame logical source index is out of range",
+            ));
+        };
+        if slot.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "begin-frame logical source already has a client",
+            ));
+        }
+        *slot = Some(client);
+        Ok(())
+    }
+}
+
+/// One physical VSync source with three ordered logical frame sources.
+/// Logical sources share frame identity and demand; their index controls only
+/// delivery order: input (0), compositor (1), display scheduler (2).
+pub struct OrderedBeginFrameSource {
+    native: Arc<dyn BeginFrameSource>,
+    dispatch: Arc<OrderedFrameDispatch>,
+}
+
+impl OrderedBeginFrameSource {
+    pub fn GetFrameSource(&self, index: usize) -> io::Result<Arc<LogicalBeginFrameSource>> {
+        if index >= LOGICAL_FRAME_SOURCE_COUNT {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "begin-frame logical source index is out of range",
+            ));
+        }
+        Ok(Arc::new(LogicalBeginFrameSource {
+            index,
+            native: self.native.clone(),
+            dispatch: self.dispatch.clone(),
+        }))
+    }
+}
+
+impl BeginFrameSource for OrderedBeginFrameSource {
+    fn request_begin_frame(&self) {
+        self.native.request_begin_frame();
+    }
+
+    fn set_display(&self, display_id: u32) {
+        self.native.set_display(display_id);
+    }
+}
+
+pub struct LogicalBeginFrameSource {
+    index: usize,
+    native: Arc<dyn BeginFrameSource>,
+    dispatch: Arc<OrderedFrameDispatch>,
+}
+
+impl LogicalBeginFrameSource {
+    pub fn SetClient(&self, client: QueuedFrameNotify) -> io::Result<()> {
+        self.dispatch.set_client(self.index, client)
+    }
+}
+
+impl BeginFrameSource for LogicalBeginFrameSource {
+    fn request_begin_frame(&self) {
+        self.native.request_begin_frame();
+    }
+
+    fn set_display(&self, display_id: u32) {
+        self.native.set_display(display_id);
+    }
+}
+
 struct BeginFrameArgsGenerator {
     next_sequence_number: u64,
     next_expected_frame_time: Option<Instant>,
@@ -189,7 +284,7 @@ fn trace_vsync(frame: NativeBeginFrame, timer_fallback: bool, requested: bool) {
     );
 }
 
-pub fn create(
+fn create_native(
     notify: QueuedFrameNotify,
     fallback_interval: Duration,
     display_id: Option<u32>,
@@ -210,6 +305,20 @@ pub fn create(
     #[cfg(not(target_os = "macos"))]
     let _ = display_id;
     TimerSource::create(notify, fallback_interval)
+}
+
+pub fn create(
+    fallback_interval: Duration,
+    display_id: Option<u32>,
+) -> io::Result<Arc<OrderedBeginFrameSource>> {
+    let dispatch = Arc::new(OrderedFrameDispatch::default());
+    let output = dispatch.clone();
+    let native = create_native(
+        Arc::new(move |frame| output.issue(frame)),
+        fallback_interval,
+        display_id,
+    )?;
+    Ok(Arc::new(OrderedBeginFrameSource { native, dispatch }))
 }
 
 fn finish_worker(worker: &mut Option<JoinHandle<()>>) {
@@ -710,6 +819,42 @@ mod mac {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logical_sources_dispatch_one_frame_in_index_order() {
+        let dispatch = OrderedFrameDispatch::default();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        for index in [2usize, 0, 1] {
+            let output = observed.clone();
+            dispatch
+                .set_client(
+                    index,
+                    Arc::new(move |frame| {
+                        output.lock().unwrap().push((
+                            index,
+                            frame.source_id,
+                            frame.sequence_number,
+                        ));
+                    }),
+                )
+                .unwrap();
+        }
+        let now = Instant::now();
+        dispatch.issue(NativeBeginFrame {
+            args: BeginFrameArgs {
+                source_id: 11,
+                sequence_number: 29,
+                frame_time: now,
+                deadline: now + Duration::from_millis(16),
+                interval: Duration::from_millis(16),
+            },
+            display_time: Some(now + Duration::from_millis(16)),
+        });
+        assert_eq!(
+            *observed.lock().unwrap(),
+            vec![(0, 11, 29), (1, 11, 29), (2, 11, 29)]
+        );
+    }
 
     #[test]
     fn begin_frame_generator_counts_elapsed_ticks_with_jitter() {

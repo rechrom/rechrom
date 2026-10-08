@@ -58,7 +58,7 @@ impl Page {
         // Render-blocking styles/parser readiness is advanced by ordinary
         // loading tasks. Re-requesting an unrenderable dirty page each tick
         // cannot advance that work and must not compete with its task queue.
-        // Once readiness changes, RunTasks reaches UpdateFrameIfNeeded again.
+        // Once readiness changes, the next task reaches UpdateFrameIfNeeded.
         let demand = (self.IsRenderingReady()
             && (self.HasPendingFrameInput() || self.state.dirty.get() || self.hover_state_dirty))
             || self.resources.HasAnimatedImages()
@@ -81,8 +81,11 @@ impl Page {
             false
         }
     }
-    pub fn OnBeginFrame(&mut self, args: BeginFrameArgs) -> io::Result<()> {
-        let mut trace = browser_tracing::span("lifecycle", "Page.OnBeginFrame");
+    /// Run Page's rendering opportunity for a compositor-issued main frame.
+    /// The platform only delivers the frame; Page owns input, animation,
+    /// style/layout/paint ordering and the resulting immutable frame state.
+    pub fn UpdateRendering(&mut self, args: BeginFrameArgs) -> io::Result<()> {
+        let mut trace = browser_tracing::span("lifecycle", "Page.UpdateRendering");
         trace.set("source_id", args.source_id as f64);
         trace.set("sequence", args.sequence_number as f64);
         trace.set("interval_ms", args.interval.as_secs_f64() * 1000.0);
@@ -103,7 +106,7 @@ impl Page {
         self.begin_frame.last_frame = Some((args.source_id, args.sequence_number));
         self.begin_frame.requested = false;
         let executing = std::mem::replace(&mut self.begin_frame.executing, true);
-        // Image/font completions remain macro tasks in RunTasks. A rendering
+        // Image/font completions remain macro tasks. A rendering
         // opportunity must not add unrelated resource callbacks to input/rAF.
         let budget = self.resource_completion_budget.replace(0);
         let result = (|| {

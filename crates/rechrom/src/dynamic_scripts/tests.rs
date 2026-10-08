@@ -140,7 +140,7 @@ fn run(
         "{:?}",
         parser_client.errors
     );
-    WindowJavaScriptBindings::RunTasks(&window, &mut runtime, &realm, 0.0, &mut |e| {
+    WindowJavaScriptBindings::RunTaskTurn(&window, &mut runtime, &realm, 0.0, &mut |e| {
         panic!("{}", e.message)
     });
     verify(&mut runtime, &realm, &dynamic, &client, &requests, &window);
@@ -168,7 +168,7 @@ fn connected_inline_script_current_script_jobs_load_and_timer_follow_source_orde
     </script></head></html>"#,
         |runtime, realm, dynamic, client, requests, window| {
             // The timer is a separate task after the dynamic script task.
-            WindowJavaScriptBindings::RunTasks(window, runtime, realm, 0.0, &mut |e| {
+            WindowJavaScriptBindings::RunTaskTurn(window, runtime, realm, 0.0, &mut |e| {
                 panic!("{}", e.message)
             });
             assert_js(runtime,realm,"once===1 && JSON.stringify(order)===JSON.stringify(['parser','script','job','load','timer'])");
@@ -211,7 +211,7 @@ fn base_url_delayed_external_redirect_and_resource_failure_keep_source_events() 
         const failure=document.createElement('script');failure.src='fail.js';failure.onload=()=>order.push('failure-load');document.head.appendChild(failure);
     </script></head></html>"#,
         |runtime, realm, dynamic, client, requests, window| {
-            // First RunTasks(0) leaves the delayed response pending; poll through
+            // The first task turn leaves the delayed response pending; poll through
             // the same production queue using the host's retained Window.
             assert_eq!(
                 requests.borrow()[0].url,
@@ -230,7 +230,7 @@ fn base_url_delayed_external_redirect_and_resource_failure_keep_source_events() 
                 if dynamic.PendingLoads() == 0 {
                     break;
                 }
-                WindowJavaScriptBindings::RunTasks(window, runtime, realm, 0.0, &mut |e| {
+                WindowJavaScriptBindings::RunTaskTurn(window, runtime, realm, 0.0, &mut |e| {
                     panic!("{}", e.message)
                 });
             }
@@ -270,7 +270,7 @@ fn stale_dynamic_registration_cannot_execute_a_parser_script_twice() {
             dynamic.registrations.borrow_mut().push_back(id);
             dynamic.EnqueuePreparedTasks(window,client.clone());
             for _ in 0..4 {
-                WindowJavaScriptBindings::RunTasks(window,runtime,realm,0.0,&mut |e|panic!("{}",e.message));
+                WindowJavaScriptBindings::RunTaskTurn(window,runtime,realm,0.0,&mut |e|panic!("{}",e.message));
             }
             assert_js(runtime,realm,"parserCount===1");
             assert!(client.borrow().executed.is_empty());

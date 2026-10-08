@@ -59,6 +59,7 @@ pub fn IsSourceSupported(property: &str) -> bool {
         "break-inside",
         "caption-side",
         "clear",
+        "clip",
         "clip-path",
         "color",
         "column-count",

@@ -12,6 +12,7 @@ pub(crate) struct EdgeValue {
     percentage: Option<f64>,
     automatic: bool,
     calculated: bool,
+    quirk: bool,
 }
 
 // cpp: style_resolver/style_resolver.cc:3597-3621
@@ -24,6 +25,18 @@ pub(crate) fn ParseEdgeValue(input: &str, font_size: f64, margin: bool) -> Optio
             automatic: true,
             ..EdgeValue::default()
         });
+    }
+    // Blink's built-in html.css uses the UA-only `__qem` unit to retain the
+    // historical margin-collapse quirk on headings, paragraphs and lists.
+    // Author CSS cannot spell this through a parsed author stylesheet.
+    if margin {
+        if let Some(number) = value.strip_suffix("__qem").and_then(Number) {
+            return Some(EdgeValue {
+                pixels: number * font_size,
+                quirk: true,
+                ..EdgeValue::default()
+            });
+        }
     }
     if let Some(calculated) = ParseLengthPercentage(&value, font_size) {
         return Some(EdgeValue {
@@ -92,6 +105,7 @@ fn SetEdgeValue(style: &mut ComputedStyle, margin: bool, side: usize, value: Edg
         extra.margin_percentages[side] = value.percentage;
         extra.margin_calculated[side] = value.calculated;
         extra.margin_auto[side] = value.automatic;
+        extra.margin_quirks[side] = value.quirk;
     } else {
         extra.padding_percentages[side] = value.percentage;
         extra.padding_calculated[side] = value.calculated;

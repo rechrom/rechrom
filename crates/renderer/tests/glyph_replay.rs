@@ -147,9 +147,9 @@ fn coretext_glyph_masks_match_skia_replay() {
                             ..Default::default()
                         };
                         let native =
-                            renderer::source_replay::RasterizeSourceDisplayItemList(&list, 80, 48);
+                            raster::source_replay::RasterizeSourceDisplayItemList(&list, 80, 48);
                         let rust =
-                            renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 80, 48);
+                            raster::pure_replay::RasterizeSourceDisplayItemList(&list, 80, 48);
                         let differences = native
                             .chunks_exact(4)
                             .zip(rust.chunks_exact(4))
@@ -230,8 +230,8 @@ fn coretext_unit_axis_transforms_match_skia_replay() {
                         ..Default::default()
                     };
                     let native =
-                        renderer::source_replay::RasterizeSourceDisplayItemList(&list, 80, 80);
-                    let rust = renderer::pure_replay::RasterizeSourceDisplayItemList(&list, 80, 80);
+                        raster::source_replay::RasterizeSourceDisplayItemList(&list, 80, 80);
+                    let rust = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 80, 80);
                     let diffs = native
                         .chunks_exact(4)
                         .zip(rust.chunks_exact(4))
@@ -347,13 +347,12 @@ fn scaled_coretext_glyph_masks_match_skia_replay() {
                                     ..Default::default()
                                 },
                             );
-                            let native = renderer::source_replay::RasterizeSourceDisplayItemList(
+                            let native = raster::source_replay::RasterizeSourceDisplayItemList(
                                 &reference, 300, 150,
                             );
-                            let rust =
-                                renderer::pure_replay::RasterizeSourceDisplayItemListWithScale(
-                                    &list, 300, 150, scale,
-                                );
+                            let rust = raster::pure_replay::RasterizeSourceDisplayItemListWithScale(
+                                &list, 300, 150, scale,
+                            );
                             let different = native
                                 .chunks_exact(4)
                                 .zip(rust.chunks_exact(4))

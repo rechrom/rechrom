@@ -1,0 +1,10 @@
+[package]
+name = "viz"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+compositor = { path = "../compositor" }
+
+[dev-dependencies]
+paint = { path = "../paint", features = ["translation_in_progress"] }

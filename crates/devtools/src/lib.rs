@@ -1,4 +1,5 @@
 //! Local Performance UI and a small JSON control endpoint for browser tracing.
+use base64::Engine;
 use browser_tracing::{Snapshot, StartOptions};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -25,6 +26,31 @@ fn reload_handler() -> &'static std::sync::Mutex<Option<ReloadHandler>> {
 }
 pub fn set_reload_handler(handler: ReloadHandler) {
     *reload_handler().lock().unwrap() = Some(handler);
+}
+
+/// Evaluate JavaScript in the active page. This is intentionally a control
+/// operation: callers that need a value can serialize it into a thrown error
+/// until the protocol grows remote-object handles.
+pub type EvaluateHandler = Arc<dyn Fn(String) -> Result<(), String> + Send + Sync>;
+fn evaluate_handler() -> &'static std::sync::Mutex<Option<EvaluateHandler>> {
+    static HANDLER: std::sync::OnceLock<std::sync::Mutex<Option<EvaluateHandler>>> =
+        std::sync::OnceLock::new();
+    HANDLER.get_or_init(|| std::sync::Mutex::new(None))
+}
+pub fn set_evaluate_handler(handler: EvaluateHandler) {
+    *evaluate_handler().lock().unwrap() = Some(handler);
+}
+
+/// Encoded PNG capture of an immutable target frame. Target 1 is the page and
+/// target 2 is browser chrome, matching the tracing target registry.
+pub type ScreenshotHandler = Arc<dyn Fn(u64) -> Result<Vec<u8>, String> + Send + Sync>;
+fn screenshot_handler() -> &'static std::sync::Mutex<Option<ScreenshotHandler>> {
+    static HANDLER: std::sync::OnceLock<std::sync::Mutex<Option<ScreenshotHandler>>> =
+        std::sync::OnceLock::new();
+    HANDLER.get_or_init(|| std::sync::Mutex::new(None))
+}
+pub fn set_screenshot_handler(handler: ScreenshotHandler) {
+    *screenshot_handler().lock().unwrap() = Some(handler);
 }
 
 /// Synthetic wheel input in window CSS coordinates, including the toolbar.
@@ -334,6 +360,38 @@ fn dispatch(request: Value) -> Result<Value, String> {
                 .ok_or("No browser target")?;
             reload()?;
             Ok(json!({}))
+        }
+        "Runtime.evaluate" => {
+            let source = params
+                .get("expression")
+                .and_then(Value::as_str)
+                .ok_or("expression must be a string")?
+                .to_owned();
+            let evaluate = evaluate_handler()
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("No browser target")?;
+            evaluate(source)?;
+            Ok(json!({}))
+        }
+        "Page.captureScreenshot" => {
+            let target_id = params
+                .get("target_id")
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .ok_or("target_id must be an unsigned integer")
+                })
+                .transpose()?
+                .unwrap_or(1);
+            let capture = screenshot_handler()
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("No browser target")?;
+            let png = capture(target_id)?;
+            Ok(json!({"data":base64::engine::general_purpose::STANDARD.encode(png)}))
         }
         "Tracing.start" => {
             let options: StartOptions =

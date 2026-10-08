@@ -280,6 +280,7 @@ pub(crate) fn CopyCSSProperty(
                 to.margin_percentages[side] = from.margin_percentages[side];
                 to.margin_calculated[side] = from.margin_calculated[side];
                 to.margin_auto[side] = from.margin_auto[side];
+                to.margin_quirks[side] = from.margin_quirks[side];
             } else {
                 to.padding_percentages[side] = from.padding_percentages[side];
                 to.padding_calculated[side] = from.padding_calculated[side];

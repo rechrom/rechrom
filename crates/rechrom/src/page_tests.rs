@@ -129,7 +129,7 @@ impl PageClient for Client {
             .push(format!("frame\t{}", frame.sequence));
         self.frames
             .borrow_mut()
-            .push(renderer::pure_replay::RasterizeDisplayItemList(
+            .push(raster::pure_replay::RasterizeDisplayItemList(
                 &frame.display_items,
                 160,
                 96,
@@ -203,8 +203,8 @@ fn body() {
 
     record(&page, "open", &trace);
     // The legacy synchronous oracle records a completed finite task batch.
-    // Give it an explicit budget; the window host uses one-task RunTasks(0).
-    page.RunTasks(100.0).unwrap();
+    // Give it an explicit budget; the window host uses one task per turn.
+    page.RunFor(std::time::Duration::from_millis(100)).unwrap();
     record(&page, "tasks", &trace);
     page.Evaluate("document.getElementById('box').style.width='41px';if(document.getElementById('box').offsetWidth!==41)throw Error('measurement 41')", "fixture:mutation").unwrap();
     record(&page, "evaluate", &trace);
@@ -318,7 +318,7 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
                 (document.body.getAttribute('qqcom-theme')==='dark') === {dark})) throw Error('injected preference mismatch');
             "#, !dark), "fixture:color-scheme").unwrap();
             assert!(result.Succeeded(), "{:?}", result.exception);
-            let rgba = renderer::pure_replay::RasterizeSourceDisplayItemList(
+            let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(
                 &page.CurrentFrame().unwrap().display_items,
                 160,
                 96,
@@ -367,7 +367,7 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
             .unwrap();
 
-        let rgba = renderer::pure_replay::RasterizeSourceDisplayItemList(
+        let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(
             &page.CurrentFrame().unwrap().display_items,
             160,
             96,
@@ -406,7 +406,7 @@ fn css_semibold_font_selection_matches_repository_chromium() {
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
             .unwrap();
 
-        let rgba = renderer::pure_replay::RasterizeSourceDisplayItemList(
+        let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(
             &page.CurrentFrame().unwrap().display_items,
             160,
             96,
@@ -434,7 +434,7 @@ fn image_mipmap_sampling_matches_repository_chromium() {
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
             .unwrap();
 
-        let rgba = renderer::pure_replay::RasterizeSourceDisplayItemList(
+        let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(
             &page.CurrentFrame().unwrap().display_items,
             160,
             96,
@@ -526,7 +526,7 @@ fn scroll_event_updates_intersection_observer_after_geometry_commit() {
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
             .unwrap();
         for _ in 0..3 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         let initial = page
             .Evaluate(
@@ -545,7 +545,7 @@ fn scroll_event_updates_intersection_observer_after_geometry_commit() {
             .unwrap();
         assert!(changed.Succeeded(), "{:?}", changed.exception);
         for _ in 0..4 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         let check = page
             .Evaluate(
@@ -567,7 +567,7 @@ fn scroll_event_updates_intersection_observer_after_geometry_commit() {
             .unwrap();
         assert!(restored.Succeeded(), "{:?}", restored.exception);
         for _ in 0..4 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         let restored = page.Evaluate(
             "if(scrollEvents!==2||zeroIntersections.at(-1).intersecting!==true||zeroIntersections.at(-1).ratio!==1)throw Error('zero sentinel did not restore '+JSON.stringify({scrollEvents,zeroIntersections}))",
@@ -586,7 +586,7 @@ fn scroll_event_updates_intersection_observer_after_geometry_commit() {
             .unwrap();
         assert!(moved.Succeeded(), "{:?}", moved.exception);
         for _ in 0..4 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         let outside = page
             .Evaluate(
@@ -604,7 +604,7 @@ fn scroll_event_updates_intersection_observer_after_geometry_commit() {
             .unwrap();
         assert!(bottom.Succeeded(), "{:?}", bottom.exception);
         for _ in 0..4 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         let bottom = page
             .Evaluate(
@@ -657,7 +657,7 @@ fn viewport_scroll_reaches_window_and_updates_client_rects() {
         }))
         .unwrap();
         for _ in 0..4 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         let result = page.Evaluate(
             "const r=document.getElementById('anchor').getBoundingClientRect(),f=document.getElementById('fixed').getBoundingClientRect();if(document.scrollingElement!==document.documentElement||document.documentElement.scrollTop!==1000||windowScrolls!==1||documentScrolls!==1||Math.abs(r.top-500)>0.01||Math.abs(f.top)>0.01)throw Error(JSON.stringify({scrollingElement:document.scrollingElement&&document.scrollingElement.tagName,scrollTop:document.documentElement.scrollTop,windowScrolls,documentScrolls,rect:r,fixed:f}));",
@@ -746,7 +746,7 @@ fn begin_frame_recomputes_hover_after_layout_under_stationary_mouse() {
             .unwrap()
             .Succeeded());
         let now = std::time::Instant::now();
-        page.OnBeginFrame(foundation::begin_frame::BeginFrameArgs {
+        page.UpdateRendering(foundation::begin_frame::BeginFrameArgs {
             source_id: 1,
             sequence_number: 1,
             frame_time: now,
@@ -835,7 +835,7 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
         assert_eq!(page.LayerTileStats().raster_tasks, 0);
         assert!(page.LayerTileStats().reused_tiles > 0);
         let snapshot = page.CurrentFrame().unwrap().fragments.clone();
-        let old_pixels = renderer::pure_replay::RasterizeDisplayItemList(
+        let old_pixels = raster::pure_replay::RasterizeDisplayItemList(
             &paint::paint_engine::Paint(&snapshot),
             160,
             96,
@@ -856,7 +856,7 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
         ));
         assert_eq!(
             old_pixels,
-            renderer::pure_replay::RasterizeDisplayItemList(
+            raster::pure_replay::RasterizeDisplayItemList(
                 &paint::paint_engine::Paint(&snapshot),
                 160,
                 96
@@ -896,7 +896,7 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
         "#, "fixture:late-scroll-resources").unwrap();
         assert!(changed.Succeeded(), "{:?}", changed.exception);
         for _ in 0..20 {
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
         }
         let check = page
             .Evaluate(
@@ -963,7 +963,7 @@ fn css_zoom_matches_repository_chromium_geometry_and_pixels() {
             )
             .unwrap();
         assert!(result.Succeeded(), "{:?}", result.exception);
-        let rgba = renderer::pure_replay::RasterizeSourceDisplayItemList(
+        let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(
             &page.CurrentFrame().unwrap().display_items,
             160,
             96,
@@ -1009,7 +1009,7 @@ fn apply_parse_document() {
     };
     page.Apply(parse(markup)).unwrap();
     record(&page, "apply", &trace);
-    page.RunTasks(0.0).unwrap();
+    page.RunTask().unwrap();
     record(&page, "tasks", &trace);
     let error = page
         .Apply(parse("<body id=wrong>Wrong</body>".into()))
@@ -1136,7 +1136,7 @@ fn without_javascript(mode: &str) {
     }
     record(&page, "parsed");
     evaluate(&mut page);
-    page.RunTasks(-1.0).unwrap();
+    page.RunTask().unwrap();
     record(&page, "tasks");
     let find = |page: &Page, id: &str| {
         fn find(d: &Document, i: usize, id: &str) -> Option<u64> {
@@ -1515,12 +1515,12 @@ fn run_page_script_fixture(
     }
     // Cached-image oracle records several ready callbacks as one task batch.
     // Other fixtures retain their existing single-turn scheduling assertions.
-    page.RunTasks(if fixture == "page-cached-image-events" {
-        100.0
+    if fixture == "page-cached-image-events" {
+        page.RunFor(std::time::Duration::from_millis(100))
+            .unwrap();
     } else {
-        0.0
-    })
-    .unwrap();
+        page.RunTask().unwrap();
+    }
     assert!(page
         .Evaluate("flushEvents()", "fixture:flush")
         .unwrap()
@@ -1712,7 +1712,7 @@ fn profile_qq_loading_stall() {
         let mut first = None;
         while started.elapsed() < std::time::Duration::from_secs(35) {
             let turn = std::time::Instant::now();
-            page.RunTasks(0.0).unwrap();
+            page.RunTask().unwrap();
             let ms = turn.elapsed().as_secs_f64() * 1000.0;
             turns.push(ms);
             if first.is_none() && page.CurrentFrame().is_some() {
@@ -1754,7 +1754,7 @@ fn profile_qq_loading_stall() {
                 let mut pixels = vec![0_u32; width as usize * height as usize];
                 for iteration in 0..5 {
                     let started = std::time::Instant::now();
-                    renderer::surface::RenderDisplayItemListIntoWindowBuffer(
+                    raster::surface::RenderDisplayItemListIntoWindowBuffer(
                         &frame.display_items,
                         width,
                         height,
@@ -1774,11 +1774,8 @@ fn profile_qq_loading_stall() {
             }
             for iteration in 0..5 {
                 let started = std::time::Instant::now();
-                let pixels = renderer::pure_replay::RasterizeDisplayItemList(
-                    &frame.display_items,
-                    1216,
-                    704,
-                );
+                let pixels =
+                    raster::pure_replay::RasterizeDisplayItemList(&frame.display_items, 1216, 704);
                 let elapsed = started.elapsed().as_secs_f64() * 1000.0;
                 let hash = pixels.iter().fold(0xcbf29ce484222325_u64, |value, &byte| {
                     (value ^ u64::from(byte)).wrapping_mul(0x100000001b3)

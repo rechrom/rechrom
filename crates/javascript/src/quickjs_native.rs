@@ -67,6 +67,21 @@ pub trait ModuleLoader {
     fn compiled(&self, _specifier: &str) -> Option<Value> {
         None
     }
+    fn request_dynamic(&mut self, _base: &str, _specifier: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+    fn poll_dynamic(&mut self, _url: &str) -> Result<Option<()>, String> {
+        Ok(None)
+    }
+}
+
+struct PendingDynamicImport {
+    resolve: JSValue,
+    reject: JSValue,
+    attributes: JSValue,
+    base: String,
+    specifier: String,
+    url: String,
 }
 struct NativeHolder {
     callable: RefCell<Option<Rc<dyn HostCallable>>>,
@@ -95,6 +110,7 @@ struct CallbackState {
     tracker_running: Cell<bool>,
     rejection_events: RefCell<VecDeque<(Value, Value, bool)>>,
     loader: RefCell<Option<Box<dyn ModuleLoader>>>,
+    pending_dynamic_imports: RefCell<Vec<PendingDynamicImport>>,
     modules: RefCell<HashMap<String, Value>>,
     prepared_modules: RefCell<HashMap<usize, Value>>,
     last_exception_location: RefCell<Option<JSExceptionLocation>>,
@@ -114,6 +130,11 @@ impl Drop for EngineOwner {
             JS_SetModuleLoaderFunc(self.rt, None, None, ptr::null_mut());
             JS_SetContextOpaque(self.ctx, ptr::null_mut());
             let data = Box::from_raw(self.callbacks);
+            for pending in data.pending_dynamic_imports.borrow_mut().drain(..) {
+                JS_FreeValue(self.ctx, pending.resolve);
+                JS_FreeValue(self.ctx, pending.reject);
+                JS_FreeValue(self.ctx, pending.attributes);
+            }
             for value in data.intrinsics.values() {
                 JS_FreeValue(self.ctx, *value);
             }
@@ -461,6 +482,7 @@ impl Context {
                 tracker_running: Cell::new(false),
                 rejection_events: RefCell::new(VecDeque::new()),
                 loader: RefCell::new(None),
+                pending_dynamic_imports: RefCell::new(Vec::new()),
                 modules: RefCell::new(HashMap::new()),
                 prepared_modules: RefCell::new(HashMap::new()),
                 last_exception_location: RefCell::new(None),
@@ -472,7 +494,7 @@ impl Context {
             JS_SetContextOpaque(ctx, callbacks.cast());
             JS_SetModuleEmbeddingHooks(
                 rt,
-                Some(deny_dynamic_import),
+                Some(dynamic_import),
                 Some(consume_internal_module_promise),
                 callbacks.cast(),
             );
@@ -568,6 +590,15 @@ impl Context {
                 Value::Str(v) => v,
                 _ => unreachable!(),
             }
+        }
+    }
+    pub fn new_array_buffer_copy(&mut self, bytes: &[u8]) -> JsResult<Value> {
+        unsafe {
+            self.accept(JS_NewArrayBufferCopy(
+                self.owner.ctx,
+                bytes.as_ptr(),
+                bytes.len(),
+            ))
         }
     }
     pub fn global(&mut self) -> Gc<JsObject> {
@@ -1102,6 +1133,7 @@ impl Context {
         self.run_jobs_errors_profiled(std::env::var_os("BROWSER_PROFILE_INPUT").is_some())
     }
     fn run_jobs_errors_profiled(&mut self, profile: bool) -> Vec<Value> {
+        self.resume_dynamic_imports();
         let tracing = browser_tracing::enabled();
         let mut trace = browser_tracing::span("javascript", "JobDrain");
         let mut traced_jobs = 0usize;
@@ -1151,27 +1183,56 @@ impl Context {
         }
         errors
     }
+
+    fn resume_dynamic_imports(&mut self) {
+        let data = self.data();
+        let pending = std::mem::take(&mut *data.pending_dynamic_imports.borrow_mut());
+        let mut remaining = Vec::new();
+        for import in pending {
+            let state = data
+                .loader
+                .borrow_mut()
+                .as_mut()
+                .ok_or_else(|| "No module loader".to_owned())
+                .and_then(|loader| loader.poll_dynamic(&import.url));
+            match state {
+                Ok(None) => remaining.push(import),
+                Ok(Some(())) => unsafe {
+                    let base = CString::new(import.base.as_str()).unwrap();
+                    let specifier = CString::new(import.specifier.as_str()).unwrap();
+                    JS_HostResumeDynamicImport(
+                        self.owner.ctx,
+                        import.resolve,
+                        import.reject,
+                        base.as_ptr(),
+                        specifier.as_ptr(),
+                        import.attributes,
+                    );
+                    JS_FreeValue(self.owner.ctx, import.resolve);
+                    JS_FreeValue(self.owner.ctx, import.reject);
+                    JS_FreeValue(self.owner.ctx, import.attributes);
+                },
+                Err(message) => unsafe {
+                    let mut context = Context::borrowed(self.owner.ctx);
+                    let error = context.make_plain_error(&message);
+                    let mut reason = error.raw();
+                    let result =
+                        JS_Call(self.owner.ctx, import.reject, JS_UNDEFINED, 1, &mut reason);
+                    JS_FreeValue(self.owner.ctx, result);
+                    JS_FreeValue(self.owner.ctx, import.resolve);
+                    JS_FreeValue(self.owner.ctx, import.reject);
+                    JS_FreeValue(self.owner.ctx, import.attributes);
+                },
+            }
+        }
+        data.pending_dynamic_imports.borrow_mut().extend(remaining);
+    }
     pub fn with_module_loader<R>(
         &mut self,
         loader: Box<dyn ModuleLoader>,
         operation: impl FnOnce(&mut Self) -> R,
     ) -> R {
-        struct Restore {
-            callbacks: *mut CallbackState,
-            previous: Option<Box<dyn ModuleLoader>>,
-        }
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                unsafe {
-                    (*self.callbacks).loader.replace(self.previous.take());
-                }
-            }
-        }
-        let previous = self.data().loader.replace(Some(loader));
-        let _restore = Restore {
-            callbacks: self.owner.callbacks,
-            previous,
-        };
+        self.data().loader.replace(Some(loader));
         unsafe {
             JS_SetModuleLoaderFunc(
                 self.owner.rt,
@@ -1491,24 +1552,75 @@ unsafe fn rejection_dispatch(
 unsafe fn host_job(ctx: *mut JSContext, argc: i32, argv: *mut JSValueConst) -> JSValue {
     JS_Call(ctx, *argv, JS_UNDEFINED, argc - 1, argv.add(1))
 }
-unsafe fn deny_dynamic_import(
+unsafe fn dynamic_import(
     ctx: *mut JSContext,
-    _: JSValueConst,
+    resolve: JSValueConst,
     reject: JSValueConst,
-    _: JSValueConst,
-    _: JSValueConst,
-    _: JSValueConst,
-    _: *mut c_void,
+    base: JSValueConst,
+    specifier: JSValueConst,
+    attributes: JSValueConst,
+    opaque: *mut c_void,
 ) -> i32 {
-    let mut context = Context::borrowed(ctx);
-    let error = context.make_plain_error("Not supported");
-    let mut reason = error.raw();
-    let result = JS_Call(ctx, reject, JS_UNDEFINED, 1, &mut reason);
-    if JS_IsException(result) != 0 {
+    let data = &*opaque.cast::<CallbackState>();
+    let base_ptr = JS_ToCString(ctx, base);
+    let specifier_ptr = JS_ToCString(ctx, specifier);
+    if base_ptr.is_null() || specifier_ptr.is_null() {
+        if !base_ptr.is_null() {
+            JS_FreeCString(ctx, base_ptr);
+        }
+        if !specifier_ptr.is_null() {
+            JS_FreeCString(ctx, specifier_ptr);
+        }
         return -1;
     }
-    JS_FreeValue(ctx, result);
-    0
+    let base_string = CStr::from_ptr(base_ptr).to_string_lossy().into_owned();
+    let specifier_string = CStr::from_ptr(specifier_ptr).to_string_lossy().into_owned();
+    JS_FreeCString(ctx, base_ptr);
+    JS_FreeCString(ctx, specifier_ptr);
+    let request = data
+        .loader
+        .borrow_mut()
+        .as_mut()
+        .ok_or_else(|| "Not supported".to_owned())
+        .and_then(|loader| loader.request_dynamic(&base_string, &specifier_string));
+    match request {
+        Ok(Some(url)) => {
+            data.pending_dynamic_imports
+                .borrow_mut()
+                .push(PendingDynamicImport {
+                    resolve: JS_DupValue(ctx, resolve),
+                    reject: JS_DupValue(ctx, reject),
+                    attributes: JS_DupValue(ctx, attributes),
+                    base: base_string,
+                    specifier: specifier_string,
+                    url,
+                });
+            0
+        }
+        Ok(None) => {
+            let message = format!("Unresolved dynamic module import: {specifier_string}");
+            let mut context = Context::borrowed(ctx);
+            let error = context.make_plain_error(&message);
+            let mut reason = error.raw();
+            let result = JS_Call(ctx, reject, JS_UNDEFINED, 1, &mut reason);
+            if JS_IsException(result) != 0 {
+                return -1;
+            }
+            JS_FreeValue(ctx, result);
+            0
+        }
+        Err(message) => {
+            let mut context = Context::borrowed(ctx);
+            let error = context.make_plain_error(&message);
+            let mut reason = error.raw();
+            let result = JS_Call(ctx, reject, JS_UNDEFINED, 1, &mut reason);
+            if JS_IsException(result) != 0 {
+                return -1;
+            }
+            JS_FreeValue(ctx, result);
+            0
+        }
+    }
 }
 unsafe fn consume_internal_module_promise(
     ctx: *mut JSContext,

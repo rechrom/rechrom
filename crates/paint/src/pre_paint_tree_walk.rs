@@ -55,6 +55,7 @@ pub struct PaintTreeNode<'a> {
     pub(crate) paint_snap_offset: Offset,
     pub root_clip: Option<PaintRect>,
     pub local_clip: Option<PaintRect>,
+    pub local_css_clip: Option<PaintRect>,
     pub local_clip_radius: f64,
     pub local_clip_radii: PaintCornerRadii,
     pub local_clip_path: Vec<PaintPathCommand>,
@@ -76,6 +77,7 @@ pub struct PaintTreeNode<'a> {
     pub applies_clip: bool,
     pub applies_root_clip: bool,
     pub applies_overflow_clip: bool,
+    pub applies_css_clip: bool,
     pub applies_clip_path: bool,
     pub applies_effect: bool,
     pub applies_compositing_layer: bool,
@@ -110,6 +112,7 @@ impl<'a> Default for PaintTreeNode<'a> {
             paint_snap_offset: Offset::default(),
             root_clip: None,
             local_clip: None,
+            local_css_clip: None,
             local_clip_radius: 0.0,
             local_clip_radii: PaintCornerRadii::default(),
             local_clip_path: Vec::new(),
@@ -131,6 +134,7 @@ impl<'a> Default for PaintTreeNode<'a> {
             applies_clip: false,
             applies_root_clip: false,
             applies_overflow_clip: false,
+            applies_css_clip: false,
             applies_clip_path: false,
             applies_effect: false,
             applies_compositing_layer: false,
@@ -1863,6 +1867,7 @@ impl PrePaintTreeWalk {
             paint_snap_offset,
             root_clip,
             local_clip,
+            local_css_clip,
             local_clip_radius,
             local_clip_radii,
             local_clip_path,
@@ -1881,6 +1886,7 @@ impl PrePaintTreeWalk {
             applies_clip,
             applies_root_clip,
             applies_overflow_clip,
+            applies_css_clip,
             applies_clip_path,
             applies_effect,
             applies_opacity,
@@ -2146,7 +2152,7 @@ impl PrePaintTreeWalk {
     }
 
     fn ContextForChild(&self, child: &FragmentNode, base: &ChildContext) -> InheritedContext {
-        if child.paint.fixed_to_view {
+        if child.paint.fixed_to_view && child.paint.establishes_paint_state {
             // Blink switches fixed-to-view descendants to the LayoutView's
             // fixed-position context. It is above document ScrollTranslation
             // and keeps the viewport clip. The ordinary child context made
@@ -2815,6 +2821,51 @@ impl PrePaintTreeWalk {
                 clip_path_even_odd: false,
                 pixel_moving_filter: None,
             });
+        }
+        // Blink UpdateCssClip runs after UpdateEffect and before UpdateFilter.
+        // Unlike overflow clipping, the legacy positioned-box clip applies to
+        // the box's own background as well as all descendants.
+        if establishes {
+            if let Some(css_clip) = fragment.paint.css_clip {
+                let local = node.PixelSnappedRect(&PaintRect {
+                    x: node.paint_offset.x + css_clip.offset.x,
+                    y: node.paint_offset.y + css_clip.offset.y,
+                    width: css_clip.size.width.max(0.0),
+                    height: css_clip.size.height.max(0.0),
+                });
+                node.local_css_clip = Some(local);
+                if let Some(mapped) = MapRectToRoot(local, &node.transforms) {
+                    node.clip = Some(node.clip.map_or(mapped, |clip| Intersect(clip, &mapped)));
+                    node.cull_rect = Some(
+                        node.cull_rect
+                            .map_or(mapped, |cull_rect| Intersect(cull_rect, &mapped)),
+                    );
+                    node.self_cull_rect = Some(
+                        node.self_cull_rect
+                            .map_or(mapped, |self_cull| Intersect(self_cull, &mapped)),
+                    );
+                }
+                node.properties.clip_id = self.next_property_id;
+                self.next_property_id += 1;
+                self.RegisterProperty(
+                    fragment,
+                    PaintPropertyRole::CssClip,
+                    node.properties.clip_id,
+                );
+                node.properties.nodes.clip = Arc::new(ClipPaintPropertyNode {
+                    lifecycle: Default::default(),
+                    id: node.properties.clip_id,
+                    parent: Some(node.properties.nodes.clip.clone()),
+                    local_transform_space: node.properties.nodes.transform.clone(),
+                    rect: Some(PropertySpaceRect(local, property_space_delta)),
+                    radii: PaintCornerRadii::default(),
+                    clip_path: Vec::new(),
+                    clip_path_even_odd: false,
+                    pixel_moving_filter: None,
+                });
+                node.applies_clip = true;
+                node.applies_css_clip = true;
+            }
         }
         if node.applies_filter {
             let style = style.expect("filter must have source style");

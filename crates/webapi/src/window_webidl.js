@@ -32,17 +32,64 @@ globalThis.cancelIdleCallback = function(id) {
   clearTimeout(timer);
 };
 const timeline = [];
+const performanceObservers = new Set();
+let performanceDeliveryQueued = false;
+class PerformanceObserverEntryList {
+  constructor(entries) { this._entries = entries; }
+  getEntries() { return this._entries.slice(); }
+  getEntriesByType(type) { return this._entries.filter(entry => entry.entryType === String(type)); }
+  getEntriesByName(name, type) { return this._entries.filter(entry => entry.name === String(name) && (type === undefined || entry.entryType === String(type))); }
+}
+class PerformanceObserver {
+  constructor(callback) {
+    if (typeof callback !== 'function') throw new TypeError('PerformanceObserver callback must be a function');
+    this._callback = callback; this._types = new Set(); this._records = [];
+  }
+  observe(options = {}) {
+    const types = options.entryTypes !== undefined ? Array.from(options.entryTypes, String) :
+      options.type !== undefined ? [String(options.type)] : [];
+    if (!types.length) throw new TypeError('PerformanceObserver requires type or entryTypes');
+    this._types = new Set(types); performanceObservers.add(this);
+    if (options.buffered) {
+      this._records.push(...timeline.filter(entry => this._types.has(entry.entryType)));
+      queuePerformanceDelivery();
+    }
+  }
+  disconnect() { performanceObservers.delete(this); this._records = []; this._types.clear(); }
+  takeRecords() { const records = this._records; this._records = []; return records; }
+}
+PerformanceObserver.supportedEntryTypes = Object.freeze(['mark','measure','resource','navigation','paint']);
+globalThis.PerformanceObserver = PerformanceObserver;
+globalThis.PerformanceObserverEntryList = PerformanceObserverEntryList;
+function queuePerformanceDelivery() {
+  if (performanceDeliveryQueued) return;
+  performanceDeliveryQueued = true;
+  queueMicrotask(() => {
+    performanceDeliveryQueued = false;
+    for (const observer of [...performanceObservers]) {
+      const records = observer.takeRecords();
+      if (records.length) observer._callback(new PerformanceObserverEntryList(records), observer);
+    }
+  });
+}
+function addPerformanceEntry(entry) {
+  timeline.push(entry);
+  for (const observer of performanceObservers)
+    if (observer._types.has(entry.entryType)) observer._records.push(entry);
+  queuePerformanceDelivery();
+  return entry;
+}
 performance.getEntries = () => timeline.slice();
 performance.getEntriesByType = type => timeline.filter(entry => entry.entryType === String(type));
 performance.getEntriesByName = (name,type) => timeline.filter(entry => entry.name === String(name) && (type === undefined || entry.entryType === type));
-performance.mark = name => { const entry = {name:String(name), entryType:'mark', startTime:performance.now(), duration:0}; timeline.push(entry); return entry; };
+performance.mark = name => addPerformanceEntry({name:String(name), entryType:'mark', startTime:performance.now(), duration:0});
 performance.measure = (name,start,end) => {
   const resolve = value => typeof value === 'number' ? value : timeline.findLast(e=>e.name===value&&e.entryType==='mark')?.startTime;
   let a=0,b=performance.now();
   if (start && typeof start === 'object') {a=start.start===undefined?0:resolve(start.start);b=start.end===undefined?b:resolve(start.end);if(start.duration!==undefined)b=a+Number(start.duration);}
   else {if(start!==undefined)a=resolve(start);if(end!==undefined)b=resolve(end);}
   if(a===undefined||b===undefined)throw new DOMException('Mark not found','SyntaxError');
-  const entry={name:String(name),entryType:'measure',startTime:a,duration:b-a};timeline.push(entry);return entry;
+  return addPerformanceEntry({name:String(name),entryType:'measure',startTime:a,duration:b-a});
 };
 performance.clearMeasures = name => {for(let i=timeline.length-1;i>=0;i--)if(timeline[i].entryType==='measure'&&(name===undefined||timeline[i].name===name))timeline.splice(i,1);};
 performance.clearMarks = name => { for (let i=timeline.length-1;i>=0;i--) if (timeline[i].entryType === 'mark' && (name === undefined || timeline[i].name === name)) timeline.splice(i,1); };
@@ -370,7 +417,7 @@ globalThis.fetch=function(input,init={}) {
     resource.signal?.addEventListener('abort',abort,{once:true});
     id=request(resource.method,resource.url,resource._body instanceof Blob?'':String(resource._body||''),
       [...resource.headers].map(([name,value])=>name+':'+value).join('\n'),
-      (status,text,url,mime)=>{if(settled)return;settled=true;const headers=new Headers();if(mime)headers.set('content-type',mime);resolve(new Response(text,{status,url,headers}));},
+      (status,bytes,url,mime)=>{if(settled)return;settled=true;const headers=new Headers();if(mime)headers.set('content-type',mime);resolve(new Response(new Blob([bytes],{type:mime}),{status,url,headers}));},
       ()=>{if(settled)return;settled=true;reject(new TypeError('Failed to fetch'));});
   });
 };
@@ -437,15 +484,18 @@ class XMLHttpRequest {
     if (this.readyState !== 1 || this._sent) throw new Error('InvalidStateError');
     this._sent = true; this._fire('loadstart'); const generation = this._generation;
     const started = this._started = performance.now();
-    this._requestId = request(this._method, this._url, body == null ? '' : String(body), Object.entries(this._headers).map(([k,v])=>k+':'+v).join('\n'), (status, text, url, mime) => {
+    this._requestId = request(this._method, this._url, body == null ? '' : String(body), Object.entries(this._headers).map(([k,v])=>k+':'+v).join('\n'), (status, bytes, url, mime) => {
       if (generation !== this._generation) return;
       timeline.push({name:url, entryType:'resource', initiatorType:'xmlhttprequest',
                      startTime:started, duration:performance.now()-started});
       this._requestId = 0; clearTimeout(this._timeoutId);
       this.status = status; this.responseURL = url; this._mime = this._overrideMime || mime;
       this.readyState = 2; this._fire('readystatechange');
+      const text = new TextDecoder().decode(bytes);
       this.responseText = text; this.readyState = 3; this._fire('readystatechange'); this._fire('progress');
-      this.response = this.responseType === 'json' ? JSON.parse(text) : text;
+      this.response = this.responseType === 'arraybuffer' ? bytes.slice(0)
+        : this.responseType === 'blob' ? new Blob([bytes], {type:this._mime})
+        : this.responseType === 'json' ? JSON.parse(text) : text;
       this.readyState = 4; this._sent = false; this._fire('readystatechange'); this._fire('load'); this._fire('loadend');
     }, () => {
       if (generation !== this._generation) return;
