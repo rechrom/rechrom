@@ -25,8 +25,8 @@ fn on_layout_thread(test: impl FnOnce() + Send + 'static) {
 #[test]
 fn changed_samples_publish_new_immutable_records_without_zero_time_churn() {
     on_layout_thread(|| {
-        let assembly = rechrom::CreateLayoutAssembly();
-        let constraints = rechrom::CreateBrowserConstraints(320, 200);
+        let assembly = browser::CreateLayoutAssembly();
+        let constraints = browser::CreateBrowserConstraints(320, 200);
         let mut decoder = SVGImageDecoder::new_with_constraints(&assembly, &constraints);
         let container = ContainerKey::new(64, 32, 1.0, 1.0);
         let mut created = decoder
@@ -78,8 +78,8 @@ fn changed_samples_publish_new_immutable_records_without_zero_time_churn() {
 #[test]
 fn container_configuration_versions_the_record_cache_key() {
     on_layout_thread(|| {
-        let assembly = rechrom::CreateLayoutAssembly();
-        let constraints = rechrom::CreateBrowserConstraints(320, 200);
+        let assembly = browser::CreateLayoutAssembly();
+        let constraints = browser::CreateBrowserConstraints(320, 200);
         let mut decoder = SVGImageDecoder::new_with_constraints(&assembly, &constraints);
         let initial = ContainerKey::new(64, 32, 1.0, 1.0);
         let mut created = decoder

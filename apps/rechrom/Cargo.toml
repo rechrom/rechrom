@@ -25,7 +25,7 @@ devtools = { path = "../../crates/devtools" }
 foundation = { package = "layoutng_foundation", path = "../../crates/foundation" }
 paint = { path = "../../crates/paint" }
 skia = { path = "../../crates/skia" }
-rechrom = { path = "../../crates/rechrom" }
+browser = { path = "../../crates/browser" }
 renderer = { path = "../../crates/renderer" }
 raster = { path = "../../crates/raster", features = ["pure_replay"] }
 layer_tile = { path = "../../crates/layer_tile" }

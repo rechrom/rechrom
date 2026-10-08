@@ -217,6 +217,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "browser"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "compositor",
+ "cssom",
+ "document_image",
+ "document_loader",
+ "dom",
+ "font_engine",
+ "html",
+ "image_decoder",
+ "image_resource",
+ "interaction",
+ "javascript",
+ "layer_tile",
+ "layoutng_assembly",
+ "layoutng_block",
+ "layoutng_flex",
+ "layoutng_float",
+ "layoutng_forms",
+ "layoutng_foundation",
+ "layoutng_grid",
+ "layoutng_list",
+ "layoutng_out_of_flow",
+ "layoutng_replaced",
+ "layoutng_style",
+ "layoutng_svg",
+ "layoutng_table",
+ "page_mutation",
+ "paint",
+ "raster",
+ "renderer",
+ "url",
+ "url_loader",
+ "viz",
+ "web_font",
+ "webapi",
+ "xhr_transport",
+]
+
+[[package]]
 name = "browser_tracing"
 version = "0.0.1"
 dependencies = [
@@ -2698,51 +2740,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
-name = "rechrom"
-version = "0.0.1"
-dependencies = [
- "browser_tracing",
- "compositor",
- "cssom",
- "document_image",
- "document_loader",
- "dom",
- "font_engine",
- "html",
- "image_decoder",
- "image_resource",
- "interaction",
- "javascript",
- "layer_tile",
- "layoutng_assembly",
- "layoutng_block",
- "layoutng_flex",
- "layoutng_float",
- "layoutng_forms",
- "layoutng_foundation",
- "layoutng_grid",
- "layoutng_list",
- "layoutng_out_of_flow",
- "layoutng_replaced",
- "layoutng_style",
- "layoutng_svg",
- "layoutng_table",
- "page_mutation",
- "paint",
- "raster",
- "renderer",
- "url",
- "url_loader",
- "viz",
- "web_font",
- "webapi",
- "xhr_transport",
-]
-
-[[package]]
 name = "rechrom_app"
 version = "0.0.1"
 dependencies = [
+ "browser",
  "browser_tracing",
  "cc",
  "compositor",
@@ -2762,7 +2763,6 @@ dependencies = [
  "png",
  "raster",
  "raw-window-handle",
- "rechrom",
  "renderer",
  "serde_json",
  "skia",

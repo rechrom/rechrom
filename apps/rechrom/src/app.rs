@@ -525,13 +525,13 @@ impl ApplicationHandler<UserEvent> for App {
                     self.send(command);
                 }
                 if !active {
-                    crate::input::set_cursor(window, rechrom::page::Cursor::kDefault);
+                    crate::input::set_cursor(window, browser::page::Cursor::kDefault);
                 }
                 self.send(Command::SetActive(*active));
             }
             _ => {
                 if matches!(&event, WindowEvent::CursorLeft { .. }) {
-                    crate::input::set_cursor(window, rechrom::page::Cursor::kDefault);
+                    crate::input::set_cursor(window, browser::page::Cursor::kDefault);
                 }
                 let scale = window.scale_factor();
                 for command in self.input.event(&event, scale) {

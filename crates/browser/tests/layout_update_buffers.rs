@@ -33,7 +33,7 @@ fn project(engine: &mut LayoutEngine, ids: &[u64]) {
 }
 
 fn new_engine(space: &ConstraintSpace) -> LayoutEngine {
-    let assembly = rechrom::CreateLayoutAssembly();
+    let assembly = browser::CreateLayoutAssembly();
     let mut engine = LayoutEngine::new(&assembly);
     engine.ApplyMutation(LayoutMutation::Constraints(space));
     engine.ApplyMutation(LayoutMutation::ReplaceTree(
@@ -68,7 +68,7 @@ fn layout_geometry(engine: &mut LayoutEngine) -> Vec<(u64, f64, f64, f64, f64)> 
 #[test]
 fn complete_tree_updates_survive_reorder_removal_and_failed_build() {
     native_test_thread::run(|| {
-        let space = rechrom::CreateBrowserConstraints(320, 240);
+        let space = browser::CreateBrowserConstraints(320, 240);
         let mut engine = new_engine(&space);
         for ids in [
             &[2, 3, 4][..],
@@ -166,7 +166,7 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
                 ..Default::default()
             },
         );
-        let mut space = rechrom::CreateBrowserConstraints(320, 240);
+        let mut space = browser::CreateBrowserConstraints(320, 240);
         for (id, width, height, color) in [
             (100, 12, 7, [255, 0, 0, 255]),
             (200, 52, 29, [0, 0, 255, 255]),
@@ -181,7 +181,7 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
                     ..Default::default()
                 });
         }
-        let assembly = rechrom::CreateLayoutAssembly();
+        let assembly = browser::CreateLayoutAssembly();
         let mut engine = LayoutEngine::new(&assembly);
         let mut extra = None;
         for step in 0..10 {
@@ -233,7 +233,7 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
                 _ => {}
             }
             dom::style_resolver::ResolveComputedStyles(&mut owner, &Default::default(), &[]);
-            let actual = rechrom::LayoutPersistentDocument(
+            let actual = browser::LayoutPersistentDocument(
                 &mut engine,
                 &mut owner,
                 &Default::default(),
@@ -246,7 +246,7 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
                 assert_eq!(resident.UpdateStats().updated, 0);
             }
             let mut fresh_engine = LayoutEngine::new(&assembly);
-            let fresh = rechrom::LayoutPersistentDocument(
+            let fresh = browser::LayoutPersistentDocument(
                 &mut fresh_engine,
                 &mut owner,
                 &Default::default(),

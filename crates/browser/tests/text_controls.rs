@@ -3,7 +3,7 @@ mod native_test_thread;
 use document_image::SVGImageDecoder;
 use image_decoder::skia_image_decoder::SkiaImageDecoder;
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
-use rechrom::page::Page;
+use browser::page::Page;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 struct Operation(Option<URLResponse>);
@@ -34,8 +34,8 @@ impl xhr_transport::XMLHttpRequestTransport for XHR {
 }
 
 fn editing_fixture() -> Page {
-    let assembly = rechrom::CreateLayoutAssembly();
-    let mut space = rechrom::CreateBrowserConstraints(640, 480);
+    let assembly = browser::CreateLayoutAssembly();
+    let mut space = browser::CreateBrowserConstraints(640, 480);
     space.fonts = vec![layoutng_assembly::internal::layout_input::FontFace {
         family: "sans-serif".into(),
         bytes: include_bytes!(
@@ -50,7 +50,7 @@ fn editing_fixture() -> Page {
         Rc::new(RefCell::new(SkiaImageDecoder)),
         Rc::new(RefCell::new(SVGImageDecoder::new(&assembly))),
         space,
-        Some(rechrom::page::ScriptEnvironment {
+        Some(browser::page::ScriptEnvironment {
             runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
                 4 * 1024 * 1024,
             )),

@@ -615,8 +615,8 @@ mod tests {
 
 /// Native cursor adaptation is deliberately the last boundary: Page/interaction
 /// never depends on winit or platform cursor handles.
-pub fn set_cursor(window: &winit::window::Window, cursor: rechrom::page::Cursor) {
-    use rechrom::page::Cursor as C;
+pub fn set_cursor(window: &winit::window::Window, cursor: browser::page::Cursor) {
+    use browser::page::Cursor as C;
     use winit::window::CursorIcon as W;
     window.set_cursor_visible(cursor != C::kNone);
     if cursor == C::kNone {

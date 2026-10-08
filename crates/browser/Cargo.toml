@@ -1,5 +1,5 @@
 [package]
-name = "rechrom"
+name = "browser"
 version = "0.0.1"
 edition = "2021"
 

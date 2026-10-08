@@ -22,7 +22,7 @@ LayerTileEngine
 Renderer / Display
 ```
 
-The repository is organized around importable engine crates. [`crates/rechrom`](crates/rechrom) is the main integration library. [`apps/rechrom`](apps/rechrom) is the desktop browser shell and stays outside the reusable engine packages.
+The repository is organized around importable engine crates. [`crates/browser`](crates/browser) is the main integration library. [`apps/rechrom`](apps/rechrom) is the desktop browser shell and stays outside the reusable engine packages.
 
 The current implementation includes:
 
@@ -51,14 +51,14 @@ open "target/Rechrom.app"
 To build only the reusable integration crate:
 
 ```bash
-cargo build -p rechrom
+cargo build -p browser
 ```
 
 ## Repository layout
 
 ```text
 apps/rechrom/       desktop browser shell
-crates/rechrom/     public engine integration crate
+crates/browser/     public engine integration crate
 crates/dom/         DOM ownership and mutation routing
 crates/layoutng_*/  layout algorithms and fragment output
 crates/paint/       pre-paint state and PaintArtifact generation

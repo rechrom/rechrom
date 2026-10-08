@@ -7,7 +7,7 @@ use interaction::input_event::{
     InputEvent, MouseButton, MouseEvent, MouseEventType, WheelEvent, WheelPhase,
 };
 use layoutng_assembly::internal::layout_input::Offset;
-use rechrom::page::Page;
+use browser::page::Page;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -32,12 +32,12 @@ impl URLLoader for FixtureLoader {
 }
 
 fn fixture(body: &'static [u8]) -> Page {
-    let assembly = rechrom::CreateLayoutAssembly();
+    let assembly = browser::CreateLayoutAssembly();
     let mut page = Page::Create(
         Rc::new(RefCell::new(FixtureLoader(body))),
         Rc::new(RefCell::new(SkiaImageDecoder)),
         Rc::new(RefCell::new(SVGImageDecoder::new(&assembly))),
-        rechrom::CreateBrowserConstraints(320, 200),
+        browser::CreateBrowserConstraints(320, 200),
         None,
         None,
     );

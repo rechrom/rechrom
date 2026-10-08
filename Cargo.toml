@@ -48,7 +48,7 @@ members = [
     "crates/webapi",
     "crates/interaction",
     "crates/page_mutation",
-    "crates/rechrom",
+    "crates/browser",
     "apps/rechrom",
 ]
 # These source trees have reciprocal C++ dependencies and compile through

@@ -14,7 +14,7 @@ use layoutng_assembly::{
     internal::layout_input::{Offset, Size},
 };
 use page_mutation::PageMutation;
-use rechrom::page::{Page, PageClient};
+use browser::page::{Page, PageClient};
 use skia::compat::surface::RasterSurface;
 use std::{
     cell::{Cell, RefCell},
@@ -85,8 +85,8 @@ pub enum UserEvent {
     Location(String),
     Message(String),
     Fatal(FatalError),
-    CursorChanged(rechrom::page::Cursor),
-    CaretChanged(Option<rechrom::page::CaretRect>),
+    CursorChanged(browser::page::Cursor),
+    CaretChanged(Option<browser::page::CaretRect>),
 }
 #[derive(Clone)]
 pub enum Command {
@@ -932,12 +932,12 @@ fn compatible_wheel_delta(a: Offset, b: Offset) -> bool {
 struct HostFeedback {
     in_toolbar: Cell<bool>,
     active_tab: Cell<u64>,
-    navigations: RefCell<VecDeque<(u64, u64, rechrom::page::NavigationRequest)>>,
-    cursor: Cell<rechrom::page::Cursor>,
+    navigations: RefCell<VecDeque<(u64, u64, browser::page::NavigationRequest)>>,
+    cursor: Cell<browser::page::Cursor>,
     output: Output,
 }
 impl HostFeedback {
-    fn publish(&self, cursor: rechrom::page::Cursor, toolbar: bool, force: bool) {
+    fn publish(&self, cursor: browser::page::Cursor, toolbar: bool, force: bool) {
         if self.in_toolbar.get() != toolbar {
             return;
         }
@@ -962,7 +962,7 @@ struct Client {
     started: Instant,
 }
 impl PageClient for Client {
-    fn DidRequestNavigation(&mut self, request: &rechrom::page::NavigationRequest) {
+    fn DidRequestNavigation(&mut self, request: &browser::page::NavigationRequest) {
         if !self.toolbar {
             self.pointer.navigations.borrow_mut().push_back((
                 self.tab_id,
@@ -971,7 +971,7 @@ impl PageClient for Client {
             ));
         }
     }
-    fn DidChangeCursor(&mut self, cursor: rechrom::page::Cursor) {
+    fn DidChangeCursor(&mut self, cursor: browser::page::Cursor) {
         if self.toolbar || self.pointer.active_tab.get() == self.tab_id {
             self.pointer.publish(cursor, self.toolbar, true);
         }
@@ -984,7 +984,7 @@ impl PageClient for Client {
             );
         }
     }
-    fn DidPresentFrame(&mut self, frame: &rechrom::page::PageFrame) {
+    fn DidPresentFrame(&mut self, frame: &browser::page::PageFrame) {
         if std::env::var_os("BROWSER_APP_TRACE_INPUT").is_some() {
             if let Some(caret) = frame.display_items.caret {
                 eprintln!(
@@ -1045,16 +1045,16 @@ fn create_page(
     let images = Rc::new(RefCell::new(
         image_decoder::skia_image_decoder::SkiaImageDecoder,
     ));
-    let assembly = rechrom::CreateLayoutAssembly();
+    let assembly = browser::CreateLayoutAssembly();
     let mut constraints =
-        rechrom::CreateBrowserConstraints(width.ceil() as u32, height.ceil() as u32);
+        browser::CreateBrowserConstraints(width.ceil() as u32, height.ceil() as u32);
     constraints.available_size = Size { width, height };
     constraints.device_pixel_ratio = scale;
     let document_images = Rc::new(RefCell::new(
         document_image::SVGImageDecoder::new_with_constraints(&assembly, &constraints),
     ));
     let environment = if scripting {
-        Some(rechrom::page::ScriptEnvironment {
+        Some(browser::page::ScriptEnvironment {
             // This embedding owns a 16 MiB thread. The unoptimized translated
             // VM uses about 87 KiB per call; retain 8 MiB for host/layout frames.
             runtime: Box::new(javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(8 * 1024 * 1024)),
@@ -1204,7 +1204,7 @@ struct BrowserState {
     toolbar_focused: bool,
     content_pointer_position: Option<Offset>,
     pointer: Rc<HostFeedback>,
-    caret_rect: Option<rechrom::page::CaretRect>,
+    caret_rect: Option<browser::page::CaretRect>,
     active: bool,
     last_frame: Option<(u64, u64, Viewport)>,
     failed_frame: Option<(u64, u64, Viewport)>,
@@ -1255,7 +1255,7 @@ impl BrowserState {
             in_toolbar: Cell::new(false),
             active_tab: Cell::new(1),
             navigations: RefCell::new(VecDeque::new()),
-            cursor: Cell::new(rechrom::page::Cursor::kDefault),
+            cursor: Cell::new(browser::page::Cursor::kDefault),
             output: output.clone(),
         });
         let mut toolbar = create_page(
@@ -2012,7 +2012,7 @@ impl BrowserState {
     }
     fn record_frame_input_dispatches(&mut self) {
         let profile = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
-        let record = |target_id, event: rechrom::page::DispatchedFrameInput| {
+        let record = |target_id, event: browser::page::DispatchedFrameInput| {
             let _input_scope = browser_tracing::scope(browser_tracing::Context {
                 target_id,
                 input_id: browser_tracing::instant_id(event.queued_at),
@@ -3186,7 +3186,7 @@ impl BrowserState {
                     self.content_press_discarded = true;
                 }
                 self.pointer
-                    .publish(rechrom::page::Cursor::kDefault, false, false);
+                    .publish(browser::page::Cursor::kDefault, false, false);
                 return Ok(());
             }
             if self.content_press_discarded {
@@ -3334,7 +3334,7 @@ impl BrowserState {
                 .page
                 .as_ref()
                 .and_then(Page::Caret)
-                .map(|caret| rechrom::page::CaretRect {
+                .map(|caret| browser::page::CaretRect {
                     y: caret.rect.y + TOOLBAR_HEIGHT,
                     ..caret.rect
                 })
@@ -3353,7 +3353,7 @@ impl BrowserState {
                 .active
                 .page
                 .as_ref()
-                .map_or(rechrom::page::Cursor::kDefault, Page::Cursor)
+                .map_or(browser::page::Cursor::kDefault, Page::Cursor)
         };
         self.pointer.publish(cursor, toolbar, false);
     }
@@ -4429,7 +4429,7 @@ mod tests {
 
     #[test]
     fn background_page_feedback_cannot_change_the_visible_cursor() {
-        use rechrom::page::Cursor;
+        use browser::page::Cursor;
         let cursors = Arc::new(Mutex::new(Vec::new()));
         let output = Output {
             mailbox: Arc::new(Mutex::new(None)),
@@ -6078,7 +6078,7 @@ mod tests {
             .unwrap()
             .location
             .ends_with("/background"));
-        let stale = rechrom::page::NavigationRequest {
+        let stale = browser::page::NavigationRequest {
             request: url_loader::URLRequest {
                 url: format!("http://{address}/stale"),
                 ..Default::default()
@@ -6627,7 +6627,7 @@ mod tests {
     }
 
     fn repeated_cursor_moves_survive_self_posting_script_tasks() {
-        use rechrom::page::Cursor;
+        use browser::page::Cursor;
         let cursors = Arc::new(Mutex::new(Vec::new()));
         let captured = cursors.clone();
         let output = Output {
@@ -6701,7 +6701,7 @@ mod tests {
     }
 
     fn article_cursor_follows_the_hit_text_and_link_style() {
-        use rechrom::page::Cursor;
+        use browser::page::Cursor;
         let output = Output {
             mailbox: Arc::new(Mutex::new(None)),
             notify: Arc::new(|_| {}),
@@ -6868,7 +6868,7 @@ mod tests {
     }
 
     fn coordinate_input_and_cursor_use_resolved_styles() {
-        use rechrom::page::Cursor;
+        use browser::page::Cursor;
         let cursors = Arc::new(Mutex::new(Vec::new()));
         let observed = cursors.clone();
         let output = Output {

@@ -1,4 +1,4 @@
-use rechrom::page::Page;
+use browser::page::Page;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Disposition {

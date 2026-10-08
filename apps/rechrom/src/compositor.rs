@@ -30,7 +30,7 @@ pub(crate) struct ArtifactSnapshot {
     pub content: Option<Arc<PaintArtifact>>,
     pub drag_regions: Vec<crate::chrome::DragRegion>,
     pub async_root_scroll: bool,
-    pub blocking_wheel_regions: rechrom::page::BlockingWheelEventRegions,
+    pub blocking_wheel_regions: browser::page::BlockingWheelEventRegions,
 }
 
 pub(crate) enum Command {

@@ -1,7 +1,7 @@
 #[path = "../src/native_test_thread.rs"]
 mod native_test_thread;
 
-use rechrom::page::Page;
+use browser::page::Page;
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -62,7 +62,7 @@ impl URLLoader for Loader {
 fn page() -> (Page, Events, Responses) {
     let body = Rc::new(RefCell::new(VecDeque::new()));
     let resources = Rc::new(RefCell::new(HashMap::new()));
-    let assembly = rechrom::CreateLayoutAssembly();
+    let assembly = browser::CreateLayoutAssembly();
     let page = Page::Create(
         Rc::new(RefCell::new(Loader {
             body: body.clone(),
@@ -74,7 +74,7 @@ fn page() -> (Page, Events, Responses) {
         Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
             &assembly,
         ))),
-        rechrom::CreateBrowserConstraints(320, 200),
+        browser::CreateBrowserConstraints(320, 200),
         None,
         None,
     );
