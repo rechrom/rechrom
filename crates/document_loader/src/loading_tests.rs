@@ -301,15 +301,21 @@ impl ResourceFetcherClient for Client {
     }
 }
 fn fetcher(backend: Rc<RefCell<dyn URLLoader>>) -> ResourceFetcher {
-    ResourceFetcher::new(
-        backend,
+    let decode = Rc::new(decode::DecodeEngine::WithDecoders(
         Rc::new(RefCell::new(Images)),
         Rc::new(RefCell::new(DocumentImages)),
+    ));
+    let resources = Rc::new(resource::ResourceEngine::WithDecodeEngine(
+        backend,
+        decode,
+        "https://page.test/root/entry".into(),
+    ));
+    ResourceFetcher::WithEngine(
+        resources,
         Rc::new(RefCell::new(DOM::new())),
         Rc::new(RefCell::new(
             layoutng_assembly::internal::layout_input::ConstraintSpace::default(),
         )),
-        "https://page.test/root/entry".into(),
     )
 }
 #[test]

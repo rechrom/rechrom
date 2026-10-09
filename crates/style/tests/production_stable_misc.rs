@@ -1,10 +1,9 @@
 use foundation::{CSSPropertyID as P, String};
 use layoutng_style::style::computed_style::ComputedStyle;
 use style::{
-    StyleEngine,
     media_queries::MediaValuesCachedData,
     parser::{css_parser_mode::CSSParserMode, production_property_parser::ParseProperty},
-    production_css_value as values,
+    production_css_value as values, StyleEngine,
 };
 fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();

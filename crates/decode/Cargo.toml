@@ -1,0 +1,9 @@
+[package]
+name = "decode"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+image_decoder = { path = "../image_decoder" }
+image_resource = { path = "../image_resource" }
+web_font = { path = "../web_font" }

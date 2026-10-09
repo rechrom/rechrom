@@ -1,0 +1,11 @@
+[package]
+name = "document"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+animation = { path = "../animation" }
+cssom = { path = "../cssom" }
+dom = { path = "../dom" }
+html = { path = "../html" }
+layoutng_assembly = { path = "../layoutng_assembly" }

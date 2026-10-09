@@ -1073,7 +1073,12 @@ impl StyleBuilderConverter {
         if b.Identifier(v) == Some(zero) {
             return 0;
         }
-        Self::ConvertFlagsFromBits(b.List(v).expect("flags list").iter().map(|value| b.IdentifierFlags(value)))
+        Self::ConvertFlagsFromBits(
+            b.List(v)
+                .expect("flags list")
+                .iter()
+                .map(|value| b.IdentifierFlags(value)),
+        )
     }
     // style_builder_converter.h:490-502. Shared native flag accumulation for
     // the generic converter and typed production values.
@@ -1547,8 +1552,12 @@ use layoutng_style::{
 // cpp: style_builder_converter.cc:1846-1895. One native conversion shared by
 // the source backend and production typed value bridge.
 pub fn ConvertGridLanesDirectionIdentifiers(values: &[CSSValueID]) -> Option<GridLanesDirection> {
-    if values == [CSSValueID::kNormal] { return Some(GridLanesDirection::default()); }
-    if values.is_empty() || values.len() > 3 { return None; }
+    if values == [CSSValueID::kNormal] {
+        return Some(GridLanesDirection::default());
+    }
+    if values.is_empty() || values.len() > 3 {
+        return None;
+    }
     let orientation = match values[0] {
         CSSValueID::kRow => GridLanesOrientation::kRow,
         CSSValueID::kColumn => GridLanesOrientation::kColumn,
@@ -1750,9 +1759,12 @@ impl StyleBuilderConverter {
         result
     }
     pub fn ConvertPlainGridTrackListFromSizes(sizes: &[GridTrackSize]) -> ComputedGridTrackList {
-        let mut result = ComputedGridTrackList::new(&GridTrackList::default(), AutoRepeatType::kNoAutoRepeat);
+        let mut result =
+            ComputedGridTrackList::new(&GridTrackList::default(), AutoRepeatType::kNoAutoRepeat);
         for size in sizes {
-            result.GetMutableTrackList().AddRepeaterDefault(&vec![size.clone()]);
+            result
+                .GetMutableTrackList()
+                .AddRepeaterDefault(&vec![size.clone()]);
         }
         result
     }
@@ -1785,11 +1797,17 @@ impl StyleBuilderConverter {
         let mut result =
             ComputedGridTrackList::new(&GridTrackList::default(), AutoRepeatType::kNoAutoRepeat);
         let values = b.List(v).expect("grid track list");
-        if values.iter().all(|value| !b.IsGridLineNames(value)
-            && b.Identifier(value) != Some(CSSValueID::kSubgrid)
-            && b.GridAutoRepeat(value).is_none()
-            && b.GridIntegerRepeat(&s.CssToLengthConversionData(),value).is_none()) {
-            let sizes = values.iter().map(|value| Self::ConvertGridTrackSize(b,s,value)).collect::<Vec<_>>();
+        if values.iter().all(|value| {
+            !b.IsGridLineNames(value)
+                && b.Identifier(value) != Some(CSSValueID::kSubgrid)
+                && b.GridAutoRepeat(value).is_none()
+                && b.GridIntegerRepeat(&s.CssToLengthConversionData(), value)
+                    .is_none()
+        }) {
+            let sizes = values
+                .iter()
+                .map(|value| Self::ConvertGridTrackSize(b, s, value))
+                .collect::<Vec<_>>();
             return Some(Self::ConvertPlainGridTrackListFromSizes(&sizes));
         }
         let mut index = 0;
@@ -1918,7 +1936,10 @@ impl StyleBuilderConverter {
             return ConvertGridLanesDirectionIdentifiers(&[id]).expect("normal direction");
         }
         let list = b.List(v).expect("grid lanes list");
-        let identifiers = list.iter().map(|v| b.Identifier(v).expect("grid lanes identifier")).collect::<Vec<_>>();
+        let identifiers = list
+            .iter()
+            .map(|v| b.Identifier(v).expect("grid lanes identifier"))
+            .collect::<Vec<_>>();
         ConvertGridLanesDirectionIdentifiers(&identifiers).expect("valid grid lanes direction")
     }
     pub fn ConvertScrollMarkerGroup<B: StyleBuilderConverterBatch2Backend>(

@@ -4,13 +4,12 @@ use font_engine::fonts::font_palette::{
 use foundation::{CSSPropertyID as P, CSSValueID as V, String};
 use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 use style::{
-    StyleEngine,
     media_queries::MediaValuesCachedData,
     parser::{
         css_parser_mode::CSSParserMode as M,
         production_property_parser::{ParseProperty, PropertyParseErrorKind},
     },
-    production_css_value as values,
+    production_css_value as values, StyleEngine,
 };
 fn native<'a>(d: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = d.GetDocument();
@@ -56,12 +55,10 @@ fn palettes_retain_native_owner_name_and_css_wide_inheritance() {
         assert!(std::sync::Arc::ptr_eq(&p, &child));
     }
     for id in ["i", "n"] {
-        assert!(
-            native(&d, id)
-                .GetFontDescription()
-                .FontPaletteValue()
-                .is_none()
-        );
+        assert!(native(&d, id)
+            .GetFontDescription()
+            .FontPaletteValue()
+            .is_none());
     }
     assert_eq!(
         native(&d, "l")

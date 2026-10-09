@@ -1,9 +1,7 @@
 #![allow(non_snake_case)]
 
-use cssom::{CSSFontFaceRule, CSSStyleSheet};
-use dom::ResolvedStyles;
-use layoutng_assembly::internal::layout_input::{FontFace, FontUnicodeRange};
-use std::{collections::HashSet, io};
+use cssom::CSSFontFaceRule;
+use layoutng_assembly::internal::layout_input::FontUnicodeRange;
 
 fn Unquote(text: &str) -> &str {
     let text = text.trim();
@@ -219,92 +217,6 @@ pub(crate) fn QueueFontFace(rule: &CSSFontFaceRule) -> Option<PendingFontFace> {
         italic,
         unicode_ranges: ParseUnicodeRanges(&unicode_ranges),
     })
-}
-
-// cpp: browser/browser.cc:1174-1236
-pub fn LoadUsedFontFaces(
-    sheets: &[CSSStyleSheet],
-    styles: &ResolvedStyles,
-    mut load: impl FnMut(&str) -> io::Result<Vec<u8>>,
-) -> Vec<FontFace> {
-    let used = styles
-        .styles
-        .iter()
-        .flat_map(|s| s.extended.iter())
-        .flat_map(|e| e.font_families.iter())
-        .map(|name| name.to_ascii_lowercase())
-        .collect::<HashSet<_>>();
-    LoadFontFacesForFamilies(sheets, used, &mut load)
-}
-
-/// Load the `@font-face` records referenced by the document's computed
-/// font-family values.  The persistent StyleEngine owns those values; this
-/// resource helper deliberately receives only their names and does not depend
-/// on style resolution or DOM traversal.
-pub fn LoadUsedFontFacesForFamilies(
-    sheets: &[CSSStyleSheet],
-    families: impl IntoIterator<Item = String>,
-    mut load: impl FnMut(&str) -> io::Result<Vec<u8>>,
-) -> Vec<FontFace> {
-    let used = families
-        .into_iter()
-        .map(|name| name.to_ascii_lowercase())
-        .collect::<HashSet<_>>();
-    LoadFontFacesForFamilies(sheets, used, &mut load)
-}
-
-fn LoadFontFacesForFamilies(
-    sheets: &[CSSStyleSheet],
-    used: HashSet<String>,
-    load: &mut impl FnMut(&str) -> io::Result<Vec<u8>>,
-) -> Vec<FontFace> {
-    let mut pending = Vec::<PendingFontFace>::new();
-    for sheet in sheets {
-        for rule in &sheet.font_faces {
-            let Some(face) = QueueFontFace(rule) else {
-                continue;
-            };
-            if !used.contains(&face.family.to_ascii_lowercase()) {
-                continue;
-            }
-            if pending.iter().any(|existing| {
-                existing.family.eq_ignore_ascii_case(&face.family)
-                    && existing.weight == face.weight
-                    && existing.italic == face.italic
-                    && existing.urls == face.urls
-            }) {
-                continue;
-            }
-            pending.push(face);
-        }
-    }
-    let mut loaded_urls = HashSet::new();
-    let mut fonts = Vec::new();
-    for face in pending {
-        for url in &face.urls {
-            if loaded_urls.contains(url) {
-                continue;
-            }
-            let Ok(bytes) = load(url) else { continue };
-            let Ok(bytes) = web_font::DecodeWebFont(bytes) else {
-                continue;
-            };
-            if bytes.is_empty() {
-                continue;
-            }
-            loaded_urls.insert(url.clone());
-            fonts.push(FontFace {
-                family: face.family.clone(),
-                weight: face.weight,
-                italic: face.italic,
-                bytes: bytes.into(),
-                unicode_ranges: face.unicode_ranges.clone(),
-                ..Default::default()
-            });
-            break;
-        }
-    }
-    fonts
 }
 
 #[cfg(test)]

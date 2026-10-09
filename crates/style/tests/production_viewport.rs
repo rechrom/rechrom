@@ -10,7 +10,6 @@ use style::{
         css_parser_mode::CSSParserMode,
         production_property_parser::{ParseProperty, PropertyParseErrorKind},
     },
-    properties::longhand_dispatch::LonghandApplicationError,
     resolver::production_style_builder::{Apply, StageFontDescription},
     StyleEngine,
 };
@@ -31,6 +30,8 @@ fn media() -> MediaValuesCachedData {
         media_type: CSSString::from("screen"),
         viewport_width: 800.,
         viewport_height: 600.,
+        large_viewport_width: 800.,
+        large_viewport_height: 600.,
         ..Default::default()
     }
 }
@@ -103,7 +104,11 @@ fn clip_rect_and_page_locale_reach_native_cascade_with_css_wide() {
             );
         }
     }
-    for id in ["p", "c", "r", "u", "bad"] {
+    assert_eq!(native(&owner, "p").Zoom(), 1.);
+    assert_eq!(native(&owner, "p").EffectiveZoom(), 1.);
+    assert_eq!(native(&owner, "c").Zoom(), 1.);
+    assert_eq!(native(&owner, "c").EffectiveZoom(), 1.);
+    for id in ["r", "u", "bad"] {
         let style = native(&owner, id);
         assert_eq!(style.Zoom(), 1.);
         assert_eq!(style.EffectiveZoom(), 1.);
@@ -202,7 +207,7 @@ fn page_size_typed_values_convert_to_native_unzoomed_dimensions() {
 }
 
 #[test]
-fn zoom_keeps_real_font_dirty_boundary_and_clip_keeps_typed_quad() {
+fn zoom_updates_effective_zoom_and_font_metrics_and_clip_keeps_typed_quad() {
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut b = ComputedStyleBuilder::from_style(initial);
@@ -228,22 +233,29 @@ fn zoom_keeps_real_font_dirty_boundary_and_clip_keeps_typed_quad() {
         assert_eq!(b.Zoom(), 1.);
         assert_eq!(b.EffectiveZoom(), 1.);
     }
-    let font = b.GetFontDescription().clone();
-    for text in ["2", "50%", "calc(2)", "calc(200%)"] {
+    for (text, expected) in [
+        ("2", 2.),
+        ("50%", 0.5),
+        ("calc(2)", 2.),
+        ("calc(200%)", 2.),
+        ("min(calc(100vw / 1000px), calc(300px / 1000px))", 0.3),
+    ] {
+        Apply(
+            P::kZoom,
+            &mut b,
+            None,
+            &parse(P::kZoom, text),
+            16.,
+            &media(),
+        )
+        .unwrap();
+        assert_eq!(b.Zoom(), expected, "{text}");
+        assert_eq!(b.EffectiveZoom(), expected, "{text}");
         assert_eq!(
-            Apply(
-                P::kZoom,
-                &mut b,
-                None,
-                &parse(P::kZoom, text),
-                16.,
-                &media()
-            ),
-            Err(LonghandApplicationError::Unsupported(P::kZoom))
+            b.GetFontDescription().ComputedSize(),
+            b.GetFontDescription().SpecifiedSize() * expected,
+            "{text}"
         );
-        assert_eq!(b.Zoom(), 1.);
-        assert_eq!(b.EffectiveZoom(), 1.);
-        assert!(b.GetFontDescription() == &font);
     }
     let value = parse(P::kClip, "rect(1px auto -3px 4px)");
     let CSSValuePayload::kQuadClass(rect) = value.Payload() else {

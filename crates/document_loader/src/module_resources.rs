@@ -2,7 +2,7 @@
 //! Document-scoped module requests, import map, compiled records and graph readiness.
 //! Pump never waits for a URL response; the engine resolver only reads this cache.
 use crate::{
-    resource_loader::{RequireResponse, ResourceLoader, StartResource},
+    resource_loader::{RequireResponse, ResourceLoader},
     text_decode::DecodeText,
     url_reference::ResolveUrl,
 };
@@ -11,6 +11,7 @@ use javascript::javascript_runtime::{
     JavaScriptModuleCompilationJob, JavaScriptModuleCompilationPoll, JavaScriptModuleResolver,
     JavaScriptModuleSource, JavaScriptRealm, JavaScriptRuntime,
 };
+use resource::ResourceEngine;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet, VecDeque},
@@ -55,7 +56,7 @@ enum ModuleState {
 }
 
 pub struct ModuleResources {
-    loader: Rc<RefCell<dyn URLLoader>>,
+    resources: Rc<ResourceEngine>,
     entries: RefCell<HashMap<ModuleKey, ModuleState>>,
     work: RefCell<VecDeque<ModuleKey>>,
     roots: RefCell<HashMap<u64, ModuleKey>>,
@@ -64,8 +65,13 @@ pub struct ModuleResources {
 }
 impl ModuleResources {
     pub fn new(loader: Rc<RefCell<dyn URLLoader>>) -> Self {
+        let resources = Rc::new(ResourceEngine::new(loader, String::new()));
+        Self::WithResourceEngine(resources)
+    }
+
+    pub fn WithResourceEngine(resources: Rc<ResourceEngine>) -> Self {
         Self {
-            loader,
+            resources,
             entries: RefCell::new(HashMap::new()),
             work: RefCell::new(VecDeque::new()),
             roots: RefCell::new(HashMap::new()),
@@ -92,15 +98,12 @@ impl ModuleResources {
         if self.entries.borrow().contains_key(&key) {
             return;
         }
-        let pending = StartResource(
-            &mut *self.loader.borrow_mut(),
-            &URLRequest {
-                url: url.to_owned(),
-                referrer: referrer.to_owned(),
-                destination: RequestDestination::kScript,
-                ..Default::default()
-            },
-        );
+        let pending = self.resources.Start(URLRequest {
+            url: url.to_owned(),
+            referrer: referrer.to_owned(),
+            destination: RequestDestination::kScript,
+            ..Default::default()
+        });
         self.entries
             .borrow_mut()
             .insert(key.clone(), ModuleState::Fetching(pending));

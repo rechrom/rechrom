@@ -234,7 +234,9 @@ fn paint_selector_attribute_mutations_preserve_provisional_measurement_geometry(
 #[test]
 fn changed_scroll_animation_viewport_font_and_image_invalidate_snapshot() {
     crate::native_test_thread::run(|| {
-        let state=state("<html><body><div id=s style='width:80px;height:20px;overflow:hidden'><div id=b style='width:40px;height:100px'></div></div></body></html>");
+        let state = state(
+            "<html><body><div id=s style='width:80px;height:20px;overflow:hidden'><div id=b style='width:40px;height:100px'></div></div></body></html>",
+        );
         let scroller = id(&state, "s");
         let node = id(&state, "b");
         let y = geometry(&state, node)[0].y;
@@ -252,6 +254,7 @@ fn changed_scroll_animation_viewport_font_and_image_invalidate_snapshot() {
                 declarations: style::ParseCSSDeclarationList("width:70px"),
                 ..Default::default()
             }],
+            ..Default::default()
         }));
         assert!(state.measurement.borrow().is_none());
         let _ = geometry(&state, node);
@@ -313,7 +316,7 @@ fn completed_frame_publishes_same_snapshot_without_a_second_measurement_layout()
         *page.state.document.borrow_mut() = html::html_parser::ParseHTML(
             "<html><body><div id=b style='width:40px;height:20px'></div></body></html>",
         );
-        page.document_started = true;
+        page.open_engine.AdoptDocument().unwrap();
         page.UpdateFrameIfNeeded().unwrap();
         let frame = page
             .frame
@@ -350,8 +353,10 @@ fn style_write_geometry_and_frame_share_one_layout_snapshot_and_match_fresh_pixe
             None,
             None,
         );
-        *page.state.document.borrow_mut()=html::html_parser::ParseHTML("<html><body style='margin:0'><div id=b style='width:40px;height:20px;background:red'></div></body></html>");
-        page.document_started = true;
+        *page.state.document.borrow_mut() = html::html_parser::ParseHTML(
+            "<html><body style='margin:0'><div id=b style='width:40px;height:20px;background:red'></div></body></html>",
+        );
+        page.open_engine.AdoptDocument().unwrap();
         page.UpdateFrameIfNeeded().unwrap();
         assert_eq!(page.state.full_layout_lifecycles.get(), 1);
         let node = id(&page.state, "b");
@@ -398,7 +403,9 @@ fn style_write_geometry_and_frame_share_one_layout_snapshot_and_match_fresh_pixe
         );
         // Obtain the comparison from a fresh resident native tree, not a second
         // paint of the reused fragment snapshot.
-        let mut owner=html::html_parser::ParseHTML("<html><body style='margin:0'><div id=b style='width:80px;height:20px;background:blue'></div></body></html>");
+        let mut owner = html::html_parser::ParseHTML(
+            "<html><body style='margin:0'><div id=b style='width:80px;height:20px;background:blue'></div></body></html>",
+        );
         crate::style_services::ResolveLayoutStyles(&mut owner, &page.state.constraints.borrow());
         let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutAssembly());
         let fresh = crate::LayoutPersistentDocument(
@@ -435,8 +442,10 @@ fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
             None,
             None,
         );
-        *page.state.document.borrow_mut()=html::html_parser::ParseHTML("<html><body style='margin:0'><div id=b style='width:40px;height:20px;background:red;opacity:.3'></div></body></html>");
-        page.document_started = true;
+        *page.state.document.borrow_mut() = html::html_parser::ParseHTML(
+            "<html><body style='margin:0'><div id=b style='width:40px;height:20px;background:red;opacity:.3'></div></body></html>",
+        );
+        page.open_engine.AdoptDocument().unwrap();
         page.UpdateFrameIfNeeded().unwrap();
         let node = id(&page.state, "b");
         let before = geometry(&page.state, node);
@@ -479,7 +488,9 @@ fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
             320,
             200,
         );
-        let mut owner=html::html_parser::ParseHTML("<html><body style='margin:0'><div id=b style='width:40px;height:20px;background:blue;opacity:.6'></div></body></html>");
+        let mut owner = html::html_parser::ParseHTML(
+            "<html><body style='margin:0'><div id=b style='width:40px;height:20px;background:blue;opacity:.6'></div></body></html>",
+        );
         crate::style_services::ResolveLayoutStyles(&mut owner, &page.state.constraints.borrow());
         let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutAssembly());
         let fresh = crate::LayoutPersistentDocument(

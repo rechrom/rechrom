@@ -4,10 +4,15 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+animation = { path = "../animation" }
 style = { path = "../style" }
 browser_tracing = { path = "../tracing" }
 url = "2"
 document_loader = { path = "../document_loader" }
+document = { path = "../document" }
+open = { path = "../open" }
+resource = { path = "../resource" }
+decode = { path = "../decode" }
 interaction = { path = "../interaction" }
 page_mutation = { path = "../page_mutation" }
 cssom = { path = "../cssom" }

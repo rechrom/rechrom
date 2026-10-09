@@ -2,9 +2,9 @@
 
 //! Source script scheduling over the persistent parser arena.
 
-use crate::script_execution::ParserScriptTasks;
+use crate::{dynamic_scripts::DynamicScriptTasks, script_execution::ParserScriptTasks};
 use document_loader::{DecodeText, DocumentLoader, ResolveCSSStyleSheetURLs, ResolveUrl};
-use document_loader::{RequireResponse, ResourceLoader, StartResource};
+use document_loader::{RequireResponse, ResourceLoader};
 use dom::persistent_document::DOMNodeType;
 use dom::{Document, DOM};
 use html::html_parser::{HTMLDocumentParser, HTMLParserStatus, ParserScript};
@@ -12,6 +12,7 @@ use html::html_parser_host::ParserElementPhase;
 use html::{HTMLParserHost, ParserElementEvent};
 use interaction::event::{EventListenerInvocation, EventPhase, EventType, MakeSyntheticEvent};
 use javascript::javascript_runtime::{JavaScriptException, JavaScriptRealm, JavaScriptRuntime};
+use resource::ResourceEngine;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -48,14 +49,14 @@ enum PendingStyle {
     },
 }
 struct ParserResources {
-    loader: Rc<RefCell<dyn URLLoader>>,
+    resources: Rc<ResourceEngine>,
     current_url: String,
     base_url: String,
     base_seen: bool,
     body_seen: bool,
     styles: VecDeque<PendingStyle>,
     page: Option<Rc<document_loader::ResourceFetcher>>,
-    dynamic: Option<std::rc::Weak<crate::dynamic_scripts::DynamicScriptTasks>>,
+    dynamic: Option<std::rc::Weak<DynamicScriptTasks>>,
     modules: Rc<document_loader::ModuleResources>,
     supports_modules: bool,
 }
@@ -95,7 +96,7 @@ impl HTMLParserHost for ParserHost {
                     destination: RequestDestination::kStyleSheet,
                     ..Default::default()
                 };
-                let resource = StartResource(&mut *resources.loader.borrow_mut(), &request);
+                let resource = resources.resources.Start(request);
                 let render_blocking = !resources.body_seen;
                 resources.styles.push_back(PendingStyle::External {
                     url,
@@ -310,7 +311,8 @@ pub struct ScriptScheduler {
     parsing_finished: bool,
     content_loaded: bool,
     started_scripts: crate::dynamic_scripts::StartedScripts,
-    interaction: crate::interaction_services::PageInteraction,
+    dynamic_scripts: Option<Rc<DynamicScriptTasks>>,
+    pending_host_errors: Option<Rc<dyn Fn() -> Vec<JavaScriptException>>>,
 }
 
 impl ScriptScheduler {
@@ -320,13 +322,8 @@ impl ScriptScheduler {
         loader: Rc<RefCell<dyn URLLoader>>,
         current_url: String,
     ) -> Self {
-        Self::WithInteractionState(
-            document,
-            bindings,
-            loader,
-            current_url,
-            Rc::new(RefCell::new(dom::UserInteractionState::default())),
-        )
+        let resources = Rc::new(ResourceEngine::new(loader, current_url));
+        Self::WithResourceEngine(document, bindings, resources, None)
     }
 
     pub fn WithInteractionState(
@@ -334,32 +331,32 @@ impl ScriptScheduler {
         bindings: Rc<RefCell<DOMJavaScriptBindings>>,
         loader: Rc<RefCell<dyn URLLoader>>,
         current_url: String,
-        state: Rc<RefCell<dom::UserInteractionState>>,
+        _state: Rc<RefCell<dom::UserInteractionState>>,
     ) -> Self {
-        let interaction = crate::interaction_services::PageInteraction::Install(
-            document.clone(),
-            &bindings,
-            state,
-        );
-        Self::WithPageInteraction(document, bindings, loader, current_url, interaction)
+        let resources = Rc::new(ResourceEngine::new(loader, current_url));
+        Self::WithResourceEngine(document, bindings, resources, None)
     }
 
-    pub(crate) fn WithPageInteraction(
+    pub fn WithResourceEngine(
         document: Rc<RefCell<DOM>>,
         bindings: Rc<RefCell<DOMJavaScriptBindings>>,
-        loader: Rc<RefCell<dyn URLLoader>>,
-        current_url: String,
-        interaction: crate::interaction_services::PageInteraction,
+        resources: Rc<ResourceEngine>,
+        pending_host_errors: Option<Rc<dyn Fn() -> Vec<JavaScriptException>>>,
     ) -> Self {
         let mut tasks = ParserScriptTasks::new(document.clone(), bindings.clone());
-        tasks.SetPendingHostErrors(interaction.ExceptionSource());
-        let modules = Rc::new(document_loader::ModuleResources::new(loader.clone()));
+        if let Some(source) = pending_host_errors.clone() {
+            tasks.SetPendingHostErrors(source);
+        }
+        let current_url = resources.DocumentURL();
+        let modules = Rc::new(document_loader::ModuleResources::WithResourceEngine(
+            resources.clone(),
+        ));
         Self {
             tasks,
             document,
             bindings,
             resources: Rc::new(RefCell::new(ParserResources {
-                loader,
+                resources,
                 base_url: current_url.clone(),
                 current_url,
                 base_seen: false,
@@ -379,7 +376,8 @@ impl ScriptScheduler {
             parsing_finished: false,
             content_loaded: false,
             started_scripts: Rc::new(RefCell::new(Default::default())),
-            interaction,
+            dynamic_scripts: None,
+            pending_host_errors,
         }
     }
 
@@ -405,22 +403,19 @@ impl ScriptScheduler {
     pub fn StartedScripts(&self) -> crate::dynamic_scripts::StartedScripts {
         self.started_scripts.clone()
     }
-    pub(crate) fn BeginTaskTurn(&mut self, nonblocking: bool) {
+    pub fn BeginTaskTurn(&mut self, nonblocking: bool) {
         self.remaining_script_tasks = nonblocking.then_some(1);
     }
-    pub(crate) fn HasTaskBudget(&self) -> bool {
+    pub fn HasTaskBudget(&self) -> bool {
         self.remaining_script_tasks
             .is_none_or(|remaining| remaining != 0)
     }
-    pub(crate) fn ConsumeTaskBudget(&mut self) {
+    pub fn ConsumeTaskBudget(&mut self) {
         if let Some(remaining) = &mut self.remaining_script_tasks {
             *remaining = remaining.saturating_sub(1);
         }
     }
-    pub fn InstallDynamicScripts(
-        &mut self,
-        dynamic: &Rc<crate::dynamic_scripts::DynamicScriptTasks>,
-    ) -> io::Result<()> {
+    pub fn InstallDynamicScripts(&mut self, dynamic: &Rc<DynamicScriptTasks>) -> io::Result<()> {
         if self.document_started {
             return Err(io::Error::other(
                 "dynamic scripts must be installed before parsing",
@@ -429,22 +424,25 @@ impl ScriptScheduler {
         if !dynamic.OwnsDocument(&self.document)
             || !dynamic.SharesStartedScripts(&self.started_scripts)
         {
-            return Err(io::Error::other("dynamic and parser scripts must share the persistent document and started-script registry"));
+            return Err(io::Error::other(
+                "dynamic and parser scripts must share the persistent document and started-script registry",
+            ));
         }
         dynamic.SetBaseURL(self.resources.borrow().base_url.clone());
         dynamic.SetModuleResources(self.resources.borrow().modules.clone());
-        dynamic.SetPendingHostErrors(self.interaction.ExceptionSource());
+        if let Some(source) = &self.pending_host_errors {
+            dynamic.SetPendingHostErrors(source.clone());
+        }
         self.resources.borrow_mut().dynamic = Some(Rc::downgrade(dynamic));
+        self.dynamic_scripts = Some(dynamic.clone());
         Ok(())
     }
 
-    pub fn Interaction(&self) -> &crate::interaction_services::PageInteraction {
-        &self.interaction
-    }
-
-    pub fn ReportInteractionErrors(&self, client: &mut dyn ScriptLoadClient) {
-        for error in self.interaction.TakePendingExceptions() {
-            client.DidReportScriptError(&error);
+    pub fn ReportHostErrors(&self, client: &mut dyn ScriptLoadClient) {
+        if let Some(source) = &self.pending_host_errors {
+            for error in source() {
+                client.DidReportScriptError(&error);
+            }
         }
     }
     fn descriptor(
@@ -542,10 +540,8 @@ impl ScriptScheduler {
             destination: RequestDestination::kScript,
             ..Default::default()
         };
-        self.script_resources.insert(
-            script.node_id,
-            StartResource(&mut *resources.loader.borrow_mut(), &request),
-        );
+        self.script_resources
+            .insert(script.node_id, resources.resources.Start(request));
         Ok(())
     }
     // cpp: browser/browser.cc:1441-1451
@@ -814,10 +810,19 @@ impl ScriptScheduler {
             )
         };
         if let Some(started) = started {
-            eprintln!("parser-script-profile id={} source={source_name:?} bytes={} module={module} ms={:.3} exception={:?}",script.node_id,source.len(),started.elapsed().as_secs_f64()*1000.0,result.exception.as_ref().map(|exception| &exception.message));
+            eprintln!(
+                "parser-script-profile id={} source={source_name:?} bytes={} module={module} ms={:.3} exception={:?}",
+                script.node_id,
+                source.len(),
+                started.elapsed().as_secs_f64() * 1000.0,
+                result
+                    .exception
+                    .as_ref()
+                    .map(|exception| &exception.message)
+            );
         }
         client.DidExecuteScript(script, &source_name, result.Succeeded());
-        self.ReportInteractionErrors(client);
+        self.ReportHostErrors(client);
         Ok(())
     }
     // cpp: browser/browser.cc:1501-1532
@@ -851,11 +856,11 @@ impl ScriptScheduler {
                 runtime,
                 realm,
                 &mut |error| {
-                    self.ReportInteractionErrors(client);
+                    self.ReportHostErrors(client);
                     client.DidReportScriptError(error);
                 },
             );
-            self.ReportInteractionErrors(client);
+            self.ReportHostErrors(client);
             event.propagation_stopped |= result.stop_propagation;
             event.immediate_propagation_stopped |= result.stop_immediate_propagation;
         };
@@ -894,10 +899,10 @@ impl ScriptScheduler {
         for error in runtime.TakePendingExceptions(realm) {
             client.DidReportScriptError(&error);
         }
-        self.ReportInteractionErrors(client);
+        self.ReportHostErrors(client);
         client.DidDispatchLifecycleEvent(interaction::event::EventTypeName(kind));
     }
-    pub(crate) fn BeginDocumentLoader(
+    pub fn BeginDocumentLoader(
         &mut self,
         loader: &mut DocumentLoader,
         runtime: &dyn JavaScriptRuntime,
@@ -913,7 +918,7 @@ impl ScriptScheduler {
     }
     /// The arena is returned to Page after every bounded loading turn, including
     /// script waits and unwinds. Script adapters may temporarily expose it to JS.
-    pub(crate) fn PumpDocumentLoader(
+    pub fn PumpDocumentLoader(
         &mut self,
         loader: &mut DocumentLoader,
         budget: document_loader::DocumentLoadBudget,
@@ -979,7 +984,7 @@ impl ScriptScheduler {
         PollParserStyleSheets(&self.resources, &self.document, None, client)?;
         Ok(progress)
     }
-    pub(crate) fn PumpModules(
+    pub fn PumpModules(
         &self,
         runtime: &mut dyn JavaScriptRuntime,
         realm: &JavaScriptRealm,
@@ -988,7 +993,7 @@ impl ScriptScheduler {
         let modules = self.resources.borrow().modules.clone();
         modules.Pump(runtime, realm, budget)
     }
-    pub(crate) fn HasPendingDynamicScripts(&self) -> bool {
+    pub fn HasPendingDynamicScripts(&self) -> bool {
         self.resources
             .borrow()
             .dynamic
@@ -996,22 +1001,32 @@ impl ScriptScheduler {
             .and_then(|d| d.upgrade())
             .is_some_and(|dynamic| dynamic.PendingLoads() != 0)
     }
-    pub(crate) fn TraceLoadingState(&self) {
+    pub fn TraceLoadingState(&self) {
         let resources = self.resources.borrow();
         let dynamic = resources.dynamic.as_ref().and_then(|d| d.upgrade());
-        eprintln!("script-loading-state parsing_finished={} content_loaded={} async={:?} defer={:?} styles={} dynamic={}",
-            self.parsing_finished, self.content_loaded,
-            self.async_scripts.iter().map(|s| s.node_id).collect::<Vec<_>>(),
-            self.deferred_scripts.iter().map(|s| s.node_id).collect::<Vec<_>>(),
-            resources.styles.len(), dynamic.as_ref().map_or(0, |d| d.PendingLoads()));
+        eprintln!(
+            "script-loading-state parsing_finished={} content_loaded={} async={:?} defer={:?} styles={} dynamic={}",
+            self.parsing_finished,
+            self.content_loaded,
+            self.async_scripts
+                .iter()
+                .map(|s| s.node_id)
+                .collect::<Vec<_>>(),
+            self.deferred_scripts
+                .iter()
+                .map(|s| s.node_id)
+                .collect::<Vec<_>>(),
+            resources.styles.len(),
+            dynamic.as_ref().map_or(0, |d| d.PendingLoads())
+        );
     }
-    pub(crate) fn StopModuleLoading(&self) {
+    pub fn StopModuleLoading(&self) {
         self.resources.borrow().modules.StopLoading();
     }
-    pub(crate) fn HasPendingStyleSheets(&self) -> bool {
+    pub fn HasPendingStyleSheets(&self) -> bool {
         !self.resources.borrow().styles.is_empty()
     }
-    pub(crate) fn HasPendingRenderBlockingStyleSheets(&self) -> bool {
+    pub fn HasPendingRenderBlockingStyleSheets(&self) -> bool {
         self.resources
             .borrow()
             .styles
@@ -1027,7 +1042,7 @@ impl ScriptScheduler {
     }
     /// Page invokes this after the parser is done; it never waits on a deferred
     /// or asynchronous script. DOMContentLoaded precedes image/font completion.
-    pub(crate) fn PollParsingCompletion(
+    pub fn PollParsingCompletion(
         &mut self,
         runtime: &mut dyn JavaScriptRuntime,
         realm: &JavaScriptRealm,
@@ -1097,7 +1112,8 @@ impl ScriptScheduler {
         realm: &JavaScriptRealm,
         client: &mut dyn ScriptLoadClient,
     ) -> io::Result<()> {
-        let mut loader = DocumentLoader::new(self.resources.borrow().loader.clone());
+        let mut loader =
+            DocumentLoader::WithResourceEngine(self.resources.borrow().resources.clone());
         self.ParseDocumentWithLoader(
             &mut loader,
             source,
@@ -1108,7 +1124,7 @@ impl ScriptScheduler {
             client,
         )
     }
-    pub(crate) fn ParseDocumentWithLoader(
+    pub fn ParseDocumentWithLoader(
         &mut self,
         document_loader: &mut DocumentLoader,
         source: &str,
@@ -1163,24 +1179,36 @@ impl ScriptScheduler {
 /// HTML resource discovery and stylesheet application when script execution
 /// is disabled. Parsing itself stays in the resident DocumentLoader.
 // cpp: browser/browser.cc:852-892,1533-1580,1646-1727
-pub(crate) struct ParserResourceDiscovery {
+pub struct ParserResourceDiscovery {
     document: Rc<RefCell<DOM>>,
     resources: Rc<RefCell<ParserResources>>,
     import_map: HashMap<Vec<u8>, Vec<u8>>,
 }
 impl ParserResourceDiscovery {
-    pub(crate) fn new(
+    pub fn new(
         document: Rc<RefCell<DOM>>,
         loader: Rc<RefCell<dyn URLLoader>>,
         page: Rc<document_loader::ResourceFetcher>,
     ) -> Self {
-        let modules = Rc::new(document_loader::ModuleResources::new(loader.clone()));
+        let resources = Rc::new(ResourceEngine::new(loader, String::new()));
+        Self::WithResourceEngine(document, resources, page)
+    }
+
+    pub fn WithResourceEngine(
+        document: Rc<RefCell<DOM>>,
+        resources: Rc<ResourceEngine>,
+        page: Rc<document_loader::ResourceFetcher>,
+    ) -> Self {
+        let modules = Rc::new(document_loader::ModuleResources::WithResourceEngine(
+            resources.clone(),
+        ));
+        let current_url = resources.DocumentURL();
         Self {
             document,
             resources: Rc::new(RefCell::new(ParserResources {
-                loader,
-                current_url: String::new(),
-                base_url: String::new(),
+                resources,
+                current_url: current_url.clone(),
+                base_url: current_url,
                 base_seen: false,
                 body_seen: false,
                 styles: VecDeque::new(),
@@ -1192,16 +1220,17 @@ impl ParserResourceDiscovery {
             import_map: HashMap::new(),
         }
     }
-    pub(crate) fn SetDocumentURL(&self, url: String) {
+    pub fn SetDocumentURL(&self, url: String) {
         let mut resources = self.resources.borrow_mut();
+        resources.resources.SetDocumentURL(url.clone());
         resources.current_url = url.clone();
         resources.base_url = url;
     }
-    pub(crate) fn BeginDocumentLoader(&mut self, loader: &mut DocumentLoader) -> io::Result<()> {
+    pub fn BeginDocumentLoader(&mut self, loader: &mut DocumentLoader) -> io::Result<()> {
         let mut host = ParserHost(self.resources.clone());
         loader.BeginParsing(self.document.borrow_mut().GetDocumentMut(), &mut host)
     }
-    pub(crate) fn PumpDocumentLoader(
+    pub fn PumpDocumentLoader(
         &mut self,
         loader: &mut DocumentLoader,
         budget: document_loader::DocumentLoadBudget,
@@ -1225,10 +1254,10 @@ impl ParserResourceDiscovery {
         PollParserStyleSheets(&self.resources, &self.document, None, client)?;
         Ok(progress)
     }
-    pub(crate) fn HasPendingStyleSheets(&self) -> bool {
+    pub fn HasPendingStyleSheets(&self) -> bool {
         !self.resources.borrow().styles.is_empty()
     }
-    pub(crate) fn HasPendingRenderBlockingStyleSheets(&self) -> bool {
+    pub fn HasPendingRenderBlockingStyleSheets(&self) -> bool {
         self.resources
             .borrow()
             .styles
@@ -1242,10 +1271,7 @@ impl ParserResourceDiscovery {
                 } => *render_blocking,
             })
     }
-    pub(crate) fn PollStyleSheets(
-        &mut self,
-        client: &mut dyn ScriptLoadClient,
-    ) -> io::Result<bool> {
+    pub fn PollStyleSheets(&mut self, client: &mut dyn ScriptLoadClient) -> io::Result<bool> {
         PollParserStyleSheets(&self.resources, &self.document, None, client)
     }
     fn HandleParserScript(
@@ -1296,7 +1322,7 @@ impl ParserResourceDiscovery {
             }
         }
     }
-    pub(crate) fn ParseDocument(
+    pub fn ParseDocument(
         &mut self,
         document_loader: &mut DocumentLoader,
         source: &str,
@@ -1344,10 +1370,7 @@ impl ParserResourceDiscovery {
         Ok(())
     }
     // cpp: browser/browser.cc:1321-1354
-    pub(crate) fn FinishStyleSheets(
-        &mut self,
-        client: &mut dyn ScriptLoadClient,
-    ) -> io::Result<()> {
+    pub fn FinishStyleSheets(&mut self, client: &mut dyn ScriptLoadClient) -> io::Result<()> {
         loop {
             let pending = self.resources.borrow_mut().styles.pop_front();
             let Some(pending) = pending else {
@@ -1465,11 +1488,26 @@ mod tests {
                     "text/css",
                 )
             } else if request.url.ends_with("async.js") {
-                (1,"log.push('async'); if(!document.currentScript)throw Error('async currentScript'); try{document.write('bad');throw Error('write succeeded')}catch(e){if(!(e instanceof TypeError))throw e}","https://cdn.test/async-final.js","text/javascript")
+                (
+                    1,
+                    "log.push('async'); if(!document.currentScript)throw Error('async currentScript'); try{document.write('bad');throw Error('write succeeded')}catch(e){if(!(e instanceof TypeError))throw e}",
+                    "https://cdn.test/async-final.js",
+                    "text/javascript",
+                )
             } else if request.url.ends_with("blocking.js") {
-                (3,"log.push('blocking');if(document.getElementById('later'))throw Error('parsed beyond blocking script');document.getElementById('written').className='from-external';", "https://cdn.test/blocking-final.js","text/javascript")
+                (
+                    3,
+                    "log.push('blocking');if(document.getElementById('later'))throw Error('parsed beyond blocking script');document.getElementById('written').className='from-external';",
+                    "https://cdn.test/blocking-final.js",
+                    "text/javascript",
+                )
             } else if request.url.ends_with("defer.js") {
-                (0,"if(document.readyState!=='interactive'||!document.getElementById('later'))throw Error('defer boundary');log.push('defer');", "https://cdn.test/defer-final.js","text/javascript")
+                (
+                    0,
+                    "if(document.readyState!=='interactive'||!document.getElementById('later'))throw Error('defer boundary');log.push('defer');",
+                    "https://cdn.test/defer-final.js",
+                    "text/javascript",
+                )
             } else {
                 return Err(io::Error::other("resource load failure"));
             };

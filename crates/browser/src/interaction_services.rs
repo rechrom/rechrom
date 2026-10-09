@@ -1,14 +1,13 @@
 #![allow(non_snake_case)]
 
-use dom::{UserInteractionState, DOM};
+use dom::{InteractionStateMutation, UserInteractionState, DOM};
 use interaction::{
     event::{Event, EventListenerInvocation, EventListenerResult, EventType},
     input_event::{FocusEvent, FocusEventType, InputEvent},
-    Interaction,
+    Interaction, InteractionOutput,
 };
 use javascript::javascript_runtime::{JavaScriptException, JavaScriptHostRuntime};
 use layoutng_assembly::fragment_tree::FragmentNode;
-use page_mutation::{InteractionStateMutation, PageMutation};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -43,7 +42,7 @@ impl PageInteraction {
         document: Rc<RefCell<DOM>>,
         bindings: &Rc<RefCell<DOMJavaScriptBindings>>,
         state: Rc<RefCell<UserInteractionState>>,
-        emitter: Option<page_mutation::PageMutationEmitter>,
+        emitter: Option<interaction::InteractionOutputEmitter>,
         selections: Rc<layoutng_assembly::editing_state::SelectionState>,
     ) -> Self {
         let weak = Rc::downgrade(bindings);
@@ -63,7 +62,7 @@ impl PageInteraction {
                     return;
                 }
                 match mutation {
-                    PageMutation::DOMMutation(mutation) => {
+                    InteractionOutput::DocumentMutation(mutation) => {
                         // cpp: browser/browser.cc:950-981
                         // Connected-subtree discovery stays with the resource scheduler.
                         let mut owner = mutation_document.borrow_mut();
@@ -71,7 +70,7 @@ impl PageInteraction {
                         mutation_styles.set(false);
                         mutation_dirty.set(true);
                     }
-                    PageMutation::InteractionStateMutation(mutation) => {
+                    InteractionOutput::StateMutation(mutation) => {
                         ApplyInteractionStateMutation(
                             &mutation_document,
                             &mutation_bindings,
@@ -81,7 +80,10 @@ impl PageInteraction {
                             mutation,
                         );
                     }
-                    _ => unreachable!("Interaction only emits DOM and interaction state mutations"),
+                    InteractionOutput::Effect(_) => {
+                        // Standalone service users have no navigation host.
+                        // A composed Page always supplies an output emitter.
+                    }
                 }
             }),
             None,
@@ -374,7 +376,7 @@ mod tests {
         }
         #[derive(Default)]
         struct Client(Vec<String>);
-        impl crate::script_scheduler::ScriptLoadClient for Client {
+        impl open::script_scheduler::ScriptLoadClient for Client {
             fn DidReportScriptError(&mut self, e: &JavaScriptException) {
                 self.0.push(e.message.clone());
             }
@@ -387,7 +389,7 @@ mod tests {
                 crate::dom_mutation::ApplyDOMTreeMutation(&mut mutated.borrow_mut(), m)
             }),
         )));
-        let mut scheduler = crate::script_scheduler::ScriptScheduler::new(
+        let mut scheduler = open::script_scheduler::ScriptScheduler::new(
             document,
             bindings.clone(),
             Rc::new(RefCell::new(Offline)),

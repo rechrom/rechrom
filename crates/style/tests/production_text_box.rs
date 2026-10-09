@@ -8,13 +8,12 @@ use layoutng_style::style::{
     text_fit::{TextFitMethod as M, TextFitTarget as T, TextFitType as F},
 };
 use style::{
-    StyleEngine,
     media_queries::MediaValuesCachedData,
     parser::{
         css_parser_mode::CSSParserMode,
         production_property_parser::{ParseProperty, PropertyParseErrorKind},
     },
-    production_css_value as values,
+    production_css_value as values, StyleEngine,
 };
 fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
@@ -219,17 +218,15 @@ fn text_box_invalid_and_hidden_exposure_are_typed() {
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut b = ComputedStyleBuilder::from_style(initial);
     for id in [P::kTextDecorationInset] {
-        assert!(
-            style::resolver::production_style_builder::Apply(
-                id,
-                &mut b,
-                None,
-                &values::wide(V::kInitial).unwrap(),
-                16.0,
-                &MediaValuesCachedData::default()
-            )
-            .is_err()
-        );
+        assert!(style::resolver::production_style_builder::Apply(
+            id,
+            &mut b,
+            None,
+            &values::wide(V::kInitial).unwrap(),
+            16.0,
+            &MediaValuesCachedData::default()
+        )
+        .is_err());
     }
     assert!(b.GetTextDecorationInset().GetStart().IsFixed());
     assert_eq!(b.GetTextDecorationInset().GetStart().Pixels(), 0.0);

@@ -4,8 +4,10 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-paint = { path = "../paint" }
+paint = { path = "../paint", features = ["translation_in_progress"] }
 layoutng_assembly = { path = "../layoutng_assembly" }
 dom = { path = "../dom" }
-page_mutation = { path = "../page_mutation" }
 foundation = { package = "layoutng_foundation", path = "../foundation" }
+
+[dev-dependencies]
+html = { path = "../html" }

@@ -5,6 +5,7 @@ extern crate layoutng_replaced as _;
 
 pub mod dom_bindings;
 mod url_record;
+pub mod web_api_engine;
 pub mod window_bindings;
 
 // The C++ Web API implementation evaluates these JavaScript source strings

@@ -357,6 +357,12 @@ impl DocumentImage for SVGDocumentAnimation {
         &mut self,
         mutation: DocumentImageMutation,
     ) -> io::Result<Vec<DocumentImageEffect>> {
+        // The isolated SVG document owns a complete Style/Layout/Paint
+        // lifecycle. Its typed mutation boundary is therefore also its cppgc
+        // allocation boundary; the application thread that hosts this object
+        // does not need to know which mutation will allocate native style.
+        let mut heap_scope = foundation::LayoutHeapScope::new();
+        heap_scope.DeferCollection();
         match mutation {
             DocumentImageMutation::AdvanceTimeline {
                 frame_time,
@@ -447,6 +453,10 @@ impl image_resource::DocumentImageDecoder for SVGImageDecoder {
         mime_type: &str,
         container: &ContainerKey,
     ) -> io::Result<CreatedDocumentImage> {
+        // Creation performs the same isolated Style/Layout/Paint lifecycle as
+        // later animation mutations and may allocate native ComputedStyle.
+        let mut heap_scope = foundation::LayoutHeapScope::new();
+        heap_scope.DeferCollection();
         let mut image = self.PrepareDocumentImage(resource_id, &bytes, mime_type, container)?;
         let initial_frame = image.RenderAt(Duration::ZERO)?;
         let effects = image

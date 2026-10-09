@@ -7,14 +7,13 @@ use layoutng_style::style::{
     computed_style_constants::TextEmphasisPosition as E,
 };
 use style::{
-    StyleEngine,
     css_value::CSSValuePayload,
     media_queries::MediaValuesCachedData,
     parser::{
         css_parser_mode::CSSParserMode,
         production_property_parser::{ParseProperty, PropertyParseErrorKind},
     },
-    production_css_value as values,
+    production_css_value as values, StyleEngine,
 };
 fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
@@ -78,14 +77,12 @@ fn emphasis_custom_keyword_position_inheritance_and_shorthand_reset() {
     assert!(q.TextEmphasisColor().IsCurrentColor());
     let parsed = parse(P::kTextEmphasis, "open");
     assert_eq!(parsed.len(), 2);
-    assert!(
-        parsed
-            .iter()
-            .find(|v| v.PropertyID() == P::kTextEmphasisColor)
-            .unwrap()
-            .Value()
-            .IsInitialValue()
-    );
+    assert!(parsed
+        .iter()
+        .find(|v| v.PropertyID() == P::kTextEmphasisColor)
+        .unwrap()
+        .Value()
+        .IsInitialValue());
     let pos = parse(P::kTextEmphasisPosition, "left over");
     assert!(
         matches!(pos[0].Value().Payload(),CSSValuePayload::kValueListClass(l) if matches!(l.values[0].Payload(),CSSValuePayload::kIdentifierClass(k) if k.0==foundation::CSSValueID::kOver))
@@ -211,22 +208,20 @@ fn typography_invalid_values_and_stable_exposure() {
             values::numeric(-1.0, style::css_primitive_value::UnitType::kPercentage),
         ),
     ] {
-        assert!(
-            style::resolver::production_style_builder::Apply(id, &mut b, None, &v, 16.0, &media)
-                .is_err()
-        );
+        assert!(style::resolver::production_style_builder::Apply(
+            id, &mut b, None, &v, 16.0, &media
+        )
+        .is_err());
     }
     assert_eq!(b.GetTextEmphasisFill(), F::kFilled);
     assert!(b.GetTextSizeAdjust().IsAuto());
-    assert!(
-        style::resolver::production_style_builder::Apply(
-            P::kTextDecorationSkipSpaces,
-            &mut b,
-            None,
-            &values::wide(foundation::CSSValueID::kInitial).unwrap(),
-            16.0,
-            &media
-        )
-        .is_err()
-    );
+    assert!(style::resolver::production_style_builder::Apply(
+        P::kTextDecorationSkipSpaces,
+        &mut b,
+        None,
+        &values::wide(foundation::CSSValueID::kInitial).unwrap(),
+        16.0,
+        &media
+    )
+    .is_err());
 }

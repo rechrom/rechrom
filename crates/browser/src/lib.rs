@@ -1,12 +1,10 @@
 #![allow(non_snake_case)]
 
 use dom::StyleSource;
-use image_decoder::image_decoder::{DecodedImage, ImageDecodeInput, ImageDecoder};
-use image_decoder::skia_image_decoder::SkiaImageDecoder;
 use layoutng_assembly::fragment_tree::FragmentNode;
 use layoutng_assembly::internal::boundary::assembly::InstallLayoutBoundary;
 use layoutng_assembly::internal::layout_input::{
-    ConstraintSpace, OverscrollType, PaintImage, Size, ViewportGeometry,
+    ConstraintSpace, OverscrollType, Size, ViewportGeometry,
 };
 use layoutng_assembly::internal::layout_input_types::{
     ControlThemeMetrics, IntSize, ScrollbarThemeMetrics,
@@ -20,13 +18,12 @@ use layoutng_forms::assembly::InstallFormsAlgorithm;
 use layoutng_list::assembly::InstallListModule;
 use layoutng_replaced::assembly::InstallReplacedAlgorithm;
 use layoutng_svg::assembly::InstallSvgModule;
+#[cfg(any(feature = "source_paint", test))]
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 
 pub mod dom_mutation;
-pub mod dynamic_scripts;
 mod font_catalog;
 #[cfg(feature = "source_paint")]
 mod form_submission;
@@ -44,8 +41,6 @@ mod page_resource_tests;
 #[cfg(all(test, feature = "pure_source_png"))]
 mod page_tests;
 mod persistent_layout;
-pub mod script_execution;
-pub mod script_scheduler;
 pub mod style_services;
 #[cfg(all(test, feature = "source_paint"))]
 mod svg_image_tests;
@@ -137,52 +132,8 @@ pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
 /// First static-page profile: block elements, embedded CSS, solid colors and
 /// borders. Other page features report unsupported at their owning boundary.
 pub fn RenderHtml(source: &str, width: u32, height: u32) -> Vec<u8> {
-    RenderWithStyleLoader(
-        source,
-        width,
-        height,
-        None,
-        |_, _| {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "linked CSS requires a base path or URL",
-            ))
-        },
-        |_, _| {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "image requires a base path or URL",
-            ))
-        },
-        |_, _| {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "font requires a base path or URL",
-            ))
-        },
-    )
-    .expect("HTML render failed")
-}
-
-fn RenderWithStyleLoader(
-    source: &str,
-    width: u32,
-    height: u32,
-    document_url: Option<&str>,
-    load_link: impl FnMut(&str, Option<&str>) -> io::Result<cssom::CSSStyleSheet>,
-    load_image: impl FnMut(&str, Option<&str>) -> io::Result<DecodedImage>,
-    load_font: impl FnMut(&str, Option<&str>) -> io::Result<Vec<u8>>,
-) -> io::Result<Vec<u8>> {
-    let fragments = LayoutWithStyleLoader(
-        source,
-        width,
-        height,
-        document_url,
-        load_link,
-        load_image,
-        load_font,
-    )?;
-    Ok(RenderFragmentPng(&fragments, width, height))
+    let fragments = LayoutStaticHtml(source, width, height).expect("HTML render failed");
+    RenderFragmentPng(&fragments, width, height)
 }
 
 fn RenderFragmentPng(fragments: &FragmentNode, width: u32, height: u32) -> Vec<u8> {
@@ -197,35 +148,19 @@ fn RenderFragmentPng(fragments: &FragmentNode, width: u32, height: u32) -> Vec<u
     raster::EncodeRgbaPng(&rgba, width, height)
 }
 
-fn LayoutWithStyleLoader(
-    source: &str,
-    width: u32,
-    height: u32,
-    document_url: Option<&str>,
-    mut load_link: impl FnMut(&str, Option<&str>) -> io::Result<cssom::CSSStyleSheet>,
-    mut load_image: impl FnMut(&str, Option<&str>) -> io::Result<DecodedImage>,
-    mut load_font: impl FnMut(&str, Option<&str>) -> io::Result<Vec<u8>>,
-) -> io::Result<FragmentNode> {
-    // The narrow static parser remains a resource-discovery adapter.  Style,
-    // layout-object construction and layout all consume the resident DOM.
+/// Resource-free diagnostic layout used by inline HTML unit tests. Anything
+/// that can load an external resource must enter through Page/OpenEngine.
+fn LayoutStaticHtml(source: &str, width: u32, height: u32) -> io::Result<FragmentNode> {
     let resource_document = html::Parse(source);
-    let resource_base_url = match (document_url, resource_document.base_href.as_deref()) {
-        (Some(url), Some(base)) => Some(document_loader::ResolveUrl(url, base)?),
-        (Some(url), None) => Some(url.to_owned()),
-        (None, _) => None,
-    };
     let mut sheets = Vec::new();
     for style_source in &resource_document.style_sources {
         match style_source {
-            StyleSource::Inline(text) => {
-                let mut sheet = style::ParseCSS(text);
-                if let Some(base) = resource_base_url.as_deref() {
-                    document_loader::ResolveCSSStyleSheetURLs(&mut sheet, base)?;
-                }
-                sheets.push(sheet);
-            }
-            StyleSource::Link(href) => {
-                sheets.push(load_link(href, resource_document.base_href.as_deref())?)
+            StyleSource::Inline(text) => sheets.push(style::ParseCSS(text)),
+            StyleSource::Link(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "external resources require the Page/OpenEngine path",
+                ))
             }
         }
     }
@@ -235,62 +170,8 @@ fn LayoutWithStyleLoader(
         document.GetDocumentMut().AppendStyleSheet(sheet.clone());
     }
     let assembly = CreateLayoutAssembly();
-    let mut space = CreateBrowserConstraints(width, height);
+    let space = CreateBrowserConstraints(width, height);
     style_services::ResolveLayoutStyles(&mut document, &space);
-    let used_font_families = (0..document.GetDocument().NodeCount())
-        .filter_map(|node| document.GetDocument().ResolvedStyleFor(node))
-        .flat_map(|style| style.style.extended.iter())
-        .flat_map(|extended| extended.font_families.iter().cloned())
-        .collect::<Vec<_>>();
-    let web_fonts =
-        document_loader::LoadUsedFontFacesForFamilies(&sheets, used_font_families, |url| {
-            load_font(url, resource_document.base_href.as_deref())
-        });
-
-    // cpp: browser/browser.cc:1241-1289
-    // cpp: browser/browser.cc:1359-1393
-    // cpp: browser/browser.cc:1761-1771
-    let mut image_sources = Vec::new();
-    let mut seen_images = HashSet::new();
-    for element in &resource_document.elements {
-        if element.tag == "img" {
-            if let Some((_, source)) = element.attributes.iter().find(|(name, _)| name == "src") {
-                if !source.is_empty() && seen_images.insert(source.clone()) {
-                    image_sources.push(source.clone());
-                }
-            }
-        }
-    }
-    let mut images = Vec::new();
-    let mut next_image_id = 1_u64;
-    for source in image_sources {
-        let Ok(decoded) = load_image(&source, resource_document.base_href.as_deref()) else {
-            continue;
-        };
-        let id = next_image_id;
-        next_image_id = next_image_id
-            .checked_add(1)
-            .ok_or_else(|| io::Error::other("image resource id space exhausted"))?;
-        document.GetDocumentMut().SetImageResource(
-            source,
-            dom::ImageResourceMetadata {
-                id,
-                natural_width: f64::from(decoded.width),
-                natural_height: f64::from(decoded.height),
-                resolution_scale: 1.0,
-            },
-        );
-        images.push(PaintImage {
-            id,
-            revision: 1,
-            width: decoded.width,
-            height: decoded.height,
-            resolution_scale: 1.0,
-            content: image_resource::PaintImageContent::Bitmap(decoded.rgba8.into()),
-        });
-    }
-    space.fonts.extend(web_fonts);
-    space.images = images;
     let mut layout = LayoutEngine::new(&assembly);
     Ok(LayoutPersistentDocument(
         &mut layout,
@@ -301,83 +182,14 @@ fn LayoutWithStyleLoader(
 }
 
 pub fn RenderFile(path: &Path, width: u32, height: u32) -> io::Result<Vec<u8>> {
-    let source = std::fs::read_to_string(path)?;
-    let directory = path.parent().unwrap_or_else(|| Path::new("."));
-    let loader = RefCell::new(url_loader::DefaultURLLoader::new(
-        url_loader::DefaultURLLoaderOptions::default(),
-    )?);
-    RenderWithStyleLoader(
-        &source,
-        width,
-        height,
-        None,
-        |href, _base_href| {
-            if href.starts_with("http://") || href.starts_with("https://") {
-                let response = document_loader::LoadResponse(
-                    &mut *loader.borrow_mut(),
-                    &url_loader::URLRequest {
-                        url: href.to_owned(),
-                        destination: url_loader::RequestDestination::kStyleSheet,
-                        ..Default::default()
-                    },
-                )?;
-                let mut sheet = style::ParseCSS(&document_loader::DecodeText(&response)?);
-                let base = if response.final_url.is_empty() {
-                    href
-                } else {
-                    &response.final_url
-                };
-                document_loader::ResolveCSSStyleSheetURLs(&mut sheet, base)?;
-                Ok(sheet)
-            } else {
-                Ok(style::ParseCSS(&std::fs::read_to_string(
-                    directory.join(href),
-                )?))
-            }
-        },
-        |source, _base_href| {
-            if source.starts_with("http://") || source.starts_with("https://") {
-                let response = document_loader::LoadResponse(
-                    &mut *loader.borrow_mut(),
-                    &url_loader::URLRequest {
-                        url: source.to_owned(),
-                        destination: url_loader::RequestDestination::kImage,
-                        ..Default::default()
-                    },
-                )?;
-                DecodeRasterImage(&response.body, &response.mime_type)
-            } else {
-                let bytes = std::fs::read(directory.join(source))?;
-                DecodeRasterImage(&bytes, "")
-            }
-        },
-        |source, _base_href| {
-            if source.starts_with("http://") || source.starts_with("https://") {
-                Ok(document_loader::LoadResponse(
-                    &mut *loader.borrow_mut(),
-                    &url_loader::URLRequest {
-                        url: source.to_owned(),
-                        destination: url_loader::RequestDestination::kFont,
-                        ..Default::default()
-                    },
-                )?
-                .body)
-            } else {
-                std::fs::read(directory.join(source))
-            }
-        },
-    )
-}
-
-fn DecodeRasterImage(bytes: &[u8], mime_type: &str) -> io::Result<DecodedImage> {
-    if mime_type.to_ascii_lowercase().contains("svg") {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "SVG document image decoder is not connected",
-        ));
-    }
-    let mut decoder = SkiaImageDecoder;
-    decoder.Decode(&ImageDecodeInput { bytes, mime_type })
+    let path = std::fs::canonicalize(path)?;
+    let url = url::Url::from_file_path(&path).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("cannot convert path to file URL: {}", path.display()),
+        )
+    })?;
+    RenderUrl(url.as_str(), width, height)
 }
 
 pub fn RenderUrl(url: &str, width: u32, height: u32) -> std::io::Result<Vec<u8>> {
@@ -401,89 +213,11 @@ pub fn LayoutUrl(url: &str, width: u32, height: u32) -> io::Result<FragmentNode>
 }
 
 #[cfg(not(feature = "source_paint"))]
-pub fn LayoutUrl(url: &str, width: u32, height: u32) -> io::Result<FragmentNode> {
-    LayoutUrlStatic(url, width, height)
-}
-
-/// Explicit static diagnostic profile, without the Page runtime or lifecycle.
-pub fn LayoutUrlStatic(url: &str, width: u32, height: u32) -> io::Result<FragmentNode> {
-    let loader = RefCell::new(url_loader::DefaultURLLoader::new(
-        url_loader::DefaultURLLoaderOptions::default(),
-    )?);
-    let response = document_loader::LoadResponse(
-        &mut *loader.borrow_mut(),
-        &url_loader::URLRequest {
-            url: url.to_owned(),
-            destination: url_loader::RequestDestination::kDocument,
-            ..Default::default()
-        },
-    )?;
-    let final_url = response.final_url.clone();
-    let source = document_loader::DecodeText(&response)?;
-    LayoutWithStyleLoader(
-        &source,
-        width,
-        height,
-        Some(&final_url),
-        |href, base_href| {
-            let base = match base_href {
-                Some(base_href) => document_loader::ResolveUrl(&final_url, base_href)?,
-                None => final_url.clone(),
-            };
-            let url = document_loader::ResolveUrl(&base, href)?;
-            let response = document_loader::LoadResponse(
-                &mut *loader.borrow_mut(),
-                &url_loader::URLRequest {
-                    url: url.clone(),
-                    referrer: final_url.clone(),
-                    destination: url_loader::RequestDestination::kStyleSheet,
-                    ..Default::default()
-                },
-            )?;
-            let mut sheet = style::ParseCSS(&document_loader::DecodeText(&response)?);
-            let base = if response.final_url.is_empty() {
-                &url
-            } else {
-                &response.final_url
-            };
-            document_loader::ResolveCSSStyleSheetURLs(&mut sheet, base)?;
-            Ok(sheet)
-        },
-        |image_source, base_href| {
-            let base = match base_href {
-                Some(base_href) => document_loader::ResolveUrl(&final_url, base_href)?,
-                None => final_url.clone(),
-            };
-            let url = document_loader::ResolveUrl(&base, image_source)?;
-            let response = document_loader::LoadResponse(
-                &mut *loader.borrow_mut(),
-                &url_loader::URLRequest {
-                    url,
-                    referrer: final_url.clone(),
-                    destination: url_loader::RequestDestination::kImage,
-                    ..Default::default()
-                },
-            )?;
-            DecodeRasterImage(&response.body, &response.mime_type)
-        },
-        |font_source, base_href| {
-            let base = match base_href {
-                Some(base_href) => document_loader::ResolveUrl(&final_url, base_href)?,
-                None => final_url.clone(),
-            };
-            let url = document_loader::ResolveUrl(&base, font_source)?;
-            Ok(document_loader::LoadResponse(
-                &mut *loader.borrow_mut(),
-                &url_loader::URLRequest {
-                    url,
-                    referrer: final_url.clone(),
-                    destination: url_loader::RequestDestination::kFont,
-                    ..Default::default()
-                },
-            )?
-            .body)
-        },
-    )
+pub fn LayoutUrl(_: &str, _: u32, _: u32) -> io::Result<FragmentNode> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "URL layout requires the source_paint Page lifecycle",
+    ))
 }
 
 #[cfg(feature = "source_paint")]
@@ -571,17 +305,18 @@ mod tests {
     #[test]
     #[ignore = "requires access to the public webtemplate site"]
     fn live_webtemplate_redirect_relative_css_and_css_resource() {
-        let mut loader =
+        let loader = std::rc::Rc::new(RefCell::new(
             url_loader::DefaultURLLoader::new(url_loader::DefaultURLLoaderOptions::default())
-                .unwrap();
-        let document_response = document_loader::LoadResponse(
-            &mut loader,
-            &url_loader::URLRequest {
+                .unwrap(),
+        ));
+        let resources = resource::ResourceEngine::new(loader, String::new());
+        let document_response = resource::RequireResponse(resource::AwaitResource(
+            &mut resources.Start(url_loader::URLRequest {
                 url: "http://www.cjpj.de/webtemplate.htm".into(),
                 destination: url_loader::RequestDestination::kDocument,
                 ..Default::default()
-            },
-        )
+            }),
+        ))
         .unwrap();
         assert_eq!(document_response.status_code, 200);
         assert_eq!(
@@ -603,15 +338,15 @@ mod tests {
             .any(|element| element.tag == "main"));
         let css_url = document_loader::ResolveUrl(&document_response.final_url, css_href).unwrap();
         assert_eq!(css_url, "https://www.cjpj.de/css/simpleweb.css?080526");
-        let css_response = document_loader::LoadResponse(
-            &mut loader,
-            &url_loader::URLRequest {
+        resources.SetDocumentURL(document_response.final_url.clone());
+        let css_response = resource::RequireResponse(resource::AwaitResource(
+            &mut resources.Start(url_loader::URLRequest {
                 url: css_url,
-                referrer: document_response.final_url,
+                referrer: document_response.final_url.clone(),
                 destination: url_loader::RequestDestination::kStyleSheet,
                 ..Default::default()
-            },
-        )
+            }),
+        ))
         .unwrap();
         assert_eq!(css_response.status_code, 200);
         assert_eq!(css_response.mime_type, "text/css");
@@ -620,15 +355,14 @@ mod tests {
         let image_url =
             document_loader::ResolveUrl(&css_response.final_url, "../images/extlink2.png").unwrap();
         assert_eq!(image_url, "https://www.cjpj.de/images/extlink2.png");
-        let image_response = document_loader::LoadResponse(
-            &mut loader,
-            &url_loader::URLRequest {
+        let image_response = resource::RequireResponse(resource::AwaitResource(
+            &mut resources.Start(url_loader::URLRequest {
                 url: image_url,
-                referrer: css_response.final_url,
+                referrer: css_response.final_url.clone(),
                 destination: url_loader::RequestDestination::kImage,
                 ..Default::default()
-            },
-        )
+            }),
+        ))
         .unwrap();
         assert_eq!(image_response.status_code, 200);
         assert_eq!(image_response.mime_type, "image/png");
@@ -732,31 +466,7 @@ mod tests {
         assert_eq!(png, REFERENCE);
         #[cfg(feature = "source_paint")]
         {
-            let fragments = LayoutWithStyleLoader(
-                HTML,
-                400,
-                320,
-                None,
-                |_, _| {
-                    Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "this fixture has no linked stylesheet",
-                    ))
-                },
-                |_, _| {
-                    Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "this fixture has no image resources",
-                    ))
-                },
-                |_, _| {
-                    Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "this fixture has no font resources",
-                    ))
-                },
-            )
-            .unwrap();
+            let fragments = LayoutStaticHtml(HTML, 400, 320).unwrap();
             let display_list = paint::paint_engine::Paint(&fragments);
             assert!(!display_list.items.is_empty());
             assert!(!display_list.chunks.is_empty());

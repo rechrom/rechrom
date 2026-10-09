@@ -62,17 +62,15 @@ mod tests {
         .unwrap();
         assert!(child.GetTextDecorationInset() == parent.GetTextDecorationInset());
         child.SetEffectiveZoom(2.0);
-        assert!(
-            ApplyInternal(
-                CSSPropertyID::kTextDecorationInset,
-                &mut child,
-                Some(parent),
-                &values::wide(CSSValueID::kInherit).unwrap(),
-                16.0,
-                &media
-            )
-            .is_err()
-        );
+        assert!(ApplyInternal(
+            CSSPropertyID::kTextDecorationInset,
+            &mut child,
+            Some(parent),
+            &values::wide(CSSValueID::kInherit).unwrap(),
+            16.0,
+            &media
+        )
+        .is_err());
         child.SetEffectiveZoom(1.0);
         ApplyInternal(
             CSSPropertyID::kTextDecorationInset,
@@ -127,17 +125,15 @@ mod tests {
             ],
             values::ListSeparator::Space,
         );
-        assert!(
-            ApplyInternal(
-                CSSPropertyID::kTextBoxEdge,
-                &mut child,
-                None,
-                &bad,
-                16.0,
-                &media
-            )
-            .is_err()
-        );
+        assert!(ApplyInternal(
+            CSSPropertyID::kTextBoxEdge,
+            &mut child,
+            None,
+            &bad,
+            16.0,
+            &media
+        )
+        .is_err());
         assert!(child.GetTextBoxEdge().IsAuto());
         let bad = values::list(
             vec![
@@ -146,17 +142,15 @@ mod tests {
             ],
             values::ListSeparator::Space,
         );
-        assert!(
-            ApplyInternal(
-                CSSPropertyID::kTextFit,
-                &mut child,
-                None,
-                &bad,
-                16.0,
-                &media
-            )
-            .is_err()
-        );
+        assert!(ApplyInternal(
+            CSSPropertyID::kTextFit,
+            &mut child,
+            None,
+            &bad,
+            16.0,
+            &media
+        )
+        .is_err());
         assert_eq!(child.GetTextFit().Type(), TextFitType::kNone);
     }
 }

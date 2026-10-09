@@ -119,6 +119,26 @@ pub(super) fn Apply(
                             )
                         }
                     }
+                    CSSValuePayload::kMathFunctionClass(math) => {
+                        use crate::css_math_expression_node::CalculationResultCategory as C;
+                        let value = math
+                            .ComputeValue(
+                                &mut MathLengthResolver(id, parent_size, root, 1.0, media),
+                                (math.Category() == C::LengthFunction)
+                                    .then_some(parent_size as f64),
+                            )
+                            .map_err(|_| LonghandApplicationError::Unsupported(id))?;
+                        let size = if math.Category() == C::Percent {
+                            value * parent_size as f64 / 100.0
+                        } else {
+                            value
+                        };
+                        // A typed calculation may include font-relative or
+                        // percentage terms. Chromium keeps that dependency on
+                        // the parent rather than classifying it as an absolute
+                        // keyword-derived size.
+                        (size, 0, false)
+                    }
                     _ => return Err(LonghandApplicationError::Unsupported(id)),
                 }
             };

@@ -49,6 +49,32 @@ fn media() -> MediaValuesCachedData {
 }
 
 #[test]
+fn svg_presentation_attributes_enter_author_hint_cascade() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<svg><g id=group transform='translate(-11.5 -6.5) scale(.35)'>\
+         <path id=path fill='#15919d' stroke='#062142' stroke-width='3' d='M0 0L10 0L10 10Z'/>\
+         </g></svg>",
+    );
+    owner
+        .GetDocumentMut()
+        .AppendStyleSheet(style::ParseCSS("#path{fill:#123456}"));
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
+    let group = native(&owner, "group");
+    assert_eq!(group.Transform().Operations().len(), 1);
+    let path = native(&owner, "path");
+    assert_eq!(path.FillPaint().GetColor().GetColor().Param0(), 18.);
+    assert_eq!(path.StrokePaint().GetColor().GetColor().Param0(), 6.);
+    assert_eq!(path.StrokeWidth().length(), &Length::Fixed(3));
+}
+
+#[test]
 fn svg_typed_grammar_handles_user_units_dash_separators_and_canonical_order() {
     for (id, value) in [
         (P::kCx, "-2"),

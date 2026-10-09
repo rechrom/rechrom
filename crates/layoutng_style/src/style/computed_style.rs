@@ -1257,7 +1257,9 @@ impl ComputedStyle {
     // cpp: third_party/blink/renderer/core/style/computed_style.cc:1779-1792
     // cpp: layoutng_style/style/computed_style.h:956
     pub fn GetCounterDirectivesMap(&self) -> *const CounterDirectiveMap {
-        self.CounterDirectivesInternal().as_deref().map_or(std::ptr::null(), std::ptr::from_ref)
+        self.CounterDirectivesInternal()
+            .as_deref()
+            .map_or(std::ptr::null(), std::ptr::from_ref)
     }
 
     // cpp: layoutng_style/style/computed_style.h:957-958
@@ -1265,7 +1267,11 @@ impl ComputedStyle {
         &self,
         identifier: &AtomicString,
     ) -> CounterDirectives {
-        self.CounterDirectivesInternal().as_ref().and_then(|map| map.get(identifier)).cloned().unwrap_or_default()
+        self.CounterDirectivesInternal()
+            .as_ref()
+            .and_then(|map| map.get(identifier))
+            .cloned()
+            .unwrap_or_default()
     }
 
     // cpp: layoutng_style/style/computed_style.h:946-951
@@ -5033,19 +5039,24 @@ mod difference_tests {
         let heap = foundation::LayoutHeapScope::new();
         let style = changed(|builder| {
             *builder.AccessAnimations().DurationListMut() = vec![Some(0.25), None];
-            *builder.AccessTransitions().PropertyListMut() = vec![
-                super::super::css_timing_data::TransitionProperty::Unknown(
+            *builder.AccessTransitions().PropertyListMut() =
+                vec![super::super::css_timing_data::TransitionProperty::Unknown(
                     AtomicString::from_str("--progress"),
-                ),
-            ];
+                )];
         });
         let root = foundation::Persistent::from_ptr(style as *const _ as *mut ComputedStyle);
-        let animations = foundation::WeakPersistent::from_ptr(style.Animations().Get() as *mut CSSAnimationData);
-        let transitions = foundation::WeakPersistent::from_ptr(style.Transitions().Get() as *mut CSSTransitionData);
+        let animations =
+            foundation::WeakPersistent::from_ptr(style.Animations().Get() as *mut CSSAnimationData);
+        let transitions = foundation::WeakPersistent::from_ptr(
+            style.Transitions().Get() as *mut CSSTransitionData
+        );
         drop(heap);
         assert!(!animations.Get().is_null());
         assert!(!transitions.Get().is_null());
-        assert_eq!(unsafe { &*animations.Get() }.DurationList(), &[Some(0.25), None]);
+        assert_eq!(
+            unsafe { &*animations.Get() }.DurationList(),
+            &[Some(0.25), None]
+        );
         assert!(matches!(
             &unsafe { &*transitions.Get() }.PropertyList()[0],
             super::super::css_timing_data::TransitionProperty::Unknown(name)

@@ -1051,28 +1051,65 @@ fn production_scope_root_limit_nested_and_self_limit() {
     owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(".item{width:1px;height:2px} @scope (.outer) to (.stop){.item{width:10px} :scope{padding-left:3px} @scope (.inner){& > .item{height:20px}}} @scope (.outer) to (:scope){.item{width:99px}}"));
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
-    for (id, width, height) in [("direct",10.0,2.0),("nested",10.0,20.0),("limited",1.0,2.0),("blocked",1.0,2.0),("outside",1.0,2.0)] {
-        let style = owner.GetDocument().ResolvedStyleFor(node(&owner,id)).unwrap();
+    for (id, width, height) in [
+        ("direct", 10.0, 2.0),
+        ("nested", 10.0, 20.0),
+        ("limited", 1.0, 2.0),
+        ("blocked", 1.0, 2.0),
+        ("outside", 1.0, 2.0),
+    ] {
+        let style = owner
+            .GetDocument()
+            .ResolvedStyleFor(node(&owner, id))
+            .unwrap();
         let native = unsafe { &*style.native_style.Get() };
-        assert_eq!((native.Width().Pixels(),native.Height().Pixels()),(width,height),"{id}: {:?}",engine.Diagnostics());
+        assert_eq!(
+            (native.Width().Pixels(), native.Height().Pixels()),
+            (width, height),
+            "{id}: {:?}",
+            engine.Diagnostics()
+        );
     }
-    let root = owner.GetDocument().ResolvedStyleFor(node(&owner,"root")).unwrap();
-    assert_eq!(unsafe { &*root.native_style.Get() }.PaddingLeft().Pixels(),3.0);
-    assert!(engine.Diagnostics().is_empty(),"{:?}",engine.Diagnostics());
+    let root = owner
+        .GetDocument()
+        .ResolvedStyleFor(node(&owner, "root"))
+        .unwrap();
+    assert_eq!(
+        unsafe { &*root.native_style.Get() }.PaddingLeft().Pixels(),
+        3.0
+    );
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
 }
 
 #[test]
 fn production_scope_proximity_precedes_order_after_specificity_and_layer() {
     let _heap = foundation::LayoutHeapScope::new();
-    let mut owner = html::html_parser::ParseHTML("<main class=far><section class=near><p id=target class=item></p></section></main>");
+    let mut owner = html::html_parser::ParseHTML(
+        "<main class=far><section class=near><p id=target class=item></p></section></main>",
+    );
     owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS("@layer first,second; @scope (.near){.item{width:11px;height:12px}} @scope (.far){.item{width:21px} #target{height:22px}} .item{width:31px} @layer first{@scope (.near){.item{padding-left:13px}}} @layer second{@scope (.far){.item{padding-left:23px}}}"));
     let mut engine = StyleEngine::new(&owner);
-    engine.Update(&mut owner,&media(),&[]).unwrap();
-    let native = unsafe { &*owner.GetDocument().ResolvedStyleFor(node(&owner,"target")).unwrap().native_style.Get() };
-    assert_eq!(native.Width().Pixels(),11.0);
-    assert_eq!(native.Height().Pixels(),22.0);
-    assert_eq!(native.PaddingLeft().Pixels(),23.0);
-    assert!(engine.Diagnostics().is_empty(),"{:?}",engine.Diagnostics());
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let native = unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(node(&owner, "target"))
+            .unwrap()
+            .native_style
+            .Get()
+    };
+    assert_eq!(native.Width().Pixels(), 11.0);
+    assert_eq!(native.Height().Pixels(), 22.0);
+    assert_eq!(native.PaddingLeft().Pixels(), 23.0);
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
 }
 
 #[test]
@@ -1080,82 +1117,233 @@ fn production_scope_implicit_owner_and_root_limit_mutation_invalidation() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<main id=root class=active><style>@scope{.item{width:7px}} @scope (.active) to (.stop){.item{height:9px}}</style><section id=limit><p id=target class=item></p></section></main><p id=outside class=item></p>");
     // An ownerless implicit scope must never become a document-wide rule.
-    owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS("@scope{.item{width:99px}}"));
-    let root=node(&owner,"root"); let limit=node(&owner,"limit"); let target=node(&owner,"target");
-    let mut engine=StyleEngine::new(&owner);
-    engine.Update(&mut owner,&media(),&[]).unwrap();
-    let read = |owner: &dom::DOM| { let n=unsafe {&*owner.GetDocument().ResolvedStyleFor(target).unwrap().native_style.Get()}; (n.Width().Pixels(),n.Height().IsFixed().then(||n.Height().Pixels())) };
-    assert_eq!(read(&owner),(7.0,Some(9.0)));
-    let outside=unsafe {&*owner.GetDocument().ResolvedStyleFor(node(&owner,"outside")).unwrap().native_style.Get()};
+    owner
+        .GetDocumentMut()
+        .AppendStyleSheet(crate::ParseCSS("@scope{.item{width:99px}}"));
+    let root = node(&owner, "root");
+    let limit = node(&owner, "limit");
+    let target = node(&owner, "target");
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let read = |owner: &dom::DOM| {
+        let n = unsafe {
+            &*owner
+                .GetDocument()
+                .ResolvedStyleFor(target)
+                .unwrap()
+                .native_style
+                .Get()
+        };
+        (
+            n.Width().Pixels(),
+            n.Height().IsFixed().then(|| n.Height().Pixels()),
+        )
+    };
+    assert_eq!(read(&owner), (7.0, Some(9.0)));
+    let outside = unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(node(&owner, "outside"))
+            .unwrap()
+            .native_style
+            .Get()
+    };
     assert!(!outside.Width().IsFixed());
-    owner.GetDocumentMut().SetAttribute(limit,dom::persistent_document::DOMAttribute{local_name:"class".into(),value:"stop".into(),..Default::default()});
-    engine.Update(&mut owner,&media(),&[]).unwrap();
-    assert_eq!(read(&owner),(7.0,None));
-    owner.GetDocumentMut().SetAttribute(limit,dom::persistent_document::DOMAttribute{local_name:"class".into(),value:"".into(),..Default::default()});
-    owner.GetDocumentMut().SetAttribute(root,dom::persistent_document::DOMAttribute{local_name:"class".into(),value:"inactive".into(),..Default::default()});
-    engine.Update(&mut owner,&media(),&[]).unwrap();
-    assert_eq!(read(&owner),(7.0,None));
-    owner.GetDocumentMut().SetAttribute(root,dom::persistent_document::DOMAttribute{local_name:"class".into(),value:"active".into(),..Default::default()});
-    engine.Update(&mut owner,&media(),&[]).unwrap();
-    assert_eq!(read(&owner),(7.0,Some(9.0)));
-    assert!(engine.Diagnostics().is_empty(),"{:?}",engine.Diagnostics());
+    owner.GetDocumentMut().SetAttribute(
+        limit,
+        dom::persistent_document::DOMAttribute {
+            local_name: "class".into(),
+            value: "stop".into(),
+            ..Default::default()
+        },
+    );
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(read(&owner), (7.0, None));
+    owner.GetDocumentMut().SetAttribute(
+        limit,
+        dom::persistent_document::DOMAttribute {
+            local_name: "class".into(),
+            value: "".into(),
+            ..Default::default()
+        },
+    );
+    owner.GetDocumentMut().SetAttribute(
+        root,
+        dom::persistent_document::DOMAttribute {
+            local_name: "class".into(),
+            value: "inactive".into(),
+            ..Default::default()
+        },
+    );
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(read(&owner), (7.0, None));
+    owner.GetDocumentMut().SetAttribute(
+        root,
+        dom::persistent_document::DOMAttribute {
+            local_name: "class".into(),
+            value: "active".into(),
+            ..Default::default()
+        },
+    );
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(read(&owner), (7.0, Some(9.0)));
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
 }
 
 #[test]
 fn production_animation_shorthand_names_composition_and_inheritance_reach_native_data() {
-    use layoutng_style::style::css_timing_data::{CompositeOperation,PlaybackDirection,StyleTimeline,TimingFunction};
-    let _heap=foundation::LayoutHeapScope::new();
+    use layoutng_style::style::css_timing_data::{
+        CompositeOperation, PlaybackDirection, StyleTimeline, TimingFunction,
+    };
+    let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=parent style='animation:fade 2s steps(calc(3)) -250ms 2 alternate both paused,fade 1s linear;animation-composition:add,accumulate'><div id=target style='animation:inherit;animation-composition:inherit'></div></div>");
-    owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS("@keyframes fade{from{opacity:0}to{opacity:1}}"));
-    let target=node(&owner,"target");
-    let mut engine=StyleEngine::new(&owner);
-    engine.Update(&mut owner,&media(),&[]).unwrap();
-    assert!(engine.Diagnostics().is_empty(),"{:?}",engine.Diagnostics());
-    let style=owner.GetDocument().ResolvedStyleFor(target).unwrap().native_style.clone();
-    let native=unsafe{&*style.Get()};
-    let animation=unsafe{&*native.Animations().Get()};
-    assert_eq!(unsafe{&*animation.NameList()[0].Get()}.GetName().Utf8(),"fade");
-    assert_eq!(animation.DurationList(),&[Some(2.0),Some(1.0)]);
-    assert_eq!(animation.GetComposition(1),CompositeOperation::kCompositeAccumulate);
-    assert_eq!(animation.ConvertToTiming(0).direction,PlaybackDirection::ALTERNATE_NORMAL);
-    assert!(matches!(&*animation.ConvertToTiming(0).timing_function,TimingFunction::Steps{number_of_steps:3,..}));
-    assert_eq!(animation.TimelineList(),&[StyleTimeline::Keyword(foundation::CSSValueID::kAuto)]);
+    owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
+        "@keyframes fade{from{opacity:0}to{opacity:1}}",
+    ));
+    let target = node(&owner, "target");
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
+    let style = owner
+        .GetDocument()
+        .ResolvedStyleFor(target)
+        .unwrap()
+        .native_style
+        .clone();
+    let native = unsafe { &*style.Get() };
+    let animation = unsafe { &*native.Animations().Get() };
+    assert_eq!(
+        unsafe { &*animation.NameList()[0].Get() }.GetName().Utf8(),
+        "fade"
+    );
+    assert_eq!(animation.DurationList(), &[Some(2.0), Some(1.0)]);
+    assert_eq!(
+        animation.GetComposition(1),
+        CompositeOperation::kCompositeAccumulate
+    );
+    assert_eq!(
+        animation.ConvertToTiming(0).direction,
+        PlaybackDirection::ALTERNATE_NORMAL
+    );
+    assert!(matches!(
+        &*animation.ConvertToTiming(0).timing_function,
+        TimingFunction::Steps {
+            number_of_steps: 3,
+            ..
+        }
+    ));
+    assert_eq!(
+        animation.TimelineList(),
+        &[StyleTimeline::Keyword(foundation::CSSValueID::kAuto)]
+    );
     assert!(animation.RangeStartList()[0].is_none() && animation.RangeEndList()[0].is_none());
-    set_attribute(&mut owner,target,"style","animation:none;animation-composition:replace");
-    engine.Update(&mut owner,&media(),&[]).unwrap();
-    assert!(engine.Diagnostics().is_empty(),"{:?}",engine.Diagnostics());
-    let updated=unsafe{&*owner.GetDocument().ResolvedStyleFor(target).unwrap().native_style.Get()};
-    let updated=unsafe{&*updated.Animations().Get()};
+    set_attribute(
+        &mut owner,
+        target,
+        "style",
+        "animation:none;animation-composition:replace",
+    );
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
+    let updated = unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(target)
+            .unwrap()
+            .native_style
+            .Get()
+    };
+    let updated = unsafe { &*updated.Animations().Get() };
     assert!(updated.NameList()[0].Get().is_null());
-    assert_eq!(updated.DurationList(),&[None]);
-    assert_eq!(updated.GetComposition(0),CompositeOperation::kCompositeReplace);
-    assert_eq!(animation.DurationList(),&[Some(2.0),Some(1.0)]);
+    assert_eq!(updated.DurationList(), &[None]);
+    assert_eq!(
+        updated.GetComposition(0),
+        CompositeOperation::kCompositeReplace
+    );
+    assert_eq!(animation.DurationList(), &[Some(2.0), Some(1.0)]);
 }
 
 #[test]
-fn production_grid_template_areas_shorthand_and_inheritance_reach_native_grid_data(){
+fn production_grid_template_areas_shorthand_and_inheritance_reach_native_grid_data() {
     use foundation::String;
     use layoutng_style::style::computed_style_constants::GridAutoFlow;
-    let _heap=foundation::LayoutHeapScope::new();
+    let _heap = foundation::LayoutHeapScope::new();
     let mut owner=html::html_parser::ParseHTML("<div id=parent style='display:grid;grid: auto-flow dense 12px / 1fr 40px'><div id=target style='grid:inherit'></div></div>");
-    owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS("#target{grid-template:\"head head\" 20px \"main side\" / 2fr 30px!important}"));
-    let target=node(&owner,"target");let mut engine=StyleEngine::new(&owner);
-    engine.Update(&mut owner,&media(),&[]).unwrap();
-    assert!(engine.Diagnostics().is_empty(),"{:?}",engine.Diagnostics());
-    let style=owner.GetDocument().ResolvedStyleFor(target).unwrap().native_style.clone();let native=unsafe{&*style.Get()};
-    let areas=unsafe{&*native.GridTemplateAreas().Get()};
-    assert_eq!((areas.row_count,areas.column_count),(2,2));
-    assert_eq!(areas.implicit_named_grid_row_lines[&String::from("head-end")],vec![1]);
-    assert_eq!(native.GetGridAutoFlow(),GridAutoFlow::kAutoFlowRowDense);
-    assert_eq!(native.GridAutoRows().RepeatTrackSize(0,0).MinTrackBreadth().Pixels(),12.0);
-    let columns=unsafe{&*native.SpecifiedGridTemplateColumns().Get()}.GetTrackList();
-    assert_eq!(columns.RepeatTrackSize(0,0).MaxTrackBreadth().FlexValue(),2.0);
-    set_attribute(&mut owner,target,"style","grid:none!important");
-    engine.Update(&mut owner,&media(),&[]).unwrap();
-    assert!(engine.Diagnostics().is_empty(),"{:?}",engine.Diagnostics());
-    let updated=unsafe{&*owner.GetDocument().ResolvedStyleFor(target).unwrap().native_style.Get()};
-    assert!(updated.GridTemplateAreas().Get().is_null()&&updated.SpecifiedGridTemplateColumns().Get().is_null()&&updated.SpecifiedGridTemplateRows().Get().is_null());
-    assert_eq!(updated.GetGridAutoFlow(),GridAutoFlow::kAutoFlowRow);
-    assert!(updated.GridAutoRows().RepeatTrackSize(0,0).MinTrackBreadth().IsAuto());
-    assert_eq!(areas.row_count,2);
+    owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
+        "#target{grid-template:\"head head\" 20px \"main side\" / 2fr 30px!important}",
+    ));
+    let target = node(&owner, "target");
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
+    let style = owner
+        .GetDocument()
+        .ResolvedStyleFor(target)
+        .unwrap()
+        .native_style
+        .clone();
+    let native = unsafe { &*style.Get() };
+    let areas = unsafe { &*native.GridTemplateAreas().Get() };
+    assert_eq!((areas.row_count, areas.column_count), (2, 2));
+    assert_eq!(
+        areas.implicit_named_grid_row_lines[&String::from("head-end")],
+        vec![1]
+    );
+    assert_eq!(native.GetGridAutoFlow(), GridAutoFlow::kAutoFlowRowDense);
+    assert_eq!(
+        native
+            .GridAutoRows()
+            .RepeatTrackSize(0, 0)
+            .MinTrackBreadth()
+            .Pixels(),
+        12.0
+    );
+    let columns = unsafe { &*native.SpecifiedGridTemplateColumns().Get() }.GetTrackList();
+    assert_eq!(
+        columns.RepeatTrackSize(0, 0).MaxTrackBreadth().FlexValue(),
+        2.0
+    );
+    set_attribute(&mut owner, target, "style", "grid:none!important");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
+    let updated = unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(target)
+            .unwrap()
+            .native_style
+            .Get()
+    };
+    assert!(
+        updated.GridTemplateAreas().Get().is_null()
+            && updated.SpecifiedGridTemplateColumns().Get().is_null()
+            && updated.SpecifiedGridTemplateRows().Get().is_null()
+    );
+    assert_eq!(updated.GetGridAutoFlow(), GridAutoFlow::kAutoFlowRow);
+    assert!(updated
+        .GridAutoRows()
+        .RepeatTrackSize(0, 0)
+        .MinTrackBreadth()
+        .IsAuto());
+    assert_eq!(areas.row_count, 2);
 }

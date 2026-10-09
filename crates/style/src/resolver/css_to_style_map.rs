@@ -251,29 +251,49 @@ pub trait CSSToStyleMapBackend: StyleResolverStateBackend {
 
 // Shared source-local native conversion, css_to_style_map.cc:617-627.
 pub(crate) fn BorderImageSliceSideFromResolved(value: f64, percentage: bool) -> Length {
-    if percentage { Length::Percent(value) } else { Length::Fixed(value.round()) }
+    if percentage {
+        Length::Percent(value)
+    } else {
+        Length::Fixed(value.round())
+    }
 }
 // css_to_style_map.cc:669-681, with already-converted real native sides.
 pub(crate) fn NinePieceImageQuadFromSides(sides: &[BorderImageLength; 4]) -> BorderImageLengthBox {
     BorderImageLengthBox::new(&sides[0], &sides[1], &sides[2], &sides[3])
 }
 // css_to_style_map.cc:684-732. Both generic and production dispatch share it.
-pub(crate) fn MapNinePieceImageRepeatFromIdentifiers(first: CSSValueID, second: CSSValueID, image: &mut NinePieceImage) {
+pub(crate) fn MapNinePieceImageRepeatFromIdentifiers(
+    first: CSSValueID,
+    second: CSSValueID,
+    image: &mut NinePieceImage,
+) {
     let rule = |identifier| match identifier {
         CSSValueID::kStretch => ENinePieceImageRule::kStretchImageRule,
         CSSValueID::kRound => ENinePieceImageRule::kRoundImageRule,
         CSSValueID::kSpace => ENinePieceImageRule::kSpaceImageRule,
         _ => ENinePieceImageRule::kRepeatImageRule,
     };
-    image.SetHorizontalRule(rule(first)); image.SetVerticalRule(rule(second));
+    image.SetHorizontalRule(rule(first));
+    image.SetVerticalRule(rule(second));
 }
 // css_to_style_map.cc:591-615. Preserve legacy fixed-width side effects.
-pub(crate) fn ApplyLegacyBorderImageWidths(image: &NinePieceImage, builder: &mut layoutng_style::style::computed_style::ComputedStyleBuilder) {
+pub(crate) fn ApplyLegacyBorderImageWidths(
+    image: &NinePieceImage,
+    builder: &mut layoutng_style::style::computed_style::ComputedStyleBuilder,
+) {
     let slices = image.BorderSlices();
-    if slices.Top().IsLength() && slices.Top().length().IsFixed() { builder.SetBorderTopWidthOwned(slices.Top().length().Pixels() as i32); }
-    if slices.Right().IsLength() && slices.Right().length().IsFixed() { builder.SetBorderRightWidthOwned(slices.Right().length().Pixels() as i32); }
-    if slices.Bottom().IsLength() && slices.Bottom().length().IsFixed() { builder.SetBorderBottomWidthOwned(slices.Bottom().length().Pixels() as i32); }
-    if slices.Left().IsLength() && slices.Left().length().IsFixed() { builder.SetBorderLeftWidthOwned(slices.Left().length().Pixels() as i32); }
+    if slices.Top().IsLength() && slices.Top().length().IsFixed() {
+        builder.SetBorderTopWidthOwned(slices.Top().length().Pixels() as i32);
+    }
+    if slices.Right().IsLength() && slices.Right().length().IsFixed() {
+        builder.SetBorderRightWidthOwned(slices.Right().length().Pixels() as i32);
+    }
+    if slices.Bottom().IsLength() && slices.Bottom().length().IsFixed() {
+        builder.SetBorderBottomWidthOwned(slices.Bottom().length().Pixels() as i32);
+    }
+    if slices.Left().IsLength() && slices.Left().length().IsFixed() {
+        builder.SetBorderLeftWidthOwned(slices.Left().length().Pixels() as i32);
+    }
 }
 pub struct CSSToStyleMap<B: CSSToStyleMapBackend>(PhantomData<fn() -> B>);
 impl<B: CSSToStyleMapBackend> CSSToStyleMap<B> {
@@ -845,7 +865,10 @@ impl<B: CSSToStyleMapBackend> CSSToStyleMap<B> {
             if backend.PrimitiveHasUnresolvablePercentages(value) {
                 return backend.PrimitiveToLength(value, resolver);
             }
-            return BorderImageSliceSideFromResolved(backend.PrimitivePercentage(value, resolver), true);
+            return BorderImageSliceSideFromResolved(
+                backend.PrimitivePercentage(value, resolver),
+                true,
+            );
         }
         BorderImageSliceSideFromResolved(backend.PrimitiveNumber(value, resolver), false)
     }

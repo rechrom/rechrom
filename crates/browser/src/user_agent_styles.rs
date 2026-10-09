@@ -9,6 +9,18 @@ const HTML_USER_AGENT_CSS: &str = r#"
   /* Keep the core rules in the same order and with the same values as
      Blink's html.css.  These are observable even on the oldest unstyled
      documents, so omitting them changes both typography and block geometry. */
+  html {
+    display: block;
+  }
+  /* html.css:1042-1052, HTML hidden-elements rendering defaults. These
+     elements retain DOM/style ownership but must not create layout objects. */
+  base, basefont, datalist, head, link, meta, noembed,
+  noframes, param, rp, script, style, template, title {
+    display: none;
+  }
+  input[type="hidden" i] {
+    display: none !important;
+  }
   body {
     display: block;
     margin: 8px;

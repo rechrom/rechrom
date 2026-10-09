@@ -6,7 +6,7 @@ use browser::page::{Page, PageClient};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use event_loop::{
     EventLoopEngine, EventLoopExecutor, EventLoopMutation, ExecutionContextId, ScheduledTask,
-    TaskId, TaskSource, WakeRequest,
+    TaskPriority, TaskToken, WakeRequest,
 };
 use foundation::begin_frame::{BeginFrameArgs, BeginFrameSource};
 use interaction::input_event::*;
@@ -103,6 +103,13 @@ pub enum UserEvent {
     CursorChanged(browser::page::Cursor),
     CaretChanged(Option<browser::page::CaretRect>),
 }
+/// Opaque application routing key carried by a generic event-loop wake.
+/// The scheduler never interprets this value or learns which engine emitted it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EngineWakeToken(pub u64);
+
+const OPEN_ENGINE_WAKE: EngineWakeToken = EngineWakeToken(1);
+
 #[derive(Clone)]
 pub enum Command {
     Navigate(String),
@@ -128,7 +135,7 @@ pub enum Command {
     Back,
     Forward,
     Stop,
-    WakeLoading,
+    Wake(EngineWakeToken),
     BeginFrame(NativeBeginFrame),
 }
 impl Command {
@@ -435,11 +442,11 @@ fn run(
                 received_external_work = true;
             }
             Ok(command) => {
-                let source = BrowserTaskSource(&command);
+                let priority = BrowserTaskPriority(&command);
                 QueueBrowserTask(
                     &mut event_loop,
                     &mut scheduling,
-                    source,
+                    priority,
                     BrowserEventLoopTask::Command(command),
                     None,
                     Instant::now(),
@@ -527,7 +534,7 @@ struct BrowserEventLoopScheduling {
     background_queued: bool,
 }
 
-fn BrowserTaskSource(command: &Command) -> TaskSource {
+fn BrowserTaskPriority(command: &Command) -> TaskPriority {
     if command.input().is_some()
         || matches!(
             command,
@@ -541,29 +548,27 @@ fn BrowserTaskSource(command: &Command) -> TaskSource {
                 | Command::Forward
         )
     {
-        TaskSource::UserInteraction
-    } else if matches!(command, Command::WakeLoading) {
-        TaskSource::Networking
+        TaskPriority::UserBlocking
     } else {
-        TaskSource::Internal
+        TaskPriority::Normal
     }
 }
 
 fn QueueBrowserTask(
     event_loop: &mut EventLoopEngine<BrowserEventLoopTask, NativeBeginFrame>,
     scheduling: &mut BrowserEventLoopScheduling,
-    source: TaskSource,
+    priority: TaskPriority,
     payload: BrowserEventLoopTask,
     ready_at: Option<Instant>,
     now: Instant,
 ) {
-    let id = TaskId(scheduling.next_task_id);
+    let token = TaskToken(scheduling.next_task_id);
     scheduling.next_task_id = scheduling.next_task_id.wrapping_add(1);
     event_loop.Apply(
         EventLoopMutation::PostTask(ScheduledTask {
-            id,
+            token,
             context: ExecutionContextId(1),
-            source,
+            priority,
             ready_at,
             payload,
         }),
@@ -583,7 +588,7 @@ fn QueueForegroundTurn(
     QueueBrowserTask(
         event_loop,
         scheduling,
-        TaskSource::DomManipulation,
+        TaskPriority::Normal,
         BrowserEventLoopTask::Foreground,
         None,
         now,
@@ -602,7 +607,7 @@ fn QueueBackgroundTurn(
     QueueBrowserTask(
         event_loop,
         scheduling,
-        TaskSource::Internal,
+        TaskPriority::Background,
         BrowserEventLoopTask::Background,
         None,
         now,
@@ -624,7 +629,7 @@ impl EventLoopExecutor<BrowserEventLoopTask, NativeBeginFrame> for BrowserEventL
     fn RunTask(
         &mut self,
         _context: ExecutionContextId,
-        _source: TaskSource,
+        _priority: TaskPriority,
         task: BrowserEventLoopTask,
     ) -> io::Result<()> {
         match task {
@@ -689,7 +694,7 @@ fn dispatch_host_command(
         if state.late_scroll.is_some()
             && !wheel
             && !aligned
-            && !matches!(&command, Command::WakeLoading)
+            && !matches!(&command, Command::Wake(_))
         {
             state.finish_late_scroll(false)?;
         }
@@ -803,7 +808,7 @@ fn native_command_waiting(
     // for the active gesture, including a pulse between wheel samples.
     // Animation-only pulses still leave loading/script tasks runnable.
     let priority = |command: &Command| {
-        !matches!(command, Command::WakeLoading | Command::BeginFrame(_))
+        !matches!(command, Command::Wake(_) | Command::BeginFrame(_))
             || (gesture_frame_pending && matches!(command, Command::BeginFrame(_)))
     };
     // Loading wakes and animation-only frame pulses are control work.
@@ -829,13 +834,14 @@ fn native_command_waiting(
 }
 // The host's ScheduleWork notification is separate from URL/body events.
 // Chromium's WorkDeduplicator coalesces requests while a wake is pending.
-fn loading_wake_callback(
+fn engine_wake_callback(
     sender: mpsc::Sender<Command>,
     pending: Arc<AtomicBool>,
+    token: EngineWakeToken,
 ) -> Arc<dyn Fn() + Send + Sync> {
     Arc::new(move || {
         if !pending.swap(true, Ordering::AcqRel) {
-            if sender.send(Command::WakeLoading).is_err() {
+            if sender.send(Command::Wake(token)).is_err() {
                 pending.store(false, Ordering::Release);
             }
         }
@@ -2208,9 +2214,10 @@ impl BrowserState {
             _ => address.clone(),
         };
         if let Some(sender) = &self.loading_sender {
-            page.SetLoadingWakeCallback(loading_wake_callback(
+            page.SetLoadingWakeCallback(engine_wake_callback(
                 sender.clone(),
                 self.loading_wake_pending.clone(),
+                OPEN_ENGINE_WAKE,
             ));
         }
         let open_result = {
@@ -2993,11 +3000,13 @@ impl BrowserState {
                 }
                 result
             }
-            Command::WakeLoading => {
-                // A wake announces ready work, not one unit of body data.
-                // Acknowledge before pumping so newly arriving work can wake
-                // the following turn. Bytes/events stay in each loader queue.
-                self.loading_wake_pending.store(false, Ordering::Release);
+            Command::Wake(token) => {
+                if token == OPEN_ENGINE_WAKE {
+                    // A wake announces ready work, not one unit of body data.
+                    // Acknowledge before pumping so newly arriving work can
+                    // wake the following turn. Data stays in its owner queue.
+                    self.loading_wake_pending.store(false, Ordering::Release);
+                }
                 Ok(())
             }
             Command::Stop => Ok(()),
@@ -4505,12 +4514,15 @@ mod tests {
             deadline: now + Duration::from_millis(16),
             interval: Duration::from_millis(16),
         };
-        sender.send(Command::WakeLoading).unwrap();
+        sender.send(Command::Wake(OPEN_ENGINE_WAKE)).unwrap();
         sender.send(Command::BeginFrame(args.into())).unwrap();
         let mut pending = VecDeque::new();
         assert!(!native_command_waiting(&receiver, &mut pending, false));
         assert!(native_command_waiting(&receiver, &mut pending, true));
-        assert!(matches!(pending.pop_front(), Some(Command::WakeLoading)));
+        assert!(matches!(
+            pending.pop_front(),
+            Some(Command::Wake(OPEN_ENGINE_WAKE))
+        ));
         assert!(matches!(pending.pop_front(), Some(Command::BeginFrame(_))));
         assert!(!native_command_waiting(&receiver, &mut pending, true));
     }
@@ -4775,14 +4787,20 @@ mod tests {
     fn native_priority_looks_through_wakes_and_retains_order() {
         let (sender, receiver) = mpsc::channel();
         let mut pending = VecDeque::new();
-        sender.send(Command::WakeLoading).unwrap();
+        sender.send(Command::Wake(OPEN_ENGINE_WAKE)).unwrap();
         sender.send(Command::Reload).unwrap();
         assert!(native_command_waiting(&receiver, &mut pending, false));
-        assert!(matches!(pending.pop_front(), Some(Command::WakeLoading)));
+        assert!(matches!(
+            pending.pop_front(),
+            Some(Command::Wake(OPEN_ENGINE_WAKE))
+        ));
         assert!(matches!(pending.pop_front(), Some(Command::Reload)));
-        sender.send(Command::WakeLoading).unwrap();
+        sender.send(Command::Wake(OPEN_ENGINE_WAKE)).unwrap();
         assert!(!native_command_waiting(&receiver, &mut pending, false));
-        assert!(matches!(pending.pop_front(), Some(Command::WakeLoading)));
+        assert!(matches!(
+            pending.pop_front(),
+            Some(Command::Wake(OPEN_ENGINE_WAKE))
+        ));
     }
 
     #[test]
@@ -4838,7 +4856,7 @@ mod tests {
                     if matches!(event, UserEvent::FrameReady) {
                         mailbox.lock().unwrap().take();
                         if armed.swap(false, Ordering::AcqRel) {
-                            sender.send(Command::WakeLoading).unwrap();
+                            sender.send(Command::Wake(OPEN_ENGINE_WAKE)).unwrap();
                             sender
                                 .send(Command::Input(InputEvent::Mouse(MouseEvent::default())))
                                 .unwrap();
@@ -4983,7 +5001,7 @@ mod tests {
     fn loading_wakes_coalesce_without_delaying_input_or_losing_rearm() {
         let (sender, receiver) = mpsc::channel();
         let pending = Arc::new(AtomicBool::new(false));
-        let wake = loading_wake_callback(sender.clone(), pending.clone());
+        let wake = engine_wake_callback(sender.clone(), pending.clone(), OPEN_ENGINE_WAKE);
         // A burst arriving while JS/render work occupies the owner must not
         // create thousands of empty host turns ahead of a later mouse event.
         let workers: Vec<_> = (0..4)
@@ -5006,7 +5024,10 @@ mod tests {
                 ..Default::default()
             })))
             .unwrap();
-        assert!(matches!(receiver.try_recv(), Ok(Command::WakeLoading)));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Command::Wake(OPEN_ENGINE_WAKE))
+        ));
         assert!(matches!(
             receiver.try_recv(),
             Ok(Command::Input(InputEvent::Mouse(_)))
@@ -5018,7 +5039,10 @@ mod tests {
         assert!(pending.load(Ordering::Acquire));
         pending.store(false, Ordering::Release); // host accepts the wake
         wake();
-        assert!(matches!(receiver.try_recv(), Ok(Command::WakeLoading)));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Command::Wake(OPEN_ENGINE_WAKE))
+        ));
         assert!(matches!(
             receiver.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -6484,7 +6508,7 @@ mod tests {
         })))
         .unwrap();
         tx.send(Command::Resize(c)).unwrap();
-        tx.send(Command::WakeLoading).unwrap();
+        tx.send(Command::Wake(OPEN_ENGINE_WAKE)).unwrap();
         tx.send(Command::Redraw).unwrap();
         tx.send(Command::Redraw).unwrap();
         tx.send(Command::Reload).unwrap();
@@ -6503,7 +6527,7 @@ mod tests {
         );
         assert!(matches!(
             receive_command(&rx, &mut pending, Duration::ZERO).unwrap(),
-            Command::WakeLoading
+            Command::Wake(OPEN_ENGINE_WAKE)
         ));
         assert!(matches!(
             receive_command(&rx, &mut pending, Duration::ZERO).unwrap(),

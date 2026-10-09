@@ -1180,6 +1180,29 @@ impl DocumentStyleEngine {
                 });
             }
         }
+        // cpp: svg/svg_element.cc:574-592 and
+        // svg/svg_transformable_element.cc:45-53. SVG presentation
+        // attributes are author-cascade input below ordinary author rules.
+        if pseudo.is_none() && document.Node(index).Namespace() == DOMNamespace::kSVG {
+            let declarations = SVGPresentationAttributeDeclarations(document.Node(index));
+            if !declarations.is_empty() {
+                result.push(MatchedRule {
+                    specificity: 0,
+                    proximity: 0,
+                    order: 0,
+                    origin: CascadeOrigin::kAuthorPresentationalHint,
+                    inline: false,
+                    layer: u16::MAX,
+                    properties: Parse(
+                        document,
+                        index,
+                        &declarations,
+                        CSSParserMode::kSVGAttributeMode,
+                        &mut self.diagnostics,
+                    ),
+                });
+            }
+        }
         // cpp: ElementRuleCollector::SortMatchedRules and MatchResult::AddMatchedProperties.
         // cpp: element_rule_collector.h:69-83. Scope proximity breaks equal
         // specificity before source order; the source clamps it to 16 bits.
@@ -1572,6 +1595,7 @@ impl DocumentStyleEngine {
                         id,
                         CSSPropertyID::kDirection
                             | CSSPropertyID::kWritingMode
+                            | CSSPropertyID::kZoom
                             | CSSPropertyID::kFontSize
                             | CSSPropertyID::kFontWeight
                             | CSSPropertyID::kFontStyle
@@ -1608,8 +1632,12 @@ impl DocumentStyleEngine {
             ids.sort_by_key(|id| match id {
                 CSSPropertyID::kDirection => 0,
                 CSSPropertyID::kWritingMode => 1,
-                CSSPropertyID::kFontFamily => 2,
-                CSSPropertyID::kFontSize => 3,
+                // cpp: style_cascade.cc:625-638 applies zoom before the
+                // high-priority font properties because it changes their
+                // conversion data and computed metrics.
+                CSSPropertyID::kZoom => 2,
+                CSSPropertyID::kFontFamily => 3,
+                CSSPropertyID::kFontSize => 4,
                 _ => *id as i32 + 10,
             });
             for id in ids {
@@ -1784,6 +1812,190 @@ fn Parse(
         });
     }
     parsed.properties
+}
+
+fn SVGPresentationAttributeDeclarations(node: &dom::persistent_document::DOMNode) -> String {
+    // Geometry-only SVG attributes remain owned by DOM/Layout metadata. These
+    // names are the CSS-facing animated presentation properties collected by
+    // SVGElement and its graphics-element subclasses in Chromium.
+    const PROPERTIES: &[&str] = &[
+        "alignment-baseline",
+        "baseline-shift",
+        "clip-path",
+        "clip-rule",
+        "color",
+        "color-interpolation",
+        "cursor",
+        "display",
+        "dominant-baseline",
+        "fill",
+        "fill-opacity",
+        "fill-rule",
+        "filter",
+        "flood-color",
+        "flood-opacity",
+        "font-family",
+        "font-size",
+        "font-style",
+        "font-weight",
+        "image-rendering",
+        "marker-end",
+        "marker-mid",
+        "marker-start",
+        "mask",
+        "opacity",
+        "overflow",
+        "paint-order",
+        "pointer-events",
+        "shape-rendering",
+        "stop-color",
+        "stop-opacity",
+        "stroke",
+        "stroke-dasharray",
+        "stroke-dashoffset",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-miterlimit",
+        "stroke-opacity",
+        "stroke-width",
+        "text-anchor",
+        "text-decoration",
+        "transform",
+        "transform-origin",
+        "vector-effect",
+        "visibility",
+        "white-space",
+    ];
+    let mut declarations = String::new();
+    for attribute in node.Attributes() {
+        if !attribute.namespace_uri.is_empty()
+            || !PROPERTIES.contains(&attribute.local_name.as_str())
+        {
+            continue;
+        }
+        let value = if attribute.local_name == "transform" {
+            NormalizeSVGTransform(&attribute.value)
+        } else {
+            attribute.value.clone()
+        };
+        declarations.push_str(&attribute.local_name);
+        declarations.push(':');
+        declarations.push_str(&value);
+        declarations.push(';');
+    }
+    declarations
+}
+
+fn NormalizeSVGTransform(value: &str) -> String {
+    // SVGTransformList has SVG-specific argument grammar (including optional
+    // rotate centers). Chromium exposes the concatenated AffineTransform to
+    // style. Lowering to matrix() preserves that exact boundary and avoids
+    // pretending the attribute itself used CSS transform-function syntax.
+    type Matrix = [f64; 6];
+    fn multiply(left: Matrix, right: Matrix) -> Matrix {
+        [
+            left[0] * right[0] + left[2] * right[1],
+            left[1] * right[0] + left[3] * right[1],
+            left[0] * right[2] + left[2] * right[3],
+            left[1] * right[2] + left[3] * right[3],
+            left[0] * right[4] + left[2] * right[5] + left[4],
+            left[1] * right[4] + left[3] * right[5] + left[5],
+        ]
+    }
+    fn operation(name: &str, arguments: &[f64]) -> Option<Matrix> {
+        match name.to_ascii_lowercase().as_str() {
+            "matrix" if arguments.len() == 6 => arguments.try_into().ok(),
+            "translate" if (1..=2).contains(&arguments.len()) => Some([
+                1.0,
+                0.0,
+                0.0,
+                1.0,
+                arguments[0],
+                arguments.get(1).copied().unwrap_or(0.0),
+            ]),
+            "scale" if (1..=2).contains(&arguments.len()) => Some([
+                arguments[0],
+                0.0,
+                0.0,
+                arguments.get(1).copied().unwrap_or(arguments[0]),
+                0.0,
+                0.0,
+            ]),
+            "rotate" if arguments.len() == 1 || arguments.len() == 3 => {
+                let radians = arguments[0].to_radians();
+                let rotation = [
+                    radians.cos(),
+                    radians.sin(),
+                    -radians.sin(),
+                    radians.cos(),
+                    0.0,
+                    0.0,
+                ];
+                if arguments.len() == 1 {
+                    Some(rotation)
+                } else {
+                    let to_center = [1.0, 0.0, 0.0, 1.0, arguments[1], arguments[2]];
+                    let from_center = [1.0, 0.0, 0.0, 1.0, -arguments[1], -arguments[2]];
+                    Some(multiply(multiply(to_center, rotation), from_center))
+                }
+            }
+            "skewx" if arguments.len() == 1 => {
+                Some([1.0, 0.0, arguments[0].to_radians().tan(), 1.0, 0.0, 0.0])
+            }
+            "skewy" if arguments.len() == 1 => {
+                Some([1.0, arguments[0].to_radians().tan(), 0.0, 1.0, 0.0, 0.0])
+            }
+            _ => None,
+        }
+    }
+
+    let bytes = value.as_bytes();
+    let mut cursor = 0;
+    let mut result = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let mut count = 0;
+    while cursor < bytes.len() {
+        while cursor < bytes.len() && (bytes[cursor].is_ascii_whitespace() || bytes[cursor] == b',')
+        {
+            cursor += 1;
+        }
+        let name_start = cursor;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_alphabetic() {
+            cursor += 1;
+        }
+        let name = &value[name_start..cursor];
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if name.is_empty() || bytes.get(cursor) != Some(&b'(') {
+            return value.to_owned();
+        }
+        cursor += 1;
+        let arguments_start = cursor;
+        while cursor < bytes.len() && bytes[cursor] != b')' {
+            cursor += 1;
+        }
+        if cursor == bytes.len() {
+            return value.to_owned();
+        }
+        let arguments: Option<Vec<f64>> = value[arguments_start..cursor]
+            .split(|character: char| character == ',' || character.is_ascii_whitespace())
+            .filter(|argument| !argument.is_empty())
+            .map(|argument| argument.parse().ok())
+            .collect();
+        let Some(matrix) = arguments.and_then(|arguments| operation(name, &arguments)) else {
+            return value.to_owned();
+        };
+        result = multiply(result, matrix);
+        count += 1;
+        cursor += 1;
+    }
+    if count == 0 {
+        return value.to_owned();
+    }
+    format!(
+        "matrix({},{},{},{},{},{})",
+        result[0], result[1], result[2], result[3], result[4], result[5]
+    )
 }
 // cpp: StyleAdjuster::EquivalentBlockDisplay; inline variants preserve their inner display.
 fn BlockDisplay(display: EDisplay) -> EDisplay {

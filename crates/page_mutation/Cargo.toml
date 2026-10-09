@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+animation = { path = "../animation" }
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }
 layoutng_assembly = { path = "../layoutng_assembly" }

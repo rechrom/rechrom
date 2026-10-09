@@ -1,0 +1,19 @@
+[package]
+name = "open"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+cssom = { path = "../cssom" }
+document_loader = { path = "../document_loader" }
+dom = { path = "../dom" }
+html = { path = "../html" }
+interaction = { path = "../interaction" }
+javascript = { path = "../javascript" }
+resource = { path = "../resource" }
+style = { path = "../style" }
+url_loader = { path = "../url_loader" }
+webapi = { path = "../webapi" }
+
+[dev-dependencies]
+xhr_transport = { path = "../xhr_transport" }

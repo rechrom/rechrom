@@ -5,7 +5,9 @@
 #![allow(non_snake_case, unused_variables)]
 use crate::css_selector::*;
 use crate::css_selector_list::CSSSelectorList;
-use crate::parser::css_selector_parser::{CSSSelectorParser, SelectorParserContext, SelectorParserOptions};
+use crate::parser::css_selector_parser::{
+    CSSSelectorParser, SelectorParserContext, SelectorParserOptions,
+};
 use crate::resolver::match_flags::MatchFlags;
 use crate::selector_checker::*;
 use crate::selector_filter::*;
@@ -703,7 +705,14 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         self.element(*n)
     }
     fn ContainerShadowHost(&self, n: &Self::ContainerNode) -> Option<Rc<Self::Element>> {
-        self.TreeScopeIsShadowRoot(n).then(|| self.document.Node(*n).Parent().and_then(|host| self.element(host))).flatten()
+        self.TreeScopeIsShadowRoot(n)
+            .then(|| {
+                self.document
+                    .Node(*n)
+                    .Parent()
+                    .and_then(|host| self.element(host))
+            })
+            .flatten()
     }
     fn ElementAsContainer(&self, e: &Self::Element) -> Rc<Self::ContainerNode> {
         self.handle(*e)
@@ -1646,32 +1655,72 @@ impl PersistentSelectorService {
         use crate::parser::css_nesting_type::CSSNestingType;
         let (_, b) = self.prepare(document, "*")?;
         if let Some(feature) = CSSSelectorParser::UnsupportedParsedFeature(&list.CopySelectors()) {
-            return Err(PersistentSelectorError::Unsupported(format!("scoped selector backend pending: :{}", feature)));
+            return Err(PersistentSelectorError::Unsupported(format!(
+                "scoped selector backend pending: :{}",
+                feature
+            )));
         }
-        let context = SelectorParserContext { html: true, quirks: b.InQuirksMode(&index) };
+        let context = SelectorParserContext {
+            html: true,
+            quirks: b.InQuirksMode(&index),
+        };
         // cpp: scoped_style_resolver.cc:446-478. Ownerless sheets have no
         // implicit activation; documentElement is not an invented fallback.
-        let implicit_root = document.FindNodeById(owner_node_id)
+        let implicit_root = document
+            .FindNodeById(owner_node_id)
             .and_then(|i| document.Node(i).Parent())
-            .and_then(|i| b.element(i)).map(|i| *i);
+            .and_then(|i| b.element(i))
+            .map(|i| *i);
         let mut parent = None;
         for record in scopes {
-            let parse = |text: &str, nesting| -> Result<Rc<CSSSelectorList>, PersistentSelectorError> {
+            let parse = |text: &str,
+                         nesting|
+             -> Result<Rc<CSSSelectorList>, PersistentSelectorError> {
                 let text = foundation::String::from(text);
-                let list = CSSSelectorList::AdoptSelectorVector(CSSSelectorParser::ParseScopeBoundary(
-                    &text, &context, nesting, &SelectorParserOptions::default()));
-                if !list.IsValid() { return Err(PersistentSelectorError::Unsupported("invalid compiled scope boundary".into())); }
-                if let Some(feature) = CSSSelectorParser::UnsupportedParsedFeature(&list.CopySelectors()) {
-                    return Err(PersistentSelectorError::Unsupported(format!("scope boundary backend pending: :{}", feature)));
+                let list =
+                    CSSSelectorList::AdoptSelectorVector(CSSSelectorParser::ParseScopeBoundary(
+                        &text,
+                        &context,
+                        nesting,
+                        &SelectorParserOptions::default(),
+                    ));
+                if !list.IsValid() {
+                    return Err(PersistentSelectorError::Unsupported(
+                        "invalid compiled scope boundary".into(),
+                    ));
+                }
+                if let Some(feature) =
+                    CSSSelectorParser::UnsupportedParsedFeature(&list.CopySelectors())
+                {
+                    return Err(PersistentSelectorError::Unsupported(format!(
+                        "scope boundary backend pending: :{}",
+                        feature
+                    )));
                 }
                 Ok(list)
             };
             let from = match &record.root {
                 cssom::CSSScopeRoot::ImplicitStylesheetOwner => None,
-                cssom::CSSScopeRoot::ExplicitSelectorList(text) => Some(parse(text, if parent.is_some() { CSSNestingType::kScope } else { CSSNestingType::kNone })?),
+                cssom::CSSScopeRoot::ExplicitSelectorList(text) => Some(parse(
+                    text,
+                    if parent.is_some() {
+                        CSSNestingType::kScope
+                    } else {
+                        CSSNestingType::kNone
+                    },
+                )?),
             };
-            let to = record.limit.as_deref().map(|text| parse(text, CSSNestingType::kScope)).transpose()?;
-            parent = Some(Rc::new(PersistentStyleScope { from, to, parent, implicit_root }));
+            let to = record
+                .limit
+                .as_deref()
+                .map(|text| parse(text, CSSNestingType::kScope))
+                .transpose()?;
+            parent = Some(Rc::new(PersistentStyleScope {
+                from,
+                to,
+                parent,
+                implicit_root,
+            }));
         }
         let mut ancestors = Vec::new();
         let mut ancestor = Some(b.handle(index));
@@ -1681,7 +1730,11 @@ impl PersistentSelectorService {
         }
         let mut frame = None;
         for element in ancestors.into_iter().rev() {
-            frame = Some(Rc::new(PersistentStyleScopeFrame { element, parent: frame, data: RefCell::new(HashMap::new()) }));
+            frame = Some(Rc::new(PersistentStyleScopeFrame {
+                element,
+                parent: frame,
+                data: RefCell::new(HashMap::new()),
+            }));
         }
         let checker = SelectorChecker::new(b.clone(), Mode::kResolvingStyle);
         let mut c = SelectorCheckingContext::new(b.handle(index));
@@ -1693,8 +1746,16 @@ impl PersistentSelectorService {
             c.selector = Some(selector);
             let mut result = MatchResult::default();
             if checker.Match(&c, &mut result) {
-                let matched = ScopedSelectorMatch { specificity: selector.Specificity(), proximity: result.proximity };
-                if best.is_none_or(|old| (matched.specificity, std::cmp::Reverse(matched.proximity)) > (old.specificity, std::cmp::Reverse(old.proximity))) { best = Some(matched); }
+                let matched = ScopedSelectorMatch {
+                    specificity: selector.Specificity(),
+                    proximity: result.proximity,
+                };
+                if best.is_none_or(|old| {
+                    (matched.specificity, std::cmp::Reverse(matched.proximity))
+                        > (old.specificity, std::cmp::Reverse(old.proximity))
+                }) {
+                    best = Some(matched);
+                }
             }
         }
         Ok(best)

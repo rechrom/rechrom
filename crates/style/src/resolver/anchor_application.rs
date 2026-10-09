@@ -66,16 +66,37 @@ fn Names(
     )))
 }
 // converter.cc:2366-2390. Reuse this native scope owner for TriggerScope.
-pub(super) fn ConvertNameScope(id: CSSPropertyID, v: &Value) -> std::result::Result<StyleNameScope, LonghandApplicationError> {
-    if matches!(v.Payload(), CSSValuePayload::kIdentifierClass(k) if k.0 == CSSValueID::kNone) { return Ok(StyleNameScope::default()); }
+pub(super) fn ConvertNameScope(
+    id: CSSPropertyID,
+    v: &Value,
+) -> std::result::Result<StyleNameScope, LonghandApplicationError> {
+    if matches!(v.Payload(), CSSValuePayload::kIdentifierClass(k) if k.0 == CSSValueID::kNone) {
+        return Ok(StyleNameScope::default());
+    }
     if let CSSValuePayload::kScopedKeywordClass(keyword) = v.Payload() {
-        if keyword.GetValueID() != CSSValueID::kAll { return Err(LonghandApplicationError::InvalidValue(id)); }
-        if !keyword.GetTreeScope().is_null() { return Err(LonghandApplicationError::Unsupported(id)); }
-        let populated = if v.IsScopedValue() { keyword.clone() } else { keyword.PopulateForDocumentRoot() };
-        return Ok(StyleNameScope::new(StyleNameScopeType::kAll, populated.GetPopulatedTreeScope(), std::ptr::null()));
+        if keyword.GetValueID() != CSSValueID::kAll {
+            return Err(LonghandApplicationError::InvalidValue(id));
+        }
+        if !keyword.GetTreeScope().is_null() {
+            return Err(LonghandApplicationError::Unsupported(id));
+        }
+        let populated = if v.IsScopedValue() {
+            keyword.clone()
+        } else {
+            keyword.PopulateForDocumentRoot()
+        };
+        return Ok(StyleNameScope::new(
+            StyleNameScopeType::kAll,
+            populated.GetPopulatedTreeScope(),
+            std::ptr::null(),
+        ));
     }
     let names = Names(id, v)?;
-    Ok(StyleNameScope::new(StyleNameScopeType::kNames, std::ptr::null(), names.Get()))
+    Ok(StyleNameScope::new(
+        StyleNameScopeType::kNames,
+        std::ptr::null(),
+        names.Get(),
+    ))
 }
 // converter.cc:3999-4217. Single-value repetition and the default second span
 // are intentionally distinct; physical resolution belongs to native PositionArea.

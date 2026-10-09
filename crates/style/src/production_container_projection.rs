@@ -243,7 +243,9 @@ fn RestoreToken(t: &CSSContainerToken) -> CSSParserToken {
             kFunctionToken,
             view(a),
             BlockType::kBlockStart,
-            Some(crate::parser::css_property_parser::CssValueKeywordID(&view(a))),
+            Some(crate::parser::css_property_parser::CssValueKeywordID(
+                &view(a),
+            )),
         ),
         AtKeyword(a) => value(kAtKeywordToken, a, BlockType::kNotBlock),
         Url(a) => value(kUrlToken, a, BlockType::kNotBlock),

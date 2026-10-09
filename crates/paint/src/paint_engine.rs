@@ -578,6 +578,14 @@ pub enum PaintMutation {
     },
 }
 
+/// Resource-only changes applied to an already committed artifact. The Page
+/// chooses which update entered the pipeline; PaintEngine owns immutable
+/// artifact replacement and validation.
+pub enum PaintResourceUpdate {
+    Snapshot(Arc<PaintResources>),
+    Mutations(Vec<PaintMutation>),
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PaintMutationResult {
     pub damaged_records: Vec<ImagePaintDependency>,
@@ -1035,12 +1043,26 @@ fn RecordPaint(
 pub struct PaintEngine {
     pre_paint: PrePaintTreeWalk,
     paint_result: Option<Arc<PaintArtifact>>,
+    animation_targeted_nodes: Vec<u64>,
 }
 
 #[cfg(feature = "translation_in_progress")]
 impl PaintEngine {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn ApplyAnimationMutation(&mut self, mutation: animation::PaintMutation) {
+        match mutation {
+            animation::PaintMutation::SetTargetedProperties { node_ids } => {
+                self.animation_targeted_nodes = node_ids;
+            }
+            animation::PaintMutation::Commit => self.animation_targeted_nodes.clear(),
+        }
+    }
+
+    pub fn AnimationTargetedNodes(&self) -> &[u64] {
+        &self.animation_targeted_nodes
     }
 
     /// Update resident properties and record a new artifact. Publish only once
@@ -1171,6 +1193,28 @@ impl PaintEngine {
         image.content = image_resource::PaintImageContent::Document(frame.record.clone());
         Arc::make_mut(artifact).resources = Some(Arc::new(resources));
         Some(PaintMutationResult { damaged_records })
+    }
+
+    /// Reconcile resource-only changes with the artifact currently published
+    /// by Page. This keeps Arc COW/adoption and resource revision validation
+    /// inside PaintEngine while older compositor snapshots remain immutable.
+    pub fn PublishResourceUpdate(
+        &mut self,
+        artifact: Arc<PaintArtifact>,
+        update: PaintResourceUpdate,
+    ) -> Option<Arc<PaintArtifact>> {
+        self.paint_result = Some(artifact);
+        match update {
+            PaintResourceUpdate::Snapshot(resources) => {
+                self.UpdatePaintResources(resources).then_some(())?;
+            }
+            PaintResourceUpdate::Mutations(mutations) => {
+                for mutation in mutations {
+                    self.ApplyMutation(mutation)?;
+                }
+            }
+        }
+        self.paint_result.clone()
     }
 
     /// Complete native client validation before publishing this artifact to

@@ -97,6 +97,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc7eb209b1518d6bb87b283c20095f5228ecda460da70b44f0802523dea6da04"
 
 [[package]]
+name = "animation"
+version = "0.0.1"
+dependencies = [
+ "cssom",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -220,9 +227,12 @@ dependencies = [
 name = "browser"
 version = "0.0.1"
 dependencies = [
+ "animation",
  "browser_tracing",
  "compositor",
  "cssom",
+ "decode",
+ "document",
  "document_image",
  "document_loader",
  "dom",
@@ -246,10 +256,12 @@ dependencies = [
  "layoutng_style",
  "layoutng_svg",
  "layoutng_table",
+ "open",
  "page_mutation",
  "paint",
  "raster",
  "renderer",
+ "resource",
  "style",
  "url",
  "url_loader",
@@ -603,6 +615,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "decode"
+version = "0.0.1"
+dependencies = [
+ "image_decoder",
+ "image_resource",
+ "web_font",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -671,6 +692,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "document"
+version = "0.0.1"
+dependencies = [
+ "animation",
+ "cssom",
+ "dom",
+ "html",
+ "layoutng_assembly",
+]
+
+[[package]]
 name = "document_image"
 version = "0.0.1"
 dependencies = [
@@ -689,6 +721,7 @@ name = "document_loader"
 version = "0.0.1"
 dependencies = [
  "cssom",
+ "decode",
  "dom",
  "font_engine",
  "html",
@@ -699,9 +732,9 @@ dependencies = [
  "layoutng_foundation",
  "layoutng_replaced",
  "page_mutation",
+ "resource",
  "style",
  "url_loader",
- "web_font",
 ]
 
 [[package]]
@@ -1518,9 +1551,9 @@ name = "interaction"
 version = "0.0.1"
 dependencies = [
  "dom",
+ "html",
  "layoutng_assembly",
  "layoutng_foundation",
- "page_mutation",
  "paint",
 ]
 
@@ -2355,6 +2388,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "open"
+version = "0.0.1"
+dependencies = [
+ "cssom",
+ "document_loader",
+ "dom",
+ "html",
+ "interaction",
+ "javascript",
+ "resource",
+ "style",
+ "url_loader",
+ "webapi",
+ "xhr_transport",
+]
+
+[[package]]
 name = "orbclient"
 version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2392,6 +2442,7 @@ dependencies = [
 name = "page_mutation"
 version = "0.0.1"
 dependencies = [
+ "animation",
  "cssom",
  "dom",
  "image_resource",
@@ -2402,6 +2453,7 @@ dependencies = [
 name = "paint"
 version = "0.0.1"
 dependencies = [
+ "animation",
  "browser_tracing",
  "image_resource",
  "layoutng_assembly",
@@ -2823,6 +2875,16 @@ dependencies = [
  "raster",
  "skia",
  "viz",
+]
+
+[[package]]
+name = "resource"
+version = "0.0.1"
+dependencies = [
+ "decode",
+ "image_decoder",
+ "image_resource",
+ "url_loader",
 ]
 
 [[package]]

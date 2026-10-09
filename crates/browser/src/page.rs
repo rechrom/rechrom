@@ -4,16 +4,12 @@
 //! tracked separately; this service is not evidence of complete browser parity.
 //! Page connects DOM mutation notifications and the style/layout/paint lifecycle;
 //! each engine owns its state and invalidation, like LocalFrameView lifecycle wiring.
-use crate::{
-    dynamic_scripts::DynamicScriptTasks,
-    interaction_services::PageInteraction,
-    script_scheduler::{ScriptLoadClient, ScriptScheduler},
+use crate::interaction_services::PageInteraction;
+use document::{
+    DocumentEffects, DocumentEngine, LayoutMutation as DocumentLayoutMutation, ResourceRequest,
 };
-use document_loader::{
-    DocumentLoadBudget, DocumentLoader, DocumentLoaderStatus, ResourceFetcher,
-    ResourceFetcherClient,
-};
-use dom::{dom_mutation::DOMMutationType, Document, UserInteractionState, DOM};
+use document_loader::{DocumentLoadBudget, ResourceFetcher, ResourceFetcherClient};
+use dom::{dom_mutation::DOMMutationType, UserInteractionState, DOM};
 use image_decoder::image_decoder::ImageDecoder;
 use image_resource::DocumentImageDecoder;
 pub use interaction::cursor::Cursor;
@@ -23,6 +19,7 @@ use javascript::javascript_runtime::{
     JavaScriptException, JavaScriptHostRuntime, JavaScriptRealm, JavaScriptResult,
     JavaScriptRuntime,
 };
+use javascript::script_engine::ScriptEngine;
 use layoutng_assembly::{
     fragment_tree::{FragmentNode, PaintResources},
     internal::{
@@ -30,11 +27,14 @@ use layoutng_assembly::{
         layout_input_types::IntSize,
     },
 };
+pub use open::OpenStatus;
+use open::{script_scheduler::ScriptLoadClient, OpenEngine};
 use page_mutation::{PageMutation, ResourceMutation};
 pub use paint::paint_engine::{CaretGeometry, PaintRect as CaretRect};
+use resource::ResourceEngine;
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     io,
     rc::{Rc, Weak},
     sync::Arc,
@@ -43,6 +43,7 @@ pub use style::PreferredColorScheme;
 use url_loader::{URLLoader, URLRequest, URLWakeCallback};
 use webapi::{
     dom_bindings::{DOMBindingsHost, DOMJavaScriptBindings},
+    web_api_engine::{WebApiEffect, WebApiEngine, WebApiMutation},
     window_bindings::WindowJavaScriptBindings,
 };
 
@@ -182,23 +183,6 @@ pub struct PageFrame {
     pub display_items: Arc<paint::paint_engine::PaintArtifact>,
 }
 
-/// Compositor-facing analogue of cc::Layer::wheel_event_region. Rectangles
-/// are expressed in the committed content viewport coordinate space. DOM
-/// listener identity and propagation stay private to Page.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct BlockingWheelEventRegions {
-    pub covers_viewport: bool,
-    pub rects: Vec<paint::paint_engine::PaintRect>,
-}
-
-impl BlockingWheelEventRegions {
-    pub fn Contains(&self, x: f64, y: f64) -> bool {
-        self.covers_viewport
-            || self.rects.iter().any(|rect| {
-                x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
-            })
-    }
-}
 /// Local document navigation request; tab/window policy belongs to the host.
 #[derive(Clone, Debug)]
 pub struct NavigationRequest {
@@ -257,7 +241,7 @@ struct PendingImageEvent {
     active: Rc<Cell<bool>>,
 }
 struct PageState {
-    document: Rc<RefCell<DOM>>,
+    document: Rc<DocumentEngine>,
     style_engine: RefCell<style::StyleEngine>,
     layout_engine: RefCell<layoutng_assembly::layout_engine::LayoutEngine>,
     paint_engine: RefCell<paint::PaintEngine>,
@@ -268,7 +252,7 @@ struct PageState {
     layout_editing: Rc<layoutng_assembly::editing_state::LayoutEditingState>,
     bindings: RefCell<Weak<RefCell<DOMJavaScriptBindings>>>,
     resources: RefCell<Option<Rc<ResourceFetcher>>>,
-    dynamic: RefCell<Option<Rc<DynamicScriptTasks>>>,
+    connected_resources: open::ConnectedResourceDiscovery,
     image_events: RefCell<Vec<PendingImageEvent>>,
     pending_image_events: RefCell<HashMap<u64, Rc<Cell<bool>>>>,
     scroll_event_targets: RefCell<Vec<u64>>,
@@ -287,15 +271,13 @@ struct PageState {
     #[cfg(test)]
     full_layout_lifecycles: Cell<usize>,
     scroll_updates: RefCell<Vec<(u64, Offset)>>,
-    animation_time: Cell<f64>,
-    animation_paint_nodes: RefCell<HashSet<u64>>,
-    animation_paint_direct: Cell<bool>,
-    animation_paint_batch_compatible: Cell<bool>,
+    animation_engine: RefCell<animation::AnimationEngine>,
+    animation_begin_frame_requested: Cell<bool>,
     preferred_color_scheme: Cell<PreferredColorScheme>,
 }
 impl PageState {
     fn WithEngines(
-        document: Rc<RefCell<DOM>>,
+        document: Rc<DocumentEngine>,
         layout_engine: layoutng_assembly::layout_engine::LayoutEngine,
         paint_engine: paint::PaintEngine,
         #[cfg(feature = "pure_source_png")] rendering: PageRenderPipeline,
@@ -303,6 +285,7 @@ impl PageState {
         client: Rc<RefCell<dyn PageClient>>,
     ) -> Rc<Self> {
         let style_engine = style::StyleEngine::new(&document.borrow());
+        let connected_resources = open::ConnectedResourceDiscovery::new(document.Handle());
         Rc::new(Self {
             document,
             style_engine: RefCell::new(style_engine),
@@ -315,7 +298,7 @@ impl PageState {
             layout_editing: Rc::new(Default::default()),
             bindings: RefCell::new(Weak::new()),
             resources: RefCell::new(None),
-            dynamic: RefCell::new(None),
+            connected_resources,
             image_events: RefCell::new(Vec::new()),
             pending_image_events: RefCell::new(HashMap::new()),
             scroll_event_targets: RefCell::new(Vec::new()),
@@ -331,10 +314,8 @@ impl PageState {
             #[cfg(test)]
             full_layout_lifecycles: Cell::new(0),
             scroll_updates: RefCell::new(Vec::new()),
-            animation_time: Cell::new(0.0),
-            animation_paint_nodes: RefCell::new(HashSet::new()),
-            animation_paint_direct: Cell::new(false),
-            animation_paint_batch_compatible: Cell::new(true),
+            animation_engine: RefCell::new(animation::AnimationEngine::new()),
+            animation_begin_frame_requested: Cell::new(false),
             preferred_color_scheme: Cell::new(PreferredColorScheme::kLight),
         })
     }
@@ -342,7 +323,7 @@ impl PageState {
     #[cfg(test)]
     fn new(constraints: ConstraintSpace, client: Rc<RefCell<dyn PageClient>>) -> Rc<Self> {
         Self::WithEngines(
-            Rc::new(RefCell::new(DOM::new())),
+            Rc::new(DocumentEngine::new()),
             layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly()),
             paint::PaintEngine::new(),
             #[cfg(feature = "pure_source_png")]
@@ -385,42 +366,21 @@ impl PageState {
 
     fn PublishPaintResources(&self, frame: &mut PageFrame) {
         let pending = std::mem::take(&mut *self.pending_paint_mutations.borrow_mut());
-        if !pending.is_empty() {
-            let mut paint = self.paint_engine.borrow_mut();
-            paint.AdoptPaintResult(std::mem::take(&mut frame.display_items));
-            for mutation in pending {
-                if paint.ApplyMutation(mutation).is_none() {
-                    dom::error::logic_error("image PaintMutation rejected");
-                }
-            }
-            frame.display_items = paint
-                .GetPaintResult()
-                .expect("image mutation retains the artifact")
-                .clone();
-            self.paint_resources_dirty.set(false);
-            return;
-        }
-        let resources = {
+        let update = if pending.is_empty() {
             let constraints = self.constraints.borrow();
-            Arc::new(PaintResources {
+            paint::paint_engine::PaintResourceUpdate::Snapshot(Arc::new(PaintResources {
                 fonts: constraints.fonts.clone(),
                 images: constraints.images.clone(),
                 device_pixel_ratio: constraints.device_pixel_ratio,
                 viewport: constraints.viewport,
-            })
+            }))
+        } else {
+            paint::paint_engine::PaintResourceUpdate::Mutations(pending)
         };
         let mut paint = self.paint_engine.borrow_mut();
-        // Page and PaintEngine jointly publish one immutable artifact. Move
-        // Page's current reference back before the resource-only COW update;
-        // any older compositor snapshot remains immutable.
-        paint.AdoptPaintResult(std::mem::take(&mut frame.display_items));
-        if !paint.UpdatePaintResources(resources) {
-            dom::error::logic_error("paint resource update requires a committed artifact");
-        }
         frame.display_items = paint
-            .GetPaintResult()
-            .expect("paint resource update retains the artifact")
-            .clone();
+            .PublishResourceUpdate(std::mem::take(&mut frame.display_items), update)
+            .unwrap_or_else(|| dom::error::logic_error("paint resource update rejected"));
         self.paint_resources_dirty.set(false);
     }
     fn InvalidateStyle(&self) {
@@ -434,64 +394,6 @@ impl PageState {
         self.scroll_only.set(false);
         self.dirty.set(true);
     }
-    fn InteractionStateNeedsPaint(
-        &self,
-        old: UserInteractionState,
-        new: UserInteractionState,
-    ) -> bool {
-        if old.focused_node_id != new.focused_node_id
-            || old.focus_visible_node_id != new.focus_visible_node_id
-        {
-            return true;
-        }
-        let owner = self.document.borrow();
-        let document = owner.GetDocument();
-        let appearance_none =
-            layoutng_assembly::fragment_tree::FormControlPaintData::default().appearance;
-        for (previous, current) in [
-            (old.hovered_node_id, new.hovered_node_id),
-            (old.pressed_node_id, new.pressed_node_id),
-        ] {
-            if previous == current {
-                continue;
-            }
-            for id in [previous, current].into_iter().flatten() {
-                if Some(id) == old.focused_node_id || Some(id) == old.focus_visible_node_id {
-                    return true;
-                }
-                let Some(index) = document.FindNodeById(id) else {
-                    return true;
-                };
-                let Some(resolved) = document.ResolvedStyleFor(index) else {
-                    return true;
-                };
-                if std::iter::once(&resolved.style)
-                    .chain(
-                        [
-                            resolved.before.as_ref(),
-                            resolved.after.as_ref(),
-                            resolved.first_letter.as_ref(),
-                            resolved.placeholder.as_ref(),
-                        ]
-                        .into_iter()
-                        .flatten()
-                        .map(|pseudo| &pseudo.style),
-                    )
-                    .any(|style| {
-                        style.extended.as_ref().is_some_and(|extended| {
-                            extended.effective_appearance != appearance_none
-                        })
-                    })
-                {
-                    return true;
-                }
-            }
-        }
-        // MatchCompound does not read interaction state. ExportFragment only
-        // exposes hover/active to native appearance and focus-ring painting.
-        // If interaction selectors gain support, their readers must be added here.
-        false
-    }
     // cpp: browser/browser.cc:947-981
     fn ApplyDOMMutation(
         &self,
@@ -499,76 +401,37 @@ impl PageState {
         notify: &mut dyn FnMut(),
         dispatch_image: &mut dyn FnMut(u64, bool),
     ) {
-        let attribute_mutation = matches!(
-            m.mutation_type,
-            DOMMutationType::kSetAttribute | DOMMutationType::kRemoveAttribute
-        );
-        // Blink invalidates style first and only invalidates layout geometry
-        // after the computed style diff proves that it changed. Every attribute
-        // can participate in selectors, presentation hints or SVG styling, so
-        // keep the last geometry snapshot provisionally for all attribute
-        // writes. ResolveStyles bumps measurement_geometry_revision when the
-        // resulting style actually changes geometry, while resource metadata
-        // and tree mutations use their explicit geometry invalidation paths.
-        // Eagerly dropping the snapshot here makes paint-only data/ARIA/SVG
-        // attributes force synchronous full layout before geometry reads.
-        if attribute_mutation {
-            self.PreserveMeasurementGeometry();
-        } else {
-            self.InvalidateMeasurement();
-        }
-        if m.mutation_type == DOMMutationType::kParseDocument {
-            dom::error::logic_error("parse document requires Page parser service");
-        }
+        let effect = self
+            .document
+            .ApplyDOMMutation(m)
+            .unwrap_or_else(|error| std::panic::panic_any(error));
+        self.ApplyDocumentLifecycleEffects(&effect);
         // A changed image request cancels its queued event, even if src later
         // changes back to the same URL before the event task runs.
-        if matches!(
-            m.mutation_type,
-            DOMMutationType::kSetAttribute | DOMMutationType::kRemoveAttribute
-        ) && m.namespace_uri.is_empty()
-            && m.name.eq_ignore_ascii_case("src")
-        {
-            let changed = {
-                let owner = self.document.borrow();
-                let tree = owner.GetDocument();
-                tree.FindNodeById(m.target_node_id).is_some_and(|i| {
-                    let node = tree.Node(i);
-                    node.IsHTMLElement("img")
-                        && node.FindAttribute("src").is_some_and(|a| {
-                            m.mutation_type == DOMMutationType::kRemoveAttribute
-                                || a.value != m.value
-                        })
-                })
-            };
-            if changed {
-                self.CancelImageEvent(m.target_node_id);
+        for request in &effect.resource {
+            if let ResourceRequest::ResetImage { node_id } = *request {
+                self.CancelImageEvent(node_id);
                 if let Some(resources) = self.resources.borrow().as_ref() {
-                    resources.ResetImageEventSource(m.target_node_id);
+                    resources.ResetImageEventSource(node_id);
                 }
             }
         }
-        crate::dom_mutation::ApplyDOMTreeMutation(&mut self.document.borrow_mut(), m);
-        // A synchronous mutation notification may read CSSOM geometry. Mark
-        // style and measurement stale before it can flush the lifecycle.
-        if attribute_mutation {
-            self.InvalidateStylePreservingGeometry();
-        } else {
-            self.InvalidateStyle();
-        }
         notify();
-        let (id, scripts) = match m.mutation_type {
-            DOMMutationType::kAppendChild | DOMMutationType::kInsertBefore => {
-                (m.child_node_id, true)
-            }
-            DOMMutationType::kSetAttribute
-            | DOMMutationType::kSetTextContent
-            | DOMMutationType::kSetInnerHTML => (
-                m.target_node_id,
-                m.mutation_type != DOMMutationType::kSetInnerHTML,
-            ),
-            _ => (0, false),
+        let Some(connected) = effect
+            .resource
+            .into_iter()
+            .find_map(|request| match request {
+                ResourceRequest::DiscoverConnectedSubtree(request) => Some(request),
+                ResourceRequest::ResetImage { .. } => None,
+            })
+        else {
+            return;
         };
-        let node = self.document.borrow().GetDocument().FindNodeById(id);
+        let node = self
+            .document
+            .borrow()
+            .GetDocument()
+            .FindNodeById(connected.root_node_id);
         if let Some(i) = node {
             // Attribute parsing belongs to this element. Descendant style
             // resource discovery still runs through the invalidated StyleState;
@@ -577,20 +440,102 @@ impl PageState {
                 // HTMLImageElement::ParseAttribute only updates the image
                 // request for source/request attributes. Styling an already
                 // loaded image must not post another load event.
-                let image_request = m.namespace_uri.is_empty()
-                    && matches!(
-                        m.name.to_ascii_lowercase().as_str(),
-                        "src" | "srcset" | "sizes" | "referrerpolicy"
-                    );
-                self.PrepareConnectedNode(i, scripts, image_request, dispatch_image)
-                    .map(|_| ())
+                self.connected_resources.PrepareNode(
+                    i,
+                    connected.prepare_scripts,
+                    connected.image_request,
+                    dispatch_image,
+                )
             } else {
-                self.PrepareConnectedSubtree(i, scripts, dispatch_image)
+                self.connected_resources.PrepareSubtree(
+                    i,
+                    connected.prepare_scripts,
+                    dispatch_image,
+                )
             };
-            result.unwrap_or_else(|e| std::panic::panic_any(e));
+            let resource_effects = result.unwrap_or_else(|e| std::panic::panic_any(e));
+            if resource_effects.style_sheet_changed {
+                self.InvalidateStylePreservingGeometry();
+            }
         }
         // Preparation invalidates newly parsed sheets itself. Image completion
         // registers a later DOM task; its listener writes use this same path.
+    }
+
+    fn ApplyDocumentLifecycleEffects(&self, effects: &DocumentEffects) {
+        // Blink leaves detailed dirty nodes on Document. The effect only admits
+        // the relevant lifecycle engines. Attribute changes keep committed
+        // geometry until computed-style diffing proves layout changed.
+        if effects.layout == Some(DocumentLayoutMutation::InvalidateGeometry) {
+            self.InvalidateMeasurement();
+        } else if effects.style.is_some() {
+            self.PreserveMeasurementGeometry();
+        }
+        if effects.style.is_some() {
+            self.InvalidateStylePreservingGeometry();
+        }
+    }
+    fn ApplyAnimationOutput(&self, output: animation::AnimationOutput) {
+        for mutation in output.document {
+            let effects = self.document.ApplyAnimationMutation(mutation);
+            self.ApplyDocumentLifecycleEffects(&effects);
+        }
+        for mutation in output.paint {
+            self.paint_engine
+                .borrow_mut()
+                .ApplyAnimationMutation(mutation);
+        }
+        for effect in output.effects {
+            match effect {
+                animation::AnimationEffect::RequestBeginFrame => {
+                    self.animation_begin_frame_requested.set(true)
+                }
+            }
+        }
+    }
+    fn ApplyAnimationMutation(&self, mutation: animation::AnimationMutation) {
+        let output = self
+            .animation_engine
+            .borrow_mut()
+            .ApplyMutation(mutation)
+            .unwrap_or_else(|_| {
+                dom::error::invalid_argument("animation time must be finite and frame ordered")
+            });
+        self.ApplyAnimationOutput(output);
+    }
+    fn ApplyInteractionOutput(&self, output: interaction::InteractionOutput) {
+        match output {
+            interaction::InteractionOutput::DocumentMutation(mutation) => {
+                self.ApplyMutation(PageMutation::DOMMutation(mutation));
+            }
+            interaction::InteractionOutput::StateMutation(mutation) => {
+                self.ApplyMutation(PageMutation::InteractionStateMutation(mutation));
+            }
+            interaction::InteractionOutput::Effect(
+                interaction::InteractionEffect::SubmitForm { form, submitter },
+            ) => {
+                let base = self
+                    .resources
+                    .borrow()
+                    .as_ref()
+                    .map(|resources| resources.BaseURL())
+                    .unwrap_or_default();
+                let request = {
+                    let owner = self.document.borrow();
+                    crate::form_submission::BuildRequest(
+                        owner.GetDocument(),
+                        &base,
+                        form,
+                        submitter,
+                    )
+                };
+                match request {
+                    Ok(Some(request)) => self.client.borrow_mut().DidRequestNavigation(&request),
+                    Err(error) => self.client.borrow_mut().DidFail(&error.to_string()),
+                    Ok(None) => {}
+                }
+            }
+        }
     }
     fn QueueImageEvent(&self, id: u64, loaded: bool) {
         let source = {
@@ -631,141 +576,23 @@ impl PageState {
         }
         self.image_events.borrow_mut().clear();
     }
-    // cpp: browser/browser.cc:1575-1613
-    fn PrepareConnectedNode(
-        &self,
-        i: usize,
-        scripts: bool,
-        image_request: bool,
-        dispatch_image: &mut dyn FnMut(u64, bool),
-    ) -> io::Result<bool> {
-        {
-            let owner = self.document.borrow();
-            let tree = owner.GetDocument();
-            let mut root = i;
-            while let Some(parent) = tree.Node(root).Parent() {
-                root = parent;
-            }
-            if tree.Node(root).Type() != dom::persistent_document::DOMNodeType::kDocument {
-                return Ok(false);
-            }
-        }
-        let resources = self.resources.borrow().clone();
-        if let Some(resources) = &resources {
-            let image = {
-                let owner = self.document.borrow();
-                let tree = owner.GetDocument();
-                let n = tree.Node(i);
-                if image_request && n.IsHTMLElement("img") {
-                    n.FindAttribute("src")
-                        .filter(|a| !a.value.is_empty())
-                        .map(|a| {
-                            (
-                                n.Id(),
-                                a.value.clone(),
-                                tree.ImageResourceFor(&a.value).is_some(),
-                                !n.FindAttribute("loading").is_some_and(|loading| {
-                                    loading.value.eq_ignore_ascii_case("lazy")
-                                }),
-                            )
-                        })
-                } else {
-                    None
-                }
-            };
-            if let Some((id, src, cached, blocks_load)) = image {
-                if cached {
-                    dispatch_image(id, true);
-                } else {
-                    resources.QueueImageWithLoadBlocking(&src, None, blocks_load)?;
-                }
-            }
-            // Release document borrows before event registration. Style text
-            // and script preparation read the current mutation's arena.
-            let owner = self.document.borrow();
-            let tree = owner.GetDocument();
-            let style = if tree.Node(i).IsHTMLElement("style") {
-                Some(i)
-            } else {
-                tree.Node(i)
-                    .Parent()
-                    .filter(|&p| tree.Node(p).IsHTMLElement("style"))
-            };
-            let style = style.filter(|&node| {
-                let id = tree.Node(node).Id();
-                owner.NeedsStyleSheetParsing(id)
-            });
-            if let Some(style) = style {
-                fn text(d: &Document, i: usize, result: &mut String) {
-                    if d.Node(i).Type() == dom::persistent_document::DOMNodeType::kText {
-                        result.push_str(d.Node(i).Data());
-                    }
-                    for &child in d.Node(i).Children() {
-                        text(d, child, result);
-                    }
-                }
-                let mut css = String::new();
-                text(tree, style, &mut css);
-                let mut sheet = style::ParseCSS(&css);
-                sheet.owner_node_id = tree.Node(style).Id();
-                drop(owner);
-                resources.AddParsedStyleSheet(sheet, &resources.BaseURL())?;
-                self.InvalidateStylePreservingGeometry();
-            }
-        }
-        // PrepareConnectedScript independently proves connectivity, but only
-        // script elements can have a descriptor. Do not repeat its ancestry walk
-        // for every ordinary descendant (or inert innerHTML script subtree).
-        if scripts {
-            let dynamic = self.dynamic.borrow().clone();
-            if let Some(dynamic) = dynamic {
-                let owner = self.document.borrow();
-                let tree = owner.GetDocument();
-                if tree.Node(i).IsHTMLElement("script") {
-                    dynamic.PrepareConnectedScript(tree, i, true)?;
-                }
-            }
-        }
-        Ok(true)
-    }
-    fn PrepareConnectedSubtree(
-        &self,
-        i: usize,
-        scripts: bool,
-        dispatch_image: &mut dyn FnMut(u64, bool),
-    ) -> io::Result<()> {
-        if !self.PrepareConnectedNode(i, scripts, true, dispatch_image)? {
-            return Ok(());
-        }
-        let children = self
-            .document
-            .borrow()
-            .GetDocument()
-            .Node(i)
-            .Children()
-            .to_vec();
-        for child in children {
-            self.PrepareConnectedSubtree(child, scripts, dispatch_image)?;
-        }
-        Ok(())
-    }
-
     fn ConnectResources(self: &Rc<Self>, resources: Rc<ResourceFetcher>) {
         // Commit into the parser's supplied arena. That arena owns its CSSOM
         // collection, just as Blink's Document owns its StyleEngine collection.
         let state = Rc::downgrade(self);
         resources.SetStyleSheetReceiver(Rc::new(move |document, sheet| {
-            document.AppendStyleSheet(sheet);
+            let effects = DocumentEngine::AppendStyleSheetTo(document, sheet);
             if let Some(state) = state.upgrade() {
                 // A newly connected sheet can change both geometry and the set
                 // of referenced @font-face/image resources. CSSOM owns rule
                 // invalidation; Page owns lifecycle and resource discovery.
-                state.InvalidateStylePreservingGeometry();
+                state.ApplyDocumentLifecycleEffects(&effects);
             }
         }));
+        self.connected_resources.SetResources(resources.clone());
         *self.resources.borrow_mut() = Some(resources);
     }
-    fn ConnectDOM(self: &Rc<Self>) -> Rc<RefCell<DOMJavaScriptBindings>> {
+    fn CreateWebApiDOMHost(self: &Rc<Self>) -> DOMBindingsHost {
         let state = self;
         let style = state.clone();
         let metric = state.clone();
@@ -784,14 +611,15 @@ impl PageState {
             })),
             // cpp: browser/browser.cc:634-637
             sample_animation: Some(Box::new(move |node_id, effect_id, time, declarations| {
-                animation.ApplyMutation(PageMutation::AnimationTick(
-                    page_mutation::AnimationTick {
+                animation.ApplyAnimationMutation(animation::AnimationMutation::Tick(
+                    animation::AnimationTick {
                         monotonic_time: time / 1000.0,
-                        samples: vec![page_mutation::AnimationStyleSample {
+                        samples: vec![animation::AnimationStyleSample {
                             node_id,
                             effect_id,
                             declarations,
                         }],
+                        ..Default::default()
                     },
                 ));
             })),
@@ -830,14 +658,11 @@ impl PageState {
                     .ClientRects(id)
             })),
         };
-        let mutate = state.clone();
-        let bindings = Rc::new(RefCell::new(DOMJavaScriptBindings::WithHost(
-            state.document.clone(),
-            Box::new(move |m| mutate.ApplyMutation(PageMutation::DOMMutation(m.clone()))),
-            host,
-        )));
-        *state.bindings.borrow_mut() = Rc::downgrade(&bindings);
-        bindings
+        host
+    }
+
+    fn ConnectDOMBindings(&self, bindings: &Rc<RefCell<DOMJavaScriptBindings>>) {
+        *self.bindings.borrow_mut() = Rc::downgrade(bindings);
     }
     fn ApplyPendingScrollUpdates(&self, frame: Option<&mut PageFrame>) -> bool {
         let mut trace = browser_tracing::span("lifecycle", "Page.ApplyPendingScrollUpdates");
@@ -1098,9 +923,7 @@ impl PageState {
             PageMutation::AnimationTick(_)
                 | PageMutation::ResourceMutation(ResourceMutation::DocumentImageFrameChanged(_))
         ) {
-            self.animation_paint_nodes.borrow_mut().clear();
-            self.animation_paint_direct.set(false);
-            self.animation_paint_batch_compatible.set(false);
+            self.ApplyAnimationMutation(animation::AnimationMutation::InvalidatePaintBatch);
         }
         match mutation {
             PageMutation::DOMMutation(m) => {
@@ -1116,27 +939,18 @@ impl PageState {
             }
             PageMutation::ResourceMutation(m) => self.ApplyResourceMutation(m),
             PageMutation::InteractionStateMutation(m) => {
-                {
-                    let owner = self.document.borrow();
-                    for id in [
-                        m.state.focused_node_id,
-                        m.state.focus_visible_node_id,
-                        m.state.hovered_node_id,
-                        m.state.pressed_node_id,
-                    ]
-                    .into_iter()
-                    .flatten()
-                    {
-                        if owner.GetDocument().FindNodeById(id).is_none() {
+                let previous = *self.interaction.borrow();
+                if previous != m.state {
+                    let needs_paint = {
+                        let owner = self.document.borrow();
+                        let document = owner.GetDocument();
+                        if !interaction::ValidateInteractionState(document, m.state) {
                             dom::error::invalid_argument(
                                 "interaction state references a missing DOM node",
                             );
                         }
-                    }
-                }
-                let previous = *self.interaction.borrow();
-                if previous != m.state {
-                    let needs_paint = self.InteractionStateNeedsPaint(previous, m.state);
+                        interaction::InteractionStateNeedsPaint(document, previous, m.state)
+                    };
                     *self.interaction.borrow_mut() = m.state;
                     if let Some(bindings) = self.bindings.borrow().upgrade() {
                         bindings
@@ -1186,54 +1000,33 @@ impl PageState {
                 self.InvalidateStyle();
             }
             PageMutation::ScrollMutation(m) => {
-                let mut owner = self.document.borrow_mut();
-                let tree = owner.GetDocument();
-                let Some(target) = tree.FindNodeById(m.target_node_id) else {
-                    dom::error::invalid_argument("invalid scroll mutation");
-                };
-                if !m.offset.x.is_finite() || !m.offset.y.is_finite() {
-                    dom::error::invalid_argument("invalid scroll mutation");
-                }
-                let before = tree.ScrollOffsetFor(target);
-                if before != m.offset {
-                    // The viewport scroll owner is the document. Layout may
-                    // expose either the HTML or BODY box as its root fragment,
-                    // depending on root/body overflow propagation.
-                    let event_target = if tree.Node(target).IsHTMLElement("html")
-                        || tree.Node(target).IsHTMLElement("body")
-                    {
-                        tree.Node(tree.Root()).Id()
-                    } else {
-                        m.target_node_id
-                    };
+                if let Some(effect) = self.document.ApplyScrollOffset(m.target_node_id, m.offset) {
                     self.InvalidateMeasurement();
-                    // JS reads the current DOM offset immediately. Native
-                    // synchronization happens once at the pending scroll flush.
-                    owner.SetScrollOffset(m.target_node_id, m.offset);
                     browser_tracing::instant(
                         "input",
                         "ScrollApplied",
                         &[
-                            ("scroll_node", m.target_node_id as f64),
-                            ("before_x", before.x),
-                            ("before_y", before.y),
-                            ("offset_x", m.offset.x),
-                            ("offset_y", m.offset.y),
-                            ("delta_x", m.offset.x - before.x),
-                            ("delta_y", m.offset.y - before.y),
+                            ("scroll_node", effect.target_node_id as f64),
+                            ("before_x", effect.before.x),
+                            ("before_y", effect.before.y),
+                            ("offset_x", effect.offset.x),
+                            ("offset_y", effect.offset.y),
+                            ("delta_x", effect.offset.x - effect.before.x),
+                            ("delta_y", effect.offset.y - effect.before.y),
                         ],
                     );
                     let mut updates = self.scroll_updates.borrow_mut();
-                    if let Some((_, offset)) =
-                        updates.iter_mut().find(|(id, _)| *id == m.target_node_id)
+                    if let Some((_, offset)) = updates
+                        .iter_mut()
+                        .find(|(id, _)| *id == effect.target_node_id)
                     {
-                        *offset = m.offset;
+                        *offset = effect.offset;
                     } else {
-                        updates.push((m.target_node_id, m.offset));
+                        updates.push((effect.target_node_id, effect.offset));
                     }
                     let mut targets = self.scroll_event_targets.borrow_mut();
-                    if !targets.contains(&event_target) {
-                        targets.push(event_target);
+                    if !targets.contains(&effect.event_target_node_id) {
+                        targets.push(effect.event_target_node_id);
                     }
                     // Keep the proof across coalesced offset writes, but never
                     // admit a scroll that follows another pending mutation.
@@ -1244,43 +1037,7 @@ impl PageState {
                 }
             }
             PageMutation::AnimationTick(m) => {
-                if !m.monotonic_time.is_finite() || m.monotonic_time < self.animation_time.get() {
-                    dom::error::invalid_argument("animation time must be finite and monotonic");
-                }
-                self.animation_time.set(m.monotonic_time);
-                let eligible = m.samples.iter().all(|sample| {
-                    sample.declarations.iter().all(|declaration| {
-                        matches!(
-                            declaration.property.as_str(),
-                            "opacity" | "transform" | "transform-origin"
-                        )
-                    })
-                });
-                // The JS binding invokes this once per animation effect. A
-                // dirty Page may therefore mean an earlier eligible effect in
-                // this same frame, not a conflicting mutation.
-                let direct = eligible && self.animation_paint_batch_compatible.get();
-                let nodes = m
-                    .samples
-                    .iter()
-                    .map(|sample| sample.node_id)
-                    .collect::<Vec<_>>();
-                let mut owner = self.document.borrow_mut();
-                for sample in m.samples {
-                    if owner.GetDocument().FindNodeById(sample.node_id).is_none() {
-                        dom::error::invalid_argument("Animation target missing");
-                    }
-                    owner.SetAnimationStyle(sample.node_id, sample.effect_id, sample.declarations);
-                    self.InvalidateStylePreservingGeometry();
-                }
-                drop(owner);
-                if direct {
-                    self.animation_paint_nodes.borrow_mut().extend(nodes);
-                } else {
-                    self.animation_paint_nodes.borrow_mut().clear();
-                    self.animation_paint_batch_compatible.set(false);
-                }
-                self.animation_paint_direct.set(direct);
+                self.ApplyAnimationMutation(animation::AnimationMutation::Tick(m));
             }
         }
     }
@@ -1387,9 +1144,10 @@ impl PageState {
 }
 
 mod begin_frame;
+mod opening;
 mod scripting;
 mod scroll;
-use crate::script_scheduler::ParserResourceDiscovery;
+use opening::PageOpenAdapter;
 use scripting::PageScripts;
 
 /// Optional execution services. None disables scripting without constructing
@@ -1406,21 +1164,11 @@ pub struct Page {
     begin_frame: begin_frame::PageBeginFrame,
     state: Rc<PageState>,
     interaction: interaction::Interaction<'static>,
-    loader: Rc<RefCell<dyn URLLoader>>,
-    document_loader: DocumentLoader,
+    open_engine: OpenEngine,
     resources: Rc<ResourceFetcher>,
     scripts: Option<Box<PageScripts>>,
-    resource_parser: Option<ParserResourceDiscovery>,
     script_client: Rc<RefCell<dyn ScriptLoadClient>>,
-    current_url: String,
     frame: Option<PageFrame>,
-    document_started: bool,
-    loading: bool,
-    loading_failure: Option<String>,
-    load_budget: DocumentLoadBudget,
-    // A task turn admits resource completions with its budget. Rendering
-    // and input-boundary lifecycle use zero so they cannot run extra tasks.
-    resource_completion_budget: Option<usize>,
     cursor_position: Option<Offset>,
     // Blink's MouseEventManager marks hover dirty after layout and resolves it
     // from the last native mouse position at the next BeginMainFrame.
@@ -1441,7 +1189,7 @@ pub struct Page {
     // Chromium retains wheel event regions in the committed layer tree. Keep
     // the flattened root-scroll equivalent until either listener identity or
     // committed fragment geometry changes.
-    blocking_wheel_region_cache: RefCell<Option<(u64, Vec<u64>, BlockingWheelEventRegions)>>,
+    wheel_event_regions: RefCell<interaction::WheelEventRegionResolver>,
     #[cfg(test)]
     cursor_hit_test_queries: usize,
     active: bool,
@@ -1459,83 +1207,18 @@ impl Page {
     /// Fragment tree. A document/window target covers the viewport; element
     /// targets include painted descendants because wheel events bubble through
     /// their DOM ancestors.
-    pub fn BlockingWheelEventRegions(&self) -> BlockingWheelEventRegions {
+    pub fn BlockingWheelEventRegions(&self) -> interaction::BlockingWheelEventRegions {
         let Some(scripts) = &self.scripts else {
-            return BlockingWheelEventRegions::default();
+            return interaction::BlockingWheelEventRegions::default();
         };
-        let mut targets = scripts.BlockingWheelListenerTargets();
-        targets.sort_unstable();
         let frame_sequence = self.frame.as_ref().map_or(0, |frame| frame.sequence);
-        if let Some((cached_sequence, cached_targets, cached_regions)) =
-            self.blocking_wheel_region_cache.borrow().as_ref()
-        {
-            if *cached_sequence == frame_sequence && *cached_targets == targets {
-                return cached_regions.clone();
-            }
-        }
-        if targets.is_empty() {
-            let regions = BlockingWheelEventRegions::default();
-            *self.blocking_wheel_region_cache.borrow_mut() =
-                Some((frame_sequence, targets, regions.clone()));
-            return regions;
-        }
-        let Some(frame) = &self.frame else {
-            let regions = BlockingWheelEventRegions {
-                covers_viewport: true,
-                rects: Vec::new(),
-            };
-            *self.blocking_wheel_region_cache.borrow_mut() =
-                Some((frame_sequence, targets, regions.clone()));
-            return regions;
-        };
         let owner = self.state.document.borrow();
-        let document = owner.GetDocument();
-        let mut node_ids = HashSet::new();
-        let mut covers_viewport = false;
-        fn collect(document: &Document, index: usize, ids: &mut HashSet<u64>) {
-            let node = document.Node(index);
-            ids.insert(node.Id());
-            for child in node.Children() {
-                collect(document, *child, ids);
-            }
-        }
-        for &target in &targets {
-            if target == 0 {
-                covers_viewport = true;
-                continue;
-            }
-            let Some(index) = document.FindNodeById(target) else {
-                continue;
-            };
-            if document.Node(index).Type() == dom::persistent_document::DOMNodeType::kDocument {
-                covers_viewport = true;
-            } else {
-                collect(document, index, &mut node_ids);
-            }
-        }
-        if covers_viewport {
-            let regions = BlockingWheelEventRegions {
-                covers_viewport: true,
-                rects: Vec::new(),
-            };
-            *self.blocking_wheel_region_cache.borrow_mut() =
-                Some((frame_sequence, targets, regions.clone()));
-            return regions;
-        }
-        let by_node = paint::paint_engine::FragmentClientRectsByNode(&frame.fragments);
-        let mut rects = Vec::new();
-        for id in node_ids {
-            if let Some(node_rects) = by_node.get(&id) {
-                rects.extend(node_rects.iter().copied().filter(|rect| !rect.is_empty()));
-            }
-        }
-        let regions = BlockingWheelEventRegions {
-            covers_viewport: false,
-            rects,
-        };
-        *self.blocking_wheel_region_cache.borrow_mut() =
-            Some((frame_sequence, targets, regions.clone()));
-        regions
+        self.wheel_event_regions.borrow_mut().Resolve(
+            frame_sequence,
+            scripts.BlockingWheelListenerTargets(),
+            owner.GetDocument(),
+            self.frame.as_ref().map(|frame| frame.fragments.as_ref()),
+        )
     }
 
     // cpp: browser/browser.cc:610-737,1834-1856
@@ -1552,8 +1235,13 @@ impl Page {
         // communicate through their existing typed inputs and immutable
         // snapshots; Page only owns their lifetime and routing.
         let client = client.unwrap_or_else(|| Rc::new(RefCell::new(NullPageClient)));
-        let document_loader = DocumentLoader::new(loader.clone());
-        let document = Rc::new(RefCell::new(DOM::new()));
+        let decode_engine = Rc::new(decode::DecodeEngine::WithDecoders(images, document_images));
+        let resource_engine = Rc::new(ResourceEngine::WithDecodeEngine(
+            loader.clone(),
+            decode_engine,
+            String::new(),
+        ));
+        let document = Rc::new(DocumentEngine::new());
         let layout_engine =
             layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly());
         let paint_engine = paint::PaintEngine::new();
@@ -1568,13 +1256,10 @@ impl Page {
             constraints,
             client.clone(),
         );
-        let resources = Rc::new(ResourceFetcher::new(
-            loader.clone(),
-            images,
-            document_images,
-            state.document.clone(),
+        let resources = Rc::new(ResourceFetcher::WithEngine(
+            resource_engine.clone(),
+            state.document.Handle(),
             state.constraints.clone(),
-            String::new(),
         ));
         state.ConnectResources(resources.clone());
         let script_client: Rc<RefCell<dyn ScriptLoadClient>> =
@@ -1586,75 +1271,44 @@ impl Page {
                 script_client.clone(),
             ))
         });
+        let open_engine = OpenEngine::new(
+            resource_engine.clone(),
+            scripts.as_ref().map(|scripts| scripts.Executor()),
+        );
         let interaction = if let Some(scripts) = &scripts {
             scripts.Engine()
         } else {
             let mutate = state.clone();
             interaction::Interaction::WithSelectionState(
-                Rc::new(move |m| mutate.ApplyMutation(m)),
+                Rc::new(move |output| mutate.ApplyInteractionOutput(output)),
                 None,
                 state.layout_editing.selections.clone(),
             )
-        };
-        let submit_state = Rc::downgrade(&state);
-        interaction.SetFormSubmissionHandler(Some(Rc::new(move |form, submitter| {
-            let Some(state) = submit_state.upgrade() else {
-                return;
-            };
-            let base = state
-                .resources
-                .borrow()
-                .as_ref()
-                .map(|resources| resources.BaseURL())
-                .unwrap_or_default();
-            let request = {
-                let owner = state.document.borrow();
-                crate::form_submission::BuildRequest(owner.GetDocument(), &base, form, submitter)
-            };
-            match request {
-                Ok(Some(request)) => state.client.borrow_mut().DidRequestNavigation(&request),
-                Err(error) => state.client.borrow_mut().DidFail(&error.to_string()),
-                Ok(None) => {}
-            }
-        })));
-        let resource_parser = if scripts.is_none() {
-            Some(ParserResourceDiscovery::new(
-                state.document.clone(),
-                loader.clone(),
-                resources.clone(),
-            ))
-        } else {
-            None
         };
         Self {
             begin_frame: begin_frame::PageBeginFrame::default(),
             state,
             interaction,
-            document_loader,
-            loader,
+            open_engine,
             resources,
             scripts,
-            resource_parser,
             script_client,
-            current_url: String::new(),
             frame: None,
-            document_started: false,
-            loading: false,
-            loading_failure: None,
-            load_budget: DocumentLoadBudget::default(),
-            resource_completion_budget: None,
             cursor_position: None,
             hover_state_dirty: false,
             wheel_scroll_active: false,
             cursor: Cursor::kDefault,
             cursor_hit_test: None,
-            blocking_wheel_region_cache: RefCell::new(None),
+            wheel_event_regions: RefCell::new(Default::default()),
             #[cfg(test)]
             cursor_hit_test_queries: 0,
             active: true,
             selection_revision: 0,
             editing_paint_dirty: false,
         }
+    }
+    pub fn ResourceEngine(&self) -> Rc<ResourceEngine> {
+        self.open_engine.Resources()
     }
     pub fn SetPreferredColorScheme(&mut self, preference: PreferredColorScheme) {
         if let Some(scripts) = &self.scripts {
@@ -1691,8 +1345,13 @@ impl Page {
         let result = self.OpenDocument(request, chunk_size, token_budget);
         trace.set("failed", result.is_err() as u8 as f64);
         if let Err(error) = &result {
-            self.loading_failure = Some(error.to_string());
-            self.state.client.borrow_mut().DidFail(&error.to_string());
+            let mut adapter = PageOpenAdapter::new(
+                self.state.clone(),
+                self.resources.clone(),
+                &mut self.scripts,
+                self.script_client.clone(),
+            );
+            self.open_engine.Fail(&mut adapter, error);
         }
         result
     }
@@ -1702,37 +1361,19 @@ impl Page {
         chunk_size: usize,
         token_budget: usize,
     ) -> io::Result<()> {
-        if request.url.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Open URL is empty",
-            ));
-        }
-        if chunk_size == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "input_chunk_size must be positive",
-            ));
-        }
-        if token_budget == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "parser_token_budget must be positive",
-            ));
-        }
-        if self.document_started || self.document_loader.Status() != DocumentLoaderStatus::kIdle {
-            return Err(io::Error::other("Page already has a document"));
-        }
-        self.load_budget = DocumentLoadBudget {
-            body_bytes: chunk_size,
-            parser_tokens: token_budget,
-        };
-        self.document_loader.StartLoading(request)?;
-        self.loading = true;
-        Ok(())
+        self.open_engine
+            .Open(
+                request.clone(),
+                DocumentLoadBudget {
+                    body_bytes: chunk_size,
+                    parser_tokens: token_budget,
+                },
+            )
+            .map(|_| ())
     }
-    /// The C++ golden fixtures describe serialized, complete-source loading.
-    /// Keep that fixture driver explicit; window navigation uses Open + RunTask.
+    /// Drive the ordinary OpenEngine path to completion for serialized fixtures.
+    /// This method supplies only the host loop; URL loading, parsing, resource
+    /// readiness and load completion remain owned by OpenEngine.
     #[cfg(test)]
     pub(crate) fn OpenSynchronously(
         &mut self,
@@ -1740,188 +1381,47 @@ impl Page {
         chunk_size: usize,
         token_budget: usize,
     ) -> io::Result<()> {
-        let response = document_loader::LoadResponse(
-            &mut *self.loader.borrow_mut(),
-            &URLRequest {
-                url: url.into(),
-                ..Default::default()
-            },
-        )?;
-        self.current_url = if response.final_url.is_empty() {
-            url.into()
-        } else {
-            response.final_url.clone()
-        };
-        self.resources.SetDocumentURL(self.current_url.clone());
-        if let Some(parser) = &self.resource_parser {
-            parser.SetDocumentURL(self.current_url.clone());
+        self.Open(url, chunk_size, token_budget)?;
+        while self.open_engine.IsLoading() {
+            self.RunTask()?;
         }
-        if let Some(scripts) = &self.scripts {
-            scripts.SetURL(self.current_url.clone());
-        }
-        self.state.client.borrow_mut().DidCommit(&self.current_url);
-        self.ParseDocument(
-            &document_loader::DecodeText(&response)?,
-            chunk_size,
-            token_budget,
-        )?;
-        if let Some(scripts) = &mut self.scripts {
-            scripts.FinishStyleSheets()?;
-        }
-        if let Some(parser) = &mut self.resource_parser {
-            parser.FinishStyleSheets(&mut *self.script_client.borrow_mut())?;
-        }
-        self.state.InvalidateStyle();
-        self.FinishSuppliedDocumentResources()?;
-        let mut client = ResourceClient {
-            state: self.state.clone(),
-            scripts: self.scripts.as_deref_mut(),
-        };
-        self.resources.LoadPendingImages(&mut client);
-        self.resources.LoadPendingFonts(&mut client);
-        // Only this cfg(test) serialized driver drains DOM tasks before
-        // returning. Live Open/Evaluate/Apply keep image events asynchronous.
-        loop {
-            if let Some(scripts) = &mut self.scripts {
-                scripts.DrainImageEventTasks();
-            }
-            if !self.resources.HasPendingImages() {
-                break;
-            }
-            let mut client = ResourceClient {
-                state: self.state.clone(),
-                scripts: self.scripts.as_deref_mut(),
-            };
-            self.resources.LoadPendingImages(&mut client);
-        }
-        self.state.ResolveStyles();
-        if let Some(scripts) = &mut self.scripts {
-            scripts.FinishLoad();
-        }
-        self.state.scroll_only.set(false);
-        self.state.dirty.set(true);
-        self.UpdateFrameIfNeeded()?;
-        self.state.client.borrow_mut().DidFinishLoad();
         Ok(())
     }
     pub fn IsLoading(&self) -> bool {
-        self.loading
+        self.open_engine.IsLoading()
     }
     /// A body-stream failure after parser initialization keeps this document.
     /// The host can report the failure without replacing its received content.
     pub fn HasCommittedDocument(&self) -> bool {
-        self.document_started
+        self.open_engine.HasCommittedDocument()
     }
     pub fn LoadingFailure(&self) -> Option<&str> {
-        self.loading_failure.as_deref()
+        self.open_engine.LoadingFailure()
+    }
+    pub fn OpenStatus(&self) -> OpenStatus {
+        self.open_engine.Status()
     }
     pub fn SetLoadingWakeCallback(&mut self, callback: URLWakeCallback) {
-        if let Some(scripts) = &mut self.scripts {
-            scripts.SetModuleCompilationWake(callback.clone());
-        }
-        self.document_loader.SetWakeCallback(callback);
+        self.open_engine.SetWakeCallback(callback);
     }
     pub fn StopLoading(&mut self) {
-        self.document_loader.StopLoading();
-        if let Some(scripts) = &self.scripts {
-            scripts.StopModuleLoading();
-        }
-        self.loading = false;
+        self.open_engine.Stop();
     }
-    /// Page owns response commit and lifecycle decisions. All ongoing body and
-    /// tokenizer work stays in DocumentLoader, one bounded turn at a time.
+    /// OpenEngine owns navigation admission and completion state. Page adapts
+    /// the selected parser/script implementation and routes lifecycle effects.
     fn PumpLoading(&mut self) -> io::Result<()> {
         let mut trace = browser_tracing::span("lifecycle", "Page.PumpLoading");
-        trace.set("loading", self.loading as u8 as f64);
-        if !self.loading {
+        trace.set("loading", self.open_engine.IsLoading() as u8 as f64);
+        if !self.open_engine.IsLoading() {
             return Ok(());
         }
-        let result = self.PumpLoadingInternal();
-        if let Err(error) = &result {
-            self.loading_failure = Some(error.to_string());
-            self.loading = false;
-            self.document_loader.StopLoading();
-            if let Some(scripts) = &self.scripts {
-                scripts.StopModuleLoading();
-            }
-            self.state.client.borrow_mut().DidFail(&error.to_string());
-        }
-        result
-    }
-    fn PumpLoadingInternal(&mut self) -> io::Result<()> {
-        if self.document_loader.Status() == DocumentLoaderStatus::kLoading {
-            let Some(response) = self.document_loader.PollResponse()? else {
-                return Ok(());
-            };
-            self.current_url = response.final_url;
-            self.resources.SetDocumentURL(self.current_url.clone());
-            if let Some(parser) = &self.resource_parser {
-                parser.SetDocumentURL(self.current_url.clone());
-            }
-            if let Some(scripts) = &self.scripts {
-                scripts.SetURL(self.current_url.clone());
-            }
-            self.state.client.borrow_mut().DidCommit(&self.current_url);
-            if let Some(scripts) = &mut self.scripts {
-                scripts.BeginDocumentLoader(
-                    &mut self.document_loader,
-                    self.loader.clone(),
-                    self.resources.clone(),
-                    &self.current_url,
-                )?;
-            } else {
-                self.resource_parser
-                    .as_mut()
-                    .unwrap()
-                    .BeginDocumentLoader(&mut self.document_loader)?;
-            }
-            self.document_started = true;
-        }
-        if self.document_loader.Status() == DocumentLoaderStatus::kParsing {
-            if let Some(scripts) = &mut self.scripts {
-                scripts.PumpDocumentLoader(&mut self.document_loader, self.load_budget)?;
-            } else {
-                self.resource_parser.as_mut().unwrap().PumpDocumentLoader(
-                    &mut self.document_loader,
-                    self.load_budget,
-                    &mut *self.script_client.borrow_mut(),
-                )?;
-            }
-        }
-        let mut scripts_finished = false;
-        if self.document_loader.Status() == DocumentLoaderStatus::kFinished {
-            scripts_finished = if let Some(scripts) = &mut self.scripts {
-                scripts.PollParsingCompletion()?
-            } else {
-                self.resource_parser
-                    .as_mut()
-                    .unwrap()
-                    .PollStyleSheets(&mut *self.script_client.borrow_mut())?
-            };
-        }
-        self.ResolveStylesAndLoadResources()?;
-        if scripts_finished
-            && self
-                .resource_completion_budget
-                .is_none_or(|remaining| remaining != 0)
-            && self
-                .scripts
-                .as_ref()
-                .is_none_or(|scripts| scripts.HasTaskBudget())
-            && !self
-                .scripts
-                .as_ref()
-                .is_some_and(|s| s.HasPendingDynamicScripts())
-            && self.state.pending_image_events.borrow().is_empty()
-            && !self.resources.HasPendingLoadBlockingImages()
-        {
-            if let Some(scripts) = &mut self.scripts {
-                scripts.FinishLoad();
-            }
-            self.loading = false;
-            self.state.client.borrow_mut().DidFinishLoad();
-            self.resources.StartDeferredImages(4);
-        }
+        let mut adapter = PageOpenAdapter::new(
+            self.state.clone(),
+            self.resources.clone(),
+            &mut self.scripts,
+            self.script_client.clone(),
+        );
+        self.open_engine.Advance(&mut adapter)?;
         Ok(())
     }
     pub fn IsRenderingReady(&self) -> bool {
@@ -1933,27 +1433,13 @@ impl Page {
         if self.frame.is_some() {
             return true;
         }
-        if !self.document_started {
+        if !self.open_engine.HasCommittedDocument() {
             return false;
         }
-        if self
-            .scripts
-            .as_ref()
-            .is_some_and(|s| s.HasPendingRenderBlockingStyleSheets())
-            || self
-                .resource_parser
-                .as_ref()
-                .is_some_and(|p| p.HasPendingRenderBlockingStyleSheets())
-        {
+        if self.open_engine.HasPendingRenderBlockingStyleSheets() {
             return false;
         }
-        fn contains(d: &Document, i: usize) -> bool {
-            d.Node(i).IsHTMLElement("body")
-                || d.Node(i).IsHTMLElement("frameset")
-                || d.Node(i).Children().iter().any(|&c| contains(d, c))
-        }
-        let owner = self.state.document.borrow();
-        contains(owner.GetDocument(), owner.GetDocument().Root())
+        self.state.document.HasRenderableRoot()
     }
     // cpp: browser/browser.cc:1646-1680
     fn ParseDocument(
@@ -1962,34 +1448,15 @@ impl Page {
         chunk_size: usize,
         token_budget: usize,
     ) -> io::Result<()> {
-        self.state.InvalidateMeasurement();
-        if self.document_started {
-            return Err(io::Error::other("document has already been built"));
-        }
-        self.document_started = true;
-        if let Some(scripts) = &mut self.scripts {
-            scripts.ParseDocument(
-                &mut self.document_loader,
-                self.loader.clone(),
-                self.resources.clone(),
-                &self.current_url,
-                source,
-                chunk_size,
-                token_budget,
-            )?;
-        } else {
-            self.resource_parser
-                .as_mut()
-                .expect("resource parser installed")
-                .ParseDocument(
-                    &mut self.document_loader,
-                    source,
-                    chunk_size,
-                    token_budget,
-                    &mut *self.script_client.borrow_mut(),
-                )?;
-        }
-        Ok(())
+        let mut adapter = PageOpenAdapter::new(
+            self.state.clone(),
+            self.resources.clone(),
+            &mut self.scripts,
+            self.script_client.clone(),
+        );
+        self.open_engine
+            .ParseSuppliedDocument(&mut adapter, source, chunk_size, token_budget)
+            .map(|_| ())
     }
     // cpp: browser/browser.cc:922-929
     pub fn Apply(&mut self, mutation: PageMutation) -> io::Result<()> {
@@ -2041,21 +1508,18 @@ impl Page {
     fn RunTaskTurn(&mut self, milliseconds: f64) -> io::Result<()> {
         let mut trace = browser_tracing::span("lifecycle", "Page.RunTask");
         trace.set("budget_ms", milliseconds);
-        trace.set("loading", self.loading as u8 as f64);
+        trace.set("loading", self.open_engine.IsLoading() as u8 as f64);
         if self.begin_frame.source.is_none() {
             self.FlushFrameInputs()?;
         }
-        self.resource_completion_budget = (!(milliseconds > 0.0)).then_some(1);
+        self.open_engine.BeginTaskTurn(milliseconds);
         let result = (|| {
             let started = std::env::var_os("BROWSER_PROFILE_INPUT")
                 .is_some()
                 .then(std::time::Instant::now);
-            let was_loading = self.loading;
-            if let Some(scripts) = &mut self.scripts {
-                scripts.BeginTaskTurn(milliseconds);
-            }
+            let was_loading = self.open_engine.IsLoading();
             self.PumpLoading()?;
-            if !self.loading {
+            if !self.open_engine.IsLoading() {
                 self.resources.StartDeferredImages(4);
             }
             // A clean frame does not imply that late image/font requests have no
@@ -2066,8 +1530,19 @@ impl Page {
                 self.ResolveStylesAndLoadResources()?;
             }
             let loading_done = started.map(|start| start.elapsed());
-            if let Some(scripts) = &mut self.scripts {
-                scripts.RunTaskTurn(milliseconds)?;
+            let run_host_tasks = if let Some(scripts) = &mut self.scripts {
+                self.open_engine
+                    .RunScriptTaskTurn(milliseconds, |scheduler, executor, limit| {
+                        scripts.PumpModuleTasks(scheduler, executor, limit)
+                    })?
+            } else {
+                false
+            };
+            if run_host_tasks {
+                self.scripts
+                    .as_deref_mut()
+                    .expect("host tasks require a script environment")
+                    .RunHostTaskTurn(milliseconds)?;
             }
             // Hosts without a BeginFrameSource treat this task turn as their
             // rendering opportunity. Native hosts dispatch the same queue in
@@ -2084,30 +1559,30 @@ impl Page {
             self.UpdateFrameIfNeeded()?;
             if let Some(start) = started {
                 if start.elapsed() >= std::time::Duration::from_millis(16) {
-                    eprintln!("page-task-profile loading_ms={:.3} script_tasks_ms={:.3} lifecycle_ms={:.3} total_ms={:.3}",
-                    loading_done.unwrap().as_secs_f64()*1000.0,
-                    (tasks_done.unwrap()-loading_done.unwrap()).as_secs_f64()*1000.0,
-                    (start.elapsed()-tasks_done.unwrap()).as_secs_f64()*1000.0,
-                    start.elapsed().as_secs_f64()*1000.0);
+                    eprintln!(
+                        "page-task-profile loading_ms={:.3} script_tasks_ms={:.3} lifecycle_ms={:.3} total_ms={:.3}",
+                        loading_done.unwrap().as_secs_f64() * 1000.0,
+                        (tasks_done.unwrap() - loading_done.unwrap()).as_secs_f64() * 1000.0,
+                        (start.elapsed() - tasks_done.unwrap()).as_secs_f64() * 1000.0,
+                        start.elapsed().as_secs_f64() * 1000.0
+                    );
                 }
             }
             if std::env::var_os("BROWSER_TRACE_LOADING_STATE").is_some() {
                 eprintln!(
                     "page-loading-state loading={} document={:?} images={} fonts={}",
-                    self.loading,
-                    self.document_loader.Status(),
+                    self.open_engine.IsLoading(),
+                    self.open_engine.LoaderStatus(),
                     self.resources.HasPendingImages(),
                     self.resources.HasPendingFonts()
                 );
-                if let Some(scripts) = &self.scripts {
-                    scripts.TraceLoadingState();
-                }
+                self.open_engine.TraceLoadingState();
             }
             Ok(())
         })();
         // IO failures must not leave a one-turn allowance attached to later
         // Evaluate/Apply/Dispatch or the explicit synchronous parser adapter.
-        self.resource_completion_budget = None;
+        self.open_engine.EndTaskTurn();
         result
     }
     /// Earliest ordinary Window task deadline. Document/resource transports
@@ -2184,7 +1659,7 @@ impl Page {
             scripts.Dispatch(input, &frame.fragments)?
         } else {
             self.interaction
-                .Dispatch(input, &self.state.document, &frame.fragments)
+                .Dispatch(input, &self.state.document.Handle(), &frame.fragments)
         };
         let restart = matches!(
             input,
@@ -2216,7 +1691,11 @@ impl Page {
             .active
             .then(|| self.interaction.State().focused_node_id)
             .flatten()
-            .and_then(|id| self.interaction.Editor().CaretFor(&self.state.document, id));
+            .and_then(|id| {
+                self.interaction
+                    .Editor()
+                    .CaretFor(&self.state.document.Handle(), id)
+            });
         let mut caret = self.state.layout_editing.caret.borrow_mut();
         let changed = caret.update(position, std::time::Instant::now(), restart);
         drop(caret);
@@ -2293,7 +1772,7 @@ impl Page {
         let cursor = match (self.cursor_position, self.frame.as_ref()) {
             (Some(point), Some(frame)) => {
                 self.interaction
-                    .CursorAt(&self.state.document, &frame.fragments, point)
+                    .CursorAt(&self.state.document.Handle(), &frame.fragments, point)
             }
             _ => Cursor::kDefault,
         };
@@ -2305,7 +1784,7 @@ impl Page {
         }
     }
     pub fn URL(&self) -> &str {
-        &self.current_url
+        self.open_engine.CurrentURL()
     }
     pub fn Document(&self) -> std::cell::Ref<'_, DOM> {
         self.state.document.borrow()
@@ -2344,99 +1823,13 @@ impl Page {
 
     // cpp: browser/browser.cc:1761-1771
     fn ResolveStylesAndLoadResources(&mut self) -> io::Result<()> {
-        let mut trace = browser_tracing::span("lifecycle", "Page.ResolveStylesAndLoadResources");
-        // Synchronous JS geometry queries may resolve styles before this pass;
-        // resource discovery has its own dirty state and cannot use style-cache
-        // validity as a proxy. Clear before callbacks so reentrant mutations
-        // remain dirty for the next discovery pass.
-        let profile =
-            std::env::var_os("BROWSER_PROFILE_RESOURCES").map(|_| std::time::Instant::now());
-        let elapsed = || profile.map(|start| start.elapsed()).unwrap_or_default();
-        let discover = self.state.resource_references_dirty.replace(false);
-        trace.set("discover", discover as u8 as f64);
-        self.state.ResolveStyles();
-        let style_before_done = elapsed();
-        let mut images_discovered_done = style_before_done;
-        let mut fonts_discovered_done = style_before_done;
-        if discover {
-            // Scroll/caret/unchanged hover updates leave all resource references
-            // intact. DOM and stylesheet changes still discover resources;
-            // image completion only refreshes consumers. Completions are polled on
-            // every pass with the existing event and admission budget.
-            let image_discovery = browser_tracing::span("lifecycle", "Page.DiscoverImages");
-            if let Err(error) = self.resources.QueueReferencedImages() {
-                self.state.resource_references_dirty.set(true);
-                return Err(error);
-            }
-            drop(image_discovery);
-            images_discovered_done = elapsed();
-            let font_discovery = browser_tracing::span("lifecycle", "Page.DiscoverFonts");
-            self.resources.SelectUsedFontFaces();
-            self.resources.StartPendingFonts();
-            drop(font_discovery);
-            fonts_discovered_done = elapsed();
-        }
-        let allowance = match self.resource_completion_budget {
-            Some(remaining)
-                if self
-                    .scripts
-                    .as_ref()
-                    .is_none_or(|scripts| scripts.HasTaskBudget()) =>
-            {
-                remaining
-            }
-            Some(_) => 0,
-            None => usize::MAX,
-        };
-        let mut client = ResourceClient {
-            state: self.state.clone(),
-            scripts: self.scripts.as_deref_mut(),
-        };
-        let images = {
-            let _trace = browser_tracing::span("lifecycle", "Page.PollImages");
-            self.resources
-                .PollPendingImagesWithBudget(&mut client, allowance)
-        };
-        let images_polled_done = elapsed();
-        let fonts = {
-            let _trace = browser_tracing::span("lifecycle", "Page.PollFonts");
-            self.resources
-                .PollPendingFontsWithBudget(&mut client, allowance - images)
-        };
-        trace.set("image_completions", images as f64);
-        trace.set("font_completions", fonts as f64);
-        let fonts_polled_done = elapsed();
-        drop(client);
-        if let Some(remaining) = &mut self.resource_completion_budget {
-            let completed = images + fonts;
-            *remaining -= completed;
-            if completed != 0 {
-                if let Some(scripts) = &mut self.scripts {
-                    scripts.ConsumeTaskBudget();
-                }
-            }
-        }
-        self.state.ResolveStyles();
-        let style_after_done = elapsed();
-        if let Some(scripts) = &self.scripts {
-            let _trace = browser_tracing::span("lifecycle", "Page.FlushScriptTasks");
-            scripts.FlushTasks();
-        }
-        if let Some(start) = profile {
-            let total = start.elapsed();
-            if total.as_millis() >= 16 {
-                eprintln!("page-resources-profile discover={discover} style_before_ms={:.3} image_discovery_ms={:.3} font_discovery_ms={:.3} image_poll_ms={:.3} font_poll_ms={:.3} style_after_ms={:.3} flush_tasks_ms={:.3} total_ms={:.3}",
-                    style_before_done.as_secs_f64()*1000.0,
-                    (images_discovered_done-style_before_done).as_secs_f64()*1000.0,
-                    (fonts_discovered_done-images_discovered_done).as_secs_f64()*1000.0,
-                    (images_polled_done-fonts_discovered_done).as_secs_f64()*1000.0,
-                    (fonts_polled_done-images_polled_done).as_secs_f64()*1000.0,
-                    (style_after_done-fonts_polled_done).as_secs_f64()*1000.0,
-                    (total-style_after_done).as_secs_f64()*1000.0,
-                    total.as_secs_f64()*1000.0);
-            }
-        }
-        Ok(())
+        opening::ResolvePageStylesAndLoadResources(
+            &self.state,
+            &self.resources,
+            &mut self.scripts,
+            usize::MAX,
+        )
+        .map(|_| ())
     }
 
     // cpp: browser/browser.cc:1731-1745
@@ -2491,10 +1884,13 @@ impl Page {
             // Keep the host's presentation/lifecycle contract while reusing
             // the existing fragments and display list for an ineffective edit.
             if let Some(start) = profile {
-                eprintln!("page-lifecycle-profile resources_ms={:.3} scroll_layout_paint_ms={:.3} layout_ms=0 paint_ms=0 total_ms={:.3} reused=true scroll_records_reused={}",
-                    resources_done.unwrap().as_secs_f64()*1000.0,
-                    (scroll_done.unwrap()-resources_done.unwrap()).as_secs_f64()*1000.0,
-                    start.elapsed().as_secs_f64()*1000.0, reused_recordings);
+                eprintln!(
+                    "page-lifecycle-profile resources_ms={:.3} scroll_layout_paint_ms={:.3} layout_ms=0 paint_ms=0 total_ms={:.3} reused=true scroll_records_reused={}",
+                    resources_done.unwrap().as_secs_f64() * 1000.0,
+                    (scroll_done.unwrap() - resources_done.unwrap()).as_secs_f64() * 1000.0,
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    reused_recordings
+                );
             }
             let frame = self.frame.as_mut().unwrap();
             if self
@@ -2540,16 +1936,12 @@ impl Page {
             }
             None => (None, None),
         };
-        let animation_paint_nodes = if paint_only_style && self.state.animation_paint_direct.get() {
-            let mut nodes = self
-                .state
-                .animation_paint_nodes
+        let animation_paint_nodes = if paint_only_style {
+            self.state
+                .paint_engine
                 .borrow()
-                .iter()
-                .copied()
-                .collect::<Vec<_>>();
-            nodes.sort_unstable();
-            nodes
+                .AnimationTargetedNodes()
+                .to_vec()
         } else {
             Vec::new()
         };
@@ -2632,12 +2024,15 @@ impl Page {
         };
         if let Some(start) = profile {
             let elapsed = start.elapsed();
-            eprintln!("page-lifecycle-profile resources_ms={:.3} scroll_layout_paint_ms={:.3} layout_ms={:.3} paint_ms={:.3} total_ms={:.3} reused=false measurement_reused={}",
-                resources_done.unwrap().as_secs_f64()*1000.0,
-                (scroll_done.unwrap()-resources_done.unwrap()).as_secs_f64()*1000.0,
-                (layout_done.unwrap()-scroll_done.unwrap()).as_secs_f64()*1000.0,
-                (elapsed-layout_done.unwrap()).as_secs_f64()*1000.0,
-                elapsed.as_secs_f64()*1000.0, measurement_reused);
+            eprintln!(
+                "page-lifecycle-profile resources_ms={:.3} scroll_layout_paint_ms={:.3} layout_ms={:.3} paint_ms={:.3} total_ms={:.3} reused=false measurement_reused={}",
+                resources_done.unwrap().as_secs_f64() * 1000.0,
+                (scroll_done.unwrap() - resources_done.unwrap()).as_secs_f64() * 1000.0,
+                (layout_done.unwrap() - scroll_done.unwrap()).as_secs_f64() * 1000.0,
+                (elapsed - layout_done.unwrap()).as_secs_f64() * 1000.0,
+                elapsed.as_secs_f64() * 1000.0,
+                measurement_reused
+            );
         }
         let frame = PageFrame {
             sequence: self.frame.as_ref().map_or(1, |f| f.sequence + 1),
@@ -2677,9 +2072,8 @@ impl Page {
         self.state.document.borrow_mut().DidCommitPaint();
         self.state.paint_resources_dirty.set(false);
         self.state.pending_paint_mutations.borrow_mut().clear();
-        self.state.animation_paint_nodes.borrow_mut().clear();
-        self.state.animation_paint_direct.set(false);
-        self.state.animation_paint_batch_compatible.set(true);
+        self.state
+            .ApplyAnimationMutation(animation::AnimationMutation::CommitPaint);
         self.state.scroll_only.set(false);
         self.state.dirty.set(false);
         if let Some(scripts) = &mut self.scripts {
@@ -2721,8 +2115,9 @@ fn cursor_hit_test_same_point_reuses_clean_frame_and_scroll_invalidates() {
             None,
         );
         *page.state.document.borrow_mut() = html::html_parser::ParseHTML(
-            "<!doctype html><body style='margin:0'><div id=s style='width:100px;height:40px;overflow:hidden;cursor:crosshair'><div style='height:200px'>scrolling</div></div></body>");
-        page.document_started = true;
+            "<!doctype html><body style='margin:0'><div id=s style='width:100px;height:40px;overflow:hidden;cursor:crosshair'><div style='height:200px'>scrolling</div></div></body>",
+        );
+        page.open_engine.AdoptDocument().unwrap();
         page.cursor_position = Some(Offset { x: 10.0, y: 10.0 });
         page.UpdateFrameIfNeeded().unwrap();
         assert!(page.cursor_hit_test.is_some());
@@ -2803,7 +2198,7 @@ impl ResourceFetcherClient for ResourceClient<'_> {
 impl Drop for Page {
     fn drop(&mut self) {
         self.state.CancelImageEvents();
-        self.state.dynamic.borrow_mut().take();
+        self.state.connected_resources.SetScriptPreparer(None);
     }
 }
 
@@ -2880,7 +2275,7 @@ impl JavaScriptResourceClient<'_> {
         self.engine.WithScopedListeners(listeners).DispatchDOMEvent(
             &mut event,
             id,
-            &self.state.document,
+            &self.state.document.Handle(),
         );
         drop(runtime);
         // WindowJavaScriptBindings completes this DOM task with the normal

@@ -146,12 +146,18 @@ pub(crate) fn ResolveLayoutStylesWithEngine(
     constraints: &ConstraintSpace,
     preferred_color_scheme: style::PreferredColorScheme,
 ) {
+    // Blink style resolution allocates ComputedStyle and its rare-data on the
+    // document's cppgc heap before Layout begins. Keep that owner-thread heap
+    // boundary in the browser assembly layer; StyleEngine itself remains
+    // independent of the host event loop and thread placement.
+    let mut heap_scope = foundation::LayoutHeapScope::new();
     let user_agent = UserAgentStyleSheets::new();
     let environment = MediaValuesForLayout(constraints, preferred_color_scheme);
     let sheets = user_agent.ForDocument(owner.GetDocument());
     engine
         .Update(owner, &environment, sheets)
         .unwrap_or_else(|error| panic!("StyleEngine update failed: {error}"));
+    heap_scope.DeferCollection();
 }
 
 /// The browser joins DOM identity, neutral native layout sizes and the
@@ -187,6 +193,7 @@ pub fn CreateStyleBindingsHost(
     let engine = RefCell::new(style::StyleEngine::new(&document.borrow()));
     DOMBindingsHost {
         update_style: Some(Box::new(move || {
+            let mut heap_scope = foundation::LayoutHeapScope::new();
             let mut owner = document.borrow_mut();
             let environment = environment.borrow();
             let sheets = user_agent.ForDocument(owner.GetDocument());
@@ -194,6 +201,7 @@ pub fn CreateStyleBindingsHost(
                 .borrow_mut()
                 .Update(&mut owner, &environment, sheets)
                 .unwrap_or_else(|error| panic!("StyleEngine update failed: {error}"));
+            heap_scope.DeferCollection();
         })),
         ..Default::default()
     }

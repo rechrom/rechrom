@@ -104,6 +104,25 @@ pub fn DecodeWebFont(bytes: Vec<u8>) -> io::Result<Vec<u8>> {
     ots_sfnt::Sanitize(&decoded)
 }
 
+/// Stateless decoder capability exposed by DecodeEngine.
+///
+/// Chromium's FontResource calls the platform WebFontDecoder before the
+/// decoded font enters the font subsystem. Keeping this as a concrete value
+/// lets the application compose that same boundary without creating another
+/// stateful engine.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WebFontDecoder;
+
+impl WebFontDecoder {
+    pub const fn new() -> Self {
+        Self
+    }
+
+    pub fn Decode(&self, bytes: Vec<u8>) -> io::Result<Vec<u8>> {
+        DecodeWebFont(bytes)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

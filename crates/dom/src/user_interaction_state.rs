@@ -6,3 +6,8 @@ pub struct UserInteractionState {
     pub hovered_node_id: Option<u64>,
     pub pressed_node_id: Option<u64>,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InteractionStateMutation {
+    pub state: UserInteractionState,
+}

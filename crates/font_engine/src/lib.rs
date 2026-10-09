@@ -92,3 +92,33 @@ pub use fonts::typesetting_features::{
     TypesettingFeatures,
 };
 pub use fonts::utf16_text_iterator::UTF16TextIterator;
+
+/// Validate decoded bytes entering the font subsystem.
+///
+/// WOFF/WOFF2 decoding and OTS sanitization happen at DecodeEngine's
+/// WebFontDecoder boundary. FontEngine only accepts the resulting OpenType
+/// data and verifies that its shaping implementation can open it.
+pub fn AcceptDecodedWebFont(bytes: Vec<u8>) -> std::io::Result<std::sync::Arc<[u8]>> {
+    if bytes.is_empty() {
+        return Err(std::io::Error::other("empty font resource"));
+    }
+    let validated = std::panic::catch_unwind(|| OpenTypeFont::new(&bytes, 0, 1.0, &[]));
+    match validated {
+        Ok(_) => Ok(bytes.into()),
+        Err(error) => {
+            let message = error
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| error.downcast_ref::<&str>().copied());
+            match message {
+                Some(
+                    message @ ("invalid OpenType font request"
+                    | "invalid OpenType font or face index"
+                    | "font contains no glyphs"),
+                ) => Err(std::io::Error::other(message.to_owned())),
+                Some("HarfBuzz allocation failed") => Err(std::io::Error::other("std::bad_alloc")),
+                _ => std::panic::resume_unwind(error),
+            }
+        }
+    }
+}

@@ -1,7 +1,6 @@
 //! Frozen independent source Browser::Open evidence. The URL loader is a
 //! deterministic test transport; parser, CSS, decoding, fonts, layout and paint
 //! are the production Rust implementations.
-use crate::script_scheduler::{ScriptLoadClient, ScriptScheduler};
 use document_image::SVGImageDecoder;
 use document_loader::{ResourceFetcher, ResourceFetcherClient};
 use dom::DOM;
@@ -10,6 +9,7 @@ use javascript::{
     javascript_runtime::JavaScriptRuntime, quickjs_javascript_runtime::QuickJsJavaScriptRuntime,
 };
 use layoutng_assembly::internal::layout_input::{ConstraintSpace, FontFace};
+use open::script_scheduler::{ScriptLoadClient, ScriptScheduler};
 use page_mutation::ResourceMutation;
 use std::{cell::RefCell, io, path::PathBuf, rc::Rc};
 use url_loader::{RequestDestination, URLLoadOperation, URLLoader, URLRequest, URLResponse};
@@ -146,16 +146,27 @@ fn body() {
         root: root.clone(),
         trace: trace.clone(),
     }));
-    let response = document_loader::LoadResponse(
-        &mut *loader.borrow_mut(),
-        &URLRequest {
+    let decode = Rc::new(decode::DecodeEngine::WithDecoders(
+        Rc::new(RefCell::new(SkiaImageDecoder)),
+        Rc::new(RefCell::new(SVGImageDecoder::new(
+            &crate::CreateLayoutAssembly(),
+        ))),
+    ));
+    let resource_engine = Rc::new(resource::ResourceEngine::WithDecodeEngine(
+        loader.clone(),
+        decode,
+        "https://page.test/entry".into(),
+    ));
+    let response = resource::RequireResponse(resource::AwaitResource(&mut resource_engine.Start(
+        URLRequest {
             url: "https://page.test/entry".into(),
             destination: RequestDestination::kDocument,
             ..Default::default()
         },
-    )
+    )))
     .unwrap();
     let current_url = response.final_url.clone();
+    resource_engine.SetDocumentURL(current_url.clone());
     let document = Rc::new(RefCell::new(DOM::new()));
     let mut constraints = crate::CreateBrowserConstraints(160, 96);
     constraints.fonts = vec![FontFace {
@@ -168,14 +179,10 @@ fn body() {
         ..Default::default()
     }];
     let constraints = Rc::new(RefCell::new(constraints));
-    let assembly = crate::CreateLayoutAssembly();
-    let resources = Rc::new(ResourceFetcher::new(
-        loader.clone(),
-        Rc::new(RefCell::new(SkiaImageDecoder)),
-        Rc::new(RefCell::new(SVGImageDecoder::new(&assembly))),
+    let resources = Rc::new(ResourceFetcher::WithEngine(
+        resource_engine,
         document.clone(),
         constraints.clone(),
-        current_url.clone(),
     ));
     let changed = document.clone();
     let bindings = Rc::new(RefCell::new(DOMJavaScriptBindings::new(

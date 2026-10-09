@@ -126,35 +126,47 @@ pub(super) fn Apply(
             }
         }
         // custom:12761-12773, converter:2087-2109, state.cc:325-339.
+        // Zoom is a cascade-affecting property. DocumentStyleEngine applies it
+        // before font properties, matching StyleCascade::ApplyCascadeAffecting,
+        // so the staged font description can be refreshed here without a
+        // second, approximate style pass.
         kZoom => {
             let zoom = if initial {
                 ComputedStyleInitialValues::InitialZoom()
             } else if inherit {
                 parent.unwrap().Zoom()
             } else {
-                ConvertZoom(v)?
+                ConvertZoom(b, v, root, media)?
             };
             let parent_zoom = parent.map_or(ComputedStyleInitialValues::InitialZoom(), |style| {
                 style.EffectiveZoom()
             });
             let effective = (parent_zoom * zoom).clamp(1e-6, 1e6);
-            if effective != b.EffectiveZoom() {
-                // The genuine generic StyleResolverState::SetZoom and
-                // FontBuilder::DidChangeEffectiveZoom are already translated.
-                // This production owner has no FontBuilderBackend, so changing
-                // effective zoom must not bypass its dirty/update-font phase.
-                return Err(LonghandApplicationError::Unsupported(id));
-            }
             b.SetZoom(zoom);
-            let changed = b.SetEffectiveZoom(parent_zoom * zoom);
-            debug_assert!(!changed);
+            if b.SetEffectiveZoom(effective) {
+                // FontBuilder::DidChangeEffectiveZoom eventually recomputes
+                // ComputedSize from the unzoomed SpecifiedSize. This assembly
+                // owns an equivalent immutable FontDescription boundary.
+                let mut description = b.GetFontDescription().clone();
+                description.SetComputedSize(
+                    (description.SpecifiedSize() * effective).min(
+                        layoutng_style::style::computed_style_constants::kMaximumAllowedFontSize,
+                    ),
+                );
+                StageFontDescription(b, &description);
+            }
         }
         _ => return Err(LonghandApplicationError::Unsupported(id)),
     }
     Ok(())
 }
 
-fn ConvertZoom(value: &Value) -> std::result::Result<f32, LonghandApplicationError> {
+fn ConvertZoom(
+    builder: &ComputedStyleBuilder,
+    value: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+) -> std::result::Result<f32, LonghandApplicationError> {
     let id = CSSPropertyID::kZoom;
     if Identifier(value) == Some(CSSValueID::kNormal) {
         return Ok(ComputedStyleInitialValues::InitialZoom());
@@ -167,9 +179,13 @@ fn ConvertZoom(value: &Value) -> std::result::Result<f32, LonghandApplicationErr
         CSSValuePayload::kMathFunctionClass(math) => {
             let number = math
                 .ComputeValue(
-                    &mut |_, _| {
-                        Err(crate::css_math_expression_node::MathError::MissingLengthContext)
-                    },
+                    &mut MathLengthResolver(
+                        id,
+                        builder.GetFontDescription().ComputedSize(),
+                        root,
+                        builder.EffectiveZoom(),
+                        media,
+                    ),
                     None,
                 )
                 .map_err(|_| LonghandApplicationError::Unsupported(id))?;

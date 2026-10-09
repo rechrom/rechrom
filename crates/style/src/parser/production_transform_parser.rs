@@ -91,10 +91,18 @@ fn ConsumeArgument<T: TokenStreamTokenizer>(
 }
 // ConsumeAngle optional probe reused by motion path consumers. A math
 // value of a different category restores the stream, preserving distance probes.
-pub(super) fn ConsumeAngle<T:TokenStreamTokenizer>(id:CSSPropertyID,s:&mut Stream<T>,mode:CSSParserMode)->Result<Option<Rc<Value>>,PropertyParseError> {
-    if IsMathFunction(s) {return ConsumeAnimationNumericMath(id,s,C::Angle,R::All);}
-    if !MatchesArgument(s,Argument::Angle(false)) {return Ok(None);}
-    ConsumeArgument(id,s,mode,Argument::Angle(false)).map(Some)
+pub(super) fn ConsumeAngle<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    s: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Option<Rc<Value>>, PropertyParseError> {
+    if IsMathFunction(s) {
+        return ConsumeAnimationNumericMath(id, s, C::Angle, R::All);
+    }
+    if !MatchesArgument(s, Argument::Angle(false)) {
+        return Ok(None);
+    }
+    ConsumeArgument(id, s, mode, Argument::Angle(false)).map(Some)
 }
 fn MatchesArgument<T: TokenStreamTokenizer>(stream: &mut Stream<T>, argument: Argument) -> bool {
     if IsMathFunction(stream) {

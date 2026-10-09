@@ -150,10 +150,19 @@ impl CSSMathExpressionNode {
                 }
             }
             Divide => {
-                if operands[1].Category() != Number {
+                let b = operands[1].Category();
+                if b == Number {
+                    a
+                } else if a == b && a != CalculationResultCategory::LengthFunction {
+                    // CSS Values 4 typed arithmetic subtracts the divisor's
+                    // dimensional exponents. Equal dimensions therefore
+                    // produce a number (for example 100vw / 1536px). The
+                    // compact category representation cannot retain arbitrary
+                    // compound dimensions, but this cancellation is exact.
+                    Number
+                } else {
                     return Err(MathError::UnsupportedTypedArithmetic);
                 }
-                a
             }
             RoundNearest | RoundUp | RoundDown | RoundToZero | Mod | Rem => {
                 if operands.len() != 2 {

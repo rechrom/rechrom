@@ -3,7 +3,9 @@
 //! Platform-independent browser event-loop scheduling.
 //!
 //! The embedding communication pump owns blocking and actual wake delivery.
-//! `EventLoopEngine` owns task selection and rendering opportunities. One
+//! `EventLoopEngine` owns task selection and rendering opportunities. Task
+//! tokens and payloads are opaque: network, parser, timer and product command
+//! meanings stay in the embedding layer. One
 //! `OnWake` call executes at most one complete turn and returns the next wake
 //! request to the embedder. The injected executor owns each task's internal
 //! lifecycle, including any required microtask checkpoint.
@@ -15,30 +17,18 @@ use std::time::Instant;
 pub struct ExecutionContextId(pub u64);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct TaskId(pub u64);
+pub struct TaskToken(pub u64);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
-pub enum TaskSource {
-    UserInteraction = 0,
-    Networking = 1,
-    Timer = 2,
-    PostedMessage = 3,
-    DomManipulation = 4,
-    Parser = 5,
-    Internal = 6,
+pub enum TaskPriority {
+    UserBlocking = 0,
+    Normal = 1,
+    Background = 2,
 }
 
-impl TaskSource {
-    const COUNT: usize = 7;
-    const REGULAR: [Self; 6] = [
-        Self::Networking,
-        Self::Timer,
-        Self::PostedMessage,
-        Self::DomManipulation,
-        Self::Parser,
-        Self::Internal,
-    ];
+impl TaskPriority {
+    const COUNT: usize = 3;
 
     fn index(self) -> usize {
         self as usize
@@ -47,9 +37,9 @@ impl TaskSource {
 
 #[derive(Debug)]
 pub struct ScheduledTask<T> {
-    pub id: TaskId,
+    pub token: TaskToken,
     pub context: ExecutionContextId,
-    pub source: TaskSource,
+    pub priority: TaskPriority,
     pub ready_at: Option<Instant>,
     pub payload: T,
 }
@@ -57,7 +47,7 @@ pub struct ScheduledTask<T> {
 #[derive(Debug)]
 pub enum EventLoopMutation<T, F> {
     PostTask(ScheduledTask<T>),
-    CancelTask(TaskId),
+    CancelTask(TaskToken),
     RequestRendering(ExecutionContextId),
     BeginMainFrame {
         context: ExecutionContextId,
@@ -104,7 +94,7 @@ pub trait EventLoopExecutor<T, F> {
     fn RunTask(
         &mut self,
         context: ExecutionContextId,
-        source: TaskSource,
+        priority: TaskPriority,
         task: T,
     ) -> Result<(), Self::Error>;
 
@@ -113,15 +103,15 @@ pub trait EventLoopExecutor<T, F> {
 }
 
 struct ReadyTask<T> {
-    id: TaskId,
+    token: TaskToken,
     context: ExecutionContextId,
     payload: T,
 }
 
 struct DelayedTask<T> {
-    id: TaskId,
+    token: TaskToken,
     context: ExecutionContextId,
-    source: TaskSource,
+    priority: TaskPriority,
     payload: T,
 }
 
@@ -131,12 +121,11 @@ struct DelayedTask<T> {
 /// The embedding pump applies mutations and calls `OnWake` when a previously
 /// returned `WakeRequest` is delivered.
 pub struct EventLoopEngine<T, F> {
-    ready: [VecDeque<ReadyTask<T>>; TaskSource::COUNT],
+    ready: [VecDeque<ReadyTask<T>>; TaskPriority::COUNT],
     delayed: BTreeMap<(Instant, u64), DelayedTask<T>>,
     rendering_requested: BTreeSet<ExecutionContextId>,
     pending_rendering: BTreeMap<ExecutionContextId, F>,
     next_delayed_order: u64,
-    next_regular_source: usize,
     stopped: bool,
     executing: bool,
 }
@@ -149,7 +138,6 @@ impl<T, F> Default for EventLoopEngine<T, F> {
             rendering_requested: BTreeSet::new(),
             pending_rendering: BTreeMap::new(),
             next_delayed_order: 0,
-            next_regular_source: 0,
             stopped: false,
             executing: false,
         }
@@ -174,25 +162,25 @@ impl<T, F> EventLoopEngine<T, F> {
                     self.delayed.insert(
                         (task.ready_at.unwrap(), order),
                         DelayedTask {
-                            id: task.id,
+                            token: task.token,
                             context: task.context,
-                            source: task.source,
+                            priority: task.priority,
                             payload: task.payload,
                         },
                     );
                 } else {
-                    self.ready[task.source.index()].push_back(ReadyTask {
-                        id: task.id,
+                    self.ready[task.priority.index()].push_back(ReadyTask {
+                        token: task.token,
                         context: task.context,
                         payload: task.payload,
                     });
                 }
             }
-            EventLoopMutation::CancelTask(id) => {
+            EventLoopMutation::CancelTask(token) => {
                 for queue in &mut self.ready {
-                    queue.retain(|task| task.id != id);
+                    queue.retain(|task| task.token != token);
                 }
-                self.delayed.retain(|_, task| task.id != id);
+                self.delayed.retain(|_, task| task.token != token);
             }
             EventLoopMutation::RequestRendering(context) => {
                 if self.rendering_requested.insert(context) {
@@ -241,12 +229,14 @@ impl<T, F> EventLoopEngine<T, F> {
         self.executing = true;
         self.PromoteReady(now);
 
-        let result = if let Some(task) = self.TakeReady(TaskSource::UserInteraction) {
-            Self::RunCompleteTask(executor, TaskSource::UserInteraction, task)
+        let result = if let Some(task) = self.TakeReady(TaskPriority::UserBlocking) {
+            Self::RunCompleteTask(executor, TaskPriority::UserBlocking, task)
         } else if let Some((context, frame)) = self.pending_rendering.pop_first() {
             executor.UpdateRendering(context, frame)
-        } else if let Some((source, task)) = self.TakeRegularReady() {
-            Self::RunCompleteTask(executor, source, task)
+        } else if let Some(task) = self.TakeReady(TaskPriority::Normal) {
+            Self::RunCompleteTask(executor, TaskPriority::Normal, task)
+        } else if let Some(task) = self.TakeReady(TaskPriority::Background) {
+            Self::RunCompleteTask(executor, TaskPriority::Background, task)
         } else {
             Ok(())
         };
@@ -270,13 +260,13 @@ impl<T, F> EventLoopEngine<T, F> {
 
     fn RunCompleteTask<E>(
         executor: &mut E,
-        source: TaskSource,
+        priority: TaskPriority,
         task: ReadyTask<T>,
     ) -> Result<(), E::Error>
     where
         E: EventLoopExecutor<T, F>,
     {
-        executor.RunTask(task.context, source, task.payload)
+        executor.RunTask(task.context, priority, task.payload)
     }
 
     fn PromoteReady(&mut self, now: Instant) {
@@ -285,29 +275,17 @@ impl<T, F> EventLoopEngine<T, F> {
                 break;
             }
             let task = self.delayed.remove(&(ready_at, order)).unwrap();
-            self.ready[task.source.index()].push_back(ReadyTask {
-                id: task.id,
+            self.ready[task.priority.index()].push_back(ReadyTask {
+                token: task.token,
                 context: task.context,
                 payload: task.payload,
             });
         }
     }
 
-    fn TakeReady(&mut self, source: TaskSource) -> Option<ReadyTask<T>> {
-        let queue = &mut self.ready[source.index()];
+    fn TakeReady(&mut self, priority: TaskPriority) -> Option<ReadyTask<T>> {
+        let queue = &mut self.ready[priority.index()];
         queue.pop_front()
-    }
-
-    fn TakeRegularReady(&mut self) -> Option<(TaskSource, ReadyTask<T>)> {
-        for offset in 0..TaskSource::REGULAR.len() {
-            let index = (self.next_regular_source + offset) % TaskSource::REGULAR.len();
-            let source = TaskSource::REGULAR[index];
-            if let Some(task) = self.TakeReady(source) {
-                self.next_regular_source = (index + 1) % TaskSource::REGULAR.len();
-                return Some((source, task));
-            }
-        }
-        None
     }
 
     fn NextWake(&self) -> WakeRequest {
@@ -342,11 +320,11 @@ mod tests {
         fn RunTask(
             &mut self,
             context: ExecutionContextId,
-            source: TaskSource,
+            priority: TaskPriority,
             task: &'static str,
         ) -> Result<(), Self::Error> {
             self.log
-                .push(format!("task:{}:{source:?}:{task}", context.0));
+                .push(format!("task:{}:{priority:?}:{task}", context.0));
             Ok(())
         }
 
@@ -363,13 +341,13 @@ mod tests {
     fn task(
         id: u64,
         context: u64,
-        source: TaskSource,
+        priority: TaskPriority,
         payload: &'static str,
     ) -> EventLoopMutation<&'static str, u64> {
         EventLoopMutation::PostTask(ScheduledTask {
-            id: TaskId(id),
+            token: TaskToken(id),
             context: ExecutionContextId(context),
-            source,
+            priority,
             ready_at: None,
             payload,
         })
@@ -379,21 +357,21 @@ mod tests {
     fn one_wake_runs_one_complete_task_turn() {
         let now = Instant::now();
         let mut engine = EventLoopEngine::New();
-        engine.Apply(task(1, 7, TaskSource::Timer, "a"), now);
-        engine.Apply(task(2, 7, TaskSource::Timer, "b"), now);
+        engine.Apply(task(1, 7, TaskPriority::Normal, "a"), now);
+        engine.Apply(task(2, 7, TaskPriority::Normal, "b"), now);
         let mut client = TestExecutor::default();
 
         assert_eq!(engine.OnWake(now, &mut client), Ok(WakeRequest::Now));
-        assert_eq!(client.log, ["task:7:Timer:a"]);
+        assert_eq!(client.log, ["task:7:Normal:a"]);
         assert_eq!(engine.OnWake(now, &mut client), Ok(WakeRequest::None));
-        assert_eq!(client.log, ["task:7:Timer:a", "task:7:Timer:b"]);
+        assert_eq!(client.log, ["task:7:Normal:a", "task:7:Normal:b"]);
     }
 
     #[test]
     fn input_precedes_rendering_and_regular_tasks() {
         let now = Instant::now();
         let mut engine = EventLoopEngine::New();
-        engine.Apply(task(1, 1, TaskSource::Networking, "network"), now);
+        engine.Apply(task(1, 1, TaskPriority::Normal, "ordinary"), now);
         engine.Apply(
             EventLoopMutation::BeginMainFrame {
                 context: ExecutionContextId(1),
@@ -401,7 +379,7 @@ mod tests {
             },
             now,
         );
-        engine.Apply(task(2, 1, TaskSource::UserInteraction, "input"), now);
+        engine.Apply(task(2, 1, TaskPriority::UserBlocking, "input"), now);
         let mut client = TestExecutor::default();
 
         engine.OnWake(now, &mut client).unwrap();
@@ -410,9 +388,9 @@ mod tests {
         assert_eq!(
             client.log,
             [
-                "task:1:UserInteraction:input",
+                "task:1:UserBlocking:input",
                 "render:1:10",
-                "task:1:Networking:network"
+                "task:1:Normal:ordinary"
             ]
         );
     }
@@ -463,16 +441,16 @@ mod tests {
         let mut engine = EventLoopEngine::New();
         let applied = engine.Apply(
             EventLoopMutation::PostTask(ScheduledTask {
-                id: TaskId(9),
+                token: TaskToken(9),
                 context: ExecutionContextId(1),
-                source: TaskSource::Timer,
+                priority: TaskPriority::Normal,
                 ready_at: Some(due),
                 payload: "timer",
             }),
             now,
         );
         assert_eq!(applied.wake, WakeRequest::At(due));
-        engine.Apply(EventLoopMutation::CancelTask(TaskId(9)), now);
+        engine.Apply(EventLoopMutation::CancelTask(TaskToken(9)), now);
         let mut client = TestExecutor::default();
         assert_eq!(engine.OnWake(due, &mut client), Ok(WakeRequest::None));
         assert!(client.log.is_empty());

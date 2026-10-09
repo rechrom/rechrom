@@ -91,20 +91,55 @@ fn run(
             }
         }),
     )));
+    let pending_focus_errors = Rc::new(RefCell::new(Vec::<
+        javascript::javascript_runtime::JavaScriptException,
+    >::new()));
+    {
+        let focus_bindings = bindings.clone();
+        let errors = pending_focus_errors.clone();
+        bindings
+            .borrow_mut()
+            .SetFocusChangeHandler(Some(Rc::new(move |id, focus, runtime| {
+                if !focus {
+                    return;
+                }
+                let event = MakeSyntheticEvent(EventType::kFocus, id);
+                DOMJavaScriptBindings::DispatchEventListenersScoped(
+                    &focus_bindings,
+                    &EventListenerInvocation {
+                        event: &event,
+                        target_node_id: id,
+                        current_target_node_id: id,
+                        phase: EventPhase::kAtTarget,
+                        capture_listeners: false,
+                        focused_node_id: Some(id),
+                    },
+                    runtime,
+                    &mut |error| errors.borrow_mut().push(error.clone()),
+                );
+            })));
+    }
     let requests = Rc::new(RefCell::new(Vec::new()));
     let loader = Rc::new(RefCell::new(Loader(requests.clone())));
-    let mut scheduler = crate::script_scheduler::ScriptScheduler::new(
-        document.clone(),
-        bindings.clone(),
+    let resource_engine = Rc::new(ResourceEngine::new(
         loader.clone(),
         "https://example.test/page".into(),
+    ));
+    let error_source: Rc<dyn Fn() -> Vec<javascript::javascript_runtime::JavaScriptException>> = {
+        let errors = pending_focus_errors.clone();
+        Rc::new(move || std::mem::take(&mut *errors.borrow_mut()))
+    };
+    let mut scheduler = crate::script_scheduler::ScriptScheduler::WithResourceEngine(
+        document.clone(),
+        bindings.clone(),
+        resource_engine.clone(),
+        Some(error_source),
     );
     let mut runtime = QuickJsJavaScriptRuntime::new();
-    let dynamic = Rc::new(DynamicScriptTasks::new(
+    let dynamic = Rc::new(DynamicScriptTasks::WithResourceEngine(
         document,
         bindings.clone(),
-        loader,
-        "https://example.test/page".into(),
+        resource_engine,
         scheduler.StartedScripts(),
         runtime.SupportsModules(),
     ));
@@ -171,7 +206,11 @@ fn connected_inline_script_current_script_jobs_load_and_timer_follow_source_orde
             WindowJavaScriptBindings::RunTaskTurn(window, runtime, realm, 0.0, &mut |e| {
                 panic!("{}", e.message)
             });
-            assert_js(runtime,realm,"once===1 && JSON.stringify(order)===JSON.stringify(['parser','script','job','load','timer'])");
+            assert_js(
+                runtime,
+                realm,
+                "once===1 && JSON.stringify(order)===JSON.stringify(['parser','script','job','load','timer'])",
+            );
             assert_eq!(client.borrow().executed.len(), 1);
             assert!(client.borrow().errors.is_empty());
             assert!(requests.borrow().is_empty());
@@ -235,7 +274,11 @@ fn base_url_delayed_external_redirect_and_resource_failure_keep_source_events() 
                 });
             }
             assert_eq!(dynamic.PendingLoads(), 0);
-            assert_js(runtime,realm,"loadedScriptId==='loaded' && JSON.stringify(order)===JSON.stringify(['failure-load','external','external-job','load'])");
+            assert_js(
+                runtime,
+                realm,
+                "loadedScriptId==='loaded' && JSON.stringify(order)===JSON.stringify(['failure-load','external','external-job','load'])",
+            );
             assert_eq!(client.borrow().executed.len(), 1);
         },
     );
@@ -257,24 +300,40 @@ fn innerhtml_script_and_json_nodes_are_not_executed() {
 
 #[test]
 fn stale_dynamic_registration_cannot_execute_a_parser_script_twice() {
-    run("<html><head><script id=parser>globalThis.parserCount=(globalThis.parserCount||0)+1;</script></head></html>",
-        |runtime,realm,dynamic,client,_,window| {
-            let id={
-                let owner=dynamic.document.borrow();let document=owner.GetDocument();
-                (0..document.NodeCount()).find_map(|index|document.Node(index).FindAttribute("id")
-                    .filter(|attribute|attribute.value=="parser").map(|_|document.Node(index).Id())).unwrap()
+    run(
+        "<html><head><script id=parser>globalThis.parserCount=(globalThis.parserCount||0)+1;</script></head></html>",
+        |runtime, realm, dynamic, client, _, window| {
+            let id = {
+                let owner = dynamic.document.borrow();
+                let document = owner.GetDocument();
+                (0..document.NodeCount())
+                    .find_map(|index| {
+                        document
+                            .Node(index)
+                            .FindAttribute("id")
+                            .filter(|attribute| attribute.value == "parser")
+                            .map(|_| document.Node(index).Id())
+                    })
+                    .unwrap()
             };
             // A mutation may have prepared this entry during the parser's load
             // wait. Its host task survives after parser execution has claimed it.
-            dynamic.StartScriptLoad(id,"pending.js").unwrap();
+            dynamic.StartScriptLoad(id, "pending.js").unwrap();
             dynamic.registrations.borrow_mut().push_back(id);
-            dynamic.EnqueuePreparedTasks(window,client.clone());
+            dynamic.EnqueuePreparedTasks(window, client.clone());
             for _ in 0..4 {
-                WindowJavaScriptBindings::RunTaskTurn(window,runtime,realm,0.0,&mut |e|panic!("{}",e.message));
+                WindowJavaScriptBindings::RunTaskTurn(window, runtime, realm, 0.0, &mut |e| {
+                    panic!("{}", e.message)
+                });
             }
-            assert_js(runtime,realm,"parserCount===1");
+            assert_js(runtime, realm, "parserCount===1");
             assert!(client.borrow().executed.is_empty());
             assert!(client.borrow().errors.is_empty());
-            assert_eq!(dynamic.PendingLoads(),0,"discarded task retires its resource load");
-        });
+            assert_eq!(
+                dynamic.PendingLoads(),
+                0,
+                "discarded task retires its resource load"
+            );
+        },
+    );
 }

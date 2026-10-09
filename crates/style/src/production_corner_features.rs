@@ -5,8 +5,24 @@
 #![allow(non_snake_case)]
 pub(crate) fn IsExposed(id: foundation::CSSPropertyID) -> bool {
     use foundation::CSSPropertyID::*;
-    !matches!(id, kCorner | kCornerTopLeft | kCornerTopRight | kCornerBottomLeft | kCornerBottomRight
-        | kCornerStartStart | kCornerStartEnd | kCornerEndStart | kCornerEndEnd
-        | kCornerTop | kCornerRight | kCornerBottom | kCornerLeft
-        | kCornerBlockStart | kCornerBlockEnd | kCornerInlineStart | kCornerInlineEnd)
+    !matches!(
+        id,
+        kCorner
+            | kCornerTopLeft
+            | kCornerTopRight
+            | kCornerBottomLeft
+            | kCornerBottomRight
+            | kCornerStartStart
+            | kCornerStartEnd
+            | kCornerEndStart
+            | kCornerEndEnd
+            | kCornerTop
+            | kCornerRight
+            | kCornerBottom
+            | kCornerLeft
+            | kCornerBlockStart
+            | kCornerBlockEnd
+            | kCornerInlineStart
+            | kCornerInlineEnd
+    )
 }

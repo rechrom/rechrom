@@ -1,6 +1,6 @@
 #![allow(non_snake_case, non_camel_case_types)]
-use cssom::{CSSDeclaration, CSSStyleSheet};
-use dom::{dom_mutation::DOMMutation, UserInteractionState};
+use cssom::CSSStyleSheet;
+use dom::dom_mutation::DOMMutation;
 use layoutng_assembly::internal::layout_input::{FontFace, Offset, PaintImage, Size};
 use std::sync::Arc;
 
@@ -53,10 +53,7 @@ pub enum ResourceMutation {
     ResourceLoadFailed(ResourceLoadFailed),
 }
 // cpp: page_mutation/page_mutation.h:45-47
-#[derive(Clone, Default)]
-pub struct InteractionStateMutation {
-    pub state: UserInteractionState,
-}
+pub use dom::InteractionStateMutation;
 // cpp: page_mutation/page_mutation.h:49-52
 #[derive(Clone, Default)]
 pub struct CSSOMMutation {
@@ -74,19 +71,7 @@ pub struct ScrollMutation {
     pub target_node_id: u64,
     pub offset: Offset,
 }
-// cpp: page_mutation/page_mutation.h:63-68
-#[derive(Clone, Default)]
-pub struct AnimationStyleSample {
-    pub node_id: u64,
-    pub effect_id: u64,
-    pub declarations: Vec<CSSDeclaration>,
-}
-// cpp: page_mutation/page_mutation.h:70-73
-#[derive(Clone, Default)]
-pub struct AnimationTick {
-    pub monotonic_time: f64,
-    pub samples: Vec<AnimationStyleSample>,
-}
+pub use animation::{AnimationStyleSample, AnimationTick};
 // cpp: page_mutation/page_mutation.h:76-82
 #[derive(Clone)]
 pub enum PageMutation {
@@ -98,6 +83,3 @@ pub enum PageMutation {
     ScrollMutation(ScrollMutation),
     AnimationTick(AnimationTick),
 }
-// cpp: page_mutation/page_mutation.h:83
-// Rc<Fn> preserves the const-callable, synchronously reentrant C++ callback.
-pub type PageMutationEmitter = std::rc::Rc<dyn Fn(PageMutation)>;

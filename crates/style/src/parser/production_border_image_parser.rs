@@ -244,26 +244,30 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
         }
         kBorderImageRepeat | kWebkitMaskBoxImageRepeat => Repeat(id, s)?.ok_or_else(|| invalid(id)),
         // css_border_image.cc:24-59 preserves source nested slash-list order.
-        kWebkitBorderImage => ConsumeWebkitBorderImage(id,s,mode),
+        kWebkitBorderImage => ConsumeWebkitBorderImage(id, s, mode),
         _ => Err(invalid(id)),
     }
 }
-pub(super) fn ConsumeWebkitBorderImage<T: TokenStreamTokenizer>(id:CSSPropertyID,s:&mut Stream<T>,mode:CSSParserMode)->Result<Rc<Value>,PropertyParseError> {
-            let c = Components(id, s, mode, true)?;
-            let mut list = Vec::new();
-            if let Some(v) = c.source {
-                list.push(v);
-            }
-            if c.width.is_some() || c.outset.is_some() {
-                let slash = c.slice.into_iter().chain(c.width).chain(c.outset).collect();
-                list.push(values::list(slash, values::ListSeparator::Slash));
-            } else if let Some(v) = c.slice {
-                list.push(v);
-            }
-            if let Some(v) = c.repeat {
-                list.push(v);
-            }
-            Ok(values::list(list, values::ListSeparator::Space))
+pub(super) fn ConsumeWebkitBorderImage<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    s: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Rc<Value>, PropertyParseError> {
+    let c = Components(id, s, mode, true)?;
+    let mut list = Vec::new();
+    if let Some(v) = c.source {
+        list.push(v);
+    }
+    if c.width.is_some() || c.outset.is_some() {
+        let slash = c.slice.into_iter().chain(c.width).chain(c.outset).collect();
+        list.push(values::list(slash, values::ListSeparator::Slash));
+    } else if let Some(v) = c.slice {
+        list.push(v);
+    }
+    if let Some(v) = c.repeat {
+        list.push(v);
+    }
+    Ok(values::list(list, values::ListSeparator::Space))
 }
 pub(super) fn ParseShorthand<T: TokenStreamTokenizer>(
     id: CSSPropertyID,

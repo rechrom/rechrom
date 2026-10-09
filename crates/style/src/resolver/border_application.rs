@@ -61,11 +61,24 @@ fn ConvertPixels(
 }
 
 // Shared ConvertBorderWidth branch used by borders and gap-decoration widths.
-pub(super) fn ConvertBorderWidthValue(id: CSSPropertyID,b:&ComputedStyleBuilder,v:&Value,root:f32,media:&MediaValuesCachedData)->std::result::Result<i32,LonghandApplicationError>{
-    let pixels=if let CSSValuePayload::kIdentifierClass(value)=v.Payload(){
-        let nominal=match value.0{CSSValueID::kThin=>1.0,CSSValueID::kMedium=>3.0,CSSValueID::kThick=>5.0,_=>return Err(LonghandApplicationError::InvalidValue(id))};
-        nominal*b.EffectiveZoom()as f64
-    }else{ConvertPixels(id,b,v,root,media)?as f32 as f64};
+pub(super) fn ConvertBorderWidthValue(
+    id: CSSPropertyID,
+    b: &ComputedStyleBuilder,
+    v: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+) -> std::result::Result<i32, LonghandApplicationError> {
+    let pixels = if let CSSValuePayload::kIdentifierClass(value) = v.Payload() {
+        let nominal = match value.0 {
+            CSSValueID::kThin => 1.0,
+            CSSValueID::kMedium => 3.0,
+            CSSValueID::kThick => 5.0,
+            _ => return Err(LonghandApplicationError::InvalidValue(id)),
+        };
+        nominal * b.EffectiveZoom() as f64
+    } else {
+        ConvertPixels(id, b, v, root, media)? as f32 as f64
+    };
     Ok(crate::resolver::style_builder_converter::StyleBuilderConverter::ClampLineWidth(pixels))
 }
 
@@ -147,7 +160,7 @@ pub(super) fn Apply(
                 _ => *p.SpecifiedBorderLeftWidth(),
             }
         } else {
-            ConvertBorderWidthValue(id,b,v,root,media)?
+            ConvertBorderWidthValue(id, b, v, root, media)?
         };
         ApplyConvertedBorderWidth(id, b, &width)?;
         if inherit && !initial && v.IsInheritedValue() {

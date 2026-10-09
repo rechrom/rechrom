@@ -4,6 +4,7 @@ use html::html_parser::{
     HTMLDocumentParser, HTMLDocumentParserState, HTMLParserResult, HTMLParserStatus,
 };
 use html::HTMLParserHost;
+use resource::ResourceEngine;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{
     RequestDestination, URLLoadEvent, URLLoader, URLRequest, URLResponseHead, URLStreamOperation,
@@ -51,7 +52,7 @@ pub struct DocumentLoadProgress {
 /// navigation commit, JavaScript environment, lifecycle events and rendering.
 /// No method waits for IO or retains a borrow of the document between calls.
 pub struct DocumentLoader {
-    loader: Rc<RefCell<dyn URLLoader>>,
+    resources: Rc<ResourceEngine>,
     stream: Option<Box<dyn URLStreamOperation>>,
     response: Option<URLResponseHead>,
     requested_url: String,
@@ -64,8 +65,13 @@ pub struct DocumentLoader {
 }
 impl DocumentLoader {
     pub fn new(loader: Rc<RefCell<dyn URLLoader>>) -> Self {
+        let resources = Rc::new(ResourceEngine::new(loader, String::new()));
+        Self::WithResourceEngine(resources)
+    }
+
+    pub fn WithResourceEngine(resources: Rc<ResourceEngine>) -> Self {
         Self {
-            loader,
+            resources,
             stream: None,
             response: None,
             requested_url: String::new(),
@@ -103,7 +109,7 @@ impl DocumentLoader {
         }
         let mut request = request.clone();
         request.destination = RequestDestination::kDocument;
-        let result = self.loader.borrow_mut().LoadStream(&request);
+        let result = self.resources.StartStream(request.clone());
         let mut stream = match result {
             Ok(stream) => stream,
             Err(error) => return self.Fail(error),

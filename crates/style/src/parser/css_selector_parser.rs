@@ -2779,7 +2779,10 @@ impl CSSSelectorParser {
         unsupported(selectors)
     }
     pub fn UnsupportedFeature(text: &String) -> Option<std::string::String> {
-        let context = SelectorParserContext { html: true, quirks: false };
+        let context = SelectorParserContext {
+            html: true,
+            quirks: false,
+        };
         Self::UnsupportedParsedFeature(&Self::ParseSelector(text, &context))
     }
     // cpp: css_selector_parser.cc:160-183. The returned slice is the
@@ -2805,8 +2808,24 @@ impl CSSSelectorParser {
         &mut arena[result]
     }
     // cpp: css_selector_parser.cc:208-225. Same shared arena/consumer as ParseSelector.
-    pub fn ParseScopeBoundaryStream<'a,T:TokenStreamTokenizer>(stream:&mut CSSParserTokenStream<'_,T>,context:&SelectorParserContext,nesting:CSSNestingType,options:&SelectorParserOptions<'_>,arena:&'a mut Vec<CSSSelector>)->&'a mut [CSSSelector]{
-        let initial=arena.len();let output=Rc::new(RefCell::new(std::mem::take(arena)));stream.ConsumeWhitespace();let mut parser=Parser::new_in_arena(context,options,false,output.clone(),true);let result=parser.list(stream,false,false,nesting,&mut ResultFlags::default()).filter(|_|stream.AtEnd()).unwrap_or(initial..initial);Self::RecordUsageAndDeprecations(&output.borrow()[result.clone()],nesting,options,None);*arena=std::mem::take(&mut *output.borrow_mut());&mut arena[result]
+    pub fn ParseScopeBoundaryStream<'a, T: TokenStreamTokenizer>(
+        stream: &mut CSSParserTokenStream<'_, T>,
+        context: &SelectorParserContext,
+        nesting: CSSNestingType,
+        options: &SelectorParserOptions<'_>,
+        arena: &'a mut Vec<CSSSelector>,
+    ) -> &'a mut [CSSSelector] {
+        let initial = arena.len();
+        let output = Rc::new(RefCell::new(std::mem::take(arena)));
+        stream.ConsumeWhitespace();
+        let mut parser = Parser::new_in_arena(context, options, false, output.clone(), true);
+        let result = parser
+            .list(stream, false, false, nesting, &mut ResultFlags::default())
+            .filter(|_| stream.AtEnd())
+            .unwrap_or(initial..initial);
+        Self::RecordUsageAndDeprecations(&output.borrow()[result.clone()], nesting, options, None);
+        *arena = std::mem::take(&mut *output.borrow_mut());
+        &mut arena[result]
     }
     // cpp: .cc:187-207,289-349. Scope rollback is shared by observer and non-observer paths.
     pub fn ConsumeSelector<'a, T: TokenStreamTokenizer>(

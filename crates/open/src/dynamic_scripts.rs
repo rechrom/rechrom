@@ -1,11 +1,12 @@
 #![allow(non_snake_case)]
 //! Page's connected-subtree script tasks over the existing persistent DOM.
 use crate::script_scheduler::ScriptLoadClient;
-use document_loader::{DecodeText, RequireResponse, ResolveUrl, ResourceLoader, StartResource};
+use document_loader::{DecodeText, RequireResponse, ResolveUrl, ResourceLoader};
 use dom::{Document, DOM};
 use html::html_parser::ParserScript;
 use interaction::event::{EventListenerInvocation, EventPhase, EventType, MakeSyntheticEvent};
 use javascript::javascript_runtime::{JavaScriptRealm, JavaScriptRuntime};
+use resource::ResourceEngine;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet, VecDeque},
@@ -24,13 +25,13 @@ pub struct StartedScriptRegistry {
     executed: HashSet<u64>,
 }
 impl StartedScriptRegistry {
-    pub(crate) fn contains(&self, id: &u64) -> bool {
+    pub fn contains(&self, id: &u64) -> bool {
         self.prepared.contains(id)
     }
-    pub(crate) fn insert(&mut self, id: u64) -> bool {
+    pub fn insert(&mut self, id: u64) -> bool {
         self.prepared.insert(id)
     }
-    pub(crate) fn ClaimExecution(&mut self, id: u64) -> bool {
+    pub fn ClaimExecution(&mut self, id: u64) -> bool {
         self.prepared.insert(id);
         self.executed.insert(id)
     }
@@ -39,7 +40,7 @@ pub type StartedScripts = Rc<RefCell<StartedScriptRegistry>>;
 pub struct DynamicScriptTasks {
     document: Rc<RefCell<DOM>>,
     bindings: Rc<RefCell<DOMJavaScriptBindings>>,
-    loader: Rc<RefCell<dyn URLLoader>>,
+    resource_engine: Rc<ResourceEngine>,
     current_url: String,
     base_url: RefCell<String>,
     started: StartedScripts,
@@ -101,11 +102,31 @@ impl DynamicScriptTasks {
         started: StartedScripts,
         supports_modules: bool,
     ) -> Self {
-        let modules = Rc::new(document_loader::ModuleResources::new(loader.clone()));
+        let resource_engine = Rc::new(ResourceEngine::new(loader, current_url.clone()));
+        Self::WithResourceEngine(
+            document,
+            bindings,
+            resource_engine,
+            started,
+            supports_modules,
+        )
+    }
+
+    pub fn WithResourceEngine(
+        document: Rc<RefCell<DOM>>,
+        bindings: Rc<RefCell<DOMJavaScriptBindings>>,
+        resource_engine: Rc<ResourceEngine>,
+        started: StartedScripts,
+        supports_modules: bool,
+    ) -> Self {
+        let current_url = resource_engine.DocumentURL();
+        let modules = Rc::new(document_loader::ModuleResources::WithResourceEngine(
+            resource_engine.clone(),
+        ));
         Self {
             document,
             bindings,
-            loader,
+            resource_engine,
             base_url: RefCell::new(current_url.clone()),
             current_url,
             started,
@@ -126,13 +147,13 @@ impl DynamicScriptTasks {
     pub fn SetBaseURL(&self, base: String) {
         *self.base_url.borrow_mut() = base;
     }
-    pub(crate) fn SetModuleResources(&self, modules: Rc<document_loader::ModuleResources>) {
+    pub fn SetModuleResources(&self, modules: Rc<document_loader::ModuleResources>) {
         *self.modules.borrow_mut() = modules;
     }
     pub fn PendingLoads(&self) -> usize {
         self.resources.borrow().len() + self.pending_modules.borrow().len()
     }
-    pub(crate) fn SetPendingHostErrors(
+    pub fn SetPendingHostErrors(
         &self,
         source: Rc<dyn Fn() -> Vec<javascript::javascript_runtime::JavaScriptException>>,
     ) {
@@ -150,7 +171,7 @@ impl DynamicScriptTasks {
     // Called after Page applies a mutation and its notification. The caller
     // supplies the live arena it already borrows; no second Document borrow.
     // Scripts installed through innerHTML have prepare_scripts=false.
-    pub(crate) fn PrepareConnectedScript(
+    pub fn PrepareConnectedScript(
         &self,
         tree: &Document,
         node: usize,
@@ -225,7 +246,7 @@ impl DynamicScriptTasks {
             destination: RequestDestination::kScript,
             ..Default::default()
         };
-        let pending = StartResource(&mut *self.loader.borrow_mut(), &request);
+        let pending = self.resource_engine.Start(request);
         self.resources.borrow_mut().insert(id, pending);
         Ok(())
     }

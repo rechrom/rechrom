@@ -5,16 +5,16 @@
 // Complex/custom branches stay explicit Unsupported; see longhand_dispatch_ledger.tsv.
 #![allow(unused_imports)]
 use foundation::*;
+use layoutng_style::css::style_color::StyleColor;
+use layoutng_style::css::white_space::WhiteSpaceCollapse;
 use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 use layoutng_style::style::computed_style_constants::*;
 use layoutng_style::style::computed_style_initial_values::ComputedStyleInitialValues;
-use layoutng_style::style::page_orientation::PageOrientation;
-use layoutng_style::css::style_color::StyleColor;
-use layoutng_style::css::white_space::WhiteSpaceCollapse;
-use layoutng_style::style::style_content_alignment_data::StyleContentAlignmentData;
-use layoutng_style::style::style_self_alignment_data::StyleSelfAlignmentData;
-use layoutng_style::style::style_flex_wrap_data::StyleFlexWrapData;
 use layoutng_style::style::css_timing_data::*;
+use layoutng_style::style::page_orientation::PageOrientation;
+use layoutng_style::style::style_content_alignment_data::StyleContentAlignmentData;
+use layoutng_style::style::style_flex_wrap_data::StyleFlexWrapData;
+use layoutng_style::style::style_self_alignment_data::StyleSelfAlignmentData;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LonghandApplicationError {
@@ -22,2394 +22,5282 @@ pub enum LonghandApplicationError {
     InvalidValue(CSSPropertyID),
 }
 
-pub fn ApplyInitial(property: CSSPropertyID, builder: &mut ComputedStyleBuilder) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:83
-CSSPropertyID::kForcedColorAdjust => { builder.SetForcedColorAdjust(ComputedStyleInitialValues::InitialForcedColorAdjust()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:118
-CSSPropertyID::kMathDepth => { builder.SetMathDepth(ComputedStyleInitialValues::InitialMathDepth()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:144
-CSSPropertyID::kPosition => { builder.SetPosition(ComputedStyleInitialValues::InitialPosition()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:242
-CSSPropertyID::kAppearance => { builder.SetAppearance(ComputedStyleInitialValues::InitialAppearance()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:297
-CSSPropertyID::kDirection => { builder.SetDirection(ComputedStyleInitialValues::InitialDirection()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1268
-CSSPropertyID::kInternalVisitedBackgroundColor => { builder.SetInternalVisitedBackgroundColor(&ComputedStyleInitialValues::InitialBackgroundColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1714
-CSSPropertyID::kInternalVisitedColumnRuleColor => { builder.SetInternalVisitedColumnRuleColor(&ComputedStyleInitialValues::InitialInternalVisitedColumnRuleColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1752
-CSSPropertyID::kInternalVisitedFill => { builder.SetInternalVisitedFillPaint(&ComputedStyleInitialValues::InitialFillPaint()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1826
-CSSPropertyID::kInternalVisitedStroke => { builder.SetInternalVisitedStrokePaint(&ComputedStyleInitialValues::InitialStrokePaint()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2017
-CSSPropertyID::kAccentColor => { builder.SetAccentColor(&ComputedStyleInitialValues::InitialAccentColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2066
-CSSPropertyID::kAlignContent => { builder.SetAlignContent(&ComputedStyleInitialValues::InitialAlignContent()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2095
-CSSPropertyID::kAlignItems => { builder.SetAlignItems(&ComputedStyleInitialValues::InitialAlignItems()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2124
-CSSPropertyID::kAlignSelf => { builder.SetAlignSelf(&ComputedStyleInitialValues::InitialAlignSelf()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2153
-CSSPropertyID::kAlignmentBaseline => { builder.SetAlignmentBaseline(ComputedStyleInitialValues::InitialAlignmentBaseline()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2241
-CSSPropertyID::kAnchorName => { builder.SetAnchorName(&ComputedStyleInitialValues::InitialAnchorName().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2276
-CSSPropertyID::kAnchorScope => { builder.SetAnchorScope(&ComputedStyleInitialValues::InitialAnchorScope()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2305
-CSSPropertyID::kAnimationComposition => { if !builder.Animations().Get().is_null() {
-let data = builder.AccessAnimations();
-*data.CompositionListMut() = vec![CSSAnimationData::InitialComposition()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2351
-CSSPropertyID::kAnimationDelay => { if !builder.Animations().Get().is_null() {
-let data = builder.AccessAnimations();
-*data.DelayStartListMut() = vec![CSSAnimationData::InitialDelayStart()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2397
-CSSPropertyID::kAnimationDirection => { if !builder.Animations().Get().is_null() {
-let data = builder.AccessAnimations();
-*data.DirectionListMut() = vec![CSSAnimationData::InitialDirection()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2443
-CSSPropertyID::kAnimationDuration => { if !builder.Animations().Get().is_null() {
-let data = builder.AccessAnimations();
-*data.DurationListMut() = vec![CSSAnimationData::InitialDuration()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2489
-CSSPropertyID::kAnimationFillMode => { if !builder.Animations().Get().is_null() {
-let data = builder.AccessAnimations();
-*data.FillModeListMut() = vec![CSSAnimationData::InitialFillMode()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2535
-CSSPropertyID::kAnimationIterationCount => { if !builder.Animations().Get().is_null() {
-let data = builder.AccessAnimations();
-*data.IterationCountListMut() = vec![CSSAnimationData::InitialIterationCount()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2581
-CSSPropertyID::kAnimationName => { if !builder.Animations().Get().is_null() {
-let data = builder.AccessAnimations();
-*data.NameListMut() = vec![CSSAnimationData::InitialName()].into();
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2627
-CSSPropertyID::kAnimationPlayState => { if !builder.Animations().Get().is_null() {
-let data = builder.AccessAnimations();
-*data.PlayStateListMut() = vec![CSSAnimationData::InitialPlayState()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2673
-CSSPropertyID::kAnimationRangeEnd => { if !builder.Animations().Get().is_null() {
-let data = builder.AccessAnimations();
-*data.RangeEndListMut() = vec![CSSAnimationData::InitialRangeEnd()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2724
-CSSPropertyID::kAnimationRangeStart => { if !builder.Animations().Get().is_null() {
-let data = builder.AccessAnimations();
-*data.RangeStartListMut() = vec![CSSAnimationData::InitialRangeStart()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2775
-CSSPropertyID::kAnimationTimeline => { if !builder.Animations().Get().is_null() {
-let data = builder.AccessAnimations();
-*data.TimelineListMut() = vec![CSSAnimationData::InitialTimeline()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2826
-CSSPropertyID::kAnimationTimingFunction => { if !builder.Animations().Get().is_null() {
-let data = builder.AccessAnimations();
-*data.TimingFunctionListMut() = vec![CSSAnimationData::InitialTimingFunction()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2967
-CSSPropertyID::kAspectRatio => { builder.SetAspectRatio(&ComputedStyleInitialValues::InitialAspectRatio()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3002
-CSSPropertyID::kBackdropFilter => { builder.SetBackdropFilter(&ComputedStyleInitialValues::InitialBackdropFilter()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3033
-CSSPropertyID::kBackfaceVisibility => { builder.SetBackfaceVisibility(ComputedStyleInitialValues::InitialBackfaceVisibility()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3255
-CSSPropertyID::kBackgroundColor => { builder.SetBackgroundColor(&ComputedStyleInitialValues::InitialBackgroundColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3777
-CSSPropertyID::kBaselineShift => { builder.SetBaselineShift(&ComputedStyleInitialValues::InitialBaselineShift()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3800
-CSSPropertyID::kBaselineSource => { builder.SetBaselineSource(ComputedStyleInitialValues::InitialBaselineSource()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3835
-CSSPropertyID::kBlockEllipsis => { builder.SetBlockEllipsis(ComputedStyleInitialValues::InitialBlockEllipsis()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4142
-CSSPropertyID::kBorderBottomColor => { builder.SetBorderBottomColor(&StyleColor::CurrentColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4188
-CSSPropertyID::kBorderBottomLeftRadius => { builder.SetBorderBottomLeftRadius(&ComputedStyleInitialValues::InitialBorderBottomLeftRadius()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4237
-CSSPropertyID::kBorderBottomRightRadius => { builder.SetBorderBottomRightRadius(&ComputedStyleInitialValues::InitialBorderBottomRightRadius()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4280
-CSSPropertyID::kBorderBottomStyle => { builder.SetBorderBottomStyle(ComputedStyleInitialValues::InitialBorderBottomStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4347
-CSSPropertyID::kBorderCollapse => { builder.SetBorderCollapse(ComputedStyleInitialValues::InitialBorderCollapse());
-builder.SetBorderCollapseIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4597
-CSSPropertyID::kBorderImageSource => { builder.SetBorderImageSource(ComputedStyleInitialValues::InitialBorderImageSource().unwrap_or(std::ptr::null_mut())); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4910
-CSSPropertyID::kBorderLeftColor => { builder.SetBorderLeftColor(&StyleColor::CurrentColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4950
-CSSPropertyID::kBorderLeftStyle => { builder.SetBorderLeftStyle(ComputedStyleInitialValues::InitialBorderLeftStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5032
-CSSPropertyID::kBorderRightColor => { builder.SetBorderRightColor(&StyleColor::CurrentColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5072
-CSSPropertyID::kBorderRightStyle => { builder.SetBorderRightStyle(ComputedStyleInitialValues::InitialBorderRightStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5145
-CSSPropertyID::kBorderShape => { builder.SetBorderShape(&ComputedStyleInitialValues::InitialBorderShape().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5276
-CSSPropertyID::kBorderTopColor => { builder.SetBorderTopColor(&StyleColor::CurrentColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5322
-CSSPropertyID::kBorderTopLeftRadius => { builder.SetBorderTopLeftRadius(&ComputedStyleInitialValues::InitialBorderTopLeftRadius()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5371
-CSSPropertyID::kBorderTopRightRadius => { builder.SetBorderTopRightRadius(&ComputedStyleInitialValues::InitialBorderTopRightRadius()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5414
-CSSPropertyID::kBorderTopStyle => { builder.SetBorderTopStyle(ComputedStyleInitialValues::InitialBorderTopStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5490
-CSSPropertyID::kBottom => { builder.SetBottom(&ComputedStyleInitialValues::InitialBottom()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5527
-CSSPropertyID::kBoxDecorationBreak => { builder.SetBoxDecorationBreak(ComputedStyleInitialValues::InitialBoxDecorationBreak()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5556
-CSSPropertyID::kBoxShadow => { builder.SetBoxShadow(ComputedStyleInitialValues::InitialBoxShadow().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5590
-CSSPropertyID::kBoxSizing => { builder.SetBoxSizing(ComputedStyleInitialValues::InitialBoxSizing()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5619
-CSSPropertyID::kBreakAfter => { builder.SetBreakAfter(ComputedStyleInitialValues::InitialBreakAfter()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5648
-CSSPropertyID::kBreakBefore => { builder.SetBreakBefore(ComputedStyleInitialValues::InitialBreakBefore()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5677
-CSSPropertyID::kBreakInside => { builder.SetBreakInside(ComputedStyleInitialValues::InitialBreakInside()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5706
-CSSPropertyID::kBufferedRendering => { builder.SetBufferedRendering(ComputedStyleInitialValues::InitialBufferedRendering()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5735
-CSSPropertyID::kCaptionSide => { builder.SetCaptionSide(ComputedStyleInitialValues::InitialCaptionSide());
-builder.SetCaptionSideIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5773
-CSSPropertyID::kCaretAnimation => { builder.SetCaretAnimation(ComputedStyleInitialValues::InitialCaretAnimation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5802
-CSSPropertyID::kCaretColor => { builder.SetCaretColor(&ComputedStyleInitialValues::InitialCaretColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5837
-CSSPropertyID::kCaretShape => { builder.SetCaretShape(ComputedStyleInitialValues::InitialCaretShape()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5866
-CSSPropertyID::kClear => { builder.SetClear(ComputedStyleInitialValues::InitialClear()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5936
-CSSPropertyID::kClipPath => { builder.SetClipPath(ComputedStyleInitialValues::InitialClipPath()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5970
-CSSPropertyID::kClipRule => { builder.SetClipRule(ComputedStyleInitialValues::InitialClipRule()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5999
-CSSPropertyID::kColorInterpolation => { builder.SetColorInterpolation(ComputedStyleInitialValues::InitialColorInterpolation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6028
-CSSPropertyID::kColorInterpolationFilters => { builder.SetColorInterpolationFilters(ComputedStyleInitialValues::InitialColorInterpolationFilters()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6057
-CSSPropertyID::kColorRendering => { builder.SetColorRendering(ComputedStyleInitialValues::InitialColorRendering()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6128
-CSSPropertyID::kColumnFill => { builder.SetColumnFill(ComputedStyleInitialValues::InitialColumnFill()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6163
-CSSPropertyID::kColumnGap => { builder.SetColumnGap(&ComputedStyleInitialValues::InitialColumnGap()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6244
-CSSPropertyID::kColumnRuleBreak => { builder.SetColumnRuleBreak(ComputedStyleInitialValues::InitialColumnRuleBreak()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6273
-CSSPropertyID::kColumnRuleColor => { builder.SetColumnRuleColor(&ComputedStyleInitialValues::InitialColumnRuleColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6302
-CSSPropertyID::kColumnRuleInsetCapEnd => { builder.SetColumnRuleInsetCapEnd(&ComputedStyleInitialValues::InitialColumnRuleInsetCapEnd()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6336
-CSSPropertyID::kColumnRuleInsetCapStart => { builder.SetColumnRuleInsetCapStart(&ComputedStyleInitialValues::InitialColumnRuleInsetCapStart()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6370
-CSSPropertyID::kColumnRuleInsetJunctionEnd => { builder.SetColumnRuleInsetJunctionEnd(&ComputedStyleInitialValues::InitialColumnRuleInsetJunctionEnd()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6404
-CSSPropertyID::kColumnRuleInsetJunctionStart => { builder.SetColumnRuleInsetJunctionStart(&ComputedStyleInitialValues::InitialColumnRuleInsetJunctionStart()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6438
-CSSPropertyID::kColumnRuleStyle => { builder.SetColumnRuleStyle(&ComputedStyleInitialValues::InitialColumnRuleStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6467
-CSSPropertyID::kColumnRuleVisibilityItems => { builder.SetColumnRuleVisibilityItems(ComputedStyleInitialValues::InitialColumnRuleVisibilityItems()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6519
-CSSPropertyID::kColumnSpan => { builder.SetColumnSpan(ComputedStyleInitialValues::InitialColumnSpan()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6595
-CSSPropertyID::kColumnWrap => { builder.SetColumnWrap(ComputedStyleInitialValues::InitialColumnWrap()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6624
-CSSPropertyID::kContain => { builder.SetContain(ComputedStyleInitialValues::InitialContain()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6700
-CSSPropertyID::kContainIntrinsicHeight => { builder.SetContainIntrinsicHeight(&ComputedStyleInitialValues::InitialContainIntrinsicHeight()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6781
-CSSPropertyID::kContainIntrinsicWidth => { builder.SetContainIntrinsicWidth(&ComputedStyleInitialValues::InitialContainIntrinsicWidth()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6821
-CSSPropertyID::kContainerName => { builder.SetContainerName(&ComputedStyleInitialValues::InitialContainerName().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6850
-CSSPropertyID::kContainerType => { builder.SetContainerType(ComputedStyleInitialValues::InitialContainerType()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6899
-CSSPropertyID::kContentVisibility => { builder.SetContentVisibility(ComputedStyleInitialValues::InitialContentVisibility()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6934
-CSSPropertyID::kContinue => { builder.SetContinue(ComputedStyleInitialValues::InitialContinue()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6978
-CSSPropertyID::kCornerBottomLeftShape => { builder.SetCornerBottomLeftShape(&ComputedStyleInitialValues::InitialCornerBottomLeftShape()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7022
-CSSPropertyID::kCornerBottomRightShape => { builder.SetCornerBottomRightShape(&ComputedStyleInitialValues::InitialCornerBottomRightShape()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7230
-CSSPropertyID::kCornerTopLeftShape => { builder.SetCornerTopLeftShape(&ComputedStyleInitialValues::InitialCornerTopLeftShape()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7274
-CSSPropertyID::kCornerTopRightShape => { builder.SetCornerTopRightShape(&ComputedStyleInitialValues::InitialCornerTopRightShape()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7553
-CSSPropertyID::kCx => { builder.SetCx(&ComputedStyleInitialValues::InitialCx()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7587
-CSSPropertyID::kCy => { builder.SetCy(&ComputedStyleInitialValues::InitialCy()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7621
-CSSPropertyID::kD => { builder.SetD(ComputedStyleInitialValues::InitialD().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7690
-CSSPropertyID::kDominantBaseline => { builder.SetDominantBaseline(ComputedStyleInitialValues::InitialDominantBaseline()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7725
-CSSPropertyID::kDynamicRangeLimit => { builder.SetDynamicRangeLimit(&ComputedStyleInitialValues::InitialDynamicRangeLimit()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7754
-CSSPropertyID::kEmptyCells => { builder.SetEmptyCells(ComputedStyleInitialValues::InitialEmptyCells());
-builder.SetEmptyCellsIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7806
-CSSPropertyID::kFieldSizing => { builder.SetFieldSizing(ComputedStyleInitialValues::InitialFieldSizing()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7841
-CSSPropertyID::kFill => { builder.SetFillPaint(&ComputedStyleInitialValues::InitialFillPaint()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7875
-CSSPropertyID::kFillOpacity => { builder.SetFillOpacity(ComputedStyleInitialValues::InitialFillOpacity()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7904
-CSSPropertyID::kFillRule => { builder.SetFillRule(ComputedStyleInitialValues::InitialFillRule()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7939
-CSSPropertyID::kFilter => { builder.SetFilter(&ComputedStyleInitialValues::InitialFilter()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7970
-CSSPropertyID::kFlexBasis => { builder.SetFlexBasis(&ComputedStyleInitialValues::InitialFlexBasis()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8004
-CSSPropertyID::kFlexDirection => { builder.SetFlexDirection(ComputedStyleInitialValues::InitialFlexDirection()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8033
-CSSPropertyID::kFlexGrow => { builder.SetFlexGrow(ComputedStyleInitialValues::InitialFlexGrow()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8068
-CSSPropertyID::kFlexLineCount => { builder.SetFlexLineCount(ComputedStyleInitialValues::InitialFlexLineCount()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8097
-CSSPropertyID::kFlexShrink => { builder.SetFlexShrink(ComputedStyleInitialValues::InitialFlexShrink()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8126
-CSSPropertyID::kFlexWrap => { builder.SetFlexWrap(&ComputedStyleInitialValues::InitialFlexWrap()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8155
-CSSPropertyID::kFloat => { builder.SetFloating(ComputedStyleInitialValues::InitialFloating()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8190
-CSSPropertyID::kFloodColor => { builder.SetFloodColor(&ComputedStyleInitialValues::InitialFloodColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8227
-CSSPropertyID::kFloodOpacity => { builder.SetFloodOpacity(ComputedStyleInitialValues::InitialFloodOpacity()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8268
-CSSPropertyID::kFlowTolerance => { builder.SetFlowTolerance(&ComputedStyleInitialValues::InitialFlowTolerance()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8328
-CSSPropertyID::kFrameSizing => { builder.SetFrameSizing(ComputedStyleInitialValues::InitialFrameSizing()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8357
-CSSPropertyID::kGridAutoColumns => { builder.SetGridAutoColumns(&ComputedStyleInitialValues::InitialGridAutoColumns()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8391
-CSSPropertyID::kGridAutoFlow => { builder.SetGridAutoFlow(ComputedStyleInitialValues::InitialGridAutoFlow()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8420
-CSSPropertyID::kGridAutoRows => { builder.SetGridAutoRows(&ComputedStyleInitialValues::InitialGridAutoRows()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8460
-CSSPropertyID::kGridColumnEnd => { builder.SetGridColumnEnd(&ComputedStyleInitialValues::InitialGridColumnEnd()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8495
-CSSPropertyID::kGridColumnStart => { builder.SetGridColumnStart(&ComputedStyleInitialValues::InitialGridColumnStart()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8530
-CSSPropertyID::kGridLanesDirection => { builder.SetGridLanesDirection(&ComputedStyleInitialValues::InitialGridLanesDirection()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8565
-CSSPropertyID::kGridLanesPack => { builder.SetGridLanesPack(ComputedStyleInitialValues::InitialGridLanesPack()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8600
-CSSPropertyID::kGridRowEnd => { builder.SetGridRowEnd(&ComputedStyleInitialValues::InitialGridRowEnd()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8635
-CSSPropertyID::kGridRowStart => { builder.SetGridRowStart(&ComputedStyleInitialValues::InitialGridRowStart()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8664
-CSSPropertyID::kGridTemplateAreas => { builder.SetGridTemplateAreas(&ComputedStyleInitialValues::InitialGridTemplateAreas().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8699
-CSSPropertyID::kGridTemplateColumns => { builder.SetGridTemplateColumns(&ComputedStyleInitialValues::InitialGridTemplateColumns().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8731
-CSSPropertyID::kGridTemplateRows => { builder.SetGridTemplateRows(&ComputedStyleInitialValues::InitialGridTemplateRows().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8763
-CSSPropertyID::kHangingPunctuation => { builder.SetHangingPunctuation(ComputedStyleInitialValues::InitialHangingPunctuation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8827
-CSSPropertyID::kHeight => { builder.SetHeight(&ComputedStyleInitialValues::InitialHeight()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8890
-CSSPropertyID::kHyphenateCharacter => { builder.SetHyphenationString(&ComputedStyleInitialValues::InitialHyphenationString()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8925
-CSSPropertyID::kHyphenateLimitChars => { builder.SetHyphenateLimitChars(&ComputedStyleInitialValues::InitialHyphenateLimitChars()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8954
-CSSPropertyID::kHyphens => { builder.SetHyphens(ComputedStyleInitialValues::InitialHyphens()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8989
-CSSPropertyID::kImageAnimation => { builder.SetImageAnimation(ComputedStyleInitialValues::InitialImageAnimation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9018
-CSSPropertyID::kImageOrientation => { builder.SetImageOrientation(ComputedStyleInitialValues::InitialImageOrientation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9047
-CSSPropertyID::kImageRendering => { builder.SetImageRendering(ComputedStyleInitialValues::InitialImageRendering()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9102
-CSSPropertyID::kInitialLetter => { builder.SetInitialLetter(&ComputedStyleInitialValues::InitialInitialLetter()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9332
-CSSPropertyID::kInteractivity => { builder.SetInteractivity(ComputedStyleInitialValues::InitialInteractivity());
-builder.SetInteractivityIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9364
-CSSPropertyID::kInterestDelayEnd => { builder.SetInterestDelayEnd(&ComputedStyleInitialValues::InitialInterestDelayEnd()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9393
-CSSPropertyID::kInterestDelayStart => { builder.SetInterestDelayStart(&ComputedStyleInitialValues::InitialInterestDelayStart()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9425
-CSSPropertyID::kInternalAlignContentBlock => { builder.SetAlignContentBlockCenter(ComputedStyleInitialValues::InitialAlignContentBlockCenter()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9457
-CSSPropertyID::kInternalEmptyLineHeight => { builder.SetHasLineIfEmpty(ComputedStyleInitialValues::InitialHasLineIfEmpty()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9527
-CSSPropertyID::kInternalForcedBackgroundColor => { builder.SetInternalForcedBackgroundColor(&ComputedStyleInitialValues::InitialInternalForcedBackgroundColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9673
-CSSPropertyID::kInternalOverscrollContainer => { builder.SetInternalOverscrollContainer(ComputedStyleInitialValues::InitialInternalOverscrollContainer()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9708
-CSSPropertyID::kInternalOverscrollPosition => { builder.SetInternalOverscrollPosition(ComputedStyleInitialValues::InitialInternalOverscrollPosition()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9743
-CSSPropertyID::kInternalUnbounded => { builder.SetInternalUnbounded(ComputedStyleInitialValues::InitialInternalUnbounded()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9772
-CSSPropertyID::kInterpolateSize => { builder.SetInterpolateSize(ComputedStyleInitialValues::InitialInterpolateSize()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9801
-CSSPropertyID::kIsolation => { builder.SetIsolation(ComputedStyleInitialValues::InitialIsolation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9830
-CSSPropertyID::kJustifyContent => { builder.SetJustifyContent(&ComputedStyleInitialValues::InitialJustifyContent()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9859
-CSSPropertyID::kJustifyItems => { builder.SetJustifyItems(&ComputedStyleInitialValues::InitialJustifyItems()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9888
-CSSPropertyID::kJustifySelf => { builder.SetJustifySelf(&ComputedStyleInitialValues::InitialJustifySelf()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9926
-CSSPropertyID::kLeft => { builder.SetLeft(&ComputedStyleInitialValues::InitialLeft()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9969
-CSSPropertyID::kLetterSpacing => { builder.SetLetterSpacing(&ComputedStyleInitialValues::InitialLetterSpacing()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10009
-CSSPropertyID::kLightingColor => { builder.SetLightingColor(&ComputedStyleInitialValues::InitialLightingColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10040
-CSSPropertyID::kLineBreak => { builder.SetLineBreak(ComputedStyleInitialValues::InitialLineBreak()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10125
-CSSPropertyID::kLineHeight => { builder.SetLineHeight(&ComputedStyleInitialValues::InitialLineHeight()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10165
-CSSPropertyID::kListStyleImage => { builder.SetListStyleImage(&ComputedStyleInitialValues::InitialListStyleImage().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10196
-CSSPropertyID::kListStylePosition => { builder.SetListStylePosition(ComputedStyleInitialValues::InitialListStylePosition());
-builder.SetListStylePositionIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10228
-CSSPropertyID::kListStyleType => { builder.SetListStyleType(&ComputedStyleInitialValues::InitialListStyleType().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10333
-CSSPropertyID::kMarginBottom => { builder.SetMarginBottom(&ComputedStyleInitialValues::InitialMarginBottom()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10449
-CSSPropertyID::kMarginLeft => { builder.SetMarginLeft(&ComputedStyleInitialValues::InitialMarginLeft()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10495
-CSSPropertyID::kMarginRight => { builder.SetMarginRight(&ComputedStyleInitialValues::InitialMarginRight()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10541
-CSSPropertyID::kMarginTop => { builder.SetMarginTop(&ComputedStyleInitialValues::InitialMarginTop()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10584
-CSSPropertyID::kMarginTrim => { builder.SetMarginTrim(ComputedStyleInitialValues::InitialMarginTrim()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10613
-CSSPropertyID::kMarkerEnd => { builder.SetMarkerEndResource(ComputedStyleInitialValues::InitialMarkerEndResource().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10639
-CSSPropertyID::kMarkerMid => { builder.SetMarkerMidResource(ComputedStyleInitialValues::InitialMarkerMidResource().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10665
-CSSPropertyID::kMarkerStart => { builder.SetMarkerStartResource(ComputedStyleInitialValues::InitialMarkerStartResource().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11122
-CSSPropertyID::kMaskType => { builder.SetMaskType(ComputedStyleInitialValues::InitialMaskType()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11151
-CSSPropertyID::kMathShift => { builder.SetMathShift(ComputedStyleInitialValues::InitialMathShift()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11180
-CSSPropertyID::kMathStyle => { builder.SetMathStyle(ComputedStyleInitialValues::InitialMathStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11285
-CSSPropertyID::kMaxHeight => { builder.SetMaxHeight(&ComputedStyleInitialValues::InitialMaxHeight()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11369
-CSSPropertyID::kMaxLines => { builder.SetMaxLines(&ComputedStyleInitialValues::InitialMaxLines()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11407
-CSSPropertyID::kMaxWidth => { builder.SetMaxWidth(&ComputedStyleInitialValues::InitialMaxWidth()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11488
-CSSPropertyID::kMinHeight => { builder.SetMinHeight(&ComputedStyleInitialValues::InitialMinHeight()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11569
-CSSPropertyID::kMinWidth => { builder.SetMinWidth(&ComputedStyleInitialValues::InitialMinWidth()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11606
-CSSPropertyID::kMixBlendMode => { builder.SetBlendMode(ComputedStyleInitialValues::InitialBlendMode()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11675
-CSSPropertyID::kObjectFit => { builder.SetObjectFit(ComputedStyleInitialValues::InitialObjectFit()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11704
-CSSPropertyID::kObjectPosition => { builder.SetObjectPosition(&ComputedStyleInitialValues::InitialObjectPosition()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11738
-CSSPropertyID::kObjectViewBox => { builder.SetObjectViewBox(ComputedStyleInitialValues::InitialObjectViewBox().map(Member::from_ptr)); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11772
-CSSPropertyID::kOffsetAnchor => { builder.SetOffsetAnchor(&ComputedStyleInitialValues::InitialOffsetAnchor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11806
-CSSPropertyID::kOffsetDistance => { builder.SetOffsetDistance(&ComputedStyleInitialValues::InitialOffsetDistance()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11846
-CSSPropertyID::kOffsetPath => { builder.SetOffsetPath(ComputedStyleInitialValues::InitialOffsetPath().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11880
-CSSPropertyID::kOffsetPosition => { builder.SetOffsetPosition(&ComputedStyleInitialValues::InitialOffsetPosition()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11920
-CSSPropertyID::kOffsetRotate => { builder.SetOffsetRotate(&ComputedStyleInitialValues::InitialOffsetRotate()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11955
-CSSPropertyID::kOpacity => { builder.SetOpacity(ComputedStyleInitialValues::InitialOpacity()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11990
-CSSPropertyID::kOrder => { builder.SetOrder(ComputedStyleInitialValues::InitialOrder()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12025
-CSSPropertyID::kOriginTrialTestProperty => { builder.SetOriginTrialTestProperty(ComputedStyleInitialValues::InitialOriginTrialTestProperty()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12060
-CSSPropertyID::kOrphans => { builder.SetOrphans(ComputedStyleInitialValues::InitialOrphans()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12120
-CSSPropertyID::kOutlineOffset => { builder.SetOutlineOffset(&ComputedStyleInitialValues::InitialOutlineOffset()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12197
-CSSPropertyID::kOverflowAnchor => { builder.SetOverflowAnchor(ComputedStyleInitialValues::InitialOverflowAnchor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12261
-CSSPropertyID::kOverflowClipMargin => { builder.SetOverflowClipMargin(&ComputedStyleInitialValues::InitialOverflowClipMargin()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12330
-CSSPropertyID::kOverflowWrap => { builder.SetOverflowWrap(ComputedStyleInitialValues::InitialOverflowWrap()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12423
-CSSPropertyID::kOverlay => { builder.SetOverlay(ComputedStyleInitialValues::InitialOverlay()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12551
-CSSPropertyID::kOverscrollBehaviorX => { builder.SetOverscrollBehaviorX(ComputedStyleInitialValues::InitialOverscrollBehaviorX()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12589
-CSSPropertyID::kOverscrollBehaviorY => { builder.SetOverscrollBehaviorY(ComputedStyleInitialValues::InitialOverscrollBehaviorY()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12624
-CSSPropertyID::kOverscrollContainerType => { builder.SetOverscrollContainerType(ComputedStyleInitialValues::InitialOverscrollContainerType()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12752
-CSSPropertyID::kPaddingBottom => { builder.SetPaddingBottom(&ComputedStyleInitialValues::InitialPaddingBottom()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12865
-CSSPropertyID::kPaddingLeft => { builder.SetPaddingLeft(&ComputedStyleInitialValues::InitialPaddingLeft()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12908
-CSSPropertyID::kPaddingRight => { builder.SetPaddingRight(&ComputedStyleInitialValues::InitialPaddingRight()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12951
-CSSPropertyID::kPaddingTop => { builder.SetPaddingTop(&ComputedStyleInitialValues::InitialPaddingTop()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12985
-CSSPropertyID::kPage => { builder.SetPage(&ComputedStyleInitialValues::InitialPage()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13020
-CSSPropertyID::kPageMarginSafety => { builder.SetPageMarginSafety(ComputedStyleInitialValues::InitialPageMarginSafety()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13049
-CSSPropertyID::kPageOrientation => { builder.SetPageOrientation(ComputedStyleInitialValues::InitialPageOrientation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13078
-CSSPropertyID::kPaintOrder => { builder.SetPaintOrder(ComputedStyleInitialValues::InitialPaintOrder()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13113
-CSSPropertyID::kPathLength => { builder.SetPathLength(&ComputedStyleInitialValues::InitialPathLength()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13199
-CSSPropertyID::kPerspective => { builder.SetPerspective(ComputedStyleInitialValues::InitialPerspective()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13233
-CSSPropertyID::kPerspectiveOrigin => { builder.SetPerspectiveOrigin(&ComputedStyleInitialValues::InitialPerspectiveOrigin()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13267
-CSSPropertyID::kPointerEvents => { builder.SetPointerEvents(ComputedStyleInitialValues::InitialPointerEvents());
-builder.SetPointerEventsIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13331
-CSSPropertyID::kPositionTryFallbacks => { builder.SetPositionTryFallbacks(&ComputedStyleInitialValues::InitialPositionTryFallbacks().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13357
-CSSPropertyID::kPositionTryOrder => { builder.SetPositionTryOrder(ComputedStyleInitialValues::InitialPositionTryOrder()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13386
-CSSPropertyID::kPositionVisibility => { builder.SetPositionVisibility(ComputedStyleInitialValues::InitialPositionVisibility()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13435
-CSSPropertyID::kPrintColorAdjust => { builder.SetPrintColorAdjust(ComputedStyleInitialValues::InitialPrintColorAdjust()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13490
-CSSPropertyID::kQuotes => { builder.SetQuotes(Default::default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13519
-CSSPropertyID::kR => { builder.SetR(&ComputedStyleInitialValues::InitialR()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13573
-CSSPropertyID::kReadingFlow => { builder.SetReadingFlow(ComputedStyleInitialValues::InitialReadingFlow()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13608
-CSSPropertyID::kReadingOrder => { builder.SetReadingOrder(ComputedStyleInitialValues::InitialReadingOrder()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13637
-CSSPropertyID::kResize => { builder.SetResize(ComputedStyleInitialValues::InitialResize()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13698
-CSSPropertyID::kRight => { builder.SetRight(&ComputedStyleInitialValues::InitialRight()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13735
-CSSPropertyID::kRotate => { builder.SetRotate(ComputedStyleInitialValues::InitialRotate().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13770
-CSSPropertyID::kRowGap => { builder.SetRowGap(&ComputedStyleInitialValues::InitialRowGap()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13804
-CSSPropertyID::kRowRuleBreak => { builder.SetRowRuleBreak(ComputedStyleInitialValues::InitialRowRuleBreak()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13833
-CSSPropertyID::kRowRuleColor => { builder.SetRowRuleColor(&ComputedStyleInitialValues::InitialRowRuleColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13862
-CSSPropertyID::kRowRuleInsetCapEnd => { builder.SetRowRuleInsetCapEnd(&ComputedStyleInitialValues::InitialRowRuleInsetCapEnd()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13896
-CSSPropertyID::kRowRuleInsetCapStart => { builder.SetRowRuleInsetCapStart(&ComputedStyleInitialValues::InitialRowRuleInsetCapStart()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13930
-CSSPropertyID::kRowRuleInsetJunctionEnd => { builder.SetRowRuleInsetJunctionEnd(&ComputedStyleInitialValues::InitialRowRuleInsetJunctionEnd()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13964
-CSSPropertyID::kRowRuleInsetJunctionStart => { builder.SetRowRuleInsetJunctionStart(&ComputedStyleInitialValues::InitialRowRuleInsetJunctionStart()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13998
-CSSPropertyID::kRowRuleStyle => { builder.SetRowRuleStyle(&ComputedStyleInitialValues::InitialRowRuleStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14027
-CSSPropertyID::kRowRuleVisibilityItems => { builder.SetRowRuleVisibilityItems(ComputedStyleInitialValues::InitialRowRuleVisibilityItems()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14079
-CSSPropertyID::kRubyAlign => { builder.SetRubyAlign(ComputedStyleInitialValues::InitialRubyAlign()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14114
-CSSPropertyID::kRubyOverhang => { builder.SetRubyOverhang(ComputedStyleInitialValues::InitialRubyOverhang()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14143
-CSSPropertyID::kRubyPosition => { builder.SetRubyPosition(ComputedStyleInitialValues::InitialRubyPosition()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14172
-CSSPropertyID::kRuleOverlap => { builder.SetRuleOverlap(ComputedStyleInitialValues::InitialRuleOverlap()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14201
-CSSPropertyID::kRx => { builder.SetRx(&ComputedStyleInitialValues::InitialRx()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14235
-CSSPropertyID::kRy => { builder.SetRy(&ComputedStyleInitialValues::InitialRy()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14269
-CSSPropertyID::kScale => { builder.SetScale(ComputedStyleInitialValues::InitialScale().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14304
-CSSPropertyID::kScrollAxisLock => { builder.SetScrollAxisLock(ComputedStyleInitialValues::InitialScrollAxisLock()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14333
-CSSPropertyID::kScrollBehavior => { builder.SetScrollBehavior(ComputedStyleInitialValues::InitialScrollBehavior()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14368
-CSSPropertyID::kScrollInitialTarget => { builder.SetScrollInitialTarget(ComputedStyleInitialValues::InitialScrollInitialTarget()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14476
-CSSPropertyID::kScrollMarginBottom => { builder.SetScrollMarginBottom(ComputedStyleInitialValues::InitialScrollMarginBottom()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14589
-CSSPropertyID::kScrollMarginLeft => { builder.SetScrollMarginLeft(ComputedStyleInitialValues::InitialScrollMarginLeft()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14632
-CSSPropertyID::kScrollMarginRight => { builder.SetScrollMarginRight(ComputedStyleInitialValues::InitialScrollMarginRight()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14675
-CSSPropertyID::kScrollMarginTop => { builder.SetScrollMarginTop(ComputedStyleInitialValues::InitialScrollMarginTop()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14715
-CSSPropertyID::kScrollMarkerGroup => { builder.SetScrollMarkerGroup(ComputedStyleInitialValues::InitialScrollMarkerGroup().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14841
-CSSPropertyID::kScrollPaddingBottom => { builder.SetScrollPaddingBottom(&ComputedStyleInitialValues::InitialScrollPaddingBottom()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14972
-CSSPropertyID::kScrollPaddingLeft => { builder.SetScrollPaddingLeft(&ComputedStyleInitialValues::InitialScrollPaddingLeft()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15021
-CSSPropertyID::kScrollPaddingRight => { builder.SetScrollPaddingRight(&ComputedStyleInitialValues::InitialScrollPaddingRight()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15070
-CSSPropertyID::kScrollPaddingTop => { builder.SetScrollPaddingTop(&ComputedStyleInitialValues::InitialScrollPaddingTop()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15104
-CSSPropertyID::kScrollSnapAlign => { builder.SetScrollSnapAlign(&ComputedStyleInitialValues::InitialScrollSnapAlign()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15133
-CSSPropertyID::kScrollSnapStop => { builder.SetScrollSnapStop(ComputedStyleInitialValues::InitialScrollSnapStop()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15162
-CSSPropertyID::kScrollSnapType => { builder.SetScrollSnapType(&ComputedStyleInitialValues::InitialScrollSnapType()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15197
-CSSPropertyID::kScrollTargetGroup => { builder.SetScrollTargetGroup(ComputedStyleInitialValues::InitialScrollTargetGroup()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15226
-CSSPropertyID::kScrollTimelineAxis => { builder.SetScrollTimelineAxis(&ComputedStyleInitialValues::InitialScrollTimelineAxis()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15255
-CSSPropertyID::kScrollTimelineName => { builder.SetScrollTimelineName(&ComputedStyleInitialValues::InitialScrollTimelineName()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15290
-CSSPropertyID::kScrollbarColor => { builder.SetScrollbarColor(ComputedStyleInitialValues::InitialScrollbarColor().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15319
-CSSPropertyID::kScrollbarGutter => { builder.SetScrollbarGutter(ComputedStyleInitialValues::InitialScrollbarGutter()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15354
-CSSPropertyID::kScrollbarWidth => { builder.SetScrollbarWidth(ComputedStyleInitialValues::InitialScrollbarWidth()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15415
-CSSPropertyID::kShapeImageThreshold => { builder.SetShapeImageThreshold(ComputedStyleInitialValues::InitialShapeImageThreshold()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15444
-CSSPropertyID::kShapeMargin => { builder.SetShapeMargin(&ComputedStyleInitialValues::InitialShapeMargin()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15478
-CSSPropertyID::kShapeOutside => { builder.SetShapeOutside(&ComputedStyleInitialValues::InitialShapeOutside().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15512
-CSSPropertyID::kShapeRendering => { builder.SetShapeRendering(ComputedStyleInitialValues::InitialShapeRendering()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15581
-CSSPropertyID::kSpeak => { builder.SetSpeak(ComputedStyleInitialValues::InitialSpeak()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15656
-CSSPropertyID::kStopColor => { builder.SetStopColor(&ComputedStyleInitialValues::InitialStopColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15693
-CSSPropertyID::kStopOpacity => { builder.SetStopOpacity(ComputedStyleInitialValues::InitialStopOpacity()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15728
-CSSPropertyID::kStroke => { builder.SetStrokePaint(&ComputedStyleInitialValues::InitialStrokePaint()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15756
-CSSPropertyID::kStrokeDasharray => { builder.SetStrokeDashArray(ComputedStyleInitialValues::InitialStrokeDashArray().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15790
-CSSPropertyID::kStrokeDashoffset => { builder.SetStrokeDashOffset(&ComputedStyleInitialValues::InitialStrokeDashOffset()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15824
-CSSPropertyID::kStrokeLinecap => { builder.SetCapStyle(ComputedStyleInitialValues::InitialCapStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15853
-CSSPropertyID::kStrokeLinejoin => { builder.SetJoinStyle(ComputedStyleInitialValues::InitialJoinStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15882
-CSSPropertyID::kStrokeMiterlimit => { builder.SetStrokeMiterLimit(ComputedStyleInitialValues::InitialStrokeMiterLimit()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15917
-CSSPropertyID::kStrokeOpacity => { builder.SetStrokeOpacity(ComputedStyleInitialValues::InitialStrokeOpacity()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15946
-CSSPropertyID::kStrokeWidth => { builder.SetStrokeWidth(&ComputedStyleInitialValues::InitialStrokeWidth()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16060
-CSSPropertyID::kTabSize => { builder.SetTabSize(&ComputedStyleInitialValues::InitialTabSize()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16094
-CSSPropertyID::kTableLayout => { builder.SetTableLayout(ComputedStyleInitialValues::InitialTableLayout()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16123
-CSSPropertyID::kTextAlign => { builder.SetTextAlign(ComputedStyleInitialValues::InitialTextAlign()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16149
-CSSPropertyID::kTextAlignLast => { builder.SetTextAlignLast(ComputedStyleInitialValues::InitialTextAlignLast()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16178
-CSSPropertyID::kTextAnchor => { builder.SetTextAnchor(ComputedStyleInitialValues::InitialTextAnchor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16207
-CSSPropertyID::kTextAutospace => { builder.SetTextAutospace(ComputedStyleInitialValues::InitialTextAutospace()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16236
-CSSPropertyID::kTextBoxEdge => { builder.SetTextBoxEdge(ComputedStyleInitialValues::InitialTextBoxEdge()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16265
-CSSPropertyID::kTextBoxTrim => { builder.SetTextBoxTrim(ComputedStyleInitialValues::InitialTextBoxTrim()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16294
-CSSPropertyID::kTextCombineUpright => { builder.SetTextCombine(ComputedStyleInitialValues::InitialTextCombine()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16366
-CSSPropertyID::kTextDecorationInset => { builder.SetTextDecorationInset(&ComputedStyleInitialValues::InitialTextDecorationInset()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16400
-CSSPropertyID::kTextDecorationLine => { builder.SetTextDecorationLine(ComputedStyleInitialValues::InitialTextDecorationLine()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16429
-CSSPropertyID::kTextDecorationSkipInk => { builder.SetTextDecorationSkipInk(ComputedStyleInitialValues::InitialTextDecorationSkipInk()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16464
-CSSPropertyID::kTextDecorationSkipSpaces => { builder.SetTextDecorationSkipSpaces(ComputedStyleInitialValues::InitialTextDecorationSkipSpaces()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16493
-CSSPropertyID::kTextDecorationStyle => { builder.SetTextDecorationStyle(ComputedStyleInitialValues::InitialTextDecorationStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16522
-CSSPropertyID::kTextDecorationThickness => { builder.SetTextDecorationThickness(&ComputedStyleInitialValues::InitialTextDecorationThickness()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16593
-CSSPropertyID::kTextEmphasisPosition => { builder.SetTextEmphasisPosition(ComputedStyleInitialValues::InitialTextEmphasisPosition()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16654
-CSSPropertyID::kTextFit => { builder.SetTextFit(&ComputedStyleInitialValues::InitialTextFit()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16683
-CSSPropertyID::kTextIndent => { builder.SetTextIndent(&ComputedStyleInitialValues::InitialTextIndent()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16714
-CSSPropertyID::kTextJustify => { builder.SetTextJustify(ComputedStyleInitialValues::InitialTextJustify()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16743
-CSSPropertyID::kTextOverflow => { builder.SetTextOverflow(&ComputedStyleInitialValues::InitialTextOverflow()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16772
-CSSPropertyID::kTextShadow => { builder.SetTextShadow(ComputedStyleInitialValues::InitialTextShadow().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16806
-CSSPropertyID::kTextTransform => { builder.SetTextTransform(ComputedStyleInitialValues::InitialTextTransform());
-builder.SetTextTransformIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16838
-CSSPropertyID::kTextUnderlineOffset => { builder.SetTextUnderlineOffset(&ComputedStyleInitialValues::InitialTextUnderlineOffset()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16872
-CSSPropertyID::kTextUnderlinePosition => { builder.SetTextUnderlinePosition(ComputedStyleInitialValues::InitialTextUnderlinePosition()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16901
-CSSPropertyID::kTextWrapMode => { builder.SetTextWrapMode(ComputedStyleInitialValues::InitialTextWrapMode()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16930
-CSSPropertyID::kTextWrapStyle => { builder.SetTextWrapStyle(ComputedStyleInitialValues::InitialTextWrapStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16959
-CSSPropertyID::kTimelineScope => { builder.SetTimelineScope(&ComputedStyleInitialValues::InitialTimelineScope()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17329
-CSSPropertyID::kTop => { builder.SetTop(&ComputedStyleInitialValues::InitialTop()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17366
-CSSPropertyID::kTouchAction => { builder.SetTouchAction(ComputedStyleInitialValues::InitialTouchAction()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17401
-CSSPropertyID::kTransform => { builder.SetTransform(&ComputedStyleInitialValues::InitialTransform()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17435
-CSSPropertyID::kTransformBox => { builder.SetTransformBox(ComputedStyleInitialValues::InitialTransformBox()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17464
-CSSPropertyID::kTransformOrigin => { builder.SetTransformOrigin(&ComputedStyleInitialValues::InitialTransformOrigin()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17498
-CSSPropertyID::kTransformStyle => { builder.SetTransformStyle3D(ComputedStyleInitialValues::InitialTransformStyle3D()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17527
-CSSPropertyID::kTransitionBehavior => { if !builder.Transitions().Get().is_null() {
-let data = builder.AccessTransitions();
-*data.BehaviorListMut() = vec![CSSTransitionData::InitialBehavior()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17573
-CSSPropertyID::kTransitionDelay => { if !builder.Transitions().Get().is_null() {
-let data = builder.AccessTransitions();
-*data.DelayStartListMut() = vec![CSSTransitionData::InitialDelayStart()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17619
-CSSPropertyID::kTransitionDuration => { if !builder.Transitions().Get().is_null() {
-let data = builder.AccessTransitions();
-*data.DurationListMut() = vec![CSSTransitionData::InitialDuration()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17665
-CSSPropertyID::kTransitionProperty => { if !builder.Transitions().Get().is_null() {
-let data = builder.AccessTransitions();
-*data.PropertyListMut() = vec![CSSTransitionData::InitialProperty()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17711
-CSSPropertyID::kTransitionTimingFunction => { if !builder.Transitions().Get().is_null() {
-let data = builder.AccessTransitions();
-*data.TimingFunctionListMut() = vec![CSSTransitionData::InitialTimingFunction()];
-} },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17757
-CSSPropertyID::kTranslate => { builder.SetTranslate(ComputedStyleInitialValues::InitialTranslate().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17803
-CSSPropertyID::kTriggerScope => { builder.SetTriggerScope(&ComputedStyleInitialValues::InitialTriggerScope()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17852
-CSSPropertyID::kUnicodeBidi => { builder.SetUnicodeBidi(ComputedStyleInitialValues::InitialUnicodeBidi()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17901
-CSSPropertyID::kUserSelect => { builder.SetUserSelect(ComputedStyleInitialValues::InitialUserSelect()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17930
-CSSPropertyID::kVectorEffect => { builder.SetVectorEffect(ComputedStyleInitialValues::InitialVectorEffect()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17959
-CSSPropertyID::kVerticalAlign => { builder.SetVerticalAlign(ComputedStyleInitialValues::InitialVerticalAlign()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17982
-CSSPropertyID::kViewTimelineAxis => { builder.SetViewTimelineAxis(&ComputedStyleInitialValues::InitialViewTimelineAxis()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18011
-CSSPropertyID::kViewTimelineInset => { builder.SetViewTimelineInset(&ComputedStyleInitialValues::InitialViewTimelineInset()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18045
-CSSPropertyID::kViewTimelineName => { builder.SetViewTimelineName(&ComputedStyleInitialValues::InitialViewTimelineName()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18074
-CSSPropertyID::kViewTransitionClass => { builder.SetViewTransitionClass(&ComputedStyleInitialValues::InitialViewTransitionClass().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18103
-CSSPropertyID::kViewTransitionGroup => { builder.SetViewTransitionGroup(&ComputedStyleInitialValues::InitialViewTransitionGroup()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18132
-CSSPropertyID::kViewTransitionName => { builder.SetViewTransitionName(&ComputedStyleInitialValues::InitialViewTransitionName().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18161
-CSSPropertyID::kViewTransitionScope => { builder.SetViewTransitionScope(ComputedStyleInitialValues::InitialViewTransitionScope()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18190
-CSSPropertyID::kVisibility => { builder.SetVisibility(ComputedStyleInitialValues::InitialVisibility());
-builder.SetVisibilityIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18222
-CSSPropertyID::kWebkitBorderHorizontalSpacing => { builder.SetHorizontalBorderSpacing(ComputedStyleInitialValues::InitialHorizontalBorderSpacing()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18262
-CSSPropertyID::kWebkitBorderImage => { builder.SetBorderImage(&ComputedStyleInitialValues::InitialBorderImage()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18288
-CSSPropertyID::kWebkitBorderVerticalSpacing => { builder.SetVerticalBorderSpacing(ComputedStyleInitialValues::InitialVerticalBorderSpacing()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18322
-CSSPropertyID::kWebkitBoxAlign => { builder.SetBoxAlign(ComputedStyleInitialValues::InitialBoxAlign()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18374
-CSSPropertyID::kWebkitBoxDirection => { builder.SetBoxDirection(ComputedStyleInitialValues::InitialBoxDirection()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18403
-CSSPropertyID::kWebkitBoxFlex => { builder.SetBoxFlex(ComputedStyleInitialValues::InitialBoxFlex()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18438
-CSSPropertyID::kWebkitBoxOrdinalGroup => { builder.SetBoxOrdinalGroup(ComputedStyleInitialValues::InitialBoxOrdinalGroup()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18467
-CSSPropertyID::kWebkitBoxOrient => { builder.SetBoxOrient(ComputedStyleInitialValues::InitialBoxOrient()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18496
-CSSPropertyID::kWebkitBoxPack => { builder.SetBoxPack(ComputedStyleInitialValues::InitialBoxPack()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18525
-CSSPropertyID::kWebkitBoxReflect => { builder.SetBoxReflect(ComputedStyleInitialValues::InitialBoxReflect().map(Member::from_ptr).unwrap_or_default()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18593
-CSSPropertyID::kWebkitLineClamp => { builder.SetWebkitLineClamp(ComputedStyleInitialValues::InitialWebkitLineClamp()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18760
-CSSPropertyID::kWebkitMaskBoxImageSource => { builder.SetMaskBoxImageSource(ComputedStyleInitialValues::InitialMaskBoxImageSource().unwrap_or(std::ptr::null_mut())); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18992
-CSSPropertyID::kWebkitPerspectiveOriginX => { builder.SetPerspectiveOriginX(&ComputedStyleInitialValues::InitialPerspectiveOriginX()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19018
-CSSPropertyID::kWebkitPerspectiveOriginY => { builder.SetPerspectiveOriginY(&ComputedStyleInitialValues::InitialPerspectiveOriginY()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19044
-CSSPropertyID::kWebkitRtlOrdering => { builder.SetRtlOrdering(ComputedStyleInitialValues::InitialRtlOrdering());
-builder.SetRtlOrderingIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19223
-CSSPropertyID::kWebkitTextSecurity => { builder.SetTextSecurity(ComputedStyleInitialValues::InitialTextSecurity()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19289
-CSSPropertyID::kWebkitTextStrokeWidth => { builder.SetTextStrokeWidth(ComputedStyleInitialValues::InitialTextStrokeWidth()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19323
-CSSPropertyID::kWebkitTransformOriginX => { builder.SetTransformOriginX(&ComputedStyleInitialValues::InitialTransformOriginX()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19349
-CSSPropertyID::kWebkitTransformOriginY => { builder.SetTransformOriginY(&ComputedStyleInitialValues::InitialTransformOriginY()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19375
-CSSPropertyID::kWebkitTransformOriginZ => { builder.SetTransformOriginZ(ComputedStyleInitialValues::InitialTransformOriginZ()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19401
-CSSPropertyID::kWebkitUserDrag => { builder.SetUserDrag(ComputedStyleInitialValues::InitialUserDrag()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19430
-CSSPropertyID::kWebkitUserModify => { builder.SetUserModify(ComputedStyleInitialValues::InitialUserModify()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19459
-CSSPropertyID::kWhiteSpaceCollapse => { builder.SetWhiteSpaceCollapse(ComputedStyleInitialValues::InitialWhiteSpaceCollapse()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19494
-CSSPropertyID::kWidows => { builder.SetWidows(ComputedStyleInitialValues::InitialWidows()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19532
-CSSPropertyID::kWidth => { builder.SetWidth(&ComputedStyleInitialValues::InitialWidth()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19595
-CSSPropertyID::kWindowDrag => { builder.SetDraggableRegionMode(ComputedStyleInitialValues::InitialDraggableRegionMode()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19621
-CSSPropertyID::kWordBreak => { builder.SetWordBreak(ComputedStyleInitialValues::InitialWordBreak()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19653
-CSSPropertyID::kWordSpacing => { builder.SetWordSpacing(&ComputedStyleInitialValues::InitialWordSpacing()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19687
-CSSPropertyID::kX => { builder.SetX(&ComputedStyleInitialValues::InitialX()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19721
-CSSPropertyID::kY => { builder.SetY(&ComputedStyleInitialValues::InitialY()); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:3896
-CSSPropertyID::kDisplay => { builder.SetDisplay(ComputedStyleInitialValues::InitialDisplay());
-builder.SetDisplayLayoutCustomName(&ComputedStyleInitialValues::InitialDisplayLayoutCustomName()); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:6030
-CSSPropertyID::kInternalForcedColor => { builder.SetInternalForcedColor(&ComputedStyleInitialValues::InitialInternalForcedColor()); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:6102
-CSSPropertyID::kInternalForcedVisitedColor => { builder.SetInternalForcedVisitedColor(&ComputedStyleInitialValues::InitialInternalForcedVisitedColor()); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:12059
-CSSPropertyID::kTextEmphasisStyle => { builder.SetTextEmphasisFill(ComputedStyleInitialValues::InitialTextEmphasisFill());
-builder.SetTextEmphasisMark(ComputedStyleInitialValues::InitialTextEmphasisMark());
-builder.SetTextEmphasisCustomMark(&ComputedStyleInitialValues::InitialTextEmphasisCustomMark()); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyInherit(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, parent: &ComputedStyle) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:86
-CSSPropertyID::kForcedColorAdjust => { builder.SetForcedColorAdjust(parent.ForcedColorAdjust()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:121
-CSSPropertyID::kMathDepth => { builder.SetMathDepth(parent.MathDepth()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:147
-CSSPropertyID::kPosition => { builder.SetPosition(parent.GetPosition()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:245
-CSSPropertyID::kAppearance => { builder.SetAppearance(parent.Appearance()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:300
-CSSPropertyID::kDirection => { builder.SetDirection(parent.Direction()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1272
-CSSPropertyID::kInternalVisitedBackgroundColor => { builder.SetInternalVisitedBackgroundColor(parent.BackgroundColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1409
-CSSPropertyID::kInternalVisitedBorderBottomColor => { builder.SetInternalVisitedBorderBottomColor(parent.BorderBottomColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1546
-CSSPropertyID::kInternalVisitedBorderLeftColor => { builder.SetInternalVisitedBorderLeftColor(parent.BorderLeftColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1595
-CSSPropertyID::kInternalVisitedBorderRightColor => { builder.SetInternalVisitedBorderRightColor(parent.BorderRightColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1644
-CSSPropertyID::kInternalVisitedBorderTopColor => { builder.SetInternalVisitedBorderTopColor(parent.BorderTopColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1678
-CSSPropertyID::kInternalVisitedCaretColor => { builder.SetInternalVisitedCaretColor(parent.CaretColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1717
-CSSPropertyID::kInternalVisitedColumnRuleColor => { builder.SetInternalVisitedColumnRuleColor(parent.InternalVisitedColumnRuleColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1756
-CSSPropertyID::kInternalVisitedFill => { builder.SetInternalVisitedFillPaint(parent.FillPaint()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1790
-CSSPropertyID::kInternalVisitedOutlineColor => { builder.SetInternalVisitedOutlineColor(parent.OutlineColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1830
-CSSPropertyID::kInternalVisitedStroke => { builder.SetInternalVisitedStrokePaint(parent.StrokePaint()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1870
-CSSPropertyID::kInternalVisitedTextDecorationColor => { builder.SetInternalVisitedTextDecorationColor(parent.TextDecorationColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1910
-CSSPropertyID::kInternalVisitedTextEmphasisColor => { builder.SetInternalVisitedTextEmphasisColor(parent.TextEmphasisColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1950
-CSSPropertyID::kInternalVisitedTextFillColor => { builder.SetInternalVisitedTextFillColor(parent.TextFillColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1990
-CSSPropertyID::kInternalVisitedTextStrokeColor => { builder.SetInternalVisitedTextStrokeColor(parent.TextStrokeColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2020
-CSSPropertyID::kAccentColor => { builder.SetAccentColor(parent.AccentColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2069
-CSSPropertyID::kAlignContent => { builder.SetAlignContent(parent.AlignContent()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2098
-CSSPropertyID::kAlignItems => { builder.SetAlignItems(parent.AlignItems()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2127
-CSSPropertyID::kAlignSelf => { builder.SetAlignSelf(parent.AlignSelf()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2156
-CSSPropertyID::kAlignmentBaseline => { builder.SetAlignmentBaseline(parent.AlignmentBaseline()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2244
-CSSPropertyID::kAnchorName => { builder.SetAnchorName(parent.AnchorName()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2279
-CSSPropertyID::kAnchorScope => { builder.SetAnchorScope(parent.AnchorScope()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2313
-CSSPropertyID::kAnimationComposition => { if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
-*builder.AccessAnimations().CompositionListMut() = data.CompositionList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2359
-CSSPropertyID::kAnimationDelay => { if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
-*builder.AccessAnimations().DelayStartListMut() = data.DelayStartList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2405
-CSSPropertyID::kAnimationDirection => { if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
-*builder.AccessAnimations().DirectionListMut() = data.DirectionList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2451
-CSSPropertyID::kAnimationDuration => { if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
-*builder.AccessAnimations().DurationListMut() = data.DurationList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2497
-CSSPropertyID::kAnimationFillMode => { if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
-*builder.AccessAnimations().FillModeListMut() = data.FillModeList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2543
-CSSPropertyID::kAnimationIterationCount => { if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
-*builder.AccessAnimations().IterationCountListMut() = data.IterationCountList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2589
-CSSPropertyID::kAnimationName => { if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
-*builder.AccessAnimations().NameListMut() = data.NameList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2635
-CSSPropertyID::kAnimationPlayState => { if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
-*builder.AccessAnimations().PlayStateListMut() = data.PlayStateList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2681
-CSSPropertyID::kAnimationRangeEnd => { if builder.EffectiveZoom() != parent.EffectiveZoom() { return Err(LonghandApplicationError::Unsupported(property)); }
-if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
-*builder.AccessAnimations().RangeEndListMut() = data.RangeEndList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2732
-CSSPropertyID::kAnimationRangeStart => { if builder.EffectiveZoom() != parent.EffectiveZoom() { return Err(LonghandApplicationError::Unsupported(property)); }
-if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
-*builder.AccessAnimations().RangeStartListMut() = data.RangeStartList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2783
-CSSPropertyID::kAnimationTimeline => { if builder.EffectiveZoom() != parent.EffectiveZoom() { return Err(LonghandApplicationError::Unsupported(property)); }
-if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
-*builder.AccessAnimations().TimelineListMut() = data.TimelineList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2834
-CSSPropertyID::kAnimationTimingFunction => { if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
-*builder.AccessAnimations().TimingFunctionListMut() = data.TimingFunctionList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2970
-CSSPropertyID::kAspectRatio => { builder.SetAspectRatio(parent.AspectRatio()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3036
-CSSPropertyID::kBackfaceVisibility => { builder.SetBackfaceVisibility(parent.BackfaceVisibility()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3259
-CSSPropertyID::kBackgroundColor => { builder.SetBackgroundColor(parent.BackgroundColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3803
-CSSPropertyID::kBaselineSource => { builder.SetBaselineSource(parent.BaselineSource()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3838
-CSSPropertyID::kBlockEllipsis => { builder.SetBlockEllipsis(parent.BlockEllipsis()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4146
-CSSPropertyID::kBorderBottomColor => { builder.SetBorderBottomColor(parent.BorderBottomColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4283
-CSSPropertyID::kBorderBottomStyle => { builder.SetBorderBottomStyle(parent.BorderBottomStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4351
-CSSPropertyID::kBorderCollapse => { builder.SetBorderCollapse(parent.BorderCollapse());
-builder.SetBorderCollapseIsInherited(true); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4600
-CSSPropertyID::kBorderImageSource => { builder.SetBorderImageSource(parent.BorderImageSource()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4914
-CSSPropertyID::kBorderLeftColor => { builder.SetBorderLeftColor(parent.BorderLeftColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4953
-CSSPropertyID::kBorderLeftStyle => { builder.SetBorderLeftStyle(parent.BorderLeftStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5036
-CSSPropertyID::kBorderRightColor => { builder.SetBorderRightColor(parent.BorderRightColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5075
-CSSPropertyID::kBorderRightStyle => { builder.SetBorderRightStyle(parent.BorderRightStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5280
-CSSPropertyID::kBorderTopColor => { builder.SetBorderTopColor(parent.BorderTopColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5417
-CSSPropertyID::kBorderTopStyle => { builder.SetBorderTopStyle(parent.BorderTopStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5530
-CSSPropertyID::kBoxDecorationBreak => { builder.SetBoxDecorationBreak(parent.BoxDecorationBreak()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5593
-CSSPropertyID::kBoxSizing => { builder.SetBoxSizing(parent.BoxSizing()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5622
-CSSPropertyID::kBreakAfter => { builder.SetBreakAfter(parent.BreakAfter()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5651
-CSSPropertyID::kBreakBefore => { builder.SetBreakBefore(parent.BreakBefore()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5680
-CSSPropertyID::kBreakInside => { builder.SetBreakInside(parent.BreakInside()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5709
-CSSPropertyID::kBufferedRendering => { builder.SetBufferedRendering(parent.BufferedRendering()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5739
-CSSPropertyID::kCaptionSide => { builder.SetCaptionSide(parent.CaptionSide());
-builder.SetCaptionSideIsInherited(true); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5776
-CSSPropertyID::kCaretAnimation => { builder.SetCaretAnimation(parent.CaretAnimation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5805
-CSSPropertyID::kCaretColor => { builder.SetCaretColor(parent.CaretColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5840
-CSSPropertyID::kCaretShape => { builder.SetCaretShape(parent.CaretShape()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5869
-CSSPropertyID::kClear => { builder.SetClear(parent.Clear()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5973
-CSSPropertyID::kClipRule => { builder.SetClipRule(parent.ClipRule()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6002
-CSSPropertyID::kColorInterpolation => { builder.SetColorInterpolation(parent.ColorInterpolation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6031
-CSSPropertyID::kColorInterpolationFilters => { builder.SetColorInterpolationFilters(parent.ColorInterpolationFilters()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6060
-CSSPropertyID::kColorRendering => { builder.SetColorRendering(parent.ColorRendering()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6131
-CSSPropertyID::kColumnFill => { builder.SetColumnFill(parent.GetColumnFill()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6247
-CSSPropertyID::kColumnRuleBreak => { builder.SetColumnRuleBreak(parent.ColumnRuleBreak()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6276
-CSSPropertyID::kColumnRuleColor => { builder.SetColumnRuleColor(parent.ColumnRuleColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6441
-CSSPropertyID::kColumnRuleStyle => { builder.SetColumnRuleStyle(parent.ColumnRuleStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6470
-CSSPropertyID::kColumnRuleVisibilityItems => { builder.SetColumnRuleVisibilityItems(parent.ColumnRuleVisibilityItems()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6522
-CSSPropertyID::kColumnSpan => { builder.SetColumnSpan(parent.GetColumnSpan()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6598
-CSSPropertyID::kColumnWrap => { builder.SetColumnWrap(parent.ColumnWrap()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6627
-CSSPropertyID::kContain => { builder.SetContain(parent.Contain()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6824
-CSSPropertyID::kContainerName => { builder.SetContainerName(parent.ContainerName()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6853
-CSSPropertyID::kContainerType => { builder.SetContainerType(parent.ContainerType()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6902
-CSSPropertyID::kContentVisibility => { builder.SetContentVisibility(parent.ContentVisibility()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6937
-CSSPropertyID::kContinue => { builder.SetContinue(parent.Continue()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6981
-CSSPropertyID::kCornerBottomLeftShape => { builder.SetCornerBottomLeftShape(parent.CornerBottomLeftShape()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7025
-CSSPropertyID::kCornerBottomRightShape => { builder.SetCornerBottomRightShape(parent.CornerBottomRightShape()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7233
-CSSPropertyID::kCornerTopLeftShape => { builder.SetCornerTopLeftShape(parent.CornerTopLeftShape()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7277
-CSSPropertyID::kCornerTopRightShape => { builder.SetCornerTopRightShape(parent.CornerTopRightShape()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7624
-CSSPropertyID::kD => { builder.SetD(Member::from_ptr(parent.D())); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7693
-CSSPropertyID::kDominantBaseline => { builder.SetDominantBaseline(parent.DominantBaseline()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7728
-CSSPropertyID::kDynamicRangeLimit => { builder.SetDynamicRangeLimit(parent.GetDynamicRangeLimit()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7758
-CSSPropertyID::kEmptyCells => { builder.SetEmptyCells(parent.EmptyCells());
-builder.SetEmptyCellsIsInherited(true); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7809
-CSSPropertyID::kFieldSizing => { builder.SetFieldSizing(parent.FieldSizing()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7845
-CSSPropertyID::kFill => { builder.SetFillPaint(parent.FillPaint()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7878
-CSSPropertyID::kFillOpacity => { builder.SetFillOpacity(parent.FillOpacity()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7907
-CSSPropertyID::kFillRule => { builder.SetFillRule(parent.FillRule()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7973
-CSSPropertyID::kFlexBasis => {
-if builder.EffectiveZoom() != parent.EffectiveZoom() { return Err(LonghandApplicationError::Unsupported(property)); }
-builder.SetFlexBasis(parent.FlexBasis());
-},
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8007
-CSSPropertyID::kFlexDirection => { builder.SetFlexDirection(parent.FlexDirection()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8036
-CSSPropertyID::kFlexGrow => { builder.SetFlexGrow(parent.FlexGrow()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8071
-CSSPropertyID::kFlexLineCount => { builder.SetFlexLineCount(parent.FlexLineCount()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8100
-CSSPropertyID::kFlexShrink => { builder.SetFlexShrink(parent.FlexShrink()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8129
-CSSPropertyID::kFlexWrap => { builder.SetFlexWrap(parent.FlexWrap()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8158
-CSSPropertyID::kFloat => { builder.SetFloating(parent.Floating()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8194
-CSSPropertyID::kFloodColor => { builder.SetFloodColor(parent.FloodColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8230
-CSSPropertyID::kFloodOpacity => { builder.SetFloodOpacity(parent.FloodOpacity()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8331
-CSSPropertyID::kFrameSizing => { builder.SetFrameSizing(parent.FrameSizing()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8394
-CSSPropertyID::kGridAutoFlow => { builder.SetGridAutoFlow(parent.GetGridAutoFlow()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8463
-CSSPropertyID::kGridColumnEnd => { builder.SetGridColumnEnd(parent.GridColumnEnd()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8498
-CSSPropertyID::kGridColumnStart => { builder.SetGridColumnStart(parent.GridColumnStart()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8533
-CSSPropertyID::kGridLanesDirection => { builder.SetGridLanesDirection(parent.GetGridLanesDirection()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8568
-CSSPropertyID::kGridLanesPack => { builder.SetGridLanesPack(parent.GridLanesPack()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8603
-CSSPropertyID::kGridRowEnd => { builder.SetGridRowEnd(parent.GridRowEnd()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8638
-CSSPropertyID::kGridRowStart => { builder.SetGridRowStart(parent.GridRowStart()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8667
-CSSPropertyID::kGridTemplateAreas => { builder.SetGridTemplateAreas(parent.GridTemplateAreas()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8766
-CSSPropertyID::kHangingPunctuation => { builder.SetHangingPunctuation(parent.GetHangingPunctuation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8893
-CSSPropertyID::kHyphenateCharacter => { builder.SetHyphenationString(parent.HyphenationString()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8928
-CSSPropertyID::kHyphenateLimitChars => { builder.SetHyphenateLimitChars(parent.HyphenateLimitChars()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8957
-CSSPropertyID::kHyphens => { builder.SetHyphens(parent.GetHyphens()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8992
-CSSPropertyID::kImageAnimation => { builder.SetImageAnimation(parent.ImageAnimation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9021
-CSSPropertyID::kImageOrientation => { builder.SetImageOrientation(parent.ImageOrientation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9050
-CSSPropertyID::kImageRendering => { builder.SetImageRendering(parent.ImageRendering()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9105
-CSSPropertyID::kInitialLetter => { builder.SetInitialLetter(parent.InitialLetter()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9336
-CSSPropertyID::kInteractivity => { builder.SetInteractivity(parent.Interactivity());
-builder.SetInteractivityIsInherited(true); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9367
-CSSPropertyID::kInterestDelayEnd => { builder.SetInterestDelayEnd(parent.InterestDelayEnd()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9396
-CSSPropertyID::kInterestDelayStart => { builder.SetInterestDelayStart(parent.InterestDelayStart()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9428
-CSSPropertyID::kInternalAlignContentBlock => { builder.SetAlignContentBlockCenter(parent.AlignContentBlockCenter()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9460
-CSSPropertyID::kInternalEmptyLineHeight => { builder.SetHasLineIfEmpty(parent.HasLineIfEmpty()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9531
-CSSPropertyID::kInternalForcedBackgroundColor => { builder.SetInternalForcedBackgroundColor(parent.InternalForcedBackgroundColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9571
-CSSPropertyID::kInternalForcedBorderColor => { builder.SetInternalForcedBorderColor(parent.InternalForcedBorderColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9640
-CSSPropertyID::kInternalForcedOutlineColor => { builder.SetInternalForcedOutlineColor(parent.InternalForcedOutlineColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9676
-CSSPropertyID::kInternalOverscrollContainer => { builder.SetInternalOverscrollContainer(parent.InternalOverscrollContainer()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9711
-CSSPropertyID::kInternalOverscrollPosition => { builder.SetInternalOverscrollPosition(parent.InternalOverscrollPosition()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9746
-CSSPropertyID::kInternalUnbounded => { builder.SetInternalUnbounded(parent.InternalUnbounded()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9775
-CSSPropertyID::kInterpolateSize => { builder.SetInterpolateSize(parent.InterpolateSize()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9804
-CSSPropertyID::kIsolation => { builder.SetIsolation(parent.Isolation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9833
-CSSPropertyID::kJustifyContent => { builder.SetJustifyContent(parent.JustifyContent()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9862
-CSSPropertyID::kJustifyItems => { builder.SetJustifyItems(parent.JustifyItems()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9891
-CSSPropertyID::kJustifySelf => { builder.SetJustifySelf(parent.JustifySelf()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10013
-CSSPropertyID::kLightingColor => { builder.SetLightingColor(parent.LightingColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10043
-CSSPropertyID::kLineBreak => { builder.SetLineBreak(parent.GetLineBreak()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10200
-CSSPropertyID::kListStylePosition => { builder.SetListStylePosition(parent.ListStylePosition());
-builder.SetListStylePositionIsInherited(true); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10231
-CSSPropertyID::kListStyleType => { builder.SetListStyleType(parent.ListStyleType()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10587
-CSSPropertyID::kMarginTrim => { builder.SetMarginTrim(parent.MarginTrim()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10616
-CSSPropertyID::kMarkerEnd => { builder.SetMarkerEndResource(Member::from_ptr(parent.MarkerEndResource())); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10642
-CSSPropertyID::kMarkerMid => { builder.SetMarkerMidResource(Member::from_ptr(parent.MarkerMidResource())); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10668
-CSSPropertyID::kMarkerStart => { builder.SetMarkerStartResource(Member::from_ptr(parent.MarkerStartResource())); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11125
-CSSPropertyID::kMaskType => { builder.SetMaskType(parent.MaskType()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11154
-CSSPropertyID::kMathShift => { builder.SetMathShift(parent.MathShift()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11183
-CSSPropertyID::kMathStyle => { builder.SetMathStyle(parent.MathStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11372
-CSSPropertyID::kMaxLines => { builder.SetMaxLines(parent.MaxLines()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11609
-CSSPropertyID::kMixBlendMode => { builder.SetBlendMode(parent.GetBlendMode()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11678
-CSSPropertyID::kObjectFit => { builder.SetObjectFit(parent.GetObjectFit()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11923
-CSSPropertyID::kOffsetRotate => { builder.SetOffsetRotate(parent.OffsetRotate()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11958
-CSSPropertyID::kOpacity => { builder.SetOpacity(parent.Opacity()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11993
-CSSPropertyID::kOrder => { builder.SetOrder(parent.Order()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12028
-CSSPropertyID::kOriginTrialTestProperty => { builder.SetOriginTrialTestProperty(parent.OriginTrialTestProperty()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12063
-CSSPropertyID::kOrphans => { builder.SetOrphans(parent.Orphans()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12093
-CSSPropertyID::kOutlineColor => { builder.SetOutlineColor(parent.OutlineColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12200
-CSSPropertyID::kOverflowAnchor => { builder.SetOverflowAnchor(parent.OverflowAnchor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12333
-CSSPropertyID::kOverflowWrap => { builder.SetOverflowWrap(parent.OverflowWrap()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12426
-CSSPropertyID::kOverlay => { builder.SetOverlay(parent.Overlay()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12554
-CSSPropertyID::kOverscrollBehaviorX => { builder.SetOverscrollBehaviorX(parent.OverscrollBehaviorX()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12592
-CSSPropertyID::kOverscrollBehaviorY => { builder.SetOverscrollBehaviorY(parent.OverscrollBehaviorY()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12627
-CSSPropertyID::kOverscrollContainerType => { builder.SetOverscrollContainerType(parent.OverscrollContainerType()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12988
-CSSPropertyID::kPage => { builder.SetPage(parent.Page()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13023
-CSSPropertyID::kPageMarginSafety => { builder.SetPageMarginSafety(parent.GetPageMarginSafety()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13052
-CSSPropertyID::kPageOrientation => { builder.SetPageOrientation(parent.GetPageOrientation()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13081
-CSSPropertyID::kPaintOrder => { builder.SetPaintOrder(parent.PaintOrder()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13271
-CSSPropertyID::kPointerEvents => { builder.SetPointerEvents(parent.PointerEvents());
-builder.SetPointerEventsIsInherited(true); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13334
-CSSPropertyID::kPositionTryFallbacks => { builder.SetPositionTryFallbacks(parent.GetPositionTryFallbacks()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13360
-CSSPropertyID::kPositionTryOrder => { builder.SetPositionTryOrder(parent.PositionTryOrder()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13389
-CSSPropertyID::kPositionVisibility => { builder.SetPositionVisibility(parent.GetPositionVisibility()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13438
-CSSPropertyID::kPrintColorAdjust => { builder.SetPrintColorAdjust(parent.PrintColorAdjust()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13493
-CSSPropertyID::kQuotes => { builder.SetQuotes(parent.Quotes().clone()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13576
-CSSPropertyID::kReadingFlow => { builder.SetReadingFlow(parent.ReadingFlow()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13611
-CSSPropertyID::kReadingOrder => { builder.SetReadingOrder(parent.ReadingOrder()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13640
-CSSPropertyID::kResize => { builder.SetResize(parent.Resize()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13738
-CSSPropertyID::kRotate => { builder.SetRotate(Member::from_ptr(parent.Rotate())); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13807
-CSSPropertyID::kRowRuleBreak => { builder.SetRowRuleBreak(parent.RowRuleBreak()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13836
-CSSPropertyID::kRowRuleColor => { builder.SetRowRuleColor(parent.RowRuleColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14001
-CSSPropertyID::kRowRuleStyle => { builder.SetRowRuleStyle(parent.RowRuleStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14030
-CSSPropertyID::kRowRuleVisibilityItems => { builder.SetRowRuleVisibilityItems(parent.RowRuleVisibilityItems()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14082
-CSSPropertyID::kRubyAlign => { builder.SetRubyAlign(parent.RubyAlign()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14117
-CSSPropertyID::kRubyOverhang => { builder.SetRubyOverhang(parent.RubyOverhang()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14146
-CSSPropertyID::kRubyPosition => { builder.SetRubyPosition(parent.GetRubyPosition()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14175
-CSSPropertyID::kRuleOverlap => { builder.SetRuleOverlap(parent.RuleOverlap()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14272
-CSSPropertyID::kScale => { builder.SetScale(Member::from_ptr(parent.Scale())); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14307
-CSSPropertyID::kScrollAxisLock => { builder.SetScrollAxisLock(parent.ScrollAxisLock()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14336
-CSSPropertyID::kScrollBehavior => { builder.SetScrollBehavior(parent.GetScrollBehavior()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14371
-CSSPropertyID::kScrollInitialTarget => { builder.SetScrollInitialTarget(parent.ScrollInitialTarget()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14718
-CSSPropertyID::kScrollMarkerGroup => { builder.SetScrollMarkerGroup(Member::from_ptr(parent.GetScrollMarkerGroup())); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15107
-CSSPropertyID::kScrollSnapAlign => { builder.SetScrollSnapAlign(parent.GetScrollSnapAlign()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15136
-CSSPropertyID::kScrollSnapStop => { builder.SetScrollSnapStop(parent.ScrollSnapStop()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15165
-CSSPropertyID::kScrollSnapType => { builder.SetScrollSnapType(parent.GetScrollSnapType()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15200
-CSSPropertyID::kScrollTargetGroup => { builder.SetScrollTargetGroup(parent.ScrollTargetGroup()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15229
-CSSPropertyID::kScrollTimelineAxis => { builder.SetScrollTimelineAxis(parent.ScrollTimelineAxis()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15258
-CSSPropertyID::kScrollTimelineName => { builder.SetScrollTimelineName(parent.ScrollTimelineName()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15293
-CSSPropertyID::kScrollbarColor => { builder.SetScrollbarColor(Member::from_ptr(parent.ScrollbarColor())); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15322
-CSSPropertyID::kScrollbarGutter => { builder.SetScrollbarGutter(parent.ScrollbarGutter()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15357
-CSSPropertyID::kScrollbarWidth => { builder.SetScrollbarWidth(parent.ScrollbarWidth()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15418
-CSSPropertyID::kShapeImageThreshold => { builder.SetShapeImageThreshold(parent.ShapeImageThreshold()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15515
-CSSPropertyID::kShapeRendering => { builder.SetShapeRendering(parent.ShapeRendering()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15584
-CSSPropertyID::kSpeak => { builder.SetSpeak(parent.Speak()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15660
-CSSPropertyID::kStopColor => { builder.SetStopColor(parent.StopColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15696
-CSSPropertyID::kStopOpacity => { builder.SetStopOpacity(parent.StopOpacity()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15732
-CSSPropertyID::kStroke => { builder.SetStrokePaint(parent.StrokePaint()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15827
-CSSPropertyID::kStrokeLinecap => { builder.SetCapStyle(parent.CapStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15856
-CSSPropertyID::kStrokeLinejoin => { builder.SetJoinStyle(parent.JoinStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15885
-CSSPropertyID::kStrokeMiterlimit => { builder.SetStrokeMiterLimit(parent.StrokeMiterLimit()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15920
-CSSPropertyID::kStrokeOpacity => { builder.SetStrokeOpacity(parent.StrokeOpacity()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16097
-CSSPropertyID::kTableLayout => { builder.SetTableLayout(parent.TableLayout()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16126
-CSSPropertyID::kTextAlign => { builder.SetTextAlign(parent.GetTextAlign()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16152
-CSSPropertyID::kTextAlignLast => { builder.SetTextAlignLast(parent.TextAlignLast()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16181
-CSSPropertyID::kTextAnchor => { builder.SetTextAnchor(parent.TextAnchor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16210
-CSSPropertyID::kTextAutospace => { builder.SetTextAutospace(parent.TextAutospace()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16239
-CSSPropertyID::kTextBoxEdge => { builder.SetTextBoxEdge(parent.GetTextBoxEdge()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16268
-CSSPropertyID::kTextBoxTrim => { builder.SetTextBoxTrim(parent.TextBoxTrim()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16297
-CSSPropertyID::kTextCombineUpright => { builder.SetTextCombine(parent.TextCombine()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16333
-CSSPropertyID::kTextDecorationColor => { builder.SetTextDecorationColor(parent.TextDecorationColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16403
-CSSPropertyID::kTextDecorationLine => { builder.SetTextDecorationLine(parent.GetTextDecorationLine()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16432
-CSSPropertyID::kTextDecorationSkipInk => { builder.SetTextDecorationSkipInk(parent.TextDecorationSkipInk()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16467
-CSSPropertyID::kTextDecorationSkipSpaces => { builder.SetTextDecorationSkipSpaces(parent.GetTextDecorationSkipSpaces()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16496
-CSSPropertyID::kTextDecorationStyle => { builder.SetTextDecorationStyle(parent.TextDecorationStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16566
-CSSPropertyID::kTextEmphasisColor => { builder.SetTextEmphasisColor(parent.TextEmphasisColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16596
-CSSPropertyID::kTextEmphasisPosition => { builder.SetTextEmphasisPosition(parent.GetTextEmphasisPosition()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16657
-CSSPropertyID::kTextFit => { builder.SetTextFit(parent.GetTextFit()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16717
-CSSPropertyID::kTextJustify => { builder.SetTextJustify(parent.GetTextJustify()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16746
-CSSPropertyID::kTextOverflow => { builder.SetTextOverflow(parent.TextOverflow()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16810
-CSSPropertyID::kTextTransform => { builder.SetTextTransform(parent.TextTransform());
-builder.SetTextTransformIsInherited(true); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16875
-CSSPropertyID::kTextUnderlinePosition => { builder.SetTextUnderlinePosition(parent.GetTextUnderlinePosition()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16904
-CSSPropertyID::kTextWrapMode => { builder.SetTextWrapMode(parent.GetTextWrapMode()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16933
-CSSPropertyID::kTextWrapStyle => { builder.SetTextWrapStyle(parent.GetTextWrapStyle()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16962
-CSSPropertyID::kTimelineScope => { builder.SetTimelineScope(parent.TimelineScope()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17369
-CSSPropertyID::kTouchAction => { builder.SetTouchAction(parent.GetTouchAction()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17438
-CSSPropertyID::kTransformBox => { builder.SetTransformBox(parent.TransformBox()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17501
-CSSPropertyID::kTransformStyle => { builder.SetTransformStyle3D(parent.TransformStyle3D()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17535
-CSSPropertyID::kTransitionBehavior => { if let Some(data) = unsafe { parent.Transitions().Get().as_ref() } {
-*builder.AccessTransitions().BehaviorListMut() = data.BehaviorList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17581
-CSSPropertyID::kTransitionDelay => { if let Some(data) = unsafe { parent.Transitions().Get().as_ref() } {
-*builder.AccessTransitions().DelayStartListMut() = data.DelayStartList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17627
-CSSPropertyID::kTransitionDuration => { if let Some(data) = unsafe { parent.Transitions().Get().as_ref() } {
-*builder.AccessTransitions().DurationListMut() = data.DurationList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17673
-CSSPropertyID::kTransitionProperty => { if let Some(data) = unsafe { parent.Transitions().Get().as_ref() } {
-*builder.AccessTransitions().PropertyListMut() = data.PropertyList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17719
-CSSPropertyID::kTransitionTimingFunction => { if let Some(data) = unsafe { parent.Transitions().Get().as_ref() } {
-*builder.AccessTransitions().TimingFunctionListMut() = data.TimingFunctionList().clone();
-} else { ApplyInitial(property, builder)?; } },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17806
-CSSPropertyID::kTriggerScope => { builder.SetTriggerScope(parent.TriggerScope()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17855
-CSSPropertyID::kUnicodeBidi => { builder.SetUnicodeBidi(parent.GetUnicodeBidi()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17904
-CSSPropertyID::kUserSelect => { builder.SetUserSelect(parent.UserSelect()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17933
-CSSPropertyID::kVectorEffect => { builder.SetVectorEffect(parent.VectorEffect()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17985
-CSSPropertyID::kViewTimelineAxis => { builder.SetViewTimelineAxis(parent.ViewTimelineAxis()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18048
-CSSPropertyID::kViewTimelineName => { builder.SetViewTimelineName(parent.ViewTimelineName()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18077
-CSSPropertyID::kViewTransitionClass => { builder.SetViewTransitionClass(parent.ViewTransitionClass()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18106
-CSSPropertyID::kViewTransitionGroup => { builder.SetViewTransitionGroup(parent.ViewTransitionGroup()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18135
-CSSPropertyID::kViewTransitionName => { builder.SetViewTransitionName(parent.ViewTransitionName()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18164
-CSSPropertyID::kViewTransitionScope => { builder.SetViewTransitionScope(parent.ViewTransitionScope()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18194
-CSSPropertyID::kVisibility => { builder.SetVisibility(parent.Visibility());
-builder.SetVisibilityIsInherited(true); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18265
-CSSPropertyID::kWebkitBorderImage => { builder.SetBorderImage(parent.BorderImage()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18325
-CSSPropertyID::kWebkitBoxAlign => { builder.SetBoxAlign(parent.BoxAlign()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18377
-CSSPropertyID::kWebkitBoxDirection => { builder.SetBoxDirection(parent.BoxDirection()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18406
-CSSPropertyID::kWebkitBoxFlex => { builder.SetBoxFlex(parent.BoxFlex()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18441
-CSSPropertyID::kWebkitBoxOrdinalGroup => { builder.SetBoxOrdinalGroup(parent.BoxOrdinalGroup()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18470
-CSSPropertyID::kWebkitBoxOrient => { builder.SetBoxOrient(parent.BoxOrient()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18499
-CSSPropertyID::kWebkitBoxPack => { builder.SetBoxPack(parent.BoxPack()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18596
-CSSPropertyID::kWebkitLineClamp => { builder.SetWebkitLineClamp(parent.WebkitLineClamp()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18763
-CSSPropertyID::kWebkitMaskBoxImageSource => { builder.SetMaskBoxImageSource(parent.MaskBoxImageSource()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19048
-CSSPropertyID::kWebkitRtlOrdering => { builder.SetRtlOrdering(parent.RtlOrdering());
-builder.SetRtlOrderingIsInherited(true); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19108
-CSSPropertyID::kWebkitTapHighlightColor => { builder.SetTapHighlightColor(parent.TapHighlightColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19196
-CSSPropertyID::kWebkitTextFillColor => { builder.SetTextFillColor(parent.TextFillColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19226
-CSSPropertyID::kWebkitTextSecurity => { builder.SetTextSecurity(parent.TextSecurity()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19262
-CSSPropertyID::kWebkitTextStrokeColor => { builder.SetTextStrokeColor(parent.TextStrokeColor()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19404
-CSSPropertyID::kWebkitUserDrag => { builder.SetUserDrag(parent.UserDrag()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19433
-CSSPropertyID::kWebkitUserModify => { builder.SetUserModify(parent.UserModify()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19462
-CSSPropertyID::kWhiteSpaceCollapse => { builder.SetWhiteSpaceCollapse(parent.GetWhiteSpaceCollapse()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19497
-CSSPropertyID::kWidows => { builder.SetWidows(parent.Widows()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19598
-CSSPropertyID::kWindowDrag => { builder.SetDraggableRegionMode(parent.DraggableRegionMode()); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19624
-CSSPropertyID::kWordBreak => { builder.SetWordBreak(parent.WordBreak()); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:2561
-CSSPropertyID::kColorScheme => { builder.SetColorScheme(parent.ColorScheme());
-builder.SetDarkColorScheme(parent.DarkColorScheme());
-builder.SetColorSchemeForced(parent.ColorSchemeForced()); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:3497
-CSSPropertyID::kCursor => { builder.SetCursor(parent.Cursor());
-builder.SetCursorList(parent.Cursors());
-builder.SetCursorIsInherited(true); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:3903
-CSSPropertyID::kDisplay => { builder.SetDisplay(parent.Display());
-builder.SetDisplayLayoutCustomName(parent.DisplayLayoutCustomName()); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:6035
-CSSPropertyID::kInternalForcedColor => { builder.SetInternalForcedColor(parent.InternalForcedColor()); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:6522
-CSSPropertyID::kLineClamp => { builder.SetContinue(parent.Continue());
-builder.SetMaxLines(parent.MaxLines());
-builder.SetLineClampInternalBlockEllipsis(parent.LineClampInternalBlockEllipsis()); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:7108
-CSSPropertyID::kMaxContentSizing => { builder.SetMaxContentSizing(parent.MaxContentSizing());
-builder.SetIsInShrinkToFitSubtree(parent.IsInShrinkToFitSubtree()); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:7572
-CSSPropertyID::kOutlineStyle => { builder.SetOutlineStyleIsAuto(parent.OutlineStyleIsAuto());
-builder.SetOutlineStyle(parent.OutlineStyle()); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:11320
-CSSPropertyID::kAlternativeWebkitLineClampLonghand => { builder.SetContinue(parent.Continue());
-builder.SetMaxLines(parent.MaxLines());
-builder.SetLineClampInternalBlockEllipsis(parent.LineClampInternalBlockEllipsis()); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:12069
-CSSPropertyID::kTextEmphasisStyle => { builder.SetTextEmphasisFill(parent.GetTextEmphasisFill());
-builder.SetTextEmphasisMark(parent.GetTextEmphasisMark());
-builder.SetTextEmphasisCustomMark(parent.TextEmphasisCustomMark()); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:12497
-CSSPropertyID::kWillChange => { builder.SetWillChange(Member::from_ptr(parent.WillChange()));
-builder.SetSubtreeWillChangeContents(parent.SubtreeWillChangeContents()); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyIdentifier(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: CSSValueID) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:89
-CSSPropertyID::kForcedColorAdjust => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:124
-let converted = match value { CSSValueID::kAuto => EForcedColorAdjust::kAuto, CSSValueID::kPreserveParentColor => EForcedColorAdjust::kPreserveParentColor, CSSValueID::kNone => EForcedColorAdjust::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetForcedColorAdjust(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:150
-CSSPropertyID::kPosition => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:152
-let converted = match value { CSSValueID::kFixed => EPosition::kFixed, CSSValueID::kRelative => EPosition::kRelative, CSSValueID::kStatic => EPosition::kStatic, CSSValueID::kSticky => EPosition::kSticky, CSSValueID::kAbsolute => EPosition::kAbsolute, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetPosition(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2159
-CSSPropertyID::kAlignmentBaseline => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:230
-let converted = match value { CSSValueID::kBaseline => EAlignmentBaseline::kBaseline, CSSValueID::kMiddle => EAlignmentBaseline::kMiddle, CSSValueID::kAuto => EAlignmentBaseline::kAuto, CSSValueID::kAlphabetic => EAlignmentBaseline::kAlphabetic, CSSValueID::kBeforeEdge => EAlignmentBaseline::kBeforeEdge, CSSValueID::kAfterEdge => EAlignmentBaseline::kAfterEdge, CSSValueID::kCentral => EAlignmentBaseline::kCentral, CSSValueID::kTextBeforeEdge => EAlignmentBaseline::kTextBeforeEdge, CSSValueID::kTextAfterEdge => EAlignmentBaseline::kTextAfterEdge, CSSValueID::kIdeographic => EAlignmentBaseline::kIdeographic, CSSValueID::kHanging => EAlignmentBaseline::kHanging, CSSValueID::kMathematical => EAlignmentBaseline::kMathematical, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetAlignmentBaseline(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3039
-CSSPropertyID::kBackfaceVisibility => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:266
-let converted = match value { CSSValueID::kVisible => EBackfaceVisibility::kVisible, CSSValueID::kHidden => EBackfaceVisibility::kHidden, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBackfaceVisibility(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3806
-CSSPropertyID::kBaselineSource => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:290
-let converted = match value { CSSValueID::kAuto => EBaselineSource::kAuto, CSSValueID::kFirst => EBaselineSource::kFirst, CSSValueID::kLast => EBaselineSource::kLast, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBaselineSource(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3841
-CSSPropertyID::kBlockEllipsis => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:314
-let converted = match value { CSSValueID::kNoEllipsis => EBlockEllipsis::kNoEllipsis, CSSValueID::kEllipsis => EBlockEllipsis::kEllipsis, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBlockEllipsis(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4286
-CSSPropertyID::kBorderBottomStyle => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:338
-let converted = ConvertBorderStyle(property, value)?;
-builder.SetBorderBottomStyle(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4355
-CSSPropertyID::kBorderCollapse => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:352
-let converted = match value { CSSValueID::kSeparate => EBorderCollapse::kSeparate, CSSValueID::kCollapse => EBorderCollapse::kCollapse, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBorderCollapse(converted);
-builder.SetBorderCollapseIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4956
-CSSPropertyID::kBorderLeftStyle => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:338
-let converted = ConvertBorderStyle(property, value)?;
-builder.SetBorderLeftStyle(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5078
-CSSPropertyID::kBorderRightStyle => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:338
-let converted = ConvertBorderStyle(property, value)?;
-builder.SetBorderRightStyle(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5420
-CSSPropertyID::kBorderTopStyle => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:338
-let converted = ConvertBorderStyle(property, value)?;
-builder.SetBorderTopStyle(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5533
-CSSPropertyID::kBoxDecorationBreak => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:376
-let converted = match value { CSSValueID::kClone => EBoxDecorationBreak::kClone, CSSValueID::kSlice => EBoxDecorationBreak::kSlice, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBoxDecorationBreak(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5596
-CSSPropertyID::kBoxSizing => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:390
-let converted = match value { CSSValueID::kContentBox => EBoxSizing::kContentBox, CSSValueID::kBorderBox => EBoxSizing::kBorderBox, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBoxSizing(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5625
-CSSPropertyID::kBreakAfter => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:414
-let converted = match value { CSSValueID::kLeft => EBreakBetween::kLeft, CSSValueID::kRight => EBreakBetween::kRight, CSSValueID::kAuto => EBreakBetween::kAuto, CSSValueID::kAvoid => EBreakBetween::kAvoid, CSSValueID::kColumn => EBreakBetween::kColumn, CSSValueID::kAvoidPage => EBreakBetween::kAvoidPage, CSSValueID::kPage => EBreakBetween::kPage, CSSValueID::kRecto => EBreakBetween::kRecto, CSSValueID::kVerso => EBreakBetween::kVerso, CSSValueID::kAvoidColumn => EBreakBetween::kAvoidColumn, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBreakAfter(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5654
-CSSPropertyID::kBreakBefore => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:414
-let converted = match value { CSSValueID::kLeft => EBreakBetween::kLeft, CSSValueID::kRight => EBreakBetween::kRight, CSSValueID::kAuto => EBreakBetween::kAuto, CSSValueID::kAvoid => EBreakBetween::kAvoid, CSSValueID::kColumn => EBreakBetween::kColumn, CSSValueID::kAvoidPage => EBreakBetween::kAvoidPage, CSSValueID::kPage => EBreakBetween::kPage, CSSValueID::kRecto => EBreakBetween::kRecto, CSSValueID::kVerso => EBreakBetween::kVerso, CSSValueID::kAvoidColumn => EBreakBetween::kAvoidColumn, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBreakBefore(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5683
-CSSPropertyID::kBreakInside => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:454
-let converted = match value { CSSValueID::kAvoid => EBreakInside::kAvoid, CSSValueID::kAvoidPage => EBreakInside::kAvoidPage, CSSValueID::kAvoidColumn => EBreakInside::kAvoidColumn, CSSValueID::kAuto => EBreakInside::kAuto, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBreakInside(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5712
-CSSPropertyID::kBufferedRendering => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:486
-let converted = match value { CSSValueID::kStatic => EBufferedRendering::kStatic, CSSValueID::kDynamic => EBufferedRendering::kDynamic, CSSValueID::kAuto => EBufferedRendering::kAuto, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBufferedRendering(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5743
-CSSPropertyID::kCaptionSide => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:514
-let converted = match value { CSSValueID::kTop => ECaptionSide::kTop, CSSValueID::kBottom => ECaptionSide::kBottom, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetCaptionSide(converted);
-builder.SetCaptionSideIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5779
-CSSPropertyID::kCaretAnimation => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:528
-let converted = match value { CSSValueID::kManual => ECaretAnimation::kManual, CSSValueID::kAuto => ECaretAnimation::kAuto, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetCaretAnimation(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5843
-CSSPropertyID::kCaretShape => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:552
-let converted = match value { CSSValueID::kBlock => ECaretShape::kBlock, CSSValueID::kAuto => ECaretShape::kAuto, CSSValueID::kBar => ECaretShape::kBar, CSSValueID::kUnderscore => ECaretShape::kUnderscore, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetCaretShape(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5872
-CSSPropertyID::kClear => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:580
-let converted = match value { CSSValueID::kNone => EClear::kNone, CSSValueID::kInlineStart => EClear::kInlineStart, CSSValueID::kInlineEnd => EClear::kInlineEnd, CSSValueID::kBoth => EClear::kBoth, CSSValueID::kLeft => EClear::kLeft, CSSValueID::kRight => EClear::kRight, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetClear(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6005
-CSSPropertyID::kColorInterpolation => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:616
-let converted = match value { CSSValueID::kAuto => EColorInterpolation::kAuto, CSSValueID::kSRGB => EColorInterpolation::kSRGB, CSSValueID::kLinearrgb => EColorInterpolation::kLinearrgb, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetColorInterpolation(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6034
-CSSPropertyID::kColorInterpolationFilters => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:616
-let converted = match value { CSSValueID::kAuto => EColorInterpolation::kAuto, CSSValueID::kSRGB => EColorInterpolation::kSRGB, CSSValueID::kLinearrgb => EColorInterpolation::kLinearrgb, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetColorInterpolationFilters(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6063
-CSSPropertyID::kColorRendering => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:640
-let converted = match value { CSSValueID::kOptimizespeed => EColorRendering::kOptimizespeed, CSSValueID::kOptimizequality => EColorRendering::kOptimizequality, CSSValueID::kAuto => EColorRendering::kAuto, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetColorRendering(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6134
-CSSPropertyID::kColumnFill => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:668
-let converted = match value { CSSValueID::kBalance => EColumnFill::kBalance, CSSValueID::kAuto => EColumnFill::kAuto, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetColumnFill(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6250
-CSSPropertyID::kColumnRuleBreak => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:692
-let converted = match value { CSSValueID::kNormal => RuleBreak::kNormal, CSSValueID::kIntersection => RuleBreak::kIntersection, CSSValueID::kNone => RuleBreak::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetColumnRuleBreak(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6473
-CSSPropertyID::kColumnRuleVisibilityItems => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:720
-let converted = match value { CSSValueID::kAll => RuleVisibilityItems::kAll, CSSValueID::kNormal => RuleVisibilityItems::kNormal, CSSValueID::kAround => RuleVisibilityItems::kAround, CSSValueID::kBetween => RuleVisibilityItems::kBetween, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetColumnRuleVisibilityItems(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6525
-CSSPropertyID::kColumnSpan => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:748
-let converted = match value { CSSValueID::kAll => EColumnSpan::kAll, CSSValueID::kNone => EColumnSpan::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetColumnSpan(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6601
-CSSPropertyID::kColumnWrap => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:772
-let converted = match value { CSSValueID::kNowrap => EColumnWrap::kNowrap, CSSValueID::kWrap => EColumnWrap::kWrap, CSSValueID::kAuto => EColumnWrap::kAuto, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetColumnWrap(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6905
-CSSPropertyID::kContentVisibility => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:800
-let converted = match value { CSSValueID::kAuto => EContentVisibility::kAuto, CSSValueID::kVisible => EContentVisibility::kVisible, CSSValueID::kHidden => EContentVisibility::kHidden, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetContentVisibility(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6940
-CSSPropertyID::kContinue => { // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:749
-let converted = match value { CSSValueID::kNormal => EContinue::kNormal, CSSValueID::kCollapse => EContinue::kCollapse, CSSValueID::kWebkitLegacy => EContinue::kWebkitLegacy, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetContinue(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7696
-CSSPropertyID::kDominantBaseline => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:856
-let converted = match value { CSSValueID::kMiddle => EDominantBaseline::kMiddle, CSSValueID::kAuto => EDominantBaseline::kAuto, CSSValueID::kAlphabetic => EDominantBaseline::kAlphabetic, CSSValueID::kUseScript => EDominantBaseline::kUseScript, CSSValueID::kNoChange => EDominantBaseline::kNoChange, CSSValueID::kResetSize => EDominantBaseline::kResetSize, CSSValueID::kCentral => EDominantBaseline::kCentral, CSSValueID::kTextBeforeEdge => EDominantBaseline::kTextBeforeEdge, CSSValueID::kTextAfterEdge => EDominantBaseline::kTextAfterEdge, CSSValueID::kIdeographic => EDominantBaseline::kIdeographic, CSSValueID::kHanging => EDominantBaseline::kHanging, CSSValueID::kMathematical => EDominantBaseline::kMathematical, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetDominantBaseline(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7762
-CSSPropertyID::kEmptyCells => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:900
-let converted = match value { CSSValueID::kShow => EEmptyCells::kShow, CSSValueID::kHide => EEmptyCells::kHide, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetEmptyCells(converted);
-builder.SetEmptyCellsIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7812
-CSSPropertyID::kFieldSizing => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:924
-let converted = match value { CSSValueID::kContent => EFieldSizing::kContent, CSSValueID::kFixed => EFieldSizing::kFixed, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetFieldSizing(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8010
-CSSPropertyID::kFlexDirection => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:948
-let converted = match value { CSSValueID::kRow => EFlexDirection::kRow, CSSValueID::kRowReverse => EFlexDirection::kRowReverse, CSSValueID::kColumn => EFlexDirection::kColumn, CSSValueID::kColumnReverse => EFlexDirection::kColumnReverse, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetFlexDirection(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8161
-CSSPropertyID::kFloat => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:962
-let converted = match value { CSSValueID::kNone => EFloat::kNone, CSSValueID::kInlineStart => EFloat::kInlineStart, CSSValueID::kInlineEnd => EFloat::kInlineEnd, CSSValueID::kLeft => EFloat::kLeft, CSSValueID::kRight => EFloat::kRight, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetFloating(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8334
-CSSPropertyID::kFrameSizing => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:994
-let converted = match value { CSSValueID::kAuto => EFrameSizing::kAuto, CSSValueID::kContentWidth => EFrameSizing::kContentWidth, CSSValueID::kContentHeight => EFrameSizing::kContentHeight, CSSValueID::kContentBlockSize => EFrameSizing::kContentBlockSize, CSSValueID::kContentInlineSize => EFrameSizing::kContentInlineSize, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetFrameSizing(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8571
-CSSPropertyID::kGridLanesPack => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1018
-let converted = match value { CSSValueID::kDense => EGridLanesPack::kDense, CSSValueID::kNormal => EGridLanesPack::kNormal, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetGridLanesPack(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8960
-CSSPropertyID::kHyphens => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1072
-let converted = match value { CSSValueID::kAuto => Hyphens::kAuto, CSSValueID::kManual => Hyphens::kManual, CSSValueID::kNone => Hyphens::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetHyphens(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8995
-CSSPropertyID::kImageAnimation => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1100
-let converted = match value { CSSValueID::kNormal => ImageAnimationEnum::kNormal, CSSValueID::kRunning => ImageAnimationEnum::kRunning, CSSValueID::kPaused => ImageAnimationEnum::kPaused, CSSValueID::kStopped => ImageAnimationEnum::kStopped, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetImageAnimation(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9053
-CSSPropertyID::kImageRendering => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1124
-let converted = match value { CSSValueID::kAuto => EImageRendering::kAuto, CSSValueID::kPixelated => EImageRendering::kPixelated, CSSValueID::kCrispEdges => EImageRendering::kCrispEdges, CSSValueID::kWebkitOptimizeContrast => EImageRendering::kWebkitOptimizeContrast, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetImageRendering(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9340
-CSSPropertyID::kInteractivity => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1148
-let converted = match value { CSSValueID::kInert => EInteractivity::kInert, CSSValueID::kAuto => EInteractivity::kAuto, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetInteractivity(converted);
-builder.SetInteractivityIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9679
-CSSPropertyID::kInternalOverscrollContainer => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1172
-let converted = match value { CSSValueID::kAuto => EInternalOverscrollContainer::kAuto, CSSValueID::kNone => EInternalOverscrollContainer::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetInternalOverscrollContainer(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9714
-CSSPropertyID::kInternalOverscrollPosition => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1196
-let converted = match value { CSSValueID::kAuto => EInternalOverscrollPosition::kAuto, CSSValueID::kNone => EInternalOverscrollPosition::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetInternalOverscrollPosition(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9749
-CSSPropertyID::kInternalUnbounded => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1220
-let converted = match value { CSSValueID::kActive => EInternalUnbounded::kActive, CSSValueID::kNone => EInternalUnbounded::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetInternalUnbounded(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9778
-CSSPropertyID::kInterpolateSize => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1244
-let converted = match value { CSSValueID::kNumericOnly => EInterpolateSize::kNumericOnly, CSSValueID::kAllowKeywords => EInterpolateSize::kAllowKeywords, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetInterpolateSize(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9807
-CSSPropertyID::kIsolation => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1258
-let converted = match value { CSSValueID::kIsolate => EIsolation::kIsolate, CSSValueID::kAuto => EIsolation::kAuto, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetIsolation(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10046
-CSSPropertyID::kLineBreak => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1282
-let converted = match value { CSSValueID::kNormal => LineBreak::kNormal, CSSValueID::kAuto => LineBreak::kAuto, CSSValueID::kLoose => LineBreak::kLoose, CSSValueID::kStrict => LineBreak::kStrict, CSSValueID::kAfterWhiteSpace => LineBreak::kAfterWhiteSpace, CSSValueID::kAnywhere => LineBreak::kAnywhere, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetLineBreak(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10204
-CSSPropertyID::kListStylePosition => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1310
-let converted = match value { CSSValueID::kOutside => EListStylePosition::kOutside, CSSValueID::kInside => EListStylePosition::kInside, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetListStylePosition(converted);
-builder.SetListStylePositionIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11128
-CSSPropertyID::kMaskType => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1324
-let converted = match value { CSSValueID::kAlpha => EMaskType::kAlpha, CSSValueID::kLuminance => EMaskType::kLuminance, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetMaskType(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11157
-CSSPropertyID::kMathShift => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1338
-let converted = match value { CSSValueID::kCompact => EMathShift::kCompact, CSSValueID::kNormal => EMathShift::kNormal, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetMathShift(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11186
-CSSPropertyID::kMathStyle => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1362
-let converted = match value { CSSValueID::kCompact => EMathStyle::kCompact, CSSValueID::kNormal => EMathStyle::kNormal, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetMathStyle(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11612
-CSSPropertyID::kMixBlendMode => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1410
-let converted = match value { CSSValueID::kNormal => BlendMode::kNormal, CSSValueID::kPlusLighter => BlendMode::kPlusLighter, CSSValueID::kOverlay => BlendMode::kOverlay, CSSValueID::kMultiply => BlendMode::kMultiply, CSSValueID::kScreen => BlendMode::kScreen, CSSValueID::kDarken => BlendMode::kDarken, CSSValueID::kLighten => BlendMode::kLighten, CSSValueID::kColorDodge => BlendMode::kColorDodge, CSSValueID::kColorBurn => BlendMode::kColorBurn, CSSValueID::kHardLight => BlendMode::kHardLight, CSSValueID::kSoftLight => BlendMode::kSoftLight, CSSValueID::kDifference => BlendMode::kDifference, CSSValueID::kExclusion => BlendMode::kExclusion, CSSValueID::kHue => BlendMode::kHue, CSSValueID::kSaturation => BlendMode::kSaturation, CSSValueID::kColor => BlendMode::kColor, CSSValueID::kLuminosity => BlendMode::kLuminosity, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBlendMode(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11681
-CSSPropertyID::kObjectFit => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1450
-let converted = match value { CSSValueID::kNone => EObjectFit::kNone, CSSValueID::kFill => EObjectFit::kFill, CSSValueID::kScaleDown => EObjectFit::kScaleDown, CSSValueID::kContain => EObjectFit::kContain, CSSValueID::kCover => EObjectFit::kCover, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetObjectFit(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12031
-CSSPropertyID::kOriginTrialTestProperty => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1482
-let converted = match value { CSSValueID::kNormal => EOriginTrialTestProperty::kNormal, CSSValueID::kNone => EOriginTrialTestProperty::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetOriginTrialTestProperty(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12203
-CSSPropertyID::kOverflowAnchor => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1506
-let converted = match value { CSSValueID::kAuto => EOverflowAnchor::kAuto, CSSValueID::kVisible => EOverflowAnchor::kVisible, CSSValueID::kNone => EOverflowAnchor::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetOverflowAnchor(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12336
-CSSPropertyID::kOverflowWrap => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1534
-let converted = match value { CSSValueID::kBreakWord => EOverflowWrap::kBreakWord, CSSValueID::kAnywhere => EOverflowWrap::kAnywhere, CSSValueID::kNormal => EOverflowWrap::kNormal, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetOverflowWrap(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12429
-CSSPropertyID::kOverlay => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1602
-let converted = match value { CSSValueID::kAuto => EOverlay::kAuto, CSSValueID::kNone => EOverlay::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetOverlay(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12557
-CSSPropertyID::kOverscrollBehaviorX => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1626
-let converted = match value { CSSValueID::kAuto => EOverscrollBehavior::kAuto, CSSValueID::kContain => EOverscrollBehavior::kContain, CSSValueID::kChain => EOverscrollBehavior::kChain, CSSValueID::kNone => EOverscrollBehavior::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetOverscrollBehaviorX(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12595
-CSSPropertyID::kOverscrollBehaviorY => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1626
-let converted = match value { CSSValueID::kAuto => EOverscrollBehavior::kAuto, CSSValueID::kContain => EOverscrollBehavior::kContain, CSSValueID::kChain => EOverscrollBehavior::kChain, CSSValueID::kNone => EOverscrollBehavior::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetOverscrollBehaviorY(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12630
-CSSPropertyID::kOverscrollContainerType => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1658
-let converted = match value { CSSValueID::kAuto => EOverscrollContainerType::kAuto, CSSValueID::kOverlay => EOverscrollContainerType::kOverlay, CSSValueID::kPush => EOverscrollContainerType::kPush, CSSValueID::kNone => EOverscrollContainerType::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetOverscrollContainerType(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13026
-CSSPropertyID::kPageMarginSafety => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1690
-let converted = match value { CSSValueID::kClamp => EPageMarginSafety::kClamp, CSSValueID::kAdd => EPageMarginSafety::kAdd, CSSValueID::kNone => EPageMarginSafety::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetPageMarginSafety(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13055
-CSSPropertyID::kPageOrientation => { // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:352
-let converted = match value { CSSValueID::kUpright => PageOrientation::kUpright, CSSValueID::kRotateLeft => PageOrientation::kRotateLeft, CSSValueID::kRotateRight => PageOrientation::kRotateRight, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetPageOrientation(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13275
-CSSPropertyID::kPointerEvents => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1718
-let converted = match value { CSSValueID::kNone => EPointerEvents::kNone, CSSValueID::kAll => EPointerEvents::kAll, CSSValueID::kAuto => EPointerEvents::kAuto, CSSValueID::kVisible => EPointerEvents::kVisible, CSSValueID::kVisiblepainted => EPointerEvents::kVisiblepainted, CSSValueID::kVisiblefill => EPointerEvents::kVisiblefill, CSSValueID::kVisiblestroke => EPointerEvents::kVisiblestroke, CSSValueID::kPainted => EPointerEvents::kPainted, CSSValueID::kFill => EPointerEvents::kFill, CSSValueID::kStroke => EPointerEvents::kStroke, CSSValueID::kBoundingBox => EPointerEvents::kBoundingBox, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetPointerEvents(converted);
-builder.SetPointerEventsIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13363
-CSSPropertyID::kPositionTryOrder => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1754
-let converted = match value { CSSValueID::kNormal => EPositionTryOrder::kNormal, CSSValueID::kMostWidth => EPositionTryOrder::kMostWidth, CSSValueID::kMostHeight => EPositionTryOrder::kMostHeight, CSSValueID::kMostBlockSize => EPositionTryOrder::kMostBlockSize, CSSValueID::kMostInlineSize => EPositionTryOrder::kMostInlineSize, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetPositionTryOrder(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13441
-CSSPropertyID::kPrintColorAdjust => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1778
-let converted = match value { CSSValueID::kEconomy => EPrintColorAdjust::kEconomy, CSSValueID::kExact => EPrintColorAdjust::kExact, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetPrintColorAdjust(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13579
-CSSPropertyID::kReadingFlow => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1792
-let converted = match value { CSSValueID::kNormal => EReadingFlow::kNormal, CSSValueID::kFlexVisual => EReadingFlow::kFlexVisual, CSSValueID::kFlexFlow => EReadingFlow::kFlexFlow, CSSValueID::kGridRows => EReadingFlow::kGridRows, CSSValueID::kGridColumns => EReadingFlow::kGridColumns, CSSValueID::kGridOrder => EReadingFlow::kGridOrder, CSSValueID::kSourceOrder => EReadingFlow::kSourceOrder, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetReadingFlow(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13810
-CSSPropertyID::kRowRuleBreak => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:692
-let converted = match value { CSSValueID::kNormal => RuleBreak::kNormal, CSSValueID::kIntersection => RuleBreak::kIntersection, CSSValueID::kNone => RuleBreak::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetRowRuleBreak(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14033
-CSSPropertyID::kRowRuleVisibilityItems => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:720
-let converted = match value { CSSValueID::kAll => RuleVisibilityItems::kAll, CSSValueID::kNormal => RuleVisibilityItems::kNormal, CSSValueID::kAround => RuleVisibilityItems::kAround, CSSValueID::kBetween => RuleVisibilityItems::kBetween, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetRowRuleVisibilityItems(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14085
-CSSPropertyID::kRubyAlign => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1852
-let converted = match value { CSSValueID::kCenter => ERubyAlign::kCenter, CSSValueID::kStart => ERubyAlign::kStart, CSSValueID::kSpaceBetween => ERubyAlign::kSpaceBetween, CSSValueID::kSpaceAround => ERubyAlign::kSpaceAround, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetRubyAlign(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14120
-CSSPropertyID::kRubyOverhang => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1880
-let converted = match value { CSSValueID::kAuto => ERubyOverhang::kAuto, CSSValueID::kSpaces => ERubyOverhang::kSpaces, CSSValueID::kNone => ERubyOverhang::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetRubyOverhang(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14178
-CSSPropertyID::kRuleOverlap => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1922
-let converted = match value { CSSValueID::kRowOverColumn => ERuleOverlap::kRowOverColumn, CSSValueID::kColumnOverRow => ERuleOverlap::kColumnOverRow, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetRuleOverlap(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14310
-CSSPropertyID::kScrollAxisLock => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1936
-let converted = match value { CSSValueID::kAuto => EScrollAxisLock::kAuto, CSSValueID::kNone => EScrollAxisLock::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetScrollAxisLock(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14374
-CSSPropertyID::kScrollInitialTarget => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1960
-let converted = match value { CSSValueID::kNearest => EScrollInitialTarget::kNearest, CSSValueID::kNone => EScrollInitialTarget::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetScrollInitialTarget(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15139
-CSSPropertyID::kScrollSnapStop => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1984
-let converted = match value { CSSValueID::kAlways => EScrollSnapStop::kAlways, CSSValueID::kNormal => EScrollSnapStop::kNormal, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetScrollSnapStop(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15203
-CSSPropertyID::kScrollTargetGroup => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2008
-let converted = match value { CSSValueID::kAuto => EScrollTargetGroup::kAuto, CSSValueID::kNone => EScrollTargetGroup::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetScrollTargetGroup(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15360
-CSSPropertyID::kScrollbarWidth => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2032
-let converted = match value { CSSValueID::kAuto => EScrollbarWidth::kAuto, CSSValueID::kThin => EScrollbarWidth::kThin, CSSValueID::kNone => EScrollbarWidth::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetScrollbarWidth(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15518
-CSSPropertyID::kShapeRendering => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2060
-let converted = match value { CSSValueID::kAuto => EShapeRendering::kAuto, CSSValueID::kOptimizespeed => EShapeRendering::kOptimizespeed, CSSValueID::kGeometricprecision => EShapeRendering::kGeometricprecision, CSSValueID::kCrispedges => EShapeRendering::kCrispedges, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetShapeRendering(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15587
-CSSPropertyID::kSpeak => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2088
-let converted = match value { CSSValueID::kNone => ESpeak::kNone, CSSValueID::kNormal => ESpeak::kNormal, CSSValueID::kSpellOut => ESpeak::kSpellOut, CSSValueID::kDigits => ESpeak::kDigits, CSSValueID::kLiteralPunctuation => ESpeak::kLiteralPunctuation, CSSValueID::kNoPunctuation => ESpeak::kNoPunctuation, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetSpeak(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16100
-CSSPropertyID::kTableLayout => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2116
-let converted = match value { CSSValueID::kFixed => ETableLayout::kFixed, CSSValueID::kAuto => ETableLayout::kAuto, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetTableLayout(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16155
-CSSPropertyID::kTextAlignLast => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2168
-let converted = match value { CSSValueID::kAuto => ETextAlignLast::kAuto, CSSValueID::kStart => ETextAlignLast::kStart, CSSValueID::kEnd => ETextAlignLast::kEnd, CSSValueID::kLeft => ETextAlignLast::kLeft, CSSValueID::kRight => ETextAlignLast::kRight, CSSValueID::kCenter => ETextAlignLast::kCenter, CSSValueID::kJustify => ETextAlignLast::kJustify, CSSValueID::kMatchParent => ETextAlignLast::kMatchParent, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetTextAlignLast(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16184
-CSSPropertyID::kTextAnchor => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2200
-let converted = match value { CSSValueID::kMiddle => ETextAnchor::kMiddle, CSSValueID::kStart => ETextAnchor::kStart, CSSValueID::kEnd => ETextAnchor::kEnd, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetTextAnchor(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16213
-CSSPropertyID::kTextAutospace => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2224
-let converted = match value { CSSValueID::kNoAutospace => ETextAutospace::kNoAutospace, CSSValueID::kNormal => ETextAutospace::kNormal, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetTextAutospace(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16271
-CSSPropertyID::kTextBoxTrim => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2248
-let converted = match value { CSSValueID::kNone => ETextBoxTrim::kNone, CSSValueID::kTrimBoth => ETextBoxTrim::kTrimBoth, CSSValueID::kTrimEnd => ETextBoxTrim::kTrimEnd, CSSValueID::kTrimStart => ETextBoxTrim::kTrimStart, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetTextBoxTrim(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16300
-CSSPropertyID::kTextCombineUpright => { // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:56
-let converted = match value { CSSValueID::kAll => ETextCombine::kAll, CSSValueID::kNone => ETextCombine::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetTextCombine(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16435
-CSSPropertyID::kTextDecorationSkipInk => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2338
-let converted = match value { CSSValueID::kAll => ETextDecorationSkipInk::kAll, CSSValueID::kAuto => ETextDecorationSkipInk::kAuto, CSSValueID::kNone => ETextDecorationSkipInk::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetTextDecorationSkipInk(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16499
-CSSPropertyID::kTextDecorationStyle => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2396
-let converted = match value { CSSValueID::kWavy => ETextDecorationStyle::kWavy, CSSValueID::kDotted => ETextDecorationStyle::kDotted, CSSValueID::kDashed => ETextDecorationStyle::kDashed, CSSValueID::kSolid => ETextDecorationStyle::kSolid, CSSValueID::kDouble => ETextDecorationStyle::kDouble, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetTextDecorationStyle(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16907
-CSSPropertyID::kTextWrapMode => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2462
-let converted = match value { CSSValueID::kWrap => TextWrapMode::kWrap, CSSValueID::kNowrap => TextWrapMode::kNowrap, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetTextWrapMode(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16936
-CSSPropertyID::kTextWrapStyle => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2486
-let converted = match value { CSSValueID::kPretty => TextWrapStyle::kPretty, CSSValueID::kBalance => TextWrapStyle::kBalance, CSSValueID::kStable => TextWrapStyle::kStable, CSSValueID::kAuto => TextWrapStyle::kAuto, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetTextWrapStyle(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17441
-CSSPropertyID::kTransformBox => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2518
-let converted = match value { CSSValueID::kBorderBox => ETransformBox::kBorderBox, CSSValueID::kContentBox => ETransformBox::kContentBox, CSSValueID::kStrokeBox => ETransformBox::kStrokeBox, CSSValueID::kFillBox => ETransformBox::kFillBox, CSSValueID::kViewBox => ETransformBox::kViewBox, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetTransformBox(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17504
-CSSPropertyID::kTransformStyle => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2550
-let converted = match value { CSSValueID::kFlat => ETransformStyle3D::kFlat, CSSValueID::kPreserve3d => ETransformStyle3D::kPreserve3d, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetTransformStyle3D(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17907
-CSSPropertyID::kUserSelect => { // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:254
-let converted = match value { CSSValueID::kAll => EUserSelect::kAll, CSSValueID::kAuto => EUserSelect::kAuto, CSSValueID::kText => EUserSelect::kText, CSSValueID::kContain => EUserSelect::kContain, CSSValueID::kNone => EUserSelect::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetUserSelect(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17936
-CSSPropertyID::kVectorEffect => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2640
-let converted = match value { CSSValueID::kNonScalingStroke => EVectorEffect::kNonScalingStroke, CSSValueID::kNone => EVectorEffect::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetVectorEffect(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18167
-CSSPropertyID::kViewTransitionScope => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2664
-let converted = match value { CSSValueID::kAll => EViewTransitionScope::kAll, CSSValueID::kNone => EViewTransitionScope::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetViewTransitionScope(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18198
-CSSPropertyID::kVisibility => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2688
-let converted = match value { CSSValueID::kHidden => EVisibility::kHidden, CSSValueID::kVisible => EVisibility::kVisible, CSSValueID::kCollapse => EVisibility::kCollapse, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetVisibility(converted);
-builder.SetVisibilityIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18328
-CSSPropertyID::kWebkitBoxAlign => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2712
-let converted = match value { CSSValueID::kBaseline => EBoxAlignment::kBaseline, CSSValueID::kCenter => EBoxAlignment::kCenter, CSSValueID::kStretch => EBoxAlignment::kStretch, CSSValueID::kStart => EBoxAlignment::kStart, CSSValueID::kEnd => EBoxAlignment::kEnd, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBoxAlign(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18380
-CSSPropertyID::kWebkitBoxDirection => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2740
-let converted = match value { CSSValueID::kReverse => EBoxDirection::kReverse, CSSValueID::kNormal => EBoxDirection::kNormal, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBoxDirection(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18473
-CSSPropertyID::kWebkitBoxOrient => { // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:44
-let converted = match value { CSSValueID::kHorizontal => EBoxOrient::kHorizontal, CSSValueID::kVertical => EBoxOrient::kVertical, CSSValueID::kInlineAxis => EBoxOrient::kHorizontal, CSSValueID::kBlockAxis => EBoxOrient::kVertical, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBoxOrient(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18502
-CSSPropertyID::kWebkitBoxPack => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2778
-let converted = match value { CSSValueID::kStart => EBoxPack::kStart, CSSValueID::kEnd => EBoxPack::kEnd, CSSValueID::kCenter => EBoxPack::kCenter, CSSValueID::kJustify => EBoxPack::kJustify, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetBoxPack(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19052
-CSSPropertyID::kWebkitRtlOrdering => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2806
-let converted = match value { CSSValueID::kLogical => EOrder::kLogical, CSSValueID::kVisual => EOrder::kVisual, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetRtlOrdering(converted);
-builder.SetRtlOrderingIsInherited(false); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19229
-CSSPropertyID::kWebkitTextSecurity => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2820
-let converted = match value { CSSValueID::kNone => ETextSecurity::kNone, CSSValueID::kDisc => ETextSecurity::kDisc, CSSValueID::kCircle => ETextSecurity::kCircle, CSSValueID::kSquare => ETextSecurity::kSquare, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetTextSecurity(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19407
-CSSPropertyID::kWebkitUserDrag => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2844
-let converted = match value { CSSValueID::kAuto => EUserDrag::kAuto, CSSValueID::kElement => EUserDrag::kElement, CSSValueID::kNone => EUserDrag::kNone, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetUserDrag(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19436
-CSSPropertyID::kWebkitUserModify => { // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2872
-let converted = match value { CSSValueID::kReadOnly => EUserModify::kReadOnly, CSSValueID::kReadWrite => EUserModify::kReadWrite, CSSValueID::kReadWritePlaintextOnly => EUserModify::kReadWritePlaintextOnly, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetUserModify(converted); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19465
-CSSPropertyID::kWhiteSpaceCollapse => { // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:421
-let converted = match value { CSSValueID::kCollapse => WhiteSpaceCollapse::kCollapse, CSSValueID::kPreserve => WhiteSpaceCollapse::kPreserve, CSSValueID::kPreserveBreaks => WhiteSpaceCollapse::kPreserveBreaks, CSSValueID::kBreakSpaces => WhiteSpaceCollapse::kBreakSpaces, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetWhiteSpaceCollapse(converted); },
-// cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:3910
-CSSPropertyID::kDisplay => { // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:158
-let converted = match value { CSSValueID::kNone => EDisplay::kNone, CSSValueID::kInline => EDisplay::kInline, CSSValueID::kBlock => EDisplay::kBlock, CSSValueID::kFlow => EDisplay::kBlock, CSSValueID::kFlowRoot => EDisplay::kFlowRoot, CSSValueID::kListItem => EDisplay::kListItem, CSSValueID::kInlineBlock => EDisplay::kInlineBlock, CSSValueID::kTable => EDisplay::kTable, CSSValueID::kInlineTable => EDisplay::kInlineTable, CSSValueID::kTableRowGroup => EDisplay::kTableRowGroup, CSSValueID::kTableHeaderGroup => EDisplay::kTableHeaderGroup, CSSValueID::kTableFooterGroup => EDisplay::kTableFooterGroup, CSSValueID::kTableRow => EDisplay::kTableRow, CSSValueID::kTableColumnGroup => EDisplay::kTableColumnGroup, CSSValueID::kTableColumn => EDisplay::kTableColumn, CSSValueID::kTableCell => EDisplay::kTableCell, CSSValueID::kTableCaption => EDisplay::kTableCaption, CSSValueID::kWebkitBox => EDisplay::kWebkitBox, CSSValueID::kWebkitInlineBox => EDisplay::kWebkitInlineBox, CSSValueID::kFlex => EDisplay::kFlex, CSSValueID::kInlineFlex => EDisplay::kInlineFlex, CSSValueID::kGrid => EDisplay::kGrid, CSSValueID::kInlineGrid => EDisplay::kInlineGrid, CSSValueID::kContents => EDisplay::kContents, CSSValueID::kWebkitFlex => EDisplay::kFlex, CSSValueID::kWebkitInlineFlex => EDisplay::kInlineFlex, CSSValueID::kMath => EDisplay::kMath, CSSValueID::kRuby => EDisplay::kRuby, CSSValueID::kRubyText => EDisplay::kRubyText, CSSValueID::kGridLanes => EDisplay::kGridLanes, CSSValueID::kInlineGridLanes => EDisplay::kInlineGridLanes, _ => return Err(LonghandApplicationError::InvalidValue(property)) };
-builder.SetDisplay(converted);
-builder.SetDisplayLayoutCustomName(&ComputedStyleInitialValues::InitialDisplayLayoutCustomName()); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
+pub fn ApplyInitial(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:83
+        CSSPropertyID::kForcedColorAdjust => {
+            builder.SetForcedColorAdjust(ComputedStyleInitialValues::InitialForcedColorAdjust());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:118
+        CSSPropertyID::kMathDepth => {
+            builder.SetMathDepth(ComputedStyleInitialValues::InitialMathDepth());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:144
+        CSSPropertyID::kPosition => {
+            builder.SetPosition(ComputedStyleInitialValues::InitialPosition());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:242
+        CSSPropertyID::kAppearance => {
+            builder.SetAppearance(ComputedStyleInitialValues::InitialAppearance());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:297
+        CSSPropertyID::kDirection => {
+            builder.SetDirection(ComputedStyleInitialValues::InitialDirection());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1268
+        CSSPropertyID::kInternalVisitedBackgroundColor => {
+            builder.SetInternalVisitedBackgroundColor(
+                &ComputedStyleInitialValues::InitialBackgroundColor(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1714
+        CSSPropertyID::kInternalVisitedColumnRuleColor => {
+            builder.SetInternalVisitedColumnRuleColor(
+                &ComputedStyleInitialValues::InitialInternalVisitedColumnRuleColor(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1752
+        CSSPropertyID::kInternalVisitedFill => {
+            builder.SetInternalVisitedFillPaint(&ComputedStyleInitialValues::InitialFillPaint());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1826
+        CSSPropertyID::kInternalVisitedStroke => {
+            builder
+                .SetInternalVisitedStrokePaint(&ComputedStyleInitialValues::InitialStrokePaint());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2017
+        CSSPropertyID::kAccentColor => {
+            builder.SetAccentColor(&ComputedStyleInitialValues::InitialAccentColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2066
+        CSSPropertyID::kAlignContent => {
+            builder.SetAlignContent(&ComputedStyleInitialValues::InitialAlignContent());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2095
+        CSSPropertyID::kAlignItems => {
+            builder.SetAlignItems(&ComputedStyleInitialValues::InitialAlignItems());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2124
+        CSSPropertyID::kAlignSelf => {
+            builder.SetAlignSelf(&ComputedStyleInitialValues::InitialAlignSelf());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2153
+        CSSPropertyID::kAlignmentBaseline => {
+            builder.SetAlignmentBaseline(ComputedStyleInitialValues::InitialAlignmentBaseline());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2241
+        CSSPropertyID::kAnchorName => {
+            builder.SetAnchorName(
+                &ComputedStyleInitialValues::InitialAnchorName()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2276
+        CSSPropertyID::kAnchorScope => {
+            builder.SetAnchorScope(&ComputedStyleInitialValues::InitialAnchorScope());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2305
+        CSSPropertyID::kAnimationComposition => {
+            if !builder.Animations().Get().is_null() {
+                let data = builder.AccessAnimations();
+                *data.CompositionListMut() = vec![CSSAnimationData::InitialComposition()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2351
+        CSSPropertyID::kAnimationDelay => {
+            if !builder.Animations().Get().is_null() {
+                let data = builder.AccessAnimations();
+                *data.DelayStartListMut() = vec![CSSAnimationData::InitialDelayStart()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2397
+        CSSPropertyID::kAnimationDirection => {
+            if !builder.Animations().Get().is_null() {
+                let data = builder.AccessAnimations();
+                *data.DirectionListMut() = vec![CSSAnimationData::InitialDirection()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2443
+        CSSPropertyID::kAnimationDuration => {
+            if !builder.Animations().Get().is_null() {
+                let data = builder.AccessAnimations();
+                *data.DurationListMut() = vec![CSSAnimationData::InitialDuration()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2489
+        CSSPropertyID::kAnimationFillMode => {
+            if !builder.Animations().Get().is_null() {
+                let data = builder.AccessAnimations();
+                *data.FillModeListMut() = vec![CSSAnimationData::InitialFillMode()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2535
+        CSSPropertyID::kAnimationIterationCount => {
+            if !builder.Animations().Get().is_null() {
+                let data = builder.AccessAnimations();
+                *data.IterationCountListMut() = vec![CSSAnimationData::InitialIterationCount()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2581
+        CSSPropertyID::kAnimationName => {
+            if !builder.Animations().Get().is_null() {
+                let data = builder.AccessAnimations();
+                *data.NameListMut() = vec![CSSAnimationData::InitialName()].into();
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2627
+        CSSPropertyID::kAnimationPlayState => {
+            if !builder.Animations().Get().is_null() {
+                let data = builder.AccessAnimations();
+                *data.PlayStateListMut() = vec![CSSAnimationData::InitialPlayState()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2673
+        CSSPropertyID::kAnimationRangeEnd => {
+            if !builder.Animations().Get().is_null() {
+                let data = builder.AccessAnimations();
+                *data.RangeEndListMut() = vec![CSSAnimationData::InitialRangeEnd()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2724
+        CSSPropertyID::kAnimationRangeStart => {
+            if !builder.Animations().Get().is_null() {
+                let data = builder.AccessAnimations();
+                *data.RangeStartListMut() = vec![CSSAnimationData::InitialRangeStart()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2775
+        CSSPropertyID::kAnimationTimeline => {
+            if !builder.Animations().Get().is_null() {
+                let data = builder.AccessAnimations();
+                *data.TimelineListMut() = vec![CSSAnimationData::InitialTimeline()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2826
+        CSSPropertyID::kAnimationTimingFunction => {
+            if !builder.Animations().Get().is_null() {
+                let data = builder.AccessAnimations();
+                *data.TimingFunctionListMut() = vec![CSSAnimationData::InitialTimingFunction()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2967
+        CSSPropertyID::kAspectRatio => {
+            builder.SetAspectRatio(&ComputedStyleInitialValues::InitialAspectRatio());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3002
+        CSSPropertyID::kBackdropFilter => {
+            builder.SetBackdropFilter(&ComputedStyleInitialValues::InitialBackdropFilter());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3033
+        CSSPropertyID::kBackfaceVisibility => {
+            builder.SetBackfaceVisibility(ComputedStyleInitialValues::InitialBackfaceVisibility());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3255
+        CSSPropertyID::kBackgroundColor => {
+            builder.SetBackgroundColor(&ComputedStyleInitialValues::InitialBackgroundColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3777
+        CSSPropertyID::kBaselineShift => {
+            builder.SetBaselineShift(&ComputedStyleInitialValues::InitialBaselineShift());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3800
+        CSSPropertyID::kBaselineSource => {
+            builder.SetBaselineSource(ComputedStyleInitialValues::InitialBaselineSource());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3835
+        CSSPropertyID::kBlockEllipsis => {
+            builder.SetBlockEllipsis(ComputedStyleInitialValues::InitialBlockEllipsis());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4142
+        CSSPropertyID::kBorderBottomColor => {
+            builder.SetBorderBottomColor(&StyleColor::CurrentColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4188
+        CSSPropertyID::kBorderBottomLeftRadius => {
+            builder.SetBorderBottomLeftRadius(
+                &ComputedStyleInitialValues::InitialBorderBottomLeftRadius(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4237
+        CSSPropertyID::kBorderBottomRightRadius => {
+            builder.SetBorderBottomRightRadius(
+                &ComputedStyleInitialValues::InitialBorderBottomRightRadius(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4280
+        CSSPropertyID::kBorderBottomStyle => {
+            builder.SetBorderBottomStyle(ComputedStyleInitialValues::InitialBorderBottomStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4347
+        CSSPropertyID::kBorderCollapse => {
+            builder.SetBorderCollapse(ComputedStyleInitialValues::InitialBorderCollapse());
+            builder.SetBorderCollapseIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4597
+        CSSPropertyID::kBorderImageSource => {
+            builder.SetBorderImageSource(
+                ComputedStyleInitialValues::InitialBorderImageSource()
+                    .unwrap_or(std::ptr::null_mut()),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4910
+        CSSPropertyID::kBorderLeftColor => {
+            builder.SetBorderLeftColor(&StyleColor::CurrentColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4950
+        CSSPropertyID::kBorderLeftStyle => {
+            builder.SetBorderLeftStyle(ComputedStyleInitialValues::InitialBorderLeftStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5032
+        CSSPropertyID::kBorderRightColor => {
+            builder.SetBorderRightColor(&StyleColor::CurrentColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5072
+        CSSPropertyID::kBorderRightStyle => {
+            builder.SetBorderRightStyle(ComputedStyleInitialValues::InitialBorderRightStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5145
+        CSSPropertyID::kBorderShape => {
+            builder.SetBorderShape(
+                &ComputedStyleInitialValues::InitialBorderShape()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5276
+        CSSPropertyID::kBorderTopColor => {
+            builder.SetBorderTopColor(&StyleColor::CurrentColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5322
+        CSSPropertyID::kBorderTopLeftRadius => {
+            builder
+                .SetBorderTopLeftRadius(&ComputedStyleInitialValues::InitialBorderTopLeftRadius());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5371
+        CSSPropertyID::kBorderTopRightRadius => {
+            builder.SetBorderTopRightRadius(&ComputedStyleInitialValues::InitialBorderTopRightRadius());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5414
+        CSSPropertyID::kBorderTopStyle => {
+            builder.SetBorderTopStyle(ComputedStyleInitialValues::InitialBorderTopStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5490
+        CSSPropertyID::kBottom => {
+            builder.SetBottom(&ComputedStyleInitialValues::InitialBottom());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5527
+        CSSPropertyID::kBoxDecorationBreak => {
+            builder.SetBoxDecorationBreak(ComputedStyleInitialValues::InitialBoxDecorationBreak());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5556
+        CSSPropertyID::kBoxShadow => {
+            builder.SetBoxShadow(
+                ComputedStyleInitialValues::InitialBoxShadow()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5590
+        CSSPropertyID::kBoxSizing => {
+            builder.SetBoxSizing(ComputedStyleInitialValues::InitialBoxSizing());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5619
+        CSSPropertyID::kBreakAfter => {
+            builder.SetBreakAfter(ComputedStyleInitialValues::InitialBreakAfter());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5648
+        CSSPropertyID::kBreakBefore => {
+            builder.SetBreakBefore(ComputedStyleInitialValues::InitialBreakBefore());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5677
+        CSSPropertyID::kBreakInside => {
+            builder.SetBreakInside(ComputedStyleInitialValues::InitialBreakInside());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5706
+        CSSPropertyID::kBufferedRendering => {
+            builder.SetBufferedRendering(ComputedStyleInitialValues::InitialBufferedRendering());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5735
+        CSSPropertyID::kCaptionSide => {
+            builder.SetCaptionSide(ComputedStyleInitialValues::InitialCaptionSide());
+            builder.SetCaptionSideIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5773
+        CSSPropertyID::kCaretAnimation => {
+            builder.SetCaretAnimation(ComputedStyleInitialValues::InitialCaretAnimation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5802
+        CSSPropertyID::kCaretColor => {
+            builder.SetCaretColor(&ComputedStyleInitialValues::InitialCaretColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5837
+        CSSPropertyID::kCaretShape => {
+            builder.SetCaretShape(ComputedStyleInitialValues::InitialCaretShape());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5866
+        CSSPropertyID::kClear => {
+            builder.SetClear(ComputedStyleInitialValues::InitialClear());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5936
+        CSSPropertyID::kClipPath => {
+            builder.SetClipPath(ComputedStyleInitialValues::InitialClipPath());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5970
+        CSSPropertyID::kClipRule => {
+            builder.SetClipRule(ComputedStyleInitialValues::InitialClipRule());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5999
+        CSSPropertyID::kColorInterpolation => {
+            builder.SetColorInterpolation(ComputedStyleInitialValues::InitialColorInterpolation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6028
+        CSSPropertyID::kColorInterpolationFilters => {
+            builder.SetColorInterpolationFilters(
+                ComputedStyleInitialValues::InitialColorInterpolationFilters(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6057
+        CSSPropertyID::kColorRendering => {
+            builder.SetColorRendering(ComputedStyleInitialValues::InitialColorRendering());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6128
+        CSSPropertyID::kColumnFill => {
+            builder.SetColumnFill(ComputedStyleInitialValues::InitialColumnFill());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6163
+        CSSPropertyID::kColumnGap => {
+            builder.SetColumnGap(&ComputedStyleInitialValues::InitialColumnGap());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6244
+        CSSPropertyID::kColumnRuleBreak => {
+            builder.SetColumnRuleBreak(ComputedStyleInitialValues::InitialColumnRuleBreak());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6273
+        CSSPropertyID::kColumnRuleColor => {
+            builder.SetColumnRuleColor(&ComputedStyleInitialValues::InitialColumnRuleColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6302
+        CSSPropertyID::kColumnRuleInsetCapEnd => {
+            builder.SetColumnRuleInsetCapEnd(
+                &ComputedStyleInitialValues::InitialColumnRuleInsetCapEnd(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6336
+        CSSPropertyID::kColumnRuleInsetCapStart => {
+            builder.SetColumnRuleInsetCapStart(
+                &ComputedStyleInitialValues::InitialColumnRuleInsetCapStart(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6370
+        CSSPropertyID::kColumnRuleInsetJunctionEnd => {
+            builder.SetColumnRuleInsetJunctionEnd(
+                &ComputedStyleInitialValues::InitialColumnRuleInsetJunctionEnd(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6404
+        CSSPropertyID::kColumnRuleInsetJunctionStart => {
+            builder.SetColumnRuleInsetJunctionStart(
+                &ComputedStyleInitialValues::InitialColumnRuleInsetJunctionStart(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6438
+        CSSPropertyID::kColumnRuleStyle => {
+            builder.SetColumnRuleStyle(&ComputedStyleInitialValues::InitialColumnRuleStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6467
+        CSSPropertyID::kColumnRuleVisibilityItems => {
+            builder.SetColumnRuleVisibilityItems(
+                ComputedStyleInitialValues::InitialColumnRuleVisibilityItems(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6519
+        CSSPropertyID::kColumnSpan => {
+            builder.SetColumnSpan(ComputedStyleInitialValues::InitialColumnSpan());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6595
+        CSSPropertyID::kColumnWrap => {
+            builder.SetColumnWrap(ComputedStyleInitialValues::InitialColumnWrap());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6624
+        CSSPropertyID::kContain => {
+            builder.SetContain(ComputedStyleInitialValues::InitialContain());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6700
+        CSSPropertyID::kContainIntrinsicHeight => {
+            builder.SetContainIntrinsicHeight(
+                &ComputedStyleInitialValues::InitialContainIntrinsicHeight(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6781
+        CSSPropertyID::kContainIntrinsicWidth => {
+            builder.SetContainIntrinsicWidth(
+                &ComputedStyleInitialValues::InitialContainIntrinsicWidth(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6821
+        CSSPropertyID::kContainerName => {
+            builder.SetContainerName(
+                &ComputedStyleInitialValues::InitialContainerName()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6850
+        CSSPropertyID::kContainerType => {
+            builder.SetContainerType(ComputedStyleInitialValues::InitialContainerType());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6899
+        CSSPropertyID::kContentVisibility => {
+            builder.SetContentVisibility(ComputedStyleInitialValues::InitialContentVisibility());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6934
+        CSSPropertyID::kContinue => {
+            builder.SetContinue(ComputedStyleInitialValues::InitialContinue());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6978
+        CSSPropertyID::kCornerBottomLeftShape => {
+            builder.SetCornerBottomLeftShape(
+                &ComputedStyleInitialValues::InitialCornerBottomLeftShape(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7022
+        CSSPropertyID::kCornerBottomRightShape => {
+            builder.SetCornerBottomRightShape(
+                &ComputedStyleInitialValues::InitialCornerBottomRightShape(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7230
+        CSSPropertyID::kCornerTopLeftShape => {
+            builder.SetCornerTopLeftShape(&ComputedStyleInitialValues::InitialCornerTopLeftShape());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7274
+        CSSPropertyID::kCornerTopRightShape => {
+            builder
+                .SetCornerTopRightShape(&ComputedStyleInitialValues::InitialCornerTopRightShape());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7553
+        CSSPropertyID::kCx => {
+            builder.SetCx(&ComputedStyleInitialValues::InitialCx());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7587
+        CSSPropertyID::kCy => {
+            builder.SetCy(&ComputedStyleInitialValues::InitialCy());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7621
+        CSSPropertyID::kD => {
+            builder.SetD(
+                ComputedStyleInitialValues::InitialD()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7690
+        CSSPropertyID::kDominantBaseline => {
+            builder.SetDominantBaseline(ComputedStyleInitialValues::InitialDominantBaseline());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7725
+        CSSPropertyID::kDynamicRangeLimit => {
+            builder.SetDynamicRangeLimit(&ComputedStyleInitialValues::InitialDynamicRangeLimit());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7754
+        CSSPropertyID::kEmptyCells => {
+            builder.SetEmptyCells(ComputedStyleInitialValues::InitialEmptyCells());
+            builder.SetEmptyCellsIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7806
+        CSSPropertyID::kFieldSizing => {
+            builder.SetFieldSizing(ComputedStyleInitialValues::InitialFieldSizing());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7841
+        CSSPropertyID::kFill => {
+            builder.SetFillPaint(&ComputedStyleInitialValues::InitialFillPaint());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7875
+        CSSPropertyID::kFillOpacity => {
+            builder.SetFillOpacity(ComputedStyleInitialValues::InitialFillOpacity());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7904
+        CSSPropertyID::kFillRule => {
+            builder.SetFillRule(ComputedStyleInitialValues::InitialFillRule());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7939
+        CSSPropertyID::kFilter => {
+            builder.SetFilter(&ComputedStyleInitialValues::InitialFilter());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7970
+        CSSPropertyID::kFlexBasis => {
+            builder.SetFlexBasis(&ComputedStyleInitialValues::InitialFlexBasis());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8004
+        CSSPropertyID::kFlexDirection => {
+            builder.SetFlexDirection(ComputedStyleInitialValues::InitialFlexDirection());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8033
+        CSSPropertyID::kFlexGrow => {
+            builder.SetFlexGrow(ComputedStyleInitialValues::InitialFlexGrow());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8068
+        CSSPropertyID::kFlexLineCount => {
+            builder.SetFlexLineCount(ComputedStyleInitialValues::InitialFlexLineCount());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8097
+        CSSPropertyID::kFlexShrink => {
+            builder.SetFlexShrink(ComputedStyleInitialValues::InitialFlexShrink());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8126
+        CSSPropertyID::kFlexWrap => {
+            builder.SetFlexWrap(&ComputedStyleInitialValues::InitialFlexWrap());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8155
+        CSSPropertyID::kFloat => {
+            builder.SetFloating(ComputedStyleInitialValues::InitialFloating());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8190
+        CSSPropertyID::kFloodColor => {
+            builder.SetFloodColor(&ComputedStyleInitialValues::InitialFloodColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8227
+        CSSPropertyID::kFloodOpacity => {
+            builder.SetFloodOpacity(ComputedStyleInitialValues::InitialFloodOpacity());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8268
+        CSSPropertyID::kFlowTolerance => {
+            builder.SetFlowTolerance(&ComputedStyleInitialValues::InitialFlowTolerance());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8328
+        CSSPropertyID::kFrameSizing => {
+            builder.SetFrameSizing(ComputedStyleInitialValues::InitialFrameSizing());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8357
+        CSSPropertyID::kGridAutoColumns => {
+            builder.SetGridAutoColumns(&ComputedStyleInitialValues::InitialGridAutoColumns());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8391
+        CSSPropertyID::kGridAutoFlow => {
+            builder.SetGridAutoFlow(ComputedStyleInitialValues::InitialGridAutoFlow());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8420
+        CSSPropertyID::kGridAutoRows => {
+            builder.SetGridAutoRows(&ComputedStyleInitialValues::InitialGridAutoRows());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8460
+        CSSPropertyID::kGridColumnEnd => {
+            builder.SetGridColumnEnd(&ComputedStyleInitialValues::InitialGridColumnEnd());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8495
+        CSSPropertyID::kGridColumnStart => {
+            builder.SetGridColumnStart(&ComputedStyleInitialValues::InitialGridColumnStart());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8530
+        CSSPropertyID::kGridLanesDirection => {
+            builder.SetGridLanesDirection(&ComputedStyleInitialValues::InitialGridLanesDirection());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8565
+        CSSPropertyID::kGridLanesPack => {
+            builder.SetGridLanesPack(ComputedStyleInitialValues::InitialGridLanesPack());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8600
+        CSSPropertyID::kGridRowEnd => {
+            builder.SetGridRowEnd(&ComputedStyleInitialValues::InitialGridRowEnd());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8635
+        CSSPropertyID::kGridRowStart => {
+            builder.SetGridRowStart(&ComputedStyleInitialValues::InitialGridRowStart());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8664
+        CSSPropertyID::kGridTemplateAreas => {
+            builder.SetGridTemplateAreas(
+                &ComputedStyleInitialValues::InitialGridTemplateAreas()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8699
+        CSSPropertyID::kGridTemplateColumns => {
+            builder.SetGridTemplateColumns(
+                &ComputedStyleInitialValues::InitialGridTemplateColumns()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8731
+        CSSPropertyID::kGridTemplateRows => {
+            builder.SetGridTemplateRows(
+                &ComputedStyleInitialValues::InitialGridTemplateRows()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8763
+        CSSPropertyID::kHangingPunctuation => {
+            builder.SetHangingPunctuation(ComputedStyleInitialValues::InitialHangingPunctuation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8827
+        CSSPropertyID::kHeight => {
+            builder.SetHeight(&ComputedStyleInitialValues::InitialHeight());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8890
+        CSSPropertyID::kHyphenateCharacter => {
+            builder.SetHyphenationString(&ComputedStyleInitialValues::InitialHyphenationString());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8925
+        CSSPropertyID::kHyphenateLimitChars => {
+            builder
+                .SetHyphenateLimitChars(&ComputedStyleInitialValues::InitialHyphenateLimitChars());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8954
+        CSSPropertyID::kHyphens => {
+            builder.SetHyphens(ComputedStyleInitialValues::InitialHyphens());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8989
+        CSSPropertyID::kImageAnimation => {
+            builder.SetImageAnimation(ComputedStyleInitialValues::InitialImageAnimation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9018
+        CSSPropertyID::kImageOrientation => {
+            builder.SetImageOrientation(ComputedStyleInitialValues::InitialImageOrientation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9047
+        CSSPropertyID::kImageRendering => {
+            builder.SetImageRendering(ComputedStyleInitialValues::InitialImageRendering());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9102
+        CSSPropertyID::kInitialLetter => {
+            builder.SetInitialLetter(&ComputedStyleInitialValues::InitialInitialLetter());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9332
+        CSSPropertyID::kInteractivity => {
+            builder.SetInteractivity(ComputedStyleInitialValues::InitialInteractivity());
+            builder.SetInteractivityIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9364
+        CSSPropertyID::kInterestDelayEnd => {
+            builder.SetInterestDelayEnd(&ComputedStyleInitialValues::InitialInterestDelayEnd());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9393
+        CSSPropertyID::kInterestDelayStart => {
+            builder.SetInterestDelayStart(&ComputedStyleInitialValues::InitialInterestDelayStart());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9425
+        CSSPropertyID::kInternalAlignContentBlock => {
+            builder.SetAlignContentBlockCenter(
+                ComputedStyleInitialValues::InitialAlignContentBlockCenter(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9457
+        CSSPropertyID::kInternalEmptyLineHeight => {
+            builder.SetHasLineIfEmpty(ComputedStyleInitialValues::InitialHasLineIfEmpty());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9527
+        CSSPropertyID::kInternalForcedBackgroundColor => {
+            builder.SetInternalForcedBackgroundColor(
+                &ComputedStyleInitialValues::InitialInternalForcedBackgroundColor(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9673
+        CSSPropertyID::kInternalOverscrollContainer => {
+            builder.SetInternalOverscrollContainer(
+                ComputedStyleInitialValues::InitialInternalOverscrollContainer(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9708
+        CSSPropertyID::kInternalOverscrollPosition => {
+            builder.SetInternalOverscrollPosition(
+                ComputedStyleInitialValues::InitialInternalOverscrollPosition(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9743
+        CSSPropertyID::kInternalUnbounded => {
+            builder.SetInternalUnbounded(ComputedStyleInitialValues::InitialInternalUnbounded());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9772
+        CSSPropertyID::kInterpolateSize => {
+            builder.SetInterpolateSize(ComputedStyleInitialValues::InitialInterpolateSize());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9801
+        CSSPropertyID::kIsolation => {
+            builder.SetIsolation(ComputedStyleInitialValues::InitialIsolation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9830
+        CSSPropertyID::kJustifyContent => {
+            builder.SetJustifyContent(&ComputedStyleInitialValues::InitialJustifyContent());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9859
+        CSSPropertyID::kJustifyItems => {
+            builder.SetJustifyItems(&ComputedStyleInitialValues::InitialJustifyItems());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9888
+        CSSPropertyID::kJustifySelf => {
+            builder.SetJustifySelf(&ComputedStyleInitialValues::InitialJustifySelf());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9926
+        CSSPropertyID::kLeft => {
+            builder.SetLeft(&ComputedStyleInitialValues::InitialLeft());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9969
+        CSSPropertyID::kLetterSpacing => {
+            builder.SetLetterSpacing(&ComputedStyleInitialValues::InitialLetterSpacing());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10009
+        CSSPropertyID::kLightingColor => {
+            builder.SetLightingColor(&ComputedStyleInitialValues::InitialLightingColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10040
+        CSSPropertyID::kLineBreak => {
+            builder.SetLineBreak(ComputedStyleInitialValues::InitialLineBreak());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10125
+        CSSPropertyID::kLineHeight => {
+            builder.SetLineHeight(&ComputedStyleInitialValues::InitialLineHeight());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10165
+        CSSPropertyID::kListStyleImage => {
+            builder.SetListStyleImage(
+                &ComputedStyleInitialValues::InitialListStyleImage()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10196
+        CSSPropertyID::kListStylePosition => {
+            builder.SetListStylePosition(ComputedStyleInitialValues::InitialListStylePosition());
+            builder.SetListStylePositionIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10228
+        CSSPropertyID::kListStyleType => {
+            builder.SetListStyleType(
+                &ComputedStyleInitialValues::InitialListStyleType()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10333
+        CSSPropertyID::kMarginBottom => {
+            builder.SetMarginBottom(&ComputedStyleInitialValues::InitialMarginBottom());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10449
+        CSSPropertyID::kMarginLeft => {
+            builder.SetMarginLeft(&ComputedStyleInitialValues::InitialMarginLeft());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10495
+        CSSPropertyID::kMarginRight => {
+            builder.SetMarginRight(&ComputedStyleInitialValues::InitialMarginRight());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10541
+        CSSPropertyID::kMarginTop => {
+            builder.SetMarginTop(&ComputedStyleInitialValues::InitialMarginTop());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10584
+        CSSPropertyID::kMarginTrim => {
+            builder.SetMarginTrim(ComputedStyleInitialValues::InitialMarginTrim());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10613
+        CSSPropertyID::kMarkerEnd => {
+            builder.SetMarkerEndResource(
+                ComputedStyleInitialValues::InitialMarkerEndResource()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10639
+        CSSPropertyID::kMarkerMid => {
+            builder.SetMarkerMidResource(
+                ComputedStyleInitialValues::InitialMarkerMidResource()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10665
+        CSSPropertyID::kMarkerStart => {
+            builder.SetMarkerStartResource(
+                ComputedStyleInitialValues::InitialMarkerStartResource()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11122
+        CSSPropertyID::kMaskType => {
+            builder.SetMaskType(ComputedStyleInitialValues::InitialMaskType());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11151
+        CSSPropertyID::kMathShift => {
+            builder.SetMathShift(ComputedStyleInitialValues::InitialMathShift());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11180
+        CSSPropertyID::kMathStyle => {
+            builder.SetMathStyle(ComputedStyleInitialValues::InitialMathStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11285
+        CSSPropertyID::kMaxHeight => {
+            builder.SetMaxHeight(&ComputedStyleInitialValues::InitialMaxHeight());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11369
+        CSSPropertyID::kMaxLines => {
+            builder.SetMaxLines(&ComputedStyleInitialValues::InitialMaxLines());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11407
+        CSSPropertyID::kMaxWidth => {
+            builder.SetMaxWidth(&ComputedStyleInitialValues::InitialMaxWidth());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11488
+        CSSPropertyID::kMinHeight => {
+            builder.SetMinHeight(&ComputedStyleInitialValues::InitialMinHeight());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11569
+        CSSPropertyID::kMinWidth => {
+            builder.SetMinWidth(&ComputedStyleInitialValues::InitialMinWidth());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11606
+        CSSPropertyID::kMixBlendMode => {
+            builder.SetBlendMode(ComputedStyleInitialValues::InitialBlendMode());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11675
+        CSSPropertyID::kObjectFit => {
+            builder.SetObjectFit(ComputedStyleInitialValues::InitialObjectFit());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11704
+        CSSPropertyID::kObjectPosition => {
+            builder.SetObjectPosition(&ComputedStyleInitialValues::InitialObjectPosition());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11738
+        CSSPropertyID::kObjectViewBox => {
+            builder.SetObjectViewBox(
+                ComputedStyleInitialValues::InitialObjectViewBox().map(Member::from_ptr),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11772
+        CSSPropertyID::kOffsetAnchor => {
+            builder.SetOffsetAnchor(&ComputedStyleInitialValues::InitialOffsetAnchor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11806
+        CSSPropertyID::kOffsetDistance => {
+            builder.SetOffsetDistance(&ComputedStyleInitialValues::InitialOffsetDistance());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11846
+        CSSPropertyID::kOffsetPath => {
+            builder.SetOffsetPath(
+                ComputedStyleInitialValues::InitialOffsetPath()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11880
+        CSSPropertyID::kOffsetPosition => {
+            builder.SetOffsetPosition(&ComputedStyleInitialValues::InitialOffsetPosition());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11920
+        CSSPropertyID::kOffsetRotate => {
+            builder.SetOffsetRotate(&ComputedStyleInitialValues::InitialOffsetRotate());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11955
+        CSSPropertyID::kOpacity => {
+            builder.SetOpacity(ComputedStyleInitialValues::InitialOpacity());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11990
+        CSSPropertyID::kOrder => {
+            builder.SetOrder(ComputedStyleInitialValues::InitialOrder());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12025
+        CSSPropertyID::kOriginTrialTestProperty => {
+            builder.SetOriginTrialTestProperty(
+                ComputedStyleInitialValues::InitialOriginTrialTestProperty(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12060
+        CSSPropertyID::kOrphans => {
+            builder.SetOrphans(ComputedStyleInitialValues::InitialOrphans());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12120
+        CSSPropertyID::kOutlineOffset => {
+            builder.SetOutlineOffset(&ComputedStyleInitialValues::InitialOutlineOffset());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12197
+        CSSPropertyID::kOverflowAnchor => {
+            builder.SetOverflowAnchor(ComputedStyleInitialValues::InitialOverflowAnchor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12261
+        CSSPropertyID::kOverflowClipMargin => {
+            builder.SetOverflowClipMargin(&ComputedStyleInitialValues::InitialOverflowClipMargin());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12330
+        CSSPropertyID::kOverflowWrap => {
+            builder.SetOverflowWrap(ComputedStyleInitialValues::InitialOverflowWrap());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12423
+        CSSPropertyID::kOverlay => {
+            builder.SetOverlay(ComputedStyleInitialValues::InitialOverlay());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12551
+        CSSPropertyID::kOverscrollBehaviorX => {
+            builder
+                .SetOverscrollBehaviorX(ComputedStyleInitialValues::InitialOverscrollBehaviorX());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12589
+        CSSPropertyID::kOverscrollBehaviorY => {
+            builder
+                .SetOverscrollBehaviorY(ComputedStyleInitialValues::InitialOverscrollBehaviorY());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12624
+        CSSPropertyID::kOverscrollContainerType => {
+            builder.SetOverscrollContainerType(
+                ComputedStyleInitialValues::InitialOverscrollContainerType(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12752
+        CSSPropertyID::kPaddingBottom => {
+            builder.SetPaddingBottom(&ComputedStyleInitialValues::InitialPaddingBottom());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12865
+        CSSPropertyID::kPaddingLeft => {
+            builder.SetPaddingLeft(&ComputedStyleInitialValues::InitialPaddingLeft());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12908
+        CSSPropertyID::kPaddingRight => {
+            builder.SetPaddingRight(&ComputedStyleInitialValues::InitialPaddingRight());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12951
+        CSSPropertyID::kPaddingTop => {
+            builder.SetPaddingTop(&ComputedStyleInitialValues::InitialPaddingTop());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12985
+        CSSPropertyID::kPage => {
+            builder.SetPage(&ComputedStyleInitialValues::InitialPage());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13020
+        CSSPropertyID::kPageMarginSafety => {
+            builder.SetPageMarginSafety(ComputedStyleInitialValues::InitialPageMarginSafety());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13049
+        CSSPropertyID::kPageOrientation => {
+            builder.SetPageOrientation(ComputedStyleInitialValues::InitialPageOrientation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13078
+        CSSPropertyID::kPaintOrder => {
+            builder.SetPaintOrder(ComputedStyleInitialValues::InitialPaintOrder());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13113
+        CSSPropertyID::kPathLength => {
+            builder.SetPathLength(&ComputedStyleInitialValues::InitialPathLength());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13199
+        CSSPropertyID::kPerspective => {
+            builder.SetPerspective(ComputedStyleInitialValues::InitialPerspective());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13233
+        CSSPropertyID::kPerspectiveOrigin => {
+            builder.SetPerspectiveOrigin(&ComputedStyleInitialValues::InitialPerspectiveOrigin());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13267
+        CSSPropertyID::kPointerEvents => {
+            builder.SetPointerEvents(ComputedStyleInitialValues::InitialPointerEvents());
+            builder.SetPointerEventsIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13331
+        CSSPropertyID::kPositionTryFallbacks => {
+            builder.SetPositionTryFallbacks(
+                &ComputedStyleInitialValues::InitialPositionTryFallbacks()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13357
+        CSSPropertyID::kPositionTryOrder => {
+            builder.SetPositionTryOrder(ComputedStyleInitialValues::InitialPositionTryOrder());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13386
+        CSSPropertyID::kPositionVisibility => {
+            builder.SetPositionVisibility(ComputedStyleInitialValues::InitialPositionVisibility());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13435
+        CSSPropertyID::kPrintColorAdjust => {
+            builder.SetPrintColorAdjust(ComputedStyleInitialValues::InitialPrintColorAdjust());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13490
+        CSSPropertyID::kQuotes => {
+            builder.SetQuotes(Default::default());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13519
+        CSSPropertyID::kR => {
+            builder.SetR(&ComputedStyleInitialValues::InitialR());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13573
+        CSSPropertyID::kReadingFlow => {
+            builder.SetReadingFlow(ComputedStyleInitialValues::InitialReadingFlow());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13608
+        CSSPropertyID::kReadingOrder => {
+            builder.SetReadingOrder(ComputedStyleInitialValues::InitialReadingOrder());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13637
+        CSSPropertyID::kResize => {
+            builder.SetResize(ComputedStyleInitialValues::InitialResize());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13698
+        CSSPropertyID::kRight => {
+            builder.SetRight(&ComputedStyleInitialValues::InitialRight());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13735
+        CSSPropertyID::kRotate => {
+            builder.SetRotate(
+                ComputedStyleInitialValues::InitialRotate()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13770
+        CSSPropertyID::kRowGap => {
+            builder.SetRowGap(&ComputedStyleInitialValues::InitialRowGap());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13804
+        CSSPropertyID::kRowRuleBreak => {
+            builder.SetRowRuleBreak(ComputedStyleInitialValues::InitialRowRuleBreak());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13833
+        CSSPropertyID::kRowRuleColor => {
+            builder.SetRowRuleColor(&ComputedStyleInitialValues::InitialRowRuleColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13862
+        CSSPropertyID::kRowRuleInsetCapEnd => {
+            builder.SetRowRuleInsetCapEnd(&ComputedStyleInitialValues::InitialRowRuleInsetCapEnd());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13896
+        CSSPropertyID::kRowRuleInsetCapStart => {
+            builder.SetRowRuleInsetCapStart(&ComputedStyleInitialValues::InitialRowRuleInsetCapStart());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13930
+        CSSPropertyID::kRowRuleInsetJunctionEnd => {
+            builder.SetRowRuleInsetJunctionEnd(
+                &ComputedStyleInitialValues::InitialRowRuleInsetJunctionEnd(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13964
+        CSSPropertyID::kRowRuleInsetJunctionStart => {
+            builder.SetRowRuleInsetJunctionStart(
+                &ComputedStyleInitialValues::InitialRowRuleInsetJunctionStart(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13998
+        CSSPropertyID::kRowRuleStyle => {
+            builder.SetRowRuleStyle(&ComputedStyleInitialValues::InitialRowRuleStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14027
+        CSSPropertyID::kRowRuleVisibilityItems => {
+            builder.SetRowRuleVisibilityItems(
+                ComputedStyleInitialValues::InitialRowRuleVisibilityItems(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14079
+        CSSPropertyID::kRubyAlign => {
+            builder.SetRubyAlign(ComputedStyleInitialValues::InitialRubyAlign());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14114
+        CSSPropertyID::kRubyOverhang => {
+            builder.SetRubyOverhang(ComputedStyleInitialValues::InitialRubyOverhang());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14143
+        CSSPropertyID::kRubyPosition => {
+            builder.SetRubyPosition(ComputedStyleInitialValues::InitialRubyPosition());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14172
+        CSSPropertyID::kRuleOverlap => {
+            builder.SetRuleOverlap(ComputedStyleInitialValues::InitialRuleOverlap());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14201
+        CSSPropertyID::kRx => {
+            builder.SetRx(&ComputedStyleInitialValues::InitialRx());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14235
+        CSSPropertyID::kRy => {
+            builder.SetRy(&ComputedStyleInitialValues::InitialRy());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14269
+        CSSPropertyID::kScale => {
+            builder.SetScale(
+                ComputedStyleInitialValues::InitialScale()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14304
+        CSSPropertyID::kScrollAxisLock => {
+            builder.SetScrollAxisLock(ComputedStyleInitialValues::InitialScrollAxisLock());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14333
+        CSSPropertyID::kScrollBehavior => {
+            builder.SetScrollBehavior(ComputedStyleInitialValues::InitialScrollBehavior());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14368
+        CSSPropertyID::kScrollInitialTarget => {
+            builder
+                .SetScrollInitialTarget(ComputedStyleInitialValues::InitialScrollInitialTarget());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14476
+        CSSPropertyID::kScrollMarginBottom => {
+            builder.SetScrollMarginBottom(ComputedStyleInitialValues::InitialScrollMarginBottom());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14589
+        CSSPropertyID::kScrollMarginLeft => {
+            builder.SetScrollMarginLeft(ComputedStyleInitialValues::InitialScrollMarginLeft());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14632
+        CSSPropertyID::kScrollMarginRight => {
+            builder.SetScrollMarginRight(ComputedStyleInitialValues::InitialScrollMarginRight());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14675
+        CSSPropertyID::kScrollMarginTop => {
+            builder.SetScrollMarginTop(ComputedStyleInitialValues::InitialScrollMarginTop());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14715
+        CSSPropertyID::kScrollMarkerGroup => {
+            builder.SetScrollMarkerGroup(
+                ComputedStyleInitialValues::InitialScrollMarkerGroup()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14841
+        CSSPropertyID::kScrollPaddingBottom => {
+            builder
+                .SetScrollPaddingBottom(&ComputedStyleInitialValues::InitialScrollPaddingBottom());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14972
+        CSSPropertyID::kScrollPaddingLeft => {
+            builder.SetScrollPaddingLeft(&ComputedStyleInitialValues::InitialScrollPaddingLeft());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15021
+        CSSPropertyID::kScrollPaddingRight => {
+            builder.SetScrollPaddingRight(&ComputedStyleInitialValues::InitialScrollPaddingRight());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15070
+        CSSPropertyID::kScrollPaddingTop => {
+            builder.SetScrollPaddingTop(&ComputedStyleInitialValues::InitialScrollPaddingTop());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15104
+        CSSPropertyID::kScrollSnapAlign => {
+            builder.SetScrollSnapAlign(&ComputedStyleInitialValues::InitialScrollSnapAlign());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15133
+        CSSPropertyID::kScrollSnapStop => {
+            builder.SetScrollSnapStop(ComputedStyleInitialValues::InitialScrollSnapStop());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15162
+        CSSPropertyID::kScrollSnapType => {
+            builder.SetScrollSnapType(&ComputedStyleInitialValues::InitialScrollSnapType());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15197
+        CSSPropertyID::kScrollTargetGroup => {
+            builder.SetScrollTargetGroup(ComputedStyleInitialValues::InitialScrollTargetGroup());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15226
+        CSSPropertyID::kScrollTimelineAxis => {
+            builder.SetScrollTimelineAxis(&ComputedStyleInitialValues::InitialScrollTimelineAxis());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15255
+        CSSPropertyID::kScrollTimelineName => {
+            builder.SetScrollTimelineName(&ComputedStyleInitialValues::InitialScrollTimelineName());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15290
+        CSSPropertyID::kScrollbarColor => {
+            builder.SetScrollbarColor(
+                ComputedStyleInitialValues::InitialScrollbarColor()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15319
+        CSSPropertyID::kScrollbarGutter => {
+            builder.SetScrollbarGutter(ComputedStyleInitialValues::InitialScrollbarGutter());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15354
+        CSSPropertyID::kScrollbarWidth => {
+            builder.SetScrollbarWidth(ComputedStyleInitialValues::InitialScrollbarWidth());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15415
+        CSSPropertyID::kShapeImageThreshold => {
+            builder
+                .SetShapeImageThreshold(ComputedStyleInitialValues::InitialShapeImageThreshold());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15444
+        CSSPropertyID::kShapeMargin => {
+            builder.SetShapeMargin(&ComputedStyleInitialValues::InitialShapeMargin());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15478
+        CSSPropertyID::kShapeOutside => {
+            builder.SetShapeOutside(
+                &ComputedStyleInitialValues::InitialShapeOutside()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15512
+        CSSPropertyID::kShapeRendering => {
+            builder.SetShapeRendering(ComputedStyleInitialValues::InitialShapeRendering());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15581
+        CSSPropertyID::kSpeak => {
+            builder.SetSpeak(ComputedStyleInitialValues::InitialSpeak());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15656
+        CSSPropertyID::kStopColor => {
+            builder.SetStopColor(&ComputedStyleInitialValues::InitialStopColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15693
+        CSSPropertyID::kStopOpacity => {
+            builder.SetStopOpacity(ComputedStyleInitialValues::InitialStopOpacity());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15728
+        CSSPropertyID::kStroke => {
+            builder.SetStrokePaint(&ComputedStyleInitialValues::InitialStrokePaint());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15756
+        CSSPropertyID::kStrokeDasharray => {
+            builder.SetStrokeDashArray(
+                ComputedStyleInitialValues::InitialStrokeDashArray()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15790
+        CSSPropertyID::kStrokeDashoffset => {
+            builder.SetStrokeDashOffset(&ComputedStyleInitialValues::InitialStrokeDashOffset());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15824
+        CSSPropertyID::kStrokeLinecap => {
+            builder.SetCapStyle(ComputedStyleInitialValues::InitialCapStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15853
+        CSSPropertyID::kStrokeLinejoin => {
+            builder.SetJoinStyle(ComputedStyleInitialValues::InitialJoinStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15882
+        CSSPropertyID::kStrokeMiterlimit => {
+            builder.SetStrokeMiterLimit(ComputedStyleInitialValues::InitialStrokeMiterLimit());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15917
+        CSSPropertyID::kStrokeOpacity => {
+            builder.SetStrokeOpacity(ComputedStyleInitialValues::InitialStrokeOpacity());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15946
+        CSSPropertyID::kStrokeWidth => {
+            builder.SetStrokeWidth(&ComputedStyleInitialValues::InitialStrokeWidth());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16060
+        CSSPropertyID::kTabSize => {
+            builder.SetTabSize(&ComputedStyleInitialValues::InitialTabSize());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16094
+        CSSPropertyID::kTableLayout => {
+            builder.SetTableLayout(ComputedStyleInitialValues::InitialTableLayout());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16123
+        CSSPropertyID::kTextAlign => {
+            builder.SetTextAlign(ComputedStyleInitialValues::InitialTextAlign());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16149
+        CSSPropertyID::kTextAlignLast => {
+            builder.SetTextAlignLast(ComputedStyleInitialValues::InitialTextAlignLast());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16178
+        CSSPropertyID::kTextAnchor => {
+            builder.SetTextAnchor(ComputedStyleInitialValues::InitialTextAnchor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16207
+        CSSPropertyID::kTextAutospace => {
+            builder.SetTextAutospace(ComputedStyleInitialValues::InitialTextAutospace());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16236
+        CSSPropertyID::kTextBoxEdge => {
+            builder.SetTextBoxEdge(ComputedStyleInitialValues::InitialTextBoxEdge());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16265
+        CSSPropertyID::kTextBoxTrim => {
+            builder.SetTextBoxTrim(ComputedStyleInitialValues::InitialTextBoxTrim());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16294
+        CSSPropertyID::kTextCombineUpright => {
+            builder.SetTextCombine(ComputedStyleInitialValues::InitialTextCombine());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16366
+        CSSPropertyID::kTextDecorationInset => {
+            builder
+                .SetTextDecorationInset(&ComputedStyleInitialValues::InitialTextDecorationInset());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16400
+        CSSPropertyID::kTextDecorationLine => {
+            builder.SetTextDecorationLine(ComputedStyleInitialValues::InitialTextDecorationLine());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16429
+        CSSPropertyID::kTextDecorationSkipInk => {
+            builder.SetTextDecorationSkipInk(
+                ComputedStyleInitialValues::InitialTextDecorationSkipInk(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16464
+        CSSPropertyID::kTextDecorationSkipSpaces => {
+            builder.SetTextDecorationSkipSpaces(
+                ComputedStyleInitialValues::InitialTextDecorationSkipSpaces(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16493
+        CSSPropertyID::kTextDecorationStyle => {
+            builder
+                .SetTextDecorationStyle(ComputedStyleInitialValues::InitialTextDecorationStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16522
+        CSSPropertyID::kTextDecorationThickness => {
+            builder.SetTextDecorationThickness(
+                &ComputedStyleInitialValues::InitialTextDecorationThickness(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16593
+        CSSPropertyID::kTextEmphasisPosition => {
+            builder
+                .SetTextEmphasisPosition(ComputedStyleInitialValues::InitialTextEmphasisPosition());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16654
+        CSSPropertyID::kTextFit => {
+            builder.SetTextFit(&ComputedStyleInitialValues::InitialTextFit());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16683
+        CSSPropertyID::kTextIndent => {
+            builder.SetTextIndent(&ComputedStyleInitialValues::InitialTextIndent());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16714
+        CSSPropertyID::kTextJustify => {
+            builder.SetTextJustify(ComputedStyleInitialValues::InitialTextJustify());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16743
+        CSSPropertyID::kTextOverflow => {
+            builder.SetTextOverflow(&ComputedStyleInitialValues::InitialTextOverflow());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16772
+        CSSPropertyID::kTextShadow => {
+            builder.SetTextShadow(
+                ComputedStyleInitialValues::InitialTextShadow()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16806
+        CSSPropertyID::kTextTransform => {
+            builder.SetTextTransform(ComputedStyleInitialValues::InitialTextTransform());
+            builder.SetTextTransformIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16838
+        CSSPropertyID::kTextUnderlineOffset => {
+            builder
+                .SetTextUnderlineOffset(&ComputedStyleInitialValues::InitialTextUnderlineOffset());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16872
+        CSSPropertyID::kTextUnderlinePosition => {
+            builder.SetTextUnderlinePosition(
+                ComputedStyleInitialValues::InitialTextUnderlinePosition(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16901
+        CSSPropertyID::kTextWrapMode => {
+            builder.SetTextWrapMode(ComputedStyleInitialValues::InitialTextWrapMode());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16930
+        CSSPropertyID::kTextWrapStyle => {
+            builder.SetTextWrapStyle(ComputedStyleInitialValues::InitialTextWrapStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16959
+        CSSPropertyID::kTimelineScope => {
+            builder.SetTimelineScope(&ComputedStyleInitialValues::InitialTimelineScope());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17329
+        CSSPropertyID::kTop => {
+            builder.SetTop(&ComputedStyleInitialValues::InitialTop());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17366
+        CSSPropertyID::kTouchAction => {
+            builder.SetTouchAction(ComputedStyleInitialValues::InitialTouchAction());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17401
+        CSSPropertyID::kTransform => {
+            builder.SetTransform(&ComputedStyleInitialValues::InitialTransform());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17435
+        CSSPropertyID::kTransformBox => {
+            builder.SetTransformBox(ComputedStyleInitialValues::InitialTransformBox());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17464
+        CSSPropertyID::kTransformOrigin => {
+            builder.SetTransformOrigin(&ComputedStyleInitialValues::InitialTransformOrigin());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17498
+        CSSPropertyID::kTransformStyle => {
+            builder.SetTransformStyle3D(ComputedStyleInitialValues::InitialTransformStyle3D());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17527
+        CSSPropertyID::kTransitionBehavior => {
+            if !builder.Transitions().Get().is_null() {
+                let data = builder.AccessTransitions();
+                *data.BehaviorListMut() = vec![CSSTransitionData::InitialBehavior()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17573
+        CSSPropertyID::kTransitionDelay => {
+            if !builder.Transitions().Get().is_null() {
+                let data = builder.AccessTransitions();
+                *data.DelayStartListMut() = vec![CSSTransitionData::InitialDelayStart()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17619
+        CSSPropertyID::kTransitionDuration => {
+            if !builder.Transitions().Get().is_null() {
+                let data = builder.AccessTransitions();
+                *data.DurationListMut() = vec![CSSTransitionData::InitialDuration()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17665
+        CSSPropertyID::kTransitionProperty => {
+            if !builder.Transitions().Get().is_null() {
+                let data = builder.AccessTransitions();
+                *data.PropertyListMut() = vec![CSSTransitionData::InitialProperty()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17711
+        CSSPropertyID::kTransitionTimingFunction => {
+            if !builder.Transitions().Get().is_null() {
+                let data = builder.AccessTransitions();
+                *data.TimingFunctionListMut() = vec![CSSTransitionData::InitialTimingFunction()];
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17757
+        CSSPropertyID::kTranslate => {
+            builder.SetTranslate(
+                ComputedStyleInitialValues::InitialTranslate()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17803
+        CSSPropertyID::kTriggerScope => {
+            builder.SetTriggerScope(&ComputedStyleInitialValues::InitialTriggerScope());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17852
+        CSSPropertyID::kUnicodeBidi => {
+            builder.SetUnicodeBidi(ComputedStyleInitialValues::InitialUnicodeBidi());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17901
+        CSSPropertyID::kUserSelect => {
+            builder.SetUserSelect(ComputedStyleInitialValues::InitialUserSelect());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17930
+        CSSPropertyID::kVectorEffect => {
+            builder.SetVectorEffect(ComputedStyleInitialValues::InitialVectorEffect());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17959
+        CSSPropertyID::kVerticalAlign => {
+            builder.SetVerticalAlign(ComputedStyleInitialValues::InitialVerticalAlign());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17982
+        CSSPropertyID::kViewTimelineAxis => {
+            builder.SetViewTimelineAxis(&ComputedStyleInitialValues::InitialViewTimelineAxis());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18011
+        CSSPropertyID::kViewTimelineInset => {
+            builder.SetViewTimelineInset(&ComputedStyleInitialValues::InitialViewTimelineInset());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18045
+        CSSPropertyID::kViewTimelineName => {
+            builder.SetViewTimelineName(&ComputedStyleInitialValues::InitialViewTimelineName());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18074
+        CSSPropertyID::kViewTransitionClass => {
+            builder.SetViewTransitionClass(
+                &ComputedStyleInitialValues::InitialViewTransitionClass()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18103
+        CSSPropertyID::kViewTransitionGroup => {
+            builder
+                .SetViewTransitionGroup(&ComputedStyleInitialValues::InitialViewTransitionGroup());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18132
+        CSSPropertyID::kViewTransitionName => {
+            builder.SetViewTransitionName(
+                &ComputedStyleInitialValues::InitialViewTransitionName()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18161
+        CSSPropertyID::kViewTransitionScope => {
+            builder
+                .SetViewTransitionScope(ComputedStyleInitialValues::InitialViewTransitionScope());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18190
+        CSSPropertyID::kVisibility => {
+            builder.SetVisibility(ComputedStyleInitialValues::InitialVisibility());
+            builder.SetVisibilityIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18222
+        CSSPropertyID::kWebkitBorderHorizontalSpacing => {
+            builder.SetHorizontalBorderSpacing(
+                ComputedStyleInitialValues::InitialHorizontalBorderSpacing(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18262
+        CSSPropertyID::kWebkitBorderImage => {
+            builder.SetBorderImage(&ComputedStyleInitialValues::InitialBorderImage());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18288
+        CSSPropertyID::kWebkitBorderVerticalSpacing => {
+            builder.SetVerticalBorderSpacing(
+                ComputedStyleInitialValues::InitialVerticalBorderSpacing(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18322
+        CSSPropertyID::kWebkitBoxAlign => {
+            builder.SetBoxAlign(ComputedStyleInitialValues::InitialBoxAlign());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18374
+        CSSPropertyID::kWebkitBoxDirection => {
+            builder.SetBoxDirection(ComputedStyleInitialValues::InitialBoxDirection());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18403
+        CSSPropertyID::kWebkitBoxFlex => {
+            builder.SetBoxFlex(ComputedStyleInitialValues::InitialBoxFlex());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18438
+        CSSPropertyID::kWebkitBoxOrdinalGroup => {
+            builder.SetBoxOrdinalGroup(ComputedStyleInitialValues::InitialBoxOrdinalGroup());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18467
+        CSSPropertyID::kWebkitBoxOrient => {
+            builder.SetBoxOrient(ComputedStyleInitialValues::InitialBoxOrient());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18496
+        CSSPropertyID::kWebkitBoxPack => {
+            builder.SetBoxPack(ComputedStyleInitialValues::InitialBoxPack());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18525
+        CSSPropertyID::kWebkitBoxReflect => {
+            builder.SetBoxReflect(
+                ComputedStyleInitialValues::InitialBoxReflect()
+                    .map(Member::from_ptr)
+                    .unwrap_or_default(),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18593
+        CSSPropertyID::kWebkitLineClamp => {
+            builder.SetWebkitLineClamp(ComputedStyleInitialValues::InitialWebkitLineClamp());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18760
+        CSSPropertyID::kWebkitMaskBoxImageSource => {
+            builder.SetMaskBoxImageSource(
+                ComputedStyleInitialValues::InitialMaskBoxImageSource()
+                    .unwrap_or(std::ptr::null_mut()),
+            );
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18992
+        CSSPropertyID::kWebkitPerspectiveOriginX => {
+            builder.SetPerspectiveOriginX(&ComputedStyleInitialValues::InitialPerspectiveOriginX());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19018
+        CSSPropertyID::kWebkitPerspectiveOriginY => {
+            builder.SetPerspectiveOriginY(&ComputedStyleInitialValues::InitialPerspectiveOriginY());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19044
+        CSSPropertyID::kWebkitRtlOrdering => {
+            builder.SetRtlOrdering(ComputedStyleInitialValues::InitialRtlOrdering());
+            builder.SetRtlOrderingIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19223
+        CSSPropertyID::kWebkitTextSecurity => {
+            builder.SetTextSecurity(ComputedStyleInitialValues::InitialTextSecurity());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19289
+        CSSPropertyID::kWebkitTextStrokeWidth => {
+            builder.SetTextStrokeWidth(ComputedStyleInitialValues::InitialTextStrokeWidth());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19323
+        CSSPropertyID::kWebkitTransformOriginX => {
+            builder.SetTransformOriginX(&ComputedStyleInitialValues::InitialTransformOriginX());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19349
+        CSSPropertyID::kWebkitTransformOriginY => {
+            builder.SetTransformOriginY(&ComputedStyleInitialValues::InitialTransformOriginY());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19375
+        CSSPropertyID::kWebkitTransformOriginZ => {
+            builder.SetTransformOriginZ(ComputedStyleInitialValues::InitialTransformOriginZ());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19401
+        CSSPropertyID::kWebkitUserDrag => {
+            builder.SetUserDrag(ComputedStyleInitialValues::InitialUserDrag());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19430
+        CSSPropertyID::kWebkitUserModify => {
+            builder.SetUserModify(ComputedStyleInitialValues::InitialUserModify());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19459
+        CSSPropertyID::kWhiteSpaceCollapse => {
+            builder.SetWhiteSpaceCollapse(ComputedStyleInitialValues::InitialWhiteSpaceCollapse());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19494
+        CSSPropertyID::kWidows => {
+            builder.SetWidows(ComputedStyleInitialValues::InitialWidows());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19532
+        CSSPropertyID::kWidth => {
+            builder.SetWidth(&ComputedStyleInitialValues::InitialWidth());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19595
+        CSSPropertyID::kWindowDrag => {
+            builder
+                .SetDraggableRegionMode(ComputedStyleInitialValues::InitialDraggableRegionMode());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19621
+        CSSPropertyID::kWordBreak => {
+            builder.SetWordBreak(ComputedStyleInitialValues::InitialWordBreak());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19653
+        CSSPropertyID::kWordSpacing => {
+            builder.SetWordSpacing(&ComputedStyleInitialValues::InitialWordSpacing());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19687
+        CSSPropertyID::kX => {
+            builder.SetX(&ComputedStyleInitialValues::InitialX());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19721
+        CSSPropertyID::kY => {
+            builder.SetY(&ComputedStyleInitialValues::InitialY());
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:3896
+        CSSPropertyID::kDisplay => {
+            builder.SetDisplay(ComputedStyleInitialValues::InitialDisplay());
+            builder.SetDisplayLayoutCustomName(
+                &ComputedStyleInitialValues::InitialDisplayLayoutCustomName(),
+            );
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:6030
+        CSSPropertyID::kInternalForcedColor => {
+            builder
+                .SetInternalForcedColor(&ComputedStyleInitialValues::InitialInternalForcedColor());
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:6102
+        CSSPropertyID::kInternalForcedVisitedColor => {
+            builder.SetInternalForcedVisitedColor(
+                &ComputedStyleInitialValues::InitialInternalForcedVisitedColor(),
+            );
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:12059
+        CSSPropertyID::kTextEmphasisStyle => {
+            builder.SetTextEmphasisFill(ComputedStyleInitialValues::InitialTextEmphasisFill());
+            builder.SetTextEmphasisMark(ComputedStyleInitialValues::InitialTextEmphasisMark());
+            builder.SetTextEmphasisCustomMark(
+                &ComputedStyleInitialValues::InitialTextEmphasisCustomMark(),
+            );
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
 }
 
-pub fn ApplyNumber(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: f64) -> Result<(), LonghandApplicationError> {
-if !value.is_finite() { return Err(LonghandApplicationError::InvalidValue(property)); }
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8039
-CSSPropertyID::kFlexGrow => { builder.SetFlexGrow(value.clamp(f32::MIN as f64, f32::MAX as f64) as f32); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8074
-CSSPropertyID::kFlexLineCount => { builder.SetFlexLineCount(value as u16); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8103
-CSSPropertyID::kFlexShrink => { builder.SetFlexShrink(value.clamp(f32::MIN as f64, f32::MAX as f64) as f32); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11961
-CSSPropertyID::kOpacity => { builder.SetOpacity(value.clamp(f32::MIN as f64, f32::MAX as f64) as f32); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11996
-CSSPropertyID::kOrder => { builder.SetOrder(value as i32); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13614
-CSSPropertyID::kReadingOrder => { builder.SetReadingOrder(value as i32); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15421
-CSSPropertyID::kShapeImageThreshold => { builder.SetShapeImageThreshold(value.clamp(f32::MIN as f64, f32::MAX as f64) as f32); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15888
-CSSPropertyID::kStrokeMiterlimit => { builder.SetStrokeMiterLimit(value.clamp(f32::MIN as f64, f32::MAX as f64) as f32); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18409
-CSSPropertyID::kWebkitBoxFlex => { builder.SetBoxFlex(value.clamp(f32::MIN as f64, f32::MAX as f64) as f32); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18444
-CSSPropertyID::kWebkitBoxOrdinalGroup => { builder.SetBoxOrdinalGroup(value as u32); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
+pub fn ApplyInherit(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    parent: &ComputedStyle,
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:86
+        CSSPropertyID::kForcedColorAdjust => {
+            builder.SetForcedColorAdjust(parent.ForcedColorAdjust());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:121
+        CSSPropertyID::kMathDepth => {
+            builder.SetMathDepth(parent.MathDepth());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:147
+        CSSPropertyID::kPosition => {
+            builder.SetPosition(parent.GetPosition());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:245
+        CSSPropertyID::kAppearance => {
+            builder.SetAppearance(parent.Appearance());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:300
+        CSSPropertyID::kDirection => {
+            builder.SetDirection(parent.Direction());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1272
+        CSSPropertyID::kInternalVisitedBackgroundColor => {
+            builder.SetInternalVisitedBackgroundColor(parent.BackgroundColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1409
+        CSSPropertyID::kInternalVisitedBorderBottomColor => {
+            builder.SetInternalVisitedBorderBottomColor(parent.BorderBottomColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1546
+        CSSPropertyID::kInternalVisitedBorderLeftColor => {
+            builder.SetInternalVisitedBorderLeftColor(parent.BorderLeftColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1595
+        CSSPropertyID::kInternalVisitedBorderRightColor => {
+            builder.SetInternalVisitedBorderRightColor(parent.BorderRightColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1644
+        CSSPropertyID::kInternalVisitedBorderTopColor => {
+            builder.SetInternalVisitedBorderTopColor(parent.BorderTopColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1678
+        CSSPropertyID::kInternalVisitedCaretColor => {
+            builder.SetInternalVisitedCaretColor(parent.CaretColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1717
+        CSSPropertyID::kInternalVisitedColumnRuleColor => {
+            builder.SetInternalVisitedColumnRuleColor(parent.InternalVisitedColumnRuleColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1756
+        CSSPropertyID::kInternalVisitedFill => {
+            builder.SetInternalVisitedFillPaint(parent.FillPaint());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1790
+        CSSPropertyID::kInternalVisitedOutlineColor => {
+            builder.SetInternalVisitedOutlineColor(parent.OutlineColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1830
+        CSSPropertyID::kInternalVisitedStroke => {
+            builder.SetInternalVisitedStrokePaint(parent.StrokePaint());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1870
+        CSSPropertyID::kInternalVisitedTextDecorationColor => {
+            builder.SetInternalVisitedTextDecorationColor(parent.TextDecorationColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1910
+        CSSPropertyID::kInternalVisitedTextEmphasisColor => {
+            builder.SetInternalVisitedTextEmphasisColor(parent.TextEmphasisColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1950
+        CSSPropertyID::kInternalVisitedTextFillColor => {
+            builder.SetInternalVisitedTextFillColor(parent.TextFillColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1990
+        CSSPropertyID::kInternalVisitedTextStrokeColor => {
+            builder.SetInternalVisitedTextStrokeColor(parent.TextStrokeColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2020
+        CSSPropertyID::kAccentColor => {
+            builder.SetAccentColor(parent.AccentColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2069
+        CSSPropertyID::kAlignContent => {
+            builder.SetAlignContent(parent.AlignContent());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2098
+        CSSPropertyID::kAlignItems => {
+            builder.SetAlignItems(parent.AlignItems());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2127
+        CSSPropertyID::kAlignSelf => {
+            builder.SetAlignSelf(parent.AlignSelf());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2156
+        CSSPropertyID::kAlignmentBaseline => {
+            builder.SetAlignmentBaseline(parent.AlignmentBaseline());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2244
+        CSSPropertyID::kAnchorName => {
+            builder.SetAnchorName(parent.AnchorName());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2279
+        CSSPropertyID::kAnchorScope => {
+            builder.SetAnchorScope(parent.AnchorScope());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2313
+        CSSPropertyID::kAnimationComposition => {
+            if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
+                *builder.AccessAnimations().CompositionListMut() = data.CompositionList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2359
+        CSSPropertyID::kAnimationDelay => {
+            if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
+                *builder.AccessAnimations().DelayStartListMut() = data.DelayStartList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2405
+        CSSPropertyID::kAnimationDirection => {
+            if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
+                *builder.AccessAnimations().DirectionListMut() = data.DirectionList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2451
+        CSSPropertyID::kAnimationDuration => {
+            if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
+                *builder.AccessAnimations().DurationListMut() = data.DurationList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2497
+        CSSPropertyID::kAnimationFillMode => {
+            if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
+                *builder.AccessAnimations().FillModeListMut() = data.FillModeList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2543
+        CSSPropertyID::kAnimationIterationCount => {
+            if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
+                *builder.AccessAnimations().IterationCountListMut() =
+                    data.IterationCountList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2589
+        CSSPropertyID::kAnimationName => {
+            if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
+                *builder.AccessAnimations().NameListMut() = data.NameList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2635
+        CSSPropertyID::kAnimationPlayState => {
+            if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
+                *builder.AccessAnimations().PlayStateListMut() = data.PlayStateList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2681
+        CSSPropertyID::kAnimationRangeEnd => {
+            if builder.EffectiveZoom() != parent.EffectiveZoom() {
+                return Err(LonghandApplicationError::Unsupported(property));
+            }
+            if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
+                *builder.AccessAnimations().RangeEndListMut() = data.RangeEndList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2732
+        CSSPropertyID::kAnimationRangeStart => {
+            if builder.EffectiveZoom() != parent.EffectiveZoom() {
+                return Err(LonghandApplicationError::Unsupported(property));
+            }
+            if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
+                *builder.AccessAnimations().RangeStartListMut() = data.RangeStartList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2783
+        CSSPropertyID::kAnimationTimeline => {
+            if builder.EffectiveZoom() != parent.EffectiveZoom() {
+                return Err(LonghandApplicationError::Unsupported(property));
+            }
+            if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
+                *builder.AccessAnimations().TimelineListMut() = data.TimelineList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2834
+        CSSPropertyID::kAnimationTimingFunction => {
+            if let Some(data) = unsafe { parent.Animations().Get().as_ref() } {
+                *builder.AccessAnimations().TimingFunctionListMut() =
+                    data.TimingFunctionList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2970
+        CSSPropertyID::kAspectRatio => {
+            builder.SetAspectRatio(parent.AspectRatio());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3036
+        CSSPropertyID::kBackfaceVisibility => {
+            builder.SetBackfaceVisibility(parent.BackfaceVisibility());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3259
+        CSSPropertyID::kBackgroundColor => {
+            builder.SetBackgroundColor(parent.BackgroundColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3803
+        CSSPropertyID::kBaselineSource => {
+            builder.SetBaselineSource(parent.BaselineSource());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3838
+        CSSPropertyID::kBlockEllipsis => {
+            builder.SetBlockEllipsis(parent.BlockEllipsis());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4146
+        CSSPropertyID::kBorderBottomColor => {
+            builder.SetBorderBottomColor(parent.BorderBottomColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4283
+        CSSPropertyID::kBorderBottomStyle => {
+            builder.SetBorderBottomStyle(parent.BorderBottomStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4351
+        CSSPropertyID::kBorderCollapse => {
+            builder.SetBorderCollapse(parent.BorderCollapse());
+            builder.SetBorderCollapseIsInherited(true);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4600
+        CSSPropertyID::kBorderImageSource => {
+            builder.SetBorderImageSource(parent.BorderImageSource());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4914
+        CSSPropertyID::kBorderLeftColor => {
+            builder.SetBorderLeftColor(parent.BorderLeftColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4953
+        CSSPropertyID::kBorderLeftStyle => {
+            builder.SetBorderLeftStyle(parent.BorderLeftStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5036
+        CSSPropertyID::kBorderRightColor => {
+            builder.SetBorderRightColor(parent.BorderRightColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5075
+        CSSPropertyID::kBorderRightStyle => {
+            builder.SetBorderRightStyle(parent.BorderRightStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5280
+        CSSPropertyID::kBorderTopColor => {
+            builder.SetBorderTopColor(parent.BorderTopColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5417
+        CSSPropertyID::kBorderTopStyle => {
+            builder.SetBorderTopStyle(parent.BorderTopStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5530
+        CSSPropertyID::kBoxDecorationBreak => {
+            builder.SetBoxDecorationBreak(parent.BoxDecorationBreak());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5593
+        CSSPropertyID::kBoxSizing => {
+            builder.SetBoxSizing(parent.BoxSizing());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5622
+        CSSPropertyID::kBreakAfter => {
+            builder.SetBreakAfter(parent.BreakAfter());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5651
+        CSSPropertyID::kBreakBefore => {
+            builder.SetBreakBefore(parent.BreakBefore());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5680
+        CSSPropertyID::kBreakInside => {
+            builder.SetBreakInside(parent.BreakInside());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5709
+        CSSPropertyID::kBufferedRendering => {
+            builder.SetBufferedRendering(parent.BufferedRendering());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5739
+        CSSPropertyID::kCaptionSide => {
+            builder.SetCaptionSide(parent.CaptionSide());
+            builder.SetCaptionSideIsInherited(true);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5776
+        CSSPropertyID::kCaretAnimation => {
+            builder.SetCaretAnimation(parent.CaretAnimation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5805
+        CSSPropertyID::kCaretColor => {
+            builder.SetCaretColor(parent.CaretColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5840
+        CSSPropertyID::kCaretShape => {
+            builder.SetCaretShape(parent.CaretShape());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5869
+        CSSPropertyID::kClear => {
+            builder.SetClear(parent.Clear());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5973
+        CSSPropertyID::kClipRule => {
+            builder.SetClipRule(parent.ClipRule());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6002
+        CSSPropertyID::kColorInterpolation => {
+            builder.SetColorInterpolation(parent.ColorInterpolation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6031
+        CSSPropertyID::kColorInterpolationFilters => {
+            builder.SetColorInterpolationFilters(parent.ColorInterpolationFilters());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6060
+        CSSPropertyID::kColorRendering => {
+            builder.SetColorRendering(parent.ColorRendering());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6131
+        CSSPropertyID::kColumnFill => {
+            builder.SetColumnFill(parent.GetColumnFill());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6247
+        CSSPropertyID::kColumnRuleBreak => {
+            builder.SetColumnRuleBreak(parent.ColumnRuleBreak());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6276
+        CSSPropertyID::kColumnRuleColor => {
+            builder.SetColumnRuleColor(parent.ColumnRuleColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6441
+        CSSPropertyID::kColumnRuleStyle => {
+            builder.SetColumnRuleStyle(parent.ColumnRuleStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6470
+        CSSPropertyID::kColumnRuleVisibilityItems => {
+            builder.SetColumnRuleVisibilityItems(parent.ColumnRuleVisibilityItems());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6522
+        CSSPropertyID::kColumnSpan => {
+            builder.SetColumnSpan(parent.GetColumnSpan());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6598
+        CSSPropertyID::kColumnWrap => {
+            builder.SetColumnWrap(parent.ColumnWrap());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6627
+        CSSPropertyID::kContain => {
+            builder.SetContain(parent.Contain());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6824
+        CSSPropertyID::kContainerName => {
+            builder.SetContainerName(parent.ContainerName());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6853
+        CSSPropertyID::kContainerType => {
+            builder.SetContainerType(parent.ContainerType());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6902
+        CSSPropertyID::kContentVisibility => {
+            builder.SetContentVisibility(parent.ContentVisibility());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6937
+        CSSPropertyID::kContinue => {
+            builder.SetContinue(parent.Continue());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6981
+        CSSPropertyID::kCornerBottomLeftShape => {
+            builder.SetCornerBottomLeftShape(parent.CornerBottomLeftShape());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7025
+        CSSPropertyID::kCornerBottomRightShape => {
+            builder.SetCornerBottomRightShape(parent.CornerBottomRightShape());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7233
+        CSSPropertyID::kCornerTopLeftShape => {
+            builder.SetCornerTopLeftShape(parent.CornerTopLeftShape());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7277
+        CSSPropertyID::kCornerTopRightShape => {
+            builder.SetCornerTopRightShape(parent.CornerTopRightShape());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7624
+        CSSPropertyID::kD => {
+            builder.SetD(Member::from_ptr(parent.D()));
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7693
+        CSSPropertyID::kDominantBaseline => {
+            builder.SetDominantBaseline(parent.DominantBaseline());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7728
+        CSSPropertyID::kDynamicRangeLimit => {
+            builder.SetDynamicRangeLimit(parent.GetDynamicRangeLimit());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7758
+        CSSPropertyID::kEmptyCells => {
+            builder.SetEmptyCells(parent.EmptyCells());
+            builder.SetEmptyCellsIsInherited(true);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7809
+        CSSPropertyID::kFieldSizing => {
+            builder.SetFieldSizing(parent.FieldSizing());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7845
+        CSSPropertyID::kFill => {
+            builder.SetFillPaint(parent.FillPaint());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7878
+        CSSPropertyID::kFillOpacity => {
+            builder.SetFillOpacity(parent.FillOpacity());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7907
+        CSSPropertyID::kFillRule => {
+            builder.SetFillRule(parent.FillRule());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7973
+        CSSPropertyID::kFlexBasis => {
+            if builder.EffectiveZoom() != parent.EffectiveZoom() {
+                return Err(LonghandApplicationError::Unsupported(property));
+            }
+            builder.SetFlexBasis(parent.FlexBasis());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8007
+        CSSPropertyID::kFlexDirection => {
+            builder.SetFlexDirection(parent.FlexDirection());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8036
+        CSSPropertyID::kFlexGrow => {
+            builder.SetFlexGrow(parent.FlexGrow());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8071
+        CSSPropertyID::kFlexLineCount => {
+            builder.SetFlexLineCount(parent.FlexLineCount());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8100
+        CSSPropertyID::kFlexShrink => {
+            builder.SetFlexShrink(parent.FlexShrink());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8129
+        CSSPropertyID::kFlexWrap => {
+            builder.SetFlexWrap(parent.FlexWrap());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8158
+        CSSPropertyID::kFloat => {
+            builder.SetFloating(parent.Floating());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8194
+        CSSPropertyID::kFloodColor => {
+            builder.SetFloodColor(parent.FloodColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8230
+        CSSPropertyID::kFloodOpacity => {
+            builder.SetFloodOpacity(parent.FloodOpacity());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8331
+        CSSPropertyID::kFrameSizing => {
+            builder.SetFrameSizing(parent.FrameSizing());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8394
+        CSSPropertyID::kGridAutoFlow => {
+            builder.SetGridAutoFlow(parent.GetGridAutoFlow());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8463
+        CSSPropertyID::kGridColumnEnd => {
+            builder.SetGridColumnEnd(parent.GridColumnEnd());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8498
+        CSSPropertyID::kGridColumnStart => {
+            builder.SetGridColumnStart(parent.GridColumnStart());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8533
+        CSSPropertyID::kGridLanesDirection => {
+            builder.SetGridLanesDirection(parent.GetGridLanesDirection());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8568
+        CSSPropertyID::kGridLanesPack => {
+            builder.SetGridLanesPack(parent.GridLanesPack());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8603
+        CSSPropertyID::kGridRowEnd => {
+            builder.SetGridRowEnd(parent.GridRowEnd());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8638
+        CSSPropertyID::kGridRowStart => {
+            builder.SetGridRowStart(parent.GridRowStart());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8667
+        CSSPropertyID::kGridTemplateAreas => {
+            builder.SetGridTemplateAreas(parent.GridTemplateAreas());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8766
+        CSSPropertyID::kHangingPunctuation => {
+            builder.SetHangingPunctuation(parent.GetHangingPunctuation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8893
+        CSSPropertyID::kHyphenateCharacter => {
+            builder.SetHyphenationString(parent.HyphenationString());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8928
+        CSSPropertyID::kHyphenateLimitChars => {
+            builder.SetHyphenateLimitChars(parent.HyphenateLimitChars());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8957
+        CSSPropertyID::kHyphens => {
+            builder.SetHyphens(parent.GetHyphens());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8992
+        CSSPropertyID::kImageAnimation => {
+            builder.SetImageAnimation(parent.ImageAnimation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9021
+        CSSPropertyID::kImageOrientation => {
+            builder.SetImageOrientation(parent.ImageOrientation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9050
+        CSSPropertyID::kImageRendering => {
+            builder.SetImageRendering(parent.ImageRendering());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9105
+        CSSPropertyID::kInitialLetter => {
+            builder.SetInitialLetter(parent.InitialLetter());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9336
+        CSSPropertyID::kInteractivity => {
+            builder.SetInteractivity(parent.Interactivity());
+            builder.SetInteractivityIsInherited(true);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9367
+        CSSPropertyID::kInterestDelayEnd => {
+            builder.SetInterestDelayEnd(parent.InterestDelayEnd());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9396
+        CSSPropertyID::kInterestDelayStart => {
+            builder.SetInterestDelayStart(parent.InterestDelayStart());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9428
+        CSSPropertyID::kInternalAlignContentBlock => {
+            builder.SetAlignContentBlockCenter(parent.AlignContentBlockCenter());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9460
+        CSSPropertyID::kInternalEmptyLineHeight => {
+            builder.SetHasLineIfEmpty(parent.HasLineIfEmpty());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9531
+        CSSPropertyID::kInternalForcedBackgroundColor => {
+            builder.SetInternalForcedBackgroundColor(parent.InternalForcedBackgroundColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9571
+        CSSPropertyID::kInternalForcedBorderColor => {
+            builder.SetInternalForcedBorderColor(parent.InternalForcedBorderColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9640
+        CSSPropertyID::kInternalForcedOutlineColor => {
+            builder.SetInternalForcedOutlineColor(parent.InternalForcedOutlineColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9676
+        CSSPropertyID::kInternalOverscrollContainer => {
+            builder.SetInternalOverscrollContainer(parent.InternalOverscrollContainer());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9711
+        CSSPropertyID::kInternalOverscrollPosition => {
+            builder.SetInternalOverscrollPosition(parent.InternalOverscrollPosition());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9746
+        CSSPropertyID::kInternalUnbounded => {
+            builder.SetInternalUnbounded(parent.InternalUnbounded());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9775
+        CSSPropertyID::kInterpolateSize => {
+            builder.SetInterpolateSize(parent.InterpolateSize());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9804
+        CSSPropertyID::kIsolation => {
+            builder.SetIsolation(parent.Isolation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9833
+        CSSPropertyID::kJustifyContent => {
+            builder.SetJustifyContent(parent.JustifyContent());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9862
+        CSSPropertyID::kJustifyItems => {
+            builder.SetJustifyItems(parent.JustifyItems());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9891
+        CSSPropertyID::kJustifySelf => {
+            builder.SetJustifySelf(parent.JustifySelf());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10013
+        CSSPropertyID::kLightingColor => {
+            builder.SetLightingColor(parent.LightingColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10043
+        CSSPropertyID::kLineBreak => {
+            builder.SetLineBreak(parent.GetLineBreak());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10200
+        CSSPropertyID::kListStylePosition => {
+            builder.SetListStylePosition(parent.ListStylePosition());
+            builder.SetListStylePositionIsInherited(true);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10231
+        CSSPropertyID::kListStyleType => {
+            builder.SetListStyleType(parent.ListStyleType());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10587
+        CSSPropertyID::kMarginTrim => {
+            builder.SetMarginTrim(parent.MarginTrim());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10616
+        CSSPropertyID::kMarkerEnd => {
+            builder.SetMarkerEndResource(Member::from_ptr(parent.MarkerEndResource()));
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10642
+        CSSPropertyID::kMarkerMid => {
+            builder.SetMarkerMidResource(Member::from_ptr(parent.MarkerMidResource()));
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10668
+        CSSPropertyID::kMarkerStart => {
+            builder.SetMarkerStartResource(Member::from_ptr(parent.MarkerStartResource()));
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11125
+        CSSPropertyID::kMaskType => {
+            builder.SetMaskType(parent.MaskType());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11154
+        CSSPropertyID::kMathShift => {
+            builder.SetMathShift(parent.MathShift());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11183
+        CSSPropertyID::kMathStyle => {
+            builder.SetMathStyle(parent.MathStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11372
+        CSSPropertyID::kMaxLines => {
+            builder.SetMaxLines(parent.MaxLines());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11609
+        CSSPropertyID::kMixBlendMode => {
+            builder.SetBlendMode(parent.GetBlendMode());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11678
+        CSSPropertyID::kObjectFit => {
+            builder.SetObjectFit(parent.GetObjectFit());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11923
+        CSSPropertyID::kOffsetRotate => {
+            builder.SetOffsetRotate(parent.OffsetRotate());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11958
+        CSSPropertyID::kOpacity => {
+            builder.SetOpacity(parent.Opacity());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11993
+        CSSPropertyID::kOrder => {
+            builder.SetOrder(parent.Order());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12028
+        CSSPropertyID::kOriginTrialTestProperty => {
+            builder.SetOriginTrialTestProperty(parent.OriginTrialTestProperty());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12063
+        CSSPropertyID::kOrphans => {
+            builder.SetOrphans(parent.Orphans());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12093
+        CSSPropertyID::kOutlineColor => {
+            builder.SetOutlineColor(parent.OutlineColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12200
+        CSSPropertyID::kOverflowAnchor => {
+            builder.SetOverflowAnchor(parent.OverflowAnchor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12333
+        CSSPropertyID::kOverflowWrap => {
+            builder.SetOverflowWrap(parent.OverflowWrap());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12426
+        CSSPropertyID::kOverlay => {
+            builder.SetOverlay(parent.Overlay());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12554
+        CSSPropertyID::kOverscrollBehaviorX => {
+            builder.SetOverscrollBehaviorX(parent.OverscrollBehaviorX());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12592
+        CSSPropertyID::kOverscrollBehaviorY => {
+            builder.SetOverscrollBehaviorY(parent.OverscrollBehaviorY());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12627
+        CSSPropertyID::kOverscrollContainerType => {
+            builder.SetOverscrollContainerType(parent.OverscrollContainerType());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12988
+        CSSPropertyID::kPage => {
+            builder.SetPage(parent.Page());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13023
+        CSSPropertyID::kPageMarginSafety => {
+            builder.SetPageMarginSafety(parent.GetPageMarginSafety());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13052
+        CSSPropertyID::kPageOrientation => {
+            builder.SetPageOrientation(parent.GetPageOrientation());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13081
+        CSSPropertyID::kPaintOrder => {
+            builder.SetPaintOrder(parent.PaintOrder());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13271
+        CSSPropertyID::kPointerEvents => {
+            builder.SetPointerEvents(parent.PointerEvents());
+            builder.SetPointerEventsIsInherited(true);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13334
+        CSSPropertyID::kPositionTryFallbacks => {
+            builder.SetPositionTryFallbacks(parent.GetPositionTryFallbacks());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13360
+        CSSPropertyID::kPositionTryOrder => {
+            builder.SetPositionTryOrder(parent.PositionTryOrder());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13389
+        CSSPropertyID::kPositionVisibility => {
+            builder.SetPositionVisibility(parent.GetPositionVisibility());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13438
+        CSSPropertyID::kPrintColorAdjust => {
+            builder.SetPrintColorAdjust(parent.PrintColorAdjust());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13493
+        CSSPropertyID::kQuotes => {
+            builder.SetQuotes(parent.Quotes().clone());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13576
+        CSSPropertyID::kReadingFlow => {
+            builder.SetReadingFlow(parent.ReadingFlow());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13611
+        CSSPropertyID::kReadingOrder => {
+            builder.SetReadingOrder(parent.ReadingOrder());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13640
+        CSSPropertyID::kResize => {
+            builder.SetResize(parent.Resize());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13738
+        CSSPropertyID::kRotate => {
+            builder.SetRotate(Member::from_ptr(parent.Rotate()));
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13807
+        CSSPropertyID::kRowRuleBreak => {
+            builder.SetRowRuleBreak(parent.RowRuleBreak());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13836
+        CSSPropertyID::kRowRuleColor => {
+            builder.SetRowRuleColor(parent.RowRuleColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14001
+        CSSPropertyID::kRowRuleStyle => {
+            builder.SetRowRuleStyle(parent.RowRuleStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14030
+        CSSPropertyID::kRowRuleVisibilityItems => {
+            builder.SetRowRuleVisibilityItems(parent.RowRuleVisibilityItems());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14082
+        CSSPropertyID::kRubyAlign => {
+            builder.SetRubyAlign(parent.RubyAlign());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14117
+        CSSPropertyID::kRubyOverhang => {
+            builder.SetRubyOverhang(parent.RubyOverhang());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14146
+        CSSPropertyID::kRubyPosition => {
+            builder.SetRubyPosition(parent.GetRubyPosition());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14175
+        CSSPropertyID::kRuleOverlap => {
+            builder.SetRuleOverlap(parent.RuleOverlap());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14272
+        CSSPropertyID::kScale => {
+            builder.SetScale(Member::from_ptr(parent.Scale()));
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14307
+        CSSPropertyID::kScrollAxisLock => {
+            builder.SetScrollAxisLock(parent.ScrollAxisLock());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14336
+        CSSPropertyID::kScrollBehavior => {
+            builder.SetScrollBehavior(parent.GetScrollBehavior());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14371
+        CSSPropertyID::kScrollInitialTarget => {
+            builder.SetScrollInitialTarget(parent.ScrollInitialTarget());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14718
+        CSSPropertyID::kScrollMarkerGroup => {
+            builder.SetScrollMarkerGroup(Member::from_ptr(parent.GetScrollMarkerGroup()));
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15107
+        CSSPropertyID::kScrollSnapAlign => {
+            builder.SetScrollSnapAlign(parent.GetScrollSnapAlign());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15136
+        CSSPropertyID::kScrollSnapStop => {
+            builder.SetScrollSnapStop(parent.ScrollSnapStop());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15165
+        CSSPropertyID::kScrollSnapType => {
+            builder.SetScrollSnapType(parent.GetScrollSnapType());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15200
+        CSSPropertyID::kScrollTargetGroup => {
+            builder.SetScrollTargetGroup(parent.ScrollTargetGroup());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15229
+        CSSPropertyID::kScrollTimelineAxis => {
+            builder.SetScrollTimelineAxis(parent.ScrollTimelineAxis());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15258
+        CSSPropertyID::kScrollTimelineName => {
+            builder.SetScrollTimelineName(parent.ScrollTimelineName());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15293
+        CSSPropertyID::kScrollbarColor => {
+            builder.SetScrollbarColor(Member::from_ptr(parent.ScrollbarColor()));
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15322
+        CSSPropertyID::kScrollbarGutter => {
+            builder.SetScrollbarGutter(parent.ScrollbarGutter());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15357
+        CSSPropertyID::kScrollbarWidth => {
+            builder.SetScrollbarWidth(parent.ScrollbarWidth());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15418
+        CSSPropertyID::kShapeImageThreshold => {
+            builder.SetShapeImageThreshold(parent.ShapeImageThreshold());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15515
+        CSSPropertyID::kShapeRendering => {
+            builder.SetShapeRendering(parent.ShapeRendering());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15584
+        CSSPropertyID::kSpeak => {
+            builder.SetSpeak(parent.Speak());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15660
+        CSSPropertyID::kStopColor => {
+            builder.SetStopColor(parent.StopColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15696
+        CSSPropertyID::kStopOpacity => {
+            builder.SetStopOpacity(parent.StopOpacity());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15732
+        CSSPropertyID::kStroke => {
+            builder.SetStrokePaint(parent.StrokePaint());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15827
+        CSSPropertyID::kStrokeLinecap => {
+            builder.SetCapStyle(parent.CapStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15856
+        CSSPropertyID::kStrokeLinejoin => {
+            builder.SetJoinStyle(parent.JoinStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15885
+        CSSPropertyID::kStrokeMiterlimit => {
+            builder.SetStrokeMiterLimit(parent.StrokeMiterLimit());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15920
+        CSSPropertyID::kStrokeOpacity => {
+            builder.SetStrokeOpacity(parent.StrokeOpacity());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16097
+        CSSPropertyID::kTableLayout => {
+            builder.SetTableLayout(parent.TableLayout());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16126
+        CSSPropertyID::kTextAlign => {
+            builder.SetTextAlign(parent.GetTextAlign());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16152
+        CSSPropertyID::kTextAlignLast => {
+            builder.SetTextAlignLast(parent.TextAlignLast());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16181
+        CSSPropertyID::kTextAnchor => {
+            builder.SetTextAnchor(parent.TextAnchor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16210
+        CSSPropertyID::kTextAutospace => {
+            builder.SetTextAutospace(parent.TextAutospace());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16239
+        CSSPropertyID::kTextBoxEdge => {
+            builder.SetTextBoxEdge(parent.GetTextBoxEdge());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16268
+        CSSPropertyID::kTextBoxTrim => {
+            builder.SetTextBoxTrim(parent.TextBoxTrim());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16297
+        CSSPropertyID::kTextCombineUpright => {
+            builder.SetTextCombine(parent.TextCombine());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16333
+        CSSPropertyID::kTextDecorationColor => {
+            builder.SetTextDecorationColor(parent.TextDecorationColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16403
+        CSSPropertyID::kTextDecorationLine => {
+            builder.SetTextDecorationLine(parent.GetTextDecorationLine());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16432
+        CSSPropertyID::kTextDecorationSkipInk => {
+            builder.SetTextDecorationSkipInk(parent.TextDecorationSkipInk());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16467
+        CSSPropertyID::kTextDecorationSkipSpaces => {
+            builder.SetTextDecorationSkipSpaces(parent.GetTextDecorationSkipSpaces());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16496
+        CSSPropertyID::kTextDecorationStyle => {
+            builder.SetTextDecorationStyle(parent.TextDecorationStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16566
+        CSSPropertyID::kTextEmphasisColor => {
+            builder.SetTextEmphasisColor(parent.TextEmphasisColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16596
+        CSSPropertyID::kTextEmphasisPosition => {
+            builder.SetTextEmphasisPosition(parent.GetTextEmphasisPosition());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16657
+        CSSPropertyID::kTextFit => {
+            builder.SetTextFit(parent.GetTextFit());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16717
+        CSSPropertyID::kTextJustify => {
+            builder.SetTextJustify(parent.GetTextJustify());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16746
+        CSSPropertyID::kTextOverflow => {
+            builder.SetTextOverflow(parent.TextOverflow());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16810
+        CSSPropertyID::kTextTransform => {
+            builder.SetTextTransform(parent.TextTransform());
+            builder.SetTextTransformIsInherited(true);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16875
+        CSSPropertyID::kTextUnderlinePosition => {
+            builder.SetTextUnderlinePosition(parent.GetTextUnderlinePosition());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16904
+        CSSPropertyID::kTextWrapMode => {
+            builder.SetTextWrapMode(parent.GetTextWrapMode());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16933
+        CSSPropertyID::kTextWrapStyle => {
+            builder.SetTextWrapStyle(parent.GetTextWrapStyle());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16962
+        CSSPropertyID::kTimelineScope => {
+            builder.SetTimelineScope(parent.TimelineScope());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17369
+        CSSPropertyID::kTouchAction => {
+            builder.SetTouchAction(parent.GetTouchAction());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17438
+        CSSPropertyID::kTransformBox => {
+            builder.SetTransformBox(parent.TransformBox());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17501
+        CSSPropertyID::kTransformStyle => {
+            builder.SetTransformStyle3D(parent.TransformStyle3D());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17535
+        CSSPropertyID::kTransitionBehavior => {
+            if let Some(data) = unsafe { parent.Transitions().Get().as_ref() } {
+                *builder.AccessTransitions().BehaviorListMut() = data.BehaviorList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17581
+        CSSPropertyID::kTransitionDelay => {
+            if let Some(data) = unsafe { parent.Transitions().Get().as_ref() } {
+                *builder.AccessTransitions().DelayStartListMut() = data.DelayStartList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17627
+        CSSPropertyID::kTransitionDuration => {
+            if let Some(data) = unsafe { parent.Transitions().Get().as_ref() } {
+                *builder.AccessTransitions().DurationListMut() = data.DurationList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17673
+        CSSPropertyID::kTransitionProperty => {
+            if let Some(data) = unsafe { parent.Transitions().Get().as_ref() } {
+                *builder.AccessTransitions().PropertyListMut() = data.PropertyList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17719
+        CSSPropertyID::kTransitionTimingFunction => {
+            if let Some(data) = unsafe { parent.Transitions().Get().as_ref() } {
+                *builder.AccessTransitions().TimingFunctionListMut() =
+                    data.TimingFunctionList().clone();
+            } else {
+                ApplyInitial(property, builder)?;
+            }
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17806
+        CSSPropertyID::kTriggerScope => {
+            builder.SetTriggerScope(parent.TriggerScope());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17855
+        CSSPropertyID::kUnicodeBidi => {
+            builder.SetUnicodeBidi(parent.GetUnicodeBidi());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17904
+        CSSPropertyID::kUserSelect => {
+            builder.SetUserSelect(parent.UserSelect());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17933
+        CSSPropertyID::kVectorEffect => {
+            builder.SetVectorEffect(parent.VectorEffect());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17985
+        CSSPropertyID::kViewTimelineAxis => {
+            builder.SetViewTimelineAxis(parent.ViewTimelineAxis());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18048
+        CSSPropertyID::kViewTimelineName => {
+            builder.SetViewTimelineName(parent.ViewTimelineName());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18077
+        CSSPropertyID::kViewTransitionClass => {
+            builder.SetViewTransitionClass(parent.ViewTransitionClass());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18106
+        CSSPropertyID::kViewTransitionGroup => {
+            builder.SetViewTransitionGroup(parent.ViewTransitionGroup());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18135
+        CSSPropertyID::kViewTransitionName => {
+            builder.SetViewTransitionName(parent.ViewTransitionName());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18164
+        CSSPropertyID::kViewTransitionScope => {
+            builder.SetViewTransitionScope(parent.ViewTransitionScope());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18194
+        CSSPropertyID::kVisibility => {
+            builder.SetVisibility(parent.Visibility());
+            builder.SetVisibilityIsInherited(true);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18265
+        CSSPropertyID::kWebkitBorderImage => {
+            builder.SetBorderImage(parent.BorderImage());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18325
+        CSSPropertyID::kWebkitBoxAlign => {
+            builder.SetBoxAlign(parent.BoxAlign());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18377
+        CSSPropertyID::kWebkitBoxDirection => {
+            builder.SetBoxDirection(parent.BoxDirection());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18406
+        CSSPropertyID::kWebkitBoxFlex => {
+            builder.SetBoxFlex(parent.BoxFlex());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18441
+        CSSPropertyID::kWebkitBoxOrdinalGroup => {
+            builder.SetBoxOrdinalGroup(parent.BoxOrdinalGroup());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18470
+        CSSPropertyID::kWebkitBoxOrient => {
+            builder.SetBoxOrient(parent.BoxOrient());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18499
+        CSSPropertyID::kWebkitBoxPack => {
+            builder.SetBoxPack(parent.BoxPack());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18596
+        CSSPropertyID::kWebkitLineClamp => {
+            builder.SetWebkitLineClamp(parent.WebkitLineClamp());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18763
+        CSSPropertyID::kWebkitMaskBoxImageSource => {
+            builder.SetMaskBoxImageSource(parent.MaskBoxImageSource());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19048
+        CSSPropertyID::kWebkitRtlOrdering => {
+            builder.SetRtlOrdering(parent.RtlOrdering());
+            builder.SetRtlOrderingIsInherited(true);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19108
+        CSSPropertyID::kWebkitTapHighlightColor => {
+            builder.SetTapHighlightColor(parent.TapHighlightColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19196
+        CSSPropertyID::kWebkitTextFillColor => {
+            builder.SetTextFillColor(parent.TextFillColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19226
+        CSSPropertyID::kWebkitTextSecurity => {
+            builder.SetTextSecurity(parent.TextSecurity());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19262
+        CSSPropertyID::kWebkitTextStrokeColor => {
+            builder.SetTextStrokeColor(parent.TextStrokeColor());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19404
+        CSSPropertyID::kWebkitUserDrag => {
+            builder.SetUserDrag(parent.UserDrag());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19433
+        CSSPropertyID::kWebkitUserModify => {
+            builder.SetUserModify(parent.UserModify());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19462
+        CSSPropertyID::kWhiteSpaceCollapse => {
+            builder.SetWhiteSpaceCollapse(parent.GetWhiteSpaceCollapse());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19497
+        CSSPropertyID::kWidows => {
+            builder.SetWidows(parent.Widows());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19598
+        CSSPropertyID::kWindowDrag => {
+            builder.SetDraggableRegionMode(parent.DraggableRegionMode());
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19624
+        CSSPropertyID::kWordBreak => {
+            builder.SetWordBreak(parent.WordBreak());
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:2561
+        CSSPropertyID::kColorScheme => {
+            builder.SetColorScheme(parent.ColorScheme());
+            builder.SetDarkColorScheme(parent.DarkColorScheme());
+            builder.SetColorSchemeForced(parent.ColorSchemeForced());
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:3497
+        CSSPropertyID::kCursor => {
+            builder.SetCursor(parent.Cursor());
+            builder.SetCursorList(parent.Cursors());
+            builder.SetCursorIsInherited(true);
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:3903
+        CSSPropertyID::kDisplay => {
+            builder.SetDisplay(parent.Display());
+            builder.SetDisplayLayoutCustomName(parent.DisplayLayoutCustomName());
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:6035
+        CSSPropertyID::kInternalForcedColor => {
+            builder.SetInternalForcedColor(parent.InternalForcedColor());
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:6522
+        CSSPropertyID::kLineClamp => {
+            builder.SetContinue(parent.Continue());
+            builder.SetMaxLines(parent.MaxLines());
+            builder.SetLineClampInternalBlockEllipsis(parent.LineClampInternalBlockEllipsis());
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:7108
+        CSSPropertyID::kMaxContentSizing => {
+            builder.SetMaxContentSizing(parent.MaxContentSizing());
+            builder.SetIsInShrinkToFitSubtree(parent.IsInShrinkToFitSubtree());
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:7572
+        CSSPropertyID::kOutlineStyle => {
+            builder.SetOutlineStyleIsAuto(parent.OutlineStyleIsAuto());
+            builder.SetOutlineStyle(parent.OutlineStyle());
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:11320
+        CSSPropertyID::kAlternativeWebkitLineClampLonghand => {
+            builder.SetContinue(parent.Continue());
+            builder.SetMaxLines(parent.MaxLines());
+            builder.SetLineClampInternalBlockEllipsis(parent.LineClampInternalBlockEllipsis());
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:12069
+        CSSPropertyID::kTextEmphasisStyle => {
+            builder.SetTextEmphasisFill(parent.GetTextEmphasisFill());
+            builder.SetTextEmphasisMark(parent.GetTextEmphasisMark());
+            builder.SetTextEmphasisCustomMark(parent.TextEmphasisCustomMark());
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:12497
+        CSSPropertyID::kWillChange => {
+            builder.SetWillChange(Member::from_ptr(parent.WillChange()));
+            builder.SetSubtreeWillChangeContents(parent.SubtreeWillChangeContents());
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
 }
 
-pub fn ApplyConvertedLength(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &Length) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5501
-CSSPropertyID::kBottom => { builder.SetBottom(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6313
-CSSPropertyID::kColumnRuleInsetCapEnd => { builder.SetColumnRuleInsetCapEnd(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6347
-CSSPropertyID::kColumnRuleInsetCapStart => { builder.SetColumnRuleInsetCapStart(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6381
-CSSPropertyID::kColumnRuleInsetJunctionEnd => { builder.SetColumnRuleInsetJunctionEnd(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6415
-CSSPropertyID::kColumnRuleInsetJunctionStart => { builder.SetColumnRuleInsetJunctionStart(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7564
-CSSPropertyID::kCx => { builder.SetCx(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7598
-CSSPropertyID::kCy => { builder.SetCy(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7981
-CSSPropertyID::kFlexBasis => { builder.SetFlexBasis(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8838
-CSSPropertyID::kHeight => { builder.SetHeight(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9937
-CSSPropertyID::kLeft => { builder.SetLeft(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9980
-CSSPropertyID::kLetterSpacing => { builder.SetLetterSpacing(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10136
-CSSPropertyID::kLineHeight => { builder.SetLineHeight(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10344
-CSSPropertyID::kMarginBottom => { builder.SetMarginBottom(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10460
-CSSPropertyID::kMarginLeft => { builder.SetMarginLeft(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10506
-CSSPropertyID::kMarginRight => { builder.SetMarginRight(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10552
-CSSPropertyID::kMarginTop => { builder.SetMarginTop(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11296
-CSSPropertyID::kMaxHeight => { builder.SetMaxHeight(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11418
-CSSPropertyID::kMaxWidth => { builder.SetMaxWidth(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11499
-CSSPropertyID::kMinHeight => { builder.SetMinHeight(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11580
-CSSPropertyID::kMinWidth => { builder.SetMinWidth(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11817
-CSSPropertyID::kOffsetDistance => { builder.SetOffsetDistance(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12763
-CSSPropertyID::kPaddingBottom => { builder.SetPaddingBottom(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12876
-CSSPropertyID::kPaddingLeft => { builder.SetPaddingLeft(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12919
-CSSPropertyID::kPaddingRight => { builder.SetPaddingRight(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12962
-CSSPropertyID::kPaddingTop => { builder.SetPaddingTop(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13124
-CSSPropertyID::kPathLength => { builder.SetPathLength(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13530
-CSSPropertyID::kR => { builder.SetR(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13709
-CSSPropertyID::kRight => { builder.SetRight(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13873
-CSSPropertyID::kRowRuleInsetCapEnd => { builder.SetRowRuleInsetCapEnd(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13907
-CSSPropertyID::kRowRuleInsetCapStart => { builder.SetRowRuleInsetCapStart(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13941
-CSSPropertyID::kRowRuleInsetJunctionEnd => { builder.SetRowRuleInsetJunctionEnd(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13975
-CSSPropertyID::kRowRuleInsetJunctionStart => { builder.SetRowRuleInsetJunctionStart(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14212
-CSSPropertyID::kRx => { builder.SetRx(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14246
-CSSPropertyID::kRy => { builder.SetRy(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14852
-CSSPropertyID::kScrollPaddingBottom => { builder.SetScrollPaddingBottom(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14983
-CSSPropertyID::kScrollPaddingLeft => { builder.SetScrollPaddingLeft(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15032
-CSSPropertyID::kScrollPaddingRight => { builder.SetScrollPaddingRight(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15081
-CSSPropertyID::kScrollPaddingTop => { builder.SetScrollPaddingTop(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15455
-CSSPropertyID::kShapeMargin => { builder.SetShapeMargin(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15801
-CSSPropertyID::kStrokeDashoffset => { builder.SetStrokeDashOffset(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16849
-CSSPropertyID::kTextUnderlineOffset => { builder.SetTextUnderlineOffset(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17340
-CSSPropertyID::kTop => { builder.SetTop(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18995
-CSSPropertyID::kWebkitPerspectiveOriginX => { builder.SetPerspectiveOriginX(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19021
-CSSPropertyID::kWebkitPerspectiveOriginY => { builder.SetPerspectiveOriginY(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19326
-CSSPropertyID::kWebkitTransformOriginX => { builder.SetTransformOriginX(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19352
-CSSPropertyID::kWebkitTransformOriginY => { builder.SetTransformOriginY(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19543
-CSSPropertyID::kWidth => { builder.SetWidth(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19664
-CSSPropertyID::kWordSpacing => { builder.SetWordSpacing(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19698
-CSSPropertyID::kX => { builder.SetX(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19732
-CSSPropertyID::kY => { builder.SetY(value); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
+pub fn ApplyIdentifier(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: CSSValueID,
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:89
+        CSSPropertyID::kForcedColorAdjust => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:124
+            let converted = match value {
+                CSSValueID::kAuto => EForcedColorAdjust::kAuto,
+                CSSValueID::kPreserveParentColor => EForcedColorAdjust::kPreserveParentColor,
+                CSSValueID::kNone => EForcedColorAdjust::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetForcedColorAdjust(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:150
+        CSSPropertyID::kPosition => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:152
+            let converted = match value {
+                CSSValueID::kFixed => EPosition::kFixed,
+                CSSValueID::kRelative => EPosition::kRelative,
+                CSSValueID::kStatic => EPosition::kStatic,
+                CSSValueID::kSticky => EPosition::kSticky,
+                CSSValueID::kAbsolute => EPosition::kAbsolute,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetPosition(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2159
+        CSSPropertyID::kAlignmentBaseline => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:230
+            let converted = match value {
+                CSSValueID::kBaseline => EAlignmentBaseline::kBaseline,
+                CSSValueID::kMiddle => EAlignmentBaseline::kMiddle,
+                CSSValueID::kAuto => EAlignmentBaseline::kAuto,
+                CSSValueID::kAlphabetic => EAlignmentBaseline::kAlphabetic,
+                CSSValueID::kBeforeEdge => EAlignmentBaseline::kBeforeEdge,
+                CSSValueID::kAfterEdge => EAlignmentBaseline::kAfterEdge,
+                CSSValueID::kCentral => EAlignmentBaseline::kCentral,
+                CSSValueID::kTextBeforeEdge => EAlignmentBaseline::kTextBeforeEdge,
+                CSSValueID::kTextAfterEdge => EAlignmentBaseline::kTextAfterEdge,
+                CSSValueID::kIdeographic => EAlignmentBaseline::kIdeographic,
+                CSSValueID::kHanging => EAlignmentBaseline::kHanging,
+                CSSValueID::kMathematical => EAlignmentBaseline::kMathematical,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetAlignmentBaseline(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3039
+        CSSPropertyID::kBackfaceVisibility => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:266
+            let converted = match value {
+                CSSValueID::kVisible => EBackfaceVisibility::kVisible,
+                CSSValueID::kHidden => EBackfaceVisibility::kHidden,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBackfaceVisibility(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3806
+        CSSPropertyID::kBaselineSource => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:290
+            let converted = match value {
+                CSSValueID::kAuto => EBaselineSource::kAuto,
+                CSSValueID::kFirst => EBaselineSource::kFirst,
+                CSSValueID::kLast => EBaselineSource::kLast,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBaselineSource(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3841
+        CSSPropertyID::kBlockEllipsis => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:314
+            let converted = match value {
+                CSSValueID::kNoEllipsis => EBlockEllipsis::kNoEllipsis,
+                CSSValueID::kEllipsis => EBlockEllipsis::kEllipsis,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBlockEllipsis(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4286
+        CSSPropertyID::kBorderBottomStyle => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:338
+            let converted = ConvertBorderStyle(property, value)?;
+            builder.SetBorderBottomStyle(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4355
+        CSSPropertyID::kBorderCollapse => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:352
+            let converted = match value {
+                CSSValueID::kSeparate => EBorderCollapse::kSeparate,
+                CSSValueID::kCollapse => EBorderCollapse::kCollapse,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBorderCollapse(converted);
+            builder.SetBorderCollapseIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4956
+        CSSPropertyID::kBorderLeftStyle => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:338
+            let converted = ConvertBorderStyle(property, value)?;
+            builder.SetBorderLeftStyle(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5078
+        CSSPropertyID::kBorderRightStyle => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:338
+            let converted = ConvertBorderStyle(property, value)?;
+            builder.SetBorderRightStyle(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5420
+        CSSPropertyID::kBorderTopStyle => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:338
+            let converted = ConvertBorderStyle(property, value)?;
+            builder.SetBorderTopStyle(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5533
+        CSSPropertyID::kBoxDecorationBreak => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:376
+            let converted = match value {
+                CSSValueID::kClone => EBoxDecorationBreak::kClone,
+                CSSValueID::kSlice => EBoxDecorationBreak::kSlice,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBoxDecorationBreak(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5596
+        CSSPropertyID::kBoxSizing => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:390
+            let converted = match value {
+                CSSValueID::kContentBox => EBoxSizing::kContentBox,
+                CSSValueID::kBorderBox => EBoxSizing::kBorderBox,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBoxSizing(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5625
+        CSSPropertyID::kBreakAfter => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:414
+            let converted = match value {
+                CSSValueID::kLeft => EBreakBetween::kLeft,
+                CSSValueID::kRight => EBreakBetween::kRight,
+                CSSValueID::kAuto => EBreakBetween::kAuto,
+                CSSValueID::kAvoid => EBreakBetween::kAvoid,
+                CSSValueID::kColumn => EBreakBetween::kColumn,
+                CSSValueID::kAvoidPage => EBreakBetween::kAvoidPage,
+                CSSValueID::kPage => EBreakBetween::kPage,
+                CSSValueID::kRecto => EBreakBetween::kRecto,
+                CSSValueID::kVerso => EBreakBetween::kVerso,
+                CSSValueID::kAvoidColumn => EBreakBetween::kAvoidColumn,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBreakAfter(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5654
+        CSSPropertyID::kBreakBefore => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:414
+            let converted = match value {
+                CSSValueID::kLeft => EBreakBetween::kLeft,
+                CSSValueID::kRight => EBreakBetween::kRight,
+                CSSValueID::kAuto => EBreakBetween::kAuto,
+                CSSValueID::kAvoid => EBreakBetween::kAvoid,
+                CSSValueID::kColumn => EBreakBetween::kColumn,
+                CSSValueID::kAvoidPage => EBreakBetween::kAvoidPage,
+                CSSValueID::kPage => EBreakBetween::kPage,
+                CSSValueID::kRecto => EBreakBetween::kRecto,
+                CSSValueID::kVerso => EBreakBetween::kVerso,
+                CSSValueID::kAvoidColumn => EBreakBetween::kAvoidColumn,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBreakBefore(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5683
+        CSSPropertyID::kBreakInside => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:454
+            let converted = match value {
+                CSSValueID::kAvoid => EBreakInside::kAvoid,
+                CSSValueID::kAvoidPage => EBreakInside::kAvoidPage,
+                CSSValueID::kAvoidColumn => EBreakInside::kAvoidColumn,
+                CSSValueID::kAuto => EBreakInside::kAuto,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBreakInside(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5712
+        CSSPropertyID::kBufferedRendering => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:486
+            let converted = match value {
+                CSSValueID::kStatic => EBufferedRendering::kStatic,
+                CSSValueID::kDynamic => EBufferedRendering::kDynamic,
+                CSSValueID::kAuto => EBufferedRendering::kAuto,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBufferedRendering(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5743
+        CSSPropertyID::kCaptionSide => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:514
+            let converted = match value {
+                CSSValueID::kTop => ECaptionSide::kTop,
+                CSSValueID::kBottom => ECaptionSide::kBottom,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetCaptionSide(converted);
+            builder.SetCaptionSideIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5779
+        CSSPropertyID::kCaretAnimation => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:528
+            let converted = match value {
+                CSSValueID::kManual => ECaretAnimation::kManual,
+                CSSValueID::kAuto => ECaretAnimation::kAuto,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetCaretAnimation(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5843
+        CSSPropertyID::kCaretShape => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:552
+            let converted = match value {
+                CSSValueID::kBlock => ECaretShape::kBlock,
+                CSSValueID::kAuto => ECaretShape::kAuto,
+                CSSValueID::kBar => ECaretShape::kBar,
+                CSSValueID::kUnderscore => ECaretShape::kUnderscore,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetCaretShape(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5872
+        CSSPropertyID::kClear => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:580
+            let converted = match value {
+                CSSValueID::kNone => EClear::kNone,
+                CSSValueID::kInlineStart => EClear::kInlineStart,
+                CSSValueID::kInlineEnd => EClear::kInlineEnd,
+                CSSValueID::kBoth => EClear::kBoth,
+                CSSValueID::kLeft => EClear::kLeft,
+                CSSValueID::kRight => EClear::kRight,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetClear(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6005
+        CSSPropertyID::kColorInterpolation => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:616
+            let converted = match value {
+                CSSValueID::kAuto => EColorInterpolation::kAuto,
+                CSSValueID::kSRGB => EColorInterpolation::kSRGB,
+                CSSValueID::kLinearrgb => EColorInterpolation::kLinearrgb,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetColorInterpolation(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6034
+        CSSPropertyID::kColorInterpolationFilters => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:616
+            let converted = match value {
+                CSSValueID::kAuto => EColorInterpolation::kAuto,
+                CSSValueID::kSRGB => EColorInterpolation::kSRGB,
+                CSSValueID::kLinearrgb => EColorInterpolation::kLinearrgb,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetColorInterpolationFilters(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6063
+        CSSPropertyID::kColorRendering => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:640
+            let converted = match value {
+                CSSValueID::kOptimizespeed => EColorRendering::kOptimizespeed,
+                CSSValueID::kOptimizequality => EColorRendering::kOptimizequality,
+                CSSValueID::kAuto => EColorRendering::kAuto,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetColorRendering(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6134
+        CSSPropertyID::kColumnFill => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:668
+            let converted = match value {
+                CSSValueID::kBalance => EColumnFill::kBalance,
+                CSSValueID::kAuto => EColumnFill::kAuto,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetColumnFill(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6250
+        CSSPropertyID::kColumnRuleBreak => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:692
+            let converted = match value {
+                CSSValueID::kNormal => RuleBreak::kNormal,
+                CSSValueID::kIntersection => RuleBreak::kIntersection,
+                CSSValueID::kNone => RuleBreak::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetColumnRuleBreak(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6473
+        CSSPropertyID::kColumnRuleVisibilityItems => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:720
+            let converted = match value {
+                CSSValueID::kAll => RuleVisibilityItems::kAll,
+                CSSValueID::kNormal => RuleVisibilityItems::kNormal,
+                CSSValueID::kAround => RuleVisibilityItems::kAround,
+                CSSValueID::kBetween => RuleVisibilityItems::kBetween,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetColumnRuleVisibilityItems(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6525
+        CSSPropertyID::kColumnSpan => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:748
+            let converted = match value {
+                CSSValueID::kAll => EColumnSpan::kAll,
+                CSSValueID::kNone => EColumnSpan::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetColumnSpan(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6601
+        CSSPropertyID::kColumnWrap => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:772
+            let converted = match value {
+                CSSValueID::kNowrap => EColumnWrap::kNowrap,
+                CSSValueID::kWrap => EColumnWrap::kWrap,
+                CSSValueID::kAuto => EColumnWrap::kAuto,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetColumnWrap(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6905
+        CSSPropertyID::kContentVisibility => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:800
+            let converted = match value {
+                CSSValueID::kAuto => EContentVisibility::kAuto,
+                CSSValueID::kVisible => EContentVisibility::kVisible,
+                CSSValueID::kHidden => EContentVisibility::kHidden,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetContentVisibility(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6940
+        CSSPropertyID::kContinue => {
+            // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:749
+            let converted = match value {
+                CSSValueID::kNormal => EContinue::kNormal,
+                CSSValueID::kCollapse => EContinue::kCollapse,
+                CSSValueID::kWebkitLegacy => EContinue::kWebkitLegacy,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetContinue(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7696
+        CSSPropertyID::kDominantBaseline => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:856
+            let converted = match value {
+                CSSValueID::kMiddle => EDominantBaseline::kMiddle,
+                CSSValueID::kAuto => EDominantBaseline::kAuto,
+                CSSValueID::kAlphabetic => EDominantBaseline::kAlphabetic,
+                CSSValueID::kUseScript => EDominantBaseline::kUseScript,
+                CSSValueID::kNoChange => EDominantBaseline::kNoChange,
+                CSSValueID::kResetSize => EDominantBaseline::kResetSize,
+                CSSValueID::kCentral => EDominantBaseline::kCentral,
+                CSSValueID::kTextBeforeEdge => EDominantBaseline::kTextBeforeEdge,
+                CSSValueID::kTextAfterEdge => EDominantBaseline::kTextAfterEdge,
+                CSSValueID::kIdeographic => EDominantBaseline::kIdeographic,
+                CSSValueID::kHanging => EDominantBaseline::kHanging,
+                CSSValueID::kMathematical => EDominantBaseline::kMathematical,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetDominantBaseline(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7762
+        CSSPropertyID::kEmptyCells => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:900
+            let converted = match value {
+                CSSValueID::kShow => EEmptyCells::kShow,
+                CSSValueID::kHide => EEmptyCells::kHide,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetEmptyCells(converted);
+            builder.SetEmptyCellsIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7812
+        CSSPropertyID::kFieldSizing => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:924
+            let converted = match value {
+                CSSValueID::kContent => EFieldSizing::kContent,
+                CSSValueID::kFixed => EFieldSizing::kFixed,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetFieldSizing(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8010
+        CSSPropertyID::kFlexDirection => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:948
+            let converted = match value {
+                CSSValueID::kRow => EFlexDirection::kRow,
+                CSSValueID::kRowReverse => EFlexDirection::kRowReverse,
+                CSSValueID::kColumn => EFlexDirection::kColumn,
+                CSSValueID::kColumnReverse => EFlexDirection::kColumnReverse,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetFlexDirection(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8161
+        CSSPropertyID::kFloat => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:962
+            let converted = match value {
+                CSSValueID::kNone => EFloat::kNone,
+                CSSValueID::kInlineStart => EFloat::kInlineStart,
+                CSSValueID::kInlineEnd => EFloat::kInlineEnd,
+                CSSValueID::kLeft => EFloat::kLeft,
+                CSSValueID::kRight => EFloat::kRight,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetFloating(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8334
+        CSSPropertyID::kFrameSizing => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:994
+            let converted = match value {
+                CSSValueID::kAuto => EFrameSizing::kAuto,
+                CSSValueID::kContentWidth => EFrameSizing::kContentWidth,
+                CSSValueID::kContentHeight => EFrameSizing::kContentHeight,
+                CSSValueID::kContentBlockSize => EFrameSizing::kContentBlockSize,
+                CSSValueID::kContentInlineSize => EFrameSizing::kContentInlineSize,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetFrameSizing(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8571
+        CSSPropertyID::kGridLanesPack => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1018
+            let converted = match value {
+                CSSValueID::kDense => EGridLanesPack::kDense,
+                CSSValueID::kNormal => EGridLanesPack::kNormal,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetGridLanesPack(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8960
+        CSSPropertyID::kHyphens => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1072
+            let converted = match value {
+                CSSValueID::kAuto => Hyphens::kAuto,
+                CSSValueID::kManual => Hyphens::kManual,
+                CSSValueID::kNone => Hyphens::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetHyphens(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8995
+        CSSPropertyID::kImageAnimation => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1100
+            let converted = match value {
+                CSSValueID::kNormal => ImageAnimationEnum::kNormal,
+                CSSValueID::kRunning => ImageAnimationEnum::kRunning,
+                CSSValueID::kPaused => ImageAnimationEnum::kPaused,
+                CSSValueID::kStopped => ImageAnimationEnum::kStopped,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetImageAnimation(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9053
+        CSSPropertyID::kImageRendering => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1124
+            let converted = match value {
+                CSSValueID::kAuto => EImageRendering::kAuto,
+                CSSValueID::kPixelated => EImageRendering::kPixelated,
+                CSSValueID::kCrispEdges => EImageRendering::kCrispEdges,
+                CSSValueID::kWebkitOptimizeContrast => EImageRendering::kWebkitOptimizeContrast,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetImageRendering(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9340
+        CSSPropertyID::kInteractivity => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1148
+            let converted = match value {
+                CSSValueID::kInert => EInteractivity::kInert,
+                CSSValueID::kAuto => EInteractivity::kAuto,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetInteractivity(converted);
+            builder.SetInteractivityIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9679
+        CSSPropertyID::kInternalOverscrollContainer => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1172
+            let converted = match value {
+                CSSValueID::kAuto => EInternalOverscrollContainer::kAuto,
+                CSSValueID::kNone => EInternalOverscrollContainer::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetInternalOverscrollContainer(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9714
+        CSSPropertyID::kInternalOverscrollPosition => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1196
+            let converted = match value {
+                CSSValueID::kAuto => EInternalOverscrollPosition::kAuto,
+                CSSValueID::kNone => EInternalOverscrollPosition::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetInternalOverscrollPosition(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9749
+        CSSPropertyID::kInternalUnbounded => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1220
+            let converted = match value {
+                CSSValueID::kActive => EInternalUnbounded::kActive,
+                CSSValueID::kNone => EInternalUnbounded::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetInternalUnbounded(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9778
+        CSSPropertyID::kInterpolateSize => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1244
+            let converted = match value {
+                CSSValueID::kNumericOnly => EInterpolateSize::kNumericOnly,
+                CSSValueID::kAllowKeywords => EInterpolateSize::kAllowKeywords,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetInterpolateSize(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9807
+        CSSPropertyID::kIsolation => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1258
+            let converted = match value {
+                CSSValueID::kIsolate => EIsolation::kIsolate,
+                CSSValueID::kAuto => EIsolation::kAuto,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetIsolation(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10046
+        CSSPropertyID::kLineBreak => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1282
+            let converted = match value {
+                CSSValueID::kNormal => LineBreak::kNormal,
+                CSSValueID::kAuto => LineBreak::kAuto,
+                CSSValueID::kLoose => LineBreak::kLoose,
+                CSSValueID::kStrict => LineBreak::kStrict,
+                CSSValueID::kAfterWhiteSpace => LineBreak::kAfterWhiteSpace,
+                CSSValueID::kAnywhere => LineBreak::kAnywhere,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetLineBreak(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10204
+        CSSPropertyID::kListStylePosition => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1310
+            let converted = match value {
+                CSSValueID::kOutside => EListStylePosition::kOutside,
+                CSSValueID::kInside => EListStylePosition::kInside,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetListStylePosition(converted);
+            builder.SetListStylePositionIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11128
+        CSSPropertyID::kMaskType => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1324
+            let converted = match value {
+                CSSValueID::kAlpha => EMaskType::kAlpha,
+                CSSValueID::kLuminance => EMaskType::kLuminance,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetMaskType(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11157
+        CSSPropertyID::kMathShift => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1338
+            let converted = match value {
+                CSSValueID::kCompact => EMathShift::kCompact,
+                CSSValueID::kNormal => EMathShift::kNormal,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetMathShift(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11186
+        CSSPropertyID::kMathStyle => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1362
+            let converted = match value {
+                CSSValueID::kCompact => EMathStyle::kCompact,
+                CSSValueID::kNormal => EMathStyle::kNormal,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetMathStyle(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11612
+        CSSPropertyID::kMixBlendMode => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1410
+            let converted = match value {
+                CSSValueID::kNormal => BlendMode::kNormal,
+                CSSValueID::kPlusLighter => BlendMode::kPlusLighter,
+                CSSValueID::kOverlay => BlendMode::kOverlay,
+                CSSValueID::kMultiply => BlendMode::kMultiply,
+                CSSValueID::kScreen => BlendMode::kScreen,
+                CSSValueID::kDarken => BlendMode::kDarken,
+                CSSValueID::kLighten => BlendMode::kLighten,
+                CSSValueID::kColorDodge => BlendMode::kColorDodge,
+                CSSValueID::kColorBurn => BlendMode::kColorBurn,
+                CSSValueID::kHardLight => BlendMode::kHardLight,
+                CSSValueID::kSoftLight => BlendMode::kSoftLight,
+                CSSValueID::kDifference => BlendMode::kDifference,
+                CSSValueID::kExclusion => BlendMode::kExclusion,
+                CSSValueID::kHue => BlendMode::kHue,
+                CSSValueID::kSaturation => BlendMode::kSaturation,
+                CSSValueID::kColor => BlendMode::kColor,
+                CSSValueID::kLuminosity => BlendMode::kLuminosity,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBlendMode(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11681
+        CSSPropertyID::kObjectFit => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1450
+            let converted = match value {
+                CSSValueID::kNone => EObjectFit::kNone,
+                CSSValueID::kFill => EObjectFit::kFill,
+                CSSValueID::kScaleDown => EObjectFit::kScaleDown,
+                CSSValueID::kContain => EObjectFit::kContain,
+                CSSValueID::kCover => EObjectFit::kCover,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetObjectFit(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12031
+        CSSPropertyID::kOriginTrialTestProperty => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1482
+            let converted = match value {
+                CSSValueID::kNormal => EOriginTrialTestProperty::kNormal,
+                CSSValueID::kNone => EOriginTrialTestProperty::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetOriginTrialTestProperty(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12203
+        CSSPropertyID::kOverflowAnchor => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1506
+            let converted = match value {
+                CSSValueID::kAuto => EOverflowAnchor::kAuto,
+                CSSValueID::kVisible => EOverflowAnchor::kVisible,
+                CSSValueID::kNone => EOverflowAnchor::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetOverflowAnchor(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12336
+        CSSPropertyID::kOverflowWrap => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1534
+            let converted = match value {
+                CSSValueID::kBreakWord => EOverflowWrap::kBreakWord,
+                CSSValueID::kAnywhere => EOverflowWrap::kAnywhere,
+                CSSValueID::kNormal => EOverflowWrap::kNormal,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetOverflowWrap(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12429
+        CSSPropertyID::kOverlay => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1602
+            let converted = match value {
+                CSSValueID::kAuto => EOverlay::kAuto,
+                CSSValueID::kNone => EOverlay::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetOverlay(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12557
+        CSSPropertyID::kOverscrollBehaviorX => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1626
+            let converted = match value {
+                CSSValueID::kAuto => EOverscrollBehavior::kAuto,
+                CSSValueID::kContain => EOverscrollBehavior::kContain,
+                CSSValueID::kChain => EOverscrollBehavior::kChain,
+                CSSValueID::kNone => EOverscrollBehavior::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetOverscrollBehaviorX(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12595
+        CSSPropertyID::kOverscrollBehaviorY => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1626
+            let converted = match value {
+                CSSValueID::kAuto => EOverscrollBehavior::kAuto,
+                CSSValueID::kContain => EOverscrollBehavior::kContain,
+                CSSValueID::kChain => EOverscrollBehavior::kChain,
+                CSSValueID::kNone => EOverscrollBehavior::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetOverscrollBehaviorY(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12630
+        CSSPropertyID::kOverscrollContainerType => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1658
+            let converted = match value {
+                CSSValueID::kAuto => EOverscrollContainerType::kAuto,
+                CSSValueID::kOverlay => EOverscrollContainerType::kOverlay,
+                CSSValueID::kPush => EOverscrollContainerType::kPush,
+                CSSValueID::kNone => EOverscrollContainerType::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetOverscrollContainerType(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13026
+        CSSPropertyID::kPageMarginSafety => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1690
+            let converted = match value {
+                CSSValueID::kClamp => EPageMarginSafety::kClamp,
+                CSSValueID::kAdd => EPageMarginSafety::kAdd,
+                CSSValueID::kNone => EPageMarginSafety::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetPageMarginSafety(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13055
+        CSSPropertyID::kPageOrientation => {
+            // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:352
+            let converted = match value {
+                CSSValueID::kUpright => PageOrientation::kUpright,
+                CSSValueID::kRotateLeft => PageOrientation::kRotateLeft,
+                CSSValueID::kRotateRight => PageOrientation::kRotateRight,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetPageOrientation(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13275
+        CSSPropertyID::kPointerEvents => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1718
+            let converted = match value {
+                CSSValueID::kNone => EPointerEvents::kNone,
+                CSSValueID::kAll => EPointerEvents::kAll,
+                CSSValueID::kAuto => EPointerEvents::kAuto,
+                CSSValueID::kVisible => EPointerEvents::kVisible,
+                CSSValueID::kVisiblepainted => EPointerEvents::kVisiblepainted,
+                CSSValueID::kVisiblefill => EPointerEvents::kVisiblefill,
+                CSSValueID::kVisiblestroke => EPointerEvents::kVisiblestroke,
+                CSSValueID::kPainted => EPointerEvents::kPainted,
+                CSSValueID::kFill => EPointerEvents::kFill,
+                CSSValueID::kStroke => EPointerEvents::kStroke,
+                CSSValueID::kBoundingBox => EPointerEvents::kBoundingBox,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetPointerEvents(converted);
+            builder.SetPointerEventsIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13363
+        CSSPropertyID::kPositionTryOrder => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1754
+            let converted = match value {
+                CSSValueID::kNormal => EPositionTryOrder::kNormal,
+                CSSValueID::kMostWidth => EPositionTryOrder::kMostWidth,
+                CSSValueID::kMostHeight => EPositionTryOrder::kMostHeight,
+                CSSValueID::kMostBlockSize => EPositionTryOrder::kMostBlockSize,
+                CSSValueID::kMostInlineSize => EPositionTryOrder::kMostInlineSize,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetPositionTryOrder(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13441
+        CSSPropertyID::kPrintColorAdjust => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1778
+            let converted = match value {
+                CSSValueID::kEconomy => EPrintColorAdjust::kEconomy,
+                CSSValueID::kExact => EPrintColorAdjust::kExact,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetPrintColorAdjust(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13579
+        CSSPropertyID::kReadingFlow => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1792
+            let converted = match value {
+                CSSValueID::kNormal => EReadingFlow::kNormal,
+                CSSValueID::kFlexVisual => EReadingFlow::kFlexVisual,
+                CSSValueID::kFlexFlow => EReadingFlow::kFlexFlow,
+                CSSValueID::kGridRows => EReadingFlow::kGridRows,
+                CSSValueID::kGridColumns => EReadingFlow::kGridColumns,
+                CSSValueID::kGridOrder => EReadingFlow::kGridOrder,
+                CSSValueID::kSourceOrder => EReadingFlow::kSourceOrder,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetReadingFlow(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13810
+        CSSPropertyID::kRowRuleBreak => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:692
+            let converted = match value {
+                CSSValueID::kNormal => RuleBreak::kNormal,
+                CSSValueID::kIntersection => RuleBreak::kIntersection,
+                CSSValueID::kNone => RuleBreak::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetRowRuleBreak(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14033
+        CSSPropertyID::kRowRuleVisibilityItems => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:720
+            let converted = match value {
+                CSSValueID::kAll => RuleVisibilityItems::kAll,
+                CSSValueID::kNormal => RuleVisibilityItems::kNormal,
+                CSSValueID::kAround => RuleVisibilityItems::kAround,
+                CSSValueID::kBetween => RuleVisibilityItems::kBetween,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetRowRuleVisibilityItems(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14085
+        CSSPropertyID::kRubyAlign => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1852
+            let converted = match value {
+                CSSValueID::kCenter => ERubyAlign::kCenter,
+                CSSValueID::kStart => ERubyAlign::kStart,
+                CSSValueID::kSpaceBetween => ERubyAlign::kSpaceBetween,
+                CSSValueID::kSpaceAround => ERubyAlign::kSpaceAround,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetRubyAlign(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14120
+        CSSPropertyID::kRubyOverhang => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1880
+            let converted = match value {
+                CSSValueID::kAuto => ERubyOverhang::kAuto,
+                CSSValueID::kSpaces => ERubyOverhang::kSpaces,
+                CSSValueID::kNone => ERubyOverhang::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetRubyOverhang(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14178
+        CSSPropertyID::kRuleOverlap => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1922
+            let converted = match value {
+                CSSValueID::kRowOverColumn => ERuleOverlap::kRowOverColumn,
+                CSSValueID::kColumnOverRow => ERuleOverlap::kColumnOverRow,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetRuleOverlap(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14310
+        CSSPropertyID::kScrollAxisLock => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1936
+            let converted = match value {
+                CSSValueID::kAuto => EScrollAxisLock::kAuto,
+                CSSValueID::kNone => EScrollAxisLock::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetScrollAxisLock(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14374
+        CSSPropertyID::kScrollInitialTarget => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1960
+            let converted = match value {
+                CSSValueID::kNearest => EScrollInitialTarget::kNearest,
+                CSSValueID::kNone => EScrollInitialTarget::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetScrollInitialTarget(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15139
+        CSSPropertyID::kScrollSnapStop => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:1984
+            let converted = match value {
+                CSSValueID::kAlways => EScrollSnapStop::kAlways,
+                CSSValueID::kNormal => EScrollSnapStop::kNormal,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetScrollSnapStop(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15203
+        CSSPropertyID::kScrollTargetGroup => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2008
+            let converted = match value {
+                CSSValueID::kAuto => EScrollTargetGroup::kAuto,
+                CSSValueID::kNone => EScrollTargetGroup::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetScrollTargetGroup(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15360
+        CSSPropertyID::kScrollbarWidth => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2032
+            let converted = match value {
+                CSSValueID::kAuto => EScrollbarWidth::kAuto,
+                CSSValueID::kThin => EScrollbarWidth::kThin,
+                CSSValueID::kNone => EScrollbarWidth::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetScrollbarWidth(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15518
+        CSSPropertyID::kShapeRendering => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2060
+            let converted = match value {
+                CSSValueID::kAuto => EShapeRendering::kAuto,
+                CSSValueID::kOptimizespeed => EShapeRendering::kOptimizespeed,
+                CSSValueID::kGeometricprecision => EShapeRendering::kGeometricprecision,
+                CSSValueID::kCrispedges => EShapeRendering::kCrispedges,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetShapeRendering(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15587
+        CSSPropertyID::kSpeak => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2088
+            let converted = match value {
+                CSSValueID::kNone => ESpeak::kNone,
+                CSSValueID::kNormal => ESpeak::kNormal,
+                CSSValueID::kSpellOut => ESpeak::kSpellOut,
+                CSSValueID::kDigits => ESpeak::kDigits,
+                CSSValueID::kLiteralPunctuation => ESpeak::kLiteralPunctuation,
+                CSSValueID::kNoPunctuation => ESpeak::kNoPunctuation,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetSpeak(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16100
+        CSSPropertyID::kTableLayout => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2116
+            let converted = match value {
+                CSSValueID::kFixed => ETableLayout::kFixed,
+                CSSValueID::kAuto => ETableLayout::kAuto,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetTableLayout(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16155
+        CSSPropertyID::kTextAlignLast => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2168
+            let converted = match value {
+                CSSValueID::kAuto => ETextAlignLast::kAuto,
+                CSSValueID::kStart => ETextAlignLast::kStart,
+                CSSValueID::kEnd => ETextAlignLast::kEnd,
+                CSSValueID::kLeft => ETextAlignLast::kLeft,
+                CSSValueID::kRight => ETextAlignLast::kRight,
+                CSSValueID::kCenter => ETextAlignLast::kCenter,
+                CSSValueID::kJustify => ETextAlignLast::kJustify,
+                CSSValueID::kMatchParent => ETextAlignLast::kMatchParent,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetTextAlignLast(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16184
+        CSSPropertyID::kTextAnchor => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2200
+            let converted = match value {
+                CSSValueID::kMiddle => ETextAnchor::kMiddle,
+                CSSValueID::kStart => ETextAnchor::kStart,
+                CSSValueID::kEnd => ETextAnchor::kEnd,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetTextAnchor(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16213
+        CSSPropertyID::kTextAutospace => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2224
+            let converted = match value {
+                CSSValueID::kNoAutospace => ETextAutospace::kNoAutospace,
+                CSSValueID::kNormal => ETextAutospace::kNormal,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetTextAutospace(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16271
+        CSSPropertyID::kTextBoxTrim => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2248
+            let converted = match value {
+                CSSValueID::kNone => ETextBoxTrim::kNone,
+                CSSValueID::kTrimBoth => ETextBoxTrim::kTrimBoth,
+                CSSValueID::kTrimEnd => ETextBoxTrim::kTrimEnd,
+                CSSValueID::kTrimStart => ETextBoxTrim::kTrimStart,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetTextBoxTrim(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16300
+        CSSPropertyID::kTextCombineUpright => {
+            // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:56
+            let converted = match value {
+                CSSValueID::kAll => ETextCombine::kAll,
+                CSSValueID::kNone => ETextCombine::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetTextCombine(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16435
+        CSSPropertyID::kTextDecorationSkipInk => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2338
+            let converted = match value {
+                CSSValueID::kAll => ETextDecorationSkipInk::kAll,
+                CSSValueID::kAuto => ETextDecorationSkipInk::kAuto,
+                CSSValueID::kNone => ETextDecorationSkipInk::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetTextDecorationSkipInk(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16499
+        CSSPropertyID::kTextDecorationStyle => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2396
+            let converted = match value {
+                CSSValueID::kWavy => ETextDecorationStyle::kWavy,
+                CSSValueID::kDotted => ETextDecorationStyle::kDotted,
+                CSSValueID::kDashed => ETextDecorationStyle::kDashed,
+                CSSValueID::kSolid => ETextDecorationStyle::kSolid,
+                CSSValueID::kDouble => ETextDecorationStyle::kDouble,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetTextDecorationStyle(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16907
+        CSSPropertyID::kTextWrapMode => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2462
+            let converted = match value {
+                CSSValueID::kWrap => TextWrapMode::kWrap,
+                CSSValueID::kNowrap => TextWrapMode::kNowrap,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetTextWrapMode(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16936
+        CSSPropertyID::kTextWrapStyle => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2486
+            let converted = match value {
+                CSSValueID::kPretty => TextWrapStyle::kPretty,
+                CSSValueID::kBalance => TextWrapStyle::kBalance,
+                CSSValueID::kStable => TextWrapStyle::kStable,
+                CSSValueID::kAuto => TextWrapStyle::kAuto,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetTextWrapStyle(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17441
+        CSSPropertyID::kTransformBox => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2518
+            let converted = match value {
+                CSSValueID::kBorderBox => ETransformBox::kBorderBox,
+                CSSValueID::kContentBox => ETransformBox::kContentBox,
+                CSSValueID::kStrokeBox => ETransformBox::kStrokeBox,
+                CSSValueID::kFillBox => ETransformBox::kFillBox,
+                CSSValueID::kViewBox => ETransformBox::kViewBox,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetTransformBox(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17504
+        CSSPropertyID::kTransformStyle => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2550
+            let converted = match value {
+                CSSValueID::kFlat => ETransformStyle3D::kFlat,
+                CSSValueID::kPreserve3d => ETransformStyle3D::kPreserve3d,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetTransformStyle3D(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17907
+        CSSPropertyID::kUserSelect => {
+            // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:254
+            let converted = match value {
+                CSSValueID::kAll => EUserSelect::kAll,
+                CSSValueID::kAuto => EUserSelect::kAuto,
+                CSSValueID::kText => EUserSelect::kText,
+                CSSValueID::kContain => EUserSelect::kContain,
+                CSSValueID::kNone => EUserSelect::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetUserSelect(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17936
+        CSSPropertyID::kVectorEffect => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2640
+            let converted = match value {
+                CSSValueID::kNonScalingStroke => EVectorEffect::kNonScalingStroke,
+                CSSValueID::kNone => EVectorEffect::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetVectorEffect(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18167
+        CSSPropertyID::kViewTransitionScope => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2664
+            let converted = match value {
+                CSSValueID::kAll => EViewTransitionScope::kAll,
+                CSSValueID::kNone => EViewTransitionScope::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetViewTransitionScope(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18198
+        CSSPropertyID::kVisibility => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2688
+            let converted = match value {
+                CSSValueID::kHidden => EVisibility::kHidden,
+                CSSValueID::kVisible => EVisibility::kVisible,
+                CSSValueID::kCollapse => EVisibility::kCollapse,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetVisibility(converted);
+            builder.SetVisibilityIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18328
+        CSSPropertyID::kWebkitBoxAlign => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2712
+            let converted = match value {
+                CSSValueID::kBaseline => EBoxAlignment::kBaseline,
+                CSSValueID::kCenter => EBoxAlignment::kCenter,
+                CSSValueID::kStretch => EBoxAlignment::kStretch,
+                CSSValueID::kStart => EBoxAlignment::kStart,
+                CSSValueID::kEnd => EBoxAlignment::kEnd,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBoxAlign(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18380
+        CSSPropertyID::kWebkitBoxDirection => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2740
+            let converted = match value {
+                CSSValueID::kReverse => EBoxDirection::kReverse,
+                CSSValueID::kNormal => EBoxDirection::kNormal,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBoxDirection(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18473
+        CSSPropertyID::kWebkitBoxOrient => {
+            // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:44
+            let converted = match value {
+                CSSValueID::kHorizontal => EBoxOrient::kHorizontal,
+                CSSValueID::kVertical => EBoxOrient::kVertical,
+                CSSValueID::kInlineAxis => EBoxOrient::kHorizontal,
+                CSSValueID::kBlockAxis => EBoxOrient::kVertical,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBoxOrient(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18502
+        CSSPropertyID::kWebkitBoxPack => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2778
+            let converted = match value {
+                CSSValueID::kStart => EBoxPack::kStart,
+                CSSValueID::kEnd => EBoxPack::kEnd,
+                CSSValueID::kCenter => EBoxPack::kCenter,
+                CSSValueID::kJustify => EBoxPack::kJustify,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetBoxPack(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19052
+        CSSPropertyID::kWebkitRtlOrdering => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2806
+            let converted = match value {
+                CSSValueID::kLogical => EOrder::kLogical,
+                CSSValueID::kVisual => EOrder::kVisual,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetRtlOrdering(converted);
+            builder.SetRtlOrderingIsInherited(false);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19229
+        CSSPropertyID::kWebkitTextSecurity => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2820
+            let converted = match value {
+                CSSValueID::kNone => ETextSecurity::kNone,
+                CSSValueID::kDisc => ETextSecurity::kDisc,
+                CSSValueID::kCircle => ETextSecurity::kCircle,
+                CSSValueID::kSquare => ETextSecurity::kSquare,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetTextSecurity(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19407
+        CSSPropertyID::kWebkitUserDrag => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2844
+            let converted = match value {
+                CSSValueID::kAuto => EUserDrag::kAuto,
+                CSSValueID::kElement => EUserDrag::kElement,
+                CSSValueID::kNone => EUserDrag::kNone,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetUserDrag(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19436
+        CSSPropertyID::kWebkitUserModify => {
+            // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:2872
+            let converted = match value {
+                CSSValueID::kReadOnly => EUserModify::kReadOnly,
+                CSSValueID::kReadWrite => EUserModify::kReadWrite,
+                CSSValueID::kReadWritePlaintextOnly => EUserModify::kReadWritePlaintextOnly,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetUserModify(converted);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19465
+        CSSPropertyID::kWhiteSpaceCollapse => {
+            // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:421
+            let converted = match value {
+                CSSValueID::kCollapse => WhiteSpaceCollapse::kCollapse,
+                CSSValueID::kPreserve => WhiteSpaceCollapse::kPreserve,
+                CSSValueID::kPreserveBreaks => WhiteSpaceCollapse::kPreserveBreaks,
+                CSSValueID::kBreakSpaces => WhiteSpaceCollapse::kBreakSpaces,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetWhiteSpaceCollapse(converted);
+        }
+        // cpp: third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc:3910
+        CSSPropertyID::kDisplay => {
+            // cpp: third_party/blink/renderer/core/css/css_value_id_mappings.h:158
+            let converted = match value {
+                CSSValueID::kNone => EDisplay::kNone,
+                CSSValueID::kInline => EDisplay::kInline,
+                CSSValueID::kBlock => EDisplay::kBlock,
+                CSSValueID::kFlow => EDisplay::kBlock,
+                CSSValueID::kFlowRoot => EDisplay::kFlowRoot,
+                CSSValueID::kListItem => EDisplay::kListItem,
+                CSSValueID::kInlineBlock => EDisplay::kInlineBlock,
+                CSSValueID::kTable => EDisplay::kTable,
+                CSSValueID::kInlineTable => EDisplay::kInlineTable,
+                CSSValueID::kTableRowGroup => EDisplay::kTableRowGroup,
+                CSSValueID::kTableHeaderGroup => EDisplay::kTableHeaderGroup,
+                CSSValueID::kTableFooterGroup => EDisplay::kTableFooterGroup,
+                CSSValueID::kTableRow => EDisplay::kTableRow,
+                CSSValueID::kTableColumnGroup => EDisplay::kTableColumnGroup,
+                CSSValueID::kTableColumn => EDisplay::kTableColumn,
+                CSSValueID::kTableCell => EDisplay::kTableCell,
+                CSSValueID::kTableCaption => EDisplay::kTableCaption,
+                CSSValueID::kWebkitBox => EDisplay::kWebkitBox,
+                CSSValueID::kWebkitInlineBox => EDisplay::kWebkitInlineBox,
+                CSSValueID::kFlex => EDisplay::kFlex,
+                CSSValueID::kInlineFlex => EDisplay::kInlineFlex,
+                CSSValueID::kGrid => EDisplay::kGrid,
+                CSSValueID::kInlineGrid => EDisplay::kInlineGrid,
+                CSSValueID::kContents => EDisplay::kContents,
+                CSSValueID::kWebkitFlex => EDisplay::kFlex,
+                CSSValueID::kWebkitInlineFlex => EDisplay::kInlineFlex,
+                CSSValueID::kMath => EDisplay::kMath,
+                CSSValueID::kRuby => EDisplay::kRuby,
+                CSSValueID::kRubyText => EDisplay::kRubyText,
+                CSSValueID::kGridLanes => EDisplay::kGridLanes,
+                CSSValueID::kInlineGridLanes => EDisplay::kInlineGridLanes,
+                _ => return Err(LonghandApplicationError::InvalidValue(property)),
+            };
+            builder.SetDisplay(converted);
+            builder.SetDisplayLayoutCustomName(
+                &ComputedStyleInitialValues::InitialDisplayLayoutCustomName(),
+            );
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
 }
 
-pub fn ApplyConvertedColor(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &StyleColor) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1276
-CSSPropertyID::kInternalVisitedBackgroundColor => { builder.SetInternalVisitedBackgroundColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1413
-CSSPropertyID::kInternalVisitedBorderBottomColor => { builder.SetInternalVisitedBorderBottomColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1550
-CSSPropertyID::kInternalVisitedBorderLeftColor => { builder.SetInternalVisitedBorderLeftColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1599
-CSSPropertyID::kInternalVisitedBorderRightColor => { builder.SetInternalVisitedBorderRightColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1648
-CSSPropertyID::kInternalVisitedBorderTopColor => { builder.SetInternalVisitedBorderTopColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1794
-CSSPropertyID::kInternalVisitedOutlineColor => { builder.SetInternalVisitedOutlineColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1874
-CSSPropertyID::kInternalVisitedTextDecorationColor => { builder.SetInternalVisitedTextDecorationColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1914
-CSSPropertyID::kInternalVisitedTextEmphasisColor => { builder.SetInternalVisitedTextEmphasisColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1954
-CSSPropertyID::kInternalVisitedTextFillColor => { builder.SetInternalVisitedTextFillColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1994
-CSSPropertyID::kInternalVisitedTextStrokeColor => { builder.SetInternalVisitedTextStrokeColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3263
-CSSPropertyID::kBackgroundColor => { builder.SetBackgroundColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4150
-CSSPropertyID::kBorderBottomColor => { builder.SetBorderBottomColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4918
-CSSPropertyID::kBorderLeftColor => { builder.SetBorderLeftColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5040
-CSSPropertyID::kBorderRightColor => { builder.SetBorderRightColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5284
-CSSPropertyID::kBorderTopColor => { builder.SetBorderTopColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8198
-CSSPropertyID::kFloodColor => { builder.SetFloodColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9535
-CSSPropertyID::kInternalForcedBackgroundColor => { builder.SetInternalForcedBackgroundColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9575
-CSSPropertyID::kInternalForcedBorderColor => { builder.SetInternalForcedBorderColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9644
-CSSPropertyID::kInternalForcedOutlineColor => { builder.SetInternalForcedOutlineColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10017
-CSSPropertyID::kLightingColor => { builder.SetLightingColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12097
-CSSPropertyID::kOutlineColor => { builder.SetOutlineColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15664
-CSSPropertyID::kStopColor => { builder.SetStopColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16337
-CSSPropertyID::kTextDecorationColor => { builder.SetTextDecorationColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16570
-CSSPropertyID::kTextEmphasisColor => { builder.SetTextEmphasisColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19111
-CSSPropertyID::kWebkitTapHighlightColor => { builder.SetTapHighlightColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19200
-CSSPropertyID::kWebkitTextFillColor => { builder.SetTextFillColor(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19266
-CSSPropertyID::kWebkitTextStrokeColor => { builder.SetTextStrokeColor(value); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
+pub fn ApplyNumber(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: f64,
+) -> Result<(), LonghandApplicationError> {
+    if !value.is_finite() {
+        return Err(LonghandApplicationError::InvalidValue(property));
+    }
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8039
+        CSSPropertyID::kFlexGrow => {
+            builder.SetFlexGrow(value.clamp(f32::MIN as f64, f32::MAX as f64) as f32);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8074
+        CSSPropertyID::kFlexLineCount => {
+            builder.SetFlexLineCount(value as u16);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8103
+        CSSPropertyID::kFlexShrink => {
+            builder.SetFlexShrink(value.clamp(f32::MIN as f64, f32::MAX as f64) as f32);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11961
+        CSSPropertyID::kOpacity => {
+            builder.SetOpacity(value.clamp(f32::MIN as f64, f32::MAX as f64) as f32);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11996
+        CSSPropertyID::kOrder => {
+            builder.SetOrder(value as i32);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13614
+        CSSPropertyID::kReadingOrder => {
+            builder.SetReadingOrder(value as i32);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15421
+        CSSPropertyID::kShapeImageThreshold => {
+            builder.SetShapeImageThreshold(value.clamp(f32::MIN as f64, f32::MAX as f64) as f32);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15888
+        CSSPropertyID::kStrokeMiterlimit => {
+            builder.SetStrokeMiterLimit(value.clamp(f32::MIN as f64, f32::MAX as f64) as f32);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18409
+        CSSPropertyID::kWebkitBoxFlex => {
+            builder.SetBoxFlex(value.clamp(f32::MIN as f64, f32::MAX as f64) as f32);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18444
+        CSSPropertyID::kWebkitBoxOrdinalGroup => {
+            builder.SetBoxOrdinalGroup(value as u32);
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
 }
 
-pub fn ApplyConvertedBorderWidth(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &i32) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4324
-CSSPropertyID::kBorderBottomWidth => { builder.SetBorderBottomWidth(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4994
-CSSPropertyID::kBorderLeftWidth => { builder.SetBorderLeftWidth(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5116
-CSSPropertyID::kBorderRightWidth => { builder.SetBorderRightWidth(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5458
-CSSPropertyID::kBorderTopWidth => { builder.SetBorderTopWidth(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12174
-CSSPropertyID::kOutlineWidth => { builder.SetOutlineWidth(value); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
+pub fn ApplyConvertedLength(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &Length,
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5501
+        CSSPropertyID::kBottom => {
+            builder.SetBottom(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6313
+        CSSPropertyID::kColumnRuleInsetCapEnd => {
+            builder.SetColumnRuleInsetCapEnd(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6347
+        CSSPropertyID::kColumnRuleInsetCapStart => {
+            builder.SetColumnRuleInsetCapStart(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6381
+        CSSPropertyID::kColumnRuleInsetJunctionEnd => {
+            builder.SetColumnRuleInsetJunctionEnd(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:6415
+        CSSPropertyID::kColumnRuleInsetJunctionStart => {
+            builder.SetColumnRuleInsetJunctionStart(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7564
+        CSSPropertyID::kCx => {
+            builder.SetCx(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7598
+        CSSPropertyID::kCy => {
+            builder.SetCy(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:7981
+        CSSPropertyID::kFlexBasis => {
+            builder.SetFlexBasis(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8838
+        CSSPropertyID::kHeight => {
+            builder.SetHeight(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9937
+        CSSPropertyID::kLeft => {
+            builder.SetLeft(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9980
+        CSSPropertyID::kLetterSpacing => {
+            builder.SetLetterSpacing(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10136
+        CSSPropertyID::kLineHeight => {
+            builder.SetLineHeight(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10344
+        CSSPropertyID::kMarginBottom => {
+            builder.SetMarginBottom(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10460
+        CSSPropertyID::kMarginLeft => {
+            builder.SetMarginLeft(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10506
+        CSSPropertyID::kMarginRight => {
+            builder.SetMarginRight(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10552
+        CSSPropertyID::kMarginTop => {
+            builder.SetMarginTop(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11296
+        CSSPropertyID::kMaxHeight => {
+            builder.SetMaxHeight(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11418
+        CSSPropertyID::kMaxWidth => {
+            builder.SetMaxWidth(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11499
+        CSSPropertyID::kMinHeight => {
+            builder.SetMinHeight(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11580
+        CSSPropertyID::kMinWidth => {
+            builder.SetMinWidth(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:11817
+        CSSPropertyID::kOffsetDistance => {
+            builder.SetOffsetDistance(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12763
+        CSSPropertyID::kPaddingBottom => {
+            builder.SetPaddingBottom(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12876
+        CSSPropertyID::kPaddingLeft => {
+            builder.SetPaddingLeft(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12919
+        CSSPropertyID::kPaddingRight => {
+            builder.SetPaddingRight(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12962
+        CSSPropertyID::kPaddingTop => {
+            builder.SetPaddingTop(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13124
+        CSSPropertyID::kPathLength => {
+            builder.SetPathLength(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13530
+        CSSPropertyID::kR => {
+            builder.SetR(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13709
+        CSSPropertyID::kRight => {
+            builder.SetRight(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13873
+        CSSPropertyID::kRowRuleInsetCapEnd => {
+            builder.SetRowRuleInsetCapEnd(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13907
+        CSSPropertyID::kRowRuleInsetCapStart => {
+            builder.SetRowRuleInsetCapStart(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13941
+        CSSPropertyID::kRowRuleInsetJunctionEnd => {
+            builder.SetRowRuleInsetJunctionEnd(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:13975
+        CSSPropertyID::kRowRuleInsetJunctionStart => {
+            builder.SetRowRuleInsetJunctionStart(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14212
+        CSSPropertyID::kRx => {
+            builder.SetRx(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14246
+        CSSPropertyID::kRy => {
+            builder.SetRy(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14852
+        CSSPropertyID::kScrollPaddingBottom => {
+            builder.SetScrollPaddingBottom(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:14983
+        CSSPropertyID::kScrollPaddingLeft => {
+            builder.SetScrollPaddingLeft(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15032
+        CSSPropertyID::kScrollPaddingRight => {
+            builder.SetScrollPaddingRight(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15081
+        CSSPropertyID::kScrollPaddingTop => {
+            builder.SetScrollPaddingTop(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15455
+        CSSPropertyID::kShapeMargin => {
+            builder.SetShapeMargin(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15801
+        CSSPropertyID::kStrokeDashoffset => {
+            builder.SetStrokeDashOffset(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16849
+        CSSPropertyID::kTextUnderlineOffset => {
+            builder.SetTextUnderlineOffset(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17340
+        CSSPropertyID::kTop => {
+            builder.SetTop(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:18995
+        CSSPropertyID::kWebkitPerspectiveOriginX => {
+            builder.SetPerspectiveOriginX(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19021
+        CSSPropertyID::kWebkitPerspectiveOriginY => {
+            builder.SetPerspectiveOriginY(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19326
+        CSSPropertyID::kWebkitTransformOriginX => {
+            builder.SetTransformOriginX(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19352
+        CSSPropertyID::kWebkitTransformOriginY => {
+            builder.SetTransformOriginY(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19543
+        CSSPropertyID::kWidth => {
+            builder.SetWidth(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19664
+        CSSPropertyID::kWordSpacing => {
+            builder.SetWordSpacing(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19698
+        CSSPropertyID::kX => {
+            builder.SetX(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19732
+        CSSPropertyID::kY => {
+            builder.SetY(value);
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
 }
 
-pub fn ApplyConvertedContentAlignment(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &StyleContentAlignmentData) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2072
-CSSPropertyID::kAlignContent => { builder.SetAlignContent(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9836
-CSSPropertyID::kJustifyContent => { builder.SetJustifyContent(value); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedSelfAlignment(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &StyleSelfAlignmentData) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2101
-CSSPropertyID::kAlignItems => { builder.SetAlignItems(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2130
-CSSPropertyID::kAlignSelf => { builder.SetAlignSelf(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9865
-CSSPropertyID::kJustifyItems => { builder.SetJustifyItems(value); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9894
-CSSPropertyID::kJustifySelf => { builder.SetJustifySelf(value); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedFlexWrap(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &StyleFlexWrapData) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8132
-CSSPropertyID::kFlexWrap => { builder.SetFlexWrap(value); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedNameList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[Member<ScopedCSSName>]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2597
-CSSPropertyID::kAnimationName => { *builder.AccessAnimations().NameListMut() = value.to_vec().into(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedCompositionList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[CompositeOperation]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2321
-CSSPropertyID::kAnimationComposition => { *builder.AccessAnimations().CompositionListMut() = value.to_vec(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedTimelineList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[StyleTimeline]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2796
-CSSPropertyID::kAnimationTimeline => { *builder.AccessAnimations().TimelineListMut() = value.to_vec(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedRangeStartList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[Option<TimelineOffset>]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2745
-CSSPropertyID::kAnimationRangeStart => { *builder.AccessAnimations().RangeStartListMut() = value.to_vec(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedRangeEndList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[Option<TimelineOffset>]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2694
-CSSPropertyID::kAnimationRangeEnd => { *builder.AccessAnimations().RangeEndListMut() = value.to_vec(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedDelayStartList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[TimingDelay]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2367
-CSSPropertyID::kAnimationDelay => { *builder.AccessAnimations().DelayStartListMut() = value.to_vec(); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17589
-CSSPropertyID::kTransitionDelay => { *builder.AccessTransitions().DelayStartListMut() = value.to_vec(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedDurationList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[Option<f64>]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2459
-CSSPropertyID::kAnimationDuration => { *builder.AccessAnimations().DurationListMut() = value.to_vec(); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17635
-CSSPropertyID::kTransitionDuration => { *builder.AccessTransitions().DurationListMut() = value.to_vec(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedDirectionList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[PlaybackDirection]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2413
-CSSPropertyID::kAnimationDirection => { *builder.AccessAnimations().DirectionListMut() = value.to_vec(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedFillModeList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[FillMode]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2505
-CSSPropertyID::kAnimationFillMode => { *builder.AccessAnimations().FillModeListMut() = value.to_vec(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
+pub fn ApplyConvertedColor(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &StyleColor,
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1276
+        CSSPropertyID::kInternalVisitedBackgroundColor => {
+            builder.SetInternalVisitedBackgroundColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1413
+        CSSPropertyID::kInternalVisitedBorderBottomColor => {
+            builder.SetInternalVisitedBorderBottomColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1550
+        CSSPropertyID::kInternalVisitedBorderLeftColor => {
+            builder.SetInternalVisitedBorderLeftColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1599
+        CSSPropertyID::kInternalVisitedBorderRightColor => {
+            builder.SetInternalVisitedBorderRightColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1648
+        CSSPropertyID::kInternalVisitedBorderTopColor => {
+            builder.SetInternalVisitedBorderTopColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1794
+        CSSPropertyID::kInternalVisitedOutlineColor => {
+            builder.SetInternalVisitedOutlineColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1874
+        CSSPropertyID::kInternalVisitedTextDecorationColor => {
+            builder.SetInternalVisitedTextDecorationColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1914
+        CSSPropertyID::kInternalVisitedTextEmphasisColor => {
+            builder.SetInternalVisitedTextEmphasisColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1954
+        CSSPropertyID::kInternalVisitedTextFillColor => {
+            builder.SetInternalVisitedTextFillColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:1994
+        CSSPropertyID::kInternalVisitedTextStrokeColor => {
+            builder.SetInternalVisitedTextStrokeColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:3263
+        CSSPropertyID::kBackgroundColor => {
+            builder.SetBackgroundColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4150
+        CSSPropertyID::kBorderBottomColor => {
+            builder.SetBorderBottomColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4918
+        CSSPropertyID::kBorderLeftColor => {
+            builder.SetBorderLeftColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5040
+        CSSPropertyID::kBorderRightColor => {
+            builder.SetBorderRightColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5284
+        CSSPropertyID::kBorderTopColor => {
+            builder.SetBorderTopColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8198
+        CSSPropertyID::kFloodColor => {
+            builder.SetFloodColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9535
+        CSSPropertyID::kInternalForcedBackgroundColor => {
+            builder.SetInternalForcedBackgroundColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9575
+        CSSPropertyID::kInternalForcedBorderColor => {
+            builder.SetInternalForcedBorderColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9644
+        CSSPropertyID::kInternalForcedOutlineColor => {
+            builder.SetInternalForcedOutlineColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:10017
+        CSSPropertyID::kLightingColor => {
+            builder.SetLightingColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12097
+        CSSPropertyID::kOutlineColor => {
+            builder.SetOutlineColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:15664
+        CSSPropertyID::kStopColor => {
+            builder.SetStopColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16337
+        CSSPropertyID::kTextDecorationColor => {
+            builder.SetTextDecorationColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:16570
+        CSSPropertyID::kTextEmphasisColor => {
+            builder.SetTextEmphasisColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19111
+        CSSPropertyID::kWebkitTapHighlightColor => {
+            builder.SetTapHighlightColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19200
+        CSSPropertyID::kWebkitTextFillColor => {
+            builder.SetTextFillColor(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:19266
+        CSSPropertyID::kWebkitTextStrokeColor => {
+            builder.SetTextStrokeColor(value);
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
 }
 
-pub fn ApplyConvertedIterationCountList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[f64]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2551
-CSSPropertyID::kAnimationIterationCount => { *builder.AccessAnimations().IterationCountListMut() = value.to_vec(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedPlayStateList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[EAnimPlayState]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2643
-CSSPropertyID::kAnimationPlayState => { *builder.AccessAnimations().PlayStateListMut() = value.to_vec(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedTimingFunctionList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[ScopedRefPtr<TimingFunction>]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2842
-CSSPropertyID::kAnimationTimingFunction => { *builder.AccessAnimations().TimingFunctionListMut() = value.to_vec(); },
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17727
-CSSPropertyID::kTransitionTimingFunction => { *builder.AccessTransitions().TimingFunctionListMut() = value.to_vec(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
-}
-
-pub fn ApplyConvertedPropertyList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[TransitionProperty]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17681
-CSSPropertyID::kTransitionProperty => { *builder.AccessTransitions().PropertyListMut() = value.to_vec(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
-}
-Ok(())
+pub fn ApplyConvertedBorderWidth(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &i32,
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4324
+        CSSPropertyID::kBorderBottomWidth => {
+            builder.SetBorderBottomWidth(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:4994
+        CSSPropertyID::kBorderLeftWidth => {
+            builder.SetBorderLeftWidth(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5116
+        CSSPropertyID::kBorderRightWidth => {
+            builder.SetBorderRightWidth(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:5458
+        CSSPropertyID::kBorderTopWidth => {
+            builder.SetBorderTopWidth(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:12174
+        CSSPropertyID::kOutlineWidth => {
+            builder.SetOutlineWidth(value);
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
 }
 
-pub fn ApplyConvertedBehaviorList(property: CSSPropertyID, builder: &mut ComputedStyleBuilder, value: &[TransitionBehavior]) -> Result<(), LonghandApplicationError> {
-if !crate::production_render_delay_features::IsExposed(property) { return Err(LonghandApplicationError::Unsupported(property)); }
-match property {
-// cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17543
-CSSPropertyID::kTransitionBehavior => { *builder.AccessTransitions().BehaviorListMut() = value.to_vec(); },
-_ => return Err(LonghandApplicationError::Unsupported(property)),
+pub fn ApplyConvertedContentAlignment(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &StyleContentAlignmentData,
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2072
+        CSSPropertyID::kAlignContent => {
+            builder.SetAlignContent(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9836
+        CSSPropertyID::kJustifyContent => {
+            builder.SetJustifyContent(value);
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
 }
-Ok(())
+
+pub fn ApplyConvertedSelfAlignment(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &StyleSelfAlignmentData,
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2101
+        CSSPropertyID::kAlignItems => {
+            builder.SetAlignItems(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2130
+        CSSPropertyID::kAlignSelf => {
+            builder.SetAlignSelf(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9865
+        CSSPropertyID::kJustifyItems => {
+            builder.SetJustifyItems(value);
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:9894
+        CSSPropertyID::kJustifySelf => {
+            builder.SetJustifySelf(value);
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedFlexWrap(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &StyleFlexWrapData,
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:8132
+        CSSPropertyID::kFlexWrap => {
+            builder.SetFlexWrap(value);
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedNameList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[Member<ScopedCSSName>],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2597
+        CSSPropertyID::kAnimationName => {
+            *builder.AccessAnimations().NameListMut() = value.to_vec().into();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedCompositionList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[CompositeOperation],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2321
+        CSSPropertyID::kAnimationComposition => {
+            *builder.AccessAnimations().CompositionListMut() = value.to_vec();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedTimelineList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[StyleTimeline],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2796
+        CSSPropertyID::kAnimationTimeline => {
+            *builder.AccessAnimations().TimelineListMut() = value.to_vec();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedRangeStartList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[Option<TimelineOffset>],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2745
+        CSSPropertyID::kAnimationRangeStart => {
+            *builder.AccessAnimations().RangeStartListMut() = value.to_vec();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedRangeEndList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[Option<TimelineOffset>],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2694
+        CSSPropertyID::kAnimationRangeEnd => {
+            *builder.AccessAnimations().RangeEndListMut() = value.to_vec();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedDelayStartList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[TimingDelay],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2367
+        CSSPropertyID::kAnimationDelay => {
+            *builder.AccessAnimations().DelayStartListMut() = value.to_vec();
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17589
+        CSSPropertyID::kTransitionDelay => {
+            *builder.AccessTransitions().DelayStartListMut() = value.to_vec();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedDurationList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[Option<f64>],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2459
+        CSSPropertyID::kAnimationDuration => {
+            *builder.AccessAnimations().DurationListMut() = value.to_vec();
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17635
+        CSSPropertyID::kTransitionDuration => {
+            *builder.AccessTransitions().DurationListMut() = value.to_vec();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedDirectionList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[PlaybackDirection],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2413
+        CSSPropertyID::kAnimationDirection => {
+            *builder.AccessAnimations().DirectionListMut() = value.to_vec();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedFillModeList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[FillMode],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2505
+        CSSPropertyID::kAnimationFillMode => {
+            *builder.AccessAnimations().FillModeListMut() = value.to_vec();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedIterationCountList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[f64],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2551
+        CSSPropertyID::kAnimationIterationCount => {
+            *builder.AccessAnimations().IterationCountListMut() = value.to_vec();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedPlayStateList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[EAnimPlayState],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2643
+        CSSPropertyID::kAnimationPlayState => {
+            *builder.AccessAnimations().PlayStateListMut() = value.to_vec();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedTimingFunctionList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[ScopedRefPtr<TimingFunction>],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:2842
+        CSSPropertyID::kAnimationTimingFunction => {
+            *builder.AccessAnimations().TimingFunctionListMut() = value.to_vec();
+        }
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17727
+        CSSPropertyID::kTransitionTimingFunction => {
+            *builder.AccessTransitions().TimingFunctionListMut() = value.to_vec();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedPropertyList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[TransitionProperty],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17681
+        CSSPropertyID::kTransitionProperty => {
+            *builder.AccessTransitions().PropertyListMut() = value.to_vec();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
+}
+
+pub fn ApplyConvertedBehaviorList(
+    property: CSSPropertyID,
+    builder: &mut ComputedStyleBuilder,
+    value: &[TransitionBehavior],
+) -> Result<(), LonghandApplicationError> {
+    if !crate::production_render_delay_features::IsExposed(property) {
+        return Err(LonghandApplicationError::Unsupported(property));
+    }
+    match property {
+        // cpp: out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc:17543
+        CSSPropertyID::kTransitionBehavior => {
+            *builder.AccessTransitions().BehaviorListMut() = value.to_vec();
+        }
+        _ => return Err(LonghandApplicationError::Unsupported(property)),
+    }
+    Ok(())
 }
 
 // cpp: out/Min/gen/third_party/blink/renderer/core/css/css_value_id_mappings_generated.h:338
-pub fn ConvertBorderStyle(property: CSSPropertyID, value: CSSValueID) -> Result<EBorderStyle, LonghandApplicationError> {
-Ok(match value { CSSValueID::kNone => EBorderStyle::kNone, CSSValueID::kHidden => EBorderStyle::kHidden, CSSValueID::kInset => EBorderStyle::kInset, CSSValueID::kGroove => EBorderStyle::kGroove, CSSValueID::kOutset => EBorderStyle::kOutset, CSSValueID::kRidge => EBorderStyle::kRidge, CSSValueID::kDotted => EBorderStyle::kDotted, CSSValueID::kDashed => EBorderStyle::kDashed, CSSValueID::kSolid => EBorderStyle::kSolid, CSSValueID::kDouble => EBorderStyle::kDouble, _ => return Err(LonghandApplicationError::InvalidValue(property)) })
+pub fn ConvertBorderStyle(
+    property: CSSPropertyID,
+    value: CSSValueID,
+) -> Result<EBorderStyle, LonghandApplicationError> {
+    Ok(match value {
+        CSSValueID::kNone => EBorderStyle::kNone,
+        CSSValueID::kHidden => EBorderStyle::kHidden,
+        CSSValueID::kInset => EBorderStyle::kInset,
+        CSSValueID::kGroove => EBorderStyle::kGroove,
+        CSSValueID::kOutset => EBorderStyle::kOutset,
+        CSSValueID::kRidge => EBorderStyle::kRidge,
+        CSSValueID::kDotted => EBorderStyle::kDotted,
+        CSSValueID::kDashed => EBorderStyle::kDashed,
+        CSSValueID::kSolid => EBorderStyle::kSolid,
+        CSSValueID::kDouble => EBorderStyle::kDouble,
+        _ => return Err(LonghandApplicationError::InvalidValue(property)),
+    })
 }
 
 // cpp: css_direction_aware_resolver.cc:336-402; generated longhands.cc ToPhysicalInternal.
 pub fn ResolvePhysical(property: CSSPropertyID, direction: WritingDirectionMode) -> CSSPropertyID {
-match property {
-// cpp: generated longhands.cc:1306
-CSSPropertyID::kInternalVisitedBorderBlockEndColor => [CSSPropertyID::kInternalVisitedBorderTopColor, CSSPropertyID::kInternalVisitedBorderRightColor, CSSPropertyID::kInternalVisitedBorderBottomColor, CSSPropertyID::kInternalVisitedBorderLeftColor][direction.BlockEnd() as usize],
-// cpp: generated longhands.cc:1350
-CSSPropertyID::kInternalVisitedBorderBlockStartColor => [CSSPropertyID::kInternalVisitedBorderTopColor, CSSPropertyID::kInternalVisitedBorderRightColor, CSSPropertyID::kInternalVisitedBorderBottomColor, CSSPropertyID::kInternalVisitedBorderLeftColor][direction.BlockStart() as usize],
-// cpp: generated longhands.cc:1443
-CSSPropertyID::kInternalVisitedBorderInlineEndColor => [CSSPropertyID::kInternalVisitedBorderTopColor, CSSPropertyID::kInternalVisitedBorderRightColor, CSSPropertyID::kInternalVisitedBorderBottomColor, CSSPropertyID::kInternalVisitedBorderLeftColor][direction.InlineEnd() as usize],
-// cpp: generated longhands.cc:1487
-CSSPropertyID::kInternalVisitedBorderInlineStartColor => [CSSPropertyID::kInternalVisitedBorderTopColor, CSSPropertyID::kInternalVisitedBorderRightColor, CSSPropertyID::kInternalVisitedBorderBottomColor, CSSPropertyID::kInternalVisitedBorderLeftColor][direction.InlineStart() as usize],
-// cpp: generated longhands.cc:3868
-CSSPropertyID::kBlockSize => [CSSPropertyID::kWidth, CSSPropertyID::kHeight][direction.IsHorizontal() as usize],
-// cpp: generated longhands.cc:3909
-CSSPropertyID::kBorderBlockEndColor => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderColor)[direction.BlockEnd() as usize],
-// cpp: generated longhands.cc:3950
-CSSPropertyID::kBorderBlockEndStyle => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderStyle)[direction.BlockEnd() as usize],
-// cpp: generated longhands.cc:3985
-CSSPropertyID::kBorderBlockEndWidth => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderWidth)[direction.BlockEnd() as usize],
-// cpp: generated longhands.cc:4020
-CSSPropertyID::kBorderBlockStartColor => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderColor)[direction.BlockStart() as usize],
-// cpp: generated longhands.cc:4061
-CSSPropertyID::kBorderBlockStartStyle => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderStyle)[direction.BlockStart() as usize],
-// cpp: generated longhands.cc:4096
-CSSPropertyID::kBorderBlockStartWidth => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderWidth)[direction.BlockStart() as usize],
-// cpp: generated longhands.cc:4383; css_direction_aware_resolver.cc:421-460
-CSSPropertyID::kBorderEndEndRadius => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderRadius)[if direction.IsLtr() { [2, 3, 2, 3, 1][direction.GetWritingMode() as usize] } else { [3, 0, 1, 0, 2][direction.GetWritingMode() as usize] }],
-// cpp: generated longhands.cc:4424; css_direction_aware_resolver.cc:421-460
-CSSPropertyID::kBorderEndStartRadius => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderRadius)[if direction.IsLtr() { [3, 0, 1, 0, 2][direction.GetWritingMode() as usize] } else { [2, 3, 2, 3, 1][direction.GetWritingMode() as usize] }],
-// cpp: generated longhands.cc:4677
-CSSPropertyID::kBorderInlineEndColor => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderColor)[direction.InlineEnd() as usize],
-// cpp: generated longhands.cc:4718
-CSSPropertyID::kBorderInlineEndStyle => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderStyle)[direction.InlineEnd() as usize],
-// cpp: generated longhands.cc:4753
-CSSPropertyID::kBorderInlineEndWidth => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderWidth)[direction.InlineEnd() as usize],
-// cpp: generated longhands.cc:4788
-CSSPropertyID::kBorderInlineStartColor => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderColor)[direction.InlineStart() as usize],
-// cpp: generated longhands.cc:4829
-CSSPropertyID::kBorderInlineStartStyle => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderStyle)[direction.InlineStart() as usize],
-// cpp: generated longhands.cc:4864
-CSSPropertyID::kBorderInlineStartWidth => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderWidth)[direction.InlineStart() as usize],
-// cpp: generated longhands.cc:5183; css_direction_aware_resolver.cc:421-460
-CSSPropertyID::kBorderStartEndRadius => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderRadius)[if direction.IsLtr() { [1, 2, 3, 2, 0][direction.GetWritingMode() as usize] } else { [0, 1, 0, 1, 3][direction.GetWritingMode() as usize] }],
-// cpp: generated longhands.cc:5224; css_direction_aware_resolver.cc:421-460
-CSSPropertyID::kBorderStartStartRadius => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderRadius)[if direction.IsLtr() { [0, 1, 0, 1, 3][direction.GetWritingMode() as usize] } else { [1, 2, 3, 2, 0][direction.GetWritingMode() as usize] }],
-// cpp: generated longhands.cc:6657
-CSSPropertyID::kContainIntrinsicBlockSize => [CSSPropertyID::kContainIntrinsicWidth, CSSPropertyID::kContainIntrinsicHeight][direction.IsHorizontal() as usize],
-// cpp: generated longhands.cc:6738
-CSSPropertyID::kContainIntrinsicInlineSize => [CSSPropertyID::kContainIntrinsicWidth, CSSPropertyID::kContainIntrinsicHeight][(!direction.IsHorizontal()) as usize],
-// cpp: generated longhands.cc:7055; css_direction_aware_resolver.cc:186-188,421-460
-CSSPropertyID::kCornerEndEndShape => match ResolvePhysical(CSSPropertyID::kBorderEndEndRadius, direction) {
-CSSPropertyID::kBorderTopLeftRadius => CSSPropertyID::kCornerTopLeftShape,
-CSSPropertyID::kBorderTopRightRadius => CSSPropertyID::kCornerTopRightShape,
-CSSPropertyID::kBorderBottomRightRadius => CSSPropertyID::kCornerBottomRightShape,
-CSSPropertyID::kBorderBottomLeftRadius => CSSPropertyID::kCornerBottomLeftShape,
-_ => unreachable!("physical border-radius corner"),
-},
-// cpp: generated longhands.cc:7096; css_direction_aware_resolver.cc:186-188,421-460
-CSSPropertyID::kCornerEndStartShape => match ResolvePhysical(CSSPropertyID::kBorderEndStartRadius, direction) {
-CSSPropertyID::kBorderTopLeftRadius => CSSPropertyID::kCornerTopLeftShape,
-CSSPropertyID::kBorderTopRightRadius => CSSPropertyID::kCornerTopRightShape,
-CSSPropertyID::kBorderBottomRightRadius => CSSPropertyID::kCornerBottomRightShape,
-CSSPropertyID::kBorderBottomLeftRadius => CSSPropertyID::kCornerBottomLeftShape,
-_ => unreachable!("physical border-radius corner"),
-},
-// cpp: generated longhands.cc:7137; css_direction_aware_resolver.cc:186-188,421-460
-CSSPropertyID::kCornerStartEndShape => match ResolvePhysical(CSSPropertyID::kBorderStartEndRadius, direction) {
-CSSPropertyID::kBorderTopLeftRadius => CSSPropertyID::kCornerTopLeftShape,
-CSSPropertyID::kBorderTopRightRadius => CSSPropertyID::kCornerTopRightShape,
-CSSPropertyID::kBorderBottomRightRadius => CSSPropertyID::kCornerBottomRightShape,
-CSSPropertyID::kBorderBottomLeftRadius => CSSPropertyID::kCornerBottomLeftShape,
-_ => unreachable!("physical border-radius corner"),
-},
-// cpp: generated longhands.cc:7178; css_direction_aware_resolver.cc:186-188,421-460
-CSSPropertyID::kCornerStartStartShape => match ResolvePhysical(CSSPropertyID::kBorderStartStartRadius, direction) {
-CSSPropertyID::kBorderTopLeftRadius => CSSPropertyID::kCornerTopLeftShape,
-CSSPropertyID::kBorderTopRightRadius => CSSPropertyID::kCornerTopRightShape,
-CSSPropertyID::kBorderBottomRightRadius => CSSPropertyID::kCornerBottomRightShape,
-CSSPropertyID::kBorderBottomLeftRadius => CSSPropertyID::kCornerBottomLeftShape,
-_ => unreachable!("physical border-radius corner"),
-},
-// cpp: generated longhands.cc:9155
-CSSPropertyID::kInlineSize => [CSSPropertyID::kWidth, CSSPropertyID::kHeight][(!direction.IsHorizontal()) as usize],
-// cpp: generated longhands.cc:9196
-CSSPropertyID::kInsetBlockEnd => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kInset)[direction.BlockEnd() as usize],
-// cpp: generated longhands.cc:9231
-CSSPropertyID::kInsetBlockStart => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kInset)[direction.BlockStart() as usize],
-// cpp: generated longhands.cc:9266
-CSSPropertyID::kInsetInlineEnd => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kInset)[direction.InlineEnd() as usize],
-// cpp: generated longhands.cc:9301
-CSSPropertyID::kInsetInlineStart => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kInset)[direction.InlineStart() as usize],
-// cpp: generated longhands.cc:10258
-CSSPropertyID::kMarginBlockEnd => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kMargin)[direction.BlockEnd() as usize],
-// cpp: generated longhands.cc:10293
-CSSPropertyID::kMarginBlockStart => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kMargin)[direction.BlockStart() as usize],
-// cpp: generated longhands.cc:10374
-CSSPropertyID::kMarginInlineEnd => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kMargin)[direction.InlineEnd() as usize],
-// cpp: generated longhands.cc:10409
-CSSPropertyID::kMarginInlineStart => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kMargin)[direction.InlineStart() as usize],
-// cpp: generated longhands.cc:11213
-CSSPropertyID::kMaxBlockSize => [CSSPropertyID::kMaxWidth, CSSPropertyID::kMaxHeight][direction.IsHorizontal() as usize],
-// cpp: generated longhands.cc:11326
-CSSPropertyID::kMaxInlineSize => [CSSPropertyID::kMaxWidth, CSSPropertyID::kMaxHeight][(!direction.IsHorizontal()) as usize],
-// cpp: generated longhands.cc:11448
-CSSPropertyID::kMinBlockSize => [CSSPropertyID::kMinWidth, CSSPropertyID::kMinHeight][direction.IsHorizontal() as usize],
-// cpp: generated longhands.cc:11529
-CSSPropertyID::kMinInlineSize => [CSSPropertyID::kMinWidth, CSSPropertyID::kMinHeight][(!direction.IsHorizontal()) as usize],
-// cpp: generated longhands.cc:12230
-CSSPropertyID::kOverflowBlock => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kOverflow)[direction.IsHorizontal() as usize],
-// cpp: generated longhands.cc:12299
-CSSPropertyID::kOverflowInline => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kOverflow)[(!direction.IsHorizontal()) as usize],
-// cpp: generated longhands.cc:12476
-CSSPropertyID::kOverscrollBehaviorBlock => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kOverscrollBehavior)[direction.IsHorizontal() as usize],
-// cpp: generated longhands.cc:12511
-CSSPropertyID::kOverscrollBehaviorInline => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kOverscrollBehavior)[(!direction.IsHorizontal()) as usize],
-// cpp: generated longhands.cc:12677
-CSSPropertyID::kPaddingBlockEnd => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kPadding)[direction.BlockEnd() as usize],
-// cpp: generated longhands.cc:12712
-CSSPropertyID::kPaddingBlockStart => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kPadding)[direction.BlockStart() as usize],
-// cpp: generated longhands.cc:12790
-CSSPropertyID::kPaddingInlineEnd => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kPadding)[direction.InlineEnd() as usize],
-// cpp: generated longhands.cc:12825
-CSSPropertyID::kPaddingInlineStart => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kPadding)[direction.InlineStart() as usize],
-// cpp: generated longhands.cc:14401
-CSSPropertyID::kScrollMarginBlockEnd => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollMargin)[direction.BlockEnd() as usize],
-// cpp: generated longhands.cc:14436
-CSSPropertyID::kScrollMarginBlockStart => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollMargin)[direction.BlockStart() as usize],
-// cpp: generated longhands.cc:14514
-CSSPropertyID::kScrollMarginInlineEnd => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollMargin)[direction.InlineEnd() as usize],
-// cpp: generated longhands.cc:14549
-CSSPropertyID::kScrollMarginInlineStart => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollMargin)[direction.InlineStart() as usize],
-// cpp: generated longhands.cc:14748
-CSSPropertyID::kScrollPaddingBlockEnd => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollPadding)[direction.BlockEnd() as usize],
-// cpp: generated longhands.cc:14789
-CSSPropertyID::kScrollPaddingBlockStart => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollPadding)[direction.BlockStart() as usize],
-// cpp: generated longhands.cc:14879
-CSSPropertyID::kScrollPaddingInlineEnd => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollPadding)[direction.InlineEnd() as usize],
-// cpp: generated longhands.cc:14920
-CSSPropertyID::kScrollPaddingInlineStart => crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollPadding)[direction.InlineStart() as usize],
-_ => property,
-}
+    match property {
+        // cpp: generated longhands.cc:1306
+        CSSPropertyID::kInternalVisitedBorderBlockEndColor => [
+            CSSPropertyID::kInternalVisitedBorderTopColor,
+            CSSPropertyID::kInternalVisitedBorderRightColor,
+            CSSPropertyID::kInternalVisitedBorderBottomColor,
+            CSSPropertyID::kInternalVisitedBorderLeftColor,
+        ][direction.BlockEnd() as usize],
+        // cpp: generated longhands.cc:1350
+        CSSPropertyID::kInternalVisitedBorderBlockStartColor => [
+            CSSPropertyID::kInternalVisitedBorderTopColor,
+            CSSPropertyID::kInternalVisitedBorderRightColor,
+            CSSPropertyID::kInternalVisitedBorderBottomColor,
+            CSSPropertyID::kInternalVisitedBorderLeftColor,
+        ][direction.BlockStart() as usize],
+        // cpp: generated longhands.cc:1443
+        CSSPropertyID::kInternalVisitedBorderInlineEndColor => [
+            CSSPropertyID::kInternalVisitedBorderTopColor,
+            CSSPropertyID::kInternalVisitedBorderRightColor,
+            CSSPropertyID::kInternalVisitedBorderBottomColor,
+            CSSPropertyID::kInternalVisitedBorderLeftColor,
+        ][direction.InlineEnd() as usize],
+        // cpp: generated longhands.cc:1487
+        CSSPropertyID::kInternalVisitedBorderInlineStartColor => [
+            CSSPropertyID::kInternalVisitedBorderTopColor,
+            CSSPropertyID::kInternalVisitedBorderRightColor,
+            CSSPropertyID::kInternalVisitedBorderBottomColor,
+            CSSPropertyID::kInternalVisitedBorderLeftColor,
+        ][direction.InlineStart() as usize],
+        // cpp: generated longhands.cc:3868
+        CSSPropertyID::kBlockSize => {
+            [CSSPropertyID::kWidth, CSSPropertyID::kHeight][direction.IsHorizontal() as usize]
+        }
+        // cpp: generated longhands.cc:3909
+        CSSPropertyID::kBorderBlockEndColor => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderColor)
+                [direction.BlockEnd() as usize]
+        }
+        // cpp: generated longhands.cc:3950
+        CSSPropertyID::kBorderBlockEndStyle => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderStyle)
+                [direction.BlockEnd() as usize]
+        }
+        // cpp: generated longhands.cc:3985
+        CSSPropertyID::kBorderBlockEndWidth => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderWidth)
+                [direction.BlockEnd() as usize]
+        }
+        // cpp: generated longhands.cc:4020
+        CSSPropertyID::kBorderBlockStartColor => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderColor)
+                [direction.BlockStart() as usize]
+        }
+        // cpp: generated longhands.cc:4061
+        CSSPropertyID::kBorderBlockStartStyle => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderStyle)
+                [direction.BlockStart() as usize]
+        }
+        // cpp: generated longhands.cc:4096
+        CSSPropertyID::kBorderBlockStartWidth => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderWidth)
+                [direction.BlockStart() as usize]
+        }
+        // cpp: generated longhands.cc:4383; css_direction_aware_resolver.cc:421-460
+        CSSPropertyID::kBorderEndEndRadius => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderRadius)
+                [if direction.IsLtr() {
+                    [2, 3, 2, 3, 1][direction.GetWritingMode() as usize]
+                } else {
+                    [3, 0, 1, 0, 2][direction.GetWritingMode() as usize]
+                }]
+        }
+        // cpp: generated longhands.cc:4424; css_direction_aware_resolver.cc:421-460
+        CSSPropertyID::kBorderEndStartRadius => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderRadius)
+                [if direction.IsLtr() {
+                    [3, 0, 1, 0, 2][direction.GetWritingMode() as usize]
+                } else {
+                    [2, 3, 2, 3, 1][direction.GetWritingMode() as usize]
+                }]
+        }
+        // cpp: generated longhands.cc:4677
+        CSSPropertyID::kBorderInlineEndColor => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderColor)
+                [direction.InlineEnd() as usize]
+        }
+        // cpp: generated longhands.cc:4718
+        CSSPropertyID::kBorderInlineEndStyle => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderStyle)
+                [direction.InlineEnd() as usize]
+        }
+        // cpp: generated longhands.cc:4753
+        CSSPropertyID::kBorderInlineEndWidth => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderWidth)
+                [direction.InlineEnd() as usize]
+        }
+        // cpp: generated longhands.cc:4788
+        CSSPropertyID::kBorderInlineStartColor => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderColor)
+                [direction.InlineStart() as usize]
+        }
+        // cpp: generated longhands.cc:4829
+        CSSPropertyID::kBorderInlineStartStyle => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderStyle)
+                [direction.InlineStart() as usize]
+        }
+        // cpp: generated longhands.cc:4864
+        CSSPropertyID::kBorderInlineStartWidth => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderWidth)
+                [direction.InlineStart() as usize]
+        }
+        // cpp: generated longhands.cc:5183; css_direction_aware_resolver.cc:421-460
+        CSSPropertyID::kBorderStartEndRadius => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderRadius)
+                [if direction.IsLtr() {
+                    [1, 2, 3, 2, 0][direction.GetWritingMode() as usize]
+                } else {
+                    [0, 1, 0, 1, 3][direction.GetWritingMode() as usize]
+                }]
+        }
+        // cpp: generated longhands.cc:5224; css_direction_aware_resolver.cc:421-460
+        CSSPropertyID::kBorderStartStartRadius => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kBorderRadius)
+                [if direction.IsLtr() {
+                    [0, 1, 0, 1, 3][direction.GetWritingMode() as usize]
+                } else {
+                    [1, 2, 3, 2, 0][direction.GetWritingMode() as usize]
+                }]
+        }
+        // cpp: generated longhands.cc:6657
+        CSSPropertyID::kContainIntrinsicBlockSize => [
+            CSSPropertyID::kContainIntrinsicWidth,
+            CSSPropertyID::kContainIntrinsicHeight,
+        ][direction.IsHorizontal() as usize],
+        // cpp: generated longhands.cc:6738
+        CSSPropertyID::kContainIntrinsicInlineSize => [
+            CSSPropertyID::kContainIntrinsicWidth,
+            CSSPropertyID::kContainIntrinsicHeight,
+        ][(!direction.IsHorizontal()) as usize],
+        // cpp: generated longhands.cc:7055; css_direction_aware_resolver.cc:186-188,421-460
+        CSSPropertyID::kCornerEndEndShape => {
+            match ResolvePhysical(CSSPropertyID::kBorderEndEndRadius, direction) {
+                CSSPropertyID::kBorderTopLeftRadius => CSSPropertyID::kCornerTopLeftShape,
+                CSSPropertyID::kBorderTopRightRadius => CSSPropertyID::kCornerTopRightShape,
+                CSSPropertyID::kBorderBottomRightRadius => CSSPropertyID::kCornerBottomRightShape,
+                CSSPropertyID::kBorderBottomLeftRadius => CSSPropertyID::kCornerBottomLeftShape,
+                _ => unreachable!("physical border-radius corner"),
+            }
+        }
+        // cpp: generated longhands.cc:7096; css_direction_aware_resolver.cc:186-188,421-460
+        CSSPropertyID::kCornerEndStartShape => {
+            match ResolvePhysical(CSSPropertyID::kBorderEndStartRadius, direction) {
+                CSSPropertyID::kBorderTopLeftRadius => CSSPropertyID::kCornerTopLeftShape,
+                CSSPropertyID::kBorderTopRightRadius => CSSPropertyID::kCornerTopRightShape,
+                CSSPropertyID::kBorderBottomRightRadius => CSSPropertyID::kCornerBottomRightShape,
+                CSSPropertyID::kBorderBottomLeftRadius => CSSPropertyID::kCornerBottomLeftShape,
+                _ => unreachable!("physical border-radius corner"),
+            }
+        }
+        // cpp: generated longhands.cc:7137; css_direction_aware_resolver.cc:186-188,421-460
+        CSSPropertyID::kCornerStartEndShape => {
+            match ResolvePhysical(CSSPropertyID::kBorderStartEndRadius, direction) {
+                CSSPropertyID::kBorderTopLeftRadius => CSSPropertyID::kCornerTopLeftShape,
+                CSSPropertyID::kBorderTopRightRadius => CSSPropertyID::kCornerTopRightShape,
+                CSSPropertyID::kBorderBottomRightRadius => CSSPropertyID::kCornerBottomRightShape,
+                CSSPropertyID::kBorderBottomLeftRadius => CSSPropertyID::kCornerBottomLeftShape,
+                _ => unreachable!("physical border-radius corner"),
+            }
+        }
+        // cpp: generated longhands.cc:7178; css_direction_aware_resolver.cc:186-188,421-460
+        CSSPropertyID::kCornerStartStartShape => {
+            match ResolvePhysical(CSSPropertyID::kBorderStartStartRadius, direction) {
+                CSSPropertyID::kBorderTopLeftRadius => CSSPropertyID::kCornerTopLeftShape,
+                CSSPropertyID::kBorderTopRightRadius => CSSPropertyID::kCornerTopRightShape,
+                CSSPropertyID::kBorderBottomRightRadius => CSSPropertyID::kCornerBottomRightShape,
+                CSSPropertyID::kBorderBottomLeftRadius => CSSPropertyID::kCornerBottomLeftShape,
+                _ => unreachable!("physical border-radius corner"),
+            }
+        }
+        // cpp: generated longhands.cc:9155
+        CSSPropertyID::kInlineSize => {
+            [CSSPropertyID::kWidth, CSSPropertyID::kHeight][(!direction.IsHorizontal()) as usize]
+        }
+        // cpp: generated longhands.cc:9196
+        CSSPropertyID::kInsetBlockEnd => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kInset)
+                [direction.BlockEnd() as usize]
+        }
+        // cpp: generated longhands.cc:9231
+        CSSPropertyID::kInsetBlockStart => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kInset)
+                [direction.BlockStart() as usize]
+        }
+        // cpp: generated longhands.cc:9266
+        CSSPropertyID::kInsetInlineEnd => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kInset)
+                [direction.InlineEnd() as usize]
+        }
+        // cpp: generated longhands.cc:9301
+        CSSPropertyID::kInsetInlineStart => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kInset)
+                [direction.InlineStart() as usize]
+        }
+        // cpp: generated longhands.cc:10258
+        CSSPropertyID::kMarginBlockEnd => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kMargin)
+                [direction.BlockEnd() as usize]
+        }
+        // cpp: generated longhands.cc:10293
+        CSSPropertyID::kMarginBlockStart => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kMargin)
+                [direction.BlockStart() as usize]
+        }
+        // cpp: generated longhands.cc:10374
+        CSSPropertyID::kMarginInlineEnd => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kMargin)
+                [direction.InlineEnd() as usize]
+        }
+        // cpp: generated longhands.cc:10409
+        CSSPropertyID::kMarginInlineStart => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kMargin)
+                [direction.InlineStart() as usize]
+        }
+        // cpp: generated longhands.cc:11213
+        CSSPropertyID::kMaxBlockSize => {
+            [CSSPropertyID::kMaxWidth, CSSPropertyID::kMaxHeight][direction.IsHorizontal() as usize]
+        }
+        // cpp: generated longhands.cc:11326
+        CSSPropertyID::kMaxInlineSize => [CSSPropertyID::kMaxWidth, CSSPropertyID::kMaxHeight]
+            [(!direction.IsHorizontal()) as usize],
+        // cpp: generated longhands.cc:11448
+        CSSPropertyID::kMinBlockSize => {
+            [CSSPropertyID::kMinWidth, CSSPropertyID::kMinHeight][direction.IsHorizontal() as usize]
+        }
+        // cpp: generated longhands.cc:11529
+        CSSPropertyID::kMinInlineSize => [CSSPropertyID::kMinWidth, CSSPropertyID::kMinHeight]
+            [(!direction.IsHorizontal()) as usize],
+        // cpp: generated longhands.cc:12230
+        CSSPropertyID::kOverflowBlock => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kOverflow)
+                [direction.IsHorizontal() as usize]
+        }
+        // cpp: generated longhands.cc:12299
+        CSSPropertyID::kOverflowInline => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kOverflow)
+                [(!direction.IsHorizontal()) as usize]
+        }
+        // cpp: generated longhands.cc:12476
+        CSSPropertyID::kOverscrollBehaviorBlock => {
+            crate::parser::production_property_metadata::ShorthandFor(
+                CSSPropertyID::kOverscrollBehavior,
+            )[direction.IsHorizontal() as usize]
+        }
+        // cpp: generated longhands.cc:12511
+        CSSPropertyID::kOverscrollBehaviorInline => {
+            crate::parser::production_property_metadata::ShorthandFor(
+                CSSPropertyID::kOverscrollBehavior,
+            )[(!direction.IsHorizontal()) as usize]
+        }
+        // cpp: generated longhands.cc:12677
+        CSSPropertyID::kPaddingBlockEnd => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kPadding)
+                [direction.BlockEnd() as usize]
+        }
+        // cpp: generated longhands.cc:12712
+        CSSPropertyID::kPaddingBlockStart => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kPadding)
+                [direction.BlockStart() as usize]
+        }
+        // cpp: generated longhands.cc:12790
+        CSSPropertyID::kPaddingInlineEnd => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kPadding)
+                [direction.InlineEnd() as usize]
+        }
+        // cpp: generated longhands.cc:12825
+        CSSPropertyID::kPaddingInlineStart => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kPadding)
+                [direction.InlineStart() as usize]
+        }
+        // cpp: generated longhands.cc:14401
+        CSSPropertyID::kScrollMarginBlockEnd => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollMargin)
+                [direction.BlockEnd() as usize]
+        }
+        // cpp: generated longhands.cc:14436
+        CSSPropertyID::kScrollMarginBlockStart => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollMargin)
+                [direction.BlockStart() as usize]
+        }
+        // cpp: generated longhands.cc:14514
+        CSSPropertyID::kScrollMarginInlineEnd => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollMargin)
+                [direction.InlineEnd() as usize]
+        }
+        // cpp: generated longhands.cc:14549
+        CSSPropertyID::kScrollMarginInlineStart => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollMargin)
+                [direction.InlineStart() as usize]
+        }
+        // cpp: generated longhands.cc:14748
+        CSSPropertyID::kScrollPaddingBlockEnd => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollPadding)
+                [direction.BlockEnd() as usize]
+        }
+        // cpp: generated longhands.cc:14789
+        CSSPropertyID::kScrollPaddingBlockStart => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollPadding)
+                [direction.BlockStart() as usize]
+        }
+        // cpp: generated longhands.cc:14879
+        CSSPropertyID::kScrollPaddingInlineEnd => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollPadding)
+                [direction.InlineEnd() as usize]
+        }
+        // cpp: generated longhands.cc:14920
+        CSSPropertyID::kScrollPaddingInlineStart => {
+            crate::parser::production_property_metadata::ShorthandFor(CSSPropertyID::kScrollPadding)
+                [direction.InlineStart() as usize]
+        }
+        _ => property,
+    }
 }

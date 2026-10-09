@@ -16,7 +16,7 @@ pub(crate) mod test_html;
 pub(crate) use test_html::{html_parser_host, html_tag_names, parser, text_decoder};
 
 pub mod user_interaction_state;
-pub use user_interaction_state::UserInteractionState;
+pub use user_interaction_state::{InteractionStateMutation, UserInteractionState};
 pub mod dom_mutation;
 pub mod error;
 pub mod image_resource;

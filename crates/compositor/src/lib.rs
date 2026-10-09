@@ -7,7 +7,9 @@
 //! window, or knowledge of which thread consumes its effects.
 
 mod engine;
+mod scroll_tree;
 pub use engine::*;
+pub use scroll_tree::ComputeMainThreadScrollUpdates;
 
 use layer_tile::{
     resolved_compositor_properties_with_scroll, FramePlan, LayerId, LayerPlan, TileId,

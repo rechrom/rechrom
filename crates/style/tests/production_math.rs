@@ -46,7 +46,6 @@ fn typed_arithmetic_precedence_categories_and_comparison_functions() {
         "calc(1px + 1s)",
         "calc(1px + 1)",
         "calc(1px * 1px)",
-        "calc(1px / 1px)",
         "calc(1px+ 2px)",
         "calc(1px +2px)",
         "min()",
@@ -59,6 +58,14 @@ fn typed_arithmetic_precedence_categories_and_comparison_functions() {
         let mut stream = CSSParserTokenStream::<CSSTokenizer>::new(StringView::from(&text), 0);
         assert!(ConsumeMathFunction(&mut stream).is_err(), "{}", text.Utf8());
     }
+    let mut resolver = |value, unit| match unit {
+        UnitType::kPixels => Ok(value),
+        UnitType::kViewportWidth => Ok(value * 8.0),
+        _ => Err(MathError::MissingLengthContext),
+    };
+    let quotient = expression("min(calc(100vw / 1600px), calc(1080px / 1600px))");
+    assert_eq!(quotient.Category(), Category::Number);
+    assert_eq!(quotient.ComputeValue(&mut resolver, None).unwrap(), 0.5);
 }
 #[test]
 fn level_four_math_functions_keep_chromium_categories_and_evaluation() {

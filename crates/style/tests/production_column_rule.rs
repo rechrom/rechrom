@@ -7,14 +7,13 @@ use layoutng_style::{
     style::computed_style::{ComputedStyle, ComputedStyleBuilder},
 };
 use style::{
-    StyleEngine,
     css_value::CSSValuePayload,
     media_queries::MediaValuesCachedData,
     parser::{
         css_parser_mode::CSSParserMode,
         production_property_parser::{ParseProperty, PropertyParseErrorKind},
     },
-    production_css_value as values,
+    production_css_value as values, StyleEngine,
 };
 fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
@@ -187,15 +186,13 @@ fn column_rule_invalid_partial_and_native_zoom_color_boundaries() {
             PropertyParseErrorKind::Unsupported
         );
     }
-    assert!(
-        ParseProperty(
-            P::kColumnRuleWidth,
-            &String::from("2"),
-            false,
-            CSSParserMode::kHTMLQuirksMode
-        )
-        .is_err()
-    );
+    assert!(ParseProperty(
+        P::kColumnRuleWidth,
+        &String::from("2"),
+        false,
+        CSSParserMode::kHTMLQuirksMode
+    )
+    .is_err());
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut b = ComputedStyleBuilder::from_style(initial);
     let media = MediaValuesCachedData::default();
@@ -224,17 +221,15 @@ fn column_rule_invalid_partial_and_native_zoom_color_boundaries() {
     assert_eq!(b.ColumnRuleWidth().GetGapDataList().at(1).GetValue(), 10);
     let parent = unsafe { &*b.TakeStyle() };
     let mut child = ComputedStyleBuilder::from_style(initial);
-    assert!(
-        style::resolver::production_style_builder::Apply(
-            P::kColumnRuleWidth,
-            &mut child,
-            Some(parent),
-            &values::wide(V::kInherit).unwrap(),
-            16.0,
-            &media
-        )
-        .is_err()
-    );
+    assert!(style::resolver::production_style_builder::Apply(
+        P::kColumnRuleWidth,
+        &mut child,
+        Some(parent),
+        &values::wide(V::kInherit).unwrap(),
+        16.0,
+        &media
+    )
+    .is_err());
     child.SetInsideLink(EInsideLink::kInsideUnvisitedLink);
     let colors = parse(P::kColumnRuleColor, "red, blue");
     style::resolver::production_style_builder::Apply(

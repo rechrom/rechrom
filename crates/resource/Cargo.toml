@@ -1,0 +1,12 @@
+[package]
+name = "resource"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+url_loader = { path = "../url_loader" }
+decode = { path = "../decode" }
+image_resource = { path = "../image_resource" }
+
+[dev-dependencies]
+image_decoder = { path = "../image_decoder" }

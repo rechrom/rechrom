@@ -6,14 +6,13 @@ use layoutng_style::{
     style::computed_style::{ComputedStyle, ComputedStyleBuilder},
 };
 use style::{
-    StyleEngine,
     css_value::CSSValuePayload,
     media_queries::MediaValuesCachedData,
     parser::{
         css_parser_mode::CSSParserMode,
         production_property_parser::{ParseProperty, PropertyParseErrorKind},
     },
-    production_css_value as values,
+    production_css_value as values, StyleEngine,
 };
 fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
@@ -194,15 +193,13 @@ fn row_rule_invalid_repeat_and_native_context_boundaries_remain_typed() {
         (P::kRule, "red blue"),
         (P::kRuleColor, "no-such-color"),
     ] {
-        assert!(
-            ParseProperty(
-                id,
-                &String::from(text),
-                false,
-                CSSParserMode::kHTMLStandardMode
-            )
-            .is_err()
-        );
+        assert!(ParseProperty(
+            id,
+            &String::from(text),
+            false,
+            CSSParserMode::kHTMLStandardMode
+        )
+        .is_err());
     }
     for id in [
         P::kRowRuleColor,
@@ -255,15 +252,13 @@ fn row_rule_invalid_repeat_and_native_context_boundaries_remain_typed() {
     assert!(b.RowRuleColor().GetSingleValue().IsCurrentColor());
     let parent = unsafe { &*b.TakeStyle() };
     let mut child = ComputedStyleBuilder::from_style(initial);
-    assert!(
-        style::resolver::production_style_builder::Apply(
-            P::kRowRuleWidth,
-            &mut child,
-            Some(parent),
-            &values::wide(V::kInherit).unwrap(),
-            16.0,
-            &media
-        )
-        .is_err()
-    );
+    assert!(style::resolver::production_style_builder::Apply(
+        P::kRowRuleWidth,
+        &mut child,
+        Some(parent),
+        &values::wide(V::kInherit).unwrap(),
+        16.0,
+        &media
+    )
+    .is_err());
 }

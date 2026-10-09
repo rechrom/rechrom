@@ -28791,8 +28791,12 @@ impl PartialEq for StyleMisc7Data {
                 == other.counter_set_list_.as_ref().map(|v| &v.0))
             && self.mask_ == other.mask_
             && foundation::ValuesEquivalent(&self.box_reflect_, &other.box_reflect_)
-            && style_member_values_equivalent_by(&self.animations_, &other.animations_, |a, b| a == b)
-            && style_member_values_equivalent_by(&self.transitions_, &other.transitions_, |a, b| a == b)
+            && style_member_values_equivalent_by(&self.animations_, &other.animations_, |a, b| {
+                a == b
+            })
+            && style_member_values_equivalent_by(&self.transitions_, &other.transitions_, |a, b| {
+                a == b
+            })
             && self.mask_box_image_ == other.mask_box_image_
             && self.page_size_ == other.page_size_
             && self.unconditional_scrollbar_size_ == other.unconditional_scrollbar_size_

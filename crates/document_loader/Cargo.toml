@@ -6,18 +6,19 @@ edition = "2021"
 [dependencies]
 foundation = { package = "layoutng_foundation", path = "../foundation" }
 url_loader = { path = "../url_loader" }
+resource = { path = "../resource" }
+decode = { path = "../decode" }
 html = { path = "../html" }
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }
-image_decoder = { path = "../image_decoder" }
 image_resource = { path = "../image_resource" }
 layoutng_assembly = { path = "../layoutng_assembly" }
 page_mutation = { path = "../page_mutation" }
-web_font = { path = "../web_font" }
 font_engine = { path = "../font_engine" }
 javascript = { path = "../javascript" }
 
 [dev-dependencies]
+image_decoder = { path = "../image_decoder" }
 style = { path = "../style" }
 layoutng_replaced = { path = "../layoutng_replaced" }
 layoutng_assembly = { path = "../layoutng_assembly", features = ["translation_in_progress"] }

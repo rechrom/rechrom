@@ -7,12 +7,14 @@ use crate::{
     ownership::{InteractionDOMMutationEmitter, InteractionDocument, IsElement, ReadNode},
     text_editor::{SyntheticEventDispatcher, TextEditor},
 };
-use dom::{persistent_document::DOMNodeType, Document, UserInteractionState};
+use dom::{
+    dom_mutation::DOMMutation, persistent_document::DOMNodeType, Document,
+    InteractionStateMutation, UserInteractionState,
+};
 use layoutng_assembly::{
     fragment_tree::FragmentNode,
     internal::layout_input::{Display, Offset},
 };
-use page_mutation::{InteractionStateMutation, PageMutation, PageMutationEmitter};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -25,6 +27,20 @@ pub struct InteractionResult {
     pub default_prevented: bool,
     pub propagation_stopped: bool,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InteractionEffect {
+    SubmitForm { form: u64, submitter: Option<u64> },
+}
+
+#[derive(Clone)]
+pub enum InteractionOutput {
+    DocumentMutation(DOMMutation),
+    StateMutation(InteractionStateMutation),
+    Effect(InteractionEffect),
+}
+
+pub type InteractionOutputEmitter = Rc<dyn Fn(InteractionOutput)>;
 // Map a root-space point through the exact same transform and scroll state as paint.
 fn LocalPoint(fragment: &FragmentNode, point: Offset, parent: Offset) -> Option<(Offset, Offset)> {
     let absolute = Offset {
@@ -450,38 +466,40 @@ fn EventPosition(input: &InputEvent) -> Option<Offset> {
 // source synchronous listener reentry without an exclusive Interaction borrow.
 #[derive(Clone)]
 pub struct Interaction<'a> {
-    emit: PageMutationEmitter,
+    emit: InteractionOutputEmitter,
     listeners: Rc<RefCell<Option<EventListenerDispatcher<'a>>>>,
     state: Rc<RefCell<InteractionState>>,
     editor: Rc<TextEditor>,
     selection_drag: Rc<Cell<Option<u64>>>,
-    submit_form: Rc<RefCell<Option<Rc<dyn Fn(u64, Option<u64>)>>>>,
     submitting_forms: Rc<RefCell<Vec<u64>>>,
 }
 // cpp: interaction/interaction_engine.cc:149-161
 struct EmitStateMutationAtExit {
     before: InteractionState,
     current: Rc<RefCell<InteractionState>>,
-    emit: PageMutationEmitter,
+    emit: InteractionOutputEmitter,
 }
 impl Drop for EmitStateMutationAtExit {
     fn drop(&mut self) {
         let state = *self.current.borrow();
         if state != self.before {
-            (self.emit)(PageMutation::InteractionStateMutation(
-                InteractionStateMutation { state },
-            ))
+            (self.emit)(InteractionOutput::StateMutation(InteractionStateMutation {
+                state,
+            }))
         }
     }
 }
 impl<'a> Interaction<'a> {
     // cpp: interaction/interaction_engine.cc:122-144
     // Rust's nonnullable Rc callback enforces the source required mutation output.
-    pub fn new(emit: PageMutationEmitter, listeners: Option<EventListenerDispatcher<'a>>) -> Self {
+    pub fn new(
+        emit: InteractionOutputEmitter,
+        listeners: Option<EventListenerDispatcher<'a>>,
+    ) -> Self {
         Self::WithSelectionState(emit, listeners, Rc::new(Default::default()))
     }
     pub fn WithSelectionState(
-        emit: PageMutationEmitter,
+        emit: InteractionOutputEmitter,
         listeners: Option<EventListenerDispatcher<'a>>,
         selections: Rc<layoutng_assembly::editing_state::SelectionState>,
     ) -> Self {
@@ -491,7 +509,6 @@ impl<'a> Interaction<'a> {
             state: Rc::new(RefCell::new(InteractionState::default())),
             editor: Rc::new(TextEditor::WithSelectionState(selections)),
             selection_drag: Rc::new(Cell::new(None)),
-            submit_form: Rc::new(RefCell::new(None)),
             submitting_forms: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -500,8 +517,8 @@ impl<'a> Interaction<'a> {
         listeners: Option<EventListenerDispatcher<'a>>,
     ) -> Self {
         Self::new(
-            Rc::new(move |mutation| {
-                if let PageMutation::DOMMutation(mutation) = mutation {
+            Rc::new(move |output| {
+                if let InteractionOutput::DocumentMutation(mutation) = output {
                     emit(&mutation)
                 }
             }),
@@ -522,7 +539,6 @@ impl<'a> Interaction<'a> {
             state: self.state.clone(),
             editor: self.editor.clone(),
             selection_drag: self.selection_drag.clone(),
-            submit_form: self.submit_form.clone(),
             submitting_forms: self.submitting_forms.clone(),
         }
     }
@@ -550,21 +566,23 @@ impl<'a> Interaction<'a> {
     fn Dispatcher(&self, document: &InteractionDocument) -> EventDispatcher<'a> {
         let emit = self.emit.clone();
         let dom: InteractionDOMMutationEmitter =
-            Rc::new(move |m| emit(PageMutation::DOMMutation(m.clone())));
+            Rc::new(move |m| emit(InteractionOutput::DocumentMutation(m.clone())));
+        let effects = self.emit.clone();
+        let submit_form: Rc<dyn Fn(u64, Option<u64>)> = Rc::new(move |form, submitter| {
+            effects(InteractionOutput::Effect(InteractionEffect::SubmitForm {
+                form,
+                submitter,
+            }))
+        });
         EventDispatcher::new(
             document.clone(),
             dom,
             self.listeners.clone(),
             self.state.clone(),
             self.editor.clone(),
-            self.submit_form.borrow().clone(),
+            Some(submit_form),
             self.submitting_forms.clone(),
         )
-    }
-    /// Submission is a document default action; its host callback is deferred
-    /// by Page's client, outside listener dispatch and DOM borrows.
-    pub fn SetFormSubmissionHandler(&self, handler: Option<Rc<dyn Fn(u64, Option<u64>)>>) {
-        *self.submit_form.borrow_mut() = handler;
     }
     pub fn SubmitForm(
         &self,
@@ -733,8 +751,9 @@ impl<'a> Interaction<'a> {
                     if IsFocusableControl(document, control)
                         && !IsDisabledFormControl(document, control)
                     {
-                        focus.Focus(control, IsTextField(document, control));
-                        if self.State().focused_node_id == Some(control) {
+                        let is_text_field = IsTextField(document, control);
+                        focus.Focus(control, is_text_field);
+                        if is_text_field && self.State().focused_node_id == Some(control) {
                             self.SelectWordAtPoint(document, fragments, control, v.position);
                         }
                     }
@@ -745,8 +764,10 @@ impl<'a> Interaction<'a> {
                     if IsFocusableControl(document, control)
                         && !IsDisabledFormControl(document, control)
                     {
-                        focus.Focus(control, IsTextField(document, control));
-                        if v.button == MouseButton::kPrimary
+                        let is_text_field = IsTextField(document, control);
+                        focus.Focus(control, is_text_field);
+                        if is_text_field
+                            && v.button == MouseButton::kPrimary
                             && self.State().focused_node_id == Some(control)
                         {
                             self.selection_drag.set(Some(control));
@@ -822,5 +843,43 @@ impl<'a> Interaction<'a> {
             default_prevented: result.default_prevented,
             propagation_stopped: result.propagation_stopped,
         }
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+
+    #[test]
+    fn form_submission_is_a_typed_effect() {
+        let document = Rc::new(RefCell::new(html::html_parser::ParseHTML(
+            "<form id=f></form>",
+        )));
+        let form = {
+            let owner = document.borrow();
+            let tree = owner.GetDocument();
+            (0..tree.NodeCount())
+                .find_map(|index| {
+                    let node = tree.Node(index);
+                    node.FindAttribute("id")
+                        .filter(|attribute| attribute.value == "f")
+                        .map(|_| node.Id())
+                })
+                .unwrap()
+        };
+        let outputs = Rc::new(RefCell::new(Vec::new()));
+        let received = outputs.clone();
+        let engine = Interaction::new(
+            Rc::new(move |output| received.borrow_mut().push(output)),
+            None,
+        );
+        engine.SubmitForm(&document, form, None, false);
+        assert!(matches!(
+            outputs.borrow().as_slice(),
+            [InteractionOutput::Effect(InteractionEffect::SubmitForm {
+                form: emitted,
+                submitter: None,
+            })] if *emitted == form
+        ));
     }
 }

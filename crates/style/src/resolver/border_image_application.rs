@@ -181,7 +181,13 @@ pub(super) fn MapNinePieceImage(
         match value.Payload() {
             CSSValuePayload::kImageClass(_) | CSSValuePayload::kLinearGradientClass(_) => image
                 .SetImage(ResolveStyleImage(
-                    if id == CSSPropertyID::kWebkitBorderImage {CSSPropertyID::kBorderImageSource} else if id == CSSPropertyID::kWebkitMaskBoxImage {CSSPropertyID::kWebkitMaskBoxImageSource} else {id},
+                    if id == CSSPropertyID::kWebkitBorderImage {
+                        CSSPropertyID::kBorderImageSource
+                    } else if id == CSSPropertyID::kWebkitMaskBoxImage {
+                        CSSPropertyID::kWebkitMaskBoxImageSource
+                    } else {
+                        id
+                    },
                     value,
                     images,
                 )?),
@@ -208,8 +214,22 @@ pub(super) fn MapNinePieceImage(
     }
     Ok(image)
 }
-fn MapLegacy(b:&ComputedStyleBuilder,v:&Value,root:f32,media:&MediaValuesCachedData,images:Option<&dyn URLImageResolver>)->std::result::Result<NinePieceImage,LonghandApplicationError> {
-    MapNinePieceImage(CSSPropertyID::kWebkitBorderImage,b,v,root,media,images,NinePieceImage::new())
+fn MapLegacy(
+    b: &ComputedStyleBuilder,
+    v: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+    images: Option<&dyn URLImageResolver>,
+) -> std::result::Result<NinePieceImage, LonghandApplicationError> {
+    MapNinePieceImage(
+        CSSPropertyID::kWebkitBorderImage,
+        b,
+        v,
+        root,
+        media,
+        images,
+        NinePieceImage::new(),
+    )
 }
 pub(super) fn Apply(
     id: CSSPropertyID,

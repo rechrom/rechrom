@@ -167,22 +167,7 @@ fn replay_document_image(
     transform.transform.values[13] = image.rect.y - source.y * sy;
     canvas.replay_item(&transform.to_skia(), &empty_resources);
 
-    let nested_resources = resources(&record.artifact);
-    let nested_documents = document_records(&record.artifact);
-    for nested in &*record.artifact.items {
-        let nested_record = nested_documents
-            .get(&nested.resource_id)
-            .and_then(|record| {
-                record
-                    .as_any()
-                    .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
-            });
-        if nested.r#type != Kind::kDrawImageRect
-            || !replay_document_image(canvas, nested, nested_record, depth + 1)
-        {
-            canvas.replay_item(&nested.to_skia(), &nested_resources);
-        }
-    }
+    replay_document_artifact(canvas, &record.artifact, depth + 1);
     canvas.replay_item(
         &DisplayItem {
             r#type: Kind::kRestore,
@@ -192,6 +177,90 @@ fn replay_document_image(
         &empty_resources,
     );
     true
+}
+
+fn replay_document_artifact(
+    canvas: &mut skia::cpu::canvas::Canvas,
+    artifact: &paint::paint_engine::PaintArtifact,
+    depth: usize,
+) {
+    let nested_resources = resources(artifact);
+    let nested_documents = document_records(artifact);
+    let empty_resources = ResourceContext::default();
+    let replay_range = |canvas: &mut skia::cpu::canvas::Canvas,
+                        range: std::ops::Range<usize>| {
+        for nested in &artifact.items[range] {
+            let nested_record = nested_documents
+                .get(&nested.resource_id)
+                .and_then(|record| {
+                    record
+                        .as_any()
+                        .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
+                });
+            if nested.r#type != Kind::kDrawImageRect
+                || !replay_document_image(canvas, nested, nested_record, depth)
+            {
+                canvas.replay_item(&nested.to_skia(), &nested_resources);
+            }
+        }
+    };
+
+    // PaintArtifact drawing operations are recorded in each PaintChunk's
+    // property-tree coordinate space. Replaying only the flat PaintRecord
+    // loses transforms such as an SVG <g transform=...>; Chromium applies the
+    // PaintChunk properties before rasterizing the record as well.
+    if artifact.display_items.is_empty() || artifact.chunks.is_empty() {
+        replay_range(canvas, 0..artifact.items.len());
+        return;
+    }
+    for chunk in &artifact.chunks {
+        let begin = chunk.begin_index as usize;
+        let end = chunk.end_index as usize;
+        if begin > end || end > artifact.display_items.len() {
+            continue;
+        }
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kSave,
+                ..Default::default()
+            }
+            .to_skia(),
+            &empty_resources,
+        );
+        let mut transforms = Vec::new();
+        let mut current = Some(&chunk.properties.transform);
+        while let Some(node) = current {
+            transforms.push(node.matrix);
+            current = node.parent.as_ref();
+        }
+        for matrix in transforms.into_iter().rev() {
+            if matrix != Default::default() {
+                canvas.replay_item(
+                    &DisplayItem {
+                        r#type: Kind::kConcat,
+                        transform: matrix,
+                        ..Default::default()
+                    }
+                    .to_skia(),
+                    &empty_resources,
+                );
+            }
+        }
+        for record in &artifact.display_items[begin..end] {
+            if record.record_begin <= record.record_end && record.record_end <= artifact.items.len()
+            {
+                replay_range(canvas, record.record_begin..record.record_end);
+            }
+        }
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kRestore,
+                ..Default::default()
+            }
+            .to_skia(),
+            &empty_resources,
+        );
+    }
 }
 impl<'a> LayerReplay<'a> {
     fn document_record(
@@ -717,5 +786,86 @@ impl<'a> LayerReplay<'a> {
             eprintln!("{message}");
         }
         Ok(reuse)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use layoutng_assembly::internal::layout_input::TransformMatrix;
+    use layoutng_assembly::internal::layout_input_types::Color;
+    use paint::paint_engine::{
+        PaintArtifact, PaintChunk, RecordedDisplayItem, RecordedDisplayItemKind,
+    };
+    use paint::paint_property_tree::{
+        PaintPropertyNodeLifecycle, PropertyTreeState, TransformPaintPropertyNode,
+    };
+
+    #[test]
+    fn document_artifact_replays_chunk_transform() {
+        let root = PropertyTreeState::default();
+        let mut matrix = TransformMatrix::default();
+        matrix.values[12] = 20.0;
+        let transform = Arc::new(TransformPaintPropertyNode {
+            lifecycle: PaintPropertyNodeLifecycle::default(),
+            id: 1,
+            parent: Some(root.transform.clone()),
+            matrix,
+            origin: [0.0; 3],
+            scroll: None,
+            direct_compositing_reasons: Vec::new(),
+        });
+        let rect = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: 8.0,
+            height: 8.0,
+        };
+        let artifact = PaintArtifact {
+            items: vec![DisplayItem {
+                r#type: Kind::kDrawRect,
+                rect,
+                color: Color {
+                    red: 1.0,
+                    green: 0.0,
+                    blue: 0.0,
+                    alpha: 1.0,
+                },
+                antialias: false,
+                ..Default::default()
+            }]
+            .into(),
+            display_items: vec![RecordedDisplayItem {
+                kind: RecordedDisplayItemKind::Drawing,
+                id: Default::default(),
+                visual_rect: rect,
+                visual_rect_is_accurate: true,
+                draws_content: true,
+                raster_effect_outset: paint::paint_engine::RasterEffectOutset::kNone,
+                record_begin: 0,
+                record_end: 1,
+                scroll_translation: None,
+            }],
+            chunks: vec![PaintChunk {
+                begin_index: 0,
+                end_index: 1,
+                bounds: rect,
+                drawable_bounds: rect,
+                properties: PropertyTreeState {
+                    transform,
+                    clip: root.clip,
+                    effect: root.effect,
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let resources = ResourceContext::default();
+        let mut canvas = skia::cpu::canvas::Canvas::new(&resources, 40, 16);
+        replay_document_artifact(&mut canvas, &artifact, 0);
+        let pixels = canvas.finish_direct().into_vec();
+        let pixel = |x: usize, y: usize| &pixels[(y * 40 + x) * 4..(y * 40 + x + 1) * 4];
+        assert_eq!(pixel(2, 2), &[255, 255, 255, 255]);
+        assert_eq!(pixel(22, 2), &[255, 0, 0, 255]);
     }
 }

@@ -4,10 +4,9 @@ use layoutng_style::{
     style::computed_style::{ComputedStyle, ComputedStyleBuilder},
 };
 use style::{
-    StyleEngine,
     media_queries::MediaValuesCachedData,
     parser::{css_parser_mode::CSSParserMode, production_property_parser::ParseProperty},
-    production_css_value as values,
+    production_css_value as values, StyleEngine,
 };
 fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
     let d = owner.GetDocument();
@@ -93,17 +92,15 @@ fn internal_visited_svg_paint_keeps_slots_separate_and_inherits_parent_ordinary_
         assert!(
             matches!(value[0].Value().Payload(),style::css_value::CSSValuePayload::kValueListClass(l) if l.values[0].IsURIValue())
         );
-        assert!(
-            style::resolver::production_style_builder::Apply(
-                id,
-                &mut b,
-                Some(parent),
-                value[0].Value(),
-                16.0,
-                &MediaValuesCachedData::default()
-            )
-            .is_err()
-        );
+        assert!(style::resolver::production_style_builder::Apply(
+            id,
+            &mut b,
+            Some(parent),
+            value[0].Value(),
+            16.0,
+            &MediaValuesCachedData::default()
+        )
+        .is_err());
     }
 }
 #[test]
@@ -188,17 +185,15 @@ fn reflection_source_invalid_none_converter_branch_url_binding_and_zoom_boundary
     assert!(
         matches!(url[0].Value().Payload(),style::css_value::CSSValuePayload::kReflectClass(r) if r.mask.is_some())
     );
-    assert!(
-        style::resolver::production_style_builder::Apply(
-            P::kWebkitBoxReflect,
-            &mut b,
-            None,
-            url[0].Value(),
-            16.0,
-            &MediaValuesCachedData::default()
-        )
-        .is_err()
-    );
+    assert!(style::resolver::production_style_builder::Apply(
+        P::kWebkitBoxReflect,
+        &mut b,
+        None,
+        url[0].Value(),
+        16.0,
+        &MediaValuesCachedData::default()
+    )
+    .is_err());
     assert_eq!(b.BoxReflect(), ptr);
     style::resolver::production_style_builder::Apply(
         P::kWebkitBoxReflect,
@@ -237,15 +232,13 @@ fn reflection_source_invalid_none_converter_branch_url_binding_and_zoom_boundary
     assert_eq!(unsafe { &*b.BoxReflect() }.Offset().Pixels(), 6.0);
     let p = unsafe { &*b.TakeStyle() };
     let mut child = ComputedStyleBuilder::from_style(initial());
-    assert!(
-        style::resolver::production_style_builder::Apply(
-            P::kWebkitBoxReflect,
-            &mut child,
-            Some(p),
-            &values::wide(V::kInherit).unwrap(),
-            16.0,
-            &MediaValuesCachedData::default()
-        )
-        .is_err()
-    );
+    assert!(style::resolver::production_style_builder::Apply(
+        P::kWebkitBoxReflect,
+        &mut child,
+        Some(p),
+        &values::wide(V::kInherit).unwrap(),
+        16.0,
+        &MediaValuesCachedData::default()
+    )
+    .is_err());
 }

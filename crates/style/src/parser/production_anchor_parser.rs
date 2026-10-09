@@ -48,7 +48,10 @@ fn Names<T: TokenStreamTokenizer>(
     Ok(values::list(list, values::ListSeparator::Comma))
 }
 // css_parsing_utils.cc:10437-10451. Shared by AnchorScope and TriggerScope.
-pub(super) fn ConsumeNameScope<T: TokenStreamTokenizer>(id: CSSPropertyID, s: &mut Stream<T>) -> Result<Rc<Value>, PropertyParseError> {
+pub(super) fn ConsumeNameScope<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    s: &mut Stream<T>,
+) -> Result<Rc<Value>, PropertyParseError> {
     if s.Peek().Id() == CSSValueID::kNone {
         return Ok(values::identifier(s.ConsumeIncludingWhitespace().Id()));
     }

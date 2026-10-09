@@ -61,6 +61,7 @@ impl Page {
         // Once readiness changes, the next task reaches UpdateFrameIfNeeded.
         let demand = (self.IsRenderingReady()
             && (self.HasPendingFrameInput() || self.state.dirty.get() || self.hover_state_dirty))
+            || self.state.animation_begin_frame_requested.get()
             || self.resources.HasAnimatedImages()
             || self
                 .scripts
@@ -105,10 +106,11 @@ impl Page {
         }
         self.begin_frame.last_frame = Some((args.source_id, args.sequence_number));
         self.begin_frame.requested = false;
+        self.state.animation_begin_frame_requested.set(false);
         let executing = std::mem::replace(&mut self.begin_frame.executing, true);
         // Image/font completions remain macro tasks. A rendering
         // opportunity must not add unrelated resource callbacks to input/rAF.
-        let budget = self.resource_completion_budget.replace(0);
+        let completion_scope = self.open_engine.BeginRenderingOpportunity();
         let result = (|| {
             let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
                 .is_some()
@@ -157,6 +159,12 @@ impl Page {
                 scripts.DispatchPendingScrollEvents();
             }
             let input_done = profile.map(|start| start.elapsed());
+            self.state
+                .ApplyAnimationMutation(animation::AnimationMutation::BeginFrame {
+                    source_id: args.source_id,
+                    begin_frame_sequence: args.sequence_number,
+                    frame_time: args.frame_time,
+                });
             if let Some(scripts) = &mut self.scripts {
                 scripts.RunAnimationFrameCallbacks(args.frame_time)?;
             }
@@ -168,17 +176,21 @@ impl Page {
                 let total = start.elapsed();
                 if total >= std::time::Duration::from_millis(16) {
                     let ms = |time: std::time::Duration| time.as_secs_f64() * 1000.0;
-                    eprintln!("page-begin-frame-stages sequence={} initial_ms={:.3} input_ms={:.3} animation_ms={:.3} lifecycle_ms={:.3} cursor_ms={:.3} total_ms={:.3}",
-                        args.sequence_number, ms(initial_done.unwrap()),
+                    eprintln!(
+                        "page-begin-frame-stages sequence={} initial_ms={:.3} input_ms={:.3} animation_ms={:.3} lifecycle_ms={:.3} cursor_ms={:.3} total_ms={:.3}",
+                        args.sequence_number,
+                        ms(initial_done.unwrap()),
                         ms(input_done.unwrap() - initial_done.unwrap()),
                         ms(animation_done.unwrap() - input_done.unwrap()),
                         ms(lifecycle_done.unwrap() - animation_done.unwrap()),
-                        ms(total - lifecycle_done.unwrap()), ms(total));
+                        ms(total - lifecycle_done.unwrap()),
+                        ms(total)
+                    );
                 }
             }
             Ok(())
         })();
-        self.resource_completion_budget = budget;
+        self.open_engine.EndRenderingOpportunity(completion_scope);
         self.begin_frame.executing = executing;
         self.RequestBeginFrameIfNeeded();
         trace.set("success", result.is_ok() as u8 as f64);
@@ -251,7 +263,7 @@ impl Page {
             return Ok(());
         }
         let executing = std::mem::replace(&mut self.begin_frame.executing, true);
-        let budget = self.resource_completion_budget.replace(0);
+        let completion_scope = self.open_engine.BeginRenderingOpportunity();
         let result = (|| {
             if self.frame.is_none() {
                 self.UpdateFrameIfNeeded()?;
@@ -267,7 +279,7 @@ impl Page {
             self.UpdateCursor();
             Ok(())
         })();
-        self.resource_completion_budget = budget;
+        self.open_engine.EndRenderingOpportunity(completion_scope);
         self.begin_frame.executing = executing;
         self.RequestBeginFrameIfNeeded();
         result

@@ -61,7 +61,12 @@ pub(super) fn ColumnNames(row: &String) -> Vec<String> {
 }
 // cpp: css_parsing_utils.cc:7484-7557. Each repeated name must extend an
 // adjacent row with identical start/end columns, producing one filled rectangle.
-pub(super) fn ParseAreasRow(row: &String, map: &mut NamedGridAreaMap, rows: u32, columns: &mut u32) -> bool {
+pub(super) fn ParseAreasRow(
+    row: &String,
+    map: &mut NamedGridAreaMap,
+    rows: u32,
+    columns: &mut u32,
+) -> bool {
     let names = ColumnNames(row);
     if rows == 0 {
         *columns = names.len() as u32;
@@ -201,18 +206,32 @@ pub(super) fn ConsumeTracks<T: TokenStreamTokenizer>(
     template: bool,
     no_repeat: bool,
 ) -> Result<Rc<Value>, PropertyParseError> {
-    ConsumeTracksWithGridLanes(id,stream,mode,template,no_repeat,false)
+    ConsumeTracksWithGridLanes(id, stream, mode, template, no_repeat, false)
 }
 // cpp: css_parsing_utils.cc:7420-7425,7472-7479. The same track-list consumer
 // stops at direction/string components only for the GridLanes shorthand.
-pub(super) fn ConsumeTracksWithGridLanes<T: TokenStreamTokenizer>(id:CSSPropertyID,stream:&mut Stream<T>,mode:CSSParserMode,template:bool,no_repeat:bool,is_grid_lanes:bool)->Result<Rc<Value>,PropertyParseError> {
+pub(super) fn ConsumeTracksWithGridLanes<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+    template: bool,
+    no_repeat: bool,
+    is_grid_lanes: bool,
+) -> Result<Rc<Value>, PropertyParseError> {
     if template && stream.Peek().Id() == CSSValueID::kNone {
         stream.ConsumeIncludingWhitespace();
         return Ok(NoneValue());
     }
     let mut tracks = Vec::new();
     while !at_value_end(stream) && !AtSlash(stream) {
-        if is_grid_lanes && (matches!(stream.Peek().Id(),CSSValueID::kNormal|CSSValueID::kRow|CSSValueID::kColumn) || stream.Peek().GetType()==kStringToken) {break}
+        if is_grid_lanes
+            && (matches!(
+                stream.Peek().Id(),
+                CSSValueID::kNormal | CSSValueID::kRow | CSSValueID::kColumn
+            ) || stream.Peek().GetType() == kStringToken)
+        {
+            break;
+        }
         if no_repeat && stream.Peek().FunctionId() == Some(CSSValueID::kRepeat) {
             return Err(invalid(id));
         }
