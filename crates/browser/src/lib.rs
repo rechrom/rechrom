@@ -11,7 +11,6 @@ use layoutng_assembly::internal::layout_input::{
 use layoutng_assembly::internal::layout_input_types::{
     ControlThemeMetrics, IntSize, ScrollbarThemeMetrics,
 };
-use layoutng_assembly::internal::layout_object_builder::LayoutObjectTree;
 use layoutng_assembly::layout_assembly::LayoutAssembly;
 pub use layoutng_assembly::layout_engine::LayoutEngine;
 use layoutng_block::assembly::InstallBlockAlgorithm;
@@ -207,54 +206,53 @@ fn LayoutWithStyleLoader(
     mut load_image: impl FnMut(&str, Option<&str>) -> io::Result<DecodedImage>,
     mut load_font: impl FnMut(&str, Option<&str>) -> io::Result<Vec<u8>>,
 ) -> io::Result<FragmentNode> {
-    let mut document = html::Parse(source);
-    let resource_base_url = match (document_url, document.base_href.as_deref()) {
+    // The narrow static parser remains a resource-discovery adapter.  Style,
+    // layout-object construction and layout all consume the resident DOM.
+    let resource_document = html::Parse(source);
+    let resource_base_url = match (document_url, resource_document.base_href.as_deref()) {
         (Some(url), Some(base)) => Some(document_loader::ResolveUrl(url, base)?),
         (Some(url), None) => Some(url.to_owned()),
         (None, _) => None,
     };
     let mut sheets = Vec::new();
-    for style_source in &document.style_sources {
+    for style_source in &resource_document.style_sources {
         match style_source {
             StyleSource::Inline(text) => {
-                let mut sheet = cssom::ParseCSS(text);
+                let mut sheet = style::ParseCSS(text);
                 if let Some(base) = resource_base_url.as_deref() {
-                    for rule in &mut sheet.rules {
-                        for declaration in &mut rule.declarations {
-                            document_loader::ResolveCSSURLs(&mut declaration.value, base)?;
-                        }
-                    }
-                    for rule in &mut sheet.font_faces {
-                        for declaration in &mut rule.declarations {
-                            if declaration.property == "src" {
-                                document_loader::ResolveCSSURLs(&mut declaration.value, base)?;
-                            }
-                        }
-                    }
+                    document_loader::ResolveCSSStyleSheetURLs(&mut sheet, base)?;
                 }
                 sheets.push(sheet);
             }
-            StyleSource::Link(href) => sheets.push(load_link(href, document.base_href.as_deref())?),
+            StyleSource::Link(href) => {
+                sheets.push(load_link(href, resource_document.base_href.as_deref())?)
+            }
         }
     }
-    let user_agent_styles = user_agent_styles::UserAgentStyleSheets::new();
-    let styles = dom::style_resolver::ResolveCssomWithUserAgent(
-        &document,
-        user_agent_styles.For(&document),
-        &sheets,
-        f64::from(width),
-        f64::from(height),
-    );
-    let web_fonts = document_loader::LoadUsedFontFaces(&sheets, &styles, |url| {
-        load_font(url, document.base_href.as_deref())
-    });
+
+    let mut document = html::html_parser::ParseHTML(source);
+    for sheet in &sheets {
+        document.GetDocumentMut().AppendStyleSheet(sheet.clone());
+    }
+    let assembly = CreateLayoutAssembly();
+    let mut space = CreateBrowserConstraints(width, height);
+    style_services::ResolveLayoutStyles(&mut document, &space);
+    let used_font_families = (0..document.GetDocument().NodeCount())
+        .filter_map(|node| document.GetDocument().ResolvedStyleFor(node))
+        .flat_map(|style| style.style.extended.iter())
+        .flat_map(|extended| extended.font_families.iter().cloned())
+        .collect::<Vec<_>>();
+    let web_fonts =
+        document_loader::LoadUsedFontFacesForFamilies(&sheets, used_font_families, |url| {
+            load_font(url, resource_document.base_href.as_deref())
+        });
 
     // cpp: browser/browser.cc:1241-1289
     // cpp: browser/browser.cc:1359-1393
     // cpp: browser/browser.cc:1761-1771
     let mut image_sources = Vec::new();
     let mut seen_images = HashSet::new();
-    for element in &document.elements {
+    for element in &resource_document.elements {
         if element.tag == "img" {
             if let Some((_, source)) = element.attributes.iter().find(|(name, _)| name == "src") {
                 if !source.is_empty() && seen_images.insert(source.clone()) {
@@ -263,31 +261,17 @@ fn LayoutWithStyleLoader(
             }
         }
     }
-    for (index, style) in styles.styles.iter().enumerate() {
-        if !styles.generates_box[index] {
-            continue;
-        }
-        for layer in &style.paint.background_images {
-            if layer.shader.is_none()
-                && layer.resource_id == 0
-                && !layer.source_url.is_empty()
-                && seen_images.insert(layer.source_url.clone())
-            {
-                image_sources.push(layer.source_url.clone());
-            }
-        }
-    }
     let mut images = Vec::new();
     let mut next_image_id = 1_u64;
     for source in image_sources {
-        let Ok(decoded) = load_image(&source, document.base_href.as_deref()) else {
+        let Ok(decoded) = load_image(&source, resource_document.base_href.as_deref()) else {
             continue;
         };
         let id = next_image_id;
         next_image_id = next_image_id
             .checked_add(1)
             .ok_or_else(|| io::Error::other("image resource id space exhausted"))?;
-        document.SetImageResource(
+        document.GetDocumentMut().SetImageResource(
             source,
             dom::ImageResourceMetadata {
                 id,
@@ -305,31 +289,15 @@ fn LayoutWithStyleLoader(
             content: image_resource::PaintImageContent::Bitmap(decoded.rgba8.into()),
         });
     }
-    let styles = dom::style_resolver::ResolveCssomWithUserAgent(
-        &document,
-        user_agent_styles.For(&document),
-        &sheets,
-        f64::from(width),
-        f64::from(height),
-    );
-
-    let assembly = CreateLayoutAssembly();
-
-    let mut space = CreateBrowserConstraints(width, height);
     space.fonts.extend(web_fonts);
     space.images = images;
-    let mut tree = LayoutObjectTree::new_with_factories(&space, &assembly.objects);
-    tree.WithAttachment(|attachment| {
-        dom::layout_mapping::BuildResolved(attachment, &document, &styles)
-    });
     let mut layout = LayoutEngine::new(&assembly);
-    layout.ApplyMutation(layoutng_assembly::layout_engine::LayoutMutation::Constraints(&space));
-    layout.ApplyMutation(layoutng_assembly::layout_engine::LayoutMutation::ReplaceTree(tree));
-    layout.Layout();
-    let fragments = layout
-        .TakeLayoutResult()
-        .expect("successful layout has fragments");
-    Ok(std::rc::Rc::try_unwrap(fragments).unwrap_or_else(|shared| (*shared).clone()))
+    Ok(LayoutPersistentDocument(
+        &mut layout,
+        &mut document,
+        &dom::UserInteractionState::default(),
+        &space,
+    ))
 }
 
 pub fn RenderFile(path: &Path, width: u32, height: u32) -> io::Result<Vec<u8>> {
@@ -353,27 +321,16 @@ pub fn RenderFile(path: &Path, width: u32, height: u32) -> io::Result<Vec<u8>> {
                         ..Default::default()
                     },
                 )?;
-                let mut sheet = cssom::ParseCSS(&document_loader::DecodeText(&response)?);
+                let mut sheet = style::ParseCSS(&document_loader::DecodeText(&response)?);
                 let base = if response.final_url.is_empty() {
                     href
                 } else {
                     &response.final_url
                 };
-                for rule in &mut sheet.rules {
-                    for declaration in &mut rule.declarations {
-                        document_loader::ResolveCSSURLs(&mut declaration.value, base)?;
-                    }
-                }
-                for rule in &mut sheet.font_faces {
-                    for declaration in &mut rule.declarations {
-                        if declaration.property == "src" {
-                            document_loader::ResolveCSSURLs(&mut declaration.value, base)?;
-                        }
-                    }
-                }
+                document_loader::ResolveCSSStyleSheetURLs(&mut sheet, base)?;
                 Ok(sheet)
             } else {
-                Ok(cssom::ParseCSS(&std::fs::read_to_string(
+                Ok(style::ParseCSS(&std::fs::read_to_string(
                     directory.join(href),
                 )?))
             }
@@ -483,24 +440,13 @@ pub fn LayoutUrlStatic(url: &str, width: u32, height: u32) -> io::Result<Fragmen
                     ..Default::default()
                 },
             )?;
-            let mut sheet = cssom::ParseCSS(&document_loader::DecodeText(&response)?);
+            let mut sheet = style::ParseCSS(&document_loader::DecodeText(&response)?);
             let base = if response.final_url.is_empty() {
                 &url
             } else {
                 &response.final_url
             };
-            for rule in &mut sheet.rules {
-                for declaration in &mut rule.declarations {
-                    document_loader::ResolveCSSURLs(&mut declaration.value, base)?;
-                }
-            }
-            for rule in &mut sheet.font_faces {
-                for declaration in &mut rule.declarations {
-                    if declaration.property == "src" {
-                        document_loader::ResolveCSSURLs(&mut declaration.value, base)?;
-                    }
-                }
-            }
+            document_loader::ResolveCSSStyleSheetURLs(&mut sheet, base)?;
             Ok(sheet)
         },
         |image_source, base_href| {

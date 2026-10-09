@@ -50,3 +50,26 @@ fn css_url_rewrites_preserve_non_url_text_quotes_and_unicode() {
     );
     assert_eq!(value, "é前缀 url(\"https://example.test/a.png\") rgb(1,2,3) url(\"https://example.test/docs/b.png\") 尾部");
 }
+
+#[test]
+fn stylesheet_url_rewrites_keep_source_and_cssom_views_in_sync() {
+    use super::ResolveCSSStyleSheetURLs;
+    // Resource-layer storage fixture: this test verifies URL rebasing, while
+    // Style owns acceptance and page semantics of the rewritten source.
+    let mut sheet = style::ParseCSS(
+        ".x{--image:url(../image.png)}@font-face{font-family:x;src:url(font.woff2)}@keyframes move{from{--image:url(a.png)}}",
+    );
+    ResolveCSSStyleSheetURLs(&mut sheet, "https://example.test/css/site.css").unwrap();
+    assert!(sheet.rules[0]
+        .declaration_text
+        .contains("https://example.test/image.png"));
+    assert!(sheet.rules[0].declarations[0]
+        .value
+        .contains("https://example.test/image.png"));
+    assert!(sheet.font_faces[0]
+        .declaration_text
+        .contains("https://example.test/css/font.woff2"));
+    assert!(sheet.keyframes[0].keyframes[0]
+        .declaration_text
+        .contains("https://example.test/css/a.png"));
+}

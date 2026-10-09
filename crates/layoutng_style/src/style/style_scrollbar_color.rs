@@ -12,9 +12,12 @@ pub struct StyleScrollbarColor {
 #[allow(non_snake_case)]
 impl StyleScrollbarColor {
     // cpp: layoutng_style/style/style_scrollbar_color.h:17
-    // No constructor definition exists in the supplied package.
+    // cpp: third_party/blink/renderer/core/style/style_scrollbar_color.cc:10-12
     pub fn new(thumb_color: StyleColor, track_color: StyleColor) -> Self {
-        unsafe { StyleScrollbarColorConstruct(thumb_color, track_color) }
+        Self {
+            thumb_color_: thumb_color,
+            track_color_: track_color,
+        }
     }
 
     // cpp: layoutng_style/style/style_scrollbar_color.h:19-22
@@ -39,9 +42,8 @@ impl PartialEq for StyleScrollbarColor {
     }
 }
 
-unsafe extern "Rust" {
-    fn StyleScrollbarColorConstruct(
-        thumb_color: StyleColor,
-        track_color: StyleColor,
-    ) -> StyleScrollbarColor;
+impl foundation::Traceable for StyleScrollbarColor {
+    fn Trace(&self, visitor: &mut Visitor<'_>) {
+        StyleScrollbarColor::Trace(self, visitor);
+    }
 }

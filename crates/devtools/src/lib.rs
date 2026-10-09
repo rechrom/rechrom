@@ -28,6 +28,16 @@ pub fn set_reload_handler(handler: ReloadHandler) {
     *reload_handler().lock().unwrap() = Some(handler);
 }
 
+pub type NavigateHandler = Arc<dyn Fn(String) -> Result<(), String> + Send + Sync>;
+fn navigate_handler() -> &'static std::sync::Mutex<Option<NavigateHandler>> {
+    static HANDLER: std::sync::OnceLock<std::sync::Mutex<Option<NavigateHandler>>> =
+        std::sync::OnceLock::new();
+    HANDLER.get_or_init(|| std::sync::Mutex::new(None))
+}
+pub fn set_navigate_handler(handler: NavigateHandler) {
+    *navigate_handler().lock().unwrap() = Some(handler);
+}
+
 /// Evaluate JavaScript in the active page. This is intentionally a control
 /// operation: callers that need a value can serialize it into a thrown error
 /// until the protocol grows remote-object handles.
@@ -74,6 +84,36 @@ pub fn set_wheel_handler(handler: WheelHandler) {
     *wheel_handler().lock().unwrap() = Some(handler);
 }
 
+/// CDP-shaped page-coordinate mouse input. The embedding maps it onto the
+/// same typed input queue used by the native window.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MouseInjection {
+    pub event_type: String,
+    pub x: f64,
+    pub y: f64,
+    pub button: String,
+    pub click_count: u32,
+}
+pub type MouseHandler = Arc<dyn Fn(MouseInjection) -> Result<(), String> + Send + Sync>;
+fn mouse_handler() -> &'static std::sync::Mutex<Option<MouseHandler>> {
+    static HANDLER: std::sync::OnceLock<std::sync::Mutex<Option<MouseHandler>>> =
+        std::sync::OnceLock::new();
+    HANDLER.get_or_init(|| std::sync::Mutex::new(None))
+}
+pub fn set_mouse_handler(handler: MouseHandler) {
+    *mouse_handler().lock().unwrap() = Some(handler);
+}
+
+pub type InsertTextHandler = Arc<dyn Fn(String) -> Result<(), String> + Send + Sync>;
+fn insert_text_handler() -> &'static std::sync::Mutex<Option<InsertTextHandler>> {
+    static HANDLER: std::sync::OnceLock<std::sync::Mutex<Option<InsertTextHandler>>> =
+        std::sync::OnceLock::new();
+    HANDLER.get_or_init(|| std::sync::Mutex::new(None))
+}
+pub fn set_insert_text_handler(handler: InsertTextHandler) {
+    *insert_text_handler().lock().unwrap() = Some(handler);
+}
+
 impl WheelInjection {
     fn from_params(params: &Value) -> Result<Self, String> {
         // Bound the local control input independently of any browser types.
@@ -103,6 +143,56 @@ impl WheelInjection {
             delta_y: number("delta_y", -1_000_000.0)?,
             phase: phase.into(),
             precise,
+        })
+    }
+}
+
+impl MouseInjection {
+    fn from_params(params: &Value) -> Result<Self, String> {
+        let number = |name: &str| -> Result<f64, String> {
+            params
+                .get(name)
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite() && (0.0..=1_000_000.0).contains(value))
+                .ok_or_else(|| format!("{name} must be finite and in [0, 1000000]"))
+        };
+        let event_type = params
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or("type must be a string")?;
+        if !matches!(event_type, "mouseMoved" | "mousePressed" | "mouseReleased") {
+            return Err("type must be mouseMoved, mousePressed or mouseReleased".into());
+        }
+        let button =
+            params
+                .get("button")
+                .and_then(Value::as_str)
+                .unwrap_or(if event_type == "mouseMoved" {
+                    "none"
+                } else {
+                    "left"
+                });
+        if !matches!(button, "none" | "left" | "right" | "middle") {
+            return Err("button must be none, left, right or middle".into());
+        }
+        let click_count = params
+            .get("clickCount")
+            .map(|value| {
+                value
+                    .as_u64()
+                    .ok_or("clickCount must be an unsigned integer")
+            })
+            .transpose()?
+            .unwrap_or(1);
+        if click_count > 2 {
+            return Err("clickCount must be 0, 1 or 2".into());
+        }
+        Ok(Self {
+            event_type: event_type.into(),
+            x: number("x")?,
+            y: number("y")?,
+            button: button.into(),
+            click_count: click_count as u32,
         })
     }
 }
@@ -352,6 +442,34 @@ fn dispatch(request: Value) -> Result<Value, String> {
             // This acknowledges queueing, not completion or presentation.
             Ok(json!({}))
         }
+        "Input.dispatchMouseEvent" => {
+            let input = MouseInjection::from_params(&params)?;
+            let mouse = mouse_handler()
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("No browser target")?;
+            mouse(input)?;
+            // This acknowledges queueing, not completion or presentation.
+            Ok(json!({}))
+        }
+        "Input.insertText" => {
+            let text = params
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or("text must be a string")?;
+            if text.len() > MAX_BODY {
+                return Err("text exceeds 64 KiB".into());
+            }
+            let insert = insert_text_handler()
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("No browser target")?;
+            insert(text.to_owned())?;
+            // This acknowledges queueing, not completion or presentation.
+            Ok(json!({}))
+        }
         "Page.reload" => {
             let reload = reload_handler()
                 .lock()
@@ -360,6 +478,22 @@ fn dispatch(request: Value) -> Result<Value, String> {
                 .ok_or("No browser target")?;
             reload()?;
             Ok(json!({}))
+        }
+        "Page.navigate" => {
+            let url = params
+                .get("url")
+                .and_then(Value::as_str)
+                .filter(|url| !url.is_empty() && url.len() <= MAX_BODY)
+                .ok_or("url must be a non-empty string no larger than 64 KiB")?;
+            let navigate = navigate_handler()
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("No browser target")?;
+            navigate(url.to_owned())?;
+            // Navigation is asynchronous. The target registry and tracing
+            // events expose commit/progress; this acknowledges queueing only.
+            Ok(json!({"frameId":"1"}))
         }
         "Runtime.evaluate" => {
             let source = params

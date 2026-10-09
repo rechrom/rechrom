@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::{style_state::StyleUpdateImpact, DOM};
-use cssom::{CSSDeclaration, CSSStyleSheet};
+use cssom::CSSDeclaration;
 use layoutng_assembly::internal::layout_input::Offset;
 
 /// Lifecycle admission uses the document's existing accumulated impact and
@@ -58,13 +58,6 @@ impl DOM {
             .SetAnimationStyle(node_id, effect_id, declarations);
     }
 
-    pub fn ResolveStyles(
-        &mut self,
-        environment: &crate::style_resolver::StyleEnvironment,
-        user_agent_sheets: &[CSSStyleSheet],
-    ) {
-        crate::style_resolver::ResolveComputedStyles(self, environment, user_agent_sheets);
-    }
     pub fn NeedsStyleSheetParsing(&self, node_id: u64) -> bool {
         let state = self.GetDocument().StyleState();
         !state.parsed_style_elements.contains(&node_id)

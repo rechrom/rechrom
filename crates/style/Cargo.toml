@@ -1,0 +1,16 @@
+[package]
+name = "style"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+layoutng_style = { path = "../layoutng_style" }
+font_engine = { path = "../font_engine" }
+
+dom = { path = "../dom" }
+cssom = { path = "../cssom" }
+layoutng = { package = "layoutng_assembly", path = "../layoutng_assembly" }
+
+[dev-dependencies]
+html = { path = "../html" }

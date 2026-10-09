@@ -120,6 +120,10 @@ impl ResourceFetcherClient for Client {
             ResourceMutation::ResourceLoadFailed(value) => {
                 self.DidFailResource(&value.url, &value.error)
             }
+            ResourceMutation::DocumentImageFrameChanged(_)
+            | ResourceMutation::DocumentImageIntrinsicSizeChanged(_) => {
+                panic!("source no-script fixture has no document images")
+            }
         }
     }
     fn HasJavaScript(&self) -> bool {

@@ -124,9 +124,23 @@ pub struct DOMJavaScriptBindings {
     next_collection_id: Cell<HostObjectId>,
     listeners: RefCell<HashMap<HostObjectId, HashMap<String, Vec<Listener>>>>,
     mutation_observers_active: bool,
+    selector_service: RefCell<style::persistent_selector::PersistentSelectorService>,
 }
 
 impl DOMJavaScriptBindings {
+    fn selector_error(error: style::persistent_selector::PersistentSelectorError) -> HostResult {
+        match error {
+            style::persistent_selector::PersistentSelectorError::Syntax(error) => {
+                HostResult::Failure(JavaScriptExceptionKind::kSyntaxError, error.message.Utf8())
+            }
+            style::persistent_selector::PersistentSelectorError::Unsupported(message) => {
+                HostResult::Failure(
+                    JavaScriptExceptionKind::kRuntimeError,
+                    format!("NotSupportedError: {}", message),
+                )
+            }
+        }
+    }
     /// EventListenerProperties::blocking_event_listeners analogue used when
     /// deciding whether wheel input may run on the compositor thread.
     pub fn HasBlockingListener(&self, kind: &str) -> bool {
@@ -184,6 +198,7 @@ impl DOMJavaScriptBindings {
             next_collection_id: Cell::new(1 << 62),
             listeners: RefCell::new(HashMap::new()),
             mutation_observers_active: false,
+            selector_service: RefCell::new(Default::default()),
         }
     }
 
@@ -1131,7 +1146,7 @@ impl DOMJavaScriptBindings {
                         Some(HostValue::String(text)) => text.as_str(),
                         _ => "",
                     };
-                    let mut parsed = cssom::ParseCSS(text);
+                    let mut parsed = style::ParseCSS(text);
                     if parsed.rules.len() != 1 || !parsed.font_faces.is_empty() {
                         return HostResult::Failure(
                             javascript::javascript_runtime::JavaScriptExceptionKind::kSyntaxError,
@@ -1329,7 +1344,7 @@ impl DOMJavaScriptBindings {
                 let Some(HostValue::String(property)) = arguments.first() else {
                     return Self::type_error("style property name is required");
                 };
-                let mut declarations = cssom::ParseCSSDeclarationList(
+                let mut declarations = style::ParseCSSDeclarationList(
                     node.FindAttribute("style").map_or("", |a| a.value.as_str()),
                 );
                 if member == "getStyle" {
@@ -1370,7 +1385,35 @@ impl DOMJavaScriptBindings {
                 HostResult::default()
             }
             // cpp: webapi/dom_bindings.cc:922-949
-            "querySelectorAll" | "getElementsByTagName" | "getElementsByClassName" => {
+            "querySelectorAll" => {
+                let Some(HostValue::String(selector)) = arguments.first() else {
+                    return Self::type_error("querySelectorAll requires a selector");
+                };
+                let mut service = self.selector_service.borrow_mut();
+                service.interaction.focused_node_id = self.focused_node;
+                let result = service.QueryAll(document, index, selector);
+                drop(service);
+                let nodes = match result {
+                    Ok(nodes) => nodes,
+                    Err(error) => return Self::selector_error(error),
+                };
+                let id = self.allocate_collection_id();
+                self.collections.borrow_mut().insert(
+                    id,
+                    NodeCollection {
+                        root: receiver,
+                        kind: "snapshot".into(),
+                        query: selector.clone(),
+                        snapshot: nodes
+                            .into_iter()
+                            .map(|node| document.Node(node).Id())
+                            .collect(),
+                        membership_cache: RefCell::new(None),
+                    },
+                );
+                Self::value(HostValue::Object(HostObjectRef { id }))
+            }
+            "getElementsByTagName" | "getElementsByClassName" => {
                 let Some(HostValue::String(query)) = arguments.first() else {
                     return Self::type_error(&format!("{member} requires a string"));
                 };
@@ -1388,27 +1431,22 @@ impl DOMJavaScriptBindings {
                 let Some(HostValue::String(selector)) = arguments.first() else {
                     return Self::type_error(&format!("{member} requires a selector"));
                 };
-                let matches = |candidate| {
-                    dom::style_resolver::persistent_selector::MatchesSelector(
-                        document, candidate, selector,
-                    )
-                };
+                let mut service = self.selector_service.borrow_mut();
+                service.interaction.focused_node_id = self.focused_node;
                 if member == "matches" {
-                    return Self::value(HostValue::Boolean(matches(index)));
+                    return match service.Matches(document, index, selector) {
+                        Ok(value) => Self::value(HostValue::Boolean(value)),
+                        Err(error) => Self::selector_error(error),
+                    };
                 }
-                let found = if member == "closest" {
-                    let mut candidate = Some(index);
-                    let mut result = None;
-                    while let Some(node) = candidate {
-                        if matches(node) {
-                            result = Some(node);
-                            break;
-                        }
-                        candidate = document.Node(node).Parent();
-                    }
-                    result
+                let result = if member == "closest" {
+                    service.Closest(document, index, selector)
                 } else {
-                    find_selector(document, index, selector)
+                    service.QueryFirst(document, index, selector)
+                };
+                let found = match result {
+                    Ok(found) => found,
+                    Err(error) => return Self::selector_error(error),
                 };
                 found.map_or_else(
                     || Self::value(HostValue::Null(JavaScriptNull)),
@@ -1905,6 +1943,16 @@ impl DOMJavaScriptBindings {
         let Some(root) = document.FindNodeById(collection.root) else {
             return CollectionNodes::Owned(Vec::new());
         };
+        if collection.kind == "query" {
+            let indices = self
+                .selector_service
+                .borrow_mut()
+                .QueryAll(document, root, &collection.query)
+                .expect("internal snapshot selector is validated before construction");
+            return CollectionNodes::Owned(
+                indices.into_iter().map(|i| document.Node(i).Id()).collect(),
+            );
+        }
         fn visit(
             document: &Document,
             index: usize,
@@ -1925,14 +1973,6 @@ impl DOMJavaScriptBindings {
                                     && node.Name() == collection.query.to_ascii_lowercase()))
                     }
                     "getElementsByClassName" => element && has_classes(node, &collection.query),
-                    "query" => {
-                        element
-                            && dom::style_resolver::persistent_selector::MatchesSelector(
-                                document,
-                                child,
-                                &collection.query,
-                            )
-                    }
                     _ => false,
                 };
                 if matched {
@@ -1979,18 +2019,6 @@ fn has_classes(node: &dom::persistent_document::DOMNode, query: &str) -> bool {
         }
     }
     any
-}
-// cpp: webapi/dom_bindings.cc:937-946
-fn find_selector(document: &Document, index: usize, selector: &str) -> Option<usize> {
-    for &child in document.Node(index).Children() {
-        if dom::style_resolver::persistent_selector::MatchesSelector(document, child, selector) {
-            return Some(child);
-        }
-        if let Some(found) = find_selector(document, child, selector) {
-            return Some(found);
-        }
-    }
-    None
 }
 
 fn is_control(node: &dom::persistent_document::DOMNode) -> bool {

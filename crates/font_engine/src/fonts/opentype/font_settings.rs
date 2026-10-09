@@ -1,6 +1,6 @@
 // C++: font_engine/fonts/opentype/font_settings.h.
-// AtomicStringToFourByteTag, FourByteTagToAtomicString, and GetHash have no
-// definitions in the supplied source tree, so those operations are pending.
+// Four-byte OpenType tag conversion follows Chromium font_settings.cc.
+// FontVariationSettings::GetHash remains outside this translated slice.
 use std::sync::Arc;
 
 // cpp: font_engine/fonts/opentype/font_settings.h:21-60
@@ -126,4 +126,14 @@ pub fn CreateFontFeatureSettings() -> FontFeatureSettings {
 
 pub fn CreateFontVariationSettings() -> FontVariationSettings {
     Arc::new(FontSettings::default())
+}
+
+// cpp: platform/fonts/opentype/font_settings.cc:18-22.
+pub fn AtomicStringToFourByteTag(tag: &foundation::AtomicString) -> u32 {
+    let units = tag.utf16_units().expect("OpenType tag is non-null");
+    assert_eq!(units.len(), 4);
+    ((units[0] as u32) << 24)
+        | ((units[1] as u32) << 16)
+        | ((units[2] as u32) << 8)
+        | units[3] as u32
 }

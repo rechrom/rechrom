@@ -23,8 +23,8 @@ pub use resource_loader::{
     ResourceLoader, StartResource,
 };
 pub use text_decode::DecodeText;
-pub use url_reference::{ResolveCSSURLs, ResolveUrl};
-pub use web_fonts::LoadUsedFontFaces;
+pub use url_reference::{ResolveCSSStyleSheetURLs, ResolveCSSURLs, ResolveUrl};
+pub use web_fonts::{LoadUsedFontFaces, LoadUsedFontFacesForFamilies};
 
 pub fn ParseImportMap(
     source: &[u8],

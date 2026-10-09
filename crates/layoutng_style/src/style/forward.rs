@@ -2,15 +2,7 @@
 // Image and CSSValue have a real resolved-gradient implementation below.
 
 // cpp: layoutng_style/style/computed_style.h:99-101
-#[repr(C)]
-pub struct CSSAnimationData {
-    _private: [u8; 0],
-}
-
-#[repr(C)]
-pub struct CSSTransitionData {
-    _private: [u8; 0],
-}
+pub use super::css_timing_data::{CSSAnimationData, CSSTransitionData};
 
 // cpp: layoutng_style/style/computed_style_base.h:133-138
 pub use super::style_path::StylePath;

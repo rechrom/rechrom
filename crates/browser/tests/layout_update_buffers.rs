@@ -232,7 +232,10 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
                 9 => owner.GetDocumentMut().Remove(extra.unwrap()),
                 _ => {}
             }
-            dom::style_resolver::ResolveComputedStyles(&mut owner, &Default::default(), &[]);
+            let mut style_engine = style::StyleEngine::new(&owner);
+            style_engine
+                .Update(&mut owner, &Default::default(), &[])
+                .expect("style update");
             let actual = browser::LayoutPersistentDocument(
                 &mut engine,
                 &mut owner,

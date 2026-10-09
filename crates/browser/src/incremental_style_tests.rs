@@ -1,7 +1,7 @@
 use dom::dom_mutation::{ApplyDOMMutations, DOMMutation, DOMMutationType};
-use dom::style_resolver::*;
 use dom::{Document, DOM};
 use std::sync::Arc;
+use style::*;
 
 fn element(document: &Document, id: &str) -> usize {
     (0..document.NodeCount())
@@ -14,7 +14,16 @@ fn element(document: &Document, id: &str) -> usize {
         .unwrap()
 }
 fn update(owner: &mut DOM) {
-    StyleEngine::Update(owner.GetDocumentMut(), &StyleEnvironment::default(), &[]);
+    update_with_environment(owner, &Default::default());
+}
+fn update_with_environment(
+    owner: &mut DOM,
+    environment: &media_queries::media_values_cached::MediaValuesCachedData,
+) {
+    let mut engine = StyleEngine::new(owner);
+    engine
+        .Update(owner, environment, &[])
+        .expect("style update");
 }
 fn assert_full_recalc_equal(owner: &mut DOM) {
     let before: Vec<_> = (0..owner.GetDocument().NodeCount())
@@ -45,7 +54,7 @@ fn fixture(css: &str) -> DOM {
     let mut owner = html::html_parser::ParseHTML("<html><body><section id=left><div id=a class=box><span id=leaf>text</span></div><div id=b class=box></div></section><section id=right><div id=c class=box><span id=other>text</span></div></section></body></html>");
     owner
         .GetDocumentMut()
-        .AppendStyleSheet(cssom::ParseCSS(css));
+        .AppendStyleSheet(style::ParseCSS(css));
     update(&mut owner);
     owner.GetDocumentMut().StyleStateMut().impact = Default::default();
     owner
@@ -57,16 +66,6 @@ fn inline_style_without_selector_dependency_stays_local_and_matches_old_fallback
         let css="body:has(.unrelated){color:blue}.box + .box{height:17px}.box{--w:10px;width:var(--w)}span{color:inherit}::view-transition-old(sb){opacity:0}html:active-view-transition-type(aimc)::view-transition-new(sb){opacity:0}";
         let mut optimized = fixture(css);
         let mut baseline = fixture(css);
-        assert!(
-            !optimized
-                .GetDocument()
-                .StyleState()
-                .rules
-                .author
-                .as_ref()
-                .unwrap()
-                .inline_style_may_affect_selectors
-        );
         let other = element(optimized.GetDocument(), "c");
         let retained = optimized.GetDocument().ResolvedStyleHandle(other).unwrap();
         for value in [
@@ -143,16 +142,6 @@ fn inline_style_selector_dependency_and_unknown_syntax_keep_full_fallback() {
             let mut owner = fixture(&format!(
                 "body:has(.missing){{color:red}}{unknown} + .box{{height:12px}}"
             ));
-            assert!(
-                owner
-                    .GetDocument()
-                    .StyleState()
-                    .rules
-                    .author
-                    .as_ref()
-                    .unwrap()
-                    .inline_style_may_affect_selectors
-            );
             attribute(&mut owner, "a", "style", "width:45px");
             update(&mut owner);
             assert!(
@@ -175,7 +164,7 @@ fn inline_style_control_native_geometry_computed_style_and_pixels_match_old_fall
         use webapi::dom_bindings::DOMJavaScriptBindings;
         fn run(old_fallback: bool) -> (Vec<paint::paint_engine::PaintRect>, Vec<u8>, usize) {
             let document=Rc::new(RefCell::new(html::html_parser::ParseHTML("<html><body style='margin:0'><textarea id=q style='box-sizing:border-box;border:0;padding:0;width:80px;height:20px'>abc</textarea><div id=other class=row>retained text</div><div class=row>other text</div></body></html>")));
-            document.borrow_mut().GetDocumentMut().AppendStyleSheet(cssom::ParseCSS("body:has(.missing){color:red}.row + .row{width:70px}::view-transition-old(sb){opacity:0}html:active-view-transition-type(aimc)::view-transition-new(sb){opacity:0}"));
+            document.borrow_mut().GetDocumentMut().AppendStyleSheet(style::ParseCSS("body:has(.missing){color:red}.row + .row{width:70px}::view-transition-old(sb){opacity:0}html:active-view-transition-type(aimc)::view-transition-new(sb){opacity:0}"));
             let constraints = Rc::new(RefCell::new(crate::CreateBrowserConstraints(320, 200)));
             crate::style_services::ResolveLayoutStyles(
                 &mut document.borrow_mut(),
@@ -275,13 +264,6 @@ fn no_op_and_local_mutation_preserve_rule_and_style_handles() {
         let a = element(owner.GetDocument(), "a");
         let old_c = owner.GetDocument().ResolvedStyleHandle(c).unwrap();
         let old_a = owner.GetDocument().ResolvedStyleHandle(a).unwrap();
-        let old_rules = owner
-            .GetDocument()
-            .StyleState()
-            .rules
-            .author
-            .clone()
-            .unwrap();
         update(&mut owner);
         assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 0);
         assert_eq!(owner.GetDocument().StyleState().stats.rule_sets_built, 0);
@@ -294,16 +276,6 @@ fn no_op_and_local_mutation_preserve_rule_and_style_handles() {
         assert!(!Arc::ptr_eq(
             &old_a,
             &owner.GetDocument().ResolvedStyleHandle(a).unwrap()
-        ));
-        assert!(Arc::ptr_eq(
-            &old_rules,
-            owner
-                .GetDocument()
-                .StyleState()
-                .rules
-                .author
-                .as_ref()
-                .unwrap()
         ));
         assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 4);
         assert_full_recalc_equal(&mut owner);
@@ -360,12 +332,18 @@ fn stylesheet_media_and_hidden_subtree_updates_match_full_recalc() {
     crate::native_test_thread::run(|| {
         let mut owner = fixture(".box{width:10px}@media(min-width:500px){.box{width:80px}}");
         let a = element(owner.GetDocument(), "a");
-        let env = StyleEnvironment {
-            viewport_width: Some(600.0),
-            viewport_height: Some(300.0),
+        let env = media_queries::media_values_cached::MediaValuesCachedData {
+            viewport_width: 600.0,
+            viewport_height: 300.0,
+            small_viewport_width: 600.0,
+            small_viewport_height: 300.0,
+            large_viewport_width: 600.0,
+            large_viewport_height: 300.0,
+            dynamic_viewport_width: 600.0,
+            dynamic_viewport_height: 300.0,
             ..Default::default()
         };
-        StyleEngine::Update(owner.GetDocumentMut(), &env, &[]);
+        update_with_environment(&mut owner, &env);
         assert_eq!(
             owner.GetDocument().ResolvedStyleFor(a).unwrap().style.width,
             Some(80.0)
@@ -393,7 +371,7 @@ fn stylesheet_media_and_hidden_subtree_updates_match_full_recalc() {
         );
         owner
             .GetDocumentMut()
-            .AppendStyleSheet(cssom::ParseCSS(".box{width:99px}"));
+            .AppendStyleSheet(style::ParseCSS(".box{width:99px}"));
         update(&mut owner);
         assert_eq!(owner.GetDocument().StyleState().stats.rule_sets_built, 1);
         assert_eq!(
@@ -444,21 +422,18 @@ fn unchanged_inline_declarations_are_retained_and_edits_replace_them() {
         attribute(&mut owner, "a", "style", "width:40px;color:red");
         update(&mut owner);
         let a = element(owner.GetDocument(), "a");
-        let id = owner.GetDocument().Node(a).Id();
-        let old = owner.GetDocument().StyleState().rules.inline.borrow()[&id]
-            .1
-            .clone();
+        let old = owner.GetDocument().ResolvedStyleHandle(a).unwrap();
         attribute(&mut owner, "a", "class", "unused");
         update(&mut owner);
         assert!(Arc::ptr_eq(
             &old,
-            &owner.GetDocument().StyleState().rules.inline.borrow()[&id].1
+            &owner.GetDocument().ResolvedStyleHandle(a).unwrap()
         ));
         attribute(&mut owner, "a", "style", "width:50px");
         update(&mut owner);
         assert!(!Arc::ptr_eq(
             &old,
-            &owner.GetDocument().StyleState().rules.inline.borrow()[&id].1
+            &owner.GetDocument().ResolvedStyleHandle(a).unwrap()
         ));
         assert_full_recalc_equal(&mut owner);
     });
@@ -474,7 +449,7 @@ fn removing_and_reconnecting_stylesheet_owner_updates_other_subtrees() {
             "style".into(),
         );
         owner.GetDocumentMut().AppendChild(left, style);
-        let mut sheet = cssom::ParseCSS(".box{width:90px}");
+        let mut sheet = style::ParseCSS(".box{width:90px}");
         sheet.owner_node_id = owner.GetDocument().Node(style).Id();
         owner.GetDocumentMut().AppendStyleSheet(sheet);
         update(&mut owner);
@@ -511,7 +486,7 @@ fn animation_and_control_state_changes_use_the_same_invalidation_path() {
         owner.GetDocumentMut().SetAnimationStyle(
             a_id,
             1,
-            cssom::ParseCSSDeclarationList("color:red;width:80px"),
+            style::ParseCSSDeclarationList("color:red;width:80px"),
         );
         update(&mut owner);
         assert!(Arc::ptr_eq(
@@ -533,7 +508,7 @@ fn animation_and_control_state_changes_use_the_same_invalidation_path() {
             },
         );
         owner.GetDocumentMut().AppendChild(left, input);
-        owner.GetDocumentMut().AppendStyleSheet(cssom::ParseCSS(
+        owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS(
             "input:placeholder-shown{width:11px}input:not(:placeholder-shown){width:42px}",
         ));
         update(&mut owner);
@@ -630,7 +605,7 @@ fn profile_loading_resource_and_shared_heap() {
         }
         owner
             .GetDocumentMut()
-            .AppendStyleSheet(cssom::ParseCSS(&css));
+            .AppendStyleSheet(style::ParseCSS(&css));
         update(&mut owner);
         let started = std::time::Instant::now();
         owner.GetDocumentMut().SetImageResource(
@@ -751,10 +726,11 @@ fn image_completion_updates_intrinsic_size_and_keeps_unrelated_styles() {
             "test:photo".into(),
             layoutng_assembly::internal::layout_input::PaintImage {
                 id: 9,
+                revision: 1,
                 width: 128,
                 height: 64,
                 resolution_scale: 2.0,
-                rgba8: vec![255; 128 * 64 * 4].into(),
+                content: image_resource::PaintImageContent::Bitmap(vec![255; 128 * 64 * 4].into()),
             },
         );
         update(&mut owner);
@@ -844,7 +820,7 @@ fn inherited_custom_properties_remain_isolated_after_local_override() {
 fn character_data_keeps_textarea_default_and_style_sheet_invalidation() {
     crate::native_test_thread::run(|| {
         let mut owner = html::html_parser::ParseHTML("<html><head><style id=sheet>textarea{width:20px}</style></head><body><textarea id=control placeholder=hint>old</textarea></body></html>");
-        owner.GetDocumentMut().AppendStyleSheet(cssom::ParseCSS(
+        owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS(
             "textarea{width:20px}textarea:placeholder-shown{width:40px}",
         ));
         update(&mut owner);
@@ -891,23 +867,33 @@ fn repeated_media_conditions_refresh_for_environment_and_cssom() {
     crate::native_test_thread::run(|| {
         let mut owner = fixture(".box{width:10px}@media screen and (min-width:600px){.box{width:80px}.box::before{content:'wide'}}@media(prefers-color-scheme:dark){.box{height:90px}}");
         let a = element(owner.GetDocument(), "a");
-        let mut env = StyleEnvironment {
-            viewport_width: Some(800.0),
-            preferred_color_scheme: PreferredColorScheme::Light,
+        let mut env = media_queries::media_values_cached::MediaValuesCachedData {
+            viewport_width: 800.0,
+            viewport_height: 600.0,
+            small_viewport_width: 800.0,
+            small_viewport_height: 600.0,
+            large_viewport_width: 800.0,
+            large_viewport_height: 600.0,
+            dynamic_viewport_width: 800.0,
+            dynamic_viewport_height: 600.0,
+            preferred_color_scheme: PreferredColorScheme::kLight,
             ..Default::default()
         };
-        StyleEngine::Update(owner.GetDocumentMut(), &env, &[]);
+        update_with_environment(&mut owner, &env);
         assert_eq!(
             owner.GetDocument().ResolvedStyleFor(a).unwrap().style.width,
             Some(80.0)
         );
         let expected = owner.GetDocument().ResolvedStyleFor(a).unwrap().clone();
         owner.GetDocumentMut().InvalidateAllStyles();
-        StyleEngine::Update(owner.GetDocumentMut(), &env, &[]);
+        update_with_environment(&mut owner, &env);
         assert!(owner.GetDocument().ResolvedStyleFor(a).unwrap() == &expected);
-        env.viewport_width = Some(400.0);
-        env.preferred_color_scheme = PreferredColorScheme::Dark;
-        StyleEngine::Update(owner.GetDocumentMut(), &env, &[]);
+        env.viewport_width = 400.0;
+        env.small_viewport_width = 400.0;
+        env.large_viewport_width = 400.0;
+        env.dynamic_viewport_width = 400.0;
+        env.preferred_color_scheme = PreferredColorScheme::kDark;
+        update_with_environment(&mut owner, &env);
         assert_eq!(
             owner.GetDocument().ResolvedStyleFor(a).unwrap().style.width,
             Some(10.0)
@@ -923,15 +909,15 @@ fn repeated_media_conditions_refresh_for_environment_and_cssom() {
         );
         owner
             .GetDocumentMut()
-            .AppendStyleSheet(cssom::ParseCSS("@media(max-width:500px){.box{width:55px}}"));
-        StyleEngine::Update(owner.GetDocumentMut(), &env, &[]);
+            .AppendStyleSheet(style::ParseCSS("@media(max-width:500px){.box{width:55px}}"));
+        update_with_environment(&mut owner, &env);
         assert_eq!(
             owner.GetDocument().ResolvedStyleFor(a).unwrap().style.width,
             Some(55.0)
         );
         let expected = owner.GetDocument().ResolvedStyleFor(a).unwrap().clone();
         owner.GetDocumentMut().InvalidateAllStyles();
-        StyleEngine::Update(owner.GetDocumentMut(), &env, &[]);
+        update_with_environment(&mut owner, &env);
         assert!(owner.GetDocument().ResolvedStyleFor(a).unwrap() == &expected);
     });
 }
@@ -968,22 +954,12 @@ fn bounded_has_class_membership_structure_moves_cascade_and_pseudo_match_full_re
     crate::native_test_thread::run(|| {
         fn owner() -> DOM {
             let mut owner = html::html_parser::ParseHTML("<html><body><section id=unrelated><span id=retained>outside</span></section><section id=wrap><div id=host class=host><div id=bin><div id=x class=item></div><div id=y></div></div><div id=target class=target></div></div><div id=host2 class=host><div id=bin2></div><div id=target2 class=target></div></div></section></body></html>");
-            owner.GetDocumentMut().AppendStyleSheet(cssom::ParseCSS(".target{width:20px;height:10px}.host:has(.active) .target{height:42px;color:red}.host:has(.item:first-child) .target{width:11px}.host:has(.active,#x) .target{--custom:29px}.host:has(.active) .target::before{content:'active';width:var(--custom,7px)}.host + .host{padding:2px}"));
+            owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS(".target{width:20px;height:10px}.host:has(.active) .target{height:42px;color:red}.host:has(.item:first-child) .target{width:11px}.host:has(.active,#x) .target{--custom:29px}.host:has(.active) .target::before{content:'active';width:var(--custom,7px)}.host + .host{padding:2px}"));
             update(&mut owner);
             owner
         }
         let mut optimized = owner();
         let mut baseline = owner();
-        assert!(
-            !optimized
-                .GetDocument()
-                .StyleState()
-                .rules
-                .author
-                .as_ref()
-                .unwrap()
-                .has_dependency_fallback
-        );
         let outside = element(optimized.GetDocument(), "retained");
         let handle = optimized
             .GetDocument()
@@ -1100,17 +1076,6 @@ fn bounded_has_nonlocal_and_unknown_grammar_still_recalculates_the_root() {
             r".box:has([cl\61ss])",
         ] {
             let mut owner = fixture(&format!("{selector}{{width:88px}}.box{{width:10px}}"));
-            assert!(
-                owner
-                    .GetDocument()
-                    .StyleState()
-                    .rules
-                    .author
-                    .as_ref()
-                    .unwrap()
-                    .has_dependency_fallback,
-                "{selector}"
-            );
             attribute(&mut owner, "leaf", "class", "active");
             update(&mut owner);
             assert!(
@@ -1133,7 +1098,7 @@ fn bounded_has_native_control_cssom_geometry_pixels_match_full_recalc() {
         use webapi::dom_bindings::DOMJavaScriptBindings;
         fn run(full: bool) -> (Vec<paint::paint_engine::PaintRect>, Vec<u8>, usize) {
             let document=Rc::new(RefCell::new(html::html_parser::ParseHTML("<html><body style='margin:0'><section class=host><div><span id=toggle></span></div><textarea id=q style='box-sizing:border-box;border:0;padding:0;width:80px'>abc</textarea></section><section><div>outside retained text</div></section></body></html>")));
-            document.borrow_mut().GetDocumentMut().AppendStyleSheet(cssom::ParseCSS("textarea{height:20px}.host:has(.active) textarea{height:30px}section + section{padding:1px}"));
+            document.borrow_mut().GetDocumentMut().AppendStyleSheet(style::ParseCSS("textarea{height:20px}.host:has(.active) textarea{height:30px}section + section{padding:1px}"));
             let constraints = Rc::new(RefCell::new(crate::CreateBrowserConstraints(320, 200)));
             crate::style_services::ResolveLayoutStyles(
                 &mut document.borrow_mut(),
@@ -1219,7 +1184,7 @@ fn parent_changed_stops_at_unchanged_children_and_matches_native_fresh_pixels() 
     crate::native_test_thread::run(|| {
         fn owner() -> DOM {
             let mut owner=html::html_parser::ParseHTML("<html><body style='margin:0'><div id=a><div id=mid class=branch><div id=leaf><span id=text>nested text</span><textarea id=q>abc</textarea></div></div></div><div id=outside>outside text</div></body></html>");
-            owner.GetDocumentMut().AppendStyleSheet(cssom::ParseCSS("#a{width:80px;height:30px;--label:'before';--tone:black}#mid{width:50%;height:inherit}#leaf{height:inherit;color:var(--tone)}#a::before{content:var(--label);width:inherit;height:2px;background:red;opacity:inherit}textarea{width:40px;height:10px;border:0;padding:0}"));
+            owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS("#a{width:80px;height:30px;--label:'before';--tone:black}#mid{width:50%;height:inherit}#leaf{height:inherit;color:var(--tone)}#a::before{content:var(--label);width:inherit;height:2px;background:red;opacity:inherit}textarea{width:40px;height:10px;border:0;padding:0}"));
             owner
         }
         let mut optimized = owner();
@@ -1328,7 +1293,7 @@ fn parent_changed_stops_at_unchanged_children_and_matches_native_fresh_pixels() 
 fn parent_changed_explicit_variable_inherit_and_custom_override_remain_exact() {
     crate::native_test_thread::run(|| {
         let mut owner=html::html_parser::ParseHTML("<html><body><div id=a><div id=mid><div id=deep></div></div><div id=isolated><span id=isolatedleaf>text</span></div></div></body></html>");
-        owner.GetDocumentMut().AppendStyleSheet(cssom::ParseCSS("#a{width:10px;--keyword:inherit;--tone:red}#mid{width:var(--keyword,inherit)}#deep{width:inherit}#isolated{--tone:black}#isolatedleaf{color:var(--tone)}"));
+        owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS("#a{width:10px;--keyword:inherit;--tone:red}#mid{width:var(--keyword,inherit)}#deep{width:inherit}#isolated{--tone:black}#isolatedleaf{color:var(--tone)}"));
         update(&mut owner);
         attribute(&mut owner, "a", "style", "width:45px");
         update(&mut owner);
@@ -1361,7 +1326,7 @@ fn parent_changed_explicit_variable_inherit_and_custom_override_remain_exact() {
 fn parent_changed_does_not_shorten_node_or_children_selector_subtrees() {
     crate::native_test_thread::run(|| {
         let mut owner=html::html_parser::ParseHTML("<html><body><div id=a><div id=mid><section id=branch class=branch><div><span id=deep>deep</span></div></section></div></div></body></html>");
-        owner.GetDocumentMut().AppendStyleSheet(cssom::ParseCSS("#deep{height:10px;width:10px}.active #deep{height:77px}#mid > .branch:first-child #deep{width:33px}"));
+        owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS("#deep{height:10px;width:10px}.active #deep{height:77px}#mid > .branch:first-child #deep{width:33px}"));
         update(&mut owner);
         attribute(&mut owner, "a", "class", "active");
         update(&mut owner);
@@ -1426,7 +1391,7 @@ fn parent_changed_bypasses_resource_only_shortcut_when_inherited_inputs_change()
         let mut owner = html::html_parser::ParseHTML(
             "<html><body><div id=a><div id=mid><span id=deep>deep</span></div></div></body></html>",
         );
-        owner.GetDocumentMut().AppendStyleSheet(cssom::ParseCSS("#a{height:20px}#mid{height:inherit;background-image:url(test:child)}#deep{color:inherit}"));
+        owner.GetDocumentMut().AppendStyleSheet(style::ParseCSS("#a{height:20px}#mid{height:inherit;background-image:url(test:child)}#deep{color:inherit}"));
         update(&mut owner);
         attribute(&mut owner, "a", "style", "height:30px;color:red");
         owner.GetDocumentMut().SetImageResource(

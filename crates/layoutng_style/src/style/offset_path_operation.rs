@@ -59,3 +59,81 @@ impl PartialEq for dyn OffsetPathOperation + '_ {
             && self.GetCoordBox() == other.GetCoordBox()
     }
 }
+
+// cpp: core/style/coord_box_offset_path_operation.h:13-31.
+pub struct CoordBoxOffsetPathOperation {
+    base: OffsetPathOperationBase,
+}
+impl CoordBoxOffsetPathOperation {
+    pub fn new(coord_box: CoordBox) -> Self {
+        Self {
+            base: OffsetPathOperationBase::new(coord_box),
+        }
+    }
+}
+#[allow(non_snake_case)]
+impl OffsetPathOperation for CoordBoxOffsetPathOperation {
+    fn base(&self) -> &OffsetPathOperationBase {
+        &self.base
+    }
+    fn GetType(&self) -> OperationType {
+        OperationType::kCoordBox
+    }
+    fn IsEqualAssumingSameType(&self, _: &dyn OffsetPathOperation) -> bool {
+        true
+    }
+}
+impl foundation::Traceable for CoordBoxOffsetPathOperation {
+    fn Trace(&self, _: &mut Visitor<'_>) {}
+}
+
+// cpp: core/style/shape_offset_path_operation.h:15-49.
+pub struct ShapeOffsetPathOperation {
+    base: OffsetPathOperationBase,
+    shape: foundation::Member<dyn super::basic_shapes::BasicShape>,
+}
+#[allow(non_snake_case)]
+impl ShapeOffsetPathOperation {
+    /// Shape is allocated in the active native layout heap.
+    pub unsafe fn new(
+        shape: *mut dyn super::basic_shapes::BasicShape,
+        coord_box: CoordBox,
+    ) -> Self {
+        Self {
+            base: OffsetPathOperationBase::new(coord_box),
+            shape: foundation::Member::from_ptr(shape),
+        }
+    }
+    pub fn GetBasicShape(&self) -> &dyn super::basic_shapes::BasicShape {
+        unsafe {
+            self.shape
+                .GetNonNull()
+                .expect("offset shape is non-null")
+                .as_ref()
+        }
+    }
+}
+#[allow(non_snake_case)]
+impl OffsetPathOperation for ShapeOffsetPathOperation {
+    fn base(&self) -> &OffsetPathOperationBase {
+        &self.base
+    }
+    fn GetType(&self) -> OperationType {
+        OperationType::kShape
+    }
+    fn IsEqualAssumingSameType(&self, other: &dyn OffsetPathOperation) -> bool {
+        debug_assert!(self.IsSameType(other));
+        let other = unsafe { &*(other as *const dyn OffsetPathOperation as *const Self) };
+        self.GetBasicShape() == other.GetBasicShape()
+    }
+    fn Trace(&self, visitor: Option<&mut Visitor>) {
+        if let Some(visitor) = visitor {
+            visitor.Trace(&self.shape);
+        }
+    }
+}
+impl foundation::Traceable for ShapeOffsetPathOperation {
+    fn Trace(&self, v: &mut Visitor<'_>) {
+        OffsetPathOperation::Trace(self, Some(v));
+    }
+}

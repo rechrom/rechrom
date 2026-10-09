@@ -1193,7 +1193,12 @@ pub(super) fn preserves_breaks(style: &ComputedStyle) -> bool {
     };
     matches!(
         extra.white_space,
-        WhiteSpace::kPre | WhiteSpace::kPreLine | WhiteSpace::kPreWrap | WhiteSpace::kBreakSpaces
+        WhiteSpace::kPre
+            | WhiteSpace::kPreLine
+            | WhiteSpace::kPreWrap
+            | WhiteSpace::kBreakSpaces
+            | WhiteSpace::kPreserveBreaksNowrap
+            | WhiteSpace::kBreakSpacesNowrap
     )
 }
 
@@ -1631,7 +1636,7 @@ mod svg_text_path_tests {
 pub fn BuildResolved(
     tree: &mut LayoutTreeUpdate<'_>,
     document: &Document,
-    resolved: &crate::style_resolver::ResolvedStyles,
+    resolved: &crate::ResolvedStyles,
 ) -> *mut LayoutObject {
     BuildResolvedWithInteraction(tree, document, resolved, &UserInteractionState::default())
 }
@@ -1640,7 +1645,7 @@ pub fn BuildResolved(
 pub fn BuildResolvedWithInteraction(
     tree: &mut LayoutTreeUpdate<'_>,
     document: &Document,
-    resolved: &crate::style_resolver::ResolvedStyles,
+    resolved: &crate::ResolvedStyles,
     interaction_state: &UserInteractionState,
 ) -> *mut LayoutObject {
     assert_eq!(document.elements.len(), resolved.styles.len());

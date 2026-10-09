@@ -230,7 +230,9 @@ impl DerefMut for ComputedStyleBuilder {
 // cpp: layoutng_style/style/computed_style.h:933-936
 impl PartialEq for ComputedStyle {
     fn eq(&self, other: &Self) -> bool {
-        unsafe { ComputedStyleEqual(self, other) }
+        self.InheritedEqual(other)
+            && self.NonInheritedEqual(other)
+            && self.InheritedVariablesEqual(other)
     }
 }
 
@@ -355,9 +357,64 @@ impl ComputedStyle {
         old_style: &Self,
         new_style: &Self,
     ) -> ComputedStyleDifference {
-        unsafe {
-            ComputedStyleComputeDifferenceIgnoringInheritedFirstLineStyle(old_style, new_style)
+        // cpp: third_party/blink/renderer/core/style/computed_style.cc:439-500
+        use ComputedStyleDifference::*;
+        if old_style.ScrollTimelineName() != new_style.ScrollTimelineName()
+            || old_style.ScrollTimelineAxis() != new_style.ScrollTimelineAxis()
+            || old_style.ViewTimelineName() != new_style.ViewTimelineName()
+            || old_style.ViewTimelineAxis() != new_style.ViewTimelineAxis()
+            || old_style.ViewTimelineInset() != new_style.ViewTimelineInset()
+            || old_style.TimelineScope() != new_style.TimelineScope()
+        {
+            return kDescendantAffecting;
         }
+        if old_style.Display() != new_style.Display()
+            && (old_style.BlockifiesChildren() != new_style.BlockifiesChildren()
+                || old_style.InlinifiesChildren() != new_style.InlinifiesChildren())
+        {
+            return kDescendantAffecting;
+        }
+        if old_style.ScrollMarkerGroupNone() != new_style.ScrollMarkerGroupNone() {
+            return kDescendantAffecting;
+        }
+        if !old_style.NonIndependentInheritedEqual(new_style)
+            || old_style.JustifyItems() != new_style.JustifyItems()
+            || old_style.AppliedTextDecorations() != new_style.AppliedTextDecorations()
+        {
+            return kInherited;
+        }
+        let non_inherited_equal = old_style.NonInheritedEqual(new_style);
+        if !non_inherited_equal && old_style.ChildHasExplicitInheritance() {
+            return kInherited;
+        }
+        let variables_independent =
+            !old_style.HasVariableReference() && !old_style.HasVariableDeclaration();
+        let inherited_variables_equal = old_style.InheritedVariablesEqual(new_style);
+        if !inherited_variables_equal && !variables_independent {
+            return kInherited;
+        }
+        if !old_style.IndependentInheritedEqual(new_style) || !inherited_variables_equal {
+            return kIndependentInherited;
+        }
+        if non_inherited_equal {
+            if Self::PseudoElementStylesEqual(old_style, new_style) {
+                return kEqual;
+            }
+            return kPseudoElementStyle;
+        }
+        if old_style.EffectiveOverscrollContainerType()
+            != new_style.EffectiveOverscrollContainerType()
+        {
+            return kDescendantAffecting;
+        }
+        if new_style.HasAnyPseudoElementStyles()
+            || old_style.HasAnyPseudoElementStyles()
+            || (old_style.Display() != new_style.Display()
+                && (new_style.IsDisplayListItem() || old_style.IsDisplayListItem()))
+        {
+            return kPseudoElementStyle;
+        }
+        kNonInherited
     }
 
     // cpp: layoutng_style/style/computed_style.h:2802-2803
@@ -387,21 +444,31 @@ impl ComputedStyle {
         }
     }
 
-    // These C++ protected cache methods are declarations without bodies in
-    // the supplied style package.
     // cpp: layoutng_style/style/computed_style.h:322
     pub(crate) fn HasCachedPseudoElementStyles(&self) -> bool {
-        unsafe { ComputedStyleHasCachedPseudoElementStyles(self) }
+        let cache = self.GetPseudoElementStyleCache();
+        !cache.is_null() && unsafe { &*cache }.size() != 0
     }
 
     // cpp: layoutng_style/style/computed_style.h:323
     pub(crate) fn GetPseudoElementStyleCache(&self) -> *mut PseudoElementStyleCache {
-        unsafe { ComputedStyleGetPseudoElementStyleCache(self) }
+        let cache = self.cached_data_.get().Get();
+        if cache.is_null() {
+            std::ptr::null_mut()
+        } else {
+            unsafe { &*cache }.pseudo_element_styles_.Get()
+        }
     }
 
     // cpp: layoutng_style/style/computed_style.h:324
     pub(crate) fn EnsurePseudoElementStyleCache(&self) -> &mut PseudoElementStyleCache {
-        unsafe { &mut *ComputedStyleEnsurePseudoElementStyleCache(self) }
+        // cpp: third_party/blink/renderer/core/style/computed_style.cc:173-180
+        let data = self.EnsureCachedData();
+        if data.pseudo_element_styles_.Get().is_null() {
+            data.pseudo_element_styles_ =
+                Member::from_ptr(MakeGarbageCollected(PseudoElementStyleCache::default()));
+        }
+        unsafe { &mut *data.pseudo_element_styles_.Get() }
     }
 
     // cpp: layoutng_style/style/computed_style.h:326
@@ -419,7 +486,29 @@ impl ComputedStyle {
         old_style: *const ComputedStyle,
         new_style: *const ComputedStyle,
     ) -> ComputedStyleDifference {
-        unsafe { ComputedStyleComputeDifference(old_style, new_style) }
+        // cpp: third_party/blink/renderer/core/style/computed_style.cc:407-436
+        if old_style == new_style {
+            return ComputedStyleDifference::kEqual;
+        }
+        // Both pointers come from live GC-owned immutable computed styles.
+        let (Some(old_style), Some(new_style)) =
+            (unsafe { old_style.as_ref() }, unsafe { new_style.as_ref() })
+        else {
+            return ComputedStyleDifference::kInherited;
+        };
+        let cached = old_style
+            .GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdFirstLineInherited);
+        let inherited_first_line_diff = if let Some(cached) = unsafe { cached.as_ref() } {
+            debug_assert!(new_style
+                .GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdFirstLineInherited)
+                .is_null());
+            Self::ComputeDifferenceIgnoringInheritedFirstLineStyle(cached, new_style)
+        } else {
+            ComputedStyleDifference::kEqual
+        };
+        inherited_first_line_diff.max(Self::ComputeDifferenceIgnoringInheritedFirstLineStyle(
+            old_style, new_style,
+        ))
     }
 
     // cpp: layoutng_style/style/computed_style.h:414-417
@@ -450,7 +539,18 @@ impl ComputedStyle {
         pseudo_id: PseudoId,
         pseudo_argument: &AtomicString,
     ) -> *const ComputedStyle {
-        unsafe { ComputedStyleGetCachedPseudoElementStyle(self, pseudo_id, pseudo_argument) }
+        // cpp: third_party/blink/renderer/core/style/computed_style.cc:641-655
+        let cache = self.GetPseudoElementStyleCache();
+        if cache.is_null() {
+            return std::ptr::null();
+        }
+        let key = super::style_cached_data::PseudoElementStyleCacheKey {
+            pseudo_type: pseudo_id,
+            pseudo_argument: pseudo_argument.clone(),
+        };
+        unsafe { &*cache }
+            .get(&key)
+            .map_or(std::ptr::null(), |style| style.Get())
     }
 
     // C++ defaults pseudo_argument to g_null_atom.
@@ -469,9 +569,17 @@ impl ComputedStyle {
         pseudo_id: PseudoId,
         pseudo_argument: &AtomicString,
     ) -> *const ComputedStyle {
-        unsafe {
-            ComputedStyleAddCachedPseudoElementStyle(self, pseudo_style, pseudo_id, pseudo_argument)
-        }
+        // cpp: third_party/blink/renderer/core/style/computed_style.cc:657-680
+        let pseudo = unsafe { pseudo_style.as_ref() }.expect("cached pseudo style is non-null");
+        debug_assert_eq!(pseudo.StyleType(), pseudo_id);
+        let key = super::style_cached_data::PseudoElementStyleCacheKey {
+            pseudo_type: pseudo_id,
+            pseudo_argument: pseudo_argument.clone(),
+        };
+        let cache = self.EnsurePseudoElementStyleCache();
+        debug_assert!(!cache.contains_key(&key), "pseudo style already cached");
+        cache.insert(key, Member::from_ptr(pseudo_style as *mut ComputedStyle));
+        pseudo_style
     }
 
     // cpp: layoutng_style/style/computed_style.h:442-445
@@ -481,19 +589,34 @@ impl ComputedStyle {
         pseudo_id: PseudoId,
         pseudo_argument: &AtomicString,
     ) -> *const ComputedStyle {
-        unsafe {
-            ComputedStyleReplaceCachedPseudoElementStyle(
-                self,
-                pseudo_style,
-                pseudo_id,
-                pseudo_argument,
-            )
+        // cpp: third_party/blink/renderer/core/style/computed_style.cc:682-699
+        let pseudo = unsafe { pseudo_style.as_ref() }.expect("cached pseudo style is non-null");
+        debug_assert!(
+            pseudo.StyleType() != PseudoId::kPseudoIdNone
+                && pseudo.StyleType() != PseudoId::kPseudoIdFirstLineInherited
+        );
+        let cache = self.GetPseudoElementStyleCache();
+        if !cache.is_null() {
+            let key = super::style_cached_data::PseudoElementStyleCacheKey {
+                pseudo_type: pseudo_id,
+                pseudo_argument: pseudo_argument.clone(),
+            };
+            if let Some(cached) = unsafe { &mut *cache }.get_mut(&key) {
+                assert!(unsafe { &*cached.Get() }.IsEnsuredInDisplayNone());
+                *cached = Member::from_ptr(pseudo_style as *mut ComputedStyle);
+                return pseudo_style;
+            }
         }
+        self.AddCachedPseudoElementStyle(pseudo_style, pseudo_id, pseudo_argument)
     }
 
     // cpp: layoutng_style/style/computed_style.h:446
     pub fn ClearCachedPseudoElementStyles(&self) {
-        unsafe { ComputedStyleClearCachedPseudoElementStyles(self) }
+        // cpp: third_party/blink/renderer/core/style/computed_style.cc:701-705
+        let cache = self.GetPseudoElementStyleCache();
+        if !cache.is_null() {
+            unsafe { &mut *cache }.clear();
+        }
     }
 
     // cpp: layoutng_style/style/computed_style.h:1603
@@ -522,27 +645,28 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:938
     pub fn InheritedEqual(&self, other: &ComputedStyle) -> bool {
-        unsafe { ComputedStyleInheritedEqual(self, other) }
+        self.IndependentInheritedEqual(other) && self.NonIndependentInheritedEqual(other)
     }
 
     // cpp: layoutng_style/style/computed_style.h:939
     pub fn NonInheritedEqual(&self, other: &ComputedStyle) -> bool {
-        unsafe { ComputedStyleNonInheritedEqual(self, other) }
+        self.base_.NonInheritedEqual(&other.base_)
     }
 
     // cpp: layoutng_style/style/computed_style.h:940
     pub fn IndependentInheritedEqual(&self, other: &ComputedStyle) -> bool {
-        unsafe { ComputedStyleIndependentInheritedEqual(self, other) }
+        self.base_.IndependentInheritedEqual(&other.base_)
     }
 
     // cpp: layoutng_style/style/computed_style.h:941
     pub fn NonIndependentInheritedEqual(&self, other: &ComputedStyle) -> bool {
-        unsafe { ComputedStyleNonIndependentInheritedEqual(self, other) }
+        self.base_.NonIndependentInheritedEqual(&other.base_)
     }
 
     // cpp: layoutng_style/style/computed_style.h:942
     pub fn InheritedEqualIncludingInheritedVariables(&self, other: &ComputedStyle) -> bool {
-        unsafe { ComputedStyleInheritedEqualIncludingInheritedVariables(self, other) }
+        self.base_
+            .InheritedEqualIncludingInheritedVariables(&other.base_)
     }
 
     // cpp: layoutng_style/style/computed_style.h:953
@@ -1130,10 +1254,10 @@ impl ComputedStyle {
         self.ChildHasExplicitInheritance()
     }
 
-    // These C++ declarations have no supplied definitions in this package.
+    // cpp: third_party/blink/renderer/core/style/computed_style.cc:1779-1792
     // cpp: layoutng_style/style/computed_style.h:956
     pub fn GetCounterDirectivesMap(&self) -> *const CounterDirectiveMap {
-        unsafe { ComputedStyleGetCounterDirectivesMap(self) }
+        self.CounterDirectivesInternal().as_deref().map_or(std::ptr::null(), std::ptr::from_ref)
     }
 
     // cpp: layoutng_style/style/computed_style.h:957-958
@@ -1141,7 +1265,7 @@ impl ComputedStyle {
         &self,
         identifier: &AtomicString,
     ) -> CounterDirectives {
-        unsafe { ComputedStyleGetCounterDirectivesForIdentifier(self, identifier) }
+        self.CounterDirectivesInternal().as_ref().and_then(|map| map.get(identifier)).cloned().unwrap_or_default()
     }
 
     // cpp: layoutng_style/style/computed_style.h:946-951
@@ -2473,7 +2597,25 @@ impl ComputedStyle {
     pub fn AppliedTextDecorations(
         &self,
     ) -> &super::applied_text_decoration::AppliedTextDecorationVector {
-        unsafe { &*ComputedStyleAppliedTextDecorations(self) }
+        // cpp: third_party/blink/renderer/core/style/computed_style.cc:2243-2259
+        if !self.HasAppliedTextDecorations() {
+            thread_local! {
+                static EMPTY: std::cell::OnceCell<foundation::Persistent<super::applied_text_decoration::AppliedTextDecorationVector>> = std::cell::OnceCell::new();
+            }
+            let empty = EMPTY.with(|slot| {
+                slot.get_or_init(|| {
+                    foundation::Persistent::from_ptr(MakeGarbageCollected(
+                        super::applied_text_decoration::AppliedTextDecorationVector::default(),
+                    ))
+                })
+                .Get()
+            });
+            return unsafe { &*empty };
+        }
+        if !self.IsDecoratingBox() {
+            return unsafe { &*self.BaseTextDecorationData() };
+        }
+        unsafe { &*self.EnsureAppliedTextDecorationsCache() }
     }
 
     // cpp: layoutng_style/style/computed_style.h:1902-1908
@@ -3513,12 +3655,30 @@ impl ComputedStyle {
 impl ComputedStyleBuilder {
     // cpp: layoutng_style/style/computed_style.h:2957-2958
     pub fn AccessAnimations(&mut self) -> &mut CSSAnimationData {
-        unsafe { &mut *ComputedStyleBuilderAccessAnimations(self) }
+        // cpp: core/style/computed_style.h:3002-3012.
+        let own = self.has_own_animations_.get();
+        let data = self.MutableAnimationsInternal();
+        if !own {
+            let value = unsafe { data.Get().as_ref() }.cloned().unwrap_or_default();
+            *data = Member::from_ptr(MakeGarbageCollected(value));
+        }
+        let pointer = data.Get();
+        self.has_own_animations_.set(true);
+        unsafe { &mut *pointer }
     }
 
     // cpp: layoutng_style/style/computed_style.h:3467-3468
     pub fn AccessTransitions(&mut self) -> &mut CSSTransitionData {
-        unsafe { &mut *ComputedStyleBuilderAccessTransitions(self) }
+        // cpp: core/style/computed_style.h:3526-3536.
+        let own = self.has_own_transitions_.get();
+        let data = self.MutableTransitionsInternal();
+        if !own {
+            let value = unsafe { data.Get().as_ref() }.cloned().unwrap_or_default();
+            *data = Member::from_ptr(MakeGarbageCollected(value));
+        }
+        let pointer = data.Get();
+        self.has_own_transitions_.set(true);
+        unsafe { &mut *pointer }
     }
 
     // cpp: layoutng_style/style/computed_style.h:2990
@@ -3538,9 +3698,21 @@ impl ComputedStyleBuilder {
         preferred_color_scheme: crate::style::color_scheme::mojom::blink::PreferredColorScheme,
         force_dark: bool,
     ) {
-        unsafe {
-            ComputedStyleBuilderSetUsedColorScheme(self, flags, preferred_color_scheme, force_dark)
-        }
+        // cpp: core/style/computed_style.cc:3147-3191
+        use crate::css::color_scheme_flags::ColorSchemeFlag as F;
+        use crate::style::color_scheme::mojom::blink::PreferredColorScheme as P;
+        let prefers_dark = preferred_color_scheme == P::kDark;
+        let has_dark = flags & F::kDark as u8 != 0;
+        let has_light = flags & F::kLight as u8 != 0;
+        let has_only = flags & F::kOnly as u8 != 0;
+        let dark_scheme = (has_dark && prefers_dark)
+            || (has_dark && !has_light)
+            || (force_dark && !has_only)
+            || (force_dark && !prefers_dark);
+        self.SetDarkColorScheme(dark_scheme);
+        let forced_scheme = (!has_dark && dark_scheme) || (force_dark && !prefers_dark);
+        self.SetColorSchemeForced(forced_scheme);
+        self.SetColorSchemeFlagsIsNormal(flags == F::kNormal as u8);
     }
 
     // cpp: layoutng_style/style/computed_style.h:2953-2955
@@ -4419,10 +4591,6 @@ impl ComputedStyleBuilder {
 
 unsafe extern "Rust" {
     // cpp: layoutng_style/style/computed_style.h:2846-2848
-    fn ComputedStyleComputeDifferenceIgnoringInheritedFirstLineStyle(
-        old_style: &ComputedStyle,
-        new_style: &ComputedStyle,
-    ) -> ComputedStyleDifference;
     // cpp: layoutng_style/style/computed_style.h:2455
     fn ComputedStyleGetInterpolationQuality(
         style: &ComputedStyle,
@@ -4558,16 +4726,6 @@ unsafe extern "Rust" {
         context_paint: &SVGPaint,
         context_style: &ComputedStyle,
     ) -> Color;
-    // cpp: layoutng_style/style/computed_style.h:322
-    fn ComputedStyleHasCachedPseudoElementStyles(style: &ComputedStyle) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:323
-    fn ComputedStyleGetPseudoElementStyleCache(
-        style: &ComputedStyle,
-    ) -> *mut PseudoElementStyleCache;
-    // cpp: layoutng_style/style/computed_style.h:324
-    fn ComputedStyleEnsurePseudoElementStyleCache(
-        style: &ComputedStyle,
-    ) -> *mut PseudoElementStyleCache;
     // cpp: layoutng_style/style/computed_style.h:326
     fn ComputedStyleGetVariableNamesCache(
         style: &ComputedStyle,
@@ -4584,26 +4742,12 @@ unsafe extern "Rust" {
     // cpp: layoutng_style/style/computed_style.h:2609
     fn ComputedStyleHasBaseEffectiveAppearance(style: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2957-2958
-    fn ComputedStyleBuilderAccessAnimations(
-        builder: &mut ComputedStyleBuilder,
-    ) -> *mut CSSAnimationData;
-    // cpp: layoutng_style/style/computed_style.h:3467-3468
-    fn ComputedStyleBuilderAccessTransitions(
-        builder: &mut ComputedStyleBuilder,
-    ) -> *mut CSSTransitionData;
     // cpp: layoutng_style/style/computed_style.h:2990
     fn ComputedStyleBuilderClearBackgroundImage(builder: &mut ComputedStyleBuilder);
     // cpp: layoutng_style/style/computed_style.h:3544-3545
     fn ComputedStyleBuilderAddPaintImage(
         builder: &mut ComputedStyleBuilder,
         image: *mut StyleImage,
-    );
-    // cpp: layoutng_style/style/computed_style.h:3565-3572
-    fn ComputedStyleBuilderSetUsedColorScheme(
-        builder: &mut ComputedStyleBuilder,
-        flags: ColorSchemeFlags,
-        preferred_color_scheme: crate::style::color_scheme::mojom::blink::PreferredColorScheme,
-        force_dark: bool,
     );
     // cpp: layoutng_style/style/computed_style.h:920-922
     fn ComputedStyleResolvedCaretTextColor(style: &ComputedStyle) -> Option<Color>;
@@ -4613,24 +4757,11 @@ unsafe extern "Rust" {
     fn ComputedStyleScrollbarThumbColorResolved(style: &ComputedStyle) -> Option<Color>;
     fn ComputedStyleScrollbarTrackColorResolved(style: &ComputedStyle) -> Option<Color>;
     // cpp: layoutng_style/style/computed_style.h:933-936
-    fn ComputedStyleEqual(style: &ComputedStyle, other: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:938
-    fn ComputedStyleInheritedEqual(style: &ComputedStyle, other: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:939
-    fn ComputedStyleNonInheritedEqual(style: &ComputedStyle, other: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:940
-    fn ComputedStyleIndependentInheritedEqual(style: &ComputedStyle, other: &ComputedStyle)
-        -> bool;
     // cpp: layoutng_style/style/computed_style.h:941
-    fn ComputedStyleNonIndependentInheritedEqual(
-        style: &ComputedStyle,
-        other: &ComputedStyle,
-    ) -> bool;
     // cpp: layoutng_style/style/computed_style.h:942
-    fn ComputedStyleInheritedEqualIncludingInheritedVariables(
-        style: &ComputedStyle,
-        other: &ComputedStyle,
-    ) -> bool;
     // cpp: layoutng_style/style/computed_style.h:953
     fn ComputedStyleCopyChildDependentFlagsFrom(style: &ComputedStyle, other: &ComputedStyle);
     // cpp: layoutng_style/style/computed_style.h:971-972
@@ -4668,10 +4799,6 @@ unsafe extern "Rust" {
         is_inherited_property: bool,
     ) -> *const CSSValue;
     // cpp: layoutng_style/style/computed_style.h:410-412
-    fn ComputedStyleComputeDifference(
-        old_style: *const ComputedStyle,
-        new_style: *const ComputedStyle,
-    ) -> ComputedStyleDifference;
     // cpp: layoutng_style/style/computed_style.h:414-417
     fn ComputedStyleDiffAffectsContainerQueries(
         old_style: *const ComputedStyle,
@@ -4688,28 +4815,6 @@ unsafe extern "Rust" {
         old_style: &ComputedStyle,
         new_style: &ComputedStyle,
     ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:436-438
-    fn ComputedStyleGetCachedPseudoElementStyle(
-        style: &ComputedStyle,
-        pseudo_id: PseudoId,
-        pseudo_argument: &AtomicString,
-    ) -> *const ComputedStyle;
-    // cpp: layoutng_style/style/computed_style.h:439-441
-    fn ComputedStyleAddCachedPseudoElementStyle(
-        style: &ComputedStyle,
-        pseudo_style: *const ComputedStyle,
-        pseudo_id: PseudoId,
-        pseudo_argument: &AtomicString,
-    ) -> *const ComputedStyle;
-    // cpp: layoutng_style/style/computed_style.h:442-445
-    fn ComputedStyleReplaceCachedPseudoElementStyle(
-        style: &ComputedStyle,
-        pseudo_style: *const ComputedStyle,
-        pseudo_id: PseudoId,
-        pseudo_argument: &AtomicString,
-    ) -> *const ComputedStyle;
-    // cpp: layoutng_style/style/computed_style.h:446
-    fn ComputedStyleClearCachedPseudoElementStyles(style: &ComputedStyle);
     // cpp: layoutng_style/style/computed_style.h:1603
     fn ComputedStyleContentDataEquivalent(style: &ComputedStyle, other: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2362
@@ -4730,9 +4835,6 @@ unsafe extern "Rust" {
         other: &ComputedStyle,
     ) -> bool;
     // cpp: layoutng_style/style/computed_style.h:1872
-    fn ComputedStyleAppliedTextDecorations(
-        style: &ComputedStyle,
-    ) -> *const super::applied_text_decoration::AppliedTextDecorationVector;
     // cpp: layoutng_style/style/computed_style.h:1687-1690
     fn ComputedStyleShouldApplyAnyContainment(
         element: &Element,
@@ -4747,13 +4849,6 @@ unsafe extern "Rust" {
     fn ComputedStyleHas3DTransformOperation(style: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:456
     fn ComputedStyleGetBaseImportantSet(style: &ComputedStyle) -> *const CSSBitset;
-    // cpp: layoutng_style/style/computed_style.h:956-958
-    fn ComputedStyleGetCounterDirectivesMap(style: &ComputedStyle) -> *const CounterDirectiveMap;
-    fn ComputedStyleGetCounterDirectivesForIdentifier(
-        style: &ComputedStyle,
-        identifier: &AtomicString,
-    ) -> CounterDirectives;
-
     // cpp: layoutng_style/style/computed_style.h:3585-3586
     fn ComputedStyleBuilderGetVariableData(
         builder: &ComputedStyleBuilder,
@@ -4776,4 +4871,263 @@ unsafe extern "Rust" {
         builder: &mut ComputedStyleBuilder,
         style: *const ComputedStyle,
     );
+}
+
+#[allow(non_snake_case)]
+impl ComputedStyle {
+    // cpp: third_party/blink/renderer/core/style/computed_style.cc:226-254
+    fn PseudoElementStylesEqual(old_style: &Self, new_style: &Self) -> bool {
+        if !old_style.HasAnyPseudoElementStyles() && !new_style.HasAnyPseudoElementStyles() {
+            return true;
+        }
+        for value in
+            PseudoId::kFirstPublicPseudoId.value()..=PseudoId::kLastTrackedPublicPseudoId.value()
+        {
+            let pseudo_id = PseudoId::from_bits(value);
+            if (!old_style.HasPseudoElementStyle(pseudo_id)
+                && !new_style.HasPseudoElementStyle(pseudo_id))
+                || super::computed_style_constants::IsHighlightPseudoElement(pseudo_id)
+            {
+                continue;
+            }
+            let new_pseudo_style = new_style.GetCachedPseudoElementStyleWithoutArgument(pseudo_id);
+            let Some(new_pseudo_style) = (unsafe { new_pseudo_style.as_ref() }) else {
+                return false;
+            };
+            let old_pseudo_style = old_style.GetCachedPseudoElementStyleWithoutArgument(pseudo_id);
+            if unsafe { old_pseudo_style.as_ref() }.is_some_and(|old| old != new_pseudo_style) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl Eq for super::style_cached_data::PseudoElementStyleCacheKey {}
+impl std::hash::Hash for super::style_cached_data::PseudoElementStyleCacheKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u32(
+            super::style_cached_data::PseudoElementStyleCacheKeyHashTraits::GetHash(self),
+        );
+    }
+}
+
+#[cfg(test)]
+mod difference_tests {
+    use super::super::computed_style_base::FieldDifference as F;
+    use super::*;
+
+    fn initial() -> &'static ComputedStyle {
+        unsafe { &*ComputedStyle::GetInitialStyleSingleton() }
+    }
+    fn changed(change: impl FnOnce(&mut ComputedStyleBuilder)) -> &'static ComputedStyle {
+        let mut builder = ComputedStyleBuilder::from_style(initial());
+        change(&mut builder);
+        unsafe { &*builder.TakeStyle() }
+    }
+
+    #[test]
+    fn difference_null_identity_and_equal_distinct_styles() {
+        let _heap = foundation::LayoutHeapScope::new();
+        use ComputedStyleDifference::*;
+        assert_eq!(
+            ComputedStyle::ComputeDifference(std::ptr::null(), std::ptr::null()),
+            kEqual
+        );
+        assert_eq!(
+            ComputedStyle::ComputeDifference(initial(), std::ptr::null()),
+            kInherited
+        );
+        let same = changed(|_| {});
+        assert_eq!(ComputedStyle::ComputeDifference(initial(), same), kEqual);
+        assert_eq!(ComputedStyleBase::FieldInvalidationDiff(initial(), same), 0);
+        // Independent default data groups exercise deep equality, including
+        // distinct variable trie roots, instead of shared group identities.
+        let independent = ComputedStyle::default();
+        assert!(initial() == &independent);
+        assert_eq!(
+            ComputedStyle::ComputeDifference(initial(), &independent),
+            kEqual
+        );
+        assert_eq!(
+            ComputedStyleBase::FieldInvalidationDiff(initial(), &independent),
+            0
+        );
+    }
+
+    #[test]
+    fn difference_propagation_and_precise_field_bits() {
+        let _heap = foundation::LayoutHeapScope::new();
+        use ComputedStyleDifference::*;
+        let width = changed(|b| b.SetWidth(&Length::Fixed(100.0)));
+        assert_eq!(
+            ComputedStyle::ComputeDifference(initial(), width),
+            kNonInherited
+        );
+        assert_eq!(
+            ComputedStyleBase::FieldInvalidationDiff(initial(), width),
+            (F::kLayout | F::kScrollAnchor).bits()
+        );
+        let color = changed(|b| b.SetColor(&StyleColor::from_color(Color::kWhite)));
+        assert_eq!(
+            ComputedStyle::ComputeDifference(initial(), color),
+            kIndependentInherited
+        );
+        assert_eq!(
+            ComputedStyleBase::FieldInvalidationDiff(initial(), color),
+            (F::kAccentColor | F::kBorderVisual | F::kColor | F::kCurrentcolor | F::kOutline)
+                .bits()
+        );
+        let line_height = changed(|b| b.SetLineHeight(&Length::Fixed(23.0)));
+        assert_eq!(
+            ComputedStyle::ComputeDifference(initial(), line_height),
+            kInherited
+        );
+        let flex = changed(|b| b.SetDisplay(EDisplay::kFlex));
+        assert_eq!(
+            ComputedStyle::ComputeDifference(initial(), flex),
+            kDescendantAffecting
+        );
+        let background = changed(|b| b.SetBackgroundColor(&StyleColor::from_color(Color::kWhite)));
+        assert_eq!(
+            ComputedStyleBase::FieldInvalidationDiff(initial(), background),
+            (F::kAXStyle | F::kBackgroundColor).bits()
+        );
+        let opacity = changed(|b| b.SetOpacity(0.5));
+        assert_eq!(
+            ComputedStyleBase::FieldInvalidationDiff(initial(), opacity),
+            F::kOpacity.bits()
+        );
+    }
+    #[test]
+    fn first_line_cache_and_public_pseudo_differences() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let color = changed(|b| b.SetColor(&StyleColor::from_color(Color::kWhite)));
+        let old = changed(|_| {});
+        let mut cache = PseudoElementStyleCache::default();
+        cache.insert(
+            super::super::style_cached_data::PseudoElementStyleCacheKey {
+                pseudo_type: PseudoId::kPseudoIdFirstLineInherited,
+                pseudo_argument: g_null_atom.clone(),
+            },
+            Member::from_ptr(color as *const ComputedStyle as *mut ComputedStyle),
+        );
+        old.EnsureCachedData().pseudo_element_styles_ =
+            Member::from_ptr(MakeGarbageCollected(cache));
+        assert!(old == initial());
+        assert_eq!(
+            ComputedStyle::ComputeDifference(old, initial()),
+            ComputedStyleDifference::kIndependentInherited
+        );
+        let pseudo = changed(|b| {
+            b.SetPseudoElementStyles(PseudoIdFlags::from_list(&[PseudoId::kPseudoIdBefore]).Bits())
+        });
+        assert_eq!(
+            ComputedStyle::ComputeDifference(initial(), pseudo),
+            ComputedStyleDifference::kPseudoElementStyle
+        );
+    }
+
+    #[test]
+    fn native_timing_data_is_retained_by_computed_style_gc_edges() {
+        let heap = foundation::LayoutHeapScope::new();
+        let style = changed(|builder| {
+            *builder.AccessAnimations().DurationListMut() = vec![Some(0.25), None];
+            *builder.AccessTransitions().PropertyListMut() = vec![
+                super::super::css_timing_data::TransitionProperty::Unknown(
+                    AtomicString::from_str("--progress"),
+                ),
+            ];
+        });
+        let root = foundation::Persistent::from_ptr(style as *const _ as *mut ComputedStyle);
+        let animations = foundation::WeakPersistent::from_ptr(style.Animations().Get() as *mut CSSAnimationData);
+        let transitions = foundation::WeakPersistent::from_ptr(style.Transitions().Get() as *mut CSSTransitionData);
+        drop(heap);
+        assert!(!animations.Get().is_null());
+        assert!(!transitions.Get().is_null());
+        assert_eq!(unsafe { &*animations.Get() }.DurationList(), &[Some(0.25), None]);
+        assert!(matches!(
+            &unsafe { &*transitions.Get() }.PropertyList()[0],
+            super::super::css_timing_data::TransitionProperty::Unknown(name)
+                if name.Utf8() == "--progress"
+        ));
+        drop(root);
+        foundation::CollectLayoutHeapForTesting();
+        assert!(animations.Get().is_null());
+        assert!(transitions.Get().is_null());
+    }
+
+    #[test]
+    fn pseudo_cache_owns_styles_and_keys_by_argument() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let owner =
+            foundation::Persistent::from_ptr(changed(|_| {}) as *const _ as *mut ComputedStyle);
+        let first = changed(|b| b.SetStyleType(PseudoId::kPseudoIdBefore));
+        let second = changed(|b| {
+            b.SetStyleType(PseudoId::kPseudoIdBefore);
+            b.SetColor(&StyleColor::from_color(Color::kWhite));
+        });
+        let weak_first =
+            foundation::WeakPersistent::from_ptr(first as *const _ as *mut ComputedStyle);
+        let weak_second =
+            foundation::WeakPersistent::from_ptr(second as *const _ as *mut ComputedStyle);
+        let argument = AtomicString::from_str("named");
+        let style = unsafe { &*owner.Get() };
+        assert_eq!(
+            style.AddCachedPseudoElementStyle(first, PseudoId::kPseudoIdBefore, &g_null_atom),
+            first as *const ComputedStyle
+        );
+        style.AddCachedPseudoElementStyle(second, PseudoId::kPseudoIdBefore, &argument);
+        drop(_heap);
+        assert_eq!(weak_first.Get(), first as *const _ as *mut ComputedStyle);
+        assert_eq!(weak_second.Get(), second as *const _ as *mut ComputedStyle);
+        assert_eq!(
+            style.GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdBefore),
+            first as *const ComputedStyle
+        );
+        assert_eq!(
+            style.GetCachedPseudoElementStyle(PseudoId::kPseudoIdBefore, &argument),
+            second as *const ComputedStyle
+        );
+        style.ClearCachedPseudoElementStyles();
+        assert!(!style.HasCachedPseudoElementStyles());
+        foundation::CollectLayoutHeapForTesting();
+        assert!(weak_first.Get().is_null());
+        assert!(weak_second.Get().is_null());
+    }
+
+    #[test]
+    fn pseudo_cache_replaces_only_ensured_display_none_style() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let owner = changed(|_| {});
+        let ensured = changed(|b| {
+            b.SetStyleType(PseudoId::kPseudoIdBefore);
+            b.SetIsEnsuredInDisplayNone();
+        });
+        let actual = changed(|b| b.SetStyleType(PseudoId::kPseudoIdBefore));
+        owner.AddCachedPseudoElementStyle(ensured, PseudoId::kPseudoIdBefore, &g_null_atom);
+        assert_eq!(
+            owner.ReplaceCachedPseudoElementStyle(actual, PseudoId::kPseudoIdBefore, &g_null_atom),
+            actual as *const ComputedStyle
+        );
+        assert_eq!(
+            owner.GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdBefore),
+            actual as *const ComputedStyle
+        );
+        let after = changed(|b| b.SetStyleType(PseudoId::kPseudoIdAfter));
+        assert_eq!(
+            owner.ReplaceCachedPseudoElementStyle(after, PseudoId::kPseudoIdAfter, &g_null_atom),
+            after as *const ComputedStyle
+        );
+    }
+}
+
+impl foundation::Traceable for super::style_cached_data::PseudoElementStyleCacheKey {
+    fn Trace(&self, visitor: &mut Visitor<'_>) {
+        visitor.Trace(&self.pseudo_argument);
+    }
+}
+impl foundation::heap_hash_containers::StrongHeapMapKey
+    for super::style_cached_data::PseudoElementStyleCacheKey
+{
 }

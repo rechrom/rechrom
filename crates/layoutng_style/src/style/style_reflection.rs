@@ -68,3 +68,8 @@ impl PartialEq for StyleReflection {
             && self.mask_ == other.mask_
     }
 }
+
+// cpp: style_reflection.h:53; GC traces the native NinePieceImage mask.
+impl foundation::Traceable for StyleReflection {
+    fn Trace(&self, visitor: &mut Visitor) { StyleReflection::Trace(self,visitor); }
+}

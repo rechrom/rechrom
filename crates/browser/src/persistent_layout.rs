@@ -30,8 +30,9 @@ pub(crate) fn LayoutDocumentWithEngine(
 ) {
     let _trace = browser_tracing::span("layout", "Page.LayoutDocumentWithEngine");
     // Tree synchronization, layout and export form one synchronous lifecycle.
-    // Their nested scopes must not each collect every resident Page on this
-    // thread. Allocation/root changes still collect at this outer scope exit.
+    // Their nested scopes must not collect every resident Page on this thread.
+    // Allocation pressure requests collection; the host services it from a
+    // low-priority owner turn, matching cppgc's scheduled-GC boundary.
     let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
         .is_some()
         .then(std::time::Instant::now);
@@ -47,16 +48,14 @@ pub(crate) fn LayoutDocumentWithEngine(
     let build_done = profile.map(|start| start.elapsed());
     engine.Layout();
     let layout_done = profile.map(|start| start.elapsed());
-    heap_scope.AllowUnchangedReuse();
-    // The engine roots the native tree throughout collection. Include
-    // this collection in diagnostics rather than ending the timer before Drop.
+    heap_scope.DeferCollection();
     {
         let _trace = browser_tracing::span("layout", "LayoutHeapScopeExit");
         drop(heap_scope);
     }
     if let Some(start) = profile {
         let elapsed = start.elapsed();
-        eprintln!("page-layout-phase-profile build_ms={:.3} layout_export_ms={:.3} gc_ms={:.3} total_ms={:.3}",
+        eprintln!("page-layout-phase-profile build_ms={:.3} layout_export_ms={:.3} heap_scope_exit_ms={:.3} total_ms={:.3}",
             build_done.unwrap().as_secs_f64() * 1000.0,
             (layout_done.unwrap() - build_done.unwrap()).as_secs_f64() * 1000.0,
             (elapsed - layout_done.unwrap()).as_secs_f64() * 1000.0,
@@ -81,7 +80,7 @@ pub(crate) fn ExportPaintOnlyDocumentWithEngine(
     if !engine.ExportPaintOnly() {
         return None;
     }
-    heap_scope.AllowUnchangedReuse();
+    heap_scope.DeferCollection();
     engine.TakeLayoutResult()
 }
 
@@ -181,10 +180,12 @@ mod tests {
     use layoutng_assembly::layout_engine::LayoutMutation;
     use std::collections::BTreeMap;
     fn resolve(owner: &mut DOM) {
-        dom::style_resolver::ResolveComputedStyles(
+        resolve_for(owner, 800, 600);
+    }
+    fn resolve_for(owner: &mut DOM, width: u32, height: u32) {
+        crate::style_services::ResolveLayoutStyles(
             owner,
-            &dom::style_resolver::StyleEnvironment::default(),
-            &[],
+            &crate::CreateBrowserConstraints(width, height),
         );
     }
     fn dom_id(owner: &DOM, name: &str) -> usize {
@@ -273,8 +274,8 @@ mod tests {
 
             let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
             let mut owner=html::html_parser::ParseHTML("<html><body style='margin:0'><div id=s style='width:100px;height:40px;overflow:hidden;zoom:80%'><div style='width:200px;height:120px;background:red'>scrolling text</div></div></body></html>");
-            resolve(&mut owner);
             let cs = crate::CreateBrowserConstraints(320, 200);
+            crate::style_services::ResolveLayoutStyles(&mut owner, &cs);
             let assembly = crate::CreateLayoutAssembly();
             let mut fragments = LayoutPersistentDocument(
                 &mut engine,
@@ -953,11 +954,7 @@ mod tests {
                 })
                 .map(|i| owner.GetDocument().Node(i).Id())
                 .unwrap();
-            dom::style_resolver::ResolveComputedStyles(
-                &mut owner,
-                &dom::style_resolver::StyleEnvironment::default(),
-                &[],
-            );
+            resolve(&mut owner);
             let root = LayoutPersistentDocument(
                 &mut engine,
                 &mut owner,
@@ -1104,7 +1101,7 @@ mod tests {
         ));
         owner
             .GetDocumentMut()
-            .AppendStyleSheet(cssom::ParseCSS(include_str!(
+            .AppendStyleSheet(style::ParseCSS(include_str!(
                 "../../../artifacts/cpp-reference/persistent-tree.css"
             )));
         let nodes: BTreeMap<_, _> = (0..owner.GetDocument().NodeCount())
@@ -1144,16 +1141,7 @@ mod tests {
                     layoutng_assembly::internal::layout_input::Offset { x: 3.0, y: 4.0 },
                 );
             }
-            dom::style_resolver::ResolveComputedStyles(
-                &mut owner,
-                &dom::style_resolver::StyleEnvironment {
-                    viewport_width: Some(1024.0),
-                    viewport_height: Some(768.0),
-                    resolution_dppx: Some(1.0),
-                    ..Default::default()
-                },
-                &[],
-            );
+            resolve_for(&mut owner, 1024, 768);
             let assembly = crate::CreateLayoutAssembly();
             let root = crate::native_test_thread::BuildDOMProjection(
                 &mut owner,
@@ -1245,8 +1233,8 @@ mod heap_lifecycle_tests {
             let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
             let mut owner =
                 html::html_parser::ParseHTML("<html><body><input value=address></body></html>");
-            dom::style_resolver::ResolveComputedStyles(&mut owner, &Default::default(), &[]);
             let cs = crate::CreateBrowserConstraints(320, 200);
+            crate::style_services::ResolveLayoutStyles(&mut owner, &cs);
             let interaction = UserInteractionState::default();
             LayoutPersistentDocument(&mut engine, &mut owner, &interaction, &cs);
             let before = traces.get();
@@ -1262,7 +1250,7 @@ mod heap_lifecycle_tests {
             assert_eq!(foundation::LayoutHeapAllocationCountForTesting(), count);
             let mut second_engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
             let mut second = html::html_parser::ParseHTML("<html><body>another Page</body></html>");
-            dom::style_resolver::ResolveComputedStyles(&mut second, &Default::default(), &[]);
+            crate::style_services::ResolveLayoutStyles(&mut second, &cs);
             LayoutPersistentDocument(&mut second_engine, &mut second, &interaction, &cs);
             assert!(
                 traces.get() > before,

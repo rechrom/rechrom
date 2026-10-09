@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use cssom::{CSSFontFaceRule, CSSStyleSheet};
-use dom::style_resolver::ResolvedStyles;
+use dom::ResolvedStyles;
 use layoutng_assembly::internal::layout_input::{FontFace, FontUnicodeRange};
 use std::{collections::HashSet, io};
 
@@ -227,13 +227,37 @@ pub fn LoadUsedFontFaces(
     styles: &ResolvedStyles,
     mut load: impl FnMut(&str) -> io::Result<Vec<u8>>,
 ) -> Vec<FontFace> {
-    let used: HashSet<String> = styles
+    let used = styles
         .styles
         .iter()
         .flat_map(|s| s.extended.iter())
         .flat_map(|e| e.font_families.iter())
         .map(|name| name.to_ascii_lowercase())
-        .collect();
+        .collect::<HashSet<_>>();
+    LoadFontFacesForFamilies(sheets, used, &mut load)
+}
+
+/// Load the `@font-face` records referenced by the document's computed
+/// font-family values.  The persistent StyleEngine owns those values; this
+/// resource helper deliberately receives only their names and does not depend
+/// on style resolution or DOM traversal.
+pub fn LoadUsedFontFacesForFamilies(
+    sheets: &[CSSStyleSheet],
+    families: impl IntoIterator<Item = String>,
+    mut load: impl FnMut(&str) -> io::Result<Vec<u8>>,
+) -> Vec<FontFace> {
+    let used = families
+        .into_iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    LoadFontFacesForFamilies(sheets, used, &mut load)
+}
+
+fn LoadFontFacesForFamilies(
+    sheets: &[CSSStyleSheet],
+    used: HashSet<String>,
+    load: &mut impl FnMut(&str) -> io::Result<Vec<u8>>,
+) -> Vec<FontFace> {
     let mut pending = Vec::<PendingFontFace>::new();
     for sheet in sheets {
         for rule in &sheet.font_faces {

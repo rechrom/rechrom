@@ -1,9 +1,7 @@
 use crate::{ScopedRefPtr, String};
 
 // cpp: foundation/text/native/quotes_data.h:34-59
-// Only Create(), equality, and size() have supplied definitions. The source
-// tree contains no quotes_data.cc for the four-character constructor, pair
-// insertion, or quote lookup; those remain explicit link requirements.
+// Definitions: third_party/blink/renderer/platform/text/quotes_data.cc:26-58.
 #[derive(Default)]
 pub struct QuotesData {
     quote_pairs_: Vec<(String, String)>,
@@ -23,20 +21,35 @@ impl QuotesData {
         open2: u16,
         close2: u16,
     ) -> ScopedRefPtr<Self> {
-        unsafe { QuotesDataCreateWithCharacters(open1, close1, open2, close2) }
+        let mut data = Self::default();
+        data.AddPair((String::from_utf16(&[open1]), String::from_utf16(&[close1])));
+        data.AddPair((String::from_utf16(&[open2]), String::from_utf16(&[close2])));
+        ScopedRefPtr::new(data)
     }
 
     // cpp: foundation/text/native/quotes_data.h:49-52
     pub fn AddPair(&mut self, pair: (String, String)) {
-        unsafe { QuotesDataAddPair(self, pair) }
+        self.quote_pairs_.push(pair);
     }
 
     pub fn GetOpenQuote(&self, index: i32) -> String {
-        unsafe { QuotesDataGetOpenQuote(self, index) }
+        debug_assert!(index >= 0);
+        if index < 0 || self.quote_pairs_.is_empty() {
+            return String::from("");
+        }
+        self.quote_pairs_[(index as usize).min(self.quote_pairs_.len() - 1)]
+            .0
+            .clone()
     }
 
     pub fn GetCloseQuote(&self, index: i32) -> String {
-        unsafe { QuotesDataGetCloseQuote(self, index) }
+        debug_assert!(index >= -1);
+        if index < 0 || self.quote_pairs_.is_empty() {
+            return String::from("");
+        }
+        self.quote_pairs_[(index as usize).min(self.quote_pairs_.len() - 1)]
+            .1
+            .clone()
     }
 
     // cpp: foundation/text/native/quotes_data.h:53
@@ -53,21 +66,20 @@ impl PartialEq for QuotesData {
 }
 impl Eq for QuotesData {}
 
-unsafe extern "Rust" {
-    fn QuotesDataCreateWithCharacters(
-        open1: u16,
-        close1: u16,
-        open2: u16,
-        close2: u16,
-    ) -> ScopedRefPtr<QuotesData>;
-    fn QuotesDataAddPair(value: &mut QuotesData, pair: (String, String));
-    fn QuotesDataGetOpenQuote(value: &QuotesData, index: i32) -> String;
-    fn QuotesDataGetCloseQuote(value: &QuotesData, index: i32) -> String;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn character_pairs_repeat_last_pair_and_return_non_null_empty_quotes() {
+        let data = QuotesData::CreateWithCharacters(0x00ab, 0x00bb, 0x2039, 0x203a);
+        assert_eq!(data.size(), 2);
+        assert_eq!(data.GetOpenQuote(0), String::from_utf16(&[0x00ab]));
+        assert_eq!(data.GetCloseQuote(1), String::from_utf16(&[0x203a]));
+        assert_eq!(data.GetOpenQuote(20), data.GetOpenQuote(1));
+        assert_eq!(data.GetCloseQuote(-1), String::from(""));
+        assert_eq!(QuotesData::Create().GetOpenQuote(0), String::from(""));
+    }
 
     #[test]
     fn empty_quotes_are_ref_counted_and_equal() {

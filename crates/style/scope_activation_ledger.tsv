@@ -1,0 +1,19 @@
+source	line_start	line_end	effective	coverage	mapping_or_pending
+style_scope_frame.h	32	68	10	credited	Typed activation root/proximity/vector/match flags; Rc owns native trace lifetimes
+style_scope_frame.h	86	91	4	credited	Concrete element/parent/cache frames for the live DOM ancestor chain
+style_scope_frame.h	92	92	1	pending	GetParentFrameOrThis caller-specific optimization
+style_scope_frame.h	105	105	1	pending	HasSeenImplicitScope fast rejection
+style_scope_frame.h	110	112	2	pending	Copy-on-write seen implicit scope set
+style_scope_frame.h	114	117	4	credited	Concrete frame element/parent and scope-address keyed activation cache
+style_scope_frame.h	118	118	1	pending	Retained seen implicit scope set
+style_scope_frame.cc	20	26	5	credited	ParentStyleScopeFrame uses identity of the actual parent element
+style_scope_frame.cc	28	82	33	pending	GetParentFrameOrThis and seen implicit scope fast rejection / COW cache
+selector_checker.cc	1035	1073	23	credited	Existing native MatchForScopeActivation now consumes real DOM activation owners and proximity
+selector_checker.cc	3850	3893	16	credited	Default activation/ceiling and HasImplicitRoot mapped to actual owner parent trigger
+selector_checker.cc	3897	4077	96	credited	Existing EnsureActivations / CalculateActivations / MatchesWithScope / ElementIsScopingLimit wired to typed owners
+rule_set.cc	1068	1075	7	credited	Production neutral scope chain assembles typed boundaries with actual outer-scope parent links
+element_rule_collector.h	69	83	15	credited	Origin/layer grouping then specificity, clamped inverse proximity and source order
+element_rule_collector.cc	551	569	14	credited	Production matcher provides subject frame, native MatchResult and matching specificity/proximity
+resolver/scoped_style_resolver.cc	446	449	3	credited	Live owner node lookup resolves implicit root to stylesheet owner parent
+resolver/scoped_style_resolver.cc	450	453	3	pending	Adopted shadow-tree stylesheet implicit host owner not available on ordinary Document API
+resolver/scoped_style_resolver.cc	459	478	12	credited	Every scope chain member receives the same actual stylesheet owner trigger; ownerless scopes produce no activation

@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+style = { path = "../style" }
 browser_tracing = { path = "../tracing" }
 url = "2"
 document_loader = { path = "../document_loader" }

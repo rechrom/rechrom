@@ -18,5 +18,6 @@ font_engine = { path = "../font_engine" }
 javascript = { path = "../javascript" }
 
 [dev-dependencies]
+style = { path = "../style" }
 layoutng_replaced = { path = "../layoutng_replaced" }
 layoutng_assembly = { path = "../layoutng_assembly", features = ["translation_in_progress"] }

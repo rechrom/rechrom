@@ -1,0 +1,82 @@
+source	line_start	line_end	effective	coverage	mapping_or_pending
+css_selector_parser.h	1	108	46	credited	Public selector/AN+B/pseudo/scope/supports entry points and typed context/observer/namespace/parent/list collaborators
+css_selector_parser.h	109	120	6	credited	ResultFlag/ResultFlags represented by typed flag state
+css_selector_parser.h	121	256	84	credited	Shared-arena constructor and complex/compound/nested/relative/name/simple/attribute/nth/namespace/accounting methods; Option encodes failed parsing
+css_selector_parser.h	257	283	9	credited	Pseudo restriction/compound/default namespace/has/host/supports parser state
+css_selector_parser.h	284	366	35	credited	SelectorArena plus move-only DisallowPseudoElementsScope and ResetVectorAfterScope with added/commit/drop semantics
+css_selector_parser.h	367	373	6	credited	AbortsNestedSelectorParsing
+css_selector_parser.h	374	377	0	pending	No additional source credit
+css_selector_parser.cc	1	48	5	credited	Typed imports and recursive RecordUsageAndDeprecationsOneSelector declaration/body counterpart
+css_selector_parser.cc	49	54	5	credited	AtEndIgnoringWhitespace
+css_selector_parser.cc	55	55	0	pending	No additional source credit
+css_selector_parser.cc	56	59	3	credited	IsHostPseudoSelector
+css_selector_parser.cc	60	64	0	pending	No additional source credit
+css_selector_parser.cc	65	98	28	credited	GetImplicitCombinatorForMatching/NeedsImplicitCombinatorForMatching
+css_selector_parser.cc	99	124	8	credited	ReverseSelectors and MarkAsEntireComplexSelector used on shared arena slices
+css_selector_parser.cc	125	142	13	credited	IsScrollButtonDirectionKeyword token Id membership
+css_selector_parser.cc	143	143	0	pending	No additional source credit
+css_selector_parser.cc	144	157	9	credited	MarkAsInvalidListIfNeeded
+css_selector_parser.cc	158	159	0	pending	No additional source credit
+css_selector_parser.cc	160	228	57	credited	ParseSelectorStream/ConsumeSelector/ParseScopeBoundary with typed usage and observer contexts
+css_selector_parser.cc	229	229	0	pending	No additional source credit
+css_selector_parser.cc	230	253	18	credited	SupportsComplexSelector
+css_selector_parser.cc	254	264	10	credited	Parser::new_in_arena stores typed context/parent/namespace/semicolon state and actual shared output
+css_selector_parser.cc	265	462	135	credited	Unforgiving/forgiving complex and nested/compound list control flow; Option and owned vectors retain rollback
+css_selector_parser.cc	463	498	26	credited	ConsumeUntilCommaAndFindNestingType
+css_selector_parser.cc	499	508	0	pending	No additional source credit
+css_selector_parser.cc	509	524	13	credited	AddPlaceholderSelectorIfNeeded
+css_selector_parser.cc	525	525	0	pending	No additional source credit
+css_selector_parser.cc	526	593	47	credited	ConsumeForgivingCompoundSelectorList with invalid serialization and supports mode
+css_selector_parser.cc	594	639	27	credited	forgiving_relative_list supports gate, per-entry BlockGuard/recovery, shared reset/adoption and compound/pseudo restrictions; rejects invalid block-start contract safely
+css_selector_parser.cc	640	664	16	credited	ConsumeRelativeSelectorList with compound/pseudo restrictions
+css_selector_parser.cc	665	668	1	credited	Typed previous_rightmost compound flag, set by pseudo-element/UA restrictions
+css_selector_parser.cc	669	745	39	credited	ExtractCompoundFlags and ConsumeRelativeSelector via compound/relation path
+css_selector_parser.cc	746	771	16	credited	GetNestingTypeForSelectorList(pointer)
+css_selector_parser.cc	772	781	0	pending	No additional source credit
+css_selector_parser.cc	782	845	44	credited	GetNestingTypeForSelectorList(span)/CreateImplicitAnchor/MaybeCreateImplicitDescendantAnchor
+css_selector_parser.cc	846	852	0	pending	No additional source credit
+css_selector_parser.cc	853	1011	83	credited	Nested-relative/complex/partial selector control flow and ParsePseudoType
+css_selector_parser.cc	1012	1013	0	pending	No additional source credit
+css_selector_parser.cc	1014	1144	81	credited	ParsePseudoElement CSSOM token/colon/exposure/argument behavior with typed node context
+css_selector_parser.cc	1145	1149	0	pending	No additional source credit
+css_selector_parser.cc	1150	1300	121	credited	Pseudo-element restriction predicates
+css_selector_parser.cc	1301	1301	0	pending	No additional source credit
+css_selector_parser.cc	1302	1471	92	credited	Has argument pseudo validation, compound/host flags and simple selector dispatch
+css_selector_parser.cc	1472	1518	37	credited	ConsumeName
+css_selector_parser.cc	1519	1519	0	pending	No additional source credit
+css_selector_parser.cc	1520	1531	10	credited	ConsumeId
+css_selector_parser.cc	1532	1532	0	pending	No additional source credit
+css_selector_parser.cc	1533	1546	12	credited	ConsumeClass
+css_selector_parser.cc	1547	1547	0	pending	No additional source credit
+css_selector_parser.cc	1548	1602	39	credited	ConsumeAttribute
+css_selector_parser.cc	1603	1603	0	pending	No additional source credit
+css_selector_parser.cc	1604	1858	188	credited	ConsumePseudo identification/accounting/logical/host/cue/has/not/picker/dir/state/part/view-transition-type branches
+css_selector_parser.cc	1859	1914	39	credited	View-transition name/class lists use typed recursive CSSCustomIdentValue and native Value() semantics, including enabled ident() values
+css_selector_parser.cc	1915	2068	110	credited	Slotted/lang/nth/overscroll/scroll-button/highlight argument branches and disabled RouteMatching gate
+css_selector_parser.cc	2069	2079	9	credited	RouteMatching gate and typed NavigationParser::ParseLocation collaborator with trailing-input rejection
+css_selector_parser.cc	2080	2126	25	credited	ConsumePseudo default failure, ConsumeNestingParent and PeekIsCombinator
+css_selector_parser.cc	2127	2127	0	pending	No additional source credit
+css_selector_parser.cc	2128	2157	21	credited	ConsumeCombinator
+css_selector_parser.cc	2158	2158	0	pending	No additional source credit
+css_selector_parser.cc	2159	2188	27	credited	ConsumeAttributeMatch/Flags
+css_selector_parser.cc	2189	2189	0	pending	No additional source credit
+css_selector_parser.cc	2190	2205	12	credited	ConsumeAttributeFlags runtime case-sensitive selector gate
+css_selector_parser.cc	2206	2307	69	credited	ConsumeANPlusB
+css_selector_parser.cc	2308	2309	0	pending	No additional source credit
+css_selector_parser.cc	2310	2326	13	credited	ConsumeNthChildOfSelectors
+css_selector_parser.cc	2327	2327	0	pending	No additional source credit
+css_selector_parser.cc	2328	2334	4	credited	DefaultNamespace including ignore-default-namespace scope
+css_selector_parser.cc	2335	2352	11	credited	DetermineNamespace
+css_selector_parser.cc	2353	2353	0	pending	No additional source credit
+css_selector_parser.cc	2354	2403	32	credited	PrependTypeSelectorIfNeeded
+css_selector_parser.cc	2404	2431	0	pending	No additional source credit
+css_selector_parser.cc	2432	2473	11	credited	SplitCompoundAtImplicitCombinator
+css_selector_parser.cc	2474	2488	10	credited	PseudoElementFeatureMapEntry constructor checked 16-bit key length and repr(u16) typed feature; actual source table lookup
+css_selector_parser.cc	2489	2603	107	credited	FeatureForWebKitCustomPseudoElement typed feature lookup and unknown feature fallback
+css_selector_parser.cc	2604	2606	1	credited	Known WebKit custom pseudo-element membership used by SupportsComplexSelector
+css_selector_parser.cc	2607	2608	0	pending	No additional source credit
+css_selector_parser.cc	2609	2782	153	credited	Recursive WebFeature/WebDX/deprecation and visited accounting
+css_selector_parser.cc	2783	2783	0	pending	No additional source credit
+css_selector_parser.cc	2784	2797	9	credited	ContainsUnknownWebkitPseudoElements
+css_selector_parser.cc	2798	2807	9	credited	PushUnparsedComplexSelector
+css_selector_parser.cc	2808	2809	0	pending	No additional source credit

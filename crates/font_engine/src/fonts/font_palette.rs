@@ -1,5 +1,5 @@
-// C++: font_engine/fonts/font_palette.h. ToString, equality, and GetHash are
-// only declared in the supplied tree; this maps the inline state and accessors.
+// C++: platform/fonts/font_palette.h and font_palette.cc:83-104. Native request
+// ownership, inline accessors and equality; ToString/GetHash remain untranslated.
 use foundation::{AtomicString, Color, ColorSpace, HueInterpolationMethod};
 use std::sync::Arc;
 
@@ -212,5 +212,29 @@ impl FontPalette {
     pub fn GetHueInterpolationMethod(&self) -> Option<HueInterpolationMethod> {
         debug_assert!(self.IsInterpolablePalette());
         self.hue_interpolation_method_
+    }
+}
+
+// cpp: platform/fonts/font_palette.cc:83-104, ValuesEquivalent in
+// font_description.cc:154. Equality includes actual custom data and mixes.
+impl PartialEq for FontPalette {
+    fn eq(&self, other: &Self) -> bool {
+        if self.IsInterpolablePalette() != other.IsInterpolablePalette() {
+            return false;
+        }
+        if self.IsInterpolablePalette() {
+            return self.start_ == other.start_
+                && self.end_ == other.end_
+                && self.percentages_ == other.percentages_
+                && self.normalized_percentage_ == other.normalized_percentage_
+                && self.alpha_multiplier_ == other.alpha_multiplier_
+                && self.color_interpolation_space_ == other.color_interpolation_space_
+                && self.hue_interpolation_method_ == other.hue_interpolation_method_;
+        }
+        self.palette_keyword_ == other.palette_keyword_
+            && self.palette_values_name_ == other.palette_values_name_
+            && self.match_font_family_ == other.match_font_family_
+            && self.base_palette_ == other.base_palette_
+            && self.palette_overrides_ == other.palette_overrides_
     }
 }

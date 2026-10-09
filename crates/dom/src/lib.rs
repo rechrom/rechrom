@@ -21,9 +21,11 @@ pub mod dom_mutation;
 pub mod error;
 pub mod image_resource;
 pub mod persistent_document;
+pub mod resolved_styles;
 pub mod style_state;
 pub mod svg_path_parser;
 pub use persistent_document::{PersistentDocument as Document, DOM};
+pub use resolved_styles::ResolvedStyles;
 
 use std::collections::HashMap;
 
@@ -190,8 +192,6 @@ impl ParsedDocument {
 }
 
 pub mod layout_mapping;
-pub mod style_resolver;
 extern crate layoutng_assembly as layoutng;
-pub(crate) use style_resolver::length_percentage_parser;
 
 mod lifecycle;

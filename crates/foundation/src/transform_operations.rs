@@ -89,6 +89,106 @@ impl TransformOperation for Matrix3DTransformOperation {
     }
 }
 
+// cpp: third_party/blink/renderer/platform/transforms/matrix_transform_operation.h:34-65,76-85.
+pub struct MatrixTransformOperation {
+    matrix_: gfx::Transform,
+}
+impl MatrixTransformOperation {
+    pub fn new(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) -> Self {
+        Self {
+            matrix_: gfx::Transform::ColMajor(&[
+                a, b, 0.0, 0.0, c, d, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, e, f, 0.0, 1.0,
+            ]),
+        }
+    }
+    pub fn Matrix(&self) -> &gfx::Transform {
+        &self.matrix_
+    }
+}
+impl Traceable for MatrixTransformOperation {
+    fn Trace(&self, _: &mut Visitor<'_>) {}
+}
+impl TransformOperation for MatrixTransformOperation {
+    fn GetType(&self) -> TransformOperationType {
+        TransformOperationType::kMatrix
+    }
+    fn IsEqualAssumingSameType(&self, other: &dyn TransformOperation) -> bool {
+        let other = unsafe { &*(other as *const dyn TransformOperation as *const Self) };
+        self.matrix_ == other.matrix_
+    }
+    fn Apply(&self, transform: &mut gfx::Transform, _: &gfx::SizeF) {
+        transform.PreConcat(&self.matrix_);
+    }
+    fn IsIdentityOrTranslation(&self) -> bool {
+        self.matrix_.IsIdentityOrTranslation()
+    }
+    fn PreservesAxisAlignment(&self) -> bool {
+        self.matrix_.Preserves2dAxisAlignment()
+    }
+}
+// cpp: third_party/blink/renderer/platform/transforms/skew_transform_operation.h:33-57,67-69.
+pub struct SkewTransformOperation {
+    angle_x_: f64,
+    angle_y_: f64,
+    type_: TransformOperationType,
+}
+impl SkewTransformOperation {
+    pub fn new(angle_x: f64, angle_y: f64, type_: TransformOperationType) -> Self {
+        Self {
+            angle_x_: angle_x,
+            angle_y_: angle_y,
+            type_,
+        }
+    }
+}
+impl Traceable for SkewTransformOperation {
+    fn Trace(&self, _: &mut Visitor<'_>) {}
+}
+impl TransformOperation for SkewTransformOperation {
+    fn GetType(&self) -> TransformOperationType {
+        self.type_
+    }
+    fn IsEqualAssumingSameType(&self, other: &dyn TransformOperation) -> bool {
+        let other = unsafe { &*(other as *const dyn TransformOperation as *const Self) };
+        self.angle_x_ == other.angle_x_ && self.angle_y_ == other.angle_y_
+    }
+    fn Apply(&self, transform: &mut gfx::Transform, _: &gfx::SizeF) {
+        transform.Skew(self.angle_x_, self.angle_y_);
+    }
+}
+// cpp: third_party/blink/renderer/platform/transforms/perspective_transform_operation.h:37-74,84-89.
+pub struct PerspectiveTransformOperation {
+    p_: Option<f64>,
+}
+impl PerspectiveTransformOperation {
+    pub fn new(p: Option<f64>) -> Self {
+        Self { p_: p }
+    }
+    pub fn Perspective(&self) -> Option<f64> {
+        self.p_
+    }
+}
+impl Traceable for PerspectiveTransformOperation {
+    fn Trace(&self, _: &mut Visitor<'_>) {}
+}
+impl TransformOperation for PerspectiveTransformOperation {
+    fn GetType(&self) -> TransformOperationType {
+        TransformOperationType::kPerspective
+    }
+    fn IsEqualAssumingSameType(&self, other: &dyn TransformOperation) -> bool {
+        let other = unsafe { &*(other as *const dyn TransformOperation as *const Self) };
+        self.p_ == other.p_
+    }
+    fn Apply(&self, transform: &mut gfx::Transform, _: &gfx::SizeF) {
+        if let Some(p) = self.p_ {
+            transform.ApplyPerspectiveDepth(p.max(1.0));
+        }
+    }
+    fn HasNonTrivial3DComponent(&self) -> bool {
+        false
+    }
+}
+
 // cpp: foundation/blink_geometry/transforms/translate_transform_operation.h:36-124
 pub struct TranslateTransformOperation {
     x_: Length,
@@ -170,9 +270,21 @@ impl PartialEq for TranslateTransformOperation {
 // cpp: foundation/blink_geometry/transforms/rotation.h:18-23,49-53
 // Vector3dF stores its components as float; the source rotation angle is double.
 #[derive(Clone, Copy, Debug)]
-struct Rotation {
+pub struct Rotation {
     axis: [f32; 3],
     angle: f64,
+}
+// Existing Rotation payload exposed for the resolver converter; no second model.
+impl Rotation {
+    pub fn new(axis: [f32; 3], angle: f64) -> Self {
+        Self { axis, angle }
+    }
+    pub fn Axis(&self) -> &[f32; 3] {
+        &self.axis
+    }
+    pub fn Angle(&self) -> f64 {
+        self.angle
+    }
 }
 // cpp: foundation/blink_geometry/transforms/rotate_transform_operation.h:37-75,105-106
 #[derive(Clone, Debug)]

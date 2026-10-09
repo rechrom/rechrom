@@ -21,22 +21,31 @@ fn native_objects_body() {
     let mut owner = html::html_parser::ParseHTML(include_str!(
         "../../../artifacts/cpp-reference/table-native-tree.html"
     ));
-    dom::style_resolver::AddStyleSheet(
-        &mut owner,
-        cssom::ParseCSS(include_str!(
+    owner
+        .GetDocumentMut()
+        .AppendStyleSheet(style::ParseCSS(include_str!(
             "../../../artifacts/cpp-reference/table-native-tree.css"
-        )),
-    );
-    dom::style_resolver::ResolveComputedStyles(
-        &mut owner,
-        &dom::style_resolver::StyleEnvironment {
-            viewport_width: Some(1024.0),
-            viewport_height: Some(768.0),
-            resolution_dppx: Some(1.0),
-            ..Default::default()
-        },
-        &[],
-    );
+        )));
+    let mut style_engine = style::StyleEngine::new(&owner);
+    style_engine
+        .Update(
+            &mut owner,
+            &style::media_queries::media_values_cached::MediaValuesCachedData {
+                viewport_width: 1024.0,
+                viewport_height: 768.0,
+                small_viewport_width: 1024.0,
+                small_viewport_height: 768.0,
+                large_viewport_width: 1024.0,
+                large_viewport_height: 768.0,
+                dynamic_viewport_width: 1024.0,
+                dynamic_viewport_height: 768.0,
+                device_pixel_ratio: 1.0,
+                em_size: 16.0,
+                ..Default::default()
+            },
+            &[],
+        )
+        .expect("style update");
     let ids: BTreeMap<_, _> = (0..owner.GetDocument().NodeCount())
         .filter_map(|i| {
             let n = owner.GetDocument().Node(i);

@@ -3,7 +3,7 @@
 //! decoding and polling do not replace the source DOM/dirty/task lifecycle.
 use crate::{
     resource_loader::{ResourceLoadResult, ResourceLoader, StartResource},
-    url_reference::{ResolveCSSURLs, ResolveUrl},
+    url_reference::ResolveUrl,
 };
 use cssom::{CSSFontFaceRule, CSSStyleSheet};
 use dom::{Document, DOM};
@@ -196,11 +196,7 @@ impl ResourceFetcher {
         for rule in &sheet.font_faces {
             self.QueueFontFace(rule, base)?;
         }
-        for rule in &mut sheet.rules {
-            for declaration in &mut rule.declarations {
-                ResolveCSSURLs(&mut declaration.value, base)?;
-            }
-        }
+        crate::ResolveCSSStyleSheetURLs(&mut sheet, base)?;
         self.CommitStyleSheet(d, sheet);
         Ok(())
     }

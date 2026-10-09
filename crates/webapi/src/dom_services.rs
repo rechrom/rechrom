@@ -525,7 +525,7 @@ impl DOMJavaScriptBindings {
             if self.node(receiver).is_none() {
                 return Some(Self::type_error("Invalid animation sample"));
             }
-            let declarations = cssom::ParseCSSDeclarationList(text);
+            let declarations = style::ParseCSSDeclarationList(text);
             trace.set("declarations", declarations.len() as f64);
             if let Some(sample) = self.services.host.sample_animation.as_mut() {
                 sample(receiver, *effect as u64, *time, declarations);

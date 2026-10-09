@@ -14,4 +14,5 @@ layoutng_style = { path = "../layoutng_style" }
 dom = { path = "../dom" }
 html = { path = "../html" }
 cssom = { path = "../cssom" }
+style = { path = "../style" }
 layoutng_replaced = { path = "../layoutng_replaced" }

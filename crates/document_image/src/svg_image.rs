@@ -8,25 +8,28 @@ use std::time::Duration;
 
 use cssom::{CSSDeclaration, CSSKeyframesRule};
 use dom::persistent_document::{DOMNamespace, DOMNode, PersistentDocument, DOM};
-use dom::style_resolver::{
-    AddStyleSheet, MediaQueryMatches, PreferredColorScheme, StyleEnvironment,
-};
 use html::html_parser::ParseHTMLBytes;
 use image_resource::{
     ContainerKey, CreatedDocumentImage, DocumentImage, DocumentImageEffect, DocumentImageFrame,
     DocumentImageMutation, ImageId, IntrinsicSize, MutationCause,
 };
 use layoutng_assembly::layout_assembly::LayoutAssembly;
+use style::media_queries::media_query_backend::ParseMediaQuerySet;
+use style::media_queries::media_query_evaluator::MediaQueryEvaluator;
+use style::media_queries::{MediaValuesCached, MediaValuesCachedData};
+use style::PreferredColorScheme;
 
 unsafe extern "C" {
     fn strtod(input: *const c_char, end: *mut *mut c_char) -> f64;
 }
 
 fn PreferredScheme(value: u8) -> PreferredColorScheme {
-    if value == PreferredColorScheme::Dark as u8 {
-        PreferredColorScheme::Dark
+    // ContainerKey uses the renderer-neutral image encoding: 0 is light and
+    // 1 is dark. Blink's mojom enum orders dark before light.
+    if value == 1 {
+        PreferredColorScheme::kDark
     } else {
-        PreferredColorScheme::Light
+        PreferredColorScheme::kLight
     }
 }
 
@@ -56,6 +59,7 @@ struct CSSImageAnimation {
 struct SVGDocumentAnimation {
     resource_id: ImageId,
     document: DOM,
+    style_engine: style::StyleEngine,
     engine: layoutng_assembly::layout_engine::LayoutEngine,
     paint_engine: paint::paint_engine::PaintEngine,
     constraints: layoutng_assembly::internal::layout_input::ConstraintSpace,
@@ -180,17 +184,16 @@ impl SVGImageDecoder {
             }
             let mut source = String::new();
             text(document.GetDocument(), index, &mut source);
-            let mut sheet = cssom::ParseCSS(&source);
+            let mut sheet = style::ParseCSS(&source);
             sheet.owner_node_id = document.GetDocument().Node(index).Id();
-            AddStyleSheet(&mut document, sheet);
+            document.GetDocumentMut().AppendStyleSheet(sheet);
         }
-        AddStyleSheet(
-            &mut document,
-            cssom::css_style_sheet::ParseCSS(concat!(
+        document
+            .GetDocumentMut()
+            .AppendStyleSheet(style::ParseCSS(concat!(
                 "html,body{margin:0;padding:0;overflow:hidden;background:transparent;}",
                 "html,body{width:100%;height:100%;}svg{display:block;}"
-            )),
-        );
+            )));
         Ok((document, pixel_width, pixel_height))
     }
 
@@ -212,15 +215,13 @@ impl SVGImageDecoder {
         if container.height == 0 {
             container.height = height as u32;
         }
-        let environment = StyleEnvironment {
-            viewport_width: Some(f64::from(container.width)),
-            viewport_height: Some(f64::from(container.height)),
-            resolution_dppx: Some(container.device_pixel_ratio()),
-            preferred_color_scheme: PreferredScheme(container.preferred_color_scheme),
-            ..Default::default()
-        };
-        dom::style_resolver::ResolveComputedStyles(&mut document, &environment, &[]);
-        let animations = CollectAnimations(document.GetDocument(), &environment);
+        let media = ImageMediaData(&container);
+        let mut style_engine = style::StyleEngine::new(&document);
+        style_engine
+            .Update(&mut document, &media, &[])
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let environment = MediaValuesCached::new(&media);
+        let animations = CollectAnimations(document.GetDocument(), &environment)?;
         let mut constraints = self.host_constraints_.clone();
         constraints.available_size = Size {
             width: f64::from(container.width),
@@ -236,6 +237,7 @@ impl SVGImageDecoder {
         Ok(SVGDocumentAnimation {
             resource_id,
             document,
+            style_engine,
             engine: layoutng_assembly::layout_engine::LayoutEngine::new(&self.assembly_),
             paint_engine: paint::paint_engine::PaintEngine::new(),
             constraints,
@@ -293,17 +295,9 @@ impl SVGDocumentAnimation {
                 animation.declarations.clone(),
             );
         }
-        dom::style_resolver::ResolveComputedStyles(
-            &mut self.document,
-            &StyleEnvironment {
-                viewport_width: Some(self.container.width as f64),
-                viewport_height: Some(self.container.height as f64),
-                resolution_dppx: Some(self.container.device_pixel_ratio()),
-                preferred_color_scheme: PreferredScheme(self.container.preferred_color_scheme),
-                ..Default::default()
-            },
-            &[],
-        );
+        self.style_engine
+            .Update(&mut self.document, &ImageMediaData(&self.container), &[])
+            .map_err(|error| io::Error::other(error.to_string()))?;
         self.document
             .EmitConstraints(&self.constraints, |mutation| {
                 self.engine.ApplyMutation(mutation);
@@ -566,20 +560,42 @@ fn ExpandKeyframes(rule: &CSSKeyframesRule) -> Vec<TimedKeyframe> {
     result
 }
 
+// Chromium SVGImageForContainer supplies the container viewport, DPR and color scheme.
+fn ImageMediaData(container: &ContainerKey) -> MediaValuesCachedData {
+    let width = container.width as f64;
+    let height = container.height as f64;
+    MediaValuesCachedData {
+        viewport_width: width,
+        viewport_height: height,
+        small_viewport_width: width,
+        small_viewport_height: height,
+        large_viewport_width: width,
+        large_viewport_height: height,
+        dynamic_viewport_width: width,
+        dynamic_viewport_height: height,
+        device_width: container.width as i32,
+        device_height: container.height as i32,
+        device_pixel_ratio: container.device_pixel_ratio() as f32,
+        media_type: foundation::String::from("screen"),
+        preferred_color_scheme: PreferredScheme(container.preferred_color_scheme),
+        scripting: style::media_queries::scripting::Scripting::kNone,
+        ..Default::default()
+    }
+}
+
 fn CollectAnimations(
     document: &PersistentDocument,
-    environment: &StyleEnvironment,
-) -> Vec<CSSImageAnimation> {
+    environment: &MediaValuesCached,
+) -> io::Result<Vec<CSSImageAnimation>> {
     let mut definitions = HashMap::new();
     let mut keyframe_rule_count = 0;
     for sheet in document.ActiveStyleSheets() {
         for rule in &sheet.keyframes {
             keyframe_rule_count += 1;
-            if rule
-                .media_conditions
-                .iter()
-                .all(|condition| MediaQueryMatches(condition, environment))
-            {
+            if rule.media_conditions.iter().all(|condition| {
+                MediaQueryEvaluator::ForMediaValues(environment)
+                    .Eval(&ParseMediaQuerySet(condition))
+            }) {
                 definitions.insert(rule.name.clone(), ExpandKeyframes(rule));
             }
         }
@@ -592,23 +608,29 @@ fn CollectAnimations(
         );
     }
     if definitions.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut result = Vec::new();
+    let mut selector_service = style::persistent_selector::PersistentSelectorService::default();
     let mut effect_id = 1;
     for index in 0..document.NodeCount() {
+        if document.Node(index).Type() != dom::persistent_document::DOMNodeType::kElement {
+            continue;
+        }
         let mut shorthand = None;
         for sheet in document.ActiveStyleSheets() {
             for rule in &sheet.rules {
-                if !rule
-                    .media_conditions
-                    .iter()
-                    .all(|condition| MediaQueryMatches(condition, environment))
-                    || !dom::style_resolver::persistent_selector::MatchesSelector(
-                        document,
-                        index,
-                        &rule.selector_text,
-                    )
+                if !rule.media_conditions.iter().all(|condition| {
+                    MediaQueryEvaluator::ForMediaValues(environment)
+                        .Eval(&ParseMediaQuerySet(condition))
+                }) || !selector_service
+                    .Matches(document, index, &rule.selector_text)
+                    .map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::Unsupported,
+                            format!("SVG animation selector: {error:?}"),
+                        )
+                    })?
                 {
                     continue;
                 }
@@ -644,7 +666,7 @@ fn CollectAnimations(
     if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() && keyframe_rule_count != 0 {
         eprintln!("svg-animation-profile targets={}", result.len());
     }
-    result
+    Ok(result)
 }
 
 fn Cubic(t: f64, a: f64, b: f64) -> f64 {

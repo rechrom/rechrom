@@ -13,7 +13,6 @@ use document_loader::{
     DocumentLoadBudget, DocumentLoader, DocumentLoaderStatus, ResourceFetcher,
     ResourceFetcherClient,
 };
-pub use dom::style_resolver::PreferredColorScheme;
 use dom::{dom_mutation::DOMMutationType, Document, UserInteractionState, DOM};
 use image_decoder::image_decoder::ImageDecoder;
 use image_resource::DocumentImageDecoder;
@@ -40,6 +39,7 @@ use std::{
     rc::{Rc, Weak},
     sync::Arc,
 };
+pub use style::PreferredColorScheme;
 use url_loader::{URLLoader, URLRequest, URLWakeCallback};
 use webapi::{
     dom_bindings::{DOMBindingsHost, DOMJavaScriptBindings},
@@ -231,8 +231,10 @@ impl ScriptLoadClient for ScriptClient {
     }
     fn DidApplyStyleSheet(&mut self, _: &str) {
         if let Some(state) = self.1.upgrade() {
-            state.InvalidateMeasurement();
-            state.InvalidateStyle();
+            // A stylesheet first invalidates computed style. Whether it also
+            // invalidates geometry is decided by the computed-style diff in
+            // ResolveStyles, matching Blink's style/layout lifecycle split.
+            state.InvalidateStylePreservingGeometry();
         }
     }
     fn DidReportScriptError(&mut self, e: &JavaScriptException) {
@@ -256,6 +258,7 @@ struct PendingImageEvent {
 }
 struct PageState {
     document: Rc<RefCell<DOM>>,
+    style_engine: RefCell<style::StyleEngine>,
     layout_engine: RefCell<layoutng_assembly::layout_engine::LayoutEngine>,
     paint_engine: RefCell<paint::PaintEngine>,
     #[cfg(feature = "pure_source_png")]
@@ -299,8 +302,10 @@ impl PageState {
         constraints: ConstraintSpace,
         client: Rc<RefCell<dyn PageClient>>,
     ) -> Rc<Self> {
+        let style_engine = style::StyleEngine::new(&document.borrow());
         Rc::new(Self {
             document,
+            style_engine: RefCell::new(style_engine),
             layout_engine: RefCell::new(layout_engine),
             paint_engine: RefCell::new(paint_engine),
             #[cfg(feature = "pure_source_png")]
@@ -330,7 +335,7 @@ impl PageState {
             animation_paint_nodes: RefCell::new(HashSet::new()),
             animation_paint_direct: Cell::new(false),
             animation_paint_batch_compatible: Cell::new(true),
-            preferred_color_scheme: Cell::new(Default::default()),
+            preferred_color_scheme: Cell::new(PreferredColorScheme::kLight),
         })
     }
 
@@ -701,11 +706,11 @@ impl PageState {
                 }
                 let mut css = String::new();
                 text(tree, style, &mut css);
-                let mut sheet = cssom::ParseCSS(&css);
+                let mut sheet = style::ParseCSS(&css);
                 sheet.owner_node_id = tree.Node(style).Id();
                 drop(owner);
                 resources.AddParsedStyleSheet(sheet, &resources.BaseURL())?;
-                self.InvalidateStyle();
+                self.InvalidateStylePreservingGeometry();
             }
         }
         // PrepareConnectedScript independently proves connectivity, but only
@@ -755,7 +760,7 @@ impl PageState {
                 // A newly connected sheet can change both geometry and the set
                 // of referenced @font-face/image resources. CSSOM owns rule
                 // invalidation; Page owns lifecycle and resource discovery.
-                state.InvalidateStyle();
+                state.InvalidateStylePreservingGeometry();
             }
         }));
         *self.resources.borrow_mut() = Some(resources);
@@ -981,12 +986,61 @@ impl PageState {
         if self.styles_resolved.get() {
             return;
         }
-        crate::style_services::ResolveLayoutStylesWithColorScheme(
+        crate::style_services::ResolveLayoutStylesWithEngine(
+            &mut self.style_engine.borrow_mut(),
             &mut self.document.borrow_mut(),
             &self.constraints.borrow(),
             self.preferred_color_scheme.get(),
         );
         self.styles_resolved.set(true);
+    }
+
+    // cpp: style_engine.cc:3865-3950; container_query_evaluator.cc:369-385.
+    // Chromium interleaves descendant style recalc with the sized container's
+    // layout. This assembly exports complete native layout batches, so advance
+    // style/layout until the published content sizes are unchanged before any
+    // measurement or paint consumes the batch.
+    fn LayoutWithContainerQueries(&self) {
+        let mut observed = std::collections::HashSet::new();
+        let limit = self.document.borrow().GetDocument().NodeCount() + 1;
+        for _ in 0..limit {
+            #[cfg(test)]
+            self.full_layout_lifecycles
+                .set(self.full_layout_lifecycles.get() + 1);
+            let sizes = {
+                let mut layout = self.layout_engine.borrow_mut();
+                crate::persistent_layout::LayoutDocumentWithEngine(
+                    &mut layout,
+                    &mut self.document.borrow_mut(),
+                    &self.interaction.borrow(),
+                    &self.constraints.borrow(),
+                );
+                if !self.style_engine.borrow().HasContainerQueries() {
+                    return;
+                }
+                layout.ContainerQuerySizes()
+            };
+            let changed = crate::style_services::PublishContainerSizes(
+                &mut self.style_engine.borrow_mut(),
+                &mut self.document.borrow_mut(),
+                &sizes,
+            );
+            if !changed {
+                return;
+            }
+            let signature = sizes
+                .iter()
+                .map(|s| (s.node_id, s.width.to_bits(), s.height.to_bits()))
+                .collect::<Vec<_>>();
+            if !observed.insert(signature) {
+                break;
+            }
+            self.styles_resolved.set(false);
+            self.ResolveStyles();
+        }
+        std::panic::panic_any(foundation::UnsupportedLayout::new(
+            "container query style/layout did not converge (style_engine.cc:3865)",
+        ));
     }
 
     // cpp: browser/browser.cc:932-939
@@ -1021,19 +1075,11 @@ impl PageState {
             trace.set("geometry_reused", 1.0);
             return;
         }
-        #[cfg(test)]
-        self.full_layout_lifecycles
-            .set(self.full_layout_lifecycles.get() + 1);
         let fragments = {
             trace.set("layout", 1.0);
-            let mut layout = self.layout_engine.borrow_mut();
-            crate::persistent_layout::LayoutDocumentWithEngine(
-                &mut layout,
-                &mut self.document.borrow_mut(),
-                &self.interaction.borrow(),
-                &self.constraints.borrow(),
-            );
-            layout
+            self.LayoutWithContainerQueries();
+            self.layout_engine
+                .borrow()
                 .GetLayoutResult()
                 .expect("successful layout has fragments")
                 .clone()
@@ -1099,7 +1145,14 @@ impl PageState {
                     }
                     if needs_paint {
                         self.document.borrow_mut().InvalidatePaint();
-                        self.InvalidateMeasurement();
+                        // Focus/hover/pressed state changes native appearance
+                        // and focus/caret paint, but not box geometry. Preserve
+                        // the last geometry as a stale-paint candidate so a
+                        // synchronous getBoundingClientRect() in the input
+                        // listener does not force a duplicate full layout.
+                        // UpdateFrameIfNeeded still rejects it for PaintCurrent
+                        // and exports the new interaction paint state.
+                        self.PreserveMeasurementGeometry();
                         self.scroll_only.set(false);
                         self.dirty.set(true);
                     }
@@ -1112,7 +1165,7 @@ impl PageState {
                     .expect("stylesheet before navigation")
                     .AddParsedStyleSheet(m.style_sheet, &m.base_url)
                     .unwrap_or_else(|e| std::panic::panic_any(e));
-                self.InvalidateStyle();
+                self.InvalidateStylePreservingGeometry();
             }
             PageMutation::ViewportMutation(m) => {
                 if !m.size.width.is_finite()
@@ -2165,33 +2218,20 @@ impl Page {
             .flatten()
             .and_then(|id| self.interaction.Editor().CaretFor(&self.state.document, id));
         let mut caret = self.state.layout_editing.caret.borrow_mut();
-        let old_owner = caret.paint_state().map(|state| state.node_id);
         let changed = caret.update(position, std::time::Instant::now(), restart);
-        let new_owner = self.interaction.State().focused_node_id;
         drop(caret);
         let revision = self.state.layout_editing.selections.Revision();
         let selection_changed = self.selection_revision != revision;
         self.selection_revision = revision;
         if changed || selection_changed {
             self.editing_paint_dirty = true;
-            // Editing invalidates native layout below, so a snapshot captured
-            // by an earlier CSSOM query cannot substitute for this lifecycle.
-            self.state.InvalidateMeasurement();
-            let mut layout = self.state.layout_engine.borrow_mut();
-            if let Some(id) = old_owner {
-                self.state.document.borrow().EmitEditing(id, |mutation| {
-                    layout.ApplyMutation(mutation);
-                });
-            }
-            if new_owner != old_owner {
-                if let Some(id) = new_owner {
-                    self.state.document.borrow().EmitEditing(id, |mutation| {
-                        layout.ApplyMutation(mutation);
-                    });
-                }
-            }
-            drop(layout);
-            self.state.document.borrow_mut().InvalidateLayout();
+            // FrameCaret and CaretDisplayItemClient schedule paint
+            // invalidation; moving/hiding the caret or changing a selection
+            // does not make the text control need layout. Control-value DOM
+            // mutations still invalidate geometry through ApplyDOMMutation.
+            // Keep the completed fragment geometry for the paint-only pass.
+            self.state.PreserveMeasurementGeometry();
+            self.state.document.borrow_mut().InvalidatePaint();
             self.state.scroll_only.set(false);
             self.state.dirty.set(true);
         }
@@ -2433,7 +2473,7 @@ impl Page {
         let reused_recordings = self.state.ApplyPendingScrollUpdates(self.frame.as_mut());
         trace.set("scroll_records_reused", reused_recordings as u8 as f64);
         let scroll_done = profile.map(|start| start.elapsed());
-        let paint_only_style = self.frame.is_some() && !self.editing_paint_dirty && {
+        let paint_only_style = self.frame.is_some() && {
             let impact = self.state.document.borrow().GetStyleImpact();
             impact.paint && !impact.layout && !impact.reattach
         };
@@ -2553,18 +2593,10 @@ impl Page {
         );
         let mut fragments = paint_only_fragments.or(measured).unwrap_or_else(|| {
             trace.set("full_layout", 1.0);
-            #[cfg(test)]
+            self.state.LayoutWithContainerQueries();
             self.state
-                .full_layout_lifecycles
-                .set(self.state.full_layout_lifecycles.get() + 1);
-            let mut layout = self.state.layout_engine.borrow_mut();
-            crate::persistent_layout::LayoutDocumentWithEngine(
-                &mut layout,
-                &mut self.state.document.borrow_mut(),
-                &self.state.interaction.borrow(),
-                &self.state.constraints.borrow(),
-            );
-            layout
+                .layout_engine
+                .borrow_mut()
                 .TakeLayoutResult()
                 .expect("successful layout has fragments")
         });

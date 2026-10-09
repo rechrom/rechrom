@@ -178,5 +178,43 @@ pub fn ResolveCSSURLs(value: &mut String, base_url: &str) -> io::Result<Vec<Stri
     Ok(urls)
 }
 
+/// Resolves stylesheet URLs in both the authoritative declaration source and
+/// the already typed/projected CSSOM view. Parsing belongs to `style`; the
+/// loader only rebases resource references and must not invoke a second CSS
+/// declaration parser or depend back on the style engine.
+pub fn ResolveCSSStyleSheetURLs(
+    sheet: &mut cssom::CSSStyleSheet,
+    base_url: &str,
+) -> io::Result<()> {
+    fn resolve_block(
+        text: &mut String,
+        declarations: &mut [cssom::CSSDeclaration],
+        base_url: &str,
+    ) -> io::Result<()> {
+        ResolveCSSURLs(text, base_url)?;
+        for declaration in declarations {
+            ResolveCSSURLs(&mut declaration.value, base_url)?;
+        }
+        Ok(())
+    }
+
+    for rule in &mut sheet.rules {
+        resolve_block(&mut rule.declaration_text, &mut rule.declarations, base_url)?;
+    }
+    for rule in &mut sheet.font_faces {
+        resolve_block(&mut rule.declaration_text, &mut rule.declarations, base_url)?;
+    }
+    for keyframes in &mut sheet.keyframes {
+        for frame in &mut keyframes.keyframes {
+            resolve_block(
+                &mut frame.declaration_text,
+                &mut frame.declarations,
+                base_url,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

@@ -1,8 +1,38 @@
 //! Document-owned style state. Mutation producers record changes here; the
 //! style resolver consumes them only after a successful update.
 #![allow(non_snake_case)]
-use cssom::compiled_rules::StyleRuleCache;
 use std::collections::HashSet;
+
+// Attributes admitted to the selector-only invalidation path.  This is a DOM
+// mutation classification: StyleEngine still proves whether any selector or
+// attr() dependency observes the attribute before it skips ordinary style
+// invalidation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum SelectorOnlyAttribute {
+    DataPcr,
+    ScriptSrc,
+    ScriptNonce,
+}
+
+impl SelectorOnlyAttribute {
+    pub const ALL: [Self; 3] = [Self::DataPcr, Self::ScriptSrc, Self::ScriptNonce];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::DataPcr => "data-pcr",
+            Self::ScriptSrc => "src",
+            Self::ScriptNonce => "nonce",
+        }
+    }
+
+    pub fn mask(self) -> u8 {
+        match self {
+            Self::DataPcr => 1,
+            Self::ScriptSrc => 2,
+            Self::ScriptNonce => 4,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StyleChange {
@@ -12,7 +42,7 @@ pub enum StyleChange {
     InlineStyle(usize),
     /// A narrowly admitted attribute without HTML presentation effects. The
     /// resolver must prove absence of selector and attr() readers before skip.
-    Attribute(usize, cssom::compiled_rules::SelectorOnlyAttribute),
+    Attribute(usize, SelectorOnlyAttribute),
     Children(usize),
     Animation(usize),
     /// Resolved image payload changed; DOM and selector inputs are unchanged.
@@ -55,7 +85,6 @@ pub struct StyleUpdateStats {
 }
 
 pub struct StyleState {
-    pub rules: StyleRuleCache,
     pub sheet_revision: u64,
     pub parsed_style_elements: HashSet<u64>,
     pub dirty_style_elements: HashSet<u64>,
@@ -89,7 +118,6 @@ pub struct StyleState {
 impl Default for StyleState {
     fn default() -> Self {
         Self {
-            rules: Default::default(),
             sheet_revision: 0,
             environment: None,
             parsed_style_elements: Default::default(),

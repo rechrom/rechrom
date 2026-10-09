@@ -386,13 +386,7 @@ mod tests {
         assert_eq!(engine.OnWake(now, &mut client), Ok(WakeRequest::Now));
         assert_eq!(client.log, ["task:7:Timer:a"]);
         assert_eq!(engine.OnWake(now, &mut client), Ok(WakeRequest::None));
-        assert_eq!(
-            client.log,
-            [
-                "task:7:Timer:a",
-                "task:7:Timer:b"
-            ]
-        );
+        assert_eq!(client.log, ["task:7:Timer:a", "task:7:Timer:b"]);
     }
 
     #[test]

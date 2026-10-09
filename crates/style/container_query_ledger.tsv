@@ -1,0 +1,16 @@
+source	line_start	line_end	effective	coverage	mapping_or_pending
+parser/container_query_parser.h	26	81	36	credited	Parser API/backend required typed context, stream, feature-set consumers
+parser/container_query_parser.cc	24	276	168	credited	Size/state/anchored feature sets, conditional grammar and shared MediaQueryParser consumer
+parser/container_query_parser.cc	277	278	2	pending	ContainerSelector feature-requirement object assembly; parsed name/query retained
+parser/container_query_parser.cc	279	314	25	credited	Failure handling and comma/name-only/query-set grammar
+container_query.h	18	19	2	pending	Native ContainerSelector constructor ownership
+container_query.h	21	21	1	pending	Native Selector accessor
+container_query.h	23	24	2	credited	ToString/Serialize
+container_query.h	34	34	1	credited	Query ownership accessor
+container_query.h	36	36	1	pending	Native ContainerSelector member
+container_query.h	37	37	1	credited	Immutable Rc conditional node
+container_query.cc	15	19	4	pending	Native ContainerSelector constructor/copy (name/tree storage currently implemented)
+container_query.cc	21	38	12	credited	Identifier and condition serialization
+container_query_set.h	20	41	13	credited	Typed queries, parent/copy and serialization contracts
+container_query_set.h	46	47	2	credited	Rc query and parent ownership
+container_query_set.cc	12	35	17	credited	CopyWithParent and comma-separated serialization

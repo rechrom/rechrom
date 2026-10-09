@@ -6,4 +6,6 @@
 *.profraw
 *.trace
 *.log
+__pycache__/
+*.pyc
 /rechrom-crash-reports/

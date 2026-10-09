@@ -797,7 +797,7 @@ fn AppendChildren<'a>(
         }
         let resolved = document
             .ResolvedStyleFor(child)
-            .expect("ResolveComputedStyles must run before tree build");
+            .expect("computed styles must be installed before tree build");
         if !resolved.generates_box {
             if resolved.display_contents {
                 AppendPseudoElement(
@@ -1263,7 +1263,7 @@ pub fn EmitLayoutMutations(
         let node = document.Node(index);
         let resolved = document
             .ResolvedStyleFor(index)
-            .expect("ResolveComputedStyles must run before tree build");
+            .expect("computed styles must be installed before tree build");
         assert!(resolved.generates_box, "document root has display:none");
         let root = tree.CreateRoot(
             node.Id(),
@@ -1511,8 +1511,6 @@ mod tests {
         let mut owner = crate::test_html::html_parser::ParseHTML(
             "<html><body><div id='changed' style='display:block;width:80px;height:30px'></div><div id='sibling' style='display:block;width:40px;height:20px'></div></body></html>",
         );
-        let environment = crate::style_resolver::StyleEnvironment::default();
-        crate::style_resolver::ResolveComputedStyles(&mut owner, &environment, &[]);
         let ids: BTreeMap<_, _> = (0..owner.GetDocument().NodeCount())
             .filter_map(|index| {
                 owner
@@ -1522,6 +1520,23 @@ mod tests {
                     .map(|attr| (attr.value.clone(), index))
             })
             .collect();
+        // This test exercises the DOM-to-layout projection boundary. Style
+        // calculation is supplied by the browser's StyleEngine lifecycle.
+        let document = owner.GetDocumentMut();
+        for index in 0..document.NodeCount() {
+            if document.Node(index).Type() == DOMNodeType::kElement {
+                let mut resolved = crate::persistent_document::ResolvedNodeStyle::default();
+                resolved.style.display = Display::kBlock;
+                document.SetResolvedStyle(index, resolved);
+            }
+        }
+        for (id, width, height) in [("changed", 80.0, 30.0), ("sibling", 40.0, 20.0)] {
+            let index = ids[id];
+            let mut resolved = document.ResolvedStyleFor(index).unwrap().clone();
+            resolved.style.width = Some(width);
+            resolved.style.height = Some(height);
+            document.SetResolvedStyle(index, resolved);
+        }
         let changed_id = owner.GetDocument().Node(ids["changed"]).Id();
         let sibling_id = owner.GetDocument().Node(ids["sibling"]).Id();
         let assembly = layoutng_assembly::layout_assembly::LayoutAssembly::default();
@@ -1546,7 +1561,10 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        crate::style_resolver::ResolveComputedStyles(&mut owner, &environment, &[]);
+        let document = owner.GetDocumentMut();
+        let mut resolved = document.ResolvedStyleFor(ids["changed"]).unwrap().clone();
+        resolved.style.width = Some(120.0);
+        document.SetResolvedStyle(ids["changed"], resolved);
         assert_eq!(
             owner
                 .GetDocument()
@@ -1585,12 +1603,15 @@ mod tests {
     }
     #[test]
     fn persistent_metadata_and_namespace_kinds_match_cpp_including_live_values() {
+        // This end-to-end reference test still requires browser assembly of
+        // the concrete Chromium style backend and the cpp-reference fixtures.
+        // Keep its assertions visible until that assembly can run them.
         let mut owner = crate::test_html::html_parser::ParseHTML(include_str!(
             "../../../../artifacts/cpp-reference/persistent-tree-metadata.html"
         ));
         owner
             .GetDocumentMut()
-            .AppendStyleSheet(cssom::ParseCSS(include_str!(
+            .AppendStyleSheet(style::ParseCSS(include_str!(
                 "../../../../artifacts/cpp-reference/persistent-tree.css"
             )));
         let nodes: BTreeMap<_, _> = (0..owner.GetDocument().NodeCount())
@@ -1627,16 +1648,26 @@ mod tests {
                 d.AppendChild(nodes["contents"], nodes["letter-next"]);
                 d.SetScrollOffset(nodes["contents"], Offset { x: 3.0, y: 4.0 });
             }
-            crate::style_resolver::ResolveComputedStyles(
-                &mut owner,
-                &crate::style_resolver::StyleEnvironment {
-                    viewport_width: Some(1024.0),
-                    viewport_height: Some(768.0),
-                    resolution_dppx: Some(1.0),
-                    ..Default::default()
-                },
-                &[],
-            );
+            let mut style_engine = style::StyleEngine::new(&owner);
+            style_engine
+                .Update(
+                    &mut owner,
+                    &style::media_queries::media_values_cached::MediaValuesCachedData {
+                        viewport_width: 1024.0,
+                        viewport_height: 768.0,
+                        small_viewport_width: 1024.0,
+                        small_viewport_height: 768.0,
+                        large_viewport_width: 1024.0,
+                        large_viewport_height: 768.0,
+                        dynamic_viewport_width: 1024.0,
+                        dynamic_viewport_height: 768.0,
+                        device_pixel_ratio: 1.0,
+                        em_size: 16.0,
+                        ..Default::default()
+                    },
+                    &[],
+                )
+                .expect("style update");
             let mut count = 0;
             for line in include_str!(
                 "../../../../artifacts/cpp-reference/persistent-tree-metadata-results.tsv"

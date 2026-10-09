@@ -1,9 +1,9 @@
 #[path = "../src/native_test_thread.rs"]
 mod native_test_thread;
+use browser::page::Page;
 use document_image::SVGImageDecoder;
 use image_decoder::skia_image_decoder::SkiaImageDecoder;
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
-use browser::page::Page;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 struct Operation(Option<URLResponse>);

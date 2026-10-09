@@ -1,0 +1,29 @@
+source	line_start	line_end	effective	coverage	mapping_or_pending
+css_syntax_string_parser.h	25	64	9	credited	Required parser methods and real input stream
+css_syntax_string_parser.cc	20	184	108	credited	Supported-name dispatch, full string grammar, existing ConsumeName escape parsing
+css_syntax_definition.h	26	75	30	credited	Typed schema APIs/default/components/equality/universal/numeric/serialization
+css_syntax_definition.cc	26	170	106	credited	Token-stream component/type/multiplier/union grammar with save points
+css_syntax_definition.cc	173	242	62	pending	Literal owners implemented; full CSSMath/image/url/transform delegated value consumers remain unsupported
+css_syntax_definition.cc	244	367	90	credited	Repetition/alternative/universal parsing control flow and syntax serialization; immutable token replay
+style_scope.h	36	36	0	credited	Explicit/implicit typed roots and limit constructor
+style_scope.h	37	37	1	pending	Deep-copy construction requires full production StyleRule cloning
+style_scope.h	39	54	7	credited	Implicit creation and parser API
+style_scope.h	58	58	1	pending	CopyWithParent/deep copy ownership
+style_scope.h	62	68	4	credited	Root/limit/parent and stable scopeified-parent nesting semantics
+style_scope.h	74	74	1	pending	Clone with reparenting
+style_scope.h	77	82	5	credited	Implicit state and immutable typed roots/limits/parent
+style_scope.h	83	83	1	pending	Specificity cache owner
+style_scope.cc	19	20	1	credited	Actual root and limit construction
+style_scope.cc	22	50	20	pending	Deep Clone/CopyWithParent via full StyleRuleCloneDependencies
+style_scope.cc	52	146	54	credited	Boundary parsing through existing native selector stream, savepoint and dummy StyleRule
+style_scope.cc	149	153	4	credited	Stable CSSScopeifiedParentPseudoClass RuleForNesting behavior
+property_registration.cc	20	77	36	partial	Document registry/runtime registration now mapped; precise interpolation/viewport pending rows in property_registry_ledger.tsv
+property_registration.cc	82	162	48	credited	Syntax/inherits/initial descriptor conversion and computational independence for concrete represented values
+property_registration.cc	165	288	88	partial	Declared construction/registry removal/invalidation mapped in property_registry_ledger.tsv; CSS.registerProperty JS binding remains pending (typed host interface implemented)
+parser/at_rule_descriptor_parser.cc	459	513	42	credited	At-property syntax/inherits/initial descriptor consumers reuse existing variable token validation
+parser/css_parser_impl.cc	1886	1965	55	credited	ConsumePropertyRule production dispatch and concrete descriptor conversion
+parser/css_parser_impl.cc	2137	2176	26	credited	ConsumeScopeRule production dispatch, real scope nesting and observer ranges
+style_rule.h	376	393	14	credited	Existing StyleRuleProperty production concrete backend
+style_rule.h	423	435	8	credited	Existing StyleRuleScope production concrete backend
+style_rule.cc	823	860	25	credited	Existing property source store/accessors now attached
+style_rule.cc	886	888	3	credited	Existing scope group construction now attached

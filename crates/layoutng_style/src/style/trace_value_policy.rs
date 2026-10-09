@@ -18,8 +18,10 @@ use super::grid_track_list::GridTrackList;
 use super::max_lines_data::MaxLinesData;
 use super::position_area::{PositionArea, PositionAreaOffsets};
 use super::scroll_snap_data::cc::{ScrollSnapAlign, ScrollSnapType};
+use super::scroll_marker_group::ScrollMarkerGroup;
 use super::shape_value::ShapeValue;
 use super::style_content_alignment_data::StyleContentAlignmentData;
+use super::style_border_shape::StyleBorderShape;
 use super::style_flex_wrap_data::StyleFlexWrapData;
 use super::style_highlight_data::StyleHighlightData;
 use super::style_hyphenate_limit_chars::StyleHyphenateLimitChars;
@@ -62,6 +64,7 @@ trace_source_method!(
     StylePositionAnchor,
     SVGPaint,
     ShapeValue,
+    StyleBorderShape,
 );
 
 // This source Trace method has no managed fields and takes an optional
@@ -70,6 +73,12 @@ trace_source_method!(
 impl Traceable for ComputedGridTemplateAreas {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
         ComputedGridTemplateAreas::Trace(self, Some(visitor));
+    }
+}
+// cpp: layoutng_style/style/scroll_marker_group.h:41. Bind the source body.
+impl Traceable for ScrollMarkerGroup {
+    fn Trace(&self, visitor: &mut Visitor<'_>) {
+        ScrollMarkerGroup::Trace(self, Some(visitor));
     }
 }
 

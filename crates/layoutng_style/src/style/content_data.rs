@@ -67,10 +67,9 @@ pub trait ContentData {
     // cpp: layoutng_style/style/content_data.h:81
     fn Equals(&self, other: &dyn ContentData) -> bool;
 
-    // cpp: layoutng_style/style/content_data.h:83
-    // Base trace has no supplied definition.
+    // cpp: third_party/blink/renderer/core/style/content_data.cc:57-59
     fn Trace(&self, visitor: &mut Visitor) {
-        unsafe { ContentDataBaseTrace(self.base(), visitor) }
+        visitor.Trace(&self.base().next_);
     }
 
     // cpp: layoutng_style/style/content_data.h:86
@@ -93,7 +92,20 @@ pub fn ConcatenateAltText(first_alt_data: &dyn ContentData) -> String {
 }
 #[allow(non_snake_case)]
 pub fn CloneContentData(value: &dyn ContentData) -> *mut dyn ContentData {
-    unsafe { ContentDataClone(value) }
+    // cpp: third_party/blink/renderer/core/style/content_data.cc:43-55
+    let result = value.CloneInternal();
+    let mut last = result;
+    let mut next = value.Next();
+    while let Some(data) = next {
+        let data = unsafe { &*data };
+        let new_data = data.CloneInternal();
+        unsafe {
+            (&mut *last).SetNext(Some(new_data));
+        }
+        last = unsafe { (&*last).Next().expect("cloned content appended") };
+        next = data.Next();
+    }
+    result
 }
 
 // cpp: layoutng_style/style/content_data.h:97-107
@@ -252,8 +264,13 @@ impl ContentData for TextContentData {
         true
     }
     // cpp: layoutng_style/style/content_data.h:158
-    fn CreateLayoutObject(&self, owner: &mut LayoutObject) -> *mut LayoutObject {
-        unsafe { TextContentDataCreateLayoutObject(self, owner) }
+    fn CreateLayoutObject(&self, _owner: &mut LayoutObject) -> *mut LayoutObject {
+        // Chromium creates LayoutTextFragment here. layoutng_style deliberately
+        // has no dependency on the concrete layoutng crate, so production
+        // generated text is materialized by layoutng's pseudo-content adapter.
+        // Keep this impossible reverse dependency explicit instead of retaining
+        // an unresolved native symbol or manufacturing an opaque LayoutObject.
+        panic!("TextContentData layout creation belongs to the layoutng adapter")
     }
     // cpp: layoutng_style/style/content_data.h:160-163
     fn Equals(&self, data: &dyn ContentData) -> bool {
@@ -315,7 +332,9 @@ impl ContentData for AltTextContentData {
     }
     // cpp: layoutng_style/style/content_data.h:188
     fn CreateLayoutObject(&self, owner: &mut LayoutObject) -> *mut LayoutObject {
-        unsafe { AltTextContentDataCreateLayoutObject(self, owner) }
+        // cpp: core/style/content_data.cc:116-122. Alt content never creates layout.
+        let _ = owner;
+        panic!("AltTextContentData::CreateLayoutObject is unreachable")
     }
     // cpp: layoutng_style/style/content_data.h:190-193
     fn Equals(&self, data: &dyn ContentData) -> bool {
@@ -370,7 +389,9 @@ impl CounterData {
     // cpp: layoutng_style/style/content_data.h:226
     // No definition is supplied in this package.
     pub fn Trace(&self, visitor: &mut Visitor) {
-        unsafe { CounterDataTrace(self, visitor) }
+        // cpp: core/style/content_data.cc:133-136.
+        visitor.Trace(&self.tree_scope);
+        visitor.Trace(&self.symbols_counter_style);
     }
 }
 
@@ -428,7 +449,29 @@ impl CounterContentData {
     // cpp: layoutng_style/style/content_data.h:278
     // No definition is supplied in this package.
     pub fn EqualsCounter(&self, data: &dyn ContentData) -> bool {
-        unsafe { CounterContentDataEquals(self, data) }
+        // cpp: core/style/content_data.cc:158-172.
+        if !data.IsCounter() {
+            return false;
+        }
+        let other = if data.IsAltCounter() {
+            &unsafe { &*(data as *const dyn ContentData as *const AltCounterContentData) }.parent_
+        } else {
+            unsafe { &*(data as *const dyn ContentData as *const CounterContentData) }
+        };
+        if self.Identifier() != other.Identifier()
+            || self.ListStyle() != other.ListStyle()
+            || self.Separator() != other.Separator()
+            || self.GetTreeScope() != other.GetTreeScope()
+        {
+            return false;
+        }
+        if self.GetSymbolsCounterStyle() == other.GetSymbolsCounterStyle() {
+            return true;
+        }
+        if self.GetSymbolsCounterStyle().is_null() || other.GetSymbolsCounterStyle().is_null() {
+            return false;
+        }
+        panic!("CounterStyle equality requires anonymous CounterStyle binding")
     }
 
     // cpp: layoutng_style/style/content_data.h:283-288
@@ -451,7 +494,10 @@ impl ContentData for CounterContentData {
     }
     // cpp: layoutng_style/style/content_data.h:254
     fn CreateLayoutObject(&self, owner: &mut LayoutObject) -> *mut LayoutObject {
-        unsafe { CounterContentDataCreateLayoutObject(self, owner) }
+        // cpp: core/style/content_data.cc:124-131. Concrete LayoutCounter
+        // creation belongs to the layout adapter.
+        let _ = owner;
+        panic!("CounterContentData layout creation requires the layoutng adapter")
     }
     // cpp: layoutng_style/style/content_data.h:278
     fn Equals(&self, data: &dyn ContentData) -> bool {
@@ -459,7 +505,9 @@ impl ContentData for CounterContentData {
     }
     // cpp: layoutng_style/style/content_data.h:268
     fn Trace(&self, visitor: &mut Visitor) {
-        unsafe { CounterContentDataTrace(self, visitor) }
+        // cpp: core/style/content_data.cc:153-156.
+        self.counter_data_.Trace(visitor);
+        visitor.Trace(&self.base_.next_);
     }
     // cpp: layoutng_style/style/content_data.h:270
     fn DebugString(&self) -> String {
@@ -543,7 +591,9 @@ impl ContentData for AltCounterContentData {
     }
     // cpp: layoutng_style/style/content_data.h:296
     fn CreateLayoutObject(&self, owner: &mut LayoutObject) -> *mut LayoutObject {
-        unsafe { AltCounterContentDataCreateLayoutObject(self, owner) }
+        // cpp: core/style/content_data.cc:175-178.
+        let _ = owner;
+        panic!("AltCounterContentData::CreateLayoutObject is unreachable")
     }
     // cpp: layoutng_style/style/content_data.h:303
     fn DebugString(&self) -> String {
@@ -613,7 +663,10 @@ impl ContentData for QuoteContentData {
     }
     // cpp: layoutng_style/style/content_data.h:339
     fn CreateLayoutObject(&self, owner: &mut LayoutObject) -> *mut LayoutObject {
-        unsafe { QuoteContentDataCreateLayoutObject(self, owner) }
+        // cpp: core/style/content_data.cc:189-194. The concrete LayoutQuote
+        // belongs to the layout adapter, like TextContentData's LayoutTextFragment.
+        let _ = owner;
+        panic!("QuoteContentData layout creation requires the layoutng adapter")
     }
     // cpp: layoutng_style/style/content_data.h:341-344
     fn Equals(&self, data: &dyn ContentData) -> bool {
@@ -664,8 +717,9 @@ impl ContentData for NoneContentData {
         true
     }
     // cpp: layoutng_style/style/content_data.h:368
-    fn CreateLayoutObject(&self, owner: &mut LayoutObject) -> *mut LayoutObject {
-        unsafe { NoneContentDataCreateLayoutObject(self, owner) }
+    fn CreateLayoutObject(&self, _owner: &mut LayoutObject) -> *mut LayoutObject {
+        // cpp: third_party/blink/renderer/core/style/content_data.cc:196-198
+        panic!("NoneContentData::CreateLayoutObject is unreachable")
     }
     // cpp: layoutng_style/style/content_data.h:370
     fn Equals(&self, data: &dyn ContentData) -> bool {
@@ -684,8 +738,8 @@ impl ContentData for NoneContentData {
 // cpp: layoutng_style/style/content_data.h:48-83,109-130,150-170,180-200,239-275,290-318,331-351,363-377
 // GarbageCollected<T> dispatches to each class's virtual Trace method in C++.
 // Keep that dispatch when these concrete values enter the Rust layout heap.
-// Out-of-line Trace definitions absent from the supplied source remain the
-// explicit extern calls above; this bridge does not replace them.
+// Concrete content nodes retain Chromium's virtual Trace dispatch in the heap.
+// Image resource/layout and counter-style resolution collaborators remain external.
 macro_rules! impl_content_data_traceable {
     ($($type:ty),+ $(,)?) => {$ (
         impl foundation::Traceable for $type {
@@ -709,23 +763,12 @@ impl_content_data_traceable!(
 unsafe extern "Rust" {
     fn ContentDataHasAltCounterContent(value: &dyn ContentData) -> bool;
     fn ContentDataConcatenateAltText(value: &dyn ContentData) -> String;
-    fn ContentDataClone(value: &dyn ContentData) -> *mut dyn ContentData;
-    fn ContentDataBaseTrace(value: &ContentDataBase, visitor: &mut Visitor);
     fn ImageContentDataCreateLayoutObject(
         value: &ImageContentData,
         owner: &mut LayoutObject,
     ) -> *mut LayoutObject;
     fn ImageContentDataTrace(value: &ImageContentData, visitor: &mut Visitor);
     fn ImageContentDataDebugString(value: &ImageContentData) -> String;
-    fn TextContentDataCreateLayoutObject(
-        value: &TextContentData,
-        owner: &mut LayoutObject,
-    ) -> *mut LayoutObject;
-    fn AltTextContentDataCreateLayoutObject(
-        value: &AltTextContentData,
-        owner: &mut LayoutObject,
-    ) -> *mut LayoutObject;
-    fn CounterDataTrace(value: &CounterData, visitor: &mut Visitor);
     fn CounterContentDataConstruct(
         identifier: &AtomicString,
         style: &AtomicString,
@@ -733,32 +776,15 @@ unsafe extern "Rust" {
         tree_scope: *const TreeScope,
         symbols: *const CSSSymbolsValue,
     ) -> CounterContentData;
-    fn CounterContentDataCreateLayoutObject(
-        value: &CounterContentData,
-        owner: &mut LayoutObject,
-    ) -> *mut LayoutObject;
     fn CounterContentDataResolveCounterStyle(
         value: &CounterContentData,
         engine: &StyleEngine,
     ) -> *const CounterStyle;
-    fn CounterContentDataTrace(value: &CounterContentData, visitor: &mut Visitor);
     fn CounterContentDataEquals(value: &CounterContentData, other: &dyn ContentData) -> bool;
-    fn AltCounterContentDataCreateLayoutObject(
-        value: &AltCounterContentData,
-        owner: &mut LayoutObject,
-    ) -> *mut LayoutObject;
     fn AltCounterContentDataUpdateText(
         value: &mut AltCounterContentData,
         context: &mut CountersAttachmentContext,
         engine: &StyleEngine,
         object: &LayoutObject,
     );
-    fn QuoteContentDataCreateLayoutObject(
-        value: &QuoteContentData,
-        owner: &mut LayoutObject,
-    ) -> *mut LayoutObject;
-    fn NoneContentDataCreateLayoutObject(
-        value: &NoneContentData,
-        owner: &mut LayoutObject,
-    ) -> *mut LayoutObject;
 }

@@ -13,6 +13,10 @@ impl HangingPunctuation {
     pub const kFirst: Self = Self(1);
     pub const kLast: Self = Self(2);
     pub const kAllowEnd: Self = Self(4);
+    // C++ casts to the underlying bit-mask type preserve unnamed combinations.
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits)
+    }
     pub const fn bits(self) -> u32 {
         self.0
     }

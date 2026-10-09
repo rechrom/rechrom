@@ -327,6 +327,12 @@ impl ApplicationHandler<UserEvent> for App {
                 },
             ) {
                 Ok(commands) => {
+                    let navigate_commands = commands.clone();
+                    devtools::set_navigate_handler(Arc::new(move |url| {
+                        navigate_commands
+                            .send(Command::Navigate(url))
+                            .map_err(|error| error.to_string())
+                    }));
                     let reload_commands = commands.clone();
                     devtools::set_reload_handler(Arc::new(move || {
                         reload_commands
@@ -380,6 +386,70 @@ impl ApplicationHandler<UserEvent> for App {
                         wheel_commands
                             .send(Command::QueuedInput {
                                 input,
+                                queued_at: Instant::now(),
+                                samples: 1,
+                            })
+                            .map_err(|error| error.to_string())
+                    }));
+                    let mouse_commands = commands.clone();
+                    devtools::set_mouse_handler(Arc::new(move |mouse| {
+                        use interaction::input_event::{
+                            InputEvent, MouseButton, MouseEvent, MouseEventType,
+                        };
+                        use layoutng_assembly::internal::layout_input::Offset;
+                        let button = match mouse.button.as_str() {
+                            "none" => MouseButton::kNone,
+                            "left" => MouseButton::kPrimary,
+                            "right" => MouseButton::kSecondary,
+                            "middle" => MouseButton::kMiddle,
+                            _ => return Err("Unsupported mouse button".into()),
+                        };
+                        let kinds: &[MouseEventType] = match mouse.event_type.as_str() {
+                            "mouseMoved" => &[MouseEventType::kMove],
+                            "mousePressed" => &[MouseEventType::kDown],
+                            "mouseReleased" if mouse.click_count == 2 => &[
+                                MouseEventType::kUp,
+                                MouseEventType::kClick,
+                                MouseEventType::kDoubleClick,
+                            ],
+                            "mouseReleased" => &[MouseEventType::kUp, MouseEventType::kClick],
+                            _ => return Err("Unsupported mouse event type".into()),
+                        };
+                        let queued_at = Instant::now();
+                        for &kind in kinds {
+                            mouse_commands
+                                .send(Command::QueuedInput {
+                                    input: InputEvent::Mouse(MouseEvent {
+                                        r#type: kind,
+                                        button: if kind == MouseEventType::kMove {
+                                            MouseButton::kNone
+                                        } else {
+                                            button
+                                        },
+                                        // DevTools coordinates address the page target; the
+                                        // native queue uses full-window coordinates.
+                                        position: Offset {
+                                            x: mouse.x,
+                                            y: mouse.y + crate::chrome::HEIGHT,
+                                        },
+                                        ..Default::default()
+                                    }),
+                                    queued_at,
+                                    samples: 1,
+                                })
+                                .map_err(|error| error.to_string())?;
+                        }
+                        Ok(())
+                    }));
+                    let text_commands = commands.clone();
+                    devtools::set_insert_text_handler(Arc::new(move |text| {
+                        use interaction::input_event::{InputEvent, TextInputEvent};
+                        text_commands
+                            .send(Command::QueuedInput {
+                                input: InputEvent::TextInput(TextInputEvent {
+                                    text,
+                                    ..Default::default()
+                                }),
                                 queued_at: Instant::now(),
                                 samples: 1,
                             })

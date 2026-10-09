@@ -756,6 +756,8 @@ fn ConvertWhiteSpace(value: WhiteSpace) -> EWhiteSpace {
         WhiteSpace::kPreLine => EWhiteSpace::kPreLine,
         WhiteSpace::kPreWrap => EWhiteSpace::kPreWrap,
         WhiteSpace::kBreakSpaces => EWhiteSpace::kBreakSpaces,
+        WhiteSpace::kPreserveBreaksNowrap => EWhiteSpace::from_bits(2),
+        WhiteSpace::kBreakSpacesNowrap => EWhiteSpace::from_bits(3),
     }
 }
 
@@ -2461,6 +2463,13 @@ pub fn PrepareNativeStyle(
     layout_parent_style: *const NativeComputedStyle,
     layout_parent_kind: NodeKind,
 ) -> *const NativeComputedStyle {
+    // StyleEngine already produced Chromium's immutable ComputedStyle.  The
+    // layout-input projection is still retained for DOM/paint metadata, but
+    // layout must consume the original style object rather than translating
+    // that projection back into a second style.
+    if !node.style.native_style.is_null() {
+        return node.style.native_style;
+    }
     // Like Blink's CSSToLengthConversionData, zoom fixed CSS lengths before
     // passing them to layout. The DOM style remains in CSS units.
     let zoomed = crate::internal::css_zoom::ZoomedStyle(&node.style);
@@ -2503,6 +2512,37 @@ pub fn PrepareNativeStyleDefault(
         std::ptr::null(),
         NodeKind::kBox,
     )
+}
+
+#[cfg(test)]
+mod style_engine_style_reuse_tests {
+    use super::*;
+    use crate::internal::layout_font_resolver::NativeFontRequest;
+    use font_engine::Font;
+
+    struct UnusedFontResolver;
+
+    impl NativeFontResolver for UnusedFontResolver {
+        fn Resolve(&mut self, _: &NativeFontRequest<'_>) -> &mut Font {
+            panic!("a StyleEngine-produced ComputedStyle must bypass input font reconstruction")
+        }
+    }
+
+    #[test]
+    fn prepare_native_style_reuses_style_engine_object_identity() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let native = NativeComputedStyle::GetInitialStyleSingleton();
+        let mut input = NativeNodeConstructionData::default();
+        input.style.native_style = native;
+        let actual = PrepareNativeStyle(
+            &input,
+            &mut UnusedFontResolver,
+            FragmentationType::kFragmentPage,
+            std::ptr::null(),
+            NodeKind::kBox,
+        );
+        assert_eq!(actual, native);
+    }
 }
 
 // cpp: layoutng/internal/boundary/native_input.h:52-57

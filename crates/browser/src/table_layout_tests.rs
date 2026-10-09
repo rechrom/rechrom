@@ -24,7 +24,7 @@ fn body() {
     ));
     owner
         .GetDocumentMut()
-        .AppendStyleSheet(cssom::ParseCSS(include_str!(
+        .AppendStyleSheet(style::ParseCSS(include_str!(
             "../../../artifacts/cpp-reference/table-native-layout.css"
         )));
     let mut space = ConstraintSpace::default();
@@ -115,16 +115,7 @@ fn body() {
             attr("c1", "style", "width:15%");
             d.AppendChild(ids["r1"], ids["f0"]);
         }
-        dom::style_resolver::ResolveComputedStyles(
-            &mut owner,
-            &dom::style_resolver::StyleEnvironment {
-                viewport_width: Some(1024.0),
-                viewport_height: Some(768.0),
-                resolution_dppx: Some(1.0),
-                ..Default::default()
-            },
-            &[],
-        );
+        crate::style_services::ResolveLayoutStyles(&mut owner, &space);
         engine.ApplyMutation(layoutng_assembly::layout_engine::LayoutMutation::Constraints(&space));
         let root = crate::native_test_thread::BuildDOMProjection(
             &mut owner,

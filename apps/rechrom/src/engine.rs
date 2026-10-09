@@ -1223,6 +1223,11 @@ struct BrowserState {
     omnibox_id: u64,
     dragspace_id: u64,
     tabs: crate::tabs::Tabs<Page>,
+    // Navigation detaches the old document immediately, while final Realm and
+    // DOM destruction runs as low-priority owner work after the replacement
+    // has produced a frame. Chromium likewise keeps GC/finalization out of the
+    // navigation input task.
+    retired_documents: VecDeque<Page>,
     tabstrip_id: u64,
     tabstrip_html: String,
     background_turn: usize,
@@ -1328,6 +1333,7 @@ impl BrowserState {
             omnibox_id,
             dragspace_id,
             tabs: crate::tabs::Tabs::new(),
+            retired_documents: VecDeque::new(),
             tabstrip_id,
             tabstrip_html: String::new(),
             background_turn: 0,
@@ -1432,6 +1438,7 @@ impl BrowserState {
             if !committed_load_failure {
                 if let Some(mut old) = self.tabs.active.page.take() {
                     old.StopLoading();
+                    self.retired_documents.push_back(old);
                 }
                 self.tabs.active.document_generation =
                     self.tabs.active.document_generation.wrapping_add(1);
@@ -2097,7 +2104,10 @@ impl BrowserState {
         }
     }
     fn tick_background(&mut self) -> io::Result<()> {
-        if self.tabs.background.is_empty() {
+        if self.tabs.background.is_empty()
+            && (self.retired_documents.is_empty() || self.last_frame.is_none())
+            && !foundation::IsLayoutHeapCollectionRequested()
+        {
             return Ok(());
         }
         let mut trace = browser_tracing::span("task", "BackgroundTasks");
@@ -2115,6 +2125,21 @@ impl BrowserState {
                 }
             }
             update_tab_metadata(tab);
+        }
+        if self.last_frame.is_some() {
+            if let Some(retired) = self.retired_documents.pop_front() {
+                let _trace =
+                    browser_tracing::span("navigation", "NavigationDisposeRetiredDocument");
+                drop(retired);
+                foundation::RequestLayoutHeapCollection();
+            }
+        }
+        // Keep stop-the-world tracing out of loading, input and frame work.
+        // The heap itself owns the allocation-pressure policy; the application
+        // layer merely supplies the low-priority owner-thread opportunity.
+        let active_loading = self.tabs.active.page.as_ref().is_some_and(Page::IsLoading);
+        if !active_loading && foundation::CollectLayoutHeapIfRequested() {
+            trace.set("layout_gc", 1.0);
         }
         if std::env::var_os("BROWSER_APP_TRACE_LOADING").is_some()
             && started.elapsed() >= Duration::from_millis(16)
@@ -2151,24 +2176,32 @@ impl BrowserState {
         }
         let address = crate::options::normalize_address(&request.url)?;
         if present {
+            let _phase = browser_tracing::span("navigation", "NavigationNotifyLoading");
             self.set_address(&address)?;
             (self.output.notify)(UserEvent::Location(format!("Loading — {address}")));
             self.publish()?;
         }
-        if let Some(mut old) = self.tabs.active.page.take() {
-            old.StopLoading(); // Navigation discards this document/realm only.
+        {
+            let _phase = browser_tracing::span("navigation", "NavigationRetireDocument");
+            if let Some(mut old) = self.tabs.active.page.take() {
+                old.StopLoading(); // Navigation discards this document/realm only.
+                self.retired_documents.push_back(old);
+            }
         }
         self.tabs.active.document_generation = self.tabs.active.document_generation.wrapping_add(1);
-        let mut page = create_page(
-            self.viewport.logical_width(),
-            self.viewport.content_height(),
-            self.viewport.scale,
-            true,
-            self.pointer.clone(),
-            false,
-            self.tabs.active.id,
-            self.tabs.active.document_generation,
-        )?;
+        let mut page = {
+            let _phase = browser_tracing::span("navigation", "NavigationCreateDocument");
+            create_page(
+                self.viewport.logical_width(),
+                self.viewport.content_height(),
+                self.viewport.scale,
+                true,
+                self.pointer.clone(),
+                false,
+                self.tabs.active.id,
+                self.tabs.active.document_generation,
+            )?
+        };
         request.url = match address.as_str() {
             "about:home" => data_url(HOME),
             "about:blank" => data_url("<!doctype html><html><body></body></html>"),
@@ -2180,7 +2213,11 @@ impl BrowserState {
                 self.loading_wake_pending.clone(),
             ));
         }
-        if let Err(error) = page.OpenRequest(&request, 16384, 4096) {
+        let open_result = {
+            let _phase = browser_tracing::span("navigation", "NavigationStartRequest");
+            page.OpenRequest(&request, 16384, 4096)
+        };
+        if let Err(error) = open_result {
             self.output.message(&error);
             drop(page);
             page = create_page(
@@ -2233,6 +2270,7 @@ impl BrowserState {
             self.tabs.active.history_index = self.tabs.active.history.len() - 1;
         }
         if present {
+            let _phase = browser_tracing::span("navigation", "NavigationCommitHostState");
             self.set_address(&self.tabs.active.location.clone())?;
             self.refresh_tabstrip()?;
             (self.output.notify)(UserEvent::Location(self.tabs.active.location.clone()));

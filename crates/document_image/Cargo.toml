@@ -4,6 +4,8 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+style = { path = "../style" }
 cssom = { path = "../cssom" }
 dom = { path = "../dom" }
 html = { path = "../html" }

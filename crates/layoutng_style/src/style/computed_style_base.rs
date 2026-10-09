@@ -122,10 +122,6 @@ use super::unzoomed_length::UnzoomedLength;
 // sets. Their C++ enums admit unnamed bit combinations, so an enum transmute
 // would not be sound. These declarations are pending dependency contracts.
 unsafe extern "Rust" {
-    fn FoundationTouchActionFromBits(bits: u32) -> TouchAction;
-    fn FoundationTouchActionBits(value: TouchAction) -> u32;
-    fn FoundationHangingPunctuationFromBits(bits: u32) -> HangingPunctuation;
-    fn FoundationHangingPunctuationBits(value: HangingPunctuation) -> u32;
     fn FoundationTextDecorationLineFromBits(bits: u32) -> TextDecorationLine;
     fn FoundationTextDecorationLineBits(value: TextDecorationLine) -> u32;
     fn FoundationTextDecorationSkipSpacesFromBits(bits: u32) -> TextDecorationSkipSpaces;
@@ -134,31 +130,6 @@ unsafe extern "Rust" {
     fn FoundationTextTransformBits(value: ETextTransform) -> u32;
 
     // The corresponding C++ declarations have no definitions in this package.
-    // cpp: layoutng_style/style/computed_style_base.h:352
-    fn ComputedStyleBaseIndependentInheritedEqual(
-        style: &ComputedStyleBase,
-        other: &ComputedStyleBase,
-    ) -> bool;
-    // cpp: layoutng_style/style/computed_style_base.h:354
-    fn ComputedStyleBaseNonIndependentInheritedEqual(
-        style: &ComputedStyleBase,
-        other: &ComputedStyleBase,
-    ) -> bool;
-    // cpp: layoutng_style/style/computed_style_base.h:356
-    fn ComputedStyleBaseInheritedVariablesEqual(
-        style: &ComputedStyleBase,
-        other: &ComputedStyleBase,
-    ) -> bool;
-    // cpp: layoutng_style/style/computed_style_base.h:358
-    fn ComputedStyleBaseInheritedEqual(
-        style: &ComputedStyleBase,
-        other: &ComputedStyleBase,
-    ) -> bool;
-    // cpp: layoutng_style/style/computed_style_base.h:360
-    fn ComputedStyleBaseNonInheritedEqual(
-        style: &ComputedStyleBase,
-        other: &ComputedStyleBase,
-    ) -> bool;
     // cpp: layoutng_style/style/computed_style_base.h:362
     fn ComputedStyleBaseHighlightOriginatingElementDataEqual(
         style: &ComputedStyleBase,
@@ -166,11 +137,6 @@ unsafe extern "Rust" {
     ) -> bool;
     // cpp: layoutng_style/style/computed_style_base.h:364
     fn ComputedStyleBaseNonHighlightOriginatingElementDataEqual(
-        style: &ComputedStyleBase,
-        other: &ComputedStyleBase,
-    ) -> bool;
-    // cpp: layoutng_style/style/computed_style_base.h:368
-    fn ComputedStyleBaseInheritedEqualIncludingInheritedVariables(
         style: &ComputedStyleBase,
         other: &ComputedStyleBase,
     ) -> bool;
@@ -192,27 +158,243 @@ pub enum IsAtShadowBoundary {
 impl ComputedStyleBase {
     // cpp: layoutng_style/style/computed_style_base.h:352
     pub fn IndependentInheritedEqual(&self, other: &Self) -> bool {
-        unsafe { ComputedStyleBaseIndependentInheritedEqual(self, other) }
+        ((self.misc_inherited_data_.Get() == other.misc_inherited_data_.Get()
+            || (unsafe { &*self.misc_inherited_data_.Get() }.empty_cells_bit()
+                == unsafe { &*other.misc_inherited_data_.Get() }.empty_cells_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }.interactivity_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.interactivity_bit()))
+            && (self.inherited_data_.Get() == other.inherited_data_.Get()
+                || (unsafe { &*self.inherited_data_.Get() }.color_
+                    == unsafe { &*other.inherited_data_.Get() }.color_
+                    && unsafe { &*self.inherited_data_.Get() }.cursor_bits()
+                        == unsafe { &*other.inherited_data_.Get() }.cursor_bits()
+                    && unsafe { &*self.inherited_data_.Get() }.text_transform_bits()
+                        == unsafe { &*other.inherited_data_.Get() }.text_transform_bits()))
+            && self.data_.pointer_events_bits() == other.data_.pointer_events_bits()
+            && self.data_.visibility_bits() == other.data_.visibility_bits()
+            && self.data_.border_collapse_bit() == other.data_.border_collapse_bit()
+            && self.data_.caption_side_bit() == other.data_.caption_side_bit()
+            && self.data_.is_css_inert_bit() == other.data_.is_css_inert_bit()
+            && self.data_.is_html_inert_bit() == other.data_.is_html_inert_bit()
+            && self.data_.list_style_position_bit() == other.data_.list_style_position_bit()
+            && self.data_.rtl_ordering_bit() == other.data_.rtl_ordering_bit())
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:354
     pub fn NonIndependentInheritedEqual(&self, other: &Self) -> bool {
-        unsafe { ComputedStyleBaseNonIndependentInheritedEqual(self, other) }
+        ((self.misc_inherited_data_.Get() == other.misc_inherited_data_.Get()
+            || (foundation::ValuesEquivalent(
+                &unsafe { &*self.misc_inherited_data_.Get() }.misc_inherited_1_data_,
+                &unsafe { &*other.misc_inherited_data_.Get() }.misc_inherited_1_data_,
+            ) && foundation::ValuesEquivalent(
+                &unsafe { &*self.misc_inherited_data_.Get() }.misc_inherited_2_data_,
+                &unsafe { &*other.misc_inherited_data_.Get() }.misc_inherited_2_data_,
+            ) && unsafe { &*self.misc_inherited_data_.Get() }.text_box_edge_bits()
+                == unsafe { &*other.misc_inherited_data_.Get() }.text_box_edge_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.text_underline_position_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }
+                        .text_underline_position_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.hanging_punctuation_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.hanging_punctuation_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.line_break_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.line_break_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.speak_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.speak_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.text_align_last_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.text_align_last_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }
+                    .text_decoration_skip_spaces_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }
+                        .text_decoration_skip_spaces_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.text_emphasis_mark_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.text_emphasis_mark_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.text_emphasis_position_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }
+                        .text_emphasis_position_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.block_ellipsis_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.block_ellipsis_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }.user_select_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.user_select_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.word_break_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.word_break_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.draggable_region_mode_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.draggable_region_mode_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.forced_color_adjust_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.forced_color_adjust_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.hyphens_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.hyphens_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.image_animation_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.image_animation_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.image_rendering_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.image_rendering_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.overflow_wrap_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.overflow_wrap_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.ruby_align_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.ruby_align_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.ruby_overhang_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.ruby_overhang_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.text_decoration_skip_ink_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }
+                        .text_decoration_skip_ink_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.text_indent_flags_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.text_indent_flags_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.text_justify_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.text_justify_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.text_orientation_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.text_orientation_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.text_security_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.text_security_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.user_modify_bits()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.user_modify_bits()
+                && unsafe { &*self.misc_inherited_data_.Get() }.has_line_if_empty_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.has_line_if_empty_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }.image_orientation_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.image_orientation_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }.in_base_appearance_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.in_base_appearance_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }.interpolate_size_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.interpolate_size_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }.is_in_shrink_to_fit_subtree_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }
+                        .is_in_shrink_to_fit_subtree_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }.math_shift_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.math_shift_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }.math_style_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.math_style_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }.ruby_position_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.ruby_position_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }.subtree_is_sticky_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.subtree_is_sticky_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }
+                    .subtree_will_change_contents_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }
+                        .subtree_will_change_contents_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }.text_autospace_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.text_autospace_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }.text_combine_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.text_combine_bit()
+                && unsafe { &*self.misc_inherited_data_.Get() }.text_emphasis_fill_bit()
+                    == unsafe { &*other.misc_inherited_data_.Get() }.text_emphasis_fill_bit()))
+            && (self.inherited_data_.Get() == other.inherited_data_.Get()
+                || (foundation::ValuesEquivalent(
+                    &unsafe { &*self.inherited_data_.Get() }.inherited_forced_colors_data_,
+                    &unsafe { &*other.inherited_data_.Get() }.inherited_forced_colors_data_,
+                ) && foundation::ValuesEquivalent(
+                    &unsafe { &*self.inherited_data_.Get() }.inherited_visited_data_,
+                    &unsafe { &*other.inherited_data_.Get() }.inherited_visited_data_,
+                ) && foundation::ValuesEquivalent(
+                    &unsafe { &*self.inherited_data_.Get() }.highlight_data_data_,
+                    &unsafe { &*other.inherited_data_.Get() }.highlight_data_data_,
+                ) && foundation::ValuesEquivalent(
+                    &unsafe { &*self.inherited_data_.Get() }.font_,
+                    &unsafe { &*other.inherited_data_.Get() }.font_,
+                ) && foundation::ValuesEquivalent(
+                    &unsafe { &*self.inherited_data_.Get() }.container_font_,
+                    &unsafe { &*other.inherited_data_.Get() }.container_font_,
+                ) && unsafe { &*self.inherited_data_.Get() }.letter_spacing_
+                    == unsafe { &*other.inherited_data_.Get() }.letter_spacing_
+                    && unsafe { &*self.inherited_data_.Get() }.line_height_
+                        == unsafe { &*other.inherited_data_.Get() }.line_height_
+                    && unsafe { &*self.inherited_data_.Get() }.word_spacing_
+                        == unsafe { &*other.inherited_data_.Get() }.word_spacing_
+                    && unsafe { &*self.inherited_data_.Get() }.internal_visited_color_
+                        == unsafe { &*other.inherited_data_.Get() }.internal_visited_color_
+                    && unsafe { &*self.inherited_data_.Get() }.horizontal_border_spacing_
+                        == unsafe { &*other.inherited_data_.Get() }.horizontal_border_spacing_
+                    && unsafe { &*self.inherited_data_.Get() }.vertical_border_spacing_
+                        == unsafe { &*other.inherited_data_.Get() }.vertical_border_spacing_
+                    && unsafe { &*self.inherited_data_.Get() }.color_is_current_color_bit()
+                        == unsafe { &*other.inherited_data_.Get() }.color_is_current_color_bit()
+                    && unsafe { &*self.inherited_data_.Get() }.in_forced_colors_mode_bit()
+                        == unsafe { &*other.inherited_data_.Get() }.in_forced_colors_mode_bit()
+                    && unsafe { &*self.inherited_data_.Get() }
+                        .internal_visited_color_is_current_color_bit()
+                        == unsafe { &*other.inherited_data_.Get() }
+                            .internal_visited_color_is_current_color_bit()))
+            && foundation::ValuesEquivalent(&self.svginherited_data_, &other.svginherited_data_)
+            && self.data_.text_align_bits() == other.data_.text_align_bits()
+            && self.data_.writing_mode_bits() == other.data_.writing_mode_bits()
+            && self.data_.caret_shape_bits() == other.data_.caret_shape_bits()
+            && self.data_.inside_link_bits() == other.data_.inside_link_bits()
+            && self.data_.text_wrap_style_bits() == other.data_.text_wrap_style_bits()
+            && self.data_.white_space_collapse_bits() == other.data_.white_space_collapse_bits()
+            && self.data_.caret_animation_bit() == other.data_.caret_animation_bit()
+            && self.data_.direction_bit() == other.data_.direction_bit()
+            && self.data_.prefers_default_scrollbar_styles_bit()
+                == other.data_.prefers_default_scrollbar_styles_bit()
+            && self.data_.print_color_adjust_bit() == other.data_.print_color_adjust_bit()
+            && self.data_.text_wrap_mode_bit() == other.data_.text_wrap_mode_bit())
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:356
     pub fn InheritedVariablesEqual(&self, other: &Self) -> bool {
-        unsafe { ComputedStyleBaseInheritedVariablesEqual(self, other) }
+        (self.inherited_data_.Get() == other.inherited_data_.Get()
+            || (unsafe { &*self.inherited_data_.Get() }.inherited_variables_
+                == unsafe { &*other.inherited_data_.Get() }.inherited_variables_))
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:358
     pub fn InheritedEqual(&self, other: &Self) -> bool {
-        unsafe { ComputedStyleBaseInheritedEqual(self, other) }
+        self.IndependentInheritedEqual(other) && self.NonIndependentInheritedEqual(other)
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:360
     pub fn NonInheritedEqual(&self, other: &Self) -> bool {
-        unsafe { ComputedStyleBaseNonInheritedEqual(self, other) }
+        (foundation::ValuesEquivalent(&self.misc_data_, &other.misc_data_)
+            && foundation::ValuesEquivalent(&self.visual_data_, &other.visual_data_)
+            && foundation::ValuesEquivalent(&self.box_data_, &other.box_data_)
+            && foundation::ValuesEquivalent(&self.svg_data_, &other.svg_data_)
+            && foundation::ValuesEquivalent(&self.surround_data_, &other.surround_data_)
+            && foundation::ValuesEquivalent(&self.background_data_, &other.background_data_)
+            && self.data_.display_bits() == other.data_.display_bits()
+            && self.data_.vertical_align_bits() == other.data_.vertical_align_bits()
+            && self.data_.clear_bits() == other.data_.clear_bits()
+            && self.data_.floating_bits() == other.data_.floating_bits()
+            && self.data_.overflow_x_bits() == other.data_.overflow_x_bits()
+            && self.data_.overflow_y_bits() == other.data_.overflow_y_bits()
+            && self.data_.position_bits() == other.data_.position_bits()
+            && self.data_.transform_box_bits() == other.data_.transform_box_bits()
+            && self.data_.unicode_bidi_bits() == other.data_.unicode_bidi_bits()
+            && self.data_.content_visibility_bits() == other.data_.content_visibility_bits()
+            && self.data_.inline_block_baseline_edge_bits()
+                == other.data_.inline_block_baseline_edge_bits()
+            && self.IsStackingContextWithoutContainment()
+                == other.IsStackingContextWithoutContainment()
+            && self.data_.overflow_anchor_bits() == other.data_.overflow_anchor_bits()
+            && self.data_.viewport_unit_flags_bits() == other.data_.viewport_unit_flags_bits()
+            && self.data_.allows_z_index_bit() == other.data_.allows_z_index_bit()
+            && self.data_.box_direction_bit() == other.data_.box_direction_bit()
+            && self.data_.box_sizing_bit() == other.data_.box_sizing_bit()
+            && self.data_.forces_stacking_context_bit()
+                == other.data_.forces_stacking_context_bit()
+            && self.data_.has_author_background_bit() == other.data_.has_author_background_bit()
+            && self.data_.has_author_border_bit() == other.data_.has_author_border_bit()
+            && self.data_.has_author_border_radius_bit()
+                == other.data_.has_author_border_radius_bit()
+            && self.data_.has_author_highlight_colors_bit()
+                == other.data_.has_author_highlight_colors_bit()
+            && self.data_.has_explicit_inheritance_bit()
+                == other.data_.has_explicit_inheritance_bit()
+            && self
+                .data_
+                .has_size_containment_for_view_transition_scope_bit()
+                == other
+                    .data_
+                    .has_size_containment_for_view_transition_scope_bit()
+            && self.data_.is_original_display_inline_type_bit()
+                == other.data_.is_original_display_inline_type_bit()
+            && self.data_.is_page_margin_box_bit() == other.data_.is_page_margin_box_bit()
+            && self.data_.origin_trial_test_property_bit()
+                == other.data_.origin_trial_test_property_bit()
+            && self.data_.scroll_snap_stop_bit() == other.data_.scroll_snap_stop_bit()
+            && self
+                .data_
+                .should_ignore_overflow_property_for_inline_block_baseline_bit()
+                == other
+                    .data_
+                    .should_ignore_overflow_property_for_inline_block_baseline_bit()
+            && self.data_.skips_contents_bit() == other.data_.skips_contents_bit()
+            && self.data_.table_layout_bit() == other.data_.table_layout_bit())
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:362
@@ -227,7 +409,29 @@ impl ComputedStyleBase {
 
     // cpp: layoutng_style/style/computed_style_base.h:368
     pub fn InheritedEqualIncludingInheritedVariables(&self, other: &Self) -> bool {
-        unsafe { ComputedStyleBaseInheritedEqualIncludingInheritedVariables(self, other) }
+        (foundation::ValuesEquivalent(&self.misc_inherited_data_, &other.misc_inherited_data_)
+            && foundation::ValuesEquivalent(&self.inherited_data_, &other.inherited_data_)
+            && foundation::ValuesEquivalent(&self.svginherited_data_, &other.svginherited_data_)
+            && self.data_.pointer_events_bits() == other.data_.pointer_events_bits()
+            && self.data_.text_align_bits() == other.data_.text_align_bits()
+            && self.data_.writing_mode_bits() == other.data_.writing_mode_bits()
+            && self.data_.caret_shape_bits() == other.data_.caret_shape_bits()
+            && self.data_.inside_link_bits() == other.data_.inside_link_bits()
+            && self.data_.text_wrap_style_bits() == other.data_.text_wrap_style_bits()
+            && self.data_.visibility_bits() == other.data_.visibility_bits()
+            && self.data_.white_space_collapse_bits() == other.data_.white_space_collapse_bits()
+            && self.data_.border_collapse_bit() == other.data_.border_collapse_bit()
+            && self.data_.caption_side_bit() == other.data_.caption_side_bit()
+            && self.data_.caret_animation_bit() == other.data_.caret_animation_bit()
+            && self.data_.direction_bit() == other.data_.direction_bit()
+            && self.data_.is_css_inert_bit() == other.data_.is_css_inert_bit()
+            && self.data_.is_html_inert_bit() == other.data_.is_html_inert_bit()
+            && self.data_.list_style_position_bit() == other.data_.list_style_position_bit()
+            && self.data_.prefers_default_scrollbar_styles_bit()
+                == other.data_.prefers_default_scrollbar_styles_bit()
+            && self.data_.print_color_adjust_bit() == other.data_.print_color_adjust_bit()
+            && self.data_.rtl_ordering_bit() == other.data_.rtl_ordering_bit()
+            && self.data_.text_wrap_mode_bit() == other.data_.text_wrap_mode_bit())
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:1572-1574
@@ -238,13 +442,13 @@ impl ComputedStyleBase {
                 .Get()
         }
         .effective_touch_action_bits();
-        unsafe { FoundationTouchActionFromBits(bits) }
+        unsafe { TouchAction::from_bits(bits) }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:1899-1901
     pub fn GetHangingPunctuation(&self) -> HangingPunctuation {
         let bits = unsafe { &*self.misc_inherited_data_.Get() }.hanging_punctuation_bits();
-        unsafe { FoundationHangingPunctuationFromBits(bits) }
+        unsafe { HangingPunctuation::from_bits(bits) }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:4295-4297
@@ -268,11 +472,11 @@ impl ComputedStyleBase {
     // cpp: layoutng_style/style/computed_style_base.h:4546-4548
     pub fn GetTouchAction(&self) -> TouchAction {
         let bits = unsafe { &*(*self.misc_data_.Get()).misc_6_data_.Get() }.touch_action_bits();
-        unsafe { FoundationTouchActionFromBits(bits) }
+        unsafe { TouchAction::from_bits(bits) }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:6927-6930
-    pub(crate) fn AccentColor(&self) -> &StyleAutoColor {
+    pub fn AccentColor(&self) -> &StyleAutoColor {
         unsafe {
             &(*(*self.misc_inherited_data_.Get())
                 .misc_inherited_1_data_
@@ -282,12 +486,12 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:7414-7417
-    pub(crate) fn Color(&self) -> &StyleColor {
+    pub fn Color(&self) -> &StyleColor {
         unsafe { &(*self.inherited_data_.Get()).color_ }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:7436-7439
-    pub(crate) fn ColorIsCurrentColor(&self) -> bool {
+    pub fn ColorIsCurrentColor(&self) -> bool {
         unsafe { &*self.inherited_data_.Get() }.color_is_current_color_bit()
     }
 
@@ -302,21 +506,21 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:8369-8371
-    pub(crate) fn InternalForcedBackgroundColor(&self) -> &StyleColor {
+    pub fn InternalForcedBackgroundColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.misc_data_.Get()).forced_colors_data_.Get()).internal_forced_background_color_
         }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:8379-8381
-    pub(crate) fn InternalForcedBorderColor(&self) -> &StyleColor {
+    pub fn InternalForcedBorderColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.misc_data_.Get()).forced_colors_data_.Get()).internal_forced_border_color_
         }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:8389-8391
-    pub(crate) fn InternalForcedColor(&self) -> &StyleColor {
+    pub fn InternalForcedColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.inherited_data_.Get())
                 .inherited_forced_colors_data_
@@ -326,14 +530,14 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:8399-8401
-    pub(crate) fn InternalForcedOutlineColor(&self) -> &StyleColor {
+    pub fn InternalForcedOutlineColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.misc_data_.Get()).forced_colors_data_.Get()).internal_forced_outline_color_
         }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:8409-8411
-    pub(crate) fn InternalForcedVisitedColor(&self) -> &StyleColor {
+    pub fn InternalForcedVisitedColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.inherited_data_.Get())
                 .inherited_forced_colors_data_
@@ -350,7 +554,7 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:8487-8489
-    pub(crate) fn InternalVisitedCaretColor(&self) -> &StyleCaretColor {
+    pub fn InternalVisitedCaretColor(&self) -> &StyleCaretColor {
         unsafe {
             &(*(*self.inherited_data_.Get()).inherited_visited_data_.Get())
                 .internal_visited_caret_color_
@@ -358,12 +562,12 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:8497-8499
-    pub(crate) fn InternalVisitedColor(&self) -> &StyleColor {
+    pub fn InternalVisitedColor(&self) -> &StyleColor {
         unsafe { &(*self.inherited_data_.Get()).internal_visited_color_ }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:8507-8509
-    pub(crate) fn InternalVisitedColorIsCurrentColor(&self) -> bool {
+    pub fn InternalVisitedColorIsCurrentColor(&self) -> bool {
         unsafe { &*self.inherited_data_.Get() }.internal_visited_color_is_current_color_bit()
     }
 
@@ -404,17 +608,17 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:9669-9671
-    pub(crate) fn StopColor(&self) -> &StyleColor {
+    pub fn StopColor(&self) -> &StyleColor {
         unsafe { &(*(*self.svg_data_.Get()).stop_data_.Get()).stop_color_ }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:9798-9800
-    pub(crate) fn TextDecorationColor(&self) -> &StyleColor {
+    pub fn TextDecorationColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_data_.Get()).misc_6_data_.Get()).text_decoration_color_ }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:9840-9842
-    pub(crate) fn TextEmphasisColor(&self) -> &StyleColor {
+    pub fn TextEmphasisColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.misc_inherited_data_.Get())
                 .misc_inherited_1_data_
@@ -439,14 +643,14 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:4502-4504
-    pub(crate) fn GetTextUnderlinePosition(&self) -> TextUnderlinePosition {
+    pub fn GetTextUnderlinePosition(&self) -> TextUnderlinePosition {
         TextUnderlinePosition::from_bits(
             unsafe { &*self.misc_inherited_data_.Get() }.text_underline_position_bits(),
         )
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:9878-9880
-    pub(crate) fn TextFillColor(&self) -> &StyleColor {
+    pub fn TextFillColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.misc_inherited_data_.Get())
                 .misc_inherited_2_data_
@@ -456,7 +660,7 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:9940-9942
-    pub(crate) fn TextStrokeColor(&self) -> &StyleColor {
+    pub fn TextStrokeColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.misc_inherited_data_.Get())
                 .misc_inherited_2_data_
@@ -472,12 +676,12 @@ impl ComputedStyleBuilderBase {
     pub fn EffectiveTouchAction(&self) -> TouchAction {
         let bits = unsafe { &*(*self.misc_inherited_data_).misc_inherited_2_data_.Get() }
             .effective_touch_action_bits();
-        unsafe { FoundationTouchActionFromBits(bits) }
+        unsafe { TouchAction::from_bits(bits) }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:12661-12664
     pub fn SetEffectiveTouchAction(&mut self, value: TouchAction) {
-        let bits = unsafe { FoundationTouchActionBits(value) };
+        let bits = unsafe { value.bits() as u32 };
         if unsafe { &*(*self.misc_inherited_data_).misc_inherited_2_data_.Get() }
             .effective_touch_action_bits()
             != bits
@@ -504,9 +708,8 @@ impl ComputedStyleBuilderBase {
             unsafe { &mut (*outer).misc_inherited_2_data_ },
             &self.access_.misc_inherited_2_data_,
         );
-        unsafe { &mut *inner }.set_effective_touch_action_bits(unsafe {
-            FoundationTouchActionBits(TouchAction::kAuto)
-        });
+        unsafe { &mut *inner }
+            .set_effective_touch_action_bits(unsafe { TouchAction::kAuto.bits() as u32 });
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:20327-20329
@@ -519,18 +722,18 @@ impl ComputedStyleBuilderBase {
             unsafe { &mut (*outer).misc_inherited_2_data_ },
             &self.access_.misc_inherited_2_data_,
         );
-        unsafe { FoundationTouchActionFromBits((&*inner).effective_touch_action_bits()) }
+        unsafe { TouchAction::from_bits((&*inner).effective_touch_action_bits()) }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:13298-13300
     pub fn GetHangingPunctuation(&self) -> HangingPunctuation {
         let bits = unsafe { &*self.misc_inherited_data_ }.hanging_punctuation_bits();
-        unsafe { FoundationHangingPunctuationFromBits(bits) }
+        unsafe { HangingPunctuation::from_bits(bits) }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:13302-13305
     pub fn SetHangingPunctuation(&mut self, value: HangingPunctuation) {
-        let bits = unsafe { FoundationHangingPunctuationBits(value) };
+        let bits = unsafe { value.bits() };
         if unsafe { &*self.misc_inherited_data_ }.hanging_punctuation_bits() != bits {
             let data = Self::AccessPtr(
                 &mut self.misc_inherited_data_,
@@ -546,9 +749,8 @@ impl ComputedStyleBuilderBase {
             &mut self.misc_inherited_data_,
             &self.access_.misc_inherited_data_,
         );
-        unsafe { &mut *data }.set_hanging_punctuation_bits(unsafe {
-            FoundationHangingPunctuationBits(HangingPunctuation::kNone)
-        });
+        unsafe { &mut *data }
+            .set_hanging_punctuation_bits(unsafe { HangingPunctuation::kNone.bits() });
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:17791-17793
@@ -628,12 +830,12 @@ impl ComputedStyleBuilderBase {
     // cpp: layoutng_style/style/computed_style_base.h:18292-18294
     pub fn GetTouchAction(&self) -> TouchAction {
         let bits = unsafe { &*(*self.misc_data_).misc_6_data_.Get() }.touch_action_bits();
-        unsafe { FoundationTouchActionFromBits(bits) }
+        unsafe { TouchAction::from_bits(bits) }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:18296-18299
     pub fn SetTouchAction(&mut self, value: TouchAction) {
-        let bits = unsafe { FoundationTouchActionBits(value) };
+        let bits = unsafe { value.bits() as u32 };
         if unsafe { &*(*self.misc_data_).misc_6_data_.Get() }.touch_action_bits() != bits {
             let outer = Self::AccessPtr(&mut self.misc_data_, &self.access_.misc_data_);
             let inner = Self::AccessMember(
@@ -651,8 +853,7 @@ impl ComputedStyleBuilderBase {
             unsafe { &mut (*outer).misc_6_data_ },
             &self.access_.misc_6_data_,
         );
-        unsafe { &mut *inner }
-            .set_touch_action_bits(unsafe { FoundationTouchActionBits(TouchAction::kAuto) });
+        unsafe { &mut *inner }.set_touch_action_bits(unsafe { TouchAction::kAuto.bits() as u32 });
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:23651-23653
@@ -662,7 +863,7 @@ impl ComputedStyleBuilderBase {
             unsafe { &mut (*outer).misc_6_data_ },
             &self.access_.misc_6_data_,
         );
-        unsafe { FoundationTouchActionFromBits((&*inner).touch_action_bits()) }
+        unsafe { TouchAction::from_bits((&*inner).touch_action_bits()) }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:18207-18209
@@ -4361,7 +4562,7 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:7063-7065
-    pub(crate) fn BackgroundColor(&self) -> &StyleColor {
+    pub fn BackgroundColor(&self) -> &StyleColor {
         unsafe { &(*self.background_data_.Get()).background_color_ }
     }
 
@@ -20287,7 +20488,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).backdrop_filter_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:19131-19133
-    pub(crate) fn MutableBackgroundInternal(&mut self) -> &mut FillLayer {
+    pub fn MutableBackgroundInternal(&mut self) -> &mut FillLayer {
         let outer = Self::AccessPtr(&mut self.background_data_, &self.access_.background_data_);
         unsafe { &mut (*outer).background_ }
     }
@@ -20301,7 +20502,7 @@ impl ComputedStyleBuilderBase {
 #[allow(non_snake_case)]
 impl ComputedStyleBuilderBase {
     // cpp: layoutng_style/style/computed_style_base.h:18942-18944
-    pub(crate) fn AccentColor(&self) -> &StyleAutoColor {
+    pub fn AccentColor(&self) -> &StyleAutoColor {
         unsafe { &(*(*self.misc_inherited_data_).misc_inherited_1_data_.Get()).accent_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:18989-18991
@@ -20330,7 +20531,7 @@ impl ComputedStyleBuilderBase {
         }
     }
     // cpp: layoutng_style/style/computed_style_base.h:19075-19077
-    pub(crate) fn Appearance(&self) -> AppearanceValue {
+    pub fn Appearance(&self) -> AppearanceValue {
         appearance_value_from_bits(unsafe { &*self.misc_data_ }.appearance_bits())
     }
     // cpp: layoutng_style/style/computed_style_base.h:19081-19083
@@ -20362,7 +20563,7 @@ impl ComputedStyleBuilderBase {
         }
     }
     // cpp: layoutng_style/style/computed_style_base.h:19137-19139
-    pub(crate) fn BackgroundColor(&self) -> &StyleColor {
+    pub fn BackgroundColor(&self) -> &StyleColor {
         unsafe { &(*self.background_data_).background_color_ }
     }
 }
@@ -20435,7 +20636,7 @@ impl ComputedStyleBuilderBase {
         self.BlockEllipsis()
     }
     // cpp: layoutng_style/style/computed_style_base.h:19204-19206
-    pub(crate) fn BorderBottomColor(&self) -> &StyleColor {
+    pub fn BorderBottomColor(&self) -> &StyleColor {
         unsafe { &(*self.surround_data_).border_bottom_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:19240-19242
@@ -20514,7 +20715,7 @@ impl ComputedStyleBuilderBase {
 #[allow(non_snake_case)]
 impl ComputedStyleBuilderBase {
     // cpp: layoutng_style/style/computed_style_base.h:19284-19286
-    pub(crate) fn BorderLeftColor(&self) -> &StyleColor {
+    pub fn BorderLeftColor(&self) -> &StyleColor {
         unsafe { &(*self.surround_data_).border_left_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:19300-19302
@@ -20523,7 +20724,7 @@ impl ComputedStyleBuilderBase {
         self.BorderLeftStyle()
     }
     // cpp: layoutng_style/style/computed_style_base.h:19316-19318
-    pub(crate) fn BorderRightColor(&self) -> &StyleColor {
+    pub fn BorderRightColor(&self) -> &StyleColor {
         unsafe { &(*self.surround_data_).border_right_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:19332-19334
@@ -20532,7 +20733,7 @@ impl ComputedStyleBuilderBase {
         self.BorderRightStyle()
     }
     // cpp: layoutng_style/style/computed_style_base.h:19357-19359
-    pub(crate) fn BorderTopColor(&self) -> &StyleColor {
+    pub fn BorderTopColor(&self) -> &StyleColor {
         unsafe { &(*self.surround_data_).border_top_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:19393-19395
@@ -20551,7 +20752,7 @@ impl ComputedStyleBuilderBase {
         self.BoxDecorationBreak()
     }
     // cpp: layoutng_style/style/computed_style_base.h:19437-19439
-    pub(crate) fn BoxDirection(&self) -> EBoxDirection {
+    pub fn BoxDirection(&self) -> EBoxDirection {
         match self.data_.box_direction_bit() {
             0 => EBoxDirection::kNormal,
             1 => EBoxDirection::kReverse,
@@ -20685,7 +20886,7 @@ impl ComputedStyleBuilderBase {
         self.CaretAnimation()
     }
     // cpp: layoutng_style/style/computed_style_base.h:19599-19601
-    pub(crate) fn CaretColor(&self) -> &StyleCaretColor {
+    pub fn CaretColor(&self) -> &StyleCaretColor {
         unsafe { &(*(*self.misc_inherited_data_).misc_inherited_1_data_.Get()).caret_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:19606-19608
@@ -20744,7 +20945,7 @@ impl ComputedStyleBuilderBase {
 #[allow(non_snake_case)]
 impl ComputedStyleBuilderBase {
     // cpp: layoutng_style/style/computed_style_base.h:19621-19623
-    pub(crate) fn Clear(&self) -> EClear {
+    pub fn Clear(&self) -> EClear {
         match self.data_.clear_bits() {
             0 => EClear::kNone,
             1 => EClear::kLeft,
@@ -20797,7 +20998,7 @@ impl ComputedStyleBuilderBase {
         self.ClipRule()
     }
     // cpp: layoutng_style/style/computed_style_base.h:19676-19678
-    pub(crate) fn Color(&self) -> &StyleColor {
+    pub fn Color(&self) -> &StyleColor {
         unsafe { &(*self.inherited_data_).color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:19692-19694
@@ -20817,7 +21018,7 @@ impl ComputedStyleBuilderBase {
         self.ColorInterpolationFilters()
     }
     // cpp: layoutng_style/style/computed_style_base.h:19707-19709
-    pub(crate) fn ColorIsCurrentColor(&self) -> bool {
+    pub fn ColorIsCurrentColor(&self) -> bool {
         unsafe { &*self.inherited_data_ }.color_is_current_color_bit()
     }
     // cpp: layoutng_style/style/computed_style_base.h:19713-19715
@@ -20974,7 +21175,7 @@ impl ComputedStyleBuilderBase {
         }
     }
     // cpp: layoutng_style/style/computed_style_base.h:19908-19911
-    pub(crate) fn SetColumnRuleWidthInternal(&mut self, value: &GapDataList<i32>) {
+    pub fn SetColumnRuleWidthInternal(&mut self, value: &GapDataList<i32>) {
         if unsafe { &(*(*self.misc_data_).misc_2_data_.Get()).column_rule_width_ } != value {
             let outer = Self::AccessPtr(&mut self.misc_data_, &self.access_.misc_data_);
             let inner = Self::AccessMember(
@@ -21000,7 +21201,7 @@ impl ComputedStyleBuilderBase {
 #[allow(non_snake_case)]
 impl ComputedStyleBuilderBase {
     // cpp: layoutng_style/style/computed_style_base.h:19769-19772
-    pub(crate) fn SetColumnCountInternal(&mut self, value: u16) {
+    pub fn SetColumnCountInternal(&mut self, value: u16) {
         if unsafe { (*(*self.misc_data_).misc_1_data_.Get()).column_count_ } != value {
             let outer = Self::AccessPtr(&mut self.misc_data_, &self.access_.misc_data_);
             let inner = Self::AccessMember(
@@ -21025,7 +21226,7 @@ impl ComputedStyleBuilderBase {
         self.GetColumnFill()
     }
     // cpp: layoutng_style/style/computed_style_base.h:19801-19804
-    pub(crate) fn SetColumnHeightInternal(&mut self, value: f32) {
+    pub fn SetColumnHeightInternal(&mut self, value: f32) {
         if unsafe { (*(*self.misc_data_).misc_1_data_.Get()).column_height_ } != value {
             let outer = Self::AccessPtr(&mut self.misc_data_, &self.access_.misc_data_);
             let inner = Self::AccessMember(
@@ -21060,7 +21261,7 @@ impl ComputedStyleBuilderBase {
         self.GetColumnSpan()
     }
     // cpp: layoutng_style/style/computed_style_base.h:19935-19938
-    pub(crate) fn SetColumnWidthInternal(&mut self, value: f32) {
+    pub fn SetColumnWidthInternal(&mut self, value: f32) {
         if unsafe { (*(*self.misc_data_).misc_2_data_.Get()).column_width_ } != value {
             let outer = Self::AccessPtr(&mut self.misc_data_, &self.access_.misc_data_);
             let inner = Self::AccessMember(
@@ -21674,7 +21875,7 @@ impl ComputedStyleBuilderBase {
         unsafe { (*inner).flex_shrink_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:20479-20481
-    pub(crate) fn Floating(&self) -> EFloat {
+    pub fn Floating(&self) -> EFloat {
         match self.data_.floating_bits() {
             0 => EFloat::kNone,
             1 => EFloat::kLeft,
@@ -21751,7 +21952,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &*data }.has_auto_clip_bit()
     }
     // cpp: layoutng_style/style/computed_style_base.h:20710-20713
-    pub(crate) fn SetHasAutoColumnCountInternal(&mut self, value: bool) {
+    pub fn SetHasAutoColumnCountInternal(&mut self, value: bool) {
         if unsafe { &*self.misc_data_ }.has_auto_column_count_bit() != value {
             let data = Self::AccessPtr(&mut self.misc_data_, &self.access_.misc_data_);
             unsafe { &mut *data }.set_has_auto_column_count_bit(value);
@@ -21763,7 +21964,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &*data }.has_auto_column_count_bit()
     }
     // cpp: layoutng_style/style/computed_style_base.h:20723-20726
-    pub(crate) fn SetHasAutoColumnHeightInternal(&mut self, value: bool) {
+    pub fn SetHasAutoColumnHeightInternal(&mut self, value: bool) {
         if unsafe { &*self.misc_data_ }.has_auto_column_height_bit() != value {
             let data = Self::AccessPtr(&mut self.misc_data_, &self.access_.misc_data_);
             unsafe { &mut *data }.set_has_auto_column_height_bit(value);
@@ -21775,7 +21976,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &*data }.has_auto_column_height_bit()
     }
     // cpp: layoutng_style/style/computed_style_base.h:20736-20739
-    pub(crate) fn SetHasAutoColumnWidthInternal(&mut self, value: bool) {
+    pub fn SetHasAutoColumnWidthInternal(&mut self, value: bool) {
         if unsafe { &*self.misc_data_ }.has_auto_column_width_bit() != value {
             let data = Self::AccessPtr(&mut self.misc_data_, &self.access_.misc_data_);
             unsafe { &mut *data }.set_has_auto_column_width_bit(value);
@@ -22048,7 +22249,7 @@ impl ComputedStyleBuilderBase {
 #[allow(non_snake_case)]
 impl ComputedStyleBuilderBase {
     // cpp: layoutng_style/style/computed_style_base.h:21144-21146
-    pub(crate) fn InternalForcedBackgroundColor(&self) -> &StyleColor {
+    pub fn InternalForcedBackgroundColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.misc_data_).forced_colors_data_.Get()).internal_forced_background_color_
         }
@@ -22063,7 +22264,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).internal_forced_background_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21157-21159
-    pub(crate) fn InternalForcedBorderColor(&self) -> &StyleColor {
+    pub fn InternalForcedBorderColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_data_).forced_colors_data_.Get()).internal_forced_border_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21164-21166
@@ -22076,7 +22277,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).internal_forced_border_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21170-21172
-    pub(crate) fn InternalForcedColor(&self) -> &StyleColor {
+    pub fn InternalForcedColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.inherited_data_).inherited_forced_colors_data_.Get()).internal_forced_color_
         }
@@ -22091,7 +22292,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).internal_forced_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21183-21185
-    pub(crate) fn InternalForcedOutlineColor(&self) -> &StyleColor {
+    pub fn InternalForcedOutlineColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_data_).forced_colors_data_.Get()).internal_forced_outline_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21190-21192
@@ -22104,7 +22305,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).internal_forced_outline_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21196-21198
-    pub(crate) fn InternalForcedVisitedColor(&self) -> &StyleColor {
+    pub fn InternalForcedVisitedColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.inherited_data_).inherited_forced_colors_data_.Get())
                 .internal_forced_visited_color_
@@ -22156,7 +22357,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).internal_visited_background_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21249-21251
-    pub(crate) fn InternalVisitedBorderBottomColor(&self) -> &StyleColor {
+    pub fn InternalVisitedBorderBottomColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_data_).visited_data_.Get()).internal_visited_border_bottom_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21256-21258
@@ -22169,7 +22370,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).internal_visited_border_bottom_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21262-21264
-    pub(crate) fn InternalVisitedBorderLeftColor(&self) -> &StyleColor {
+    pub fn InternalVisitedBorderLeftColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_data_).visited_data_.Get()).internal_visited_border_left_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21269-21271
@@ -22182,7 +22383,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).internal_visited_border_left_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21275-21277
-    pub(crate) fn InternalVisitedBorderRightColor(&self) -> &StyleColor {
+    pub fn InternalVisitedBorderRightColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_data_).visited_data_.Get()).internal_visited_border_right_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21282-21284
@@ -22195,7 +22396,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).internal_visited_border_right_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21288-21290
-    pub(crate) fn InternalVisitedBorderTopColor(&self) -> &StyleColor {
+    pub fn InternalVisitedBorderTopColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_data_).visited_data_.Get()).internal_visited_border_top_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21295-21297
@@ -22208,7 +22409,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).internal_visited_border_top_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21301-21303
-    pub(crate) fn InternalVisitedCaretColor(&self) -> &StyleCaretColor {
+    pub fn InternalVisitedCaretColor(&self) -> &StyleCaretColor {
         unsafe {
             &(*(*self.inherited_data_).inherited_visited_data_.Get()).internal_visited_caret_color_
         }
@@ -22223,7 +22424,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).internal_visited_caret_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21359-21361
-    pub(crate) fn InternalVisitedOutlineColor(&self) -> &StyleColor {
+    pub fn InternalVisitedOutlineColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_data_).visited_data_.Get()).internal_visited_outline_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21366-21368
@@ -22299,7 +22500,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).internal_visited_text_stroke_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21314-21316
-    pub(crate) fn InternalVisitedColor(&self) -> &StyleColor {
+    pub fn InternalVisitedColor(&self) -> &StyleColor {
         unsafe { &(*self.inherited_data_).internal_visited_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21321-21323
@@ -22308,7 +22509,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*data).internal_visited_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:21327-21329
-    pub(crate) fn InternalVisitedColorIsCurrentColor(&self) -> bool {
+    pub fn InternalVisitedColorIsCurrentColor(&self) -> bool {
         unsafe { &*self.inherited_data_ }.internal_visited_color_is_current_color_bit()
     }
     // cpp: layoutng_style/style/computed_style_base.h:21333-21335
@@ -23001,7 +23202,7 @@ impl ComputedStyleBuilderBase {
         unsafe { (*inner).orphans_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:22201-22203
-    pub(crate) fn OutlineColor(&self) -> &StyleColor {
+    pub fn OutlineColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_data_).misc_4_data_.Get()).outline_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:22208-22210
@@ -23276,7 +23477,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).perspective_origin_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:22511-22513
-    pub(crate) fn PointerEvents(&self) -> EPointerEvents {
+    pub fn PointerEvents(&self) -> EPointerEvents {
         match self.data_.pointer_events_bits() {
             0 => EPointerEvents::kNone,
             1 => EPointerEvents::kAll,
@@ -23417,7 +23618,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &*data }.requires_accelerated_compositing_for_external_reasons_bit()
     }
     // cpp: layoutng_style/style/computed_style_base.h:22675-22677
-    pub(crate) fn Resize(&self) -> EResize {
+    pub fn Resize(&self) -> EResize {
         match unsafe { &*self.misc_data_ }.resize_bits() {
             0 => EResize::kNone,
             1 => EResize::kInline,
@@ -23862,7 +24063,7 @@ impl ComputedStyleBuilderBase {
         self.Speak()
     }
     // cpp: layoutng_style/style/computed_style_base.h:23153-23155
-    pub(crate) fn StopColor(&self) -> &StyleColor {
+    pub fn StopColor(&self) -> &StyleColor {
         unsafe { &(*(*self.svg_data_).stop_data_.Get()).stop_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:23160-23162
@@ -24081,7 +24282,7 @@ impl ComputedStyleBuilderBase {
         self.TextCombine()
     }
     // cpp: layoutng_style/style/computed_style_base.h:23354-23356
-    pub(crate) fn TextDecorationColor(&self) -> &StyleColor {
+    pub fn TextDecorationColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_data_).misc_6_data_.Get()).text_decoration_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:23361-23363
@@ -24127,7 +24328,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).text_decoration_thickness_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:23411-23413
-    pub(crate) fn TextEmphasisColor(&self) -> &StyleColor {
+    pub fn TextEmphasisColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.misc_inherited_data_).misc_inherited_1_data_.Get()).text_emphasis_color_
         }
@@ -24195,7 +24396,7 @@ impl ComputedStyleBuilderBase {
         self.GetTextEmphasisPosition()
     }
     // cpp: layoutng_style/style/computed_style_base.h:23464-23466
-    pub(crate) fn TextFillColor(&self) -> &StyleColor {
+    pub fn TextFillColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_inherited_data_).misc_inherited_2_data_.Get()).text_fill_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:23471-23473
@@ -24288,7 +24489,7 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut (*inner).text_size_adjust_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:23557-23559
-    pub(crate) fn TextStrokeColor(&self) -> &StyleColor {
+    pub fn TextStrokeColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_inherited_data_).misc_inherited_2_data_.Get()).text_stroke_color_ }
     }
     // cpp: layoutng_style/style/computed_style_base.h:23564-23566
@@ -24420,7 +24621,7 @@ impl ComputedStyleBuilderBase {
         self.UserDrag()
     }
     // cpp: layoutng_style/style/computed_style_base.h:23754-23756
-    pub(crate) fn UserModify(&self) -> EUserModify {
+    pub fn UserModify(&self) -> EUserModify {
         match unsafe { &*self.misc_inherited_data_ }.user_modify_bits() {
             0 => EUserModify::kReadOnly,
             1 => EUserModify::kReadWrite,
@@ -24437,7 +24638,7 @@ impl ComputedStyleBuilderBase {
         self.UserModify()
     }
     // cpp: layoutng_style/style/computed_style_base.h:23766-23768
-    pub(crate) fn UserSelect(&self) -> EUserSelect {
+    pub fn UserSelect(&self) -> EUserSelect {
         match unsafe { &*self.misc_inherited_data_ }.user_select_bits() {
             0 => EUserSelect::kNone,
             1 => EUserSelect::kAll,
@@ -24744,7 +24945,7 @@ impl ComputedStyleBase {
 #[allow(non_snake_case)]
 impl ComputedStyleBase {
     // cpp: layoutng_style/style/computed_style_base.h:10068-10070
-    pub(crate) fn UserModify(&self) -> EUserModify {
+    pub fn UserModify(&self) -> EUserModify {
         match unsafe { &*self.misc_inherited_data_.Get() }.user_modify_bits() {
             0 => EUserModify::kReadOnly,
             1 => EUserModify::kReadWrite,
@@ -24753,7 +24954,7 @@ impl ComputedStyleBase {
         }
     }
     // cpp: layoutng_style/style/computed_style_base.h:10077-10079
-    pub(crate) fn UserSelect(&self) -> EUserSelect {
+    pub fn UserSelect(&self) -> EUserSelect {
         match unsafe { &*self.misc_inherited_data_.Get() }.user_select_bits() {
             0 => EUserSelect::kNone,
             1 => EUserSelect::kAll,
@@ -24817,32 +25018,32 @@ unsafe extern "Rust" {
 #[allow(non_snake_case)]
 impl ComputedStyleBase {
     // cpp: layoutng_style/style/computed_style_base.h:7104-7106
-    pub(crate) fn BorderBottomColor(&self) -> &StyleColor {
+    pub fn BorderBottomColor(&self) -> &StyleColor {
         unsafe { &(*self.surround_data_.Get()).border_bottom_color_ }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:7160-7162
-    pub(crate) fn BorderLeftColor(&self) -> &StyleColor {
+    pub fn BorderLeftColor(&self) -> &StyleColor {
         unsafe { &(*self.surround_data_.Get()).border_left_color_ }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:7183-7185
-    pub(crate) fn BorderRightColor(&self) -> &StyleColor {
+    pub fn BorderRightColor(&self) -> &StyleColor {
         unsafe { &(*self.surround_data_.Get()).border_right_color_ }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:7212-7214
-    pub(crate) fn BorderTopColor(&self) -> &StyleColor {
+    pub fn BorderTopColor(&self) -> &StyleColor {
         unsafe { &(*self.surround_data_.Get()).border_top_color_ }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:7024-7026
-    pub(crate) fn Appearance(&self) -> AppearanceValue {
+    pub fn Appearance(&self) -> AppearanceValue {
         appearance_value_from_bits(unsafe { &*self.misc_data_.Get() }.appearance_bits())
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:7268-7270
-    pub(crate) fn BoxDirection(&self) -> EBoxDirection {
+    pub fn BoxDirection(&self) -> EBoxDirection {
         match self.data_.box_direction_bit() {
             0 => EBoxDirection::kNormal,
             1 => EBoxDirection::kReverse,
@@ -24851,7 +25052,7 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:7365-7367
-    pub(crate) fn CaretColor(&self) -> &StyleCaretColor {
+    pub fn CaretColor(&self) -> &StyleCaretColor {
         unsafe {
             &(*(*self.misc_inherited_data_.Get())
                 .misc_inherited_1_data_
@@ -24861,7 +25062,7 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:7384-7386
-    pub(crate) fn Clear(&self) -> EClear {
+    pub fn Clear(&self) -> EClear {
         match self.data_.clear_bits() {
             0 => EClear::kNone,
             1 => EClear::kLeft,
@@ -24899,7 +25100,7 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:7917-7919
-    pub(crate) fn Floating(&self) -> EFloat {
+    pub fn Floating(&self) -> EFloat {
         match self.data_.floating_bits() {
             0 => EFloat::kNone,
             1 => EFloat::kLeft,
@@ -24922,35 +25123,35 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:8447-8449
-    pub(crate) fn InternalVisitedBorderBottomColor(&self) -> &StyleColor {
+    pub fn InternalVisitedBorderBottomColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.misc_data_.Get()).visited_data_.Get()).internal_visited_border_bottom_color_
         }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:8457-8459
-    pub(crate) fn InternalVisitedBorderLeftColor(&self) -> &StyleColor {
+    pub fn InternalVisitedBorderLeftColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.misc_data_.Get()).visited_data_.Get()).internal_visited_border_left_color_
         }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:8467-8469
-    pub(crate) fn InternalVisitedBorderRightColor(&self) -> &StyleColor {
+    pub fn InternalVisitedBorderRightColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.misc_data_.Get()).visited_data_.Get()).internal_visited_border_right_color_
         }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:8477-8479
-    pub(crate) fn InternalVisitedBorderTopColor(&self) -> &StyleColor {
+    pub fn InternalVisitedBorderTopColor(&self) -> &StyleColor {
         unsafe {
             &(*(*self.misc_data_.Get()).visited_data_.Get()).internal_visited_border_top_color_
         }
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:8530-8532
-    pub(crate) fn InternalVisitedOutlineColor(&self) -> &StyleColor {
+    pub fn InternalVisitedOutlineColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_data_.Get()).visited_data_.Get()).internal_visited_outline_color_ }
     }
 
@@ -24965,7 +25166,7 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:9072-9074
-    pub(crate) fn OutlineColor(&self) -> &StyleColor {
+    pub fn OutlineColor(&self) -> &StyleColor {
         unsafe { &(*(*self.misc_data_.Get()).misc_4_data_.Get()).outline_color_ }
     }
 
@@ -24982,7 +25183,7 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:9258-9260
-    pub(crate) fn PointerEvents(&self) -> EPointerEvents {
+    pub fn PointerEvents(&self) -> EPointerEvents {
         match self.data_.pointer_events_bits() {
             0 => EPointerEvents::kNone,
             1 => EPointerEvents::kAll,
@@ -25000,7 +25201,7 @@ impl ComputedStyleBase {
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:9370-9372
-    pub(crate) fn Resize(&self) -> EResize {
+    pub fn Resize(&self) -> EResize {
         match unsafe { &*self.misc_data_.Get() }.resize_bits() {
             0 => EResize::kNone,
             1 => EResize::kInline,
@@ -25599,9 +25800,2459 @@ impl ComputedStyleBase {
         unsafe { ComputedStyleBaseFindChangedGroups(self, other) }
     }
 
-    // cpp: layoutng_style/style/computed_style_base.h:10386
+    // cpp: out/Min/gen/third_party/blink/renderer/core/style/computed_style_base.cc:323-1732
+    // The generated bit assignment is preserved for every compared field.
     pub fn FieldInvalidationDiff(a: &ComputedStyle, b: &ComputedStyle) -> u64 {
-        unsafe { ComputedStyleBaseFieldInvalidationDiff(a, b) }
+        let mut diff = 0u64;
+        if a.misc_inherited_data_.Get() != b.misc_inherited_data_.Get() {
+            if unsafe { &*a.misc_inherited_data_.Get() }
+                .misc_inherited_1_data_
+                .Get()
+                != unsafe { &*b.misc_inherited_data_.Get() }
+                    .misc_inherited_1_data_
+                    .Get()
+            {
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_1_data_
+                        .Get()
+                }
+                .hyphenation_string_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .hyphenation_string_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    unsafe {
+                        &*unsafe { &*a.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .quotes_
+                    .get(),
+                    unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .quotes_
+                    .get(),
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe {
+                        &*unsafe { &*a.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .list_style_image_,
+                    &unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .list_style_image_,
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe {
+                        &*unsafe { &*a.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .list_style_type_,
+                    &unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .list_style_type_,
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe {
+                        &*unsafe { &*a.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .scrollbar_color_,
+                    &unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .scrollbar_color_,
+                ) {
+                    diff |= FieldDifference::kScrollbarStyle.bits();
+                    diff |= FieldDifference::kScrollbarColor.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_1_data_
+                        .Get()
+                }
+                .dynamic_range_limit_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .dynamic_range_limit_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_1_data_
+                        .Get()
+                }
+                .tab_size_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .tab_size_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_1_data_
+                        .Get()
+                }
+                .text_fit_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .text_fit_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_1_data_
+                        .Get()
+                }
+                .text_size_adjust_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .text_size_adjust_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_1_data_
+                        .Get()
+                }
+                .accent_color_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .accent_color_
+                {
+                    diff |= FieldDifference::kAccentColor.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_1_data_
+                        .Get()
+                }
+                .caret_color_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .caret_color_
+                {
+                    diff |= FieldDifference::kColor.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_1_data_
+                        .Get()
+                }
+                .text_emphasis_color_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .text_emphasis_color_
+                {
+                    diff |= FieldDifference::kColor.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_1_data_
+                        .Get()
+                }
+                .orphans_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .orphans_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_1_data_
+                        .Get()
+                }
+                .hyphenate_limit_chars_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_1_data_
+                            .Get()
+                    }
+                    .hyphenate_limit_chars_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }
+                .misc_inherited_2_data_
+                .Get()
+                != unsafe { &*b.misc_inherited_data_.Get() }
+                    .misc_inherited_2_data_
+                    .Get()
+            {
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_2_data_
+                        .Get()
+                }
+                .text_emphasis_custom_mark_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_2_data_
+                            .Get()
+                    }
+                    .text_emphasis_custom_mark_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe {
+                        &*unsafe { &*a.misc_inherited_data_.Get() }
+                            .misc_inherited_2_data_
+                            .Get()
+                    }
+                    .text_shadow_,
+                    &unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_2_data_
+                            .Get()
+                    }
+                    .text_shadow_,
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_2_data_
+                        .Get()
+                }
+                .text_indent_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_2_data_
+                            .Get()
+                    }
+                    .text_indent_
+                {
+                    diff |= FieldDifference::kAXStyle.bits();
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_2_data_
+                        .Get()
+                }
+                .text_underline_offset_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_2_data_
+                            .Get()
+                    }
+                    .text_underline_offset_
+                {
+                    diff |= FieldDifference::kTextDecoration.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_2_data_
+                        .Get()
+                }
+                .text_stroke_width_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_2_data_
+                            .Get()
+                    }
+                    .text_stroke_width_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_2_data_
+                        .Get()
+                }
+                .effective_zoom_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_2_data_
+                            .Get()
+                    }
+                    .effective_zoom_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_2_data_
+                        .Get()
+                }
+                .text_fill_color_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_2_data_
+                            .Get()
+                    }
+                    .text_fill_color_
+                {
+                    diff |= FieldDifference::kColor.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_2_data_
+                        .Get()
+                }
+                .text_stroke_color_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_2_data_
+                            .Get()
+                    }
+                    .text_stroke_color_
+                {
+                    diff |= FieldDifference::kColor.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                        .misc_inherited_2_data_
+                        .Get()
+                }
+                .widows_
+                    != unsafe {
+                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                            .misc_inherited_2_data_
+                            .Get()
+                    }
+                    .widows_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                }
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_box_edge_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_box_edge_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_underline_position_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_underline_position_bits()
+            {
+                diff |= FieldDifference::kTextDecoration.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.hanging_punctuation_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.hanging_punctuation_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.line_break_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.line_break_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_align_last_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_align_last_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_decoration_skip_spaces_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_decoration_skip_spaces_bits()
+            {
+                diff |= FieldDifference::kTextDecoration.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_emphasis_mark_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_emphasis_mark_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_emphasis_position_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_emphasis_position_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.block_ellipsis_bit()
+                != unsafe { &*b.misc_inherited_data_.Get() }.block_ellipsis_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.user_select_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.user_select_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.word_break_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.word_break_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.draggable_region_mode_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.draggable_region_mode_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.hyphens_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.hyphens_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.image_animation_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.image_animation_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.image_rendering_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.image_rendering_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.overflow_wrap_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.overflow_wrap_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.ruby_align_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.ruby_align_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.ruby_overhang_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.ruby_overhang_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_decoration_skip_ink_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_decoration_skip_ink_bits()
+            {
+                diff |= FieldDifference::kTextDecoration.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_indent_flags_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_indent_flags_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_justify_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_justify_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_orientation_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_orientation_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_security_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_security_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.user_modify_bits()
+                != unsafe { &*b.misc_inherited_data_.Get() }.user_modify_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.empty_cells_bit()
+                != unsafe { &*b.misc_inherited_data_.Get() }.empty_cells_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.image_orientation_bit()
+                != unsafe { &*b.misc_inherited_data_.Get() }.image_orientation_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.ruby_position_bit()
+                != unsafe { &*b.misc_inherited_data_.Get() }.ruby_position_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.subtree_will_change_contents_bit()
+                != unsafe { &*b.misc_inherited_data_.Get() }.subtree_will_change_contents_bit()
+            {
+                diff |= FieldDifference::kCompositing.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_autospace_bit()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_autospace_bit()
+            {
+                diff |= FieldDifference::kReshape.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_combine_bit()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_combine_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_inherited_data_.Get() }.text_emphasis_fill_bit()
+                != unsafe { &*b.misc_inherited_data_.Get() }.text_emphasis_fill_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+        }
+        if a.misc_data_.Get() != b.misc_data_.Get() {
+            if unsafe { &*a.misc_data_.Get() }.misc_1_data_.Get()
+                != unsafe { &*b.misc_data_.Get() }.misc_1_data_.Get()
+            {
+                if unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.backdrop_filter_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.backdrop_filter_
+                {
+                    diff |= FieldDifference::kCompositing.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.column_rule_color_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.column_rule_color_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.anchor_name_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.anchor_name_,
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.border_shape_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.border_shape_,
+                ) {
+                    diff |= FieldDifference::kBorderVisual.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                    diff |= FieldDifference::kVisualOverflow.bits();
+                    diff |= FieldDifference::kBorderShape.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.box_shadow_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.box_shadow_,
+                ) {
+                    diff |= FieldDifference::kPaint.bits();
+                    diff |= FieldDifference::kVisualOverflow.bits();
+                }
+                if !style_member_values_equivalent_by(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.clip_path_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.clip_path_,
+                    |a, b| a.Equals(b),
+                ) {
+                    diff |= FieldDifference::kClipPath.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.anchor_scope_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.anchor_scope_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.column_rule_inset_cap_end_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }
+                        .column_rule_inset_cap_end_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }
+                    .column_rule_inset_cap_start_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }
+                        .column_rule_inset_cap_start_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.position_anchor_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.position_anchor_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.column_height_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.column_height_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.column_gap_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.column_gap_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.align_content_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.align_content_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.align_self_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.align_self_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.column_count_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.column_count_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_1_data_.Get() }.position_area_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_1_data_.Get() }.position_area_
+                {
+                    diff |= FieldDifference::kBoxPaintProperty.bits();
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+            }
+            if unsafe { &*a.misc_data_.Get() }.visited_data_.Get()
+                != unsafe { &*b.misc_data_.Get() }.visited_data_.Get()
+            {
+                if unsafe { &*(*a.misc_data_.Get()).visited_data_.Get() }
+                    .internal_visited_column_rule_color_
+                    != unsafe { &*(*b.misc_data_.Get()).visited_data_.Get() }
+                        .internal_visited_column_rule_color_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).visited_data_.Get() }
+                    .internal_visited_background_color_
+                    != unsafe { &*(*b.misc_data_.Get()).visited_data_.Get() }
+                        .internal_visited_background_color_
+                {
+                    diff |= FieldDifference::kBackgroundColor.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).visited_data_.Get() }
+                    .internal_visited_border_bottom_color_
+                    != unsafe { &*(*b.misc_data_.Get()).visited_data_.Get() }
+                        .internal_visited_border_bottom_color_
+                {
+                    diff |= FieldDifference::kBorderOutlineVisitedColor.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).visited_data_.Get() }
+                    .internal_visited_border_left_color_
+                    != unsafe { &*(*b.misc_data_.Get()).visited_data_.Get() }
+                        .internal_visited_border_left_color_
+                {
+                    diff |= FieldDifference::kBorderOutlineVisitedColor.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).visited_data_.Get() }
+                    .internal_visited_border_right_color_
+                    != unsafe { &*(*b.misc_data_.Get()).visited_data_.Get() }
+                        .internal_visited_border_right_color_
+                {
+                    diff |= FieldDifference::kBorderOutlineVisitedColor.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).visited_data_.Get() }
+                    .internal_visited_border_top_color_
+                    != unsafe { &*(*b.misc_data_.Get()).visited_data_.Get() }
+                        .internal_visited_border_top_color_
+                {
+                    diff |= FieldDifference::kBorderOutlineVisitedColor.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).visited_data_.Get() }
+                    .internal_visited_outline_color_
+                    != unsafe { &*(*b.misc_data_.Get()).visited_data_.Get() }
+                        .internal_visited_outline_color_
+                {
+                    diff |= FieldDifference::kBorderOutlineVisitedColor.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).visited_data_.Get() }
+                    .internal_visited_text_decoration_color_
+                    != unsafe { &*(*b.misc_data_.Get()).visited_data_.Get() }
+                        .internal_visited_text_decoration_color_
+                {
+                    diff |= FieldDifference::kColor.bits();
+                }
+            }
+            if unsafe { &*a.misc_data_.Get() }.misc_2_data_.Get()
+                != unsafe { &*b.misc_data_.Get() }.misc_2_data_.Get()
+            {
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }.filter_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }.filter_
+                {
+                    diff |= FieldDifference::kFilterData.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }.column_rule_style_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }.column_rule_style_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                    diff |= FieldDifference::kGapDecorations.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }.column_rule_width_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }.column_rule_width_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }.grid_auto_columns_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }.grid_auto_columns_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }.grid_auto_rows_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }.grid_auto_rows_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }.flow_tolerance_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }.flow_tolerance_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }
+                    .column_rule_inset_junction_end_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }
+                        .column_rule_inset_junction_end_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }
+                    .column_rule_inset_junction_start_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }
+                        .column_rule_inset_junction_start_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }.flex_basis_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }.flex_basis_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }.column_width_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }.column_width_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }.flex_grow_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }.flex_grow_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }.flex_shrink_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }.flex_shrink_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }.flex_line_count_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }.flex_line_count_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_2_data_.Get() }.flex_wrap_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_2_data_.Get() }.flex_wrap_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+            }
+            if unsafe { &*a.misc_data_.Get() }.misc_3_data_.Get()
+                != unsafe { &*b.misc_data_.Get() }.misc_3_data_.Get()
+            {
+                if unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.grid_column_end_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.grid_column_end_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.grid_column_start_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.grid_column_start_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.grid_row_end_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.grid_row_end_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.grid_row_start_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.grid_row_start_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.grid_template_areas_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.grid_template_areas_,
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.grid_template_columns_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.grid_template_columns_,
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.grid_template_rows_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.grid_template_rows_,
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !style_optional_member_values_equivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.object_view_box_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.object_view_box_,
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.object_position_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.object_position_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.offset_anchor_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.offset_anchor_
+                {
+                    diff |= FieldDifference::kTransformData.bits();
+                    diff |= FieldDifference::kTransformOther.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.initial_letter_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.initial_letter_
+                {
+                    diff |= FieldDifference::kReshape.bits();
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.grid_lanes_direction_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.grid_lanes_direction_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.justify_items_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.justify_items_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_3_data_.Get() }.justify_self_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_3_data_.Get() }.justify_self_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                }
+            }
+            if unsafe { &*a.misc_data_.Get() }.misc_4_data_.Get()
+                != unsafe { &*b.misc_data_.Get() }.misc_4_data_.Get()
+            {
+                if unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.row_rule_color_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.row_rule_color_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.offset_path_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.offset_path_,
+                ) {
+                    diff |= FieldDifference::kHasTransform.bits();
+                    diff |= FieldDifference::kTransformData.bits();
+                    diff |= FieldDifference::kTransformOther.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.position_try_fallbacks_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.position_try_fallbacks_,
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.rotate_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.rotate_,
+                ) {
+                    diff |= FieldDifference::kHasTransform.bits();
+                    diff |= FieldDifference::kTransformData.bits();
+                    diff |= FieldDifference::kTransformOther.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.offset_distance_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.offset_distance_
+                {
+                    diff |= FieldDifference::kTransformData.bits();
+                    diff |= FieldDifference::kTransformOther.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.offset_position_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.offset_position_
+                {
+                    diff |= FieldDifference::kHasTransform.bits();
+                    diff |= FieldDifference::kTransformData.bits();
+                    diff |= FieldDifference::kTransformOther.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.perspective_origin_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.perspective_origin_
+                {
+                    diff |= FieldDifference::kTransformOther.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.offset_rotate_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.offset_rotate_
+                {
+                    diff |= FieldDifference::kTransformData.bits();
+                    diff |= FieldDifference::kTransformOther.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.perspective_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.perspective_
+                {
+                    diff |= FieldDifference::kTransformOther.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.row_gap_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.row_gap_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.outline_color_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.outline_color_
+                {
+                    diff |= FieldDifference::kOutline.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.order_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.order_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.outline_offset_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.outline_offset_
+                {
+                    diff |= FieldDifference::kOutline.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.outline_width_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.outline_width_
+                {
+                    diff |= FieldDifference::kOutline.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_4_data_.Get() }.reading_order_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_4_data_.Get() }.reading_order_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                }
+            }
+            if unsafe { &*a.misc_data_.Get() }.misc_5_data_.Get()
+                != unsafe { &*b.misc_data_.Get() }.misc_5_data_.Get()
+            {
+                if unsafe { &*(*a.misc_data_.Get()).misc_5_data_.Get() }.row_rule_style_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_5_data_.Get() }.row_rule_style_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                    diff |= FieldDifference::kGapDecorations.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_5_data_.Get() }.row_rule_width_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_5_data_.Get() }.row_rule_width_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_5_data_.Get() }.scale_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_5_data_.Get() }.scale_,
+                ) {
+                    diff |= FieldDifference::kHasTransform.bits();
+                    diff |= FieldDifference::kTransformData.bits();
+                    diff |= FieldDifference::kTransformOther.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_5_data_.Get() }.row_rule_inset_cap_end_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_5_data_.Get() }.row_rule_inset_cap_end_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_5_data_.Get() }.row_rule_inset_cap_start_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_5_data_.Get() }
+                        .row_rule_inset_cap_start_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_5_data_.Get() }
+                    .row_rule_inset_junction_end_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_5_data_.Get() }
+                        .row_rule_inset_junction_end_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_5_data_.Get() }
+                    .row_rule_inset_junction_start_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_5_data_.Get() }
+                        .row_rule_inset_junction_start_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+            }
+            if unsafe { &*a.misc_data_.Get() }.misc_6_data_.Get()
+                != unsafe { &*b.misc_data_.Get() }.misc_6_data_.Get()
+            {
+                if unsafe { &*(*a.misc_data_.Get()).misc_6_data_.Get() }.text_overflow_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_6_data_.Get() }.text_overflow_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_6_data_.Get() }.shape_outside_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_6_data_.Get() }.shape_outside_,
+                ) {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_6_data_.Get() }.translate_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_6_data_.Get() }.translate_,
+                ) {
+                    diff |= FieldDifference::kHasTransform.bits();
+                    diff |= FieldDifference::kTransformData.bits();
+                    diff |= FieldDifference::kTransformOther.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_6_data_.Get() }.trigger_scope_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_6_data_.Get() }.trigger_scope_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_6_data_.Get() }.shape_margin_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_6_data_.Get() }.shape_margin_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_6_data_.Get() }.text_decoration_inset_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_6_data_.Get() }.text_decoration_inset_
+                {
+                    diff |= FieldDifference::kTextDecoration.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_6_data_.Get() }.text_decoration_thickness_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_6_data_.Get() }
+                        .text_decoration_thickness_
+                {
+                    diff |= FieldDifference::kTextDecoration.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_6_data_.Get() }.box_flex_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_6_data_.Get() }.box_flex_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_6_data_.Get() }.text_decoration_color_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_6_data_.Get() }.text_decoration_color_
+                {
+                    diff |= FieldDifference::kColor.bits();
+                }
+            }
+            if unsafe { &*a.misc_data_.Get() }.misc_7_data_.Get()
+                != unsafe { &*b.misc_data_.Get() }.misc_7_data_.Get()
+            {
+                if unsafe { &*(*a.misc_data_.Get()).misc_7_data_.Get() }.display_layout_custom_name_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_7_data_.Get() }
+                        .display_layout_custom_name_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_7_data_.Get() }.mask_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_7_data_.Get() }.mask_
+                {
+                    diff |= FieldDifference::kMask.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.misc_data_.Get()).misc_7_data_.Get() }.box_reflect_,
+                    &unsafe { &*(*b.misc_data_.Get()).misc_7_data_.Get() }.box_reflect_,
+                ) {
+                    diff |= FieldDifference::kFilterData.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_7_data_.Get() }.mask_box_image_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_7_data_.Get() }.mask_box_image_
+                {
+                    diff |= FieldDifference::kMask.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_7_data_.Get() }.webkit_line_clamp_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_7_data_.Get() }.webkit_line_clamp_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).misc_7_data_.Get() }.box_ordinal_group_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_7_data_.Get() }.box_ordinal_group_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+            }
+            if unsafe { &*a.misc_data_.Get() }.misc_8_data_.Get()
+                != unsafe { &*b.misc_data_.Get() }.misc_8_data_.Get()
+            {
+                if unsafe { &*(*a.misc_data_.Get()).misc_8_data_.Get() }.max_lines_
+                    != unsafe { &*(*b.misc_data_.Get()).misc_8_data_.Get() }.max_lines_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+            }
+            if unsafe { &*a.misc_data_.Get() }.math_data_.Get()
+                != unsafe { &*b.misc_data_.Get() }.math_data_.Get()
+            {
+                if unsafe { &*(*a.misc_data_.Get()).math_data_.Get() }.math_fraction_bar_thickness_
+                    != unsafe { &*(*b.misc_data_.Get()).math_data_.Get() }
+                        .math_fraction_bar_thickness_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).math_data_.Get() }.math_l_space_
+                    != unsafe { &*(*b.misc_data_.Get()).math_data_.Get() }.math_l_space_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).math_data_.Get() }.math_r_space_
+                    != unsafe { &*(*b.misc_data_.Get()).math_data_.Get() }.math_r_space_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).math_data_.Get() }.math_padded_v_offset_
+                    != unsafe { &*(*b.misc_data_.Get()).math_data_.Get() }.math_padded_v_offset_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).math_data_.Get() }.math_min_size_
+                    != unsafe { &*(*b.misc_data_.Get()).math_data_.Get() }.math_min_size_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.misc_data_.Get()).math_data_.Get() }.math_max_size_
+                    != unsafe { &*(*b.misc_data_.Get()).math_data_.Get() }.math_max_size_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+            }
+            if !foundation::ValuesEquivalent(
+                &unsafe { &*a.misc_data_.Get() }.will_change_,
+                &unsafe { &*b.misc_data_.Get() }.will_change_,
+            ) {
+                diff |= FieldDifference::kCompositing.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.blend_mode_bits()
+                != unsafe { &*b.misc_data_.Get() }.blend_mode_bits()
+            {
+                diff |= FieldDifference::kBlendMode.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.contain_bits()
+                != unsafe { &*b.misc_data_.Get() }.contain_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.effective_appearance_bits()
+                != unsafe { &*b.misc_data_.Get() }.effective_appearance_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.break_after_bits()
+                != unsafe { &*b.misc_data_.Get() }.break_after_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.break_before_bits()
+                != unsafe { &*b.misc_data_.Get() }.break_before_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.container_type_bits()
+                != unsafe { &*b.misc_data_.Get() }.container_type_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.grid_auto_flow_bits()
+                != unsafe { &*b.misc_data_.Get() }.grid_auto_flow_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.margin_trim_bits()
+                != unsafe { &*b.misc_data_.Get() }.margin_trim_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.outline_style_bits()
+                != unsafe { &*b.misc_data_.Get() }.outline_style_bits()
+            {
+                diff |= FieldDifference::kOutline.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.scrollbar_gutter_bits()
+                != unsafe { &*b.misc_data_.Get() }.scrollbar_gutter_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.box_align_bits()
+                != unsafe { &*b.misc_data_.Get() }.box_align_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.object_fit_bits()
+                != unsafe { &*b.misc_data_.Get() }.object_fit_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.position_try_order_bits()
+                != unsafe { &*b.misc_data_.Get() }.position_try_order_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.position_visibility_bits()
+                != unsafe { &*b.misc_data_.Get() }.position_visibility_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.reading_flow_bits()
+                != unsafe { &*b.misc_data_.Get() }.reading_flow_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.resize_bits()
+                != unsafe { &*b.misc_data_.Get() }.resize_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.text_decoration_style_bits()
+                != unsafe { &*b.misc_data_.Get() }.text_decoration_style_bits()
+            {
+                diff |= FieldDifference::kTextDecoration.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.box_pack_bits()
+                != unsafe { &*b.misc_data_.Get() }.box_pack_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.break_inside_bits()
+                != unsafe { &*b.misc_data_.Get() }.break_inside_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.column_rule_break_bits()
+                != unsafe { &*b.misc_data_.Get() }.column_rule_break_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.column_rule_visibility_items_bits()
+                != unsafe { &*b.misc_data_.Get() }.column_rule_visibility_items_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.column_wrap_bits()
+                != unsafe { &*b.misc_data_.Get() }.column_wrap_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.continue_bits()
+                != unsafe { &*b.misc_data_.Get() }.continue_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.flex_direction_bits()
+                != unsafe { &*b.misc_data_.Get() }.flex_direction_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.overscroll_behavior_x_bits()
+                != unsafe { &*b.misc_data_.Get() }.overscroll_behavior_x_bits()
+            {
+                diff |= FieldDifference::kBoxPaintProperty.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.overscroll_behavior_y_bits()
+                != unsafe { &*b.misc_data_.Get() }.overscroll_behavior_y_bits()
+            {
+                diff |= FieldDifference::kBoxPaintProperty.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.page_margin_safety_bits()
+                != unsafe { &*b.misc_data_.Get() }.page_margin_safety_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.row_rule_break_bits()
+                != unsafe { &*b.misc_data_.Get() }.row_rule_break_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.row_rule_visibility_items_bits()
+                != unsafe { &*b.misc_data_.Get() }.row_rule_visibility_items_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.scrollbar_width_bits()
+                != unsafe { &*b.misc_data_.Get() }.scrollbar_width_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+                diff |= FieldDifference::kScrollbarStyle.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.user_drag_bits()
+                != unsafe { &*b.misc_data_.Get() }.user_drag_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.align_content_block_center_bit()
+                != unsafe { &*b.misc_data_.Get() }.align_content_block_center_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.backface_visibility_bit()
+                != unsafe { &*b.misc_data_.Get() }.backface_visibility_bit()
+            {
+                diff |= FieldDifference::kCompositing.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.box_orient_bit()
+                != unsafe { &*b.misc_data_.Get() }.box_orient_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.column_fill_bit()
+                != unsafe { &*b.misc_data_.Get() }.column_fill_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.column_span_bit()
+                != unsafe { &*b.misc_data_.Get() }.column_span_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.grid_lanes_pack_bit()
+                != unsafe { &*b.misc_data_.Get() }.grid_lanes_pack_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.has_auto_column_count_bit()
+                != unsafe { &*b.misc_data_.Get() }.has_auto_column_count_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.has_auto_column_height_bit()
+                != unsafe { &*b.misc_data_.Get() }.has_auto_column_height_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.has_auto_column_width_bit()
+                != unsafe { &*b.misc_data_.Get() }.has_auto_column_width_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.has_current_backdrop_filter_animation_bit()
+                != unsafe { &*b.misc_data_.Get() }.has_current_backdrop_filter_animation_bit()
+            {
+                diff |= FieldDifference::kCompositing.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.has_current_clip_path_animation_bit()
+                != unsafe { &*b.misc_data_.Get() }.has_current_clip_path_animation_bit()
+            {
+                diff |= FieldDifference::kCompositing.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.has_current_filter_animation_bit()
+                != unsafe { &*b.misc_data_.Get() }.has_current_filter_animation_bit()
+            {
+                diff |= FieldDifference::kCompositing.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.has_current_opacity_animation_bit()
+                != unsafe { &*b.misc_data_.Get() }.has_current_opacity_animation_bit()
+            {
+                diff |= FieldDifference::kCompositing.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.has_current_rotate_animation_bit()
+                != unsafe { &*b.misc_data_.Get() }.has_current_rotate_animation_bit()
+            {
+                diff |= FieldDifference::kCompositing.bits();
+                diff |= FieldDifference::kHasTransform.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.has_current_scale_animation_bit()
+                != unsafe { &*b.misc_data_.Get() }.has_current_scale_animation_bit()
+            {
+                diff |= FieldDifference::kCompositing.bits();
+                diff |= FieldDifference::kHasTransform.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.has_current_transform_animation_bit()
+                != unsafe { &*b.misc_data_.Get() }.has_current_transform_animation_bit()
+            {
+                diff |= FieldDifference::kCompositing.bits();
+                diff |= FieldDifference::kHasTransform.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.has_current_translate_animation_bit()
+                != unsafe { &*b.misc_data_.Get() }.has_current_translate_animation_bit()
+            {
+                diff |= FieldDifference::kCompositing.bits();
+                diff |= FieldDifference::kHasTransform.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.internal_unbounded_bit()
+                != unsafe { &*b.misc_data_.Get() }.internal_unbounded_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.is_bottom_relative_to_safe_area_inset_bit()
+                != unsafe { &*b.misc_data_.Get() }.is_bottom_relative_to_safe_area_inset_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.is_specified_display_webkit_box_bit()
+                != unsafe { &*b.misc_data_.Get() }.is_specified_display_webkit_box_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.isolation_bit()
+                != unsafe { &*b.misc_data_.Get() }.isolation_bit()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.line_clamp_internal_block_ellipsis_bit()
+                != unsafe { &*b.misc_data_.Get() }.line_clamp_internal_block_ellipsis_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.max_content_sizing_bit()
+                != unsafe { &*b.misc_data_.Get() }.max_content_sizing_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.outline_style_is_auto_bit()
+                != unsafe { &*b.misc_data_.Get() }.outline_style_is_auto_bit()
+            {
+                diff |= FieldDifference::kOutline.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.rule_overlap_bit()
+                != unsafe { &*b.misc_data_.Get() }.rule_overlap_bit()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.scroll_axis_lock_bit()
+                != unsafe { &*b.misc_data_.Get() }.scroll_axis_lock_bit()
+            {
+                diff |= FieldDifference::kCompositing.bits();
+            }
+            if unsafe { &*a.misc_data_.Get() }.scroll_initial_target_bit()
+                != unsafe { &*b.misc_data_.Get() }.scroll_initial_target_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+        }
+        if a.inherited_data_.Get() != b.inherited_data_.Get() {
+            if unsafe { &*a.inherited_data_.Get() }
+                .inherited_visited_data_
+                .Get()
+                != unsafe { &*b.inherited_data_.Get() }
+                    .inherited_visited_data_
+                    .Get()
+            {
+                if unsafe {
+                    &*unsafe { &*a.inherited_data_.Get() }
+                        .inherited_visited_data_
+                        .Get()
+                }
+                .internal_visited_caret_color_
+                    != unsafe {
+                        &*unsafe { &*b.inherited_data_.Get() }
+                            .inherited_visited_data_
+                            .Get()
+                    }
+                    .internal_visited_caret_color_
+                {
+                    diff |= FieldDifference::kColor.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.inherited_data_.Get() }
+                        .inherited_visited_data_
+                        .Get()
+                }
+                .internal_visited_text_emphasis_color_
+                    != unsafe {
+                        &*unsafe { &*b.inherited_data_.Get() }
+                            .inherited_visited_data_
+                            .Get()
+                    }
+                    .internal_visited_text_emphasis_color_
+                {
+                    diff |= FieldDifference::kColor.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.inherited_data_.Get() }
+                        .inherited_visited_data_
+                        .Get()
+                }
+                .internal_visited_text_fill_color_
+                    != unsafe {
+                        &*unsafe { &*b.inherited_data_.Get() }
+                            .inherited_visited_data_
+                            .Get()
+                    }
+                    .internal_visited_text_fill_color_
+                {
+                    diff |= FieldDifference::kColor.bits();
+                }
+                if unsafe {
+                    &*unsafe { &*a.inherited_data_.Get() }
+                        .inherited_visited_data_
+                        .Get()
+                }
+                .internal_visited_text_stroke_color_
+                    != unsafe {
+                        &*unsafe { &*b.inherited_data_.Get() }
+                            .inherited_visited_data_
+                            .Get()
+                    }
+                    .internal_visited_text_stroke_color_
+                {
+                    diff |= FieldDifference::kColor.bits();
+                }
+            }
+            if !foundation::ValuesEquivalent(
+                &unsafe { &*a.inherited_data_.Get() }.font_,
+                &unsafe { &*b.inherited_data_.Get() }.font_,
+            ) {
+                diff |= FieldDifference::kAXStyle.bits();
+                diff |= FieldDifference::kReshape.bits();
+            }
+            if !foundation::ValuesEquivalent(
+                &unsafe { &*a.inherited_data_.Get() }.container_font_,
+                &unsafe { &*b.inherited_data_.Get() }.container_font_,
+            ) {
+                diff |= FieldDifference::kReshape.bits();
+            }
+            if unsafe { &*a.inherited_data_.Get() }.line_height_
+                != unsafe { &*b.inherited_data_.Get() }.line_height_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.inherited_data_.Get() }.internal_visited_color_
+                != unsafe { &*b.inherited_data_.Get() }.internal_visited_color_
+            {
+                diff |= FieldDifference::kBorderVisual.bits();
+                diff |= FieldDifference::kColor.bits();
+                diff |= FieldDifference::kCurrentcolor.bits();
+            }
+            if unsafe { &*a.inherited_data_.Get() }.color_
+                != unsafe { &*b.inherited_data_.Get() }.color_
+            {
+                diff |= FieldDifference::kAccentColor.bits();
+                diff |= FieldDifference::kBorderVisual.bits();
+                diff |= FieldDifference::kColor.bits();
+                diff |= FieldDifference::kCurrentcolor.bits();
+                diff |= FieldDifference::kOutline.bits();
+            }
+            if unsafe { &*a.inherited_data_.Get() }.horizontal_border_spacing_
+                != unsafe { &*b.inherited_data_.Get() }.horizontal_border_spacing_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.inherited_data_.Get() }.vertical_border_spacing_
+                != unsafe { &*b.inherited_data_.Get() }.vertical_border_spacing_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.inherited_data_.Get() }.text_transform_bits()
+                != unsafe { &*b.inherited_data_.Get() }.text_transform_bits()
+            {
+                diff |= FieldDifference::kReshape.bits();
+            }
+        }
+        if a.visual_data_.Get() != b.visual_data_.Get() {
+            if !foundation::ValuesEquivalent(
+                &unsafe { &*a.visual_data_.Get() }.base_text_decoration_data_,
+                &unsafe { &*b.visual_data_.Get() }.base_text_decoration_data_,
+            ) {
+                diff |= FieldDifference::kTextDecoration.bits();
+            }
+            if unsafe { &*a.visual_data_.Get() }.clip_ != unsafe { &*b.visual_data_.Get() }.clip_ {
+                diff |= FieldDifference::kClip.bits();
+            }
+            if unsafe { &*a.visual_data_.Get() }.text_decoration_line_bits()
+                != unsafe { &*b.visual_data_.Get() }.text_decoration_line_bits()
+            {
+                diff |= FieldDifference::kTextDecoration.bits();
+            }
+            if unsafe { &*a.visual_data_.Get() }.field_sizing_bit()
+                != unsafe { &*b.visual_data_.Get() }.field_sizing_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.visual_data_.Get() }.has_auto_clip_bit()
+                != unsafe { &*b.visual_data_.Get() }.has_auto_clip_bit()
+            {
+                diff |= FieldDifference::kClip.bits();
+            }
+        }
+        if a.svginherited_data_.Get() != b.svginherited_data_.Get() {
+            if unsafe { &*a.svginherited_data_.Get() }.fill_data_.Get()
+                != unsafe { &*b.svginherited_data_.Get() }.fill_data_.Get()
+            {
+                if unsafe { &*(*a.svginherited_data_.Get()).fill_data_.Get() }.fill_paint_
+                    != unsafe { &*(*b.svginherited_data_.Get()).fill_data_.Get() }.fill_paint_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svginherited_data_.Get()).fill_data_.Get() }.fill_opacity_
+                    != unsafe { &*(*b.svginherited_data_.Get()).fill_data_.Get() }.fill_opacity_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+            }
+            if unsafe { &*a.svginherited_data_.Get() }.stroke_data_.Get()
+                != unsafe { &*b.svginherited_data_.Get() }.stroke_data_.Get()
+            {
+                if !foundation::ValuesEquivalent(
+                    &unsafe { &*(*a.svginherited_data_.Get()).stroke_data_.Get() }
+                        .stroke_dash_array_,
+                    &unsafe { &*(*b.svginherited_data_.Get()).stroke_data_.Get() }
+                        .stroke_dash_array_,
+                ) {
+                    diff |= FieldDifference::kPaint.bits();
+                    diff |= FieldDifference::kStroke.bits();
+                    diff |= FieldDifference::kBorderShape.bits();
+                }
+                if unsafe { &*(*a.svginherited_data_.Get()).stroke_data_.Get() }
+                    .internal_visited_stroke_paint_
+                    != unsafe { &*(*b.svginherited_data_.Get()).stroke_data_.Get() }
+                        .internal_visited_stroke_paint_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svginherited_data_.Get()).stroke_data_.Get() }.stroke_paint_
+                    != unsafe { &*(*b.svginherited_data_.Get()).stroke_data_.Get() }.stroke_paint_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                    diff |= FieldDifference::kStroke.bits();
+                }
+                if unsafe { &*(*a.svginherited_data_.Get()).stroke_data_.Get() }.stroke_dash_offset_
+                    != unsafe { &*(*b.svginherited_data_.Get()).stroke_data_.Get() }
+                        .stroke_dash_offset_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svginherited_data_.Get()).stroke_data_.Get() }.stroke_width_
+                    != unsafe { &*(*b.svginherited_data_.Get()).stroke_data_.Get() }.stroke_width_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                    diff |= FieldDifference::kBorderShape.bits();
+                }
+                if unsafe { &*(*a.svginherited_data_.Get()).stroke_data_.Get() }.stroke_miter_limit_
+                    != unsafe { &*(*b.svginherited_data_.Get()).stroke_data_.Get() }
+                        .stroke_miter_limit_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                    diff |= FieldDifference::kBorderShape.bits();
+                }
+                if unsafe { &*(*a.svginherited_data_.Get()).stroke_data_.Get() }.stroke_opacity_
+                    != unsafe { &*(*b.svginherited_data_.Get()).stroke_data_.Get() }.stroke_opacity_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svginherited_data_.Get()).stroke_data_.Get() }.cap_style_bits()
+                    != unsafe { &*(*b.svginherited_data_.Get()).stroke_data_.Get() }
+                        .cap_style_bits()
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                    diff |= FieldDifference::kBorderShape.bits();
+                }
+                if unsafe { &*(*a.svginherited_data_.Get()).stroke_data_.Get() }.join_style_bits()
+                    != unsafe { &*(*b.svginherited_data_.Get()).stroke_data_.Get() }
+                        .join_style_bits()
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                    diff |= FieldDifference::kBorderShape.bits();
+                }
+            }
+            if unsafe { &*a.svginherited_data_.Get() }
+                .resources_data_
+                .Get()
+                != unsafe { &*b.svginherited_data_.Get() }
+                    .resources_data_
+                    .Get()
+            {
+                if !foundation::ValuesEquivalent(
+                    &unsafe {
+                        &*unsafe { &*a.svginherited_data_.Get() }
+                            .resources_data_
+                            .Get()
+                    }
+                    .marker_end_resource_,
+                    &unsafe {
+                        &*unsafe { &*b.svginherited_data_.Get() }
+                            .resources_data_
+                            .Get()
+                    }
+                    .marker_end_resource_,
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe {
+                        &*unsafe { &*a.svginherited_data_.Get() }
+                            .resources_data_
+                            .Get()
+                    }
+                    .marker_mid_resource_,
+                    &unsafe {
+                        &*unsafe { &*b.svginherited_data_.Get() }
+                            .resources_data_
+                            .Get()
+                    }
+                    .marker_mid_resource_,
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if !foundation::ValuesEquivalent(
+                    &unsafe {
+                        &*unsafe { &*a.svginherited_data_.Get() }
+                            .resources_data_
+                            .Get()
+                    }
+                    .marker_start_resource_,
+                    &unsafe {
+                        &*unsafe { &*b.svginherited_data_.Get() }
+                            .resources_data_
+                            .Get()
+                    }
+                    .marker_start_resource_,
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+            }
+            if unsafe { &*a.svginherited_data_.Get() }.css_dominant_baseline_bits()
+                != unsafe { &*b.svginherited_data_.Get() }.css_dominant_baseline_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.svginherited_data_.Get() }.dominant_baseline_bits()
+                != unsafe { &*b.svginherited_data_.Get() }.dominant_baseline_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.svginherited_data_.Get() }.paint_order_bits()
+                != unsafe { &*b.svginherited_data_.Get() }.paint_order_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.svginherited_data_.Get() }.color_interpolation_bits()
+                != unsafe { &*b.svginherited_data_.Get() }.color_interpolation_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.svginherited_data_.Get() }.color_interpolation_filters_bits()
+                != unsafe { &*b.svginherited_data_.Get() }.color_interpolation_filters_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.svginherited_data_.Get() }.shape_rendering_bits()
+                != unsafe { &*b.svginherited_data_.Get() }.shape_rendering_bits()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.svginherited_data_.Get() }.text_anchor_bits()
+                != unsafe { &*b.svginherited_data_.Get() }.text_anchor_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.svginherited_data_.Get() }.clip_rule_bit()
+                != unsafe { &*b.svginherited_data_.Get() }.clip_rule_bit()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.svginherited_data_.Get() }.fill_rule_bit()
+                != unsafe { &*b.svginherited_data_.Get() }.fill_rule_bit()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+        }
+        if a.box_data_.Get() != b.box_data_.Get() {
+            if unsafe { &*a.box_data_.Get() }.height_ != unsafe { &*b.box_data_.Get() }.height_ {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.margin_bottom_
+                != unsafe { &*b.box_data_.Get() }.margin_bottom_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.margin_left_
+                != unsafe { &*b.box_data_.Get() }.margin_left_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.margin_right_
+                != unsafe { &*b.box_data_.Get() }.margin_right_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.margin_top_
+                != unsafe { &*b.box_data_.Get() }.margin_top_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.max_height_
+                != unsafe { &*b.box_data_.Get() }.max_height_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.max_width_
+                != unsafe { &*b.box_data_.Get() }.max_width_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.min_height_
+                != unsafe { &*b.box_data_.Get() }.min_height_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.min_width_
+                != unsafe { &*b.box_data_.Get() }.min_width_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.padding_bottom_
+                != unsafe { &*b.box_data_.Get() }.padding_bottom_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.padding_left_
+                != unsafe { &*b.box_data_.Get() }.padding_left_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.padding_right_
+                != unsafe { &*b.box_data_.Get() }.padding_right_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.padding_top_
+                != unsafe { &*b.box_data_.Get() }.padding_top_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.width_ != unsafe { &*b.box_data_.Get() }.width_ {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.vertical_align_length_
+                != unsafe { &*b.box_data_.Get() }.vertical_align_length_
+            {
+                diff |= FieldDifference::kAXStyle.bits();
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.justify_content_
+                != unsafe { &*b.box_data_.Get() }.justify_content_
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.align_items_
+                != unsafe { &*b.box_data_.Get() }.align_items_
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.border_bottom_width_
+                != unsafe { &*b.box_data_.Get() }.border_bottom_width_
+            {
+                diff |= FieldDifference::kBorderWidth.bits();
+                diff |= FieldDifference::kBorderVisual.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.border_left_width_
+                != unsafe { &*b.box_data_.Get() }.border_left_width_
+            {
+                diff |= FieldDifference::kBorderWidth.bits();
+                diff |= FieldDifference::kBorderVisual.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.border_right_width_
+                != unsafe { &*b.box_data_.Get() }.border_right_width_
+            {
+                diff |= FieldDifference::kBorderWidth.bits();
+                diff |= FieldDifference::kBorderVisual.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.border_top_width_
+                != unsafe { &*b.box_data_.Get() }.border_top_width_
+            {
+                diff |= FieldDifference::kBorderWidth.bits();
+                diff |= FieldDifference::kBorderVisual.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.z_index_ != unsafe { &*b.box_data_.Get() }.z_index_ {
+                diff |= FieldDifference::kZIndex.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.overflow_clip_margin_
+                != unsafe { &*b.box_data_.Get() }.overflow_clip_margin_
+            {
+                diff |= FieldDifference::kBoxPaintProperty.bits();
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.border_bottom_style_bits()
+                != unsafe { &*b.box_data_.Get() }.border_bottom_style_bits()
+            {
+                diff |= FieldDifference::kBorderWidth.bits();
+                diff |= FieldDifference::kBorderVisual.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.border_left_style_bits()
+                != unsafe { &*b.box_data_.Get() }.border_left_style_bits()
+            {
+                diff |= FieldDifference::kBorderWidth.bits();
+                diff |= FieldDifference::kBorderVisual.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.border_right_style_bits()
+                != unsafe { &*b.box_data_.Get() }.border_right_style_bits()
+            {
+                diff |= FieldDifference::kBorderWidth.bits();
+                diff |= FieldDifference::kBorderVisual.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.border_top_style_bits()
+                != unsafe { &*b.box_data_.Get() }.border_top_style_bits()
+            {
+                diff |= FieldDifference::kBorderWidth.bits();
+                diff |= FieldDifference::kBorderVisual.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.baseline_source_bits()
+                != unsafe { &*b.box_data_.Get() }.baseline_source_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.text_box_trim_bits()
+                != unsafe { &*b.box_data_.Get() }.text_box_trim_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.box_data_.Get() }.box_decoration_break_bit()
+                != unsafe { &*b.box_data_.Get() }.box_decoration_break_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+        }
+        if a.svg_data_.Get() != b.svg_data_.Get() {
+            if unsafe { &*a.svg_data_.Get() }.svgmisc_data_.Get()
+                != unsafe { &*b.svg_data_.Get() }.svgmisc_data_.Get()
+            {
+                if unsafe { &*(*a.svg_data_.Get()).svgmisc_data_.Get() }.baseline_shift_
+                    != unsafe { &*(*b.svg_data_.Get()).svgmisc_data_.Get() }.baseline_shift_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svg_data_.Get()).svgmisc_data_.Get() }.flood_opacity_
+                    != unsafe { &*(*b.svg_data_.Get()).svgmisc_data_.Get() }.flood_opacity_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svg_data_.Get()).svgmisc_data_.Get() }.flood_color_
+                    != unsafe { &*(*b.svg_data_.Get()).svgmisc_data_.Get() }.flood_color_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svg_data_.Get()).svgmisc_data_.Get() }.lighting_color_
+                    != unsafe { &*(*b.svg_data_.Get()).svgmisc_data_.Get() }.lighting_color_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svg_data_.Get()).svgmisc_data_.Get() }.baseline_shift_type_bits()
+                    != unsafe { &*(*b.svg_data_.Get()).svgmisc_data_.Get() }
+                        .baseline_shift_type_bits()
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+            }
+            if unsafe { &*a.svg_data_.Get() }.geometry_data_.Get()
+                != unsafe { &*b.svg_data_.Get() }.geometry_data_.Get()
+            {
+                if !style_member_values_equivalent_by(
+                    &unsafe { &*(*a.svg_data_.Get()).geometry_data_.Get() }.d_,
+                    &unsafe { &*(*b.svg_data_.Get()).geometry_data_.Get() }.d_,
+                    |a, b| a.ByteStream() == b.ByteStream() && a.GetWindRule() == b.GetWindRule(),
+                ) {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svg_data_.Get()).geometry_data_.Get() }.cx_
+                    != unsafe { &*(*b.svg_data_.Get()).geometry_data_.Get() }.cx_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svg_data_.Get()).geometry_data_.Get() }.cy_
+                    != unsafe { &*(*b.svg_data_.Get()).geometry_data_.Get() }.cy_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svg_data_.Get()).geometry_data_.Get() }.path_length_
+                    != unsafe { &*(*b.svg_data_.Get()).geometry_data_.Get() }.path_length_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svg_data_.Get()).geometry_data_.Get() }.r_
+                    != unsafe { &*(*b.svg_data_.Get()).geometry_data_.Get() }.r_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svg_data_.Get()).geometry_data_.Get() }.rx_
+                    != unsafe { &*(*b.svg_data_.Get()).geometry_data_.Get() }.rx_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svg_data_.Get()).geometry_data_.Get() }.ry_
+                    != unsafe { &*(*b.svg_data_.Get()).geometry_data_.Get() }.ry_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svg_data_.Get()).geometry_data_.Get() }.x_
+                    != unsafe { &*(*b.svg_data_.Get()).geometry_data_.Get() }.x_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svg_data_.Get()).geometry_data_.Get() }.y_
+                    != unsafe { &*(*b.svg_data_.Get()).geometry_data_.Get() }.y_
+                {
+                    diff |= FieldDifference::kLayout.bits();
+                    diff |= FieldDifference::kPaint.bits();
+                }
+            }
+            if unsafe { &*a.svg_data_.Get() }.stop_data_.Get()
+                != unsafe { &*b.svg_data_.Get() }.stop_data_.Get()
+            {
+                if unsafe { &*(*a.svg_data_.Get()).stop_data_.Get() }.stop_opacity_
+                    != unsafe { &*(*b.svg_data_.Get()).stop_data_.Get() }.stop_opacity_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+                if unsafe { &*(*a.svg_data_.Get()).stop_data_.Get() }.stop_color_
+                    != unsafe { &*(*b.svg_data_.Get()).stop_data_.Get() }.stop_color_
+                {
+                    diff |= FieldDifference::kPaint.bits();
+                }
+            }
+            if unsafe { &*a.svg_data_.Get() }.transform_
+                != unsafe { &*b.svg_data_.Get() }.transform_
+            {
+                diff |= FieldDifference::kHasTransform.bits();
+                diff |= FieldDifference::kTransformData.bits();
+                diff |= FieldDifference::kTransformProperty.bits();
+            }
+            if unsafe { &*a.svg_data_.Get() }.transform_origin_
+                != unsafe { &*b.svg_data_.Get() }.transform_origin_
+            {
+                diff |= FieldDifference::kTransformData.bits();
+                diff |= FieldDifference::kTransformOther.bits();
+            }
+            if unsafe { &*a.svg_data_.Get() }.opacity_ != unsafe { &*b.svg_data_.Get() }.opacity_ {
+                diff |= FieldDifference::kOpacity.bits();
+            }
+            if unsafe { &*a.svg_data_.Get() }.alignment_baseline_bits()
+                != unsafe { &*b.svg_data_.Get() }.alignment_baseline_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.svg_data_.Get() }.mask_type_bit()
+                != unsafe { &*b.svg_data_.Get() }.mask_type_bit()
+            {
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.svg_data_.Get() }.vector_effect_bit()
+                != unsafe { &*b.svg_data_.Get() }.vector_effect_bit()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+        }
+        if a.surround_data_.Get() != b.surround_data_.Get() {
+            if unsafe { &*a.surround_data_.Get() }.corner_bottom_left_shape_
+                != unsafe { &*b.surround_data_.Get() }.corner_bottom_left_shape_
+            {
+                diff |= FieldDifference::kBorderRadius.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.corner_bottom_right_shape_
+                != unsafe { &*b.surround_data_.Get() }.corner_bottom_right_shape_
+            {
+                diff |= FieldDifference::kBorderRadius.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.corner_top_left_shape_
+                != unsafe { &*b.surround_data_.Get() }.corner_top_left_shape_
+            {
+                diff |= FieldDifference::kBorderRadius.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.corner_top_right_shape_
+                != unsafe { &*b.surround_data_.Get() }.corner_top_right_shape_
+            {
+                diff |= FieldDifference::kBorderRadius.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.border_image_
+                != unsafe { &*b.surround_data_.Get() }.border_image_
+            {
+                diff |= FieldDifference::kBorderImage.bits();
+                diff |= FieldDifference::kBorderVisual.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.bottom_
+                != unsafe { &*b.surround_data_.Get() }.bottom_
+            {
+                diff |= FieldDifference::kInset.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.left_
+                != unsafe { &*b.surround_data_.Get() }.left_
+            {
+                diff |= FieldDifference::kInset.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.right_
+                != unsafe { &*b.surround_data_.Get() }.right_
+            {
+                diff |= FieldDifference::kInset.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.top_ != unsafe { &*b.surround_data_.Get() }.top_
+            {
+                diff |= FieldDifference::kInset.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.border_bottom_left_radius_
+                != unsafe { &*b.surround_data_.Get() }.border_bottom_left_radius_
+            {
+                diff |= FieldDifference::kBorderRadius.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.border_bottom_right_radius_
+                != unsafe { &*b.surround_data_.Get() }.border_bottom_right_radius_
+            {
+                diff |= FieldDifference::kBorderRadius.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.border_top_left_radius_
+                != unsafe { &*b.surround_data_.Get() }.border_top_left_radius_
+            {
+                diff |= FieldDifference::kBorderRadius.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.border_top_right_radius_
+                != unsafe { &*b.surround_data_.Get() }.border_top_right_radius_
+            {
+                diff |= FieldDifference::kBorderRadius.bits();
+                diff |= FieldDifference::kPaint.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.aspect_ratio_
+                != unsafe { &*b.surround_data_.Get() }.aspect_ratio_
+            {
+                diff |= FieldDifference::kLayout.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.contain_intrinsic_height_
+                != unsafe { &*b.surround_data_.Get() }.contain_intrinsic_height_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.contain_intrinsic_width_
+                != unsafe { &*b.surround_data_.Get() }.contain_intrinsic_width_
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.border_bottom_color_
+                != unsafe { &*b.surround_data_.Get() }.border_bottom_color_
+            {
+                diff |= FieldDifference::kBorderVisual.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.border_left_color_
+                != unsafe { &*b.surround_data_.Get() }.border_left_color_
+            {
+                diff |= FieldDifference::kBorderVisual.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.border_right_color_
+                != unsafe { &*b.surround_data_.Get() }.border_right_color_
+            {
+                diff |= FieldDifference::kBorderVisual.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.border_top_color_
+                != unsafe { &*b.surround_data_.Get() }.border_top_color_
+            {
+                diff |= FieldDifference::kBorderVisual.bits();
+            }
+            if unsafe { &*a.surround_data_.Get() }.frame_sizing_bits()
+                != unsafe { &*b.surround_data_.Get() }.frame_sizing_bits()
+            {
+                diff |= FieldDifference::kLayout.bits();
+                diff |= FieldDifference::kScrollAnchor.bits();
+            }
+        }
+        if a.background_data_.Get() != b.background_data_.Get() {
+            if unsafe { &*a.background_data_.Get() }.background_
+                != unsafe { &*b.background_data_.Get() }.background_
+            {
+                diff |= FieldDifference::kBackground.bits();
+                diff |= FieldDifference::kCurrentcolor.bits();
+            }
+            if unsafe { &*a.background_data_.Get() }.background_color_
+                != unsafe { &*b.background_data_.Get() }.background_color_
+            {
+                diff |= FieldDifference::kAXStyle.bits();
+                diff |= FieldDifference::kBackgroundColor.bits();
+            }
+        }
+        if a.data_.pseudo_element_styles_bits() != b.data_.pseudo_element_styles_bits() {
+            diff |= FieldDifference::kScrollbarStyle.bits();
+        }
+        if a.data_.vertical_align_bits() != b.data_.vertical_align_bits() {
+            diff |= FieldDifference::kAXStyle.bits();
+            diff |= FieldDifference::kLayout.bits();
+        }
+        if a.data_.clear_bits() != b.data_.clear_bits() {
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.floating_bits() != b.data_.floating_bits() {
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.overflow_x_bits() != b.data_.overflow_x_bits() {
+            diff |= FieldDifference::kBoxPaintProperty.bits();
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.overflow_y_bits() != b.data_.overflow_y_bits() {
+            diff |= FieldDifference::kBoxPaintProperty.bits();
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.position_bits() != b.data_.position_bits() {
+            diff |= FieldDifference::kClip.bits();
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kScrollAnchor.bits();
+        }
+        if a.data_.transform_box_bits() != b.data_.transform_box_bits() {
+            diff |= FieldDifference::kTransformData.bits();
+            diff |= FieldDifference::kTransformOther.bits();
+        }
+        if a.data_.unicode_bidi_bits() != b.data_.unicode_bidi_bits() {
+            diff |= FieldDifference::kReshape.bits();
+        }
+        if a.data_.content_visibility_bits() != b.data_.content_visibility_bits() {
+            diff |= FieldDifference::kLayout.bits();
+        }
+        if a.data_.box_direction_bit() != b.data_.box_direction_bit() {
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.box_sizing_bit() != b.data_.box_sizing_bit() {
+            diff |= FieldDifference::kLayout.bits();
+        }
+        if a.data_.has_size_containment_for_view_transition_scope_bit()
+            != b.data_.has_size_containment_for_view_transition_scope_bit()
+        {
+            diff |= FieldDifference::kLayout.bits();
+        }
+        if a.data_.is_original_display_inline_type_bit()
+            != b.data_.is_original_display_inline_type_bit()
+        {
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.skips_contents_bit() != b.data_.skips_contents_bit() {
+            diff |= FieldDifference::kLayout.bits();
+        }
+        if a.data_.table_layout_bit() != b.data_.table_layout_bit() {
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.text_align_bits() != b.data_.text_align_bits() {
+            diff |= FieldDifference::kAXStyle.bits();
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.writing_mode_bits() != b.data_.writing_mode_bits() {
+            diff |= FieldDifference::kAXStyle.bits();
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.caret_shape_bits() != b.data_.caret_shape_bits() {
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.inside_link_bits() != b.data_.inside_link_bits() {
+            diff |= FieldDifference::kAXStyle.bits();
+            diff |= FieldDifference::kBorderVisual.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.text_wrap_style_bits() != b.data_.text_wrap_style_bits() {
+            diff |= FieldDifference::kLayout.bits();
+        }
+        if a.data_.visibility_bits() != b.data_.visibility_bits() {
+            diff |= FieldDifference::kPaint.bits();
+            diff |= FieldDifference::kVisibility.bits();
+        }
+        if a.data_.white_space_collapse_bits() != b.data_.white_space_collapse_bits() {
+            diff |= FieldDifference::kReshape.bits();
+        }
+        if a.data_.border_collapse_bit() != b.data_.border_collapse_bit() {
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.caption_side_bit() != b.data_.caption_side_bit() {
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.caret_animation_bit() != b.data_.caret_animation_bit() {
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.color_scheme_forced_bit() != b.data_.color_scheme_forced_bit() {
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.dark_color_scheme_bit() != b.data_.dark_color_scheme_bit() {
+            diff |= FieldDifference::kAccentColor.bits();
+            diff |= FieldDifference::kBorderVisual.bits();
+            diff |= FieldDifference::kCurrentcolor.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.direction_bit() != b.data_.direction_bit() {
+            diff |= FieldDifference::kAXStyle.bits();
+            diff |= FieldDifference::kReshape.bits();
+        }
+        if a.data_.is_css_inert_bit() != b.data_.is_css_inert_bit() {
+            diff |= FieldDifference::kInert.bits();
+        }
+        if a.data_.is_html_inert_bit() != b.data_.is_html_inert_bit() {
+            diff |= FieldDifference::kInert.bits();
+        }
+        if a.data_.list_style_position_bit() != b.data_.list_style_position_bit() {
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.prefers_default_scrollbar_styles_bit()
+            != b.data_.prefers_default_scrollbar_styles_bit()
+        {
+            diff |= FieldDifference::kLayout.bits();
+            diff |= FieldDifference::kPaint.bits();
+            diff |= FieldDifference::kScrollbarColor.bits();
+        }
+        if a.data_.print_color_adjust_bit() != b.data_.print_color_adjust_bit() {
+            diff |= FieldDifference::kPaint.bits();
+        }
+        if a.data_.rtl_ordering_bit() != b.data_.rtl_ordering_bit() {
+            diff |= FieldDifference::kReshape.bits();
+        }
+        if a.data_.text_wrap_mode_bit() != b.data_.text_wrap_mode_bit() {
+            diff |= FieldDifference::kReshape.bits();
+        }
+
+        diff
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:5451
@@ -25630,8 +28281,6 @@ unsafe extern "Rust" {
         style: &ComputedStyleBase,
         other: &ComputedStyleBase,
     ) -> Vector<(String, usize)>;
-    // cpp: layoutng_style/style/computed_style_base.h:10386
-    fn ComputedStyleBaseFieldInvalidationDiff(a: &ComputedStyle, b: &ComputedStyle) -> u64;
     // cpp: layoutng_style/style/computed_style_base.h:5451
     #[cfg(debug_assertions)]
     fn ComputedStyleBaseDebugFieldToString(field: ComputedStyleBaseDebugField) -> String;
@@ -25864,3 +28513,752 @@ impl_style_data_traceable!(
     StyleMiscInheritedData,
     StyleMiscData,
 );
+
+// cpp: third_party/blink/renderer/core/style/computed_style_base.h (generated)
+// Field-by-field value equality preserves the generated group pointer fast paths.
+impl PartialEq for StyleMiscInherited1Data {
+    fn eq(&self, other: &Self) -> bool {
+        self.hyphenation_string_ == other.hyphenation_string_
+            && self.color_scheme_ == other.color_scheme_
+            && foundation::ValuesEquivalent(self.quotes_.get(), other.quotes_.get())
+            && foundation::ValuesEquivalent(&self.list_style_image_, &other.list_style_image_)
+            && foundation::ValuesEquivalent(&self.list_style_type_, &other.list_style_type_)
+            && foundation::ValuesEquivalent(&self.scrollbar_color_, &other.scrollbar_color_)
+            && self.dynamic_range_limit_ == other.dynamic_range_limit_
+            && self.tab_size_ == other.tab_size_
+            && self.text_fit_ == other.text_fit_
+            && self.text_size_adjust_ == other.text_size_adjust_
+            && self.accent_color_ == other.accent_color_
+            && self.caret_color_ == other.caret_color_
+            && self.text_emphasis_color_ == other.text_emphasis_color_
+            && self.math_depth_ == other.math_depth_
+            && self.orphans_ == other.orphans_
+            && self.hyphenate_limit_chars_ == other.hyphenate_limit_chars_
+    }
+}
+impl PartialEq for StyleMiscInherited2Data {
+    fn eq(&self, other: &Self) -> bool {
+        self.text_emphasis_custom_mark_ == other.text_emphasis_custom_mark_
+            && (&self.ua_shadow_host_data_ == &other.ua_shadow_host_data_)
+            && foundation::ValuesEquivalent(&self.text_shadow_, &other.text_shadow_)
+            && foundation::ValuesEquivalent(&self.cursor_data_, &other.cursor_data_)
+            && style_member_values_equivalent_by(
+                &self.initial_data_,
+                &other.initial_data_,
+                style_initial_data_equal,
+            )
+            && self.text_indent_ == other.text_indent_
+            && self.text_underline_offset_ == other.text_underline_offset_
+            && self.text_stroke_width_ == other.text_stroke_width_
+            && self.effective_zoom_ == other.effective_zoom_
+            && self.tap_highlight_color_ == other.tap_highlight_color_
+            && self.text_fill_color_ == other.text_fill_color_
+            && self.text_stroke_color_ == other.text_stroke_color_
+            && self.widows_ == other.widows_
+            && self.effective_touch_action_bits() == other.effective_touch_action_bits()
+    }
+}
+impl PartialEq for StyleMiscInheritedData {
+    fn eq(&self, other: &Self) -> bool {
+        foundation::ValuesEquivalent(&self.misc_inherited_1_data_, &other.misc_inherited_1_data_)
+            && foundation::ValuesEquivalent(
+                &self.misc_inherited_2_data_,
+                &other.misc_inherited_2_data_,
+            )
+            && self.text_box_edge_bits() == other.text_box_edge_bits()
+            && self.text_underline_position_bits() == other.text_underline_position_bits()
+            && self.hanging_punctuation_bits() == other.hanging_punctuation_bits()
+            && self.line_break_bits() == other.line_break_bits()
+            && self.speak_bits() == other.speak_bits()
+            && self.text_align_last_bits() == other.text_align_last_bits()
+            && self.text_decoration_skip_spaces_bits() == other.text_decoration_skip_spaces_bits()
+            && self.text_emphasis_mark_bits() == other.text_emphasis_mark_bits()
+            && self.text_emphasis_position_bits() == other.text_emphasis_position_bits()
+            && self.block_ellipsis_bit() == other.block_ellipsis_bit()
+            && self.user_select_bits() == other.user_select_bits()
+            && self.word_break_bits() == other.word_break_bits()
+            && self.draggable_region_mode_bits() == other.draggable_region_mode_bits()
+            && self.forced_color_adjust_bits() == other.forced_color_adjust_bits()
+            && self.hyphens_bits() == other.hyphens_bits()
+            && self.image_animation_bits() == other.image_animation_bits()
+            && self.image_rendering_bits() == other.image_rendering_bits()
+            && self.overflow_wrap_bits() == other.overflow_wrap_bits()
+            && self.ruby_align_bits() == other.ruby_align_bits()
+            && self.ruby_overhang_bits() == other.ruby_overhang_bits()
+            && self.text_decoration_skip_ink_bits() == other.text_decoration_skip_ink_bits()
+            && self.text_indent_flags_bits() == other.text_indent_flags_bits()
+            && self.text_justify_bits() == other.text_justify_bits()
+            && self.text_orientation_bits() == other.text_orientation_bits()
+            && self.text_security_bits() == other.text_security_bits()
+            && self.user_modify_bits() == other.user_modify_bits()
+            && self.empty_cells_bit() == other.empty_cells_bit()
+            && self.has_line_if_empty_bit() == other.has_line_if_empty_bit()
+            && self.image_orientation_bit() == other.image_orientation_bit()
+            && self.in_base_appearance_bit() == other.in_base_appearance_bit()
+            && self.interactivity_bit() == other.interactivity_bit()
+            && self.interpolate_size_bit() == other.interpolate_size_bit()
+            && self.is_in_shrink_to_fit_subtree_bit() == other.is_in_shrink_to_fit_subtree_bit()
+            && self.math_shift_bit() == other.math_shift_bit()
+            && self.math_style_bit() == other.math_style_bit()
+            && self.ruby_position_bit() == other.ruby_position_bit()
+            && self.subtree_is_sticky_bit() == other.subtree_is_sticky_bit()
+            && self.subtree_will_change_contents_bit() == other.subtree_will_change_contents_bit()
+            && self.text_autospace_bit() == other.text_autospace_bit()
+            && self.text_combine_bit() == other.text_combine_bit()
+            && self.text_emphasis_fill_bit() == other.text_emphasis_fill_bit()
+    }
+}
+impl PartialEq for StyleMisc1Data {
+    fn eq(&self, other: &Self) -> bool {
+        self.backdrop_filter_ == other.backdrop_filter_
+            && self.column_rule_color_ == other.column_rule_color_
+            && foundation::ValuesEquivalent(&self.anchor_name_, &other.anchor_name_)
+            && foundation::ValuesEquivalent(&self.border_shape_, &other.border_shape_)
+            && foundation::ValuesEquivalent(&self.box_shadow_, &other.box_shadow_)
+            && style_member_values_equivalent_by(&self.clip_path_, &other.clip_path_, |a, b| {
+                a.Equals(b)
+            })
+            && self.anchor_scope_ == other.anchor_scope_
+            && self.column_rule_inset_cap_end_ == other.column_rule_inset_cap_end_
+            && self.column_rule_inset_cap_start_ == other.column_rule_inset_cap_start_
+            && self.position_anchor_ == other.position_anchor_
+            && self.column_height_ == other.column_height_
+            && self.column_gap_ == other.column_gap_
+            && self.align_content_ == other.align_content_
+            && self.align_self_ == other.align_self_
+            && self.column_count_ == other.column_count_
+            && self.position_area_ == other.position_area_
+    }
+}
+impl PartialEq for StyleVisitedData {
+    fn eq(&self, other: &Self) -> bool {
+        self.internal_visited_column_rule_color_ == other.internal_visited_column_rule_color_
+            && self.internal_visited_background_color_ == other.internal_visited_background_color_
+            && self.internal_visited_border_bottom_color_
+                == other.internal_visited_border_bottom_color_
+            && self.internal_visited_border_left_color_ == other.internal_visited_border_left_color_
+            && self.internal_visited_border_right_color_
+                == other.internal_visited_border_right_color_
+            && self.internal_visited_border_top_color_ == other.internal_visited_border_top_color_
+            && self.internal_visited_outline_color_ == other.internal_visited_outline_color_
+            && self.internal_visited_text_decoration_color_
+                == other.internal_visited_text_decoration_color_
+    }
+}
+impl PartialEq for StyleMisc2Data {
+    fn eq(&self, other: &Self) -> bool {
+        self.filter_ == other.filter_
+            && self.column_rule_style_ == other.column_rule_style_
+            && self.column_rule_width_ == other.column_rule_width_
+            && self.grid_auto_columns_ == other.grid_auto_columns_
+            && self.grid_auto_rows_ == other.grid_auto_rows_
+            && foundation::ValuesEquivalent(&self.container_name_, &other.container_name_)
+            && style_content_values_equivalent(&self.content_, &other.content_)
+            && self.flow_tolerance_ == other.flow_tolerance_
+            && self.column_rule_inset_junction_end_ == other.column_rule_inset_junction_end_
+            && self.column_rule_inset_junction_start_ == other.column_rule_inset_junction_start_
+            && self.flex_basis_ == other.flex_basis_
+            && self.column_width_ == other.column_width_
+            && self.flex_grow_ == other.flex_grow_
+            && self.flex_shrink_ == other.flex_shrink_
+            && self.flex_line_count_ == other.flex_line_count_
+            && self.flex_wrap_ == other.flex_wrap_
+    }
+}
+impl PartialEq for StyleMisc3Data {
+    fn eq(&self, other: &Self) -> bool {
+        self.interest_delay_end_ == other.interest_delay_end_
+            && self.interest_delay_start_ == other.interest_delay_start_
+            && self.grid_column_end_ == other.grid_column_end_
+            && self.grid_column_start_ == other.grid_column_start_
+            && self.grid_row_end_ == other.grid_row_end_
+            && self.grid_row_start_ == other.grid_row_start_
+            && foundation::ValuesEquivalent(&self.grid_template_areas_, &other.grid_template_areas_)
+            && foundation::ValuesEquivalent(
+                &self.grid_template_columns_,
+                &other.grid_template_columns_,
+            )
+            && foundation::ValuesEquivalent(&self.grid_template_rows_, &other.grid_template_rows_)
+            && style_optional_member_values_equivalent(
+                &self.object_view_box_,
+                &other.object_view_box_,
+            )
+            && self.object_position_ == other.object_position_
+            && self.offset_anchor_ == other.offset_anchor_
+            && self.initial_letter_ == other.initial_letter_
+            && self.grid_lanes_direction_ == other.grid_lanes_direction_
+            && self.justify_items_ == other.justify_items_
+            && self.justify_self_ == other.justify_self_
+    }
+}
+impl PartialEq for StyleForcedColorsData {
+    fn eq(&self, other: &Self) -> bool {
+        self.internal_forced_background_color_ == other.internal_forced_background_color_
+            && self.internal_forced_border_color_ == other.internal_forced_border_color_
+            && self.internal_forced_outline_color_ == other.internal_forced_outline_color_
+    }
+}
+impl PartialEq for StyleMisc4Data {
+    fn eq(&self, other: &Self) -> bool {
+        self.page_ == other.page_
+            && self.row_rule_color_ == other.row_rule_color_
+            && foundation::ValuesEquivalent(&self.offset_path_, &other.offset_path_)
+            && foundation::ValuesEquivalent(
+                &self.position_try_fallbacks_,
+                &other.position_try_fallbacks_,
+            )
+            && foundation::ValuesEquivalent(&self.rotate_, &other.rotate_)
+            && self.offset_distance_ == other.offset_distance_
+            && self.offset_position_ == other.offset_position_
+            && self.perspective_origin_ == other.perspective_origin_
+            && self.offset_rotate_ == other.offset_rotate_
+            && self.perspective_ == other.perspective_
+            && self.row_gap_ == other.row_gap_
+            && self.outline_color_ == other.outline_color_
+            && self.order_ == other.order_
+            && self.outline_offset_ == other.outline_offset_
+            && self.outline_width_ == other.outline_width_
+            && self.reading_order_ == other.reading_order_
+    }
+}
+impl PartialEq for StyleMisc5Data {
+    fn eq(&self, other: &Self) -> bool {
+        self.row_rule_style_ == other.row_rule_style_
+            && self.row_rule_width_ == other.row_rule_width_
+            && foundation::ValuesEquivalent(&self.scale_, &other.scale_)
+            && foundation::ValuesEquivalent(&self.scroll_marker_group_, &other.scroll_marker_group_)
+            && self.row_rule_inset_cap_end_ == other.row_rule_inset_cap_end_
+            && self.row_rule_inset_cap_start_ == other.row_rule_inset_cap_start_
+            && self.row_rule_inset_junction_end_ == other.row_rule_inset_junction_end_
+            && self.row_rule_inset_junction_start_ == other.row_rule_inset_junction_start_
+            && self.scroll_padding_bottom_ == other.scroll_padding_bottom_
+            && self.scroll_padding_left_ == other.scroll_padding_left_
+            && self.scroll_padding_right_ == other.scroll_padding_right_
+            && self.scroll_padding_top_ == other.scroll_padding_top_
+            && self.scroll_margin_bottom_ == other.scroll_margin_bottom_
+            && self.scroll_margin_left_ == other.scroll_margin_left_
+            && self.scroll_margin_right_ == other.scroll_margin_right_
+            && self.scroll_margin_top_ == other.scroll_margin_top_
+    }
+}
+impl PartialEq for StyleMisc6Data {
+    fn eq(&self, other: &Self) -> bool {
+        self.view_transition_group_ == other.view_transition_group_
+            && self.text_overflow_ == other.text_overflow_
+            && foundation::ValuesEquivalent(&self.shape_outside_, &other.shape_outside_)
+            && foundation::ValuesEquivalent(&self.translate_, &other.translate_)
+            && foundation::ValuesEquivalent(
+                &self.view_transition_class_,
+                &other.view_transition_class_,
+            )
+            && foundation::ValuesEquivalent(
+                &self.view_transition_name_,
+                &other.view_transition_name_,
+            )
+            && self.trigger_scope_ == other.trigger_scope_
+            && self.shape_margin_ == other.shape_margin_
+            && self.text_decoration_inset_ == other.text_decoration_inset_
+            && self.text_decoration_thickness_ == other.text_decoration_thickness_
+            && self.shape_image_threshold_ == other.shape_image_threshold_
+            && self.box_flex_ == other.box_flex_
+            && self.text_decoration_color_ == other.text_decoration_color_
+            && self.scroll_snap_align_ == other.scroll_snap_align_
+            && self.scroll_snap_type_ == other.scroll_snap_type_
+            && self.touch_action_bits() == other.touch_action_bits()
+    }
+}
+impl PartialEq for StyleTimelineData {
+    fn eq(&self, other: &Self) -> bool {
+        self.timeline_scope_ == other.timeline_scope_
+            && self.scroll_timeline_name_ == other.scroll_timeline_name_
+            && self.view_timeline_name_ == other.view_timeline_name_
+            && self.scroll_timeline_axis_ == other.scroll_timeline_axis_
+            && self.view_timeline_axis_ == other.view_timeline_axis_
+            && self.view_timeline_inset_ == other.view_timeline_inset_
+    }
+}
+impl PartialEq for StyleMisc7Data {
+    fn eq(&self, other: &Self) -> bool {
+        self.display_layout_custom_name_ == other.display_layout_custom_name_
+            && self.display_layout_custom_parent_name_ == other.display_layout_custom_parent_name_
+            && (&self.custom_highlight_names_ == &other.custom_highlight_names_)
+            && (&self.counter_directives_ == &other.counter_directives_)
+            && (self.counter_increment_list_.as_ref().map(|v| &v.0)
+                == other.counter_increment_list_.as_ref().map(|v| &v.0))
+            && (self.counter_reset_list_.as_ref().map(|v| &v.0)
+                == other.counter_reset_list_.as_ref().map(|v| &v.0))
+            && (self.counter_set_list_.as_ref().map(|v| &v.0)
+                == other.counter_set_list_.as_ref().map(|v| &v.0))
+            && self.mask_ == other.mask_
+            && foundation::ValuesEquivalent(&self.box_reflect_, &other.box_reflect_)
+            && style_member_values_equivalent_by(&self.animations_, &other.animations_, |a, b| a == b)
+            && style_member_values_equivalent_by(&self.transitions_, &other.transitions_, |a, b| a == b)
+            && self.mask_box_image_ == other.mask_box_image_
+            && self.page_size_ == other.page_size_
+            && self.unconditional_scrollbar_size_ == other.unconditional_scrollbar_size_
+            && self.webkit_line_clamp_ == other.webkit_line_clamp_
+            && self.box_ordinal_group_ == other.box_ordinal_group_
+    }
+}
+impl PartialEq for StyleMisc8Data {
+    fn eq(&self, other: &Self) -> bool {
+        self.callback_selectors_ == other.callback_selectors_
+            && style_member_values_equivalent_by(
+                &self.document_rules_selectors_,
+                &other.document_rules_selectors_,
+                |a, b| a.size() == b.size() && a.iter().all(|entry| b.Contains(entry)),
+            )
+            && self.non_inherited_variables_ == other.non_inherited_variables_
+            && self.max_lines_ == other.max_lines_
+    }
+}
+impl PartialEq for StyleMathData {
+    fn eq(&self, other: &Self) -> bool {
+        self.math_baseline_ == other.math_baseline_
+            && self.math_fraction_bar_thickness_ == other.math_fraction_bar_thickness_
+            && self.math_l_space_ == other.math_l_space_
+            && self.math_r_space_ == other.math_r_space_
+            && self.math_padded_v_offset_ == other.math_padded_v_offset_
+            && self.math_padded_depth_ == other.math_padded_depth_
+            && self.math_min_size_ == other.math_min_size_
+            && self.math_max_size_ == other.math_max_size_
+    }
+}
+impl PartialEq for StyleMiscData {
+    fn eq(&self, other: &Self) -> bool {
+        foundation::ValuesEquivalent(&self.misc_1_data_, &other.misc_1_data_)
+            && foundation::ValuesEquivalent(&self.visited_data_, &other.visited_data_)
+            && foundation::ValuesEquivalent(&self.misc_2_data_, &other.misc_2_data_)
+            && foundation::ValuesEquivalent(&self.misc_3_data_, &other.misc_3_data_)
+            && foundation::ValuesEquivalent(&self.forced_colors_data_, &other.forced_colors_data_)
+            && foundation::ValuesEquivalent(&self.misc_4_data_, &other.misc_4_data_)
+            && foundation::ValuesEquivalent(&self.misc_5_data_, &other.misc_5_data_)
+            && foundation::ValuesEquivalent(&self.misc_6_data_, &other.misc_6_data_)
+            && foundation::ValuesEquivalent(&self.timeline_data_, &other.timeline_data_)
+            && foundation::ValuesEquivalent(&self.misc_7_data_, &other.misc_7_data_)
+            && foundation::ValuesEquivalent(&self.misc_8_data_, &other.misc_8_data_)
+            && foundation::ValuesEquivalent(&self.math_data_, &other.math_data_)
+            && foundation::ValuesEquivalent(&self.will_change_, &other.will_change_)
+            && self.appearance_bits() == other.appearance_bits()
+            && self.blend_mode_bits() == other.blend_mode_bits()
+            && self.contain_bits() == other.contain_bits()
+            && self.effective_appearance_bits() == other.effective_appearance_bits()
+            && self.break_after_bits() == other.break_after_bits()
+            && self.break_before_bits() == other.break_before_bits()
+            && self.container_type_bits() == other.container_type_bits()
+            && self.grid_auto_flow_bits() == other.grid_auto_flow_bits()
+            && self.margin_trim_bits() == other.margin_trim_bits()
+            && self.outline_style_bits() == other.outline_style_bits()
+            && self.scrollbar_gutter_bits() == other.scrollbar_gutter_bits()
+            && self.box_align_bits() == other.box_align_bits()
+            && self.object_fit_bits() == other.object_fit_bits()
+            && self.position_try_order_bits() == other.position_try_order_bits()
+            && self.position_visibility_bits() == other.position_visibility_bits()
+            && self.reading_flow_bits() == other.reading_flow_bits()
+            && self.affected_by_css_function_bit() == other.affected_by_css_function_bit()
+            && self.resize_bits() == other.resize_bits()
+            && self.text_decoration_style_bits() == other.text_decoration_style_bits()
+            && self.box_pack_bits() == other.box_pack_bits()
+            && self.break_inside_bits() == other.break_inside_bits()
+            && self.column_rule_break_bits() == other.column_rule_break_bits()
+            && self.column_rule_visibility_items_bits() == other.column_rule_visibility_items_bits()
+            && self.column_wrap_bits() == other.column_wrap_bits()
+            && self.continue_bits() == other.continue_bits()
+            && self.flex_direction_bits() == other.flex_direction_bits()
+            && self.overscroll_behavior_x_bits() == other.overscroll_behavior_x_bits()
+            && self.overscroll_behavior_y_bits() == other.overscroll_behavior_y_bits()
+            && self.overscroll_container_type_bits() == other.overscroll_container_type_bits()
+            && self.page_margin_safety_bits() == other.page_margin_safety_bits()
+            && self.page_orientation_bits() == other.page_orientation_bits()
+            && self.page_size_type_bits() == other.page_size_type_bits()
+            && self.row_rule_break_bits() == other.row_rule_break_bits()
+            && self.row_rule_visibility_items_bits() == other.row_rule_visibility_items_bits()
+            && self.scroll_behavior_bits() == other.scroll_behavior_bits()
+            && self.scrollbar_width_bits() == other.scrollbar_width_bits()
+            && self.user_drag_bits() == other.user_drag_bits()
+            && self.affected_by_functional_media_bit() == other.affected_by_functional_media_bit()
+            && self.affected_by_functional_navigation_bit()
+                == other.affected_by_functional_navigation_bit()
+            && self.align_content_block_center_bit() == other.align_content_block_center_bit()
+            && self.backface_visibility_bit() == other.backface_visibility_bit()
+            && self.box_orient_bit() == other.box_orient_bit()
+            && self.can_affect_animations_bit() == other.can_affect_animations_bit()
+            && self.column_fill_bit() == other.column_fill_bit()
+            && self.column_span_bit() == other.column_span_bit()
+            && self.depends_on_anchored_container_queries_bit()
+                == other.depends_on_anchored_container_queries_bit()
+            && self.depends_on_scroll_state_container_queries_bit()
+                == other.depends_on_scroll_state_container_queries_bit()
+            && self.depends_on_size_container_queries_bit()
+                == other.depends_on_size_container_queries_bit()
+            && self.depends_on_style_container_queries_bit()
+                == other.depends_on_style_container_queries_bit()
+            && self.element_is_view_transition_participant_bit()
+                == other.element_is_view_transition_participant_bit()
+            && self.first_line_depends_on_size_container_queries_bit()
+                == other.first_line_depends_on_size_container_queries_bit()
+            && self.forces_blockifies_children_bit() == other.forces_blockifies_children_bit()
+            && self.grid_lanes_pack_bit() == other.grid_lanes_pack_bit()
+            && self.has_auto_column_count_bit() == other.has_auto_column_count_bit()
+            && self.has_auto_column_height_bit() == other.has_auto_column_height_bit()
+            && self.has_auto_column_width_bit() == other.has_auto_column_width_bit()
+            && self.has_current_backdrop_filter_animation_bit()
+                == other.has_current_backdrop_filter_animation_bit()
+            && self.has_current_background_color_animation_bit()
+                == other.has_current_background_color_animation_bit()
+            && self.has_current_clip_path_animation_bit()
+                == other.has_current_clip_path_animation_bit()
+            && self.has_current_filter_animation_bit() == other.has_current_filter_animation_bit()
+            && self.has_current_opacity_animation_bit() == other.has_current_opacity_animation_bit()
+            && self.has_current_rotate_animation_bit() == other.has_current_rotate_animation_bit()
+            && self.has_current_scale_animation_bit() == other.has_current_scale_animation_bit()
+            && self.has_current_transform_animation_bit()
+                == other.has_current_transform_animation_bit()
+            && self.has_current_translate_animation_bit()
+                == other.has_current_translate_animation_bit()
+            && self.has_explicit_overflow_x_visible_bit()
+                == other.has_explicit_overflow_x_visible_bit()
+            && self.has_explicit_overflow_y_visible_bit()
+                == other.has_explicit_overflow_y_visible_bit()
+            && self.internal_overscroll_container_bit() == other.internal_overscroll_container_bit()
+            && self.internal_overscroll_position_bit() == other.internal_overscroll_position_bit()
+            && self.internal_unbounded_bit() == other.internal_unbounded_bit()
+            && self.is_bottom_relative_to_safe_area_inset_bit()
+                == other.is_bottom_relative_to_safe_area_inset_bit()
+            && self.is_running_rotate_animation_on_compositor_bit()
+                == other.is_running_rotate_animation_on_compositor_bit()
+            && self.is_running_scale_animation_on_compositor_bit()
+                == other.is_running_scale_animation_on_compositor_bit()
+            && self.is_running_transform_animation_on_compositor_bit()
+                == other.is_running_transform_animation_on_compositor_bit()
+            && self.is_running_translate_animation_on_compositor_bit()
+                == other.is_running_translate_animation_on_compositor_bit()
+            && self.is_secondary_body_element_bit() == other.is_secondary_body_element_bit()
+            && self.is_specified_display_webkit_box_bit()
+                == other.is_specified_display_webkit_box_bit()
+            && self.is_starting_style_bit() == other.is_starting_style_bit()
+            && self.isolation_bit() == other.isolation_bit()
+            && self.line_clamp_internal_block_ellipsis_bit()
+                == other.line_clamp_internal_block_ellipsis_bit()
+            && self.max_content_sizing_bit() == other.max_content_sizing_bit()
+            && self.outline_style_is_auto_bit() == other.outline_style_is_auto_bit()
+            && self.overlay_bit() == other.overlay_bit()
+            && self.requires_accelerated_compositing_for_external_reasons_bit()
+                == other.requires_accelerated_compositing_for_external_reasons_bit()
+            && self.rule_overlap_bit() == other.rule_overlap_bit()
+            && self.scroll_axis_lock_bit() == other.scroll_axis_lock_bit()
+            && self.scroll_initial_target_bit() == other.scroll_initial_target_bit()
+            && self.scroll_target_group_bit() == other.scroll_target_group_bit()
+            && self.transform_style_3d_bit() == other.transform_style_3d_bit()
+            && self.view_transition_scope_bit() == other.view_transition_scope_bit()
+    }
+}
+impl PartialEq for StyleInheritedForcedColorsData {
+    fn eq(&self, other: &Self) -> bool {
+        self.internal_forced_visited_color_ == other.internal_forced_visited_color_
+            && self.internal_forced_color_ == other.internal_forced_color_
+    }
+}
+impl PartialEq for StyleInheritedVisitedData {
+    fn eq(&self, other: &Self) -> bool {
+        self.internal_visited_caret_color_ == other.internal_visited_caret_color_
+            && self.internal_visited_text_emphasis_color_
+                == other.internal_visited_text_emphasis_color_
+            && self.internal_visited_text_fill_color_ == other.internal_visited_text_fill_color_
+            && self.internal_visited_text_stroke_color_ == other.internal_visited_text_stroke_color_
+    }
+}
+impl PartialEq for StyleHighlightDataData {
+    fn eq(&self, other: &Self) -> bool {
+        self.highlight_data_ == other.highlight_data_
+    }
+}
+impl PartialEq for StyleInheritedData {
+    fn eq(&self, other: &Self) -> bool {
+        foundation::ValuesEquivalent(
+            &self.inherited_forced_colors_data_,
+            &other.inherited_forced_colors_data_,
+        ) && foundation::ValuesEquivalent(
+            &self.inherited_visited_data_,
+            &other.inherited_visited_data_,
+        ) && foundation::ValuesEquivalent(&self.highlight_data_data_, &other.highlight_data_data_)
+            && foundation::ValuesEquivalent(&self.font_, &other.font_)
+            && foundation::ValuesEquivalent(&self.container_font_, &other.container_font_)
+            && self.inherited_variables_ == other.inherited_variables_
+            && self.letter_spacing_ == other.letter_spacing_
+            && self.line_height_ == other.line_height_
+            && self.word_spacing_ == other.word_spacing_
+            && self.internal_visited_color_ == other.internal_visited_color_
+            && self.color_ == other.color_
+            && self.horizontal_border_spacing_ == other.horizontal_border_spacing_
+            && self.vertical_border_spacing_ == other.vertical_border_spacing_
+            && self.cursor_bits() == other.cursor_bits()
+            && self.text_transform_bits() == other.text_transform_bits()
+            && self.color_is_current_color_bit() == other.color_is_current_color_bit()
+            && self.in_forced_colors_mode_bit() == other.in_forced_colors_mode_bit()
+            && self.internal_visited_color_is_current_color_bit()
+                == other.internal_visited_color_is_current_color_bit()
+    }
+}
+impl PartialEq for StyleVisualData {
+    fn eq(&self, other: &Self) -> bool {
+        foundation::ValuesEquivalent(
+            &self.base_text_decoration_data_,
+            &other.base_text_decoration_data_,
+        ) && self.clip_ == other.clip_
+            && self.zoom_ == other.zoom_
+            && self.text_decoration_line_bits() == other.text_decoration_line_bits()
+            && self.field_sizing_bit() == other.field_sizing_bit()
+            && self.has_auto_clip_bit() == other.has_auto_clip_bit()
+            && self.has_clip_path_bit() == other.has_clip_path_bit()
+            && self.maybe_has_gap_decorations_bit() == other.maybe_has_gap_decorations_bit()
+    }
+}
+impl PartialEq for StyleFillData {
+    fn eq(&self, other: &Self) -> bool {
+        self.internal_visited_fill_paint_ == other.internal_visited_fill_paint_
+            && self.fill_paint_ == other.fill_paint_
+            && self.fill_opacity_ == other.fill_opacity_
+    }
+}
+impl PartialEq for StyleStrokeData {
+    fn eq(&self, other: &Self) -> bool {
+        foundation::ValuesEquivalent(&self.stroke_dash_array_, &other.stroke_dash_array_)
+            && self.internal_visited_stroke_paint_ == other.internal_visited_stroke_paint_
+            && self.stroke_paint_ == other.stroke_paint_
+            && self.stroke_dash_offset_ == other.stroke_dash_offset_
+            && self.stroke_width_ == other.stroke_width_
+            && self.stroke_miter_limit_ == other.stroke_miter_limit_
+            && self.stroke_opacity_ == other.stroke_opacity_
+            && self.cap_style_bits() == other.cap_style_bits()
+            && self.join_style_bits() == other.join_style_bits()
+    }
+}
+impl PartialEq for StyleResourcesData {
+    fn eq(&self, other: &Self) -> bool {
+        foundation::ValuesEquivalent(&self.marker_end_resource_, &other.marker_end_resource_)
+            && foundation::ValuesEquivalent(&self.marker_mid_resource_, &other.marker_mid_resource_)
+            && foundation::ValuesEquivalent(
+                &self.marker_start_resource_,
+                &other.marker_start_resource_,
+            )
+    }
+}
+impl PartialEq for StyleSvginheritedData {
+    fn eq(&self, other: &Self) -> bool {
+        foundation::ValuesEquivalent(&self.fill_data_, &other.fill_data_)
+            && foundation::ValuesEquivalent(&self.stroke_data_, &other.stroke_data_)
+            && foundation::ValuesEquivalent(&self.resources_data_, &other.resources_data_)
+            && self.css_dominant_baseline_bits() == other.css_dominant_baseline_bits()
+            && self.dominant_baseline_bits() == other.dominant_baseline_bits()
+            && self.paint_order_bits() == other.paint_order_bits()
+            && self.color_interpolation_bits() == other.color_interpolation_bits()
+            && self.color_interpolation_filters_bits() == other.color_interpolation_filters_bits()
+            && self.color_rendering_bits() == other.color_rendering_bits()
+            && self.shape_rendering_bits() == other.shape_rendering_bits()
+            && self.text_anchor_bits() == other.text_anchor_bits()
+            && self.clip_rule_bit() == other.clip_rule_bit()
+            && self.fill_rule_bit() == other.fill_rule_bit()
+    }
+}
+impl PartialEq for StyleBoxData {
+    fn eq(&self, other: &Self) -> bool {
+        self.height_ == other.height_
+            && self.margin_bottom_ == other.margin_bottom_
+            && self.margin_left_ == other.margin_left_
+            && self.margin_right_ == other.margin_right_
+            && self.margin_top_ == other.margin_top_
+            && self.max_height_ == other.max_height_
+            && self.max_width_ == other.max_width_
+            && self.min_height_ == other.min_height_
+            && self.min_width_ == other.min_width_
+            && self.padding_bottom_ == other.padding_bottom_
+            && self.padding_left_ == other.padding_left_
+            && self.padding_right_ == other.padding_right_
+            && self.padding_top_ == other.padding_top_
+            && self.width_ == other.width_
+            && self.vertical_align_length_ == other.vertical_align_length_
+            && self.justify_content_ == other.justify_content_
+            && self.align_items_ == other.align_items_
+            && self.border_bottom_width_ == other.border_bottom_width_
+            && self.border_left_width_ == other.border_left_width_
+            && self.border_right_width_ == other.border_right_width_
+            && self.border_top_width_ == other.border_top_width_
+            && self.z_index_ == other.z_index_
+            && self.overflow_clip_margin_ == other.overflow_clip_margin_
+            && self.border_bottom_style_bits() == other.border_bottom_style_bits()
+            && self.border_left_style_bits() == other.border_left_style_bits()
+            && self.border_right_style_bits() == other.border_right_style_bits()
+            && self.border_top_style_bits() == other.border_top_style_bits()
+            && self.baseline_source_bits() == other.baseline_source_bits()
+            && self.text_box_trim_bits() == other.text_box_trim_bits()
+            && self.box_decoration_break_bit() == other.box_decoration_break_bit()
+            && self.has_auto_z_index_bit() == other.has_auto_z_index_bit()
+    }
+}
+impl PartialEq for StyleSvgmiscData {
+    fn eq(&self, other: &Self) -> bool {
+        self.baseline_shift_ == other.baseline_shift_
+            && self.flood_opacity_ == other.flood_opacity_
+            && self.flood_color_ == other.flood_color_
+            && self.lighting_color_ == other.lighting_color_
+            && self.baseline_shift_type_bits() == other.baseline_shift_type_bits()
+    }
+}
+impl PartialEq for StyleGeometryData {
+    fn eq(&self, other: &Self) -> bool {
+        style_member_values_equivalent_by(&self.d_, &other.d_, |a, b| {
+            a.ByteStream() == b.ByteStream() && a.GetWindRule() == b.GetWindRule()
+        }) && self.cx_ == other.cx_
+            && self.cy_ == other.cy_
+            && self.path_length_ == other.path_length_
+            && self.r_ == other.r_
+            && self.rx_ == other.rx_
+            && self.ry_ == other.ry_
+            && self.x_ == other.x_
+            && self.y_ == other.y_
+    }
+}
+impl PartialEq for StyleStopData {
+    fn eq(&self, other: &Self) -> bool {
+        self.stop_opacity_ == other.stop_opacity_ && self.stop_color_ == other.stop_color_
+    }
+}
+impl PartialEq for StyleSVGData {
+    fn eq(&self, other: &Self) -> bool {
+        foundation::ValuesEquivalent(&self.svgmisc_data_, &other.svgmisc_data_)
+            && foundation::ValuesEquivalent(&self.geometry_data_, &other.geometry_data_)
+            && foundation::ValuesEquivalent(&self.stop_data_, &other.stop_data_)
+            && self.transform_ == other.transform_
+            && self.transform_origin_ == other.transform_origin_
+            && self.opacity_ == other.opacity_
+            && self.alignment_baseline_bits() == other.alignment_baseline_bits()
+            && self.buffered_rendering_bits() == other.buffered_rendering_bits()
+            && self.mask_type_bit() == other.mask_type_bit()
+            && self.vector_effect_bit() == other.vector_effect_bit()
+    }
+}
+impl PartialEq for StyleSurroundData {
+    fn eq(&self, other: &Self) -> bool {
+        self.corner_bottom_left_shape_ == other.corner_bottom_left_shape_
+            && self.corner_bottom_right_shape_ == other.corner_bottom_right_shape_
+            && self.corner_top_left_shape_ == other.corner_top_left_shape_
+            && self.corner_top_right_shape_ == other.corner_top_right_shape_
+            && self.border_image_ == other.border_image_
+            && self.bottom_ == other.bottom_
+            && self.left_ == other.left_
+            && self.right_ == other.right_
+            && self.top_ == other.top_
+            && self.border_bottom_left_radius_ == other.border_bottom_left_radius_
+            && self.border_bottom_right_radius_ == other.border_bottom_right_radius_
+            && self.border_top_left_radius_ == other.border_top_left_radius_
+            && self.border_top_right_radius_ == other.border_top_right_radius_
+            && self.aspect_ratio_ == other.aspect_ratio_
+            && self.contain_intrinsic_height_ == other.contain_intrinsic_height_
+            && self.contain_intrinsic_width_ == other.contain_intrinsic_width_
+            && self.border_bottom_color_ == other.border_bottom_color_
+            && self.border_left_color_ == other.border_left_color_
+            && self.border_right_color_ == other.border_right_color_
+            && self.border_top_color_ == other.border_top_color_
+            && self.frame_sizing_bits() == other.frame_sizing_bits()
+    }
+}
+impl PartialEq for StyleBackgroundData {
+    fn eq(&self, other: &Self) -> bool {
+        self.background_ == other.background_ && self.background_color_ == other.background_color_
+    }
+}
+
+// The trait-object and optional ownership forms below represent the same nullable
+// pointers as ValuesEquivalent in Chromium's generated comparisons.
+fn style_member_values_equivalent_by<T: ?Sized>(
+    a: &Member<T>,
+    b: &Member<T>,
+    equal: impl FnOnce(&T, &T) -> bool,
+) -> bool {
+    match (a.GetNonNull(), b.GetNonNull()) {
+        (None, None) => true,
+        (Some(a), Some(b)) if std::ptr::eq(a.as_ptr(), b.as_ptr()) => true,
+        (Some(a), Some(b)) => unsafe { equal(a.as_ref(), b.as_ref()) },
+        _ => false,
+    }
+}
+fn style_optional_member_values_equivalent<T: PartialEq + ?Sized>(
+    a: &Option<Member<T>>,
+    b: &Option<Member<T>>,
+) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => foundation::ValuesEquivalent(a, b),
+        _ => false,
+    }
+}
+fn style_content_values_equivalent(
+    a: &Option<Member<dyn ContentData>>,
+    b: &Option<Member<dyn ContentData>>,
+) -> bool {
+    style_optional_member_values_equivalent(a, b)
+}
+// cpp: third_party/blink/renderer/core/style/style_initial_data.cc:43-45
+fn style_initial_data_equal(a: &StyleInitialData, b: &StyleInitialData) -> bool {
+    let mut a_names = HashSet::default();
+    let mut b_names = HashSet::default();
+    a.CollectVariableNames(&mut a_names);
+    b.CollectVariableNames(&mut b_names);
+    a_names == b_names
+        && a_names.iter().all(|name| {
+            foundation::ValuesEquivalent(a.GetVariableData(name), b.GetVariableData(name))
+                && foundation::ValuesEquivalent(a.GetVariableValue(name), b.GetVariableValue(name))
+        })
+}
+// cpp: third_party/blink/renderer/core/style/fill_layer.cc:171-191
+#[unsafe(export_name = "FillLayerEqual")]
+fn fill_layer_equal(a: &FillLayer, b: &FillLayer) -> bool {
+    foundation::ValuesEquivalent(a.GetImage(), b.GetImage())
+        && a.PositionX() == b.PositionX()
+        && a.PositionY() == b.PositionY()
+        && a.BackgroundXOrigin() == b.BackgroundXOrigin()
+        && a.BackgroundYOrigin() == b.BackgroundYOrigin()
+        && a.MaskMode() == b.MaskMode()
+        && a.Attachment() == b.Attachment()
+        && a.Clip() == b.Clip()
+        && a.CompositingOperator() == b.CompositingOperator()
+        && a.GetBlendMode() == b.GetBlendMode()
+        && a.Origin() == b.Origin()
+        && a.Repeat() == b.Repeat()
+        && a.SizeType() == b.SizeType()
+        && a.SizeLength() == b.SizeLength()
+        && a.GetType() == b.GetType()
+        && foundation::ValuesEquivalent(a.Next(), b.Next())
+}
+// cpp: third_party/blink/renderer/core/style/style_highlight_data.cc:14-42
+#[unsafe(export_name = "StyleHighlightDataEqual")]
+fn style_highlight_data_equal(a: &StyleHighlightData, b: &StyleHighlightData) -> bool {
+    foundation::ValuesEquivalent(a.Selection(), b.Selection())
+        && foundation::ValuesEquivalent(a.TargetText(), b.TargetText())
+        && foundation::ValuesEquivalent(a.SearchTextCurrent(), b.SearchTextCurrent())
+        && foundation::ValuesEquivalent(a.SearchTextNotCurrent(), b.SearchTextNotCurrent())
+        && foundation::ValuesEquivalent(a.SpellingError(), b.SpellingError())
+        && foundation::ValuesEquivalent(a.GrammarError(), b.GrammarError())
+        && a.CustomHighlights().size() == b.CustomHighlights().size()
+        && a.CustomHighlights().iter().all(|entry| {
+            b.CustomHighlights()
+                .get(entry.0)
+                .is_some_and(|other| foundation::ValuesEquivalent(entry.1, other))
+        })
+}
+
+// CSSVariableData currently has an opaque, zero-size declaration in forward.rs.
+// Trie comparison already handles identical/null pointers before reaching this
+// leaf. Comparing distinct payloads needs the owning CSS token-stream type;
+// refusing that case keeps equality sound instead of inventing equal values.
+#[unsafe(export_name = "CSSVariableDataEquals")]
+fn css_variable_data_equal(
+    a: &super::forward::CSSVariableData,
+    b: &super::forward::CSSVariableData,
+) -> bool {
+    if std::ptr::eq(a, b) {
+        return true;
+    }
+    unimplemented!("distinct CSSVariableData requires the owning CSS token-stream payload")
+}

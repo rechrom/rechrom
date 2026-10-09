@@ -33,7 +33,7 @@ fn run_matrix(smoke: bool) {
     let mut owner = html::html_parser::ParseHTML(if smoke { &smoke_input } else { input });
     owner
         .GetDocumentMut()
-        .AppendStyleSheet(cssom::ParseCSS(include_str!(
+        .AppendStyleSheet(style::ParseCSS(include_str!(
             "../../../artifacts/cpp-reference/grid-native-layout.css"
         )));
     let mut space = ConstraintSpace::default();
@@ -123,16 +123,7 @@ fn run_matrix(smoke: bool) {
             d.AppendChild(ids["g6"], ids["i6_0"]);
             attr(d, "g15", "style", "width:270px;gap:4px");
         }
-        dom::style_resolver::ResolveComputedStyles(
-            &mut owner,
-            &dom::style_resolver::StyleEnvironment {
-                viewport_width: Some(1024.0),
-                viewport_height: Some(768.0),
-                resolution_dppx: Some(1.0),
-                ..Default::default()
-            },
-            &[],
-        );
+        crate::style_services::ResolveLayoutStyles(&mut owner, &space);
         engine.ApplyMutation(layoutng_assembly::layout_engine::LayoutMutation::Constraints(&space));
         let root = crate::native_test_thread::BuildDOMProjection(
             &mut owner,

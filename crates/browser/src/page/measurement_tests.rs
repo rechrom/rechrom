@@ -249,7 +249,7 @@ fn changed_scroll_animation_viewport_font_and_image_invalidate_snapshot() {
             samples: vec![AnimationStyleSample {
                 node_id: node,
                 effect_id: 1,
-                declarations: cssom::ParseCSSDeclarationList("width:70px"),
+                declarations: style::ParseCSSDeclarationList("width:70px"),
                 ..Default::default()
             }],
         }));
@@ -277,7 +277,7 @@ fn changed_scroll_animation_viewport_font_and_image_invalidate_snapshot() {
                     width: 2,
                     height: 3,
                     resolution_scale: 1.,
-                    rgba8: vec![255; 24].into(),
+                    content: image_resource::PaintImageContent::Bitmap(vec![255; 24].into()),
                     ..Default::default()
                 },
             },
@@ -327,7 +327,7 @@ fn completed_frame_publishes_same_snapshot_without_a_second_measurement_layout()
         // An effective CSSOM change must still invalidate the shared frame.
         page.state
             .ApplyMutation(PageMutation::CSSOMMutation(page_mutation::CSSOMMutation {
-                style_sheet: cssom::ParseCSS("#b {width:42px!important}"),
+                style_sheet: style::ParseCSS("#b {width:42px!important}"),
                 base_url: "https://fixture.test/".into(),
             }));
         assert!(page.state.measurement.borrow().is_none());

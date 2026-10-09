@@ -1,6 +1,7 @@
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
 use layoutng_style::style::appearance::AppearanceValue;
+use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
 
 use super::form_control_types::{AutofillState, FormControlType};
 use super::layout_input_types::{Color, ControlThemeMetrics, IntSize, ScrollbarThemeMetrics};
@@ -249,6 +250,11 @@ pub enum WhiteSpace {
     kPreLine,
     kPreWrap,
     kBreakSpaces,
+    // CSS Text exposes white-space-collapse and text-wrap-mode separately.
+    // These two combinations have no legacy white-space keyword spelling but
+    // remain valid computed values.
+    kPreserveBreaksNowrap,
+    kBreakSpacesNowrap,
 }
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1810,6 +1816,11 @@ pub struct CssClipRect {
 
 #[derive(Clone, PartialEq)]
 pub struct ComputedStyle {
+    /// The Chromium `ComputedStyle` produced by StyleEngine for this
+    /// projection.  DOM-to-layout metadata below remains the renderer-neutral
+    /// projection consumed by the Rust paint boundary; layout itself reuses
+    /// this exact immutable style object instead of reconstructing one.
+    pub native_style: *const NativeComputedStyle,
     pub display: Display,
     pub width: Option<f64>,
     pub height: Option<f64>,
@@ -1872,6 +1883,11 @@ impl ComputedStyle {
         }
         let mut normalized = self.clone();
         normalized.paint = other.paint.clone();
+        // The native pointer is an identity/revision signal for the complete
+        // input comparison above.  It is not independently a geometry change:
+        // the projected fields decide LayoutEquivalent until native style
+        // difference calculation owns this boundary end-to-end.
+        normalized.native_style = other.native_style;
         normalized == *other
     }
 }
@@ -1920,6 +1936,7 @@ mod computed_style_layout_equivalence_tests {
 impl Default for ComputedStyle {
     fn default() -> Self {
         Self {
+            native_style: std::ptr::null(),
             display: Display::kBlock,
             width: None,
             height: None,

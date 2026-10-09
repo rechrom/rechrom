@@ -1,12 +1,12 @@
 // C++: font_engine/fonts/font_variant_alternates.h
-// The supplied tree declares but does not define construction, setters,
-// resolution, hash, equality, or IsNormal. This state and its inline
-// accessors are mapped; the file remains blocked.
+// Construction, setters, IsNormal and inline state/accessors are mapped.
+// Font-feature-values resolution, hash and equality remain untranslated.
 use foundation::AtomicString;
 
 use super::resolved_font_features::ResolvedFontFeatures;
 
 // cpp: font_engine/fonts/font_variant_alternates.h:20-21,87-100
+#[derive(Default)]
 pub struct FontVariantAlternates {
     stylistic_: Option<AtomicString>,
     swash_: Option<AtomicString>,
@@ -21,6 +21,21 @@ pub struct FontVariantAlternates {
 
 #[allow(non_snake_case)]
 impl FontVariantAlternates {
+    // cpp: platform/fonts/font_variant_alternates.cc:13,71-105.
+    pub fn Create() -> Self { Self::default() }
+    pub fn IsNormal(&self) -> bool {
+        self.stylistic_.is_none() && !self.historical_forms_ && self.swash_.is_none()
+            && self.ornaments_.is_none() && self.annotation_.is_none()
+            && self.styleset_.is_empty() && self.character_variant_.is_empty()
+    }
+    pub fn SetStylistic(&mut self, value: AtomicString) { self.stylistic_ = Some(value); }
+    pub fn SetSwash(&mut self, value: AtomicString) { self.swash_ = Some(value); }
+    pub fn SetOrnaments(&mut self, value: AtomicString) { self.ornaments_ = Some(value); }
+    pub fn SetAnnotation(&mut self, value: AtomicString) { self.annotation_ = Some(value); }
+    pub fn SetHistoricalForms(&mut self) { self.historical_forms_ = true; }
+    pub fn SetStyleset(&mut self, value: Vec<AtomicString>) { self.styleset_ = value; }
+    pub fn SetCharacterVariant(&mut self, value: Vec<AtomicString>) { self.character_variant_ = value; }
+
     // cpp: font_engine/fonts/font_variant_alternates.h:36-38
     pub fn Stylistic(&self) -> *const AtomicString {
         self.stylistic_

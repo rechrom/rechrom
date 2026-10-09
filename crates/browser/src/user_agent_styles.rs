@@ -1,7 +1,8 @@
 #![allow(non_snake_case)]
 
-use cssom::css_style_sheet::{CSSStyleSheet, ParseCSS};
+use cssom::css_style_sheet::CSSStyleSheet;
 use dom::ParsedDocument;
+use style::ParseCSS;
 
 // cpp: browser/user_agent_styles.cc:10-42
 const HTML_USER_AGENT_CSS: &str = r#"

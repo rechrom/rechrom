@@ -3,7 +3,9 @@
 use crate::error::{invalid_argument, logic_error};
 use crate::ImageResourceMetadata;
 use cssom::{CSSDeclaration, CSSOMEvent, CSSOMMutation, CSSStyleSheet, CSSOM};
+use foundation::Persistent;
 use layoutng_assembly::internal::layout_input::{ComputedStyle, Offset};
+use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
@@ -126,26 +128,48 @@ impl DOMNode {
 }
 
 // cpp: dom/document.h:169-196
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub struct PseudoElement {
     pub style: ComputedStyle,
+    /// Owns the immutable Chromium style referenced by `style.native_style`.
+    pub native_style: Persistent<NativeComputedStyle>,
     pub text: String,
     pub display_contents: bool,
+}
+
+impl PartialEq for PseudoElement {
+    fn eq(&self, other: &Self) -> bool {
+        self.style == other.style
+            && self.native_style.Get() == other.native_style.Get()
+            && self.text == other.text
+            && self.display_contents == other.display_contents
+    }
 }
 
 impl Default for PseudoElement {
     fn default() -> Self {
         Self {
             style: ComputedStyle::default(),
+            native_style: Persistent::default(),
             text: String::new(),
             display_contents: false,
         }
     }
 }
 
+impl PseudoElement {
+    pub fn SetNativeStyle(&mut self, native_style: Persistent<NativeComputedStyle>) {
+        self.style.native_style = native_style.Get();
+        self.native_style = native_style;
+    }
+}
+
 #[derive(Clone)]
 pub struct ResolvedNodeStyle {
     pub style: ComputedStyle,
+    /// Roots the immutable Chromium style used by the live LayoutObject tree.
+    /// `style.native_style` is a borrowed pointer into this owner.
+    pub native_style: Persistent<NativeComputedStyle>,
     pub generates_box: bool,
     pub own_generates_box: bool,
     pub own_display_contents: bool,
@@ -163,6 +187,7 @@ pub struct ResolvedNodeStyle {
 impl PartialEq for ResolvedNodeStyle {
     fn eq(&self, other: &Self) -> bool {
         self.style == other.style
+            && self.native_style.Get() == other.native_style.Get()
             && self.generates_box == other.generates_box
             && self.own_generates_box == other.own_generates_box
             && self.own_display_contents == other.own_display_contents
@@ -181,6 +206,7 @@ impl Default for ResolvedNodeStyle {
     fn default() -> Self {
         Self {
             style: ComputedStyle::default(),
+            native_style: Persistent::default(),
             generates_box: true,
             own_generates_box: true,
             own_display_contents: false,
@@ -192,6 +218,13 @@ impl Default for ResolvedNodeStyle {
             first_letter: None,
             placeholder: None,
         }
+    }
+}
+
+impl ResolvedNodeStyle {
+    pub fn SetNativeStyle(&mut self, native_style: Persistent<NativeComputedStyle>) {
+        self.style.native_style = native_style.Get();
+        self.native_style = native_style;
     }
 }
 
@@ -584,11 +617,6 @@ impl PersistentDocument {
         let mut detached = vec![child];
         while let Some(node) = detached.pop() {
             self.RemoveResolvedStyle(node);
-            self.style_state
-                .rules
-                .inline
-                .borrow_mut()
-                .remove(&self.arena[node].id);
             detached.extend_from_slice(&self.arena[node].children);
         }
         self.RecordNonAppendChildrenChange(parent);
@@ -669,6 +697,13 @@ impl PersistentDocument {
         self.arena[child].parent = Some(parent);
         self.StyleSheetConnectivityChanged(child);
         self.RecordNonAppendChildrenChange(parent);
+        // InsertBefore attaches the same fresh/stale-free subtree as
+        // AppendChild. Record it explicitly so style invalidation resolves the
+        // inserted branch and treats existing siblings through selector
+        // invalidation sets instead of rescanning the whole parent subtree.
+        if !self.style_state.all_dirty && self.arena[child].node_type == DOMNodeType::kElement {
+            self.style_state.inserted_style_subtrees.insert(child);
+        }
         let owner = if self.arena[parent].node_type == DOMNodeType::kDocument {
             Some(DOMOwnerHandle {
                 arena_id: self.arena_id,
@@ -1004,6 +1039,7 @@ impl PersistentDocument {
                 .expect("a stylesheet owner must have an owner document");
             (document != root_handle).then_some(document)
         });
+        let affects_active_sheets = detached_owner.is_none();
         let state = &mut self.style_state;
         self.cssom.ApplyMutation(
             CSSOMMutation::AddStyleSheet {
@@ -1011,10 +1047,14 @@ impl PersistentDocument {
                 detached_owner,
             },
             |event| match event {
-                CSSOMEvent::StyleSheetChanged => {
+                CSSOMEvent::StyleSheetChanged if affects_active_sheets => {
                     state.sheet_revision += 1;
-                    state.all_dirty = true;
+                    // StyleEngine owns the active-sheet diff. It invalidates
+                    // against both the old and new RuleSets, so replacing or
+                    // removing a sheet does not itself imply a document-wide
+                    // recalc. This matches Blink's ApplyRuleSetChanges path.
                 }
+                CSSOMEvent::StyleSheetChanged => {}
             },
         );
     }
@@ -1042,7 +1082,10 @@ impl PersistentDocument {
         });
         if contains_sheet {
             self.style_state.sheet_revision += 1;
-            self.style_state.all_dirty = true;
+            // Let StyleEngine compare the retained active-sheet sequence.
+            // Connecting a new source-order suffix can use its compiled target
+            // features as an invalidation set; removal, replacement and
+            // reordering still fail that proof and become a full update there.
         }
     }
     pub fn ActiveStyleSheets(&self) -> impl Iterator<Item = &CSSStyleSheet> {
@@ -1171,41 +1214,14 @@ impl PersistentDocument {
         }
     }
     fn NodeMayAffectSiblingSelectors(&self, node: usize) -> bool {
-        let mut has_compiled_rules = false;
-        for rules in [
-            &self.style_state.rules.user_agent,
-            &self.style_state.rules.author,
-        ]
-        .into_iter()
-        .filter_map(|rules| rules.as_ref())
-        {
-            has_compiled_rules = true;
-            if rules.sibling_invalidation_hosts.iter().any(|host| {
-                crate::style_resolver::persistent_selector::MatchesSelector(self, node, host)
-            }) {
-                return true;
-            }
-        }
-        // Before the first rule compilation, retain the conservative behavior.
-        !has_compiled_rules
+        let _ = node;
+        // DOM records the structural fact only.  Selector-dependent filtering
+        // belongs to StyleEngine and is applied when it consumes this batch.
+        true
     }
     fn NodeMayAffectDescendantSelectors(&self, node: usize) -> bool {
-        let mut has_compiled_rules = false;
-        for rules in [
-            &self.style_state.rules.user_agent,
-            &self.style_state.rules.author,
-        ]
-        .into_iter()
-        .filter_map(|rules| rules.as_ref())
-        {
-            has_compiled_rules = true;
-            if rules.descendant_invalidation_hosts.iter().any(|host| {
-                crate::style_resolver::persistent_selector::MatchesSelector(self, node, host)
-            }) {
-                return true;
-            }
-        }
-        !has_compiled_rules
+        let _ = node;
+        true
     }
     fn RecordSiblingSensitivity(&mut self, node: usize, conservative: bool) {
         if self.style_state.all_dirty {
@@ -1298,7 +1314,7 @@ impl PersistentDocument {
         namespace: &str,
         sibling_sensitive: bool,
     ) -> bool {
-        use cssom::compiled_rules::SelectorOnlyAttribute;
+        use crate::style_state::SelectorOnlyAttribute;
         let kind = if namespace.is_empty() && self.arena[node].namespace == DOMNamespace::kHTML {
             match name {
                 "data-pcr" => Some(SelectorOnlyAttribute::DataPcr),

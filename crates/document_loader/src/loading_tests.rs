@@ -388,7 +388,8 @@ impl URLLoader for FailingLoader {
 fn font_fallback_progresses_one_poll_pass_at_a_time_and_keeps_failure_callbacks() {
     let requests = Rc::new(RefCell::new(vec![]));
     let fetcher = fetcher(Rc::new(RefCell::new(FailingLoader(requests.clone()))));
-    let sheet = cssom::ParseCSS("@font-face { font-family: X; src: url(a.ttf),url(b.ttf); }");
+    // Resource transport fixture; stylesheet acceptance belongs to Style.
+    let sheet = style::ParseCSS("@font-face { font-family: X; src: url(a.ttf),url(b.ttf); }");
     fetcher
         .QueueFontFace(&sheet.font_faces[0], "https://fonts.test/")
         .unwrap();

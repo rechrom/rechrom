@@ -39,8 +39,8 @@ mod tests {
             let mut document = html::html_parser::ParseHTML(
                 "<html><body><div id=a style='width:20px;height:20px;background:red'></div><div id=b style='width:20px;height:20px;background:blue'></div></body></html>",
             );
-            dom::style_resolver::ResolveComputedStyles(&mut document, &Default::default(), &[]);
             let constraints = crate::CreateBrowserConstraints(100, 100);
+            crate::style_services::ResolveLayoutStyles(&mut document, &constraints);
             let interaction = dom::UserInteractionState::default();
             let mut layout = LayoutEngine::new(&crate::CreateLayoutAssembly());
             let mut fragments = Rc::new(crate::LayoutPersistentDocument(

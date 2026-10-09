@@ -7,6 +7,11 @@ pub mod mojom {
     pub struct PreferredColorScheme(i32);
 
     impl PreferredColorScheme {
+        // cpp: third_party/blink/public/mojom/css/preferred_color_scheme.mojom:7-10
+        #[allow(non_upper_case_globals)]
+        pub const kDark: Self = Self(0);
+        #[allow(non_upper_case_globals)]
+        pub const kLight: Self = Self(1);
         pub const fn from_i32(value: i32) -> Self {
             Self(value)
         }

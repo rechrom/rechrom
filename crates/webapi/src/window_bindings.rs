@@ -18,6 +18,10 @@ const PERFORMANCE_TIMING: u64 = PERFORMANCE - 3;
 const MIME_TYPES: u64 = PERFORMANCE - 4;
 const PLUGINS: u64 = PERFORMANCE - 5;
 const SCREEN: u64 = PERFORMANCE - 6;
+// Blink DOMTimer uses the same values. Timers installed by deeply nested
+// timer callbacks must stop behaving like an unrestricted busy loop.
+const MAX_TIMER_NESTING_LEVEL: u32 = 6;
+const MINIMUM_NESTED_TIMER_INTERVAL_MS: f64 = 4.0;
 
 #[derive(Clone)]
 struct Timer {
@@ -26,6 +30,7 @@ struct Timer {
     due: Instant,
     interval_ms: f64,
     repeating: bool,
+    nesting_level: u32,
 }
 struct NetworkJob {
     success: JavaScriptFunction,
@@ -71,12 +76,13 @@ pub struct WindowJavaScriptBindings {
     width: f64,
     height: f64,
     scale: f64,
-    preferred_color_scheme: dom::style_resolver::PreferredColorScheme,
+    preferred_color_scheme: style::PreferredColorScheme,
     start: Instant,
     time_origin: f64,
     next_timer: u64,
     timers: HashMap<u64, Timer>,
     timer_deadlines: BTreeSet<(Instant, u64)>,
+    timer_nesting_level: u32,
     animation_callbacks: BTreeMap<u64, JavaScriptFunction>,
     animation_fallback_due: Option<Instant>,
     animation_dispatching: bool,
@@ -203,7 +209,7 @@ impl WindowJavaScriptBindings {
             width: 0.0,
             height: 0.0,
             scale: 1.0,
-            preferred_color_scheme: Default::default(),
+            preferred_color_scheme: style::PreferredColorScheme::kLight,
             start: Instant::now(),
             time_origin: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -213,6 +219,7 @@ impl WindowJavaScriptBindings {
             next_timer: 1,
             timers: HashMap::new(),
             timer_deadlines: BTreeSet::new(),
+            timer_nesting_level: 0,
             animation_callbacks: BTreeMap::new(),
             animation_fallback_due: None,
             animation_dispatching: false,
@@ -287,10 +294,7 @@ impl WindowJavaScriptBindings {
         self.scale = scale;
     }
     /// Inject a host preference; this binding never queries platform APIs.
-    pub fn SetPreferredColorScheme(
-        &mut self,
-        preference: dom::style_resolver::PreferredColorScheme,
-    ) {
+    pub fn SetPreferredColorScheme(&mut self, preference: style::PreferredColorScheme) {
         self.preferred_color_scheme = preference;
     }
     pub fn BootstrapSource() -> String {
@@ -397,16 +401,30 @@ impl WindowJavaScriptBindings {
             return match call.operation {
                 HostOperation::kGet => method(0, name),
                 HostOperation::kCall => {
-                    value(HostValue::Boolean(dom::style_resolver::MediaQueryMatches(
-                        text_arg(args, 0).unwrap_or(""),
-                        &dom::style_resolver::StyleEnvironment {
-                            viewport_width: Some(self.width),
-                            viewport_height: Some(self.height),
-                            resolution_dppx: Some(self.scale),
-                            preferred_color_scheme: self.preferred_color_scheme,
-                            ..Default::default()
-                        },
-                    )))
+                    use style::media_queries::media_query_backend::ParseMediaQuerySet;
+                    use style::media_queries::media_query_evaluator::MediaQueryEvaluator;
+                    use style::media_queries::{MediaValuesCached, MediaValuesCachedData};
+                    let queries = ParseMediaQuerySet(text_arg(args, 0).unwrap_or(""));
+                    let values = MediaValuesCached::new(&MediaValuesCachedData {
+                        viewport_width: self.width,
+                        viewport_height: self.height,
+                        small_viewport_width: self.width,
+                        small_viewport_height: self.height,
+                        large_viewport_width: self.width,
+                        large_viewport_height: self.height,
+                        dynamic_viewport_width: self.width,
+                        dynamic_viewport_height: self.height,
+                        device_width: self.width as i32,
+                        device_height: self.height as i32,
+                        device_pixel_ratio: self.scale as f32,
+                        media_type: foundation::String::from("screen"),
+                        preferred_color_scheme: self.preferred_color_scheme,
+                        scripting: style::media_queries::scripting::Scripting::kEnabled,
+                        ..Default::default()
+                    });
+                    value(HostValue::Boolean(
+                        MediaQueryEvaluator::ForMediaValues(&values).Eval(&queries),
+                    ))
                 }
                 _ => unhandled(),
             };
@@ -685,6 +703,15 @@ impl WindowJavaScriptBindings {
                     Some(HostValue::Number(n)) if n.is_finite() => n.clamp(0.0, 2147483647.0),
                     _ => 0.0,
                 };
+                // Chromium's DOMTimer inherits the nesting level of the
+                // currently firing timer and clamps levels above six to 4ms.
+                // Keep setInterval's historical 1ms floor at low nesting.
+                let nesting_level = self.timer_nesting_level.saturating_add(1);
+                let delay = if nesting_level > MAX_TIMER_NESTING_LEVEL {
+                    delay.max(MINIMUM_NESTED_TIMER_INTERVAL_MS)
+                } else {
+                    delay
+                };
                 let id = self.next_timer;
                 self.next_timer += 1;
                 let due = Instant::now() + milliseconds(delay);
@@ -696,6 +723,7 @@ impl WindowJavaScriptBindings {
                         due,
                         interval_ms: delay.max(1.0),
                         repeating: name == "setInterval",
+                        nesting_level,
                     },
                 );
                 if let Some(timer) = replaced {
@@ -959,11 +987,18 @@ impl WindowJavaScriptBindings {
         if due > now {
             return None;
         }
-        let timer = self.timers[&id].clone();
+        let mut timer = self.timers[&id].clone();
         self.timer_deadlines.remove(&(due, id));
         if timer.repeating {
+            timer.nesting_level = timer.nesting_level.saturating_add(1);
+            if timer.nesting_level == MAX_TIMER_NESTING_LEVEL + 1 {
+                timer.interval_ms = timer.interval_ms.max(MINIMUM_NESTED_TIMER_INTERVAL_MS);
+            }
             let next_due = Instant::now() + milliseconds(timer.interval_ms);
-            self.timers.get_mut(&id).unwrap().due = next_due;
+            let stored = self.timers.get_mut(&id).unwrap();
+            stored.due = next_due;
+            stored.interval_ms = timer.interval_ms;
+            stored.nesting_level = timer.nesting_level;
             self.timer_deadlines.insert((next_due, id));
         } else {
             self.timers.remove(&id);
@@ -1121,6 +1156,7 @@ impl WindowJavaScriptBindings {
                     ..Default::default()
                 });
                 let _task_trace = browser_tracing::span("task", task_kind);
+                let timer_task = matches!(&task, Task::Timer(_));
                 let result = match task {
                     Task::Network(job) => {
                         if let Some(response) = job.response {
@@ -1169,16 +1205,22 @@ impl WindowJavaScriptBindings {
                         }
                         continue;
                     }
-                    Task::Timer(timer) => match timer.callback {
-                        HostValue::JavaScriptFunction(f) => runtime.Call(
-                            realm,
-                            &f,
-                            &HostValue::Object(HostObjectRef { id: 0 }),
-                            &timer.arguments,
-                        ),
-                        HostValue::String(s) => runtime.Evaluate(realm, &s, "browser:timer"),
-                        _ => unreachable!("validated timer callback"),
-                    },
+                    Task::Timer(timer) => {
+                        // Timer callbacks install descendants at this timer's
+                        // inherited level. Reset after the callback's required
+                        // microtask checkpoint, matching DOMTimer::Fired.
+                        window.borrow_mut().timer_nesting_level = timer.nesting_level;
+                        match timer.callback {
+                            HostValue::JavaScriptFunction(f) => runtime.Call(
+                                realm,
+                                &f,
+                                &HostValue::Object(HostObjectRef { id: 0 }),
+                                &timer.arguments,
+                            ),
+                            HostValue::String(s) => runtime.Evaluate(realm, &s, "browser:timer"),
+                            _ => unreachable!("validated timer callback"),
+                        }
+                    }
                 };
                 let callback_elapsed = task_started.map(|started| started.elapsed());
                 if let Some(e) = result.exception {
@@ -1188,6 +1230,9 @@ impl WindowJavaScriptBindings {
                 runtime.PerformMicrotaskCheckpoint();
                 for e in runtime.TakePendingExceptions(realm) {
                     report_error(&e);
+                }
+                if timer_task {
+                    window.borrow_mut().timer_nesting_level = 0;
                 }
                 if let Some(started) = task_started {
                     let elapsed = started.elapsed();
@@ -1344,6 +1389,33 @@ mod tests {
         assert!(window.timers.is_empty());
         assert!(window.timer_deadlines.is_empty());
         assert_eq!(window.next_timer(), None);
+
+        // Blink DOMTimer clamps deeply nested one-shot timers, and raises a
+        // fast interval to the same floor after repeated fires cross the
+        // nesting threshold.
+        window.timer_nesting_level = MAX_TIMER_NESTING_LEVEL;
+        let clamped = register(&mut window, "setTimeout", 0.0);
+        assert_eq!(window.timers[&clamped].nesting_level, 7);
+        assert_eq!(
+            window.timers[&clamped].interval_ms,
+            MINIMUM_NESTED_TIMER_INTERVAL_MS
+        );
+        cancel(&mut window, "clearTimeout", clamped);
+
+        window.timer_nesting_level = 0;
+        let fast_interval = register(&mut window, "setInterval", 0.0);
+        assert_eq!(window.timers[&fast_interval].interval_ms, 1.0);
+        for _ in 0..6 {
+            let old_due = window.timers[&fast_interval].due;
+            window.timer_deadlines.remove(&(old_due, fast_interval));
+            window.timers.get_mut(&fast_interval).unwrap().due = due;
+            window.timer_deadlines.insert((due, fast_interval));
+            assert!(window.take_timer().is_some());
+        }
+        assert_eq!(
+            window.timers[&fast_interval].interval_ms,
+            MINIMUM_NESTED_TIMER_INTERVAL_MS
+        );
     }
 
     #[test]
@@ -1385,9 +1457,13 @@ mod tests {
         // must regain control between tasks; their Promise jobs finish first.
         enqueue(&window, 32);
         for expected in 1..=32 {
-            WindowJavaScriptBindings::RunTaskTurn(&window, &mut runtime, &realm, 0.0, &mut |error| {
-                panic!("unexpected script error: {error:?}")
-            });
+            WindowJavaScriptBindings::RunTaskTurn(
+                &window,
+                &mut runtime,
+                &realm,
+                0.0,
+                &mut |error| panic!("unexpected script error: {error:?}"),
+            );
             assert_script(
                 &mut runtime,
                 &realm,
@@ -1467,6 +1543,11 @@ mod tests {
             if (navigator.userAgent !== 'Mozilla/5.0 TEST' || navigator.appVersion !== '5.0 TEST' || navigator.platform !== 'MacIntel' || navigator.language !== 'en-US' || navigator.vendor !== 'Google Inc.' || !navigator.onLine || navigator.maxTouchPoints !== 0) throw Error('navigator');
             if (navigator.cookieEnabled || document.cookie !== '' || navigator.plugins.length !== 0 || navigator.mimeTypes.item(0) !== null) throw Error('cookie-disabled source');
             if (innerWidth !== 1024 || outerHeight !== 768 || devicePixelRatio !== 2 || screen.width !== 1024 || screen.colorDepth !== 24) throw Error('viewport');
+            if (!matchMedia('(1000px < width <= 1024px) and (resolution: 192dpi)').matches) throw Error('typed media range/resolution');
+            if (!matchMedia('(min-width: 64em)').matches || matchMedia('(max-width: 63em)').matches) throw Error('typed media font lengths');
+            if (!matchMedia('(prefers-color-scheme: light)').matches || matchMedia('not (unknown: x)').matches) throw Error('typed media preference/unknown');
+            if (!matchMedia('(scripting: enabled)').matches) throw Error('typed media scripting');
+
             document.cookie='ignored=1';
             document.domain='example.test';
             var rejected=false; try {document.domain='ample.test'} catch(e) {rejected=e instanceof TypeError}

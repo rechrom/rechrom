@@ -250,6 +250,7 @@ dependencies = [
  "paint",
  "raster",
  "renderer",
+ "style",
  "url",
  "url_loader",
  "viz",
@@ -678,7 +679,9 @@ dependencies = [
  "html",
  "image_resource",
  "layoutng_assembly",
+ "layoutng_foundation",
  "paint",
+ "style",
 ]
 
 [[package]]
@@ -696,6 +699,7 @@ dependencies = [
  "layoutng_foundation",
  "layoutng_replaced",
  "page_mutation",
+ "style",
  "url_loader",
  "web_font",
 ]
@@ -714,6 +718,7 @@ dependencies = [
  "layoutng_foundation",
  "layoutng_replaced",
  "layoutng_style",
+ "style",
 ]
 
 [[package]]
@@ -1821,6 +1826,7 @@ dependencies = [
  "layoutng_geometry",
  "layoutng_replaced",
  "layoutng_style",
+ "style",
 ]
 
 [[package]]
@@ -3255,6 +3261,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6637bab7722d379c8b41ba849228d680cc12d0a45ba1fa2b48f2a30577a06731"
 
 [[package]]
+name = "style"
+version = "0.0.1"
+dependencies = [
+ "cssom",
+ "dom",
+ "font_engine",
+ "html",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_style",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3830,6 +3849,7 @@ dependencies = [
  "layoutng_replaced",
  "paint",
  "skia",
+ "style",
  "url",
  "xhr_transport",
 ]

@@ -15,6 +15,7 @@ layoutng_style = { path = "../layoutng_style" }
 
 [dev-dependencies]
 html = { path = "../html" }
+style = { path = "../style" }
 # Standalone DOM tests link the assembly dispatch's real replaced-object
 # provider; browser executables already supply it through their layout bundle.
 layoutng_replaced = { path = "../layoutng_replaced" }

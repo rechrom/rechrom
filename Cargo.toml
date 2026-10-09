@@ -26,6 +26,7 @@ members = [
     "crates/layoutng_list",
     "crates/layoutng_out_of_flow",
     "crates/cssom",
+    "crates/style",
     "crates/layoutng_custom",
     "crates/paint",
     "crates/layer_tile",

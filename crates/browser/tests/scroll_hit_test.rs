@@ -1,13 +1,13 @@
 #[path = "../src/native_test_thread.rs"]
 mod native_test_thread;
 
+use browser::page::Page;
 use document_image::SVGImageDecoder;
 use image_decoder::skia_image_decoder::SkiaImageDecoder;
 use interaction::input_event::{
     InputEvent, MouseButton, MouseEvent, MouseEventType, WheelEvent, WheelPhase,
 };
 use layoutng_assembly::internal::layout_input::Offset;
-use browser::page::Page;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 

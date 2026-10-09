@@ -27,6 +27,10 @@ impl TouchAction {
     pub const kInternalNotWritable: Self = Self(0x80);
     pub const kAuto: Self = Self(0xff);
     pub const kMax: Self = Self((1 << kTouchActionBits) - 1);
+    // C++ casts to the underlying bit-mask type preserve unnamed combinations.
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits as i32)
+    }
     pub const fn bits(self) -> i32 {
         self.0
     }

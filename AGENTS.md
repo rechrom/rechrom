@@ -48,6 +48,14 @@ method has a CDP-compatible name. When reporting protocol compatibility,
 distinguish matching method semantics from matching target discovery,
 WebSocket JSON-RPC transport, parameters, and response shape.
 
+For performance work, use the headless DevTools protocol to record the exact
+interaction, retrieve the Performance report or trace, and capture page
+screenshots when visual state matters. Base optimizations on the recorded
+evidence. If the report cannot expose the relevant scheduling, input,
+lifecycle, raster, compositing, or presentation cause, improve the tracing and
+report generation first and iterate on it as needed so that the performance
+tool can diagnose and verify the optimization.
+
 Open a visible Release window only for final user-facing experiential
 verification, or when the behavior being tested specifically requires native
 window interaction.
@@ -86,4 +94,10 @@ the requested URL before handing the window to the user.
    corresponding Chromium path and align lifecycle, invalidation, ownership,
    scheduling, and rendering semantics. Do not introduce a plausible custom
    behavior merely because it passes one page or test; implement the reusable
-   class of behavior represented by Chromium.
+   class of behavior represented by Chromium. Treat a site-specific symptom as
+   evidence of a missing general mechanism: use the corresponding Chromium
+   implementation to identify and fix the whole class of problems, then verify
+   representative cases. Preserve Rechrom's existing crate boundaries,
+   one-way dependency graph, minimal typed interfaces, and application-level
+   assembly while doing so; alignment does not justify cross-layer shortcuts,
+   duplicated ownership, or site-specific branches.

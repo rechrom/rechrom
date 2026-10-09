@@ -199,11 +199,14 @@ impl FontBinding {
         if let Some(previous) = previous {
             if previous.Matches(space) {
                 cache = Some(previous);
-                // Providers may change through interior mutability. Keep their
-                // font resolver but conservatively prepare text again each pass.
-                reused = space.hyphenation.is_none()
-                    && space.phrase_break.is_none()
-                    && space.text_transform.is_none();
+                // Provider identity is part of Matches(). As in Blink, a
+                // stable layout input cannot silently change its shaping
+                // semantics between lifecycle updates; hosts publish a new
+                // provider (or another explicit layout mutation) when those
+                // semantics change. Rebinding every node merely because a
+                // stable provider exists turns every otherwise clean pass into
+                // a full-font layout and defeats LayoutNG's result cache.
+                reused = true;
             }
         }
         if cache.is_none() {

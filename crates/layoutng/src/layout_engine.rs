@@ -77,6 +77,15 @@ pub enum ScrollLayoutUpdate {
     RefreshedLayout,
 }
 
+/// Immutable native content-box geometry. This layout output does not depend
+/// on StyleEngine or its query AST.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContainerQuerySizeSnapshot {
+    pub node_id: u64,
+    pub width: f64,
+    pub height: f64,
+}
+
 /// Owns the resident native input tree, its constraints and exported result.
 /// DOM adapters provide mutations; Paint consumes only the fragment output.
 pub struct LayoutEngine {
@@ -129,6 +138,7 @@ impl LayoutEngine {
                 true
             }
             LayoutMutation::TreeUpdate(update) => {
+                let mut trace = browser_tracing::span("layout", "LayoutEngine.TreeUpdate");
                 self.fragments = None;
                 // DOM projection has always used a deferred construction font
                 // resolver. Layout's boundary installs the current resources;
@@ -143,6 +153,11 @@ impl LayoutEngine {
                     let mut attachment = LayoutTreeUpdate::new(tree);
                     update(&mut attachment);
                 });
+                let stats = tree.UpdateStats();
+                trace.set("created", stats.created as f64);
+                trace.set("reused", stats.reused as f64);
+                trace.set("updated", stats.updated as f64);
+                trace.set("removed", stats.removed as f64);
                 true
             }
             LayoutMutation::PaintStyle { node_id, style } => {
@@ -205,6 +220,43 @@ impl LayoutEngine {
     /// ownership; callers cannot retain an Rc that extends the tree lifetime.
     pub fn GetLayoutTree(&self) -> Option<&LayoutObjectTree> {
         self.tree_.as_ref()
+    }
+
+    /// Chromium supplies laid-out content sizes to SizeContainerChanged.
+    /// Native content boxes exclude borders, padding and scrollbars;
+    /// FragmentNode::content_size instead describes scrollable overflow.
+    pub fn ContainerQuerySizes(&self) -> Vec<ContainerQuerySizeSnapshot> {
+        if self.fragments.is_none() {
+            return Vec::new();
+        }
+        let Some(tree) = self.tree_.as_ref() else {
+            return Vec::new();
+        };
+        let root = tree.Root() as *const LayoutObject;
+        let mut current = root as *mut LayoutObject;
+        let mut result = Vec::new();
+        while let Some(object) = unsafe { current.as_ref() } {
+            let real_element = unsafe { object.GetNode().as_ref() }
+                .is_some_and(|node| !node.InputIsStyleGenerated());
+            if real_element && object.StyleRef().ContainerType() & 3 != 0 && !object.NeedsLayout() {
+                let box_ = DynamicTo::<LayoutBox>(current);
+                if let Some(box_) =
+                    unsafe { box_.as_ref() }.filter(|b| b.PhysicalFragmentCount() != 0)
+                {
+                    let size = box_.PhysicalContentBoxRect().size;
+                    // style_engine.cc:3888-3890 adjusts layout's physical size
+                    // back to CSS pixels before evaluating container features.
+                    let zoom = object.StyleRef().EffectiveZoom() as f64;
+                    result.push(ContainerQuerySizeSnapshot {
+                        node_id: object.OwnerNodeIdDefault() as u64,
+                        width: size.width.ToDouble().max(0.0) / zoom,
+                        height: size.height.ToDouble().max(0.0) / zoom,
+                    });
+                }
+            }
+            current = object.NextInPreOrder(root);
+        }
+        result
     }
 
     pub fn GetConstraints(&self) -> &ConstraintSpace {
@@ -510,8 +562,16 @@ impl LayoutEngine {
         // callbacks during this walk.
         let _object_factory_scope = LayoutObjectFactoryScope::new(&self.objects_);
         let mut object: *mut LayoutObject = root;
+        let mut object_count = 0usize;
+        let mut needs_layout_count = 0usize;
+        let mut self_needs_full_layout_count = 0usize;
+        let mut child_needs_full_layout_count = 0usize;
         while !object.is_null() {
             let current = unsafe { &*object };
+            object_count += 1;
+            needs_layout_count += current.NeedsLayout() as usize;
+            self_needs_full_layout_count += current.SelfNeedsFullLayout() as usize;
+            child_needs_full_layout_count += current.ChildNeedsFullLayout() as usize;
             if missing_float && current.IsFloating() {
                 std::panic::panic_any(UnsupportedLayout::new(
                     "float layout module is not installed",
@@ -536,6 +596,16 @@ impl LayoutEngine {
             }
             object = current.NextInPreOrder(root);
         }
+        trace.set("objects", object_count as f64);
+        trace.set("needs_layout_objects", needs_layout_count as f64);
+        trace.set(
+            "self_needs_full_layout_objects",
+            self_needs_full_layout_count as f64,
+        );
+        trace.set(
+            "child_needs_full_layout_objects",
+            child_needs_full_layout_count as f64,
+        );
 
         let root_node = root.GetNode();
         let constraints = prepare_constraints(
@@ -544,8 +614,18 @@ impl LayoutEngine {
             contains_annotations,
         );
         let _layout_pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-        prepare_tree(root, space, &constraints, environment.ReusesPreparedFonts());
+        let reuses_prepared_fonts = environment.ReusesPreparedFonts();
+        trace.set("reuses_prepared_fonts", reuses_prepared_fonts as u8 as f64);
+        prepare_tree(root, space, &constraints, reuses_prepared_fonts);
         let native_root = BlockNode::new(root_box);
+        trace.set(
+            "root_cached_results",
+            unsafe { &*root_box }.GetLayoutResults().len() as f64,
+        );
+        trace.set(
+            "root_skips_layout_cache",
+            unsafe { &*root_box }.ShouldSkipLayoutCache() as u8 as f64,
+        );
         let algorithm = browser_tracing::span("layout", "LayoutEngine.NativeLayout");
         let result = native_root.Layout(
             &constraints,

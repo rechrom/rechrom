@@ -1,5 +1,6 @@
 use super::forward::{CSSValue, CSSVariableData};
 use foundation::{AtomicString, HashInts, HashSet, MakeGarbageCollected, Member, Visitor};
+use std::cell::Cell;
 
 // C++ calls Data::Hash() for both supported value types.
 pub trait TrieData: PartialEq + 'static {
@@ -349,8 +350,8 @@ impl<Data: TrieData> PartialEq for HashTrieNode<Data> {
 
 // cpp: layoutng_style/style/style_variables.h:371-430
 pub struct StyleVariables {
-    data_root_: Member<HashTrieNode<CSSVariableData>>,
-    values_root_: Member<HashTrieNode<CSSValue>>,
+    data_root_: Cell<Member<HashTrieNode<CSSVariableData>>>,
+    values_root_: Cell<Member<HashTrieNode<CSSValue>>>,
     data_hash_: u32,
     values_hash_: u32,
 }
@@ -359,8 +360,12 @@ pub struct StyleVariables {
 impl Default for StyleVariables {
     fn default() -> Self {
         Self {
-            data_root_: Member::from_ptr(MakeGarbageCollected(HashTrieNode::default())),
-            values_root_: Member::from_ptr(MakeGarbageCollected(HashTrieNode::default())),
+            data_root_: Cell::new(Member::from_ptr(MakeGarbageCollected(
+                HashTrieNode::default(),
+            ))),
+            values_root_: Cell::new(Member::from_ptr(MakeGarbageCollected(
+                HashTrieNode::default(),
+            ))),
             data_hash_: 0,
             values_hash_: 0,
         }
@@ -371,14 +376,14 @@ impl Default for StyleVariables {
 impl Clone for StyleVariables {
     fn clone(&self) -> Self {
         let result = Self {
-            data_root_: self.data_root_.clone(),
-            values_root_: self.values_root_.clone(),
+            data_root_: Cell::new(self.data_root_.get()),
+            values_root_: Cell::new(self.values_root_.get()),
             data_hash_: self.data_hash_,
             values_hash_: self.values_hash_,
         };
         unsafe {
-            (&mut *result.data_root_.Get()).MakeShared();
-            (&mut *result.values_root_.Get()).MakeShared();
+            (&mut *result.data_root_.get().Get()).MakeShared();
+            (&mut *result.values_root_.get().Get()).MakeShared();
         }
         result
     }
@@ -388,30 +393,30 @@ impl Clone for StyleVariables {
 impl StyleVariables {
     // cpp: layoutng_style/style/style_variables.h:387-395
     pub fn CopyAssign(&mut self, other: &Self) -> &mut Self {
-        self.data_root_ = other.data_root_.clone();
-        self.values_root_ = other.values_root_.clone();
+        self.data_root_.set(other.data_root_.get());
+        self.values_root_.set(other.values_root_.get());
         self.data_hash_ = other.data_hash_;
         self.values_hash_ = other.values_hash_;
         unsafe {
-            (&mut *self.data_root_.Get()).MakeShared();
-            (&mut *self.values_root_.Get()).MakeShared();
+            (&mut *self.data_root_.get().Get()).MakeShared();
+            (&mut *self.values_root_.get().Get()).MakeShared();
         }
         self
     }
 
     // cpp: layoutng_style/style/style_variables.h:398-401
     pub fn Trace(&self, visitor: &mut Visitor) {
-        visitor.Trace(&self.data_root_);
-        visitor.Trace(&self.values_root_);
+        visitor.Trace(&self.data_root_.get());
+        visitor.Trace(&self.values_root_.get());
     }
 
     // cpp: layoutng_style/style/style_variables.h:405-410
     pub fn GetData(&self, name: &AtomicString) -> Option<*mut CSSVariableData> {
-        unsafe { (&*self.data_root_.Get()).GetFromRoot(name) }
+        unsafe { (&*self.data_root_.get().Get()).GetFromRoot(name) }
     }
     pub fn GetValue(&self, name: &AtomicString) -> Option<*const CSSValue> {
         unsafe {
-            (&*self.values_root_.Get())
+            (&*self.values_root_.get().Get())
                 .GetFromRoot(name)
                 .map(|value| value as *const CSSValue)
         }
@@ -433,12 +438,13 @@ impl StyleVariables {
     // cpp: layoutng_style/style/style_variables.h:414-415
     // No definitions are supplied in this package.
     pub fn IsEmpty(&self) -> bool {
-        unsafe { StyleVariablesIsEmpty(self) }
+        self.data_hash_ == 0
+            && self.values_hash_ == 0
+            && unsafe { &*self.data_root_.get().Get() }.empty()
+            && unsafe { &*self.values_root_.get().Get() }.empty()
     }
     pub fn CollectNames(&self, names: &mut HashSet<AtomicString>) {
-        unsafe {
-            StyleVariablesCollectNames(self, names);
-        }
+        unsafe { &*self.data_root_.get().Get() }.CollectNames(names);
     }
 
     // cpp: layoutng_style/style/style_variables.h:417
@@ -450,7 +456,32 @@ impl StyleVariables {
 // cpp: layoutng_style/style/style_variables.h:403
 impl PartialEq for StyleVariables {
     fn eq(&self, other: &Self) -> bool {
-        unsafe { StyleVariablesEquals(self, other) }
+        if self.data_hash_ != other.data_hash_ || self.values_hash_ != other.values_hash_ {
+            return false;
+        }
+        // cpp: third_party/blink/renderer/core/style/style_variables.cc:12-46
+        // Deduplicate equal roots onto the lowest address, then mark the root
+        // shared so a later mutation follows the trie copy-on-write path.
+        fn equal_roots<T: TrieData>(
+            a: &Cell<Member<HashTrieNode<T>>>,
+            b: &Cell<Member<HashTrieNode<T>>>,
+        ) -> bool {
+            let left = a.get().Get();
+            let right = b.get().Get();
+            if left == right {
+                return true;
+            }
+            if unsafe { &*left != &*right } {
+                return false;
+            }
+            let root = left.min(right);
+            a.set(Member::from_ptr(root));
+            b.set(Member::from_ptr(root));
+            unsafe { &mut *root }.MakeShared();
+            true
+        }
+        equal_roots(&self.data_root_, &other.data_root_)
+            && equal_roots(&self.values_root_, &other.values_root_)
     }
 }
 
@@ -477,9 +508,6 @@ unsafe extern "Rust" {
         name: &AtomicString,
         data: *const CSSValue,
     );
-    fn StyleVariablesIsEmpty(value: &StyleVariables) -> bool;
-    fn StyleVariablesCollectNames(value: &StyleVariables, names: &mut HashSet<AtomicString>);
-    fn StyleVariablesEquals(value: &StyleVariables, other: &StyleVariables) -> bool;
     fn StyleVariablesFormat(
         value: &StyleVariables,
         formatter: &mut std::fmt::Formatter<'_>,

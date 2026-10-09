@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+style = { path = "../style" }
 browser_tracing = { path = "../tracing" }
 foundation = { package = "layoutng_foundation", path = "../foundation" }
 interaction = { path = "../interaction" }

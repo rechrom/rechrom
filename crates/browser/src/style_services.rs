@@ -1,6 +1,5 @@
 #![allow(non_snake_case)]
 use crate::user_agent_styles::UserAgentStyleSheets;
-use dom::style_resolver::StyleEnvironment;
 use dom::UserInteractionState;
 use dom::DOM;
 use layoutng_assembly::{
@@ -8,7 +7,34 @@ use layoutng_assembly::{
     internal::layout_input::ConstraintSpace,
 };
 use std::{cell::RefCell, rc::Rc};
+use style::media_queries::{media_values_cached::MediaValuesCachedData, scripting::Scripting};
 use webapi::dom_bindings::DOMBindingsHost;
+
+fn MediaValuesForLayout(
+    constraints: &ConstraintSpace,
+    preferred_color_scheme: style::PreferredColorScheme,
+) -> MediaValuesCachedData {
+    let width = constraints.available_size.width;
+    let height = constraints.available_size.height;
+    MediaValuesCachedData {
+        viewport_width: width,
+        viewport_height: height,
+        small_viewport_width: width,
+        small_viewport_height: height,
+        large_viewport_width: width,
+        large_viewport_height: height,
+        dynamic_viewport_width: width,
+        dynamic_viewport_height: height,
+        device_width: width.round() as i32,
+        device_height: height.round() as i32,
+        device_pixel_ratio: 1.0,
+        em_size: 16.0,
+        media_type: foundation::String::from("screen"),
+        preferred_color_scheme,
+        scripting: Scripting::kEnabled,
+        ..Default::default()
+    }
+}
 
 // cpp: browser/browser.cc:649-671
 pub(crate) fn FragmentMetric(root: &FragmentNode, id: u64, name: &str) -> f64 {
@@ -105,23 +131,48 @@ pub fn CreateLayoutBindingsHost(
 
 // cpp: browser/browser.cc:1748-1758
 pub(crate) fn ResolveLayoutStyles(owner: &mut DOM, constraints: &ConstraintSpace) {
-    ResolveLayoutStylesWithColorScheme(owner, constraints, Default::default());
+    let mut engine = style::StyleEngine::new(owner);
+    ResolveLayoutStylesWithEngine(
+        &mut engine,
+        owner,
+        constraints,
+        style::PreferredColorScheme::kLight,
+    );
 }
 
-pub(crate) fn ResolveLayoutStylesWithColorScheme(
+pub(crate) fn ResolveLayoutStylesWithEngine(
+    engine: &mut style::StyleEngine,
     owner: &mut DOM,
     constraints: &ConstraintSpace,
-    preferred_color_scheme: dom::style_resolver::PreferredColorScheme,
+    preferred_color_scheme: style::PreferredColorScheme,
 ) {
     let user_agent = UserAgentStyleSheets::new();
-    let environment = StyleEnvironment {
-        viewport_width: Some(constraints.available_size.width),
-        viewport_height: Some(constraints.available_size.height),
-        resolution_dppx: Some(1.0),
-        preferred_color_scheme,
-        ..Default::default()
-    };
-    owner.ResolveStyles(&environment, user_agent.ForDocument(owner.GetDocument()));
+    let environment = MediaValuesForLayout(constraints, preferred_color_scheme);
+    let sheets = user_agent.ForDocument(owner.GetDocument());
+    engine
+        .Update(owner, &environment, sheets)
+        .unwrap_or_else(|error| panic!("StyleEngine update failed: {error}"));
+}
+
+/// The browser joins DOM identity, neutral native layout sizes and the
+/// document's StyleEngine. Layout itself does not import StyleEngine.
+pub(crate) fn PublishContainerSizes(
+    engine: &mut style::StyleEngine,
+    owner: &mut DOM,
+    sizes: &[layoutng_assembly::layout_engine::ContainerQuerySizeSnapshot],
+) -> bool {
+    let sizes = sizes
+        .iter()
+        .filter_map(|size| {
+            owner
+                .GetDocument()
+                .FindNodeById(size.node_id)
+                .map(|node| (node, size.width, size.height))
+        })
+        .collect::<Vec<_>>();
+    engine
+        .SetContainerSizes(owner, sizes)
+        .unwrap_or_else(|error| panic!("container size publication failed: {error}"))
 }
 
 // cpp: browser/browser.cc:641-641,1748-1758
@@ -130,15 +181,19 @@ pub(crate) fn ResolveLayoutStylesWithColorScheme(
 // separate services; this callback computes current styles on demand.
 pub fn CreateStyleBindingsHost(
     document: Rc<RefCell<DOM>>,
-    environment: Rc<RefCell<StyleEnvironment>>,
+    environment: Rc<RefCell<MediaValuesCachedData>>,
 ) -> DOMBindingsHost {
     let user_agent = UserAgentStyleSheets::new();
+    let engine = RefCell::new(style::StyleEngine::new(&document.borrow()));
     DOMBindingsHost {
         update_style: Some(Box::new(move || {
             let mut owner = document.borrow_mut();
-            let environment = *environment.borrow();
+            let environment = environment.borrow();
             let sheets = user_agent.ForDocument(owner.GetDocument());
-            dom::style_resolver::ResolveComputedStyles(&mut owner, &environment, sheets);
+            engine
+                .borrow_mut()
+                .Update(&mut owner, &environment, sheets)
+                .unwrap_or_else(|error| panic!("StyleEngine update failed: {error}"));
         })),
         ..Default::default()
     }
@@ -155,15 +210,25 @@ mod tests {
     #[test]
     fn javascript_computed_style_reads_real_cascade_and_live_mutations() {
         let document = Rc::new(RefCell::new(html::html_parser::ParseHTML("<html><body><style>.old{font-size:20px;padding-left:3px}.new{font-size:30px;padding-left:7px}input:placeholder-shown{font-weight:600}input:not(:placeholder-shown){font-weight:800}</style><div id=box class=old></div><input id=search placeholder=search></body></html>")));
-        let sheet=cssom::ParseCSS(".old{font-size:20px;padding-left:3px}.new{font-size:30px;padding-left:7px}input:placeholder-shown{font-weight:600}input:not(:placeholder-shown){font-weight:800}");
+        let sheet=style::ParseCSS(".old{font-size:20px;padding-left:3px}.new{font-size:30px;padding-left:7px}input:placeholder-shown{font-weight:600}input:not(:placeholder-shown){font-weight:800}");
         document
             .borrow_mut()
             .GetDocumentMut()
             .AppendStyleSheet(sheet);
-        let environment = Rc::new(RefCell::new(StyleEnvironment {
-            viewport_width: Some(1024.0),
-            viewport_height: Some(768.0),
-            resolution_dppx: Some(1.0),
+        let environment = Rc::new(RefCell::new(MediaValuesCachedData {
+            viewport_width: 1024.0,
+            viewport_height: 768.0,
+            small_viewport_width: 1024.0,
+            small_viewport_height: 768.0,
+            large_viewport_width: 1024.0,
+            large_viewport_height: 768.0,
+            dynamic_viewport_width: 1024.0,
+            dynamic_viewport_height: 768.0,
+            device_width: 1024,
+            device_height: 768,
+            em_size: 16.0,
+            media_type: foundation::String::from("screen"),
+            scripting: Scripting::kEnabled,
             ..Default::default()
         }));
         let host = CreateStyleBindingsHost(document.clone(), environment);
@@ -210,7 +275,7 @@ mod measurement_tests {
         document
             .borrow_mut()
             .GetDocumentMut()
-            .AppendStyleSheet(cssom::ParseCSS(include_str!(
+            .AppendStyleSheet(style::ParseCSS(include_str!(
                 "../../../artifacts/cpp-reference/persistent-measurement.css"
             )));
         assert_eq!(

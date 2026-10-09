@@ -1,0 +1,231 @@
+source	line_start	line_end	effective	coverage	mapping_or_pending
+core/css/property_registry.h	1	15	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	16	16	1	mapped	PropertyRegistry persistent Document owner/map types
+core/css/property_registry.h	17	17	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	18	19	2	mapped	PropertyRegistry persistent Document owner/map types
+core/css/property_registry.h	20	21	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	22	22	1	mapped	Typed script slot/declaration rebuild/remove ownership
+core/css/property_registry.h	23	23	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	24	24	1	mapped	Typed script slot/declaration rebuild/remove ownership
+core/css/property_registry.h	25	27	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	28	28	1	mapped	Typed script slot/declaration rebuild/remove ownership
+core/css/property_registry.h	29	30	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	31	31	1	pending	Inspector registration entry points
+core/css/property_registry.h	32	32	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	33	33	1	pending	Inspector registration entry points
+core/css/property_registry.h	34	39	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	40	40	1	mapped	Registration lookup/IsEmpty
+core/css/property_registry.h	41	41	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	42	42	1	mapped	Registration lookup/IsEmpty
+core/css/property_registry.h	43	46	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	47	48	2	pending	Aggregated registration viewport-unit flags
+core/css/property_registry.h	49	52	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	53	53	1	mapped	Version
+core/css/property_registry.h	54	58	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	59	59	1	mapped	IsInRegisteredPropertySet
+core/css/property_registry.h	60	67	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	68	70	3	mapped	Registrations native Rust iterator script-first/masked declarations
+core/css/property_registry.h	71	72	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	73	76	4	mapped	Registrations native Rust iterator script-first/masked declarations
+core/css/property_registry.h	77	77	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	78	80	3	mapped	Registrations native Rust iterator script-first/masked declarations
+core/css/property_registry.h	81	84	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	85	85	1	mapped	Registrations native Rust iterator script-first/masked declarations
+core/css/property_registry.h	86	86	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	87	90	4	mapped	Registrations native Rust iterator script-first/masked declarations
+core/css/property_registry.h	91	92	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	93	94	2	mapped	Registrations native Rust iterator script-first/masked declarations
+core/css/property_registry.h	95	95	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	96	98	3	mapped	Rust Rc roots hold registration CSS values; no C++ Visitor needed
+core/css/property_registry.h	99	104	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	105	106	2	mapped	MarkReferenced/WasReferenced state APIs
+core/css/property_registry.h	107	108	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.h	109	110	2	mapped	Separate registered/declared maps
+core/css/property_registry.h	111	112	2	pending	Stored viewport-unit flags
+core/css/property_registry.h	113	113	1	mapped	Version state
+core/css/property_registry.h	114	118	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	1	8	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	9	12	4	mapped	RegisterProperty/declared replace/remove version lifecycle; viewport flag lines excluded
+core/css/property_registry.cc	13	13	1	pending	Registered viewport flags
+core/css/property_registry.cc	14	14	1	mapped	RegisterProperty/declared replace/remove version lifecycle; viewport flag lines excluded
+core/css/property_registry.cc	15	16	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	17	19	3	mapped	RegisterProperty/declared replace/remove version lifecycle; viewport flag lines excluded
+core/css/property_registry.cc	20	20	1	pending	Declared viewport flags
+core/css/property_registry.cc	21	21	1	mapped	RegisterProperty/declared replace/remove version lifecycle; viewport flag lines excluded
+core/css/property_registry.cc	22	23	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	24	26	3	mapped	RegisterProperty/declared replace/remove version lifecycle; viewport flag lines excluded
+core/css/property_registry.cc	27	27	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	28	28	1	mapped	RegisterProperty/declared replace/remove version lifecycle; viewport flag lines excluded
+core/css/property_registry.cc	29	29	1	pending	Reset declared viewport flags
+core/css/property_registry.cc	30	30	1	mapped	RegisterProperty/declared replace/remove version lifecycle; viewport flag lines excluded
+core/css/property_registry.cc	31	32	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	33	37	5	pending	Inspector add/remove registration
+core/css/property_registry.cc	38	39	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	40	43	4	pending	Inspector add/remove registration
+core/css/property_registry.cc	44	44	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	45	45	1	pending	Inspector add/remove registration
+core/css/property_registry.cc	46	47	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	48	49	2	mapped	Script registration priority/Registration/IsEmpty/script membership
+core/css/property_registry.cc	50	53	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	54	56	3	mapped	Script registration priority/Registration/IsEmpty/script membership
+core/css/property_registry.cc	57	57	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	58	59	2	mapped	Script registration priority/Registration/IsEmpty/script membership
+core/css/property_registry.cc	60	61	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	62	63	2	mapped	Script registration priority/Registration/IsEmpty/script membership
+core/css/property_registry.cc	64	65	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	66	68	3	mapped	Script registration priority/Registration/IsEmpty/script membership
+core/css/property_registry.cc	69	70	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	71	79	9	mapped	Iterator mapped to Rust script iterator chained with unmasked declaration filter
+core/css/property_registry.cc	80	84	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	85	89	5	mapped	Iterator mapped to Rust script iterator chained with unmasked declaration filter
+core/css/property_registry.cc	90	91	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	92	94	3	mapped	Iterator mapped to Rust script iterator chained with unmasked declaration filter
+core/css/property_registry.cc	95	98	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	99	102	4	mapped	Iterator mapped to Rust script iterator chained with unmasked declaration filter
+core/css/property_registry.cc	103	103	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	104	104	1	mapped	Iterator mapped to Rust script iterator chained with unmasked declaration filter
+core/css/property_registry.cc	105	106	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	107	109	3	mapped	Iterator mapped to Rust script iterator chained with unmasked declaration filter
+core/css/property_registry.cc	110	111	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	112	114	3	mapped	Iterator mapped to Rust script iterator chained with unmasked declaration filter
+core/css/property_registry.cc	115	116	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	117	119	3	mapped	Iterator mapped to Rust script iterator chained with unmasked declaration filter
+core/css/property_registry.cc	120	121	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	122	124	3	mapped	Iterator mapped to Rust script iterator chained with unmasked declaration filter
+core/css/property_registry.cc	125	126	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	127	130	4	mapped	Referenced Cell state lookup/update
+core/css/property_registry.cc	131	133	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	134	137	4	mapped	Referenced Cell state lookup/update
+core/css/property_registry.cc	138	138	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registry.cc	139	139	1	mapped	Referenced Cell state lookup/update
+core/css/property_registry.cc	140	142	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.h	1	22	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.h	23	24	2	mapped	Concrete Rust PropertyRegistration ownership type
+core/css/property_registration.h	25	27	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.h	28	31	4	mapped	PropertyRegistration::FromRule from admitted typed CSSOM effect
+core/css/property_registration.h	32	32	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.h	33	35	3	pending	CSS.registerProperty JS PropertyDefinition/ExceptionState binding
+core/css/property_registration.h	36	36	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.h	37	37	1	mapped	Direct Document Registry lookup/removal and descriptor owners in property_registration.rs
+core/css/property_registration.h	38	38	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.h	39	40	2	mapped	Direct Document Registry lookup/removal and descriptor owners in property_registration.rs
+core/css/property_registration.h	41	41	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.h	42	49	8	mapped	Direct Document Registry lookup/removal and descriptor owners in property_registration.rs
+core/css/property_registration.h	50	50	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.h	51	56	6	mapped	Registration constructor/default Rust drop/syntax/inherits/initial getters; interpolation/source rule public APIs excluded
+core/css/property_registration.h	57	57	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.h	58	60	3	mapped	Registration constructor/default Rust drop/syntax/inherits/initial getters; interpolation/source rule public APIs excluded
+core/css/property_registration.h	61	63	3	pending	PropertyRule accessor and interpolation types
+core/css/property_registration.h	64	65	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.h	66	66	1	pending	Viewport unit flags
+core/css/property_registration.h	67	67	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.h	68	68	1	mapped	Rust Rc memory ownership
+core/css/property_registration.h	69	70	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.h	71	71	1	mapped	Registry ownership and typed registration fields; rule source retained in declared_rules
+core/css/property_registration.h	72	72	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.h	73	76	4	mapped	Registry ownership and typed registration fields; rule source retained in declared_rules
+core/css/property_registration.h	77	77	1	pending	Interpolation types state
+core/css/property_registration.h	78	78	1	mapped	Referenced Cell
+core/css/property_registration.h	79	83	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	1	31	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	32	37	6	mapped	Document registration lookup and typed construction/drop; interpolation lines excluded
+core/css/property_registration.cc	38	38	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	39	40	2	mapped	Document registration lookup and typed construction/drop; interpolation lines excluded
+core/css/property_registration.cc	41	42	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	43	51	9	mapped	Document registration lookup and typed construction/drop; interpolation lines excluded
+core/css/property_registration.cc	52	55	4	pending	InterpolationTypesMap construction
+core/css/property_registration.cc	56	56	1	mapped	Document registration lookup and typed construction/drop; interpolation lines excluded
+core/css/property_registration.cc	57	57	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	58	58	1	mapped	Document registration lookup and typed construction/drop; interpolation lines excluded
+core/css/property_registration.cc	59	59	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	60	67	8	pending	Registration initial viewport unit flags
+core/css/property_registration.cc	68	68	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	69	70	2	pending	Registration initial viewport unit flags
+core/css/property_registration.cc	71	72	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	73	73	1	pending	Registration initial viewport unit flags
+core/css/property_registration.cc	74	75	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	76	78	3	mapped	Rust Rc initial/source ownership
+core/css/property_registration.cc	79	79	1	pending	InterpolationTypes trace state
+core/css/property_registration.cc	80	81	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	82	83	2	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	84	84	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	85	88	4	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	89	90	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	91	94	4	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	95	96	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	97	97	1	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	98	99	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	100	101	2	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	102	105	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	106	106	1	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	107	108	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	109	110	2	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	111	111	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	112	113	2	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	114	114	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	115	116	2	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	117	118	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	119	120	2	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	121	121	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	122	123	2	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	124	125	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	126	128	3	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	129	130	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	131	135	5	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	136	136	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	137	138	2	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	139	139	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	140	141	2	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	142	143	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	144	150	7	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	151	151	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	152	153	2	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	154	157	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	158	159	2	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	160	161	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	162	162	1	mapped	Existing descriptor/schema/initial independence owners (represented values)
+core/css/property_registration.cc	163	164	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	165	171	7	mapped	PropertyRegistration::FromRule restores typed syntax and retained descriptor tokens with same validation owners
+core/css/property_registration.cc	172	172	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	173	175	3	mapped	PropertyRegistration::FromRule restores typed syntax and retained descriptor tokens with same validation owners
+core/css/property_registration.cc	176	176	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	177	178	2	mapped	PropertyRegistration::FromRule restores typed syntax and retained descriptor tokens with same validation owners
+core/css/property_registration.cc	179	183	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	184	189	6	mapped	PropertyRegistration::FromRule restores typed syntax and retained descriptor tokens with same validation owners
+core/css/property_registration.cc	190	191	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	192	193	2	mapped	PropertyRegistration::FromRule restores typed syntax and retained descriptor tokens with same validation owners
+core/css/property_registration.cc	194	195	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	196	197	2	mapped	PropertyRegistration::FromRule restores typed syntax and retained descriptor tokens with same validation owners
+core/css/property_registration.cc	198	198	1	pending	Unmapped source declaration/control logic
+core/css/property_registration.cc	199	199	1	pending	CSS.registerProperty JS input grammar/exceptions/execution context binding; typed host API is present but not claimed as JS implementation
+core/css/property_registration.cc	200	200	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	201	203	3	pending	CSS.registerProperty JS input grammar/exceptions/execution context binding; typed host API is present but not claimed as JS implementation
+core/css/property_registration.cc	204	204	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	205	210	6	pending	CSS.registerProperty JS input grammar/exceptions/execution context binding; typed host API is present but not claimed as JS implementation
+core/css/property_registration.cc	211	211	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	212	219	8	pending	CSS.registerProperty JS input grammar/exceptions/execution context binding; typed host API is present but not claimed as JS implementation
+core/css/property_registration.cc	220	221	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	222	228	7	pending	CSS.registerProperty JS input grammar/exceptions/execution context binding; typed host API is present but not claimed as JS implementation
+core/css/property_registration.cc	229	230	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	231	232	2	pending	CSS.registerProperty JS input grammar/exceptions/execution context binding; typed host API is present but not claimed as JS implementation
+core/css/property_registration.cc	233	233	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	234	236	3	pending	CSS.registerProperty JS input grammar/exceptions/execution context binding; typed host API is present but not claimed as JS implementation
+core/css/property_registration.cc	237	238	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	239	248	10	pending	CSS.registerProperty JS input grammar/exceptions/execution context binding; typed host API is present but not claimed as JS implementation
+core/css/property_registration.cc	249	249	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	250	254	5	pending	CSS.registerProperty JS input grammar/exceptions/execution context binding; typed host API is present but not claimed as JS implementation
+core/css/property_registration.cc	255	255	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	256	261	6	pending	CSS.registerProperty JS input grammar/exceptions/execution context binding; typed host API is present but not claimed as JS implementation
+core/css/property_registration.cc	262	263	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	264	267	4	pending	CSS.registerProperty JS input grammar/exceptions/execution context binding; typed host API is present but not claimed as JS implementation
+core/css/property_registration.cc	268	268	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	269	269	1	pending	CSS.registerProperty JS input grammar/exceptions/execution context binding; typed host API is present but not claimed as JS implementation
+core/css/property_registration.cc	270	271	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	272	274	3	mapped	Document declaration removal/change invalidation owner
+core/css/property_registration.cc	275	276	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	277	277	1	mapped	Document declaration removal/change invalidation owner
+core/css/property_registration.cc	278	278	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	279	281	3	mapped	Document declaration removal/change invalidation owner
+core/css/property_registration.cc	282	282	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line
+core/css/property_registration.cc	283	284	2	mapped	Document declaration removal/change invalidation owner
+core/css/property_registration.cc	285	288	0	scaffolding	Comments blanks preprocessor namespace or delimiter-only line

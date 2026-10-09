@@ -4,3 +4,10 @@
 // or ABI to implement here. The uninhabited type makes that unresolved
 // external return boundary explicit until the owning Path package is linked.
 pub enum Path {}
+
+// cpp: platform/geometry/path.h:70-74. This independent result does not
+// instantiate the unresolved Path owner.
+pub struct PointAndTangent {
+    pub point: crate::gfx::PointF,
+    pub tangent_in_degrees: f32,
+}

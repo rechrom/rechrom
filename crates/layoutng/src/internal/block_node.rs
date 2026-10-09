@@ -229,6 +229,13 @@ impl BlockNode {
         column_spanner_path: *const ColumnSpannerPath,
     ) -> *const LayoutResult {
         let box_ = self.GetLayoutBox();
+        let mut root_trace = if browser_tracing::enabled()
+            && unsafe { &*(box_ as *mut LayoutObject) }.Parent().is_null()
+        {
+            Some(browser_tracing::span("layout", "BlockNode.RootLayout"))
+        } else {
+            None
+        };
         let previous_result = unsafe { &mut *box_ }.GetCachedLayoutResult(break_token);
         if !previous_result.is_null() {
             constraint_space.GetExclusionSpace().PreInitialize(
@@ -249,6 +256,14 @@ impl BlockNode {
             &mut fragment_geometry,
             &mut cache_status,
         );
+        if let Some(trace) = root_trace.as_mut() {
+            trace.set("needed_layout", needed_layout as u8 as f64);
+            trace.set("cache_status", cache_status as i32 as f64);
+            trace.set(
+                "returned_previous_result",
+                (layout_result == previous_result) as u8 as f64,
+            );
+        }
 
         if matches!(
             cache_status,

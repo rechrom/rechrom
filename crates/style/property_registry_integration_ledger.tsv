@@ -1,0 +1,14 @@
+source	line_start	line_end	effective	coverage	mapping_or_pending
+core/css/style_engine.cc	2873	2929	33	mapped	PropertyRegistry::UpdateDeclaredProperties origin/layer/source-order candidate priority; user/author sheets only
+core/css/style_engine.cc	3164	3174	8	mapped	DocumentStyleEngine::Update rebuilds global document declarations from active sheets
+core/css/style_engine.cc	3391	3399	6	mapped	registry_changed forces connected tree recalc and recomputes custom state; native final style diff retains normal impact
+core/css/style_engine.cc	3499	3511	9	mapped	PropertyRegistry::UpdateDeclaredProperties replaces only declaration slots; script map persists
+core/css/style_engine.cc	3621	3643	16	mapped	PropertyRegistration::FromRule and active descriptor request candidate selection
+core/css/properties/longhands/custom_property.cc	74	110	25	mapped	CustomProperties::ComputeWithRegistry initial/inherit defaults and explicit inherit from parent even for inherits:false
+core/css/properties/longhands/custom_property.cc	184	214	20	mapped	VariableResolver::ResolveName typed invalid unset behavior plus typed computed values/substitution data
+core/css/properties/longhands/custom_property.cc	224	249	15	mapped	PropertyRegistry RegisteredContainerPropertyResolver reads live current custom.registered_values; universal data retained
+core/css/resolver/style_cascade.cc	1379	1388	6	pending	Font-size/line-height cross-native-property CycleNode locking is not present; no translation credit
+core/css/resolver/style_cascade.cc	3009	3033	16	pending	Native font/line-height dependency cycle integration; ordinary em/rem conversion and inheritance absolute data are implemented and tested
+core/css/resolver/style_builder_converter.cc	3548	3600	32	partial	ComputeRegisteredValue literal number/percentage/angle/time/resolution and represented length conversion; CSSMath/glyph/native conversion collaborators remain pending
+core/css/resolver/style_builder_converter.cc	3686	3693	7	mapped	RegisteredVariableData emits numeric/list tokens directly; nonnumeric equivalent admitted source tokens retained, no text retokenization
+core/css/resolver/style_resolver.cc	3020	3082	44	partial	RegisteredContainerPropertyResolver typed value computation/pre-substitution/conversion flags/error state and live computed map; generic native cascade computation is not claimed

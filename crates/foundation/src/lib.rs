@@ -28,7 +28,7 @@ pub use foundation_base::text::native::{
 };
 pub use foundation_base::unsupported_layout::UnsupportedLayout;
 pub use gfx_ext::RectF;
-pub use path_forward::Path;
+pub use path_forward::{Path, PointAndTangent};
 pub use physical_conversions::{ToFlooredPoint, ToFlooredSize, ToRoundedSize};
 pub use physical_rect::PhysicalRect;
 pub use physical_rect::{SnapSizeToPixel, ToPixelSnappedRect};
@@ -109,11 +109,11 @@ pub use compositor_element_id::{
 };
 pub use css_bitset::{CSSBitset, CSSBitsetBase, CSSBitsetIterator};
 pub use gc_heap::{
-    BasicPersistent, CollectLayoutHeapForTesting, FreeLayoutBacking,
-    IsLayoutHeapSweepingOnOwningThread, IsManagedLayoutAddress,
+    BasicPersistent, CollectLayoutHeapForTesting, CollectLayoutHeapIfRequested, FreeLayoutBacking,
+    IsLayoutHeapCollectionRequested, IsLayoutHeapSweepingOnOwningThread, IsManagedLayoutAddress,
     LayoutHeapAllocationCountForTesting, LayoutHeapScope, LayoutObjectSize, LivenessBroker,
-    MakeGarbageCollected, MakeGarbageCollectedWithAdditionalBytes, Persistent, TraceIfNeeded,
-    Traceable, Visitor, WeakPersistent,
+    MakeGarbageCollected, MakeGarbageCollectedWithAdditionalBytes, Persistent,
+    RequestLayoutHeapCollection, TraceIfNeeded, Traceable, Visitor, WeakPersistent,
 };
 pub use gc_member::{kMemberDeletedValue, Member, ReferenceKind, UntracedMember, WeakMember};
 pub use graphics_enums::InterpolationQuality::kInterpolationNone;

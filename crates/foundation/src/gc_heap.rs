@@ -189,6 +189,9 @@ struct HeapState {
     scopes: usize,
     collecting: bool,
     activity_since_collection: bool,
+    heap_bytes: usize,
+    allocated_bytes_since_collection: usize,
+    collection_requested: bool,
     profile_collection: bool,
     profile_mark_edges: usize,
     profile_mark_cache_hits: usize,
@@ -214,6 +217,9 @@ impl HeapState {
             scopes: 0,
             collecting: false,
             activity_since_collection: false,
+            heap_bytes: 0,
+            allocated_bytes_since_collection: 0,
+            collection_requested: false,
             profile_collection: false,
             profile_mark_edges: 0,
             profile_mark_cache_hits: 0,
@@ -332,6 +338,8 @@ impl HeapState {
         self.next_strong_marked_range = 0;
         self.strong_marked_addresses.fill(0);
         self.activity_since_collection = false;
+        self.allocated_bytes_since_collection = 0;
+        self.collection_requested = false;
         // Upgrade and prune the root registry in one pass. Every successful
         // upgrade remains held through dispatch, including cleared root cells.
         // A separate strong_count scan would visit the same registry twice.
@@ -470,6 +478,11 @@ fn collect() {
         for address in dead {
             heap.objects.remove(&address);
         }
+        heap.heap_bytes = heap
+            .objects
+            .values()
+            .map(|object| object.layout.size())
+            .sum();
         heap.weak_slots.clear();
         heap.weak_roots.clear();
         heap.weak_backings.clear();
@@ -482,6 +495,7 @@ fn collect() {
 // cpp: foundation/blink_base/heap/heap.h:61-76
 pub struct LayoutHeapScope {
     reuse_unchanged_heap: bool,
+    defer_collection: bool,
 }
 
 impl LayoutHeapScope {
@@ -493,6 +507,7 @@ impl LayoutHeapScope {
         });
         Self {
             reuse_unchanged_heap: false,
+            defer_collection: false,
         }
     }
 
@@ -504,6 +519,15 @@ impl LayoutHeapScope {
     pub fn AllowUnchangedReuse(&mut self) {
         self.reuse_unchanged_heap = true;
     }
+
+    /// Keep a browser lifecycle operation free of stop-the-world collection.
+    /// Allocations still raise the heap's collection request; the owner event
+    /// loop services that request from a low-priority turn. This is the small
+    /// synchronous collector's equivalent of cppgc scheduling collection from
+    /// allocation pressure instead of collecting at every Blink API boundary.
+    pub fn DeferCollection(&mut self) {
+        self.defer_collection = true;
+    }
 }
 
 impl Default for LayoutHeapScope {
@@ -514,13 +538,15 @@ impl Default for LayoutHeapScope {
 
 impl Drop for LayoutHeapScope {
     fn drop(&mut self) {
-        let outermost = HEAP.with(|heap| {
+        let collect_now = HEAP.with(|heap| {
             let mut heap = heap.borrow_mut();
             assert!(heap.scopes > 0);
             heap.scopes -= 1;
-            heap.scopes == 0 && (!self.reuse_unchanged_heap || heap.activity_since_collection)
+            heap.scopes == 0
+                && !self.defer_collection
+                && (!self.reuse_unchanged_heap || heap.activity_since_collection)
         });
-        if outermost {
+        if collect_now {
             collect();
         }
     }
@@ -632,6 +658,18 @@ pub unsafe fn MakeGarbageCollectedWithAdditionalBytes<T: Traceable + 'static>(
         let address = unsafe { alloc_zeroed(layout) };
         let address = NonNull::new(address).unwrap_or_else(|| handle_alloc_error(layout));
         heap.activity_since_collection = true;
+        heap.allocated_bytes_since_collection = heap
+            .allocated_bytes_since_collection
+            .saturating_add(layout.size());
+        // cppgc grows the heap between collections and schedules GC from
+        // allocation pressure. Our collector is currently synchronous, so a
+        // moderately sized budget keeps it out of every layout while bounding
+        // transient garbage until the owner services the request while idle.
+        const MIN_ALLOCATION_BUDGET: usize = 4 * 1024 * 1024;
+        let budget = MIN_ALLOCATION_BUDGET.max(heap.heap_bytes / 2);
+        if heap.allocated_bytes_since_collection >= budget {
+            heap.collection_requested = true;
+        }
         heap.objects.insert(
             address.as_ptr() as usize,
             Allocation {
@@ -643,12 +681,16 @@ pub unsafe fn MakeGarbageCollectedWithAdditionalBytes<T: Traceable + 'static>(
                 strongly_marked: false,
             },
         );
+        heap.heap_bytes = heap.heap_bytes.saturating_add(layout.size());
         address.as_ptr() as *mut T
     });
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| init(pointer)));
     if let Err(error) = result {
         HEAP.with(|heap| {
-            heap.borrow_mut().objects.remove(&(pointer as usize));
+            let mut heap = heap.borrow_mut();
+            if let Some(object) = heap.objects.remove(&(pointer as usize)) {
+                heap.heap_bytes = heap.heap_bytes.saturating_sub(object.layout.size());
+            }
         });
         std::panic::resume_unwind(error);
     }
@@ -824,9 +866,10 @@ pub fn FreeLayoutBacking<T: ?Sized>(pointer: *mut T) {
         unsafe { destroy(pointer as *mut u8) };
     }
     HEAP.with(|heap| {
-        heap.borrow_mut()
-            .objects
-            .remove(&(pointer as *mut u8 as usize));
+        let mut heap = heap.borrow_mut();
+        if let Some(object) = heap.objects.remove(&(pointer as *mut u8 as usize)) {
+            heap.heap_bytes = heap.heap_bytes.saturating_sub(object.layout.size());
+        }
     });
 }
 pub fn LayoutHeapAllocationCountForTesting() -> usize {
@@ -834,6 +877,33 @@ pub fn LayoutHeapAllocationCountForTesting() -> usize {
 }
 pub fn CollectLayoutHeapForTesting() {
     collect();
+}
+
+/// True once allocation pressure asks the owner event loop for a collection.
+/// The query is side-effect free and is valid only on the layout heap's owner
+/// thread, like all other heap operations.
+pub fn IsLayoutHeapCollectionRequested() -> bool {
+    HEAP.with(|heap| heap.borrow().collection_requested)
+}
+
+/// Ask the next low-priority owner turn to collect, for example after an
+/// entire document has been retired.
+pub fn RequestLayoutHeapCollection() {
+    HEAP.with(|heap| heap.borrow_mut().collection_requested = true);
+}
+
+/// Service an allocation-driven request outside input/layout/frame work.
+/// Returns whether a collection ran.
+pub fn CollectLayoutHeapIfRequested() -> bool {
+    let requested = HEAP.with(|heap| {
+        let heap = heap.borrow();
+        assert_eq!(heap.scopes, 0, "cannot collect inside a layout heap scope");
+        !heap.collecting && heap.collection_requested
+    });
+    if requested {
+        collect();
+    }
+    requested
 }
 
 #[cfg(test)]

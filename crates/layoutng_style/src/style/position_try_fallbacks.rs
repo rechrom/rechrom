@@ -62,9 +62,23 @@ impl PositionTryFallback {
     }
 
     // cpp: layoutng_style/style/position_try_fallbacks.h:42-46
-    // No definition exists in the supplied C++ tree.
+    // cpp: third_party/blink/renderer/core/style/position_try_fallbacks.cc:15-26
     pub fn Matches(&self, other: &PositionTryFallback) -> bool {
-        unsafe { PositionTryFallbackMatches(self, other) }
+        let name = if self.position_try_name_.Get().is_null() {
+            AtomicString::default()
+        } else {
+            unsafe { &*self.position_try_name_.Get() }.GetName().clone()
+        };
+        let other_name = if other.position_try_name_.Get().is_null() {
+            AtomicString::default()
+        } else {
+            unsafe { &*other.position_try_name_.Get() }
+                .GetName()
+                .clone()
+        };
+        self.tactic_list_ == other.tactic_list_
+            && name == other_name
+            && self.position_area_.Matches(&other.position_area_)
     }
 
     // cpp: layoutng_style/style/position_try_fallbacks.h:48-51
@@ -122,9 +136,12 @@ impl PositionTryFallbacks {
     }
 
     // cpp: layoutng_style/style/position_try_fallbacks.h:70-72
-    // No definition exists in the supplied C++ tree.
+    // cpp: third_party/blink/renderer/core/style/position_try_fallbacks.cc:36-46
     pub fn HasPositionTryName(&self, names: &HashSet<AtomicString>) -> bool {
-        unsafe { PositionTryFallbacksHasPositionTryName(self, names) }
+        self.fallbacks_.iter().any(|fallback| {
+            let name = fallback.GetPositionTryName();
+            !name.is_null() && names.Contains(unsafe { &*name }.GetName())
+        })
     }
 
     // cpp: layoutng_style/style/position_try_fallbacks.h:73
@@ -151,13 +168,4 @@ impl PositionTryFallbackVectorTraits {
     pub const kCanInitializeWithMemset: bool = true;
     pub const kCanMoveWithMemcpy: bool = true;
     pub const kCanTraceConcurrently: bool = true;
-}
-
-unsafe extern "Rust" {
-    fn PositionTryFallbackMatches(value: &PositionTryFallback, other: &PositionTryFallback)
-        -> bool;
-    fn PositionTryFallbacksHasPositionTryName(
-        value: &PositionTryFallbacks,
-        names: &HashSet<AtomicString>,
-    ) -> bool;
 }

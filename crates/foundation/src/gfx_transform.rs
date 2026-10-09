@@ -145,6 +145,39 @@ impl Transform {
         self.representation = Representation::Matrix44(matrix);
     }
 
+    // cpp: ui/gfx/geometry/transform.cc:265-269; matrix44.cc:268-273.
+    pub fn Skew(&mut self, degrees_x: f64, degrees_y: f64) {
+        if degrees_x == 0.0 && degrees_y == 0.0 {
+            return;
+        }
+        let mut matrix = self.matrix();
+        let c0 = matrix[0];
+        let c1 = matrix[1];
+        let x = degrees_x.to_radians().tan();
+        let y = degrees_y.to_radians().tan();
+        for row in 0..4 {
+            matrix[0][row] = c0[row] + c1[row] * y;
+            matrix[1][row] = c1[row] + c0[row] * x;
+        }
+        self.representation = Representation::Matrix44(matrix);
+    }
+    // cpp: ui/gfx/geometry/transform.cc:638-644; matrix44.cc:412-430.
+    pub fn Zoom(&mut self, zoom: f32) {
+        match &mut self.representation {
+            Representation::Axis2d { translation, .. } => {
+                translation[0] *= zoom;
+                translation[1] *= zoom;
+            }
+            Representation::Matrix44(matrix) => {
+                let zoom = f64::from(zoom);
+                for index in 0..3 {
+                    matrix[index][3] /= zoom;
+                    matrix[3][index] *= zoom;
+                }
+            }
+        }
+    }
+
     // cpp: foundation/gfx_geometry/transform.cc:271-275
     pub fn ApplyPerspectiveDepth(&mut self, depth: f64) {
         if depth == 0.0 {

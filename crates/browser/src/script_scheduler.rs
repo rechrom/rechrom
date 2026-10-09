@@ -3,7 +3,7 @@
 //! Source script scheduling over the persistent parser arena.
 
 use crate::script_execution::ParserScriptTasks;
-use document_loader::{DecodeText, DocumentLoader, ResolveCSSURLs, ResolveUrl};
+use document_loader::{DecodeText, DocumentLoader, ResolveCSSStyleSheetURLs, ResolveUrl};
 use document_loader::{RequireResponse, ResourceLoader, StartResource};
 use dom::persistent_document::DOMNodeType;
 use dom::{Document, DOM};
@@ -13,7 +13,7 @@ use html::{HTMLParserHost, ParserElementEvent};
 use interaction::event::{EventListenerInvocation, EventPhase, EventType, MakeSyntheticEvent};
 use javascript::javascript_runtime::{JavaScriptException, JavaScriptRealm, JavaScriptRuntime};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::rc::Rc;
 use std::time::Duration;
@@ -150,7 +150,7 @@ impl HTMLParserHost for ParserHost {
         {
             let mut css = String::new();
             AppendText(document, element, &mut css);
-            let mut sheet = cssom::ParseCSS(&css);
+            let mut sheet = style::ParseCSS(&css);
             sheet.owner_node_id = document.Node(element).Id();
             Some(sheet)
         } else {
@@ -216,7 +216,7 @@ fn PollParserStyleSheets(
                     let mut css = String::new();
                     let i = d.FindNodeById(node).expect("style node retained in arena");
                     AppendText(d, i, &mut css);
-                    let mut sheet = cssom::ParseCSS(&css);
+                    let mut sheet = style::ParseCSS(&css);
                     sheet.owner_node_id = node;
                     sheet
                 };
@@ -251,7 +251,7 @@ fn PollParserStyleSheets(
                     } else {
                         response.final_url.clone()
                     };
-                    Ok((cssom::ParseCSS(&DecodeText(&response)?), base))
+                    Ok((style::ParseCSS(&DecodeText(&response)?), base))
                 }) {
                     Ok(loaded) => loaded,
                     Err(error) => {
@@ -263,11 +263,7 @@ fn PollParserStyleSheets(
         };
         let page = resources.borrow().page.clone();
         if page.is_none() {
-            for rule in &mut sheet.rules {
-                for declaration in &mut rule.declarations {
-                    ResolveCSSURLs(&mut declaration.value, &base)?;
-                }
-            }
+            ResolveCSSStyleSheetURLs(&mut sheet, &base)?;
         }
         let apply = |d: &mut Document| {
             if let Some(page) = page {
@@ -275,7 +271,6 @@ fn PollParserStyleSheets(
             } else {
                 d.AppendStyleSheet(sheet);
             }
-            d.ClearResolvedStyles();
             Ok::<_, io::Error>(())
         };
         if let Some(parser) = parser.as_deref_mut() {
@@ -656,7 +651,7 @@ impl ScriptScheduler {
                             .expect("inline style node retained in arena");
                         let mut css = String::new();
                         AppendText(tree, index, &mut css);
-                        let mut sheet = cssom::ParseCSS(&css);
+                        let mut sheet = style::ParseCSS(&css);
                         sheet.owner_node_id = node;
                         sheet
                     };
@@ -682,7 +677,7 @@ impl ScriptScheduler {
                         } else {
                             response.final_url.clone()
                         };
-                        Ok((cssom::ParseCSS(&DecodeText(&response)?), base))
+                        Ok((style::ParseCSS(&DecodeText(&response)?), base))
                     }) {
                         Ok(loaded) => Ok(loaded),
                         Err(error) => {
@@ -695,11 +690,7 @@ impl ScriptScheduler {
             if let Ok((mut sheet, base)) = loaded {
                 let page = self.resources.borrow().page.clone();
                 if page.is_none() {
-                    for rule in &mut sheet.rules {
-                        for declaration in &mut rule.declarations {
-                            ResolveCSSURLs(&mut declaration.value, &base)?;
-                        }
-                    }
+                    ResolveCSSStyleSheetURLs(&mut sheet, &base)?;
                 }
                 let apply = |tree: &mut Document| {
                     if let Some(page) = page {
@@ -707,7 +698,6 @@ impl ScriptScheduler {
                     } else {
                         tree.AppendStyleSheet(sheet);
                     }
-                    tree.ClearResolvedStyles();
                     Ok::<_, io::Error>(())
                 };
                 if let Some(parser) = parser.as_deref_mut() {
@@ -1373,7 +1363,7 @@ impl ParserResourceDiscovery {
                         let i = d.FindNodeById(node).expect("style remains in arena");
                         let mut css = String::new();
                         AppendText(d, i, &mut css);
-                        let mut sheet = cssom::ParseCSS(&css);
+                        let mut sheet = style::ParseCSS(&css);
                         sheet.owner_node_id = node;
                         sheet
                     });
@@ -1391,7 +1381,7 @@ impl ParserResourceDiscovery {
                         } else {
                             r.final_url.clone()
                         };
-                        Ok((cssom::ParseCSS(&DecodeText(&r)?), base))
+                        Ok((style::ParseCSS(&DecodeText(&r)?), base))
                     });
                     match loaded {
                         Ok(loaded) => loaded,
@@ -1409,10 +1399,6 @@ impl ParserResourceDiscovery {
                 .clone()
                 .expect("no-runtime page resources");
             page.AddParsedStyleSheet(sheet, &base)?;
-            self.document
-                .borrow_mut()
-                .GetDocumentMut()
-                .ClearResolvedStyles();
             client.DidApplyStyleSheet(&base);
         }
     }

@@ -1,7 +1,10 @@
 #![allow(non_snake_case)]
 
+#[cfg(test)]
 use css_parser::css_parser_token::{BlockType, CSSParserTokenType};
+#[cfg(test)]
 use css_parser::css_tokenizer::CSSTokenizer;
+#[cfg(test)]
 use foundation::{InitStringStatics, String as BlinkString};
 
 // cpp: cssom/css_style_sheet.h:11-15
@@ -16,15 +19,24 @@ pub struct CSSDeclaration {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CSSStyleRule {
     pub selector_text: String,
+    /// Exact source inside the rule block. Production Style parses this with
+    /// the translated Blink declaration parser; `declarations` is retained
+    /// only for the CSSOM-facing rule API during its ownership migration.
+    pub declaration_text: String,
     pub declarations: Vec<CSSDeclaration>,
     pub media_conditions: Vec<String>,
     pub layer_name: String,
+    pub scope_conditions: Vec<crate::CSSStyleScope>,
+    pub container_conditions: Vec<crate::container_condition::CSSContainerQuerySet>,
 }
 
 // cpp: cssom/css_style_sheet.h:27-31
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CSSFontFaceRule {
+    pub declaration_text: String,
     pub declarations: Vec<CSSDeclaration>,
+    pub media_conditions: Vec<String>,
+    pub layer_name: String,
 }
 
 /// One selector block inside an author `@keyframes` rule.  Keep the selector
@@ -33,6 +45,7 @@ pub struct CSSFontFaceRule {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CSSKeyframeRule {
     pub key_text: String,
+    pub declaration_text: String,
     pub declarations: Vec<CSSDeclaration>,
 }
 
@@ -41,6 +54,7 @@ pub struct CSSKeyframesRule {
     pub name: String,
     pub keyframes: Vec<CSSKeyframeRule>,
     pub media_conditions: Vec<String>,
+    pub layer_name: String,
 }
 
 // cpp: cssom/css_style_sheet.h:33-41
@@ -49,20 +63,25 @@ pub struct CSSStyleSheet {
     pub rules: Vec<CSSStyleRule>,
     pub font_faces: Vec<CSSFontFaceRule>,
     pub keyframes: Vec<CSSKeyframesRule>,
+    pub scopes: Vec<crate::CSSScopeRule>,
+    pub property_rules: Vec<crate::CSSPropertyRule>,
     pub layer_order: Vec<String>,
     pub owner_node_id: u64,
 }
 
 // cpp: cssom/css_style_sheet.cc:16-37
+#[cfg(test)]
 fn Trim(text: &str) -> String {
     text.trim_matches(|character: char| character.is_ascii_whitespace())
         .to_owned()
 }
 
+#[cfg(test)]
 fn LowerASCII(text: &str) -> String {
     text.to_ascii_lowercase()
 }
 
+#[cfg(test)]
 fn AppendUnique(values: &mut Vec<String>, value: String) {
     if !value.is_empty() && !values.contains(&value) {
         values.push(value);
@@ -70,6 +89,7 @@ fn AppendUnique(values: &mut Vec<String>, value: String) {
 }
 
 // cpp: cssom/css_style_sheet.cc:39-57
+#[cfg(test)]
 fn SplitLayerNames(input: &str) -> Vec<String> {
     input
         .split(',')
@@ -78,6 +98,7 @@ fn SplitLayerNames(input: &str) -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn QualifiedLayerName(outer: &str, inner: &str) -> String {
     match (outer.is_empty(), inner.is_empty()) {
         (true, _) => inner.to_owned(),
@@ -87,6 +108,7 @@ fn QualifiedLayerName(outer: &str, inner: &str) -> String {
 }
 
 // cpp: cssom/css_style_sheet.cc:59-78
+#[cfg(test)]
 fn AppendNestedSheet(
     destination: &mut CSSStyleSheet,
     nested: CSSStyleSheet,
@@ -118,6 +140,7 @@ fn AppendNestedSheet(
     }
 }
 
+#[cfg(test)]
 fn ParseKeyframes(name: String, body: &str) -> Option<CSSKeyframesRule> {
     let source = BlinkString::FromUtf8(body.as_bytes());
     let mut tokenizer = CSSTokenizer::new(&source, 0);
@@ -167,10 +190,12 @@ fn ParseKeyframes(name: String, body: &str) -> Option<CSSKeyframesRule> {
             }
         }
         let key_text = Trim(&Range(&tokenizer, selector_start, selector_end));
-        let declarations = ParseDeclarations(&Range(&tokenizer, body_start, body_end));
+        let declaration_text = Range(&tokenizer, body_start, body_end);
+        let declarations = ParseDeclarations(&declaration_text);
         if !key_text.is_empty() && !declarations.is_empty() {
             keyframes.push(CSSKeyframeRule {
                 key_text,
+                declaration_text,
                 declarations,
             });
         }
@@ -179,49 +204,12 @@ fn ParseKeyframes(name: String, body: &str) -> Option<CSSKeyframesRule> {
         name,
         keyframes,
         media_conditions: Vec::new(),
+        layer_name: String::new(),
     })
 }
 
-// cpp: cssom/css_style_sheet.cc:80-113
-fn RemoveComments(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut output = Vec::with_capacity(bytes.len());
-    let mut quote = 0;
-    let mut index = 0;
-    while index < bytes.len() {
-        let character = bytes[index];
-        if quote != 0 {
-            output.push(character);
-            index += 1;
-            if character == b'\\' && index < bytes.len() {
-                output.push(bytes[index]);
-                index += 1;
-            } else if character == quote {
-                quote = 0;
-            }
-            continue;
-        }
-        if character == b'\'' || character == b'"' {
-            quote = character;
-            output.push(character);
-            index += 1;
-            continue;
-        }
-        if character == b'/' && bytes.get(index + 1) == Some(&b'*') {
-            index += 2;
-            while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/') {
-                index += 1;
-            }
-            index = (index + 2).min(bytes.len());
-            continue;
-        }
-        output.push(character);
-        index += 1;
-    }
-    String::from_utf8(output).expect("removing ASCII CSS comments preserves UTF-8")
-}
-
 // cpp: cssom/css_style_sheet.cc:115-119
+#[cfg(test)]
 fn Range(tokenizer: &CSSTokenizer, start: u32, end: u32) -> String {
     tokenizer
         .StringRangeAt(start, end - start)
@@ -230,6 +218,7 @@ fn Range(tokenizer: &CSSTokenizer, start: u32, end: u32) -> String {
 }
 
 // cpp: cssom/css_style_sheet.cc:121-193
+#[cfg(test)]
 fn ParseDeclarations(input: &str) -> Vec<CSSDeclaration> {
     let source = BlinkString::FromUtf8(input.as_bytes());
     let mut tokenizer = CSSTokenizer::new(&source, 0);
@@ -315,10 +304,12 @@ fn ParseDeclarations(input: &str) -> Vec<CSSDeclaration> {
 }
 
 // cpp: cssom/css_style_sheet.cc:197-328
+#[cfg(test)]
 pub fn ParseCSS(input: &str) -> CSSStyleSheet {
     InitStringStatics();
-    let without_comments = RemoveComments(input);
-    let source = BlinkString::FromUtf8(without_comments.as_bytes());
+    // Preserve comments in the source range. Blink tokenization discards them
+    // at grammar boundaries without concatenating the surrounding tokens.
+    let source = BlinkString::FromUtf8(input.as_bytes());
     let mut tokenizer = CSSTokenizer::new(&source, 0);
     let mut sheet = CSSStyleSheet::default();
 
@@ -403,9 +394,14 @@ pub fn ParseCSS(input: &str) -> CSSStyleSheet {
                 }
                 AppendNestedSheet(&mut sheet, ParseCSS(&body), &layer, None);
             } else if at_name == "font-face" {
-                let declarations = ParseDeclarations(&body);
+                let declaration_text = body;
+                let declarations = ParseDeclarations(&declaration_text);
                 if !declarations.is_empty() {
-                    sheet.font_faces.push(CSSFontFaceRule { declarations });
+                    sheet.font_faces.push(CSSFontFaceRule {
+                        declaration_text,
+                        declarations,
+                        ..CSSFontFaceRule::default()
+                    });
                 }
             } else if matches!(at_name.as_str(), "keyframes" | "-webkit-keyframes") {
                 let name = Trim(&Range(&tokenizer, prelude_start, prelude_end));
@@ -455,10 +451,12 @@ pub fn ParseCSS(input: &str) -> CSSStyleSheet {
             }
         }
         let selector_text = Trim(&Range(&tokenizer, selector_start, selector_end));
-        let declarations = ParseDeclarations(&Range(&tokenizer, body_start, body_end));
+        let declaration_text = Range(&tokenizer, body_start, body_end);
+        let declarations = ParseDeclarations(&declaration_text);
         if !selector_text.is_empty() {
             sheet.rules.push(CSSStyleRule {
                 selector_text,
+                declaration_text,
                 declarations,
                 ..CSSStyleRule::default()
             });
@@ -468,14 +466,18 @@ pub fn ParseCSS(input: &str) -> CSSStyleSheet {
 }
 
 // cpp: cssom/css_style_sheet.cc:330-334
+#[cfg(test)]
 pub fn ParseCSSDeclarationList(input: &str) -> Vec<CSSDeclaration> {
     InitStringStatics();
-    ParseDeclarations(&RemoveComments(input))
+    // Preserve token boundaries exactly as the stylesheet path does.  The
+    // tokenizer consumes comments as CSS whitespace; deleting them first
+    // would incorrectly turn `1/**/0px` into `10px`.
+    ParseDeclarations(input)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ParseCSS;
+    use super::{ParseCSS, ParseCSSDeclarationList};
 
     // Behavioral assertions translated from css/css_style_sheet_test.cc:8-69.
     #[test]
@@ -533,5 +535,12 @@ mod tests {
         );
         assert_eq!(sheet.font_faces[0].declarations[1].property, "src");
         assert_eq!(sheet.font_faces[0].declarations[2].value, "700");
+    }
+
+    #[test]
+    fn declaration_lists_preserve_comment_token_boundaries() {
+        let declarations = ParseCSSDeclarationList("width:1/**/0px;color:r/**/ed");
+        assert_eq!(declarations[0].value, "1/**/0px");
+        assert_eq!(declarations[1].value, "r/**/ed");
     }
 }

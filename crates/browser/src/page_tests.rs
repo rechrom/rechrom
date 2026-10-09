@@ -298,8 +298,8 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
         .unwrap();
         for preference in [
             None,
-            Some(PreferredColorScheme::Dark),
-            Some(PreferredColorScheme::Light),
+            Some(PreferredColorScheme::kDark),
+            Some(PreferredColorScheme::kLight),
         ] {
             let trace = Rc::new(RefCell::new(Vec::new()));
             let frames = Rc::new(RefCell::new(Vec::new()));
@@ -310,7 +310,7 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
             page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
                 .unwrap();
 
-            let dark = preference == Some(PreferredColorScheme::Dark);
+            let dark = preference == Some(PreferredColorScheme::kDark);
             let result = page.Evaluate(&format!(r#"
                 if(!(scheme.matches === {dark} &&
                 matchMedia('(prefers-color-scheme:light)').matches === {} &&
@@ -363,7 +363,7 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
             None,
             Some(Rc::new(RefCell::new(Client { trace, frames }))),
         );
-        page.SetPreferredColorScheme(PreferredColorScheme::Dark);
+        page.SetPreferredColorScheme(PreferredColorScheme::kDark);
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
             .unwrap();
 
@@ -1123,7 +1123,7 @@ fn without_javascript(mode: &str) {
             .unwrap();
     } else {
         page.Apply(page_mutation::PageMutation::CSSOMMutation(page_mutation::CSSOMMutation {
-            style_sheet: cssom::ParseCSS("body{margin:0;background:white}#box{width:30px;height:10px;background:#2458a6}"),base_url:String::new()
+            style_sheet: style::ParseCSS("body{margin:0;background:white}#box{width:30px;height:10px;background:#2458a6}"),base_url:String::new()
         })).unwrap();
         page.Apply(page_mutation::PageMutation::DOMMutation(
             dom::dom_mutation::DOMMutation {
@@ -1281,13 +1281,13 @@ impl image_resource::DocumentImageDecoder for FixtureImageDecoder {
         let artifact = paint::paint_engine::PaintArtifact {
             items: vec![paint::paint_engine::DisplayItem {
                 r#type: paint::paint_engine::DisplayItemType::kDrawImageRect,
-                rect: layoutng_assembly::internal::layout_input::PaintRect {
+                rect: paint::paint_engine::PaintRect {
                     x: 0.0,
                     y: 0.0,
                     width: decoded.width as f64,
                     height: decoded.height as f64,
                 },
-                source_rect: layoutng_assembly::internal::layout_input::PaintRect {
+                source_rect: paint::paint_engine::PaintRect {
                     x: 0.0,
                     y: 0.0,
                     width: decoded.width as f64,
@@ -1516,8 +1516,7 @@ fn run_page_script_fixture(
     // Cached-image oracle records several ready callbacks as one task batch.
     // Other fixtures retain their existing single-turn scheduling assertions.
     if fixture == "page-cached-image-events" {
-        page.RunFor(std::time::Duration::from_millis(100))
-            .unwrap();
+        page.RunFor(std::time::Duration::from_millis(100)).unwrap();
     } else {
         page.RunTask().unwrap();
     }
