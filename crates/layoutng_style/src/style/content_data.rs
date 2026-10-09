@@ -199,7 +199,13 @@ impl ContentData for ImageContentData {
     }
     // cpp: layoutng_style/style/content_data.h:123
     fn CreateLayoutObject(&self, owner: &mut LayoutObject) -> *mut LayoutObject {
-        unsafe { ImageContentDataCreateLayoutObject(self, owner) }
+        // cpp: core/style/content_data.cc:84-95. Concrete LayoutImage and
+        // LayoutImageResourceStyleImage construction belongs to layoutng's
+        // pseudo-content adapter; layoutng_style deliberately cannot depend
+        // on that higher layer. Keep the owner boundary explicit, matching
+        // the other concrete ContentData implementations in this crate.
+        let _ = owner;
+        panic!("ImageContentData layout creation requires the layoutng adapter")
     }
     // cpp: layoutng_style/style/content_data.h:125-128
     fn Equals(&self, data: &dyn ContentData) -> bool {
@@ -211,11 +217,32 @@ impl ContentData for ImageContentData {
     }
     // cpp: layoutng_style/style/content_data.h:130
     fn Trace(&self, visitor: &mut Visitor) {
-        unsafe { ImageContentDataTrace(self, visitor) }
+        // cpp: core/style/content_data.cc:97-100.
+        visitor.Trace(&self.image_);
+        visitor.Trace(&self.base_.next_);
     }
     // cpp: layoutng_style/style/content_data.h:132
     fn DebugString(&self) -> String {
-        unsafe { ImageContentDataDebugString(self) }
+        // cpp: layoutng_style/style/content_data.h:133-159. CssValue text is
+        // owned by the style-value package; the native flags remain useful at
+        // this package boundary without a reverse dependency.
+        let image = unsafe { &*self.GetImage() };
+        let mut text = std::string::String::from("<image: ");
+        for (flag, label) in [
+            (image.IsImageResource(), "[is_resource]"),
+            (image.IsPendingImage(), "[pending]"),
+            (image.IsGeneratedImage(), "[generated]"),
+            (image.IsContentful(), "[contentful]"),
+            (image.IsImageResourceSet(), "[resourceset]"),
+            (image.IsPaintImage(), "[paint]"),
+            (image.IsCrossfadeImage(), "[crossfade]"),
+        ] {
+            if flag {
+                text.push_str(label);
+            }
+        }
+        text.push('>');
+        String::from(text.as_str())
     }
     // cpp: layoutng_style/style/content_data.h:135-138
     fn CloneInternal(&self) -> *mut dyn ContentData {
@@ -763,12 +790,6 @@ impl_content_data_traceable!(
 unsafe extern "Rust" {
     fn ContentDataHasAltCounterContent(value: &dyn ContentData) -> bool;
     fn ContentDataConcatenateAltText(value: &dyn ContentData) -> String;
-    fn ImageContentDataCreateLayoutObject(
-        value: &ImageContentData,
-        owner: &mut LayoutObject,
-    ) -> *mut LayoutObject;
-    fn ImageContentDataTrace(value: &ImageContentData, visitor: &mut Visitor);
-    fn ImageContentDataDebugString(value: &ImageContentData) -> String;
     fn CounterContentDataConstruct(
         identifier: &AtomicString,
         style: &AtomicString,

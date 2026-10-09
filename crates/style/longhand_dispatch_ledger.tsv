@@ -12,7 +12,7 @@ Appearance	Inherit	NativeInteraction	production-complete	out/Min/gen/third_party
 Appearance	Value	NativeInteraction	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	248
 Direction	Initial	NativeWritingDirection	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	297
 Direction	Inherit	NativeWritingDirection	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	300
-FontFamily	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	323
+FontFamily	Value	NativeFontCore	production-platform-context-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	323
 FontFeatureSettings	Initial	NativeFontDescription	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	352
 FontFeatureSettings	Inherit	NativeFontDescription	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	355
 FontFeatureSettings	Value	NativeFontDescription	production-literal-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	358
@@ -28,16 +28,16 @@ FontOpticalSizing	Value	NativeFontDescription	production-literal-branch	out/Min/
 FontPalette	Initial	NativeFontPalette	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	480
 FontPalette	Inherit	NativeFontPalette	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	483
 FontPalette	Value	NativeFontPalette	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	486
-FontSize	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	509
-FontSize	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	512
-FontSize	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	515
+FontSize	Initial	NativeFontCore	production-platform-context-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	509
+FontSize	Inherit	NativeFontCore	production-platform-context-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	512
+FontSize	Value	NativeFontCore	production-platform-context-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	515
 FontSizeAdjust	Initial	NativeFontDescription	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	544
 FontSizeAdjust	Inherit	NativeFontDescription	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	547
 FontSizeAdjust	Value	NativeFontDescription	production-literal-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	550
 FontStretch	Initial	NativeFontDescription	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	579
 FontStretch	Inherit	NativeFontDescription	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	582
 FontStretch	Value	NativeFontDescription	production-literal-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	585
-FontStyle	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	614
+FontStyle	Initial	NativeFontCore	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	614
 FontSynthesisSmallCaps	Initial	NativeStableMisc	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	637
 FontSynthesisSmallCaps	Inherit	NativeStableMisc	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	640
 FontSynthesisSmallCaps	Value	NativeStableMisc	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	643
@@ -71,23 +71,23 @@ FontVariantPosition	Value	NativeFontDescription	production-literal-branch	out/Mi
 FontVariationSettings	Initial	NativeFontDescription	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	927
 FontVariationSettings	Inherit	NativeFontDescription	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	930
 FontVariationSettings	Value	NativeFontDescription	production-literal-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	933
-FontWeight	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	962
-FontWeight	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	965
-FontWeight	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	968
-TextRendering	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1031
-TextRendering	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1034
-TextRendering	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1037
+FontWeight	Initial	NativeFontCore	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	962
+FontWeight	Inherit	NativeFontCore	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	965
+FontWeight	Value	NativeFontCore	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	968
+TextRendering	Initial	NativeFontCore	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1031
+TextRendering	Inherit	NativeFontCore	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1034
+TextRendering	Value	NativeFontCore	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1037
 TextSpacingTrim	Initial	NativeTextBox	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1060
 TextSpacingTrim	Inherit	NativeTextBox	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1063
 TextSpacingTrim	Value	NativeTextBox	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1066
-WebkitFontSmoothing	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1089
-WebkitFontSmoothing	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1092
-WebkitFontSmoothing	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1095
+WebkitFontSmoothing	Initial	NativeFontCore	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1089
+WebkitFontSmoothing	Inherit	NativeFontCore	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1092
+WebkitFontSmoothing	Value	NativeFontCore	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1095
 WebkitLocale	Initial	NativeViewport	production-native-locale-branch/cache-icu-fontbuilder-lifecycle-pending	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1118
 WebkitLocale	Inherit	NativeViewport	production-native-locale-branch/cache-icu-fontbuilder-lifecycle-pending	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1121
-InternalVisitedBackgroundColor	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1268
-InternalVisitedBackgroundColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1272
-InternalVisitedBackgroundColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1276
+InternalVisitedBackgroundColor	Initial	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1268
+InternalVisitedBackgroundColor	Inherit	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1272
+InternalVisitedBackgroundColor	Value	NativeColorSlots	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1276
 InternalVisitedBorderBottomColor	Initial	NativeColorUI	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1405
 InternalVisitedBorderBottomColor	Inherit	NativeColorUI	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1409
 InternalVisitedBorderBottomColor	Value	NativeColorUI	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1413
@@ -103,9 +103,9 @@ InternalVisitedBorderTopColor	Value	NativeColorUI	production-typed-branch	out/Mi
 InternalVisitedCaretColor	Initial	NativeColorUI	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1674
 InternalVisitedCaretColor	Inherit	NativeColorUI	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1678
 InternalVisitedCaretColor	Value	NativeColorUI	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1682
-InternalVisitedColumnRuleColor	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1714
-InternalVisitedColumnRuleColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1717
-InternalVisitedColumnRuleColor	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1720
+InternalVisitedColumnRuleColor	Initial	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1714
+InternalVisitedColumnRuleColor	Inherit	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1717
+InternalVisitedColumnRuleColor	Value	NativeColorSlots	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1720
 InternalVisitedFill	Initial	NativeVisitedSVGPaintShared	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1752
 InternalVisitedFill	Inherit	NativeVisitedSVGPaintShared	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1756
 InternalVisitedFill	Value	NativeVisitedSVGPaintShared	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1760
@@ -115,18 +115,18 @@ InternalVisitedOutlineColor	Value	NativeColorUI	production-typed-branch	out/Min/
 InternalVisitedStroke	Initial	NativeVisitedSVGPaintShared	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1826
 InternalVisitedStroke	Inherit	NativeVisitedSVGPaintShared	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1830
 InternalVisitedStroke	Value	NativeVisitedSVGPaintShared	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1834
-InternalVisitedTextDecorationColor	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1866
-InternalVisitedTextDecorationColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1870
-InternalVisitedTextDecorationColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1874
-InternalVisitedTextEmphasisColor	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1906
-InternalVisitedTextEmphasisColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1910
-InternalVisitedTextEmphasisColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1914
-InternalVisitedTextFillColor	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1946
-InternalVisitedTextFillColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1950
-InternalVisitedTextFillColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1954
-InternalVisitedTextStrokeColor	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1986
-InternalVisitedTextStrokeColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1990
-InternalVisitedTextStrokeColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1994
+InternalVisitedTextDecorationColor	Initial	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1866
+InternalVisitedTextDecorationColor	Inherit	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1870
+InternalVisitedTextDecorationColor	Value	NativeColorSlots	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1874
+InternalVisitedTextEmphasisColor	Initial	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1906
+InternalVisitedTextEmphasisColor	Inherit	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1910
+InternalVisitedTextEmphasisColor	Value	NativeColorSlots	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1914
+InternalVisitedTextFillColor	Initial	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1946
+InternalVisitedTextFillColor	Inherit	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1950
+InternalVisitedTextFillColor	Value	NativeColorSlots	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1954
+InternalVisitedTextStrokeColor	Initial	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1986
+InternalVisitedTextStrokeColor	Inherit	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1990
+InternalVisitedTextStrokeColor	Value	NativeColorSlots	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	1994
 AccentColor	Initial	NativeColorUI	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	2017
 AccentColor	Inherit	NativeColorUI	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	2020
 AccentColor	Value	NativeColorUI	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	2023
@@ -198,35 +198,35 @@ BackdropFilter	Inherit	NativeEffects	production-same-zoom-branch	out/Min/gen/thi
 BackfaceVisibility	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3033
 BackfaceVisibility	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3036
 BackfaceVisibility	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3039
-BackgroundAttachment	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3062
-BackgroundAttachment	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3069
-BackgroundAttachment	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3089
-BackgroundBlendMode	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3132
-BackgroundBlendMode	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3139
-BackgroundBlendMode	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3159
-BackgroundClip	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3202
-BackgroundClip	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3209
-BackgroundColor	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3255
-BackgroundColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3259
-BackgroundColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3263
+BackgroundAttachment	Initial	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3062
+BackgroundAttachment	Inherit	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3069
+BackgroundAttachment	Value	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3089
+BackgroundBlendMode	Initial	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3132
+BackgroundBlendMode	Inherit	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3139
+BackgroundBlendMode	Value	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3159
+BackgroundClip	Initial	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3202
+BackgroundClip	Inherit	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3209
+BackgroundColor	Initial	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3255
+BackgroundColor	Inherit	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3259
+BackgroundColor	Value	NativeColorSlots	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3263
 BackgroundImage	Initial	NativeBackgroundImage	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3286
 BackgroundImage	Inherit	NativeBackgroundImage	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3293
 BackgroundImage	Value	NativeBackgroundImage	production-literal-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3313
-BackgroundOrigin	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3356
-BackgroundOrigin	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3363
-BackgroundOrigin	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3383
-BackgroundPositionX	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3426
-BackgroundPositionX	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3433
-BackgroundPositionX	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3460
-BackgroundPositionY	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3503
-BackgroundPositionY	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3510
-BackgroundPositionY	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3537
-BackgroundRepeat	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3580
-BackgroundRepeat	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3587
-BackgroundRepeat	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3607
-BackgroundSize	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3656
-BackgroundSize	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3663
-BackgroundSize	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3688
+BackgroundOrigin	Initial	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3356
+BackgroundOrigin	Inherit	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3363
+BackgroundOrigin	Value	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3383
+BackgroundPositionX	Initial	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3426
+BackgroundPositionX	Inherit	NativeBackgroundFillLayer	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3433
+BackgroundPositionX	Value	NativeBackgroundFillLayer	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3460
+BackgroundPositionY	Initial	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3503
+BackgroundPositionY	Inherit	NativeBackgroundFillLayer	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3510
+BackgroundPositionY	Value	NativeBackgroundFillLayer	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3537
+BackgroundRepeat	Initial	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3580
+BackgroundRepeat	Inherit	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3587
+BackgroundRepeat	Value	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3607
+BackgroundSize	Initial	NativeBackgroundFillLayer	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3656
+BackgroundSize	Inherit	NativeBackgroundFillLayer	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3663
+BackgroundSize	Value	NativeBackgroundFillLayer	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3688
 BaselineShift	Initial	NativeSVGPresentation	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3777
 BaselineSource	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3800
 BaselineSource	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	3803
@@ -278,9 +278,9 @@ BorderRightStyle	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer
 BorderRightStyle	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5075
 BorderRightStyle	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5078
 BorderRightWidth	Value	NativeBorder	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5116
-BorderShape	Initial	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5145
-BorderShape	Inherit	NativeCorner	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5148
-BorderShape	Value	NativeCorner	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5156
+BorderShape	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5145
+BorderShape	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5148
+BorderShape	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5156
 BorderTopColor	Initial	NativeBorder	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5276
 BorderTopColor	Inherit	NativeBorder	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5280
 BorderTopColor	Value	NativeBorder	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5284
@@ -294,9 +294,9 @@ BorderTopStyle	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/c
 BorderTopStyle	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5417
 BorderTopStyle	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5420
 BorderTopWidth	Value	NativeBorder	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5458
-Bottom	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5490
-Bottom	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5493
-Bottom	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5501
+Bottom	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5490
+Bottom	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5493
+Bottom	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5501
 BoxDecorationBreak	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5527
 BoxDecorationBreak	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5530
 BoxDecorationBreak	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5533
@@ -339,9 +339,9 @@ Clip	Value	NativeViewport	production-typed-branch	out/Min/gen/third_party/blink/
 ClipPath	Initial	NativeEffects	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5936
 ClipPath	Inherit	NativeEffects	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5939
 ClipPath	Value	NativeEffects	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5947
-ClipRule	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5970
-ClipRule	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5973
-ClipRule	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5976
+ClipRule	Initial	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5970
+ClipRule	Inherit	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5973
+ClipRule	Value	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5976
 ColorInterpolation	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5999
 ColorInterpolation	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6002
 ColorInterpolation	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6005
@@ -357,9 +357,9 @@ ColumnCount	Value	NativeLayoutMisc	production-typed-branch	out/Min/gen/third_par
 ColumnFill	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6128
 ColumnFill	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6131
 ColumnFill	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6134
-ColumnGap	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6163
-ColumnGap	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6166
-ColumnGap	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6174
+ColumnGap	Initial	NativeGapClip	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6163
+ColumnGap	Inherit	NativeGapClip	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6166
+ColumnGap	Value	NativeGapClip	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6174
 ColumnHeight	Initial	NativeLayoutMisc	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6203
 ColumnHeight	Inherit	NativeLayoutMisc	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6206
 ColumnHeight	Value	NativeLayoutMisc	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6217
@@ -418,18 +418,18 @@ ContentVisibility	Value	Identifier	identifier-branch	out/Min/gen/third_party/bli
 Continue	Initial	NativeLinePagination	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6934
 Continue	Inherit	NativeLinePagination	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6937
 Continue	Value	NativeLinePagination	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6940
-CornerBottomLeftShape	Initial	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6978
-CornerBottomLeftShape	Inherit	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6981
-CornerBottomLeftShape	Value	NativeCorner	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6984
-CornerBottomRightShape	Initial	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7022
-CornerBottomRightShape	Inherit	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7025
-CornerBottomRightShape	Value	NativeCorner	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7028
-CornerTopLeftShape	Initial	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7230
-CornerTopLeftShape	Inherit	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7233
-CornerTopLeftShape	Value	NativeCorner	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7236
-CornerTopRightShape	Initial	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7274
-CornerTopRightShape	Inherit	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7277
-CornerTopRightShape	Value	NativeCorner	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7280
+CornerBottomLeftShape	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6978
+CornerBottomLeftShape	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6981
+CornerBottomLeftShape	Value	NativeCornerShape	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6984
+CornerBottomRightShape	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7022
+CornerBottomRightShape	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7025
+CornerBottomRightShape	Value	NativeCornerShape	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7028
+CornerTopLeftShape	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7230
+CornerTopLeftShape	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7233
+CornerTopLeftShape	Value	NativeCornerShape	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7236
+CornerTopRightShape	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7274
+CornerTopRightShape	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7277
+CornerTopRightShape	Value	NativeCornerShape	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7280
 CounterIncrement	Initial	NativeListCounter	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7303
 CounterIncrement	Inherit	NativeListCounter	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7308
 CounterIncrement	Value	NativeListCounter	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7324
@@ -462,12 +462,12 @@ FieldSizing	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core
 FieldSizing	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7812
 Fill	Initial	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7841
 Fill	Inherit	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7845
-FillOpacity	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7875
-FillOpacity	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7878
-FillOpacity	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7881
-FillRule	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7904
-FillRule	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7907
-FillRule	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7910
+FillOpacity	Initial	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7875
+FillOpacity	Inherit	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7878
+FillOpacity	Value	NativeSVG	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7881
+FillRule	Initial	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7904
+FillRule	Inherit	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7907
+FillRule	Value	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7910
 Filter	Initial	NativeEffects	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7939
 Filter	Inherit	NativeEffects	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7942
 FlexBasis	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7970
@@ -494,9 +494,9 @@ Float	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/
 FloodColor	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8190
 FloodColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8194
 FloodColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8198
-FloodOpacity	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8227
-FloodOpacity	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8230
-FloodOpacity	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8233
+FloodOpacity	Initial	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8227
+FloodOpacity	Inherit	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8230
+FloodOpacity	Value	NativeSVG	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8233
 FlowTolerance	Initial	NativeRenderDelayStyle	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8268
 FlowTolerance	Inherit	NativeRenderDelayStyle	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8271
 FlowTolerance	Value	NativeRenderDelayStyle	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8279
@@ -512,24 +512,24 @@ GridAutoFlow	Value	NativeGrid	production-complete	out/Min/gen/third_party/blink/
 GridAutoRows	Initial	NativeGrid	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8420
 GridAutoRows	Inherit	NativeGrid	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8423
 GridAutoRows	Value	NativeGrid	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8431
-GridColumnEnd	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8460
-GridColumnEnd	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8463
-GridColumnEnd	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8466
-GridColumnStart	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8495
-GridColumnStart	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8498
-GridColumnStart	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8501
+GridColumnEnd	Initial	NativeGrid	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8460
+GridColumnEnd	Inherit	NativeGrid	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8463
+GridColumnEnd	Value	NativeGrid	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8466
+GridColumnStart	Initial	NativeGrid	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8495
+GridColumnStart	Inherit	NativeGrid	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8498
+GridColumnStart	Value	NativeGrid	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8501
 GridLanesDirection	Initial	NativeGridLanesDirection	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8530
 GridLanesDirection	Inherit	NativeGridLanesDirection	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8533
 GridLanesDirection	Value	NativeGridLanesDirection	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8536
 GridLanesPack	Initial	NativeGridLanesPack	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8565
 GridLanesPack	Inherit	NativeGridLanesPack	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8568
 GridLanesPack	Value	NativeGridLanesPack	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8571
-GridRowEnd	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8600
-GridRowEnd	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8603
-GridRowEnd	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8606
-GridRowStart	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8635
-GridRowStart	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8638
-GridRowStart	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8641
+GridRowEnd	Initial	NativeGrid	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8600
+GridRowEnd	Inherit	NativeGrid	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8603
+GridRowEnd	Value	NativeGrid	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8606
+GridRowStart	Initial	NativeGrid	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8635
+GridRowStart	Inherit	NativeGrid	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8638
+GridRowStart	Value	NativeGrid	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8641
 GridTemplateAreas	Initial	NativeGrid	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8664
 GridTemplateAreas	Inherit	NativeGrid	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8667
 GridTemplateAreas	Value	NativeGrid	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8670
@@ -540,9 +540,9 @@ GridTemplateRows	Value	NativeGrid	production-typed-branch	out/Min/gen/third_part
 HangingPunctuation	Initial	NativeInteraction	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8763
 HangingPunctuation	Inherit	NativeInteraction	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8766
 HangingPunctuation	Value	NativeInteraction	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8769
-Height	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8827
-Height	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8830
-Height	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8838
+Height	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8827
+Height	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8830
+Height	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8838
 HyphenateCharacter	Initial	NativeTypography	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8890
 HyphenateCharacter	Inherit	NativeTypography	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8893
 HyphenateCharacter	Value	NativeTypography	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	8896
@@ -582,15 +582,15 @@ InternalEmptyLineHeight	Value	NativeUAInternal	production-complete	out/Min/gen/t
 InternalFontSizeDelta	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9489
 InternalFontSizeDelta	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9492
 InternalFontSizeDelta	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9495
-InternalForcedBackgroundColor	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9527
-InternalForcedBackgroundColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9531
-InternalForcedBackgroundColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9535
-InternalForcedBorderColor	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9567
-InternalForcedBorderColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9571
-InternalForcedBorderColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9575
-InternalForcedOutlineColor	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9636
-InternalForcedOutlineColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9640
-InternalForcedOutlineColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9644
+InternalForcedBackgroundColor	Initial	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9527
+InternalForcedBackgroundColor	Inherit	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9531
+InternalForcedBackgroundColor	Value	NativeColorSlots	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9535
+InternalForcedBorderColor	Initial	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9567
+InternalForcedBorderColor	Inherit	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9571
+InternalForcedBorderColor	Value	NativeColorSlots	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9575
+InternalForcedOutlineColor	Initial	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9636
+InternalForcedOutlineColor	Inherit	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9640
+InternalForcedOutlineColor	Value	NativeColorSlots	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9644
 InternalOverscrollContainer	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9673
 InternalOverscrollContainer	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9676
 InternalOverscrollContainer	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9679
@@ -615,12 +615,12 @@ JustifyItems	Value	ConvertedSelfAlignment	post-conversion-setter	out/Min/gen/thi
 JustifySelf	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9888
 JustifySelf	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9891
 JustifySelf	Value	ConvertedSelfAlignment	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9894
-Left	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9926
-Left	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9929
-Left	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9937
-LetterSpacing	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9969
-LetterSpacing	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9972
-LetterSpacing	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9980
+Left	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9926
+Left	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9929
+Left	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9937
+LetterSpacing	Initial	NativeFontCore	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9969
+LetterSpacing	Inherit	NativeFontCore	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9972
+LetterSpacing	Value	NativeFontCore	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	9980
 LightingColor	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10009
 LightingColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10013
 LightingColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10017
@@ -637,18 +637,18 @@ ListStylePosition	Inherit	NativeListCounter	production-complete	out/Min/gen/thir
 ListStylePosition	Value	NativeListCounter	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10204
 ListStyleType	Initial	NativeListCounter	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10228
 ListStyleType	Inherit	NativeListCounter	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10231
-MarginBottom	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10333
-MarginBottom	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10336
-MarginBottom	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10344
-MarginLeft	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10449
-MarginLeft	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10452
-MarginLeft	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10460
-MarginRight	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10495
-MarginRight	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10498
-MarginRight	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10506
-MarginTop	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10541
-MarginTop	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10544
-MarginTop	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10552
+MarginBottom	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10333
+MarginBottom	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10336
+MarginBottom	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10344
+MarginLeft	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10449
+MarginLeft	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10452
+MarginLeft	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10460
+MarginRight	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10495
+MarginRight	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10498
+MarginRight	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10506
+MarginTop	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10541
+MarginTop	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10544
+MarginTop	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10552
 MarginTrim	Initial	NativeInteraction	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10584
 MarginTrim	Inherit	NativeInteraction	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10587
 MarginTrim	Value	NativeInteraction	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	10590
@@ -685,21 +685,21 @@ MathShift	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/rende
 MathStyle	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11180
 MathStyle	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11183
 MathStyle	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11186
-MaxHeight	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11285
-MaxHeight	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11288
-MaxHeight	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11296
+MaxHeight	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11285
+MaxHeight	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11288
+MaxHeight	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11296
 MaxLines	Initial	NativeLinePagination	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11369
 MaxLines	Inherit	NativeLinePagination	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11372
 MaxLines	Value	NativeLinePagination	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11375
-MaxWidth	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11407
-MaxWidth	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11410
-MaxWidth	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11418
-MinHeight	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11488
-MinHeight	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11491
-MinHeight	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11499
-MinWidth	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11569
-MinWidth	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11572
-MinWidth	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11580
+MaxWidth	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11407
+MaxWidth	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11410
+MaxWidth	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11418
+MinHeight	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11488
+MinHeight	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11491
+MinHeight	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11499
+MinWidth	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11569
+MinWidth	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11572
+MinWidth	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11580
 MixBlendMode	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11606
 MixBlendMode	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11609
 MixBlendMode	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	11612
@@ -749,9 +749,9 @@ OutlineWidth	Value	NativeOverflowOutline	production-literal-branch	out/Min/gen/t
 OverflowAnchor	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12197
 OverflowAnchor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12200
 OverflowAnchor	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12203
-OverflowClipMargin	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12261
-OverflowClipMargin	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12264
-OverflowClipMargin	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12272
+OverflowClipMargin	Initial	NativeGapClip	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12261
+OverflowClipMargin	Inherit	NativeGapClip	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12264
+OverflowClipMargin	Value	NativeGapClip	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12272
 OverflowWrap	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12330
 OverflowWrap	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12333
 OverflowWrap	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12336
@@ -767,18 +767,18 @@ OverscrollBehaviorY	Value	NativeScroll	production-complete	out/Min/gen/third_par
 OverscrollContainerType	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12624
 OverscrollContainerType	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12627
 OverscrollContainerType	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12630
-PaddingBottom	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12752
-PaddingBottom	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12755
-PaddingBottom	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12763
-PaddingLeft	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12865
-PaddingLeft	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12868
-PaddingLeft	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12876
-PaddingRight	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12908
-PaddingRight	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12911
-PaddingRight	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12919
-PaddingTop	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12951
-PaddingTop	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12954
-PaddingTop	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12962
+PaddingBottom	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12752
+PaddingBottom	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12755
+PaddingBottom	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12763
+PaddingLeft	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12865
+PaddingLeft	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12868
+PaddingLeft	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12876
+PaddingRight	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12908
+PaddingRight	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12911
+PaddingRight	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12919
+PaddingTop	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12951
+PaddingTop	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12954
+PaddingTop	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12962
 Page	Initial	NativeViewport	production-document-root-native-name-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12985
 Page	Inherit	NativeViewport	production-document-root-native-name-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12988
 Page	Value	NativeViewport	production-document-root-native-name-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	12991
@@ -826,17 +826,17 @@ ReadingFlow	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/ren
 ReadingOrder	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13608
 ReadingOrder	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13611
 ReadingOrder	Value	Number	numeric-literal-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13614
-Resize	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13637
-Resize	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13640
-Right	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13698
-Right	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13701
-Right	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13709
+Resize	Initial	NativeSimpleStyle	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13637
+Resize	Inherit	NativeSimpleStyle	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13640
+Right	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13698
+Right	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13701
+Right	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13709
 Rotate	Initial	NativeTransform	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13735
 Rotate	Inherit	NativeTransform	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13738
 Rotate	Value	NativeTransform	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13741
-RowGap	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13770
-RowGap	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13773
-RowGap	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13781
+RowGap	Initial	NativeGapClip	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13770
+RowGap	Inherit	NativeGapClip	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13773
+RowGap	Value	NativeGapClip	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13781
 RowRuleBreak	Initial	NativeGapRuleBits	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13804
 RowRuleBreak	Inherit	NativeGapRuleBits	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13807
 RowRuleBreak	Value	NativeGapRuleBits	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	13810
@@ -886,9 +886,9 @@ Scale	Value	NativeTransform	production-typed-branch	out/Min/gen/third_party/blin
 ScrollAxisLock	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	14304
 ScrollAxisLock	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	14307
 ScrollAxisLock	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	14310
-ScrollBehavior	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	14333
-ScrollBehavior	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	14336
-ScrollBehavior	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	14339
+ScrollBehavior	Initial	NativeSimpleStyle	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	14333
+ScrollBehavior	Inherit	NativeSimpleStyle	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	14336
+ScrollBehavior	Value	NativeSimpleStyle	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	14339
 ScrollInitialTarget	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	14368
 ScrollInitialTarget	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	14371
 ScrollInitialTarget	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	14374
@@ -949,9 +949,9 @@ ScrollbarWidth	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/
 ShapeImageThreshold	Initial	NativeEffects	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15415
 ShapeImageThreshold	Inherit	NativeEffects	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15418
 ShapeImageThreshold	Value	NativeEffects	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15421
-ShapeMargin	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15444
-ShapeMargin	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15447
-ShapeMargin	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15455
+ShapeMargin	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15444
+ShapeMargin	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15447
+ShapeMargin	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15455
 ShapeOutside	Initial	NativeEffects	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15478
 ShapeOutside	Inherit	NativeEffects	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15481
 ShapeOutside	Value	NativeEffects	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15489
@@ -964,9 +964,9 @@ Speak	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/
 StopColor	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15656
 StopColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15660
 StopColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15664
-StopOpacity	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15693
-StopOpacity	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15696
-StopOpacity	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15699
+StopOpacity	Initial	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15693
+StopOpacity	Inherit	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15696
+StopOpacity	Value	NativeSVG	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15699
 Stroke	Initial	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15728
 Stroke	Inherit	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15732
 StrokeDasharray	Initial	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15756
@@ -984,9 +984,9 @@ StrokeLinejoin	Value	NativeSVGPresentation	production-complete	out/Min/gen/third
 StrokeMiterlimit	Initial	NativeSVGPresentation	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15882
 StrokeMiterlimit	Inherit	NativeSVGPresentation	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15885
 StrokeMiterlimit	Value	NativeSVGPresentation	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15888
-StrokeOpacity	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15917
-StrokeOpacity	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15920
-StrokeOpacity	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15923
+StrokeOpacity	Initial	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15917
+StrokeOpacity	Inherit	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15920
+StrokeOpacity	Value	NativeSVG	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15923
 StrokeWidth	Initial	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15946
 StrokeWidth	Inherit	NativeSVG	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15949
 StrokeWidth	Value	NativeSVG	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	15957
@@ -996,8 +996,8 @@ TabSize	Value	NativeLinePagination	production-typed-branch	out/Min/gen/third_par
 TableLayout	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	16094
 TableLayout	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	16097
 TableLayout	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	16100
-TextAlign	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	16123
-TextAlign	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	16126
+TextAlign	Initial	NativeText	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	16123
+TextAlign	Inherit	NativeText	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	16126
 TextAlignLast	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	16149
 TextAlignLast	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	16152
 TextAlignLast	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	16155
@@ -1093,9 +1093,9 @@ TimelineTriggerName	Value	NativeCSSAnimationData	production-typed-branch	out/Min
 TimelineTriggerSource	Initial	NativeCSSAnimationData	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17274
 TimelineTriggerSource	Inherit	NativeCSSAnimationData	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17282
 TimelineTriggerSource	Value	NativeCSSAnimationData	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17290
-Top	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17329
-Top	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17332
-Top	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17340
+Top	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17329
+Top	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17332
+Top	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17340
 TouchAction	Initial	NativeInteraction	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17366
 TouchAction	Inherit	NativeInteraction	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17369
 TouchAction	Value	NativeInteraction	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17372
@@ -1132,9 +1132,9 @@ Translate	Value	NativeTransform	production-typed-branch	out/Min/gen/third_party/
 TriggerScope	Initial	NativeInitialScope	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17803
 TriggerScope	Inherit	NativeInitialScope	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17806
 TriggerScope	Value	NativeInitialScope	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17809
-UnicodeBidi	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17852
-UnicodeBidi	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17855
-UnicodeBidi	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17858
+UnicodeBidi	Initial	NativeSimpleStyle	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17852
+UnicodeBidi	Inherit	NativeSimpleStyle	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17855
+UnicodeBidi	Value	NativeSimpleStyle	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17858
 UserSelect	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17901
 UserSelect	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17904
 UserSelect	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	17907
@@ -1225,13 +1225,13 @@ WebkitPerspectiveOriginY	Value	NativeTransform	production-typed-branch	out/Min/g
 WebkitRtlOrdering	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19044
 WebkitRtlOrdering	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19048
 WebkitRtlOrdering	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19052
-WebkitTapHighlightColor	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19105
+WebkitTapHighlightColor	Initial	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19105
 WebkitTapHighlightColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19108
 WebkitTapHighlightColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19111
 WebkitTextDecorationsInEffect	Initial	NativeTextBoxEmpty	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19157
 WebkitTextDecorationsInEffect	Inherit	NativeTextBoxEmpty	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19160
 WebkitTextDecorationsInEffect	Value	NativeTextBoxEmpty	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19163
-WebkitTextFillColor	Initial		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19192
+WebkitTextFillColor	Initial	NativeColorSlots	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19192
 WebkitTextFillColor	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19196
 WebkitTextFillColor	Value	ConvertedColor	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19200
 WebkitTextSecurity	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19223
@@ -1261,16 +1261,16 @@ WhiteSpaceCollapse	Value	Identifier	identifier-branch	out/Min/gen/third_party/bl
 Widows	Initial	NativeLayoutMisc	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19494
 Widows	Inherit	NativeLayoutMisc	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19497
 Widows	Value	NativeLayoutMisc	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19500
-Width	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19532
-Width	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19535
-Width	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19543
+Width	Initial	NativeBoxGeometry	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19532
+Width	Inherit	NativeBoxGeometry	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19535
+Width	Value	NativeBoxGeometry	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19543
 WindowDrag	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19595
 WindowDrag	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19598
-WordBreak	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19621
-WordBreak	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19624
-WordSpacing	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19653
-WordSpacing	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19656
-WordSpacing	Value	ConvertedLength	post-conversion-setter	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19664
+WordBreak	Initial	NativeFontCore	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19621
+WordBreak	Inherit	NativeFontCore	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19624
+WordSpacing	Initial	NativeFontCore	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19653
+WordSpacing	Inherit	NativeFontCore	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19656
+WordSpacing	Value	NativeFontCore	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19664
 X	Initial	NativeSVG	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19687
 X	Inherit	NativeSVG	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19690
 X	Value	NativeSVG	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	19698
@@ -1287,7 +1287,7 @@ PositionAnchor	Initial	NativeAnchorPosition	production-typed-branch	third_party/
 PositionAnchor	Inherit	NativeAnchorPosition	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	256
 PositionAnchor	Value	NativeAnchorPosition	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	260
 BackdropFilter	Value	NativeEffects	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	925
-BackgroundClip	Value		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	1045
+BackgroundClip	Value	NativeBackgroundFillLayer	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	1045
 BaselineShift	Inherit	NativeSVGPresentation	production-same-zoom-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	1273
 BaselineShift	Value	NativeSVGPresentation	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	1285
 BorderBottomWidth	Initial	NativeBorder	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	1408
@@ -1299,9 +1299,9 @@ BorderRightWidth	Initial	NativeBorder	production-complete	third_party/blink/rend
 BorderRightWidth	Inherit	NativeBorder	production-same-zoom-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	1736
 BorderTopWidth	Initial	NativeBorder	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	1834
 BorderTopWidth	Inherit	NativeBorder	production-same-zoom-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	1841
-Color	Initial		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	2377
-Color	Inherit		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	2384
-Color	Value		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	2396
+Color	Initial	NativeColorSlots	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	2377
+Color	Inherit	NativeColorSlots	production-color-context-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	2384
+Color	Value	NativeColorSlots	production-color-context-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	2396
 ColorScheme	Initial	NativeColorUI	production-context-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	2557
 ColorScheme	Inherit	NativeColorUI	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	2561
 ColorScheme	Value	NativeColorUI	production-context-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	2568
@@ -1309,9 +1309,9 @@ ColumnRuleWidth	Initial	NativeColumnRule	production-complete	third_party/blink/r
 ColumnRuleWidth	Inherit	NativeColumnRule	production-same-zoom-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	2739
 RowRuleWidth	Initial	NativeGapRuleShared	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	2767
 RowRuleWidth	Inherit	NativeGapRuleShared	production-same-zoom-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	2774
-Content	Initial		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	3158
-Content	Inherit		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	3162
-Content	Value		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	3193
+Content	Initial	NativeContentData	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	3158
+Content	Inherit	NativeContentData	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	3162
+Content	Value	NativeContentData	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	3193
 Cursor	Initial	NativeEffects	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	3490
 Cursor	Inherit	NativeEffects	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	3497
 Cursor	Value	NativeEffects	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	3504
@@ -1321,24 +1321,24 @@ Display	Inherit	Inherit	complete	third_party/blink/renderer/core/css/properties/
 Display	Value	Identifier	identifier-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	3910
 Fill	Value	NativeSVG	production-color-none-context-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4133
 Filter	Value	NativeEffects	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4170
-FontFamily	Initial		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4417
-FontFamily	Inherit		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4423
-FontStyle	Inherit		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4513
-FontStyle	Value		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4519
-InternalVisitedColor	Initial		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4854
-InternalVisitedColor	Inherit		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4860
-InternalVisitedColor	Value		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4879
+FontFamily	Initial	NativeFontCore	production-platform-context-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4417
+FontFamily	Inherit	NativeFontCore	production-platform-context-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4423
+FontStyle	Inherit	NativeFontCore	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4513
+FontStyle	Value	NativeFontCore	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4519
+InternalVisitedColor	Initial	NativeColorSlots	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4854
+InternalVisitedColor	Inherit	NativeColorSlots	production-color-context-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4860
+InternalVisitedColor	Value	NativeColorSlots	production-color-context-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	4879
 GridTemplateColumns	Inherit	NativeGrid	production-same-zoom-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	5167
 GridTemplateRows	Inherit	NativeGrid	production-same-zoom-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	5192
 PositionArea	Initial	NativeAnchorPosition	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	5411
 PositionArea	Inherit	NativeAnchorPosition	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	5415
 PositionArea	Value	NativeAnchorPosition	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	5419
-InternalForcedColor	Initial	Initial	complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6030
-InternalForcedColor	Inherit	Inherit	complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6035
-InternalForcedColor	Value		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6040
-InternalForcedVisitedColor	Initial	Initial	complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6102
-InternalForcedVisitedColor	Inherit		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6107
-InternalForcedVisitedColor	Value		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6112
+InternalForcedColor	Initial	NativeColorSlots	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6030
+InternalForcedColor	Inherit	NativeColorSlots	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6035
+InternalForcedColor	Value	NativeColorSlots	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6040
+InternalForcedVisitedColor	Initial	NativeColorSlots	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6102
+InternalForcedVisitedColor	Inherit	NativeColorSlots	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6107
+InternalForcedVisitedColor	Value	NativeColorSlots	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6112
 LineClamp	Initial	NativeLinePagination	production-runtime-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6515
 LineClamp	Inherit	NativeLinePagination	production-runtime-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6522
 LineClamp	Value	NativeLinePagination	production-runtime-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	6529
@@ -1363,16 +1363,16 @@ OverflowY	Initial	NativeOverflowOutline	production-complete	third_party/blink/re
 OverflowY	Inherit	NativeOverflowOutline	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	7785
 OverflowY	Value	NativeOverflowOutline	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	7795
 PositionTryFallbacks	Value	NativeAnchorPosition	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	8357
-Resize	Value		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	8480
+Resize	Value	NativeSimpleStyle	production-settings-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	8480
 Size	Initial	NativeViewport	production-empty-css-wide	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	9413
 Size	Inherit	NativeViewport	production-empty-css-wide	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	9415
 Size	Value	NativeViewport	production-native-size-branch/page-cascade-pending	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	9417
 Stroke	Value	NativeSVG	production-color-none-context-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	9553
-TextAlign	Value		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	9741
+TextAlign	Value	NativeText	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	9741
 TextIndent	Value	NativeText	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	10073
-TextOrientation	Initial		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	10132
-TextOrientation	Inherit		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	10137
-TextOrientation	Value		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	10141
+TextOrientation	Initial	NativeFontCore	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	10132
+TextOrientation	Inherit	NativeFontCore	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	10137
+TextOrientation	Value	NativeFontCore	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	10141
 VerticalAlign	Inherit	NativeLinePagination	production-same-zoom-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	10821
 VerticalAlign	Value	NativeLinePagination	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	10837
 WindowDrag	Value		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	10984
@@ -1393,7 +1393,7 @@ WebkitTransformOriginZ	Inherit	NativeTransform	production-same-zoom-branch	third
 WillChange	Initial	NativeInteraction	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	12490
 WillChange	Inherit	NativeInteraction	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	12497
 WillChange	Value	NativeInteraction	production-typed-branch	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	12504
-WordBreak	Value		unsupported	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	12601
+WordBreak	Value	NativeFontCore	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	12601
 WritingMode	Initial	NativeWritingDirection	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	12635
 WritingMode	Inherit	NativeWritingDirection	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	12639
 WritingMode	Value	NativeWritingDirection	production-complete	third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc	12643

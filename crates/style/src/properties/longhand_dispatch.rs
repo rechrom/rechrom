@@ -2320,7 +2320,7 @@ CSSPropertyID::kBorderStartStartRadius => crate::parser::production_property_met
 CSSPropertyID::kContainIntrinsicBlockSize => [CSSPropertyID::kContainIntrinsicWidth, CSSPropertyID::kContainIntrinsicHeight][direction.IsHorizontal() as usize],
 // cpp: generated longhands.cc:6738
 CSSPropertyID::kContainIntrinsicInlineSize => [CSSPropertyID::kContainIntrinsicWidth, CSSPropertyID::kContainIntrinsicHeight][(!direction.IsHorizontal()) as usize],
-// cpp: generated longhands.cc:7055; css_direction_aware_resolver.cc:402-409,421-460
+// cpp: generated longhands.cc:7055; css_direction_aware_resolver.cc:186-188,421-460
 CSSPropertyID::kCornerEndEndShape => match ResolvePhysical(CSSPropertyID::kBorderEndEndRadius, direction) {
 CSSPropertyID::kBorderTopLeftRadius => CSSPropertyID::kCornerTopLeftShape,
 CSSPropertyID::kBorderTopRightRadius => CSSPropertyID::kCornerTopRightShape,
@@ -2328,7 +2328,7 @@ CSSPropertyID::kBorderBottomRightRadius => CSSPropertyID::kCornerBottomRightShap
 CSSPropertyID::kBorderBottomLeftRadius => CSSPropertyID::kCornerBottomLeftShape,
 _ => unreachable!("physical border-radius corner"),
 },
-// cpp: generated longhands.cc:7096; css_direction_aware_resolver.cc:402-409,421-460
+// cpp: generated longhands.cc:7096; css_direction_aware_resolver.cc:186-188,421-460
 CSSPropertyID::kCornerEndStartShape => match ResolvePhysical(CSSPropertyID::kBorderEndStartRadius, direction) {
 CSSPropertyID::kBorderTopLeftRadius => CSSPropertyID::kCornerTopLeftShape,
 CSSPropertyID::kBorderTopRightRadius => CSSPropertyID::kCornerTopRightShape,
@@ -2336,7 +2336,7 @@ CSSPropertyID::kBorderBottomRightRadius => CSSPropertyID::kCornerBottomRightShap
 CSSPropertyID::kBorderBottomLeftRadius => CSSPropertyID::kCornerBottomLeftShape,
 _ => unreachable!("physical border-radius corner"),
 },
-// cpp: generated longhands.cc:7137; css_direction_aware_resolver.cc:402-409,421-460
+// cpp: generated longhands.cc:7137; css_direction_aware_resolver.cc:186-188,421-460
 CSSPropertyID::kCornerStartEndShape => match ResolvePhysical(CSSPropertyID::kBorderStartEndRadius, direction) {
 CSSPropertyID::kBorderTopLeftRadius => CSSPropertyID::kCornerTopLeftShape,
 CSSPropertyID::kBorderTopRightRadius => CSSPropertyID::kCornerTopRightShape,
@@ -2344,7 +2344,7 @@ CSSPropertyID::kBorderBottomRightRadius => CSSPropertyID::kCornerBottomRightShap
 CSSPropertyID::kBorderBottomLeftRadius => CSSPropertyID::kCornerBottomLeftShape,
 _ => unreachable!("physical border-radius corner"),
 },
-// cpp: generated longhands.cc:7178; css_direction_aware_resolver.cc:402-409,421-460
+// cpp: generated longhands.cc:7178; css_direction_aware_resolver.cc:186-188,421-460
 CSSPropertyID::kCornerStartStartShape => match ResolvePhysical(CSSPropertyID::kBorderStartStartRadius, direction) {
 CSSPropertyID::kBorderTopLeftRadius => CSSPropertyID::kCornerTopLeftShape,
 CSSPropertyID::kBorderTopRightRadius => CSSPropertyID::kCornerTopRightShape,

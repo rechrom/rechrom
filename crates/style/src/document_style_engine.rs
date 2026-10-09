@@ -337,7 +337,9 @@ impl DocumentStyleEngine {
     /// The real page/style-engine owner supplies page color-scheme and
     /// force-dark settings; media owns the preferred scheme.
     pub fn SetColorSchemeSettings(
-        &mut self, owner: &mut DOM, settings: production_style_builder::ColorSchemeSettings,
+        &mut self,
+        owner: &mut DOM,
+        settings: production_style_builder::ColorSchemeSettings,
     ) -> Result<(), DocumentStyleError> {
         if owner.GetDocument().RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
@@ -637,11 +639,23 @@ impl DocumentStyleEngine {
         // cpp: style_resolver.cc:2397-2400 initial used-color-scheme setup; page settings
         // are real host inputs, with Chromium's initial defaults when absent.
         production_style_builder::ApplyWithColorSchemeSettings(
-            CSSPropertyID::kColorScheme, &mut root_builder, None,
+            CSSPropertyID::kColorScheme,
+            &mut root_builder,
+            None,
             &crate::production_css_value::wide(foundation::CSSValueID::kInitial).unwrap(),
-            media.em_size, media, self.color_scheme_settings,
-        ).map_err(|error| DocumentStyleError::Application { node: document.Root(), error })?;
+            media.em_size,
+            media,
+            self.color_scheme_settings,
+        )
+        .map_err(|error| DocumentStyleError::Application {
+            node: document.Root(),
+            error,
+        })?;
         let mut description = root_builder.GetFontDescription().clone();
+        description.SetKeywordSize(4);
+        description.SetGenericFamily(
+            font_engine::fonts::font_description::GenericFamilyType::kStandardFamily,
+        );
         description.SetSpecifiedSize(media.em_size);
         description.SetComputedSize(media.em_size);
         production_style_builder::StageFontDescription(&mut root_builder, &description);
@@ -1477,6 +1491,18 @@ impl DocumentStyleEngine {
         diagnostics: &mut Vec<DocumentStyleError>,
     ) -> Result<(HashMap<CSSPropertyID, Rc<Value>>, CustomProperties), DocumentStyleError> {
         let mut applied = HashMap::new();
+        // cpp: style_resolver.cc:593-600,1767-1778. The document element has
+        // a scheme-sensitive initial color at the lowest UA cascade priority.
+        // Pseudo styles use this same node index with a parent style, so they
+        // must keep normal color inheritance instead of resetting it here.
+        let is_document_element = parent.is_none()
+            && document
+                .Node(document.Root())
+                .Children()
+                .iter()
+                .copied()
+                .find(|&index| document.Node(index).Type() == DOMNodeType::kElement)
+                == Some(node);
         let custom_winners = WinningCustomProperties(rules)?;
         let environment = CascadeEnvironment::new(environment_variables);
         let attribute_source = PersistentAttributeSource::new(
@@ -1572,6 +1598,12 @@ impl DocumentStyleEngine {
                     );
                 }
             }
+            if !high && is_document_element {
+                // ColorScheme sorts before Color. Schedule the native initial
+                // color even without a declaration, then let any real winner
+                // override it. No synthetic CSS value crosses a crate boundary.
+                ids.insert(CSSPropertyID::kColor);
+            }
             let mut ids = ids.into_iter().collect::<Vec<_>>();
             ids.sort_by_key(|id| match id {
                 CSSPropertyID::kDirection => 0,
@@ -1583,6 +1615,15 @@ impl DocumentStyleEngine {
             for id in ids {
                 let name = CSSPropertyName::new(id);
                 let mut priority = map.At(&name);
+                if id == CSSPropertyID::kColor && is_document_element {
+                    let color = builder.InitialColorForColorScheme();
+                    builder.SetColor(&color);
+                    builder.SetColorIsInherited(false);
+                    builder.SetColorIsCurrentColor(false);
+                    if !priority.HasOrigin() {
+                        continue;
+                    }
+                }
                 let mut value;
                 let mut source_id;
                 loop {
@@ -1628,9 +1669,15 @@ impl DocumentStyleEngine {
                             continue;
                         }
                     };
-                if let Err(error) =
-                    production_style_builder::ApplyWithColorSchemeSettings(id, builder, parent, &value, root, media, color_scheme_settings)
-                {
+                if let Err(error) = production_style_builder::ApplyWithColorSchemeSettings(
+                    id,
+                    builder,
+                    parent,
+                    &value,
+                    root,
+                    media,
+                    color_scheme_settings,
+                ) {
                     diagnostics.push(DocumentStyleError::Application { node, error });
                 } else {
                     applied.insert(id, value);
@@ -1827,8 +1874,11 @@ fn ProjectForLayoutBoundary(
     ext.font_size = font.ComputedSize() as f64;
     ext.font_weight = font.Weight().ToFloat() as f64;
     ext.font_italic = font.Style().ToFloat() != 0.0;
-    ext.letter_spacing = font.ComputedLetterSpacing().Pixels() as f64;
-    ext.word_spacing = font.ComputedWordSpacing().Pixels() as f64;
+    // cpp: font_description_data.cc:127-145. The computed CSS value keeps a
+    // Length/percentage, while Layout consumes the used spacing resolved from
+    // the current computed font size.
+    ext.letter_spacing = font.LetterSpacing() as f64;
+    ext.word_spacing = font.WordSpacing() as f64;
     ext.effective_zoom = native.EffectiveZoom();
     ext.zoom = native.Zoom();
     let mut family = font.Family() as *const font_engine::FontFamily;

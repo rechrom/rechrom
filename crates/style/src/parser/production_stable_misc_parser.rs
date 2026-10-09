@@ -10,6 +10,7 @@ pub(super) fn IsProperty(id: CSSPropertyID) -> bool {
             | CSSPropertyID::kFontSynthesisWeight
             | CSSPropertyID::kFontSynthesisStyle
             | CSSPropertyID::kFontSynthesisSmallCaps
+            | CSSPropertyID::kScrollBehavior
     )
 }
 fn Integer<T: TokenStreamTokenizer>(
@@ -39,6 +40,10 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
     s: &mut Stream<T>,
     mode: CSSParserMode,
 ) -> Result<Rc<Value>, PropertyParseError> {
+    if id == CSSPropertyID::kScrollBehavior {
+        // css_properties.json5 generated keyword grammar, mojom enum.
+        return ConsumeLiteral(id, s, mode, Grammar::Keywords(&["auto", "smooth"]));
+    }
     if matches!(
         id,
         CSSPropertyID::kFontSynthesisWeight

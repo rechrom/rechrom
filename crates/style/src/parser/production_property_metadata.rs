@@ -18,6 +18,8 @@ CSSPropertyID::kFontSynthesisSmallCaps => Grammar::Keywords(&["auto", "none"]),
 CSSPropertyID::kFontVariantEmoji => Grammar::Keywords(&["normal", "text", "emoji", "unicode"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:1838
 CSSPropertyID::kFontVariantPosition => Grammar::Keywords(&["normal", "sub", "super"]),
+// cpp: third_party/blink/renderer/core/css/css_properties.json5:1856
+CSSPropertyID::kWebkitFontSmoothing => Grammar::Keywords(&["auto", "none", "antialiased", "subpixel-antialiased"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:1869
 CSSPropertyID::kForcedColorAdjust => Grammar::Keywords(&["auto", "none", "preserve-parent-color"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:1885
@@ -26,6 +28,8 @@ CSSPropertyID::kFieldSizing => Grammar::Keywords(&["fixed", "content"]),
 CSSPropertyID::kTextOrientation => Grammar::Keywords(&["sideways", "mixed", "upright", "sideways-right"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:1947
 CSSPropertyID::kWritingMode => Grammar::Keywords(&["horizontal-tb", "vertical-rl", "vertical-lr", "sideways-rl", "sideways-lr"]),
+// cpp: third_party/blink/renderer/core/css/css_properties.json5:1977
+CSSPropertyID::kTextRendering => Grammar::Keywords(&["auto", "optimizespeed", "optimizelegibility", "geometricprecision"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:2045
 CSSPropertyID::kAlignmentBaseline => Grammar::Keywords(&["auto", "baseline", "alphabetic", "ideographic", "middle", "central", "mathematical", "before-edge", "text-before-edge", "after-edge", "text-after-edge", "hanging"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:2136
@@ -62,6 +66,8 @@ CSSPropertyID::kCaretAnimation => Grammar::Keywords(&["auto", "manual"]),
 CSSPropertyID::kCaretShape => Grammar::Keywords(&["auto", "bar", "block", "underscore"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:3056
 CSSPropertyID::kClear => Grammar::Keywords(&["none", "left", "right", "both", "inline-start", "inline-end"]),
+// cpp: third_party/blink/renderer/core/css/css_properties.json5:3102
+CSSPropertyID::kClipRule => Grammar::Keywords(&["nonzero", "evenodd"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:3117
 CSSPropertyID::kColorInterpolation => Grammar::Keywords(&["auto", "srgb", "linearrgb"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:3129
@@ -74,6 +80,8 @@ CSSPropertyID::kColumnFill => Grammar::Keywords(&["balance", "auto"]),
 CSSPropertyID::kDominantBaseline => Grammar::Keywords(&["auto", "alphabetic", "ideographic", "middle", "central", "mathematical", "hanging", "use-script", "no-change", "reset-size", "text-after-edge", "text-before-edge"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:3503
 CSSPropertyID::kEmptyCells => Grammar::Keywords(&["show", "hide"]),
+// cpp: third_party/blink/renderer/core/css/css_properties.json5:3555
+CSSPropertyID::kFillRule => Grammar::Keywords(&["nonzero", "evenodd"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:3604
 CSSPropertyID::kFlexDirection => Grammar::Keywords(&["row", "row-reverse", "column", "column-reverse"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:3666
@@ -154,6 +162,8 @@ CSSPropertyID::kScrollAxisLock => Grammar::Keywords(&["auto", "none"]),
 CSSPropertyID::kScrollTargetGroup => Grammar::Keywords(&["none", "auto"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:5594
 CSSPropertyID::kScrollbarWidth => Grammar::Keywords(&["auto", "thin", "none"]),
+// cpp: third_party/blink/renderer/core/css/css_properties.json5:5606
+CSSPropertyID::kScrollBehavior => Grammar::Keywords(&["auto", "smooth"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:5618
 CSSPropertyID::kScrollInitialTarget => Grammar::Keywords(&["none", "nearest"]),
 // cpp: third_party/blink/renderer/core/css/css_properties.json5:5878
@@ -1551,6 +1561,7 @@ CSSPropertyID::kCaretShape => ("third_party/blink/renderer/core/css/css_properti
 CSSPropertyID::kClear => ("third_party/blink/renderer/core/css/css_properties.json5", 3056, "generated keyword grammar"),
 CSSPropertyID::kClip => ("third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc", 2214, "ConsumeIdent"),
 CSSPropertyID::kClipPath => ("third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc", 2276, "ClipPath::ParseSingleValue / ConsumeBasicShape / ConsumeGeometryBox / ConsumeUrl"),
+CSSPropertyID::kClipRule => ("third_party/blink/renderer/core/css/css_properties.json5", 3102, "generated keyword grammar"),
 CSSPropertyID::kColor => ("out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc", 270, "ConsumeColorMaybeQuirky"),
 CSSPropertyID::kColorInterpolation => ("third_party/blink/renderer/core/css/css_properties.json5", 3117, "generated keyword grammar"),
 CSSPropertyID::kColorInterpolationFilters => ("third_party/blink/renderer/core/css/css_properties.json5", 3129, "generated keyword grammar"),
@@ -1640,6 +1651,7 @@ CSSPropertyID::kEmptyCells => ("third_party/blink/renderer/core/css/css_properti
 CSSPropertyID::kFieldSizing => ("third_party/blink/renderer/core/css/css_properties.json5", 1885, "generated keyword grammar"),
 CSSPropertyID::kFill => ("out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc", 7834, "ConsumeSVGPaint"),
 CSSPropertyID::kFillOpacity => ("out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc", 7868, "ConsumeAlphaValue"),
+CSSPropertyID::kFillRule => ("third_party/blink/renderer/core/css/css_properties.json5", 3555, "generated keyword grammar"),
 CSSPropertyID::kFilter => ("out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc", 7932, "ConsumeFilterFunctionList"),
 CSSPropertyID::kFlex => ("third_party/blink/renderer/core/css/properties/shorthands/shorthands_custom.cc", 2942, "Flex::ParseShorthand"),
 CSSPropertyID::kFlexBasis => ("third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc", 4181, "ConsumeIdent"),
@@ -1908,6 +1920,7 @@ CSSPropertyID::kRx => ("third_party/blink/renderer/core/css/properties/longhands
 CSSPropertyID::kRy => ("third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc", 8662, "ConsumeIdent"),
 CSSPropertyID::kScale => ("third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc", 8682, "Scale::ParseSingleValue / ConsumeNumberOrPercent"),
 CSSPropertyID::kScrollAxisLock => ("third_party/blink/renderer/core/css/css_properties.json5", 5524, "generated keyword grammar"),
+CSSPropertyID::kScrollBehavior => ("third_party/blink/renderer/core/css/css_properties.json5", 5606, "generated keyword grammar"),
 CSSPropertyID::kScrollInitialTarget => ("third_party/blink/renderer/core/css/css_properties.json5", 5618, "generated keyword grammar"),
 CSSPropertyID::kScrollMargin => ("third_party/blink/renderer/core/css/properties/shorthands/shorthands_custom.cc", 4963, "ScrollMargin::ParseShorthand"),
 CSSPropertyID::kScrollMarginBlock => ("third_party/blink/renderer/core/css/properties/shorthands/shorthands_custom.cc", 4943, "ScrollMarginBlock::ParseShorthand"),
@@ -1985,6 +1998,7 @@ CSSPropertyID::kTextIndent => ("third_party/blink/renderer/core/css/properties/l
 CSSPropertyID::kTextJustify => ("third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc", 10108, "ConsumeIdent"),
 CSSPropertyID::kTextOrientation => ("third_party/blink/renderer/core/css/css_properties.json5", 1921, "generated keyword grammar"),
 CSSPropertyID::kTextOverflow => ("third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc", 10148, "ConsumeTextOverflow"),
+CSSPropertyID::kTextRendering => ("third_party/blink/renderer/core/css/css_properties.json5", 1977, "generated keyword grammar"),
 CSSPropertyID::kTextShadow => ("third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc", 10171, "ConsumeShadow"),
 CSSPropertyID::kTextSizeAdjust => ("third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc", 10193, "TextSizeAdjust::ParseSingleValue / auto-none or nonnegative ConsumePercent"),
 CSSPropertyID::kTextSpacing => ("third_party/blink/renderer/core/css/properties/shorthands/shorthands_custom.cc", 6358, "TextSpacing::ParseShorthand / none or autospace-spacing-trim-normal combinations (internal)"),
@@ -2045,6 +2059,7 @@ CSSPropertyID::kWebkitBoxReflect => ("third_party/blink/renderer/core/css/proper
 CSSPropertyID::kWebkitColumnBreakAfter => ("third_party/blink/renderer/core/css/properties/shorthands/shorthands_custom.cc", 5694, "ConsumeFromColumnBreakBetween / always to column, auto-avoid"),
 CSSPropertyID::kWebkitColumnBreakBefore => ("third_party/blink/renderer/core/css/properties/shorthands/shorthands_custom.cc", 5721, "ConsumeFromColumnBreakBetween / always to column, auto-avoid"),
 CSSPropertyID::kWebkitColumnBreakInside => ("third_party/blink/renderer/core/css/properties/shorthands/shorthands_custom.cc", 5748, "ConsumeFromColumnOrPageBreakInside / auto-avoid"),
+CSSPropertyID::kWebkitFontSmoothing => ("third_party/blink/renderer/core/css/css_properties.json5", 1856, "generated keyword grammar"),
 CSSPropertyID::kWebkitLineClamp => ("third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc", 11253, "WebkitLineClamp::ParseSingleValue / none or ConsumePositiveInteger"),
 CSSPropertyID::kWebkitLocale => ("third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc", 11344, "ConsumeIdent"),
 CSSPropertyID::kWebkitMaskBoxImage => ("third_party/blink/renderer/core/css/properties/shorthands/shorthands_custom.cc", 5960, "WebkitMaskBoxImage::ParseShorthand"),

@@ -21,6 +21,9 @@ pub(super) fn IsLayoutProperty(id: CSSPropertyID) -> bool {
             | kContainIntrinsicHeight
             | kOrphans
             | kWidows
+            | kColumnGap
+            | kRowGap
+            | kOverflowClipMargin
     )
 }
 
@@ -145,6 +148,81 @@ pub(super) fn Apply(
         || v.IsUnsetValue() && !CSSProperty::Get(id).IsInherited()
         || inherit && parent.is_none();
     match id {
+        // generated longhands.cc:6163-6175,13770-13782;
+        // converter.cc:2051-2061 ConvertGapLength.
+        kColumnGap | kRowGap => {
+            let row = id == kRowGap;
+            let gap = if initial {
+                None
+            } else if inherit {
+                let p = parent.unwrap();
+                if p.EffectiveZoom() != b.EffectiveZoom() {
+                    return Err(LonghandApplicationError::Unsupported(id));
+                }
+                if row {
+                    p.RowGap().clone()
+                } else {
+                    p.ColumnGap().clone()
+                }
+            } else if matches!(v.Payload(), CSSValuePayload::kIdentifierClass(k) if k.0 == CSSValueID::kNormal)
+            {
+                None
+            } else {
+                Some(text_application::ConvertLength(id, b, v, root, media)?)
+            };
+            if row {
+                b.SetRowGap(&gap);
+            } else {
+                b.SetColumnGap(&gap);
+            }
+        }
+        // generated longhands.cc:12261-12273; converter.cc:3898-3943.
+        kOverflowClipMargin => {
+            use layoutng_style::style::style_overflow_clip_margin::{
+                ReferenceBox, StyleOverflowClipMargin,
+            };
+            let margin = if initial {
+                ComputedStyleInitialValues::InitialOverflowClipMargin()
+            } else if inherit {
+                let p = parent.unwrap();
+                if p.EffectiveZoom() != b.EffectiveZoom() {
+                    return Err(LonghandApplicationError::Unsupported(id));
+                }
+                *p.OverflowClipMargin()
+            } else {
+                let CSSValuePayload::kValueListClass(list) = v.Payload() else {
+                    return Err(LonghandApplicationError::InvalidValue(id));
+                };
+                if !(1..=2).contains(&list.values.len()) {
+                    return Err(LonghandApplicationError::InvalidValue(id));
+                }
+                let mut reference = ReferenceBox::kPaddingBox;
+                let mut length = None;
+                for v in &list.values {
+                    if let CSSValuePayload::kIdentifierClass(k) = v.Payload() {
+                        reference = match k.0 {
+                            CSSValueID::kContentBox => ReferenceBox::kContentBox,
+                            CSSValueID::kPaddingBox => ReferenceBox::kPaddingBox,
+                            CSSValueID::kBorderBox => ReferenceBox::kBorderBox,
+                            _ => return Err(LonghandApplicationError::InvalidValue(id)),
+                        };
+                    } else if length.is_none() {
+                        let l = text_application::ConvertLength(id, b, v, root, media)?;
+                        if !l.IsFixed() {
+                            return Err(LonghandApplicationError::InvalidValue(id));
+                        }
+                        length = Some(l.Pixels());
+                    } else {
+                        return Err(LonghandApplicationError::InvalidValue(id));
+                    }
+                }
+                Some(StyleOverflowClipMargin::new(
+                    reference,
+                    foundation::LayoutUnit::from_f64(length.unwrap_or(0.) as f64),
+                ))
+            };
+            b.SetOverflowClipMargin(&margin);
+        }
         // cpp: generated longhands.cc:2967-2975; converter.cc:3697-3743.
         kAspectRatio => {
             let ratio = if initial {

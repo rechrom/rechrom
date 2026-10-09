@@ -352,6 +352,20 @@ ledger = [
      row[4], row[5]) if row[0] in production_font_properties else row
     for row in ledger
 ]
+# Native scalar FontBuilder input/text state, including oblique typed values.
+# System fonts, font-metric lengths/MATH and document font-settings preferences
+# remain explicit converter dependencies; changed-zoom spacing needs document policy.
+production_font_core = {'FontFamily', 'FontSize', 'FontStyle', 'FontWeight',
+    'TextRendering', 'WebkitFontSmoothing', 'TextOrientation', 'WordBreak',
+    'LetterSpacing', 'WordSpacing'}
+ledger = [
+    (row[0], row[1], 'NativeFontCore',
+     'production-same-zoom-branch' if row[0] in {'LetterSpacing','WordSpacing'} and row[1] == 'Inherit'
+     else 'production-platform-context-branch' if row[0] in {'FontFamily','FontSize'}
+     else 'production-typed-branch' if row[0] in {'LetterSpacing','WordSpacing','FontStyle','FontWeight'} and row[1] == 'Value'
+     else 'production-complete', row[4], row[5]) if row[0] in production_font_core else row
+    for row in ledger
+]
 # Concrete visual-effects storage; URL/image, missing shape subtypes and
 # standardized zoom reapplication remain explicit production dependencies.
 production_effects_properties = {'Filter', 'BackdropFilter', 'ClipPath', 'Cursor',
@@ -455,8 +469,11 @@ ledger = [(row[0],row[1],'NativeWritingDirection','production-complete',row[4],r
 # lengths. URL paints keep a typed Unsupported until real resource binding;
 # generated zoom-change inheritance still requires the document policy adapter.
 production_svg = {'Fill','Stroke','StrokeWidth','StrokeDashoffset','StrokeDasharray',
-                  'Cx','Cy','R','Rx','Ry','X','Y','PathLength','PaintOrder'}
+                  'Cx','Cy','R','Rx','Ry','X','Y','PathLength','PaintOrder',
+                  'FillOpacity','FloodOpacity','StopOpacity','StrokeOpacity','FillRule','ClipRule'}
 def production_svg_state(property_, operation):
+    if property_ in {'FillOpacity','FloodOpacity','StopOpacity','StrokeOpacity','FillRule','ClipRule'}:
+        return 'production-typed-branch' if operation == 'Value' and property_.endswith('Opacity') else 'production-complete'
     if operation == 'Initial' or operation == 'Inherit' and property_ in {'Fill','Stroke','PaintOrder'}:
         return 'production-complete'
     if operation == 'Inherit':
@@ -503,7 +520,7 @@ ledger=[(row[0],row[1],'NativeViewport',production_viewport_state(row[0],row[1])
 # inheritance and missing font/container metrics remain explicit collaborators.
 production_text = {'TextTransform','TextOverflow','TextIndent','TextDecorationLine',
     'TextDecorationThickness','TextUnderlineOffset','TextUnderlinePosition',
-    'TextDecorationStyle','TextDecorationColor','TextJustify'}
+    'TextDecorationStyle','TextDecorationColor','TextJustify','TextAlign'}
 def production_text_state(property_, operation):
     if property_ in {'TextIndent','TextDecorationThickness','TextUnderlineOffset'}:
         return 'production-complete' if operation == 'Initial' else 'production-same-zoom-branch' if operation == 'Inherit' else 'production-typed-branch'
@@ -620,8 +637,11 @@ for prop in ['ScrollMarginBlockStart','ScrollMarginBlockEnd','ScrollMarginInline
 # existing converter's native construction. Bracketed/repeat/subgrid and real
 # conversion/changed-zoom collaborators remain partial, including shorthands.
 production_grid_core = {'GridTemplateAreas','GridTemplateRows','GridTemplateColumns',
-    'GridAutoRows','GridAutoColumns','GridAutoFlow'}
+    'GridAutoRows','GridAutoColumns','GridAutoFlow',
+    'GridColumnStart','GridColumnEnd','GridRowStart','GridRowEnd'}
 def production_grid_state(property_, operation):
+    if property_ in {'GridColumnStart','GridColumnEnd','GridRowStart','GridRowEnd'}:
+        return 'production-typed-branch' if operation == 'Value' else 'production-complete'
     if property_ in {'GridTemplateAreas','GridAutoFlow'} or operation == 'Initial':
         return 'production-complete'
     return 'production-same-zoom-branch' if operation == 'Inherit' else 'production-typed-branch'
@@ -800,6 +820,49 @@ production_rule_behavior={'ColumnRuleBreak','RowRuleBreak','ColumnRuleVisibility
 ledger=[(r[0],r[1],'NativeGridLanesDirection' if r[0]=='GridLanesDirection' else 'NativeGridLanesPack','production-runtime-branch',r[4],r[5]) if r[0] in production_grid_lanes else (r[0],r[1],'NativeGapRuleBits','production-complete',r[4],r[5]) if r[0] in production_rule_behavior else r for r in ledger]
 for prop,line in [('GridLanes',3934),('RuleBreak',1223),('RuleVisibilityItems',6213)]:
     ledger.append((prop,'Expand','ProductionLonghands','production-runtime-branch' if prop=='GridLanes' else 'production-complete','third_party/blink/renderer/core/css/properties/shorthands/shorthands_custom.cc',line))
+# Native background fields preserve generated list-set/clear loops and the
+# custom BackgroundClip list-cycling branch. Length metrics and changed zoom
+# remain the resolver's explicit dependencies.
+production_background_fields={'BackgroundAttachment','BackgroundBlendMode','BackgroundClip','BackgroundOrigin','BackgroundPositionX','BackgroundPositionY','BackgroundRepeat','BackgroundSize'}
+def background_field_state(property_, operation):
+    if operation=='Initial': return 'production-complete'
+    if property_ in {'BackgroundPositionX','BackgroundPositionY','BackgroundSize'}:
+        return 'production-same-zoom-branch' if operation=='Inherit' else 'production-typed-branch'
+    return 'production-complete'
+ledger=[(r[0],r[1],'NativeBackgroundFillLayer',background_field_state(r[0],r[1]),r[4],r[5]) if r[0] in production_background_fields else r for r in ledger]
+# Ordinary and visited colors use separate native slots. Provider/system/link
+# and highlight contexts remain typed dependencies; currentColor inherits.
+production_color_slots={'Color','BackgroundColor','InternalVisitedColor','InternalVisitedBackgroundColor','InternalVisitedColumnRuleColor','InternalVisitedTextDecorationColor','InternalVisitedTextEmphasisColor','InternalVisitedTextFillColor','InternalVisitedTextStrokeColor','InternalForcedColor','InternalForcedVisitedColor','InternalForcedBackgroundColor','InternalForcedBorderColor','InternalForcedOutlineColor'}
+def color_slot_state(property_, operation):
+    if operation=='Initial': return 'production-complete'
+    if property_ in {'Color','InternalVisitedColor'}: return 'production-color-context-branch'
+    return 'production-typed-branch' if operation=='Value' else 'production-complete'
+ledger=[(r[0],r[1],'NativeColorSlots',color_slot_state(r[0],r[1]),r[4],r[5]) if r[0] in production_color_slots else r for r in ledger]
+# Content owns a native ContentData chain, including generated or resource-
+# bound images. URL fetches go through URLImageResolver, never a loader here.
+ledger=[(r[0],r[1],'NativeContentData','production-typed-branch' if r[1]=='Value' else 'production-complete',r[4],r[5]) if r[0]=='Content' else r for r in ledger]
+# Physical length inheritance copies native lengths at equal effective zoom.
+# The document's standardized browser zoom policy remains a typed collaborator.
+production_box_geometry={'Width','Height','MinWidth','MinHeight','MaxWidth','MaxHeight',
+    'MarginTop','MarginRight','MarginBottom','MarginLeft','PaddingTop','PaddingRight',
+    'PaddingBottom','PaddingLeft','Top','Right','Bottom','Left','ShapeMargin'}
+production_gap_clip={'ColumnGap','RowGap','OverflowClipMargin'}
+production_simple_style={'ScrollBehavior','Resize','UnicodeBidi'}
+ledger=[(r[0],r[1],'NativeBoxGeometry' if r[0] in production_box_geometry else 'NativeGapClip',
+    'production-complete' if r[1]=='Initial' else 'production-same-zoom-branch' if r[1]=='Inherit' else 'production-typed-branch',r[4],r[5])
+    if r[0] in production_box_geometry | production_gap_clip else
+    (r[0],r[1],'NativeSimpleStyle','production-settings-branch' if r[0]=='Resize' and r[1]=='Value' else 'production-complete',r[4],r[5])
+    if r[0] in production_simple_style else r for r in ledger]
+# Provider-backed/currentColor initials are applied by color_application.
+ledger=[(r[0],r[1],'NativeColorSlots','production-complete',r[4],r[5])
+    if r[0] in {'WebkitTapHighlightColor','WebkitTextFillColor'} and r[1]=='Initial'
+    else r for r in ledger]
+# Physical corner shape values already use corner_application and its shared
+# superellipse math converter; record that production path instead of a gap.
+production_corner_shapes={'CornerTopLeftShape','CornerTopRightShape',
+    'CornerBottomLeftShape','CornerBottomRightShape'}
+ledger=[(r[0],r[1],'NativeCornerShape','production-typed-branch',r[4],r[5])
+    if r[0] in production_corner_shapes and r[1]=='Value' else r for r in ledger]
 (HERE / 'longhand_dispatch_ledger.tsv').write_text('property\toperation\tdispatch\tstate\tsource_file\tsource_line\n' + ''.join('\t'.join(str(v) for v in row) + '\n' for row in ledger))
 print({kind: len(values) for kind, values in arms.items()})
 print('Excluded complete generated functions:', len(excluded))

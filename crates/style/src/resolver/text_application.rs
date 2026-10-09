@@ -3,7 +3,8 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{
-    ETextDecorationStyle, ETextTransform, TextDecorationLine, TextDecorationThickness, TextJustify,
+    ETextAlign, ETextDecorationStyle, ETextTransform, TextDecorationLine, TextDecorationThickness,
+    TextJustify,
 };
 use layoutng_style::style::{
     computed_style_constants::TextUnderlinePosition,
@@ -15,7 +16,8 @@ pub(super) fn IsTextProperty(id: CSSPropertyID) -> bool {
     use CSSPropertyID::*;
     matches!(
         id,
-        kTextTransform
+        kTextAlign
+            | kTextTransform
             | kTextOverflow
             | kTextIndent
             | kTextDecorationLine
@@ -136,6 +138,7 @@ pub(super) fn Apply(
             return Err(LonghandApplicationError::Unsupported(id));
         }
         match id {
+            kTextAlign => b.SetTextAlign(p.GetTextAlign()),
             kTextTransform => {
                 b.SetTextTransform(p.TextTransform());
                 b.SetTextTransformIsInherited(true);
@@ -160,6 +163,39 @@ pub(super) fn Apply(
         return Ok(());
     }
     match id {
+        // longhands_custom.cc:9741-9777; css_value_id_mappings.h:64-73.
+        kTextAlign => {
+            let CSSValuePayload::kIdentifierClass(keyword) = v.Payload() else {
+                return Err(LonghandApplicationError::InvalidValue(id));
+            };
+            let align = match keyword.0 {
+                kMatchParent | kWebkitMatchParent => match parent {
+                    // Tree style resolution supplies no parent for the document element.
+                    None => ETextAlign::kStart,
+                    Some(p) => match p.GetTextAlign() {
+                        ETextAlign::kStart if p.IsLeftToRightDirection() => ETextAlign::kLeft,
+                        ETextAlign::kStart => ETextAlign::kRight,
+                        ETextAlign::kEnd if p.IsLeftToRightDirection() => ETextAlign::kRight,
+                        ETextAlign::kEnd => ETextAlign::kLeft,
+                        align => align,
+                    },
+                },
+                kInternalCenter => parent
+                    .filter(|p| p.GetTextAlign() != ComputedStyleInitialValues::InitialTextAlign())
+                    .map_or(ETextAlign::kCenter, |p| p.GetTextAlign()),
+                kWebkitAuto | kStart => ETextAlign::kStart,
+                kEnd => ETextAlign::kEnd,
+                CSSValueID::kLeft => ETextAlign::kLeft,
+                CSSValueID::kRight => ETextAlign::kRight,
+                kCenter => ETextAlign::kCenter,
+                kJustify => ETextAlign::kJustify,
+                kWebkitLeft => ETextAlign::kWebkitLeft,
+                kWebkitRight => ETextAlign::kWebkitRight,
+                kWebkitCenter => ETextAlign::kWebkitCenter,
+                _ => return Err(LonghandApplicationError::InvalidValue(id)),
+            };
+            b.SetTextAlign(align);
+        }
         // generated longhands.cc:16806-16817; css_value_id_mappings.h.
         kTextTransform => {
             let flags = ConvertFlags(id, v, kNone, |keyword| {

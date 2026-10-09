@@ -250,3 +250,52 @@ fn invalid_stable_ui_grammar_and_unavailable_color_contexts_remain_typed() {
     .unwrap();
     assert_eq!(parsed[0].Value().CssText().Utf8(), "MyTheme light only");
 }
+
+#[test]
+fn document_element_initial_color_follows_final_scheme_and_author_overrides() {
+    let _heap = foundation::LayoutHeapScope::new();
+    for (declaration, expected) in [
+        ("color-scheme:dark", foundation::Color::kWhite),
+        ("color-scheme:dark;color:red", color(255, 0, 0, 255)),
+        ("color-scheme:dark;color:revert", foundation::Color::kWhite),
+        ("color-scheme:light", foundation::Color::kBlack),
+    ] {
+        let mut owner = html::html_parser::ParseHTML(&format!(
+            "<html id=root style='{declaration}'><body id=body><span id=child></span><span id=local style='color-scheme:light'></span></body></html>"
+        ));
+        let mut engine = StyleEngine::new(&owner);
+        engine
+            .Update(&mut owner, &MediaValuesCachedData::default(), &[])
+            .unwrap();
+        assert!(
+            engine.Diagnostics().is_empty(),
+            "{:?}",
+            engine.Diagnostics()
+        );
+        assert_eq!(
+            native(&owner, "root").GetCurrentColor(None),
+            expected,
+            "{declaration}"
+        );
+        assert_eq!(
+            native(&owner, "body").GetCurrentColor(None),
+            expected,
+            "{declaration}"
+        );
+        assert_eq!(
+            native(&owner, "child").GetCurrentColor(None),
+            expected,
+            "{declaration}"
+        );
+        // A descendant's local scheme does not reset an inherited color.
+        assert_eq!(
+            native(&owner, "local").GetCurrentColor(None),
+            expected,
+            "{declaration}"
+        );
+        assert_eq!(
+            native(&owner, "root").GetFontDescription().ComputedSize(),
+            16.0
+        );
+    }
+}

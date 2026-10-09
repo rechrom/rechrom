@@ -22,9 +22,9 @@ for m in re.finditer(r'^    \{(.*?)^    \},', text, re.M|re.S):
     # is the same source keyword grammar (css_properties.json5:8159-8172).
     if name and name[1] == "white-space-collapse": field=True
     # FontBuilder-owned fields still use the same generated keyword grammar.
-    if name and name[1] in {"font-kerning", "font-optical-sizing", "font-variant-position", "font-variant-emoji", "text-spacing-trim", "font-synthesis-weight", "font-synthesis-style", "font-synthesis-small-caps"}: field=True
+    if name and name[1] in {"font-kerning", "font-optical-sizing", "font-variant-position", "font-variant-emoji", "text-spacing-trim", "font-synthesis-weight", "font-synthesis-style", "font-synthesis-small-caps", "text-rendering", "-webkit-font-smoothing"}: field=True
     # SVG primitive fields are genuine generated keyword grammars too.
-    if name and name[1] in {"stroke-linecap", "stroke-linejoin"}: field=True
+    if name and name[1] in {"stroke-linecap", "stroke-linejoin", "fill-rule", "clip-rule", "scroll-behavior"}: field=True
     kw=re.search(r'keywords:\s*\[([^]]*)\]',block,re.S)
     if not(name and field and kw) or '"ParseSingleValue"' in block: continue
     body=re.sub(r'//[^\n]*','',kw[1])
@@ -207,18 +207,18 @@ column_rule_cluster={'ColumnRuleColor','ColumnRuleStyle','ColumnRuleWidth','Colu
 manual.update(column_rule_cluster)
 row_rule_cluster={'RowRuleColor','RowRuleStyle','RowRuleWidth','RowRule','RuleColor','RuleStyle','RuleWidth','Rule'}
 manual.update(row_rule_cluster)
-stable_misc_cluster={'FontSynthesis','FontSynthesisWeight','FontSynthesisStyle','FontSynthesisSmallCaps','MathDepth','WebkitBoxOrdinalGroup'}
+stable_misc_cluster={'FontSynthesis','FontSynthesisWeight','FontSynthesisStyle','FontSynthesisSmallCaps','MathDepth','WebkitBoxOrdinalGroup','ScrollBehavior'}
 manual.update(stable_misc_cluster)
 reflection_visited_cluster={'InternalVisitedFill','InternalVisitedStroke','WebkitBoxReflect'}
 manual.update(reflection_visited_cluster)
 palette_internal_cluster={'FontPalette','InternalAlignContentBlock','InternalEmptyLineHeight'}
 manual.update(palette_internal_cluster)
 
-text_cluster={'TextTransform','TextOverflow','TextIndent','TextDecorationLine',
+text_cluster={'TextAlign','TextTransform','TextOverflow','TextIndent','TextDecorationLine',
     'TextDecorationThickness','TextUnderlineOffset','TextUnderlinePosition','TextJustify','TextDecoration'}
 manual.update(text_cluster)
 svg_properties={'Fill','Stroke','StrokeWidth','StrokeDashoffset','StrokeDasharray',
-                'Cx','Cy','R','Rx','Ry','X','Y','PathLength','PaintOrder'}
+                'Cx','Cy','R','Rx','Ry','X','Y','PathLength','PaintOrder','FillRule','ClipRule'}
 manual.update(svg_properties)
 svg_presentation={'D','MarkerStart','MarkerMid','MarkerEnd','Marker','BaselineShift',
                   'StrokeLinecap','StrokeLinejoin','StrokeMiterlimit',
@@ -603,6 +603,7 @@ for prop,(file,line,consumer) in sorted(locations.items()):
     if prop in text_cluster:
         coverage='stable consumer complete'
         pending='alternate TextOverflowString runtime flag' if prop == 'TextOverflow' else 'alternate CSSTextTransformFullWidth/FullSizeKana/MultiKeyword runtime flags' if prop == 'TextTransform' else 'none'
+        if prop == 'TextAlign': pending='alternate CSSTextAlignMatchParent runtime flag; -internal-center UA only'
         if prop == 'TextDecoration':
             coverage='typed consumer branches'
             pending='ConsumeColor advanced/system-color collaborators'
@@ -660,8 +661,8 @@ for prop,(file,line,consumer) in sorted(locations.items()):
         coverage='typed consumer branches'
         pending='extended CSSMath functions (trig/round/mod/rem/pow/sqrt/hypot/log/exp/anchor/calc-size/progress/random); typed exponent arithmetic; use counters'
     if prop == 'Content':
-        coverage='text branches'
-        pending='images/quotes/counters/alternative text; attr uses shared substitution'
+        coverage='typed consumer branches'
+        pending='non-linear generated/image-set/light-dark images; anonymous symbols CounterStyle and TreeScope population; attr uses shared substitution'
     if prop == 'BorderShape':
         coverage='typed consumer branches'
         pending='circle/ellipse/inset/rect/xywh/path/shape shared typed/native BasicShape owners; native polygon GetPath; computed-value serialization; cross-zoom inheritance reapplication; relative-unit conversion contexts'

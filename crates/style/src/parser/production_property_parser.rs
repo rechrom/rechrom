@@ -21,69 +21,69 @@ use crate::production_css_value::{self as values, PropertyValue, Value};
 use foundation::{CSSPropertyID, CSSValueID, Color, String, StringView};
 use std::rc::Rc;
 
-#[path = "production_initial_scope_parser.rs"]
-mod initial_scope_parser;
 #[path = "production_corner_parser.rs"]
 mod corner_parser;
+#[path = "production_initial_scope_parser.rs"]
+mod initial_scope_parser;
 
+#[path = "production_anchor_parser.rs"]
+mod anchor_parser;
+#[path = "production_column_rule_parser.rs"]
+mod column_rule_parser;
+#[path = "production_layout_misc_parser.rs"]
+mod layout_misc_parser;
+#[path = "production_line_parser.rs"]
+mod line_parser;
+#[path = "production_list_counter_parser.rs"]
+mod list_counter_parser;
+#[path = "production_logical_border_parser.rs"]
+mod logical_border_parser;
+#[path = "production_palette_internal_parser.rs"]
+mod palette_internal_parser;
+#[path = "production_reflect_parser.rs"]
+mod reflect_parser;
+#[path = "production_rule_inset_parser.rs"]
+mod rule_inset_parser;
+#[path = "production_scroll_parser.rs"]
+mod scroll_parser;
+#[path = "production_stable_misc_parser.rs"]
+mod stable_misc_parser;
 #[path = "production_svg_parser.rs"]
 mod svg_parser;
 #[path = "production_svg_presentation_parser.rs"]
 mod svg_presentation_parser;
-#[path = "production_logical_border_parser.rs"]
-mod logical_border_parser;
-#[path = "production_timeline_parser.rs"]
-mod timeline_parser;
-#[path = "production_viewport_parser.rs"]
-mod viewport_parser;
-#[path = "production_transform_parser.rs"]
-mod transform_parser;
-#[path = "production_layout_misc_parser.rs"]
-mod layout_misc_parser;
-#[path = "production_text_parser.rs"]
-mod text_parser;
-#[path = "production_list_counter_parser.rs"]
-mod list_counter_parser;
-#[path = "production_scroll_parser.rs"]
-mod scroll_parser;
-#[path = "production_line_parser.rs"]
-mod line_parser;
-#[path = "production_anchor_parser.rs"]
-mod anchor_parser;
-#[path = "production_typography_parser.rs"]
-mod typography_parser;
 #[path = "production_text_box_parser.rs"]
 mod text_box_parser;
-#[path = "production_column_rule_parser.rs"]
-mod column_rule_parser;
-#[path = "production_rule_inset_parser.rs"]
-mod rule_inset_parser;
-#[path = "production_stable_misc_parser.rs"]
-mod stable_misc_parser;
-#[path = "production_reflect_parser.rs"]
-mod reflect_parser;
-#[path = "production_palette_internal_parser.rs"]
-mod palette_internal_parser;
+#[path = "production_text_parser.rs"]
+mod text_parser;
+#[path = "production_timeline_parser.rs"]
+mod timeline_parser;
+#[path = "production_transform_parser.rs"]
+mod transform_parser;
+#[path = "production_typography_parser.rs"]
+mod typography_parser;
+#[path = "production_viewport_parser.rs"]
+mod viewport_parser;
 
 #[path = "production_font_parser.rs"]
 mod font_parser;
 
-#[path = "production_effects_parser.rs"]
-mod effects_parser;
+#[path = "production_border_image_parser.rs"]
+mod border_image_parser;
 #[path = "production_color_ui_parser.rs"]
 mod color_ui_parser;
+#[path = "production_effects_parser.rs"]
+mod effects_parser;
+#[path = "production_grid_lanes_parser.rs"]
+mod grid_lanes_parser;
 #[path = "production_grid_parser.rs"]
 mod grid_parser;
 #[path = "production_interaction_parser.rs"]
 mod interaction_parser;
-#[path = "production_border_image_parser.rs"]
-mod border_image_parser;
 #[path = "production_mask_parser.rs"]
 mod mask_parser;
 #[path = "production_motion_parser.rs"]
 mod motion_parser;
-#[path = "production_grid_lanes_parser.rs"]
-mod grid_lanes_parser;
 #[path = "production_render_delay_parser.rs"]
 mod render_delay_parser;
 #[path = "production_timeline_trigger_parser.rs"]
@@ -277,21 +277,48 @@ pub fn ParseProperty(
             "CSSVariableParser::ParseDeclarationIncludingCSSWide",
         ));
     }
-    if !crate::production_corner_features::IsExposed(id) { return Err(unsupported(id, "CSSProperty::Exposure / CSSCornersShorthand")); }
+    if !crate::production_corner_features::IsExposed(id) {
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / CSSCornersShorthand",
+        ));
+    }
     if !crate::production_interaction_features::IsExposed(id) {
-        return Err(unsupported(id, "CSSProperty::Exposure / interaction runtime flags"));
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / interaction runtime flags",
+        ));
     }
     if !crate::production_line_features::IsExposed(id) {
-        return Err(unsupported(id, "CSSProperty::Exposure / CSSLineClamp runtime flags"));
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / CSSLineClamp runtime flags",
+        ));
     }
     if !crate::production_typography_features::IsExposed(id) {
-        return Err(unsupported(id, "CSSProperty::Exposure / typography runtime flags"));
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / typography runtime flags",
+        ));
     }
-    if !crate::production_render_delay_features::IsExposed(id) {return Err(unsupported(id,"CSSProperty::Exposure / CSSGridLanesLayout"));}
+    if !crate::production_render_delay_features::IsExposed(id) {
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / CSSGridLanesLayout",
+        ));
+    }
     if !crate::production_text_box_features::IsExposed(id) {
-        return Err(unsupported(id, "CSSProperty::Exposure / text box runtime flags"));
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / text box runtime flags",
+        ));
     }
-    if palette_internal_parser::IsUAOnly(id) && mode!=CSSParserMode::kUASheetMode {return Err(unsupported(id,"CSSProperty::Exposure / kUA internal property"));}
+    if palette_internal_parser::IsUAOnly(id) && mode != CSSParserMode::kUASheetMode {
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / kUA internal property",
+        ));
+    }
     let (data, parsed_important) = ParseVariableData(text, true, true).map_err(|_| invalid(id))?;
     if data.NeedsVariableResolution() {
         let value = values::unparsed(data, mode);
@@ -325,21 +352,48 @@ fn ParsePropertyStream<T: TokenStreamTokenizer>(
     stream: &mut Stream<T>,
 ) -> Result<Vec<PropertyValue>, PropertyParseError> {
     let id = ResolveCSSPropertyID(unresolved);
-    if !crate::production_corner_features::IsExposed(id) { return Err(unsupported(id, "CSSProperty::Exposure / CSSCornersShorthand")); }
+    if !crate::production_corner_features::IsExposed(id) {
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / CSSCornersShorthand",
+        ));
+    }
     if !crate::production_interaction_features::IsExposed(id) {
-        return Err(unsupported(id, "CSSProperty::Exposure / interaction runtime flags"));
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / interaction runtime flags",
+        ));
     }
     if !crate::production_line_features::IsExposed(id) {
-        return Err(unsupported(id, "CSSProperty::Exposure / CSSLineClamp runtime flags"));
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / CSSLineClamp runtime flags",
+        ));
     }
     if !crate::production_typography_features::IsExposed(id) {
-        return Err(unsupported(id, "CSSProperty::Exposure / typography runtime flags"));
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / typography runtime flags",
+        ));
     }
-    if !crate::production_render_delay_features::IsExposed(id) {return Err(unsupported(id,"CSSProperty::Exposure / CSSGridLanesLayout"));}
+    if !crate::production_render_delay_features::IsExposed(id) {
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / CSSGridLanesLayout",
+        ));
+    }
     if !crate::production_text_box_features::IsExposed(id) {
-        return Err(unsupported(id, "CSSProperty::Exposure / text box runtime flags"));
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / text box runtime flags",
+        ));
     }
-    if palette_internal_parser::IsUAOnly(id) && mode!=CSSParserMode::kUASheetMode {return Err(unsupported(id,"CSSProperty::Exposure / kUA internal property"));}
+    if palette_internal_parser::IsUAOnly(id) && mode != CSSParserMode::kUASheetMode {
+        return Err(unsupported(
+            id,
+            "CSSProperty::Exposure / kUA internal property",
+        ));
+    }
     stream.ConsumeWhitespace();
     let mut parsed = Vec::new();
     let first = stream.Peek().Id();
@@ -967,18 +1021,36 @@ fn ConsumeLonghand<T: TokenStreamTokenizer>(
     ConsumeLonghandWithAlias(id, stream, mode, false)
 }
 // css_parsing_utils.cc:5764-5782. Reused by physical/logical radius and Corner.
-fn ConsumeBorderRadiusCorner<T: TokenStreamTokenizer>(id: CSSPropertyID, stream: &mut Stream<T>, mode: CSSParserMode) -> Result<Rc<Value>, PropertyParseError> {
-    let grammar = Grammar::Length { percent: true, nonnegative: true, quirks: false, keywords: &[] };
+fn ConsumeBorderRadiusCorner<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Rc<Value>, PropertyParseError> {
+    let grammar = Grammar::Length {
+        percent: true,
+        nonnegative: true,
+        quirks: false,
+        keywords: &[],
+    };
     let first = ConsumeLiteral(id, stream, mode, grammar)?;
     stream.EnsureLookAhead();
     let save = stream.Save();
-    let second = if matches!(stream.Peek().GetType(), kNumberToken | kPercentageToken | kDimensionToken) || IsMathFunction(stream) {
+    let second = if matches!(
+        stream.Peek().GetType(),
+        kNumberToken | kPercentageToken | kDimensionToken
+    ) || IsMathFunction(stream)
+    {
         match ConsumeLiteral(id, stream, mode, grammar) {
             Ok(v) => v,
-            Err(e) if e.kind == PropertyParseErrorKind::Invalid => { stream.Restore(save); first.clone() },
+            Err(e) if e.kind == PropertyParseErrorKind::Invalid => {
+                stream.Restore(save);
+                first.clone()
+            }
             Err(e) => return Err(e),
         }
-    } else { first.clone() };
+    } else {
+        first.clone()
+    };
     Ok(Pair(first, second, true))
 }
 fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
@@ -987,23 +1059,51 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
     mode: CSSParserMode,
     alias: bool,
 ) -> Result<Rc<Value>, PropertyParseError> {
-    if corner_parser::IsProperty(id) { return corner_parser::Consume(id, stream, mode); }
-    if initial_scope_parser::IsProperty(id) { return initial_scope_parser::Consume(id, stream, mode); }
-    if id==CSSPropertyID::kGridLanesDirection {return grid_lanes_parser::ConsumeDirection(id,stream);}
-    if render_delay_parser::IsProperty(id) {return render_delay_parser::Consume(id,stream,mode);}
-    if timeline_trigger_parser::IsProperty(id) {return timeline_trigger_parser::Consume(id,stream,mode);}
-    if view_transition_parser::IsProperty(id) {return view_transition_parser::Consume(id,stream);}
-    if motion_parser::IsProperty(id) { return motion_parser::Consume(id,stream,mode); }
-    if border_image_parser::IsBorderImageProperty(id) { return border_image_parser::Consume(id, stream, mode); }
+    if corner_parser::IsProperty(id) {
+        return corner_parser::Consume(id, stream, mode);
+    }
+    if initial_scope_parser::IsProperty(id) {
+        return initial_scope_parser::Consume(id, stream, mode);
+    }
+    if id == CSSPropertyID::kGridLanesDirection {
+        return grid_lanes_parser::ConsumeDirection(id, stream);
+    }
+    if render_delay_parser::IsProperty(id) {
+        return render_delay_parser::Consume(id, stream, mode);
+    }
+    if timeline_trigger_parser::IsProperty(id) {
+        return timeline_trigger_parser::Consume(id, stream, mode);
+    }
+    if view_transition_parser::IsProperty(id) {
+        return view_transition_parser::Consume(id, stream);
+    }
+    if motion_parser::IsProperty(id) {
+        return motion_parser::Consume(id, stream, mode);
+    }
+    if border_image_parser::IsBorderImageProperty(id) {
+        return border_image_parser::Consume(id, stream, mode);
+    }
     if interaction_parser::IsInteractionProperty(id) {
         return interaction_parser::Consume(id, stream, mode);
     }
-    if palette_internal_parser::IsProperty(id) {return palette_internal_parser::Consume(id,stream,mode);}
-    if id==CSSPropertyID::kWebkitBoxReflect {return reflect_parser::Consume(stream,mode);}
-    if stable_misc_parser::IsProperty(id) { return stable_misc_parser::Consume(id,stream,mode); }
-    if column_rule_parser::IsProperty(id) { return column_rule_parser::Consume(id, stream, mode); }
-    if rule_inset_parser::IsProperty(id) { return rule_inset_parser::Consume(id, stream, mode); }
-    if text_box_parser::IsProperty(id) { return text_box_parser::Consume(id, stream, mode); }
+    if palette_internal_parser::IsProperty(id) {
+        return palette_internal_parser::Consume(id, stream, mode);
+    }
+    if id == CSSPropertyID::kWebkitBoxReflect {
+        return reflect_parser::Consume(stream, mode);
+    }
+    if stable_misc_parser::IsProperty(id) {
+        return stable_misc_parser::Consume(id, stream, mode);
+    }
+    if column_rule_parser::IsProperty(id) {
+        return column_rule_parser::Consume(id, stream, mode);
+    }
+    if rule_inset_parser::IsProperty(id) {
+        return rule_inset_parser::Consume(id, stream, mode);
+    }
+    if text_box_parser::IsProperty(id) {
+        return text_box_parser::Consume(id, stream, mode);
+    }
     if typography_parser::IsTypographyProperty(id) {
         return typography_parser::Consume(id, stream, mode);
     }
@@ -1011,7 +1111,7 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
         return line_parser::Consume(id, stream, mode);
     }
     if anchor_parser::IsAnchorProperty(id) {
-        return anchor_parser::Consume(id,stream,mode);
+        return anchor_parser::Consume(id, stream, mode);
     }
     if scroll_parser::IsScrollProperty(id) {
         return scroll_parser::Consume(id, stream, mode);
@@ -1019,9 +1119,15 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
     if list_counter_parser::IsListCounterProperty(id) {
         return list_counter_parser::Consume(id, stream, mode);
     }
-    if color_ui_parser::IsColorUIProperty(id) { return color_ui_parser::Consume(id, stream, mode); }
-    if effects_parser::IsEffectsProperty(id) { return effects_parser::Consume(id, stream, mode); }
-    if font_parser::IsFontProperty(id) { return font_parser::Consume(id, stream, mode); }
+    if color_ui_parser::IsColorUIProperty(id) {
+        return color_ui_parser::Consume(id, stream, mode);
+    }
+    if effects_parser::IsEffectsProperty(id) {
+        return effects_parser::Consume(id, stream, mode);
+    }
+    if font_parser::IsFontProperty(id) {
+        return font_parser::Consume(id, stream, mode);
+    }
     if layout_misc_parser::IsLayoutProperty(id) {
         return layout_misc_parser::Consume(id, stream, mode);
     }
@@ -1031,7 +1137,9 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
     if transform_parser::IsTransformProperty(id) {
         return transform_parser::Consume(id, stream, mode, alias);
     }
-    if timeline_parser::IsProperty(id) { return timeline_parser::Consume(id,stream,mode); }
+    if timeline_parser::IsProperty(id) {
+        return timeline_parser::Consume(id, stream, mode);
+    }
     if viewport_parser::IsProperty(id) {
         return viewport_parser::Consume(id, stream, mode);
     }
@@ -1041,7 +1149,10 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
     if svg_parser::IsSVGProperty(id) {
         return svg_parser::Consume(id, stream, mode);
     }
-    if matches!(id, CSSPropertyID::kBackgroundImage | CSSPropertyID::kMaskImage) {
+    if matches!(
+        id,
+        CSSPropertyID::kBackgroundImage | CSSPropertyID::kMaskImage
+    ) {
         return ConsumeBackgroundImage(id, stream, mode);
     }
     // cpp: longhands_custom.cc:2009-2016,10171-10178.
@@ -1312,15 +1423,25 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
     }
     // cpp: generated longhands.cc:3950,4061,4718,4829: logical style
     // SurrogateFor uses the physical border-style generated keyword grammar.
-    if matches!(id, CSSPropertyID::kBorderBlockStartStyle | CSSPropertyID::kBorderBlockEndStyle
-        | CSSPropertyID::kBorderInlineStartStyle | CSSPropertyID::kBorderInlineEndStyle) {
+    if matches!(
+        id,
+        CSSPropertyID::kBorderBlockStartStyle
+            | CSSPropertyID::kBorderBlockEndStyle
+            | CSSPropertyID::kBorderInlineStartStyle
+            | CSSPropertyID::kBorderInlineEndStyle
+    ) {
         return ConsumeLiteral(id, stream, mode, GrammarFor(CSSPropertyID::kBorderTopStyle));
     }
     // cpp: css_parsing_utils.cc:9653-9662 ConsumeBorderColorSide. The quad
     // border-color shorthand uses this consumer too; side shorthands call
     // ConsumeColor directly and therefore do not enable quirky hex colors.
-    if matches!(id, CSSPropertyID::kBorderTopColor | CSSPropertyID::kBorderRightColor
-        | CSSPropertyID::kBorderBottomColor | CSSPropertyID::kBorderLeftColor) {
+    if matches!(
+        id,
+        CSSPropertyID::kBorderTopColor
+            | CSSPropertyID::kBorderRightColor
+            | CSSPropertyID::kBorderBottomColor
+            | CSSPropertyID::kBorderLeftColor
+    ) {
         return ConsumeBorderColorSide(id, stream, mode);
     }
     // cpp: css_parsing_utils.cc ParseBorderRadiusCorner:5765-5784.
@@ -1414,18 +1535,67 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
         }
         return Ok(values::list(families, values::ListSeparator::Comma));
     }
-    // cpp: css_parsing_utils.cc ConsumeFontStyle normal/italic branches:6481.
-    if id == CSSPropertyID::kFontStyle && matches(stream.Peek().Id(), &["normal", "italic", "oblique"]) {
+    // cpp: css_parsing_utils.cc:6481-6523, element font-style permits one angle.
+    if id == CSSPropertyID::kFontStyle
+        && matches(stream.Peek().Id(), &["normal", "italic", "oblique"])
+    {
         let keyword = stream.ConsumeIncludingWhitespace().Id();
+        if keyword == CSSValueID::kOblique && !stream.AtEnd() {
+            let angle = if IsMathFunction(stream) {
+                ConsumeMath(
+                    id,
+                    stream,
+                    &[crate::css_math_expression_node::CalculationResultCategory::Angle],
+                    crate::css_math_function_value::ValueRange::All,
+                )?
+            } else {
+                if stream.Peek().GetType() != kDimensionToken {
+                    return Err(invalid(id));
+                }
+                let token = stream.ConsumeIncludingWhitespace();
+                let unit = token.GetUnitType();
+                let degrees = token.NumericValue()
+                    * match unit {
+                        UnitType::kDegrees => 1.0,
+                        UnitType::kRadians => 180.0 / std::f64::consts::PI,
+                        UnitType::kGradians => 0.9,
+                        UnitType::kTurns => 360.0,
+                        _ => return Err(invalid(id)),
+                    };
+                if !(-90.0..=90.0).contains(&degrees) {
+                    return Err(invalid(id));
+                }
+                if degrees == 0.0 {
+                    return Ok(values::identifier(CSSValueID::kNormal));
+                }
+                values::numeric(token.NumericValue(), unit)
+            };
+            return Ok(Rc::new(Value::new(CSSValuePayload::kFontStyleRangeClass(
+                values::CSSFontStyleRangeValue { angle: Some(angle) },
+            ))));
+        }
         return Ok(values::identifier(keyword));
     }
     if id == CSSPropertyID::kGridTemplateAreas {
         return grid_parser::ConsumeAreas(id, stream);
     }
-    if matches!(id, CSSPropertyID::kGridTemplateColumns | CSSPropertyID::kGridTemplateRows
-        | CSSPropertyID::kGridAutoColumns | CSSPropertyID::kGridAutoRows) {
-        return grid_parser::ConsumeTracks(id, stream, mode,
-            matches!(id,CSSPropertyID::kGridTemplateColumns|CSSPropertyID::kGridTemplateRows), false);
+    if matches!(
+        id,
+        CSSPropertyID::kGridTemplateColumns
+            | CSSPropertyID::kGridTemplateRows
+            | CSSPropertyID::kGridAutoColumns
+            | CSSPropertyID::kGridAutoRows
+    ) {
+        return grid_parser::ConsumeTracks(
+            id,
+            stream,
+            mode,
+            matches!(
+                id,
+                CSSPropertyID::kGridTemplateColumns | CSSPropertyID::kGridTemplateRows
+            ),
+            false,
+        );
     }
     // cpp: css_parsing_utils.cc ConsumeAlphaValue/ConsumeNumberOrPercent:1420-1451.
     if matches!(
@@ -1757,17 +1927,37 @@ fn ConsumeMath<T: TokenStreamTokenizer>(
 // shared typed math parser so a shorthand number can reach iteration-count
 // after the time consumer, and linear() percentages can follow its number probe.
 fn ConsumeAnimationNumericMath<T: TokenStreamTokenizer>(
-    id: CSSPropertyID, stream: &mut Stream<T>,
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
     category: crate::css_math_expression_node::CalculationResultCategory,
     range: crate::css_math_function_value::ValueRange,
 ) -> Result<Option<Rc<Value>>, PropertyParseError> {
     use crate::css_math_expression_node::CalculationResultCategory as C;
-    if !IsMathFunction(stream) { return Ok(None); }
+    if !IsMathFunction(stream) {
+        return Ok(None);
+    }
     let saved = stream.Save();
-    let value = ConsumeMath(id, stream,
-        &[C::Number,C::Length,C::Percent,C::LengthFunction,C::Angle,C::Time,C::Frequency,C::Resolution], range)?;
-    let CSSValuePayload::kMathFunctionClass(math) = value.Payload() else { unreachable!() };
-    if math.Category() == category { return Ok(Some(value)); }
+    let value = ConsumeMath(
+        id,
+        stream,
+        &[
+            C::Number,
+            C::Length,
+            C::Percent,
+            C::LengthFunction,
+            C::Angle,
+            C::Time,
+            C::Frequency,
+            C::Resolution,
+        ],
+        range,
+    )?;
+    let CSSValuePayload::kMathFunctionClass(math) = value.Payload() else {
+        unreachable!()
+    };
+    if math.Category() == category {
+        return Ok(Some(value));
+    }
     stream.Peek();
     stream.Restore(saved);
     Ok(None)
@@ -1777,21 +1967,37 @@ fn ConsumeAnimationNumericMath<T: TokenStreamTokenizer>(
 fn AnimationKnownNumber(id: CSSPropertyID, value: &Value) -> Result<f64, PropertyParseError> {
     match value.Payload() {
         CSSValuePayload::kNumericLiteralClass(number) => Ok(number.DoubleValue()),
-        CSSValuePayload::kMathFunctionClass(math) => math.ComputeValue(
-            &mut |_,_| Err(crate::css_math_expression_node::MathError::MissingLengthContext), None)
+        CSSValuePayload::kMathFunctionClass(math) => math
+            .ComputeValue(
+                &mut |_, _| Err(crate::css_math_expression_node::MathError::MissingLengthContext),
+                None,
+            )
             .map(crate::css_value_clamping_utils::CSSValueClampingUtils::ClampDouble)
             .map_err(|_| invalid(id)),
         _ => Err(invalid(id)),
     }
 }
-fn ConsumeAnimationKnownNumeric<T: TokenStreamTokenizer>(id: CSSPropertyID,
-    stream: &mut Stream<T>, percent: bool) -> Result<Option<f64>, PropertyParseError> {
+fn ConsumeAnimationKnownNumeric<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    percent: bool,
+) -> Result<Option<f64>, PropertyParseError> {
     use crate::css_math_expression_node::CalculationResultCategory as C;
-    if let Some(value) = ConsumeAnimationNumericMath(id,stream,
-        if percent { C::Percent } else { C::Number }, crate::css_math_function_value::ValueRange::All)? {
-        return AnimationKnownNumber(id,&value).map(Some);
+    if let Some(value) = ConsumeAnimationNumericMath(
+        id,
+        stream,
+        if percent { C::Percent } else { C::Number },
+        crate::css_math_function_value::ValueRange::All,
+    )? {
+        return AnimationKnownNumber(id, &value).map(Some);
     }
-    if stream.Peek().GetType() == if percent { kPercentageToken } else { kNumberToken } {
+    if stream.Peek().GetType()
+        == if percent {
+            kPercentageToken
+        } else {
+            kNumberToken
+        }
+    {
         return Ok(Some(stream.ConsumeIncludingWhitespace().NumericValue()));
     }
     Ok(None)
@@ -1803,10 +2009,16 @@ fn ConsumeTime<T: TokenStreamTokenizer>(
     nonnegative: bool,
 ) -> Result<Option<Rc<Value>>, PropertyParseError> {
     if IsMathFunction(stream) {
-        return ConsumeAnimationNumericMath(id, stream,
+        return ConsumeAnimationNumericMath(
+            id,
+            stream,
             crate::css_math_expression_node::CalculationResultCategory::Time,
-            if nonnegative { crate::css_math_function_value::ValueRange::NonNegative }
-            else { crate::css_math_function_value::ValueRange::All });
+            if nonnegative {
+                crate::css_math_function_value::ValueRange::NonNegative
+            } else {
+                crate::css_math_function_value::ValueRange::All
+            },
+        );
     }
     let token = stream.Peek();
     if token.GetType() == kDimensionToken
@@ -1934,7 +2146,9 @@ fn ConsumeAnimationTimingFunction<T: TokenStreamTokenizer>(
         if function == Some(CSSValueID::kCubicBezier) {
             let mut args = [0.0; 4];
             for (index, arg) in args.iter_mut().enumerate() {
-                let Some(number) = ConsumeAnimationKnownNumeric(id,&mut guard,false)? else { return Ok(None); };
+                let Some(number) = ConsumeAnimationKnownNumeric(id, &mut guard, false)? else {
+                    return Ok(None);
+                };
                 *arg = number;
                 if index < 3 {
                     if guard.Peek().GetType() != kCommaToken {
@@ -1955,18 +2169,30 @@ fn ConsumeAnimationTimingFunction<T: TokenStreamTokenizer>(
             ));
         } else if function == Some(CSSValueID::kSteps) {
             let steps = if IsMathFunction(&mut guard) {
-                let Some(value) = ConsumeAnimationNumericMath(id,&mut guard,
+                let Some(value) = ConsumeAnimationNumericMath(
+                    id,
+                    &mut guard,
                     crate::css_math_expression_node::CalculationResultCategory::Number,
-                    crate::css_math_function_value::ValueRange::PositiveInteger)? else { return Ok(None); };
+                    crate::css_math_function_value::ValueRange::PositiveInteger,
+                )?
+                else {
+                    return Ok(None);
+                };
                 value
             } else {
                 let token = guard.Peek();
                 if token.GetType() != kNumberToken
                     || token.GetNumericValueType() != NumericValueType::kIntegerValueType
-                    || token.NumericValue() < 1.0 { return Ok(None); }
-                values::numeric(guard.ConsumeIncludingWhitespace().NumericValue(),UnitType::kInteger)
+                    || token.NumericValue() < 1.0
+                {
+                    return Ok(None);
+                }
+                values::numeric(
+                    guard.ConsumeIncludingWhitespace().NumericValue(),
+                    UnitType::kInteger,
+                )
             };
-            let count = AnimationKnownNumber(id,&steps)?;
+            let count = AnimationKnownNumber(id, &steps)?;
             let mut position = CSSValueID::kEnd;
             if guard.Peek().GetType() == kCommaToken {
                 guard.ConsumeIncludingWhitespace();
@@ -1990,10 +2216,7 @@ fn ConsumeAnimationTimingFunction<T: TokenStreamTokenizer>(
                 return Ok(None);
             }
             value = Rc::new(Value::new(CSSValuePayload::kStepsTimingFunctionClass(
-                values::CSSStepsTimingFunctionValue {
-                    steps,
-                    position,
-                },
+                values::CSSStepsTimingFunctionValue { steps, position },
             )));
         } else {
             // ConsumeLinearStop permits the numeric output before or after its
@@ -2005,15 +2228,15 @@ fn ConsumeAnimationTimingFunction<T: TokenStreamTokenizer>(
                 let mut b = None;
                 while !guard.AtEnd() && guard.Peek().GetType() != kCommaToken {
                     if number.is_none() {
-                        if let Some(output) = ConsumeAnimationKnownNumeric(id,&mut guard,false)? {
+                        if let Some(output) = ConsumeAnimationKnownNumeric(id, &mut guard, false)? {
                             number = Some(output);
                             continue;
                         }
                     }
                     if a.is_none() {
-                        if let Some(input) = ConsumeAnimationKnownNumeric(id,&mut guard,true)? {
+                        if let Some(input) = ConsumeAnimationKnownNumeric(id, &mut guard, true)? {
                             a = Some(input);
-                            b = ConsumeAnimationKnownNumeric(id,&mut guard,true)?;
+                            b = ConsumeAnimationKnownNumeric(id, &mut guard, true)?;
                             continue;
                         }
                     }
@@ -2085,8 +2308,16 @@ fn ConsumeAnimationRange<T: TokenStreamTokenizer>(
 ) -> Result<Option<Rc<Value>>, PropertyParseError> {
     ConsumeAnimationRangeWithAuto(id, stream, mode, default, false)
 }
-fn ConsumeAnimationRangeWithAuto<T: TokenStreamTokenizer>(id: CSSPropertyID, stream: &mut Stream<T>, mode: CSSParserMode, default: f64, allow_auto: bool) -> Result<Option<Rc<Value>>, PropertyParseError> {
-    if stream.Peek().Id() == CSSValueID::kNormal || allow_auto && stream.Peek().Id() == CSSValueID::kAuto {
+fn ConsumeAnimationRangeWithAuto<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+    default: f64,
+    allow_auto: bool,
+) -> Result<Option<Rc<Value>>, PropertyParseError> {
+    if stream.Peek().Id() == CSSValueID::kNormal
+        || allow_auto && stream.Peek().Id() == CSSValueID::kAuto
+    {
         return Ok(Some(values::identifier(
             stream.ConsumeIncludingWhitespace().Id(),
         )));
@@ -2108,11 +2339,46 @@ fn ConsumeAnimationRangeWithAuto<T: TokenStreamTokenizer>(id: CSSPropertyID, str
     }
     let length = if IsMathFunction(stream) {
         use crate::css_math_expression_node::CalculationResultCategory as C;
-        let saved=stream.Save();
-        let value=ConsumeMath(id,stream,&[C::Number,C::Length,C::Percent,C::LengthFunction,C::Angle,C::Time,C::Frequency,C::Resolution],crate::css_math_function_value::ValueRange::All)?;
-        let CSSValuePayload::kMathFunctionClass(math)=value.Payload() else {unreachable!()};
-        if matches!(math.Category(),C::Length|C::Percent|C::LengthFunction) {Some(value)} else {stream.Peek();stream.Restore(saved);None}
-    } else { ConsumeLiteral(id,stream,mode,Grammar::Length {percent:true,nonnegative:false,quirks:false,keywords:&[]}).ok() };
+        let saved = stream.Save();
+        let value = ConsumeMath(
+            id,
+            stream,
+            &[
+                C::Number,
+                C::Length,
+                C::Percent,
+                C::LengthFunction,
+                C::Angle,
+                C::Time,
+                C::Frequency,
+                C::Resolution,
+            ],
+            crate::css_math_function_value::ValueRange::All,
+        )?;
+        let CSSValuePayload::kMathFunctionClass(math) = value.Payload() else {
+            unreachable!()
+        };
+        if matches!(math.Category(), C::Length | C::Percent | C::LengthFunction) {
+            Some(value)
+        } else {
+            stream.Peek();
+            stream.Restore(saved);
+            None
+        }
+    } else {
+        ConsumeLiteral(
+            id,
+            stream,
+            mode,
+            Grammar::Length {
+                percent: true,
+                nonnegative: false,
+                quirks: false,
+                keywords: &[],
+            },
+        )
+        .ok()
+    };
     if let Some(value) = length {
         let is_default = matches!(value.Payload(), CSSValuePayload::kNumericLiteralClass(n) if n.GetType() == UnitType::kPercentage && n.DoubleValue() == default);
         if items.is_empty() || !is_default {
@@ -2125,34 +2391,36 @@ fn ConsumeAnimationRangeWithAuto<T: TokenStreamTokenizer>(id: CSSPropertyID, str
         Some(values::list(items, values::ListSeparator::Space))
     })
 }
-fn ConsumeAnimationTimeline<T: TokenStreamTokenizer>(id: CSSPropertyID, stream: &mut Stream<T>) -> Result<Option<Rc<Value>>,PropertyParseError> {
-            if matches(stream.Peek().Id(), &["none", "auto"]) {
-                return Ok(Some(values::identifier(
-                    stream.ConsumeIncludingWhitespace().Id(),
-                )));
-            }
-            if matches!(
-                stream.Peek().FunctionId(),
-                Some(CSSValueID::kScroll | CSSValueID::kView)
-            ) {
-                return Err(unsupported(
-                    id,
-                    "ConsumeAnimationTimeline CSSScrollValue / CSSViewValue",
-                ));
-            }
-            if stream.Peek().FunctionId() == Some(CSSValueID::kIdent) {
-                return Err(unsupported(
-                    id,
-                    "ConsumeDashedIdent CSSFunctionValue ident()",
-                ));
-            }
-            if stream.Peek().GetType() == kIdentToken
-                && stream.Peek().Value().ToString().Utf8().starts_with("--")
-            {
-                return ConsumeAnimationName(id, stream, false);
-            }
-            Ok(None)
-
+fn ConsumeAnimationTimeline<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+) -> Result<Option<Rc<Value>>, PropertyParseError> {
+    if matches(stream.Peek().Id(), &["none", "auto"]) {
+        return Ok(Some(values::identifier(
+            stream.ConsumeIncludingWhitespace().Id(),
+        )));
+    }
+    if matches!(
+        stream.Peek().FunctionId(),
+        Some(CSSValueID::kScroll | CSSValueID::kView)
+    ) {
+        return Err(unsupported(
+            id,
+            "ConsumeAnimationTimeline CSSScrollValue / CSSViewValue",
+        ));
+    }
+    if stream.Peek().FunctionId() == Some(CSSValueID::kIdent) {
+        return Err(unsupported(
+            id,
+            "ConsumeDashedIdent CSSFunctionValue ident()",
+        ));
+    }
+    if stream.Peek().GetType() == kIdentToken
+        && stream.Peek().Value().ToString().Utf8().starts_with("--")
+    {
+        return ConsumeAnimationName(id, stream, false);
+    }
+    Ok(None)
 }
 fn ConsumeAnimationItem<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
@@ -2281,7 +2549,7 @@ fn ConsumeAnimationItem<T: TokenStreamTokenizer>(
                 values::ListSeparator::Space,
             )))
         }
-        CSSPropertyID::kAnimationTimeline => ConsumeAnimationTimeline(id,stream),
+        CSSPropertyID::kAnimationTimeline => ConsumeAnimationTimeline(id, stream),
         _ => Ok(None),
     }
 }
@@ -2560,14 +2828,32 @@ fn ConsumePositionLength<T: TokenStreamTokenizer>(
     percent: bool,
 ) -> Result<Option<Rc<Value>>, PropertyParseError> {
     if IsMathFunction(stream) {
-        if matches!(id, CSSPropertyID::kTransformOrigin | CSSPropertyID::kPerspectiveOrigin |
-            CSSPropertyID::kWebkitTransformOriginX | CSSPropertyID::kWebkitTransformOriginY |
-            CSSPropertyID::kWebkitPerspectiveOriginX | CSSPropertyID::kWebkitPerspectiveOriginY) {
+        if matches!(
+            id,
+            CSSPropertyID::kTransformOrigin
+                | CSSPropertyID::kPerspectiveOrigin
+                | CSSPropertyID::kWebkitTransformOriginX
+                | CSSPropertyID::kWebkitTransformOriginY
+                | CSSPropertyID::kWebkitPerspectiveOriginX
+                | CSSPropertyID::kWebkitPerspectiveOriginY
+        ) {
             use crate::css_math_expression_node::CalculationResultCategory as C;
-            return ConsumeMath(id, stream, if percent { &[C::Length, C::Percent, C::LengthFunction] } else { &[C::Length] },
-                crate::css_math_function_value::ValueRange::All).map(Some);
+            return ConsumeMath(
+                id,
+                stream,
+                if percent {
+                    &[C::Length, C::Percent, C::LengthFunction]
+                } else {
+                    &[C::Length]
+                },
+                crate::css_math_function_value::ValueRange::All,
+            )
+            .map(Some);
         }
-        return Err(unsupported(id, "ConsumePosition CSSMathFunctionValue / negative percentage reference"));
+        return Err(unsupported(
+            id,
+            "ConsumePosition CSSMathFunctionValue / negative percentage reference",
+        ));
     }
     match ConsumeLiteral(
         id,
@@ -3290,6 +3576,7 @@ fn ConsumeContentImage<T: TokenStreamTokenizer>(
 fn ConsumeContent<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
+    mode: CSSParserMode,
 ) -> Result<Rc<Value>, PropertyParseError> {
     if matches!(stream.Peek().Id(), CSSValueID::kNormal | CSSValueID::kNone) {
         return Ok(values::identifier(stream.ConsumeIncludingWhitespace().Id()));
@@ -3297,7 +3584,11 @@ fn ConsumeContent<T: TokenStreamTokenizer>(
     let mut items = Vec::new();
     let mut alt_present = false;
     loop {
-        let value = if let Some(image) = ConsumeContentImage(id, stream)? {
+        let value = if stream.Peek().FunctionId() == Some(CSSValueID::kLinearGradient) {
+            // cpp: css_parsing_utils.cc ConsumeImage/ConsumeGeneratedImage.
+            // Reuse background/mask's typed linear-gradient consumer.
+            Some(ConsumeLinearGradient(id, stream, mode)?)
+        } else if let Some(image) = ConsumeContentImage(id, stream)? {
             Some(image)
         } else if matches!(
             stream.Peek().Id(),
@@ -3416,7 +3707,7 @@ fn ConsumeLiteral<T: TokenStreamTokenizer>(
         ));
     }
     if matches!(grammar, Grammar::Content) {
-        return ConsumeContent(id, stream);
+        return ConsumeContent(id, stream, mode);
     }
     if matches!(grammar, Grammar::Color) {
         return ConsumeColor(id, stream);
@@ -4024,7 +4315,9 @@ fn ConsumeFamily<T: TokenStreamTokenizer>(
 // cpp: css_parsing_utils.cc:2368-2400,2487-2499 ParseQuirkyHexColor /
 // ConsumeColorMaybeQuirky. Decode the tokenizer's typed number/unit/identifier.
 fn ConsumeBorderColorSide<T: TokenStreamTokenizer>(
-    id: CSSPropertyID, stream: &mut Stream<T>, mode: CSSParserMode,
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
 ) -> Result<Rc<Value>, PropertyParseError> {
     stream.EnsureLookAhead();
     let savepoint = stream.Save();
@@ -4040,12 +4333,17 @@ fn ConsumeBorderColorSide<T: TokenStreamTokenizer>(
     let mut hex = match token.GetType() {
         kNumberToken | kDimensionToken => {
             if token.GetNumericValueType() != NumericValueType::kIntegerValueType
-                || !(0.0..1_000_000.0).contains(&token.NumericValue()) {
+                || !(0.0..1_000_000.0).contains(&token.NumericValue())
+            {
                 return Err(invalid(id));
             }
             let mut text = format!("{}", token.NumericValue() as i32);
-            if token.GetType() == kDimensionToken { text.push_str(&token.Value().ToString().Utf8()); }
-            while text.len() < 6 { text.insert(0, '0'); }
+            if token.GetType() == kDimensionToken {
+                text.push_str(&token.Value().ToString().Utf8());
+            }
+            while text.len() < 6 {
+                text.insert(0, '0');
+            }
             text
         }
         kIdentToken => token.Value().ToString().Utf8(),
@@ -4054,11 +4352,17 @@ fn ConsumeBorderColorSide<T: TokenStreamTokenizer>(
     if !matches!(hex.len(), 3 | 6) || !hex.as_bytes().iter().all(u8::is_ascii_hexdigit) {
         return Err(invalid(id));
     }
-    if hex.len() == 3 { hex = hex.chars().flat_map(|c| [c, c]).collect(); }
+    if hex.len() == 3 {
+        hex = hex.chars().flat_map(|c| [c, c]).collect();
+    }
     let color = u32::from_str_radix(&hex, 16).map_err(|_| invalid(id))?;
     stream.ConsumeIncludingWhitespace();
-    Ok(values::color(Color::FromRGBA(((color >> 16) & 255) as i32,
-        ((color >> 8) & 255) as i32, (color & 255) as i32, 255)))
+    Ok(values::color(Color::FromRGBA(
+        ((color >> 16) & 255) as i32,
+        ((color >> 8) & 255) as i32,
+        (color & 255) as i32,
+        255,
+    )))
 }
 // cpp: css_parsing_utils.cc ConsumeColor:2421-2485; ParseHexColor:2355-2366;
 // platform/graphics/color.cc ParseHexColorInternal (3/4/6/8-digit forms).
@@ -4270,32 +4574,63 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
     mode: CSSParserMode,
     out: &mut Vec<PropertyValue>,
 ) -> Result<(), PropertyParseError> {
-    if grid_lanes_parser::IsShorthand(id) {return grid_lanes_parser::Expand(id,stream,mode,out);}
-    if corner_parser::IsShorthand(id) { return corner_parser::ParseShorthand(id, stream, mode, out); }
-    if timeline_trigger_parser::IsShorthand(id) {return timeline_trigger_parser::Expand(id,stream,mode,out);}
+    if grid_lanes_parser::IsShorthand(id) {
+        return grid_lanes_parser::Expand(id, stream, mode, out);
+    }
+    if corner_parser::IsShorthand(id) {
+        return corner_parser::ParseShorthand(id, stream, mode, out);
+    }
+    if timeline_trigger_parser::IsShorthand(id) {
+        return timeline_trigger_parser::Expand(id, stream, mode, out);
+    }
     if id == CSSPropertyID::kMarker {
         return svg_presentation_parser::ParseMarker(stream, mode, out);
     }
-    if logical_border_parser::IsShorthand(id) { return logical_border_parser::ParseShorthand(id,stream,mode,out); }
+    if logical_border_parser::IsShorthand(id) {
+        return logical_border_parser::ParseShorthand(id, stream, mode, out);
+    }
     // shorthands_custom.cc:6458-6466, shared greedy longhand consumer.
-    if matches!(id, CSSPropertyID::kWebkitTextStroke | CSSPropertyID::kTextEmphasis) {
+    if matches!(
+        id,
+        CSSPropertyID::kWebkitTextStroke | CSSPropertyID::kTextEmphasis
+    ) {
         return ConsumeShorthandGreedilyViaLonghands(id, stream, mode, out);
     }
-    if matches!(id, CSSPropertyID::kBorderImage | CSSPropertyID::kWebkitMaskBoxImage) { return border_image_parser::ParseShorthand(id, stream, mode, out); }
-    if matches!(id,CSSPropertyID::kScrollTimeline | CSSPropertyID::kViewTimeline) { return timeline_parser::ParseShorthand(id,stream,mode,out); }
-    if id == CSSPropertyID::kOffset { return motion_parser::ParseShorthand(stream,mode,out); }
-    if id == CSSPropertyID::kMask { return mask_parser::ParseShorthand(id, unresolved, stream, mode, out); }
+    if matches!(
+        id,
+        CSSPropertyID::kBorderImage | CSSPropertyID::kWebkitMaskBoxImage
+    ) {
+        return border_image_parser::ParseShorthand(id, stream, mode, out);
+    }
+    if matches!(
+        id,
+        CSSPropertyID::kScrollTimeline | CSSPropertyID::kViewTimeline
+    ) {
+        return timeline_parser::ParseShorthand(id, stream, mode, out);
+    }
+    if id == CSSPropertyID::kOffset {
+        return motion_parser::ParseShorthand(stream, mode, out);
+    }
+    if id == CSSPropertyID::kMask {
+        return mask_parser::ParseShorthand(id, unresolved, stream, mode, out);
+    }
     if matches!(id, CSSPropertyID::kTextBox | CSSPropertyID::kTextSpacing) {
         return text_box_parser::ParseShorthand(id, stream, mode, out);
     }
-    if id==CSSPropertyID::kFontSynthesis {return stable_misc_parser::FontSynthesis(stream,out);}
-    if column_rule_parser::IsShorthand(id) { return column_rule_parser::ParseShorthand(id,stream,mode,out); }
-    if rule_inset_parser::IsShorthand(id) { return rule_inset_parser::Expand(id,stream,mode,out); }
+    if id == CSSPropertyID::kFontSynthesis {
+        return stable_misc_parser::FontSynthesis(stream, out);
+    }
+    if column_rule_parser::IsShorthand(id) {
+        return column_rule_parser::ParseShorthand(id, stream, mode, out);
+    }
+    if rule_inset_parser::IsShorthand(id) {
+        return rule_inset_parser::Expand(id, stream, mode, out);
+    }
     if line_parser::IsLineShorthand(id) {
         return line_parser::ParseShorthand(id, stream, mode, out);
     }
     if id == CSSPropertyID::kPositionTry {
-        return anchor_parser::ParseShorthand(id,stream,mode,out);
+        return anchor_parser::ParseShorthand(id, stream, mode, out);
     }
     if matches!(id, CSSPropertyID::kGrid | CSSPropertyID::kGridTemplate) {
         return grid_parser::ParseShorthand(id, stream, mode, out);
@@ -4309,7 +4644,10 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
     if id == CSSPropertyID::kListStyle {
         return list_counter_parser::ParseShorthand(id, stream, mode, out);
     }
-    if matches!(id, CSSPropertyID::kColumns | CSSPropertyID::kContainIntrinsicSize) {
+    if matches!(
+        id,
+        CSSPropertyID::kColumns | CSSPropertyID::kContainIntrinsicSize
+    ) {
         return layout_misc_parser::ParseShorthand(id, stream, mode, out);
     }
     // cpp: css_parsing_utils.cc:5243-5276; shorthands_custom.cc:251-278,
@@ -4357,8 +4695,8 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
         loop {
             let start = ConsumeAnimationRange(id, stream, mode, 0.0)?.ok_or_else(|| invalid(id))?;
             let end = ConsumeAnimationRange(id, stream, mode, 100.0)?
-                .or_else(||timeline_trigger_parser::Implied(&Some(start.clone())))
-                .unwrap_or_else(||values::identifier(CSSValueID::kNormal));
+                .or_else(|| timeline_trigger_parser::Implied(&Some(start.clone())))
+                .unwrap_or_else(|| values::identifier(CSSValueID::kNormal));
             starts.push(start);
             ends.push(end);
             if stream.Peek().GetType() != kCommaToken {
@@ -4531,12 +4869,30 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
     }
     // cpp: shorthands_custom.cc:1043-1072 BorderSpacing::ParseShorthand.
     if id == CSSPropertyID::kBorderSpacing {
-        let grammar = Grammar::Length { percent: false, nonnegative: true, quirks: true, keywords: &[] };
+        let grammar = Grammar::Length {
+            percent: false,
+            nonnegative: true,
+            quirks: true,
+            keywords: &[],
+        };
         let horizontal = ConsumeLiteral(id, stream, mode, grammar)?;
-        let vertical = if at_value_end(stream) { horizontal.clone() }
-            else { ConsumeLiteral(id, stream, mode, grammar)? };
-        out.push(make_expanded(CSSPropertyID::kWebkitBorderHorizontalSpacing, id, horizontal, false));
-        out.push(make_expanded(CSSPropertyID::kWebkitBorderVerticalSpacing, id, vertical, false));
+        let vertical = if at_value_end(stream) {
+            horizontal.clone()
+        } else {
+            ConsumeLiteral(id, stream, mode, grammar)?
+        };
+        out.push(make_expanded(
+            CSSPropertyID::kWebkitBorderHorizontalSpacing,
+            id,
+            horizontal,
+            false,
+        ));
+        out.push(make_expanded(
+            CSSPropertyID::kWebkitBorderVerticalSpacing,
+            id,
+            vertical,
+            false,
+        ));
         return Ok(());
     }
     // cpp: shorthands_custom.cc Gap/Overflow and logical edge shorthands;
@@ -4568,9 +4924,17 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
             ConsumeLonghand(longhands[1], stream, mode)?
         };
         out.push(make_expanded(longhands[0], id, first, false));
-        let implicit = implicit && !matches!(id, CSSPropertyID::kInterestDelay | CSSPropertyID::kBorderBlockColor | CSSPropertyID::kBorderInlineColor
-            | CSSPropertyID::kBorderBlockStyle | CSSPropertyID::kBorderInlineStyle
-            | CSSPropertyID::kBorderBlockWidth | CSSPropertyID::kBorderInlineWidth);
+        let implicit = implicit
+            && !matches!(
+                id,
+                CSSPropertyID::kInterestDelay
+                    | CSSPropertyID::kBorderBlockColor
+                    | CSSPropertyID::kBorderInlineColor
+                    | CSSPropertyID::kBorderBlockStyle
+                    | CSSPropertyID::kBorderInlineStyle
+                    | CSSPropertyID::kBorderBlockWidth
+                    | CSSPropertyID::kBorderInlineWidth
+            );
         out.push(make_expanded(longhands[1], id, second, implicit));
         return Ok(());
     }
@@ -5255,6 +5619,7 @@ mod tests {
         for available in [
             "counter(item)",
             "url(image.png)",
+            "linear-gradient(red, blue)",
             "open-quote",
             "'text' / 'alt'",
         ] {
@@ -5262,7 +5627,7 @@ mod tests {
                 .Value()
                 .IsValueList());
         }
-        for unavailable in ["linear-gradient(red, blue)", "counter(item, symbols('x'))"] {
+        for unavailable in ["radial-gradient(red, blue)", "counter(item, symbols('x'))"] {
             assert_eq!(
                 rejected(CSSPropertyID::kContent, unavailable).kind,
                 PropertyParseErrorKind::Unsupported
@@ -5547,11 +5912,18 @@ mod tests {
                 );
             }
             if id == CSSPropertyID::kPerspectiveOrigin {
-                assert!(ParseProperty(id, &String::from("left calc(10% + 1px)"), false,
-                    CSSParserMode::kHTMLStandardMode).is_ok());
+                assert!(ParseProperty(
+                    id,
+                    &String::from("left calc(10% + 1px)"),
+                    false,
+                    CSSParserMode::kHTMLStandardMode
+                )
+                .is_ok());
             } else {
-                assert_eq!(rejected(id, "left calc(10% + 1px)").kind,
-                    PropertyParseErrorKind::Unsupported);
+                assert_eq!(
+                    rejected(id, "left calc(10% + 1px)").kind,
+                    PropertyParseErrorKind::Unsupported
+                );
             }
         }
         assert_eq!(
@@ -5691,8 +6063,13 @@ mod tests {
                 PropertyParseErrorKind::Invalid
             );
         }
-        assert_eq!(parse(CSSPropertyID::kTransformOrigin, "left top calc(1px)")[0]
-            .Value().CssText().Utf8(), "left top calc(1px)");
+        assert_eq!(
+            parse(CSSPropertyID::kTransformOrigin, "left top calc(1px)")[0]
+                .Value()
+                .CssText()
+                .Utf8(),
+            "left top calc(1px)"
+        );
         for id in [
             CSSPropertyID::kBackgroundPosition,
             CSSPropertyID::kMaskPosition,
@@ -6331,9 +6708,16 @@ mod tests {
             PropertyParseErrorKind::Invalid
         );
         let math_range = parse(CSSPropertyID::kAnimationRange, "entry calc(10% + 2px)");
-        let CSSValuePayload::kValueListClass(comma) = math_range[0].Value().Payload() else { panic!("comma range list") };
-        let CSSValuePayload::kValueListClass(range) = comma.values[0].Payload() else { panic!("named range") };
-        assert!(matches!(range.values[1].Payload(), CSSValuePayload::kMathFunctionClass(_)));
+        let CSSValuePayload::kValueListClass(comma) = math_range[0].Value().Payload() else {
+            panic!("comma range list")
+        };
+        let CSSValuePayload::kValueListClass(range) = comma.values[0].Payload() else {
+            panic!("named range")
+        };
+        assert!(matches!(
+            range.values[1].Payload(),
+            CSSValuePayload::kMathFunctionClass(_)
+        ));
         let trigger = parse(
             CSSPropertyID::kAnimationTrigger,
             "none, --trigger play reset, --other play-once",

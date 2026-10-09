@@ -9,7 +9,7 @@ use crate::{
     production_css_value::Value,
     properties::{css_property::CSSProperty, longhand_dispatch::*},
 };
-use font_engine::{FontFamily, FontFamilyType, FontSelectionValue};
+use font_engine::FontSelectionValue;
 use foundation::{CSSPropertyID, CSSValueID, Length, LengthType};
 use layoutng_style::{
     css::style_color::StyleColor,
@@ -29,72 +29,81 @@ use layoutng_style::{
         style_self_alignment_data::StyleSelfAlignmentData,
     },
 };
-#[path = "custom_properties.rs"]
-pub mod custom_properties;
-#[path = "initial_scope_application.rs"]
-mod initial_scope_application;
-#[path = "corner_application.rs"]
-mod corner_application;
+#[path = "anchor_application.rs"]
+mod anchor_application;
+#[path = "animation_application.rs"]
+mod animation_application;
 #[path = "border_application.rs"]
 mod border_application;
-#[path = "writing_direction_application.rs"]
-mod writing_direction_application;
+#[path = "box_geometry_application.rs"]
+mod box_geometry_application;
+#[path = "column_rule_application.rs"]
+mod column_rule_application;
+#[path = "corner_application.rs"]
+mod corner_application;
+#[path = "custom_properties.rs"]
+pub mod custom_properties;
+#[path = "grid_application.rs"]
+mod grid_application;
+#[path = "initial_scope_application.rs"]
+mod initial_scope_application;
+#[path = "layout_misc_application.rs"]
+mod layout_misc_application;
+#[path = "line_application.rs"]
+mod line_application;
+#[path = "list_counter_application.rs"]
+mod list_counter_application;
+#[path = "palette_internal_application.rs"]
+mod palette_internal_application;
+#[path = "reflection_application.rs"]
+mod reflection_application;
+#[path = "rule_inset_application.rs"]
+mod rule_inset_application;
+#[path = "scroll_application.rs"]
+mod scroll_application;
+#[path = "stable_misc_application.rs"]
+mod stable_misc_application;
 #[path = "svg_application.rs"]
 mod svg_application;
 #[path = "svg_presentation_application.rs"]
 mod svg_presentation_application;
-#[path = "timeline_application.rs"]
-mod timeline_application;
-#[path = "viewport_application.rs"]
-mod viewport_application;
-#[path = "transform_application.rs"]
-mod transform_application;
-#[path = "animation_application.rs"]
-mod animation_application;
-#[path = "grid_application.rs"]
-mod grid_application;
-#[path = "layout_misc_application.rs"]
-mod layout_misc_application;
 #[path = "text_application.rs"]
 mod text_application;
-#[path = "list_counter_application.rs"]
-mod list_counter_application;
-#[path = "scroll_application.rs"]
-mod scroll_application;
-#[path = "line_application.rs"]
-mod line_application;
-#[path = "anchor_application.rs"]
-mod anchor_application;
-#[path = "typography_application.rs"]
-mod typography_application;
 #[path = "text_box_application.rs"]
 mod text_box_application;
-#[path = "column_rule_application.rs"]
-mod column_rule_application;
-#[path = "rule_inset_application.rs"]
-mod rule_inset_application;
-#[path = "stable_misc_application.rs"]
-mod stable_misc_application;
-#[path = "reflection_application.rs"]
-mod reflection_application;
-#[path = "palette_internal_application.rs"]
-mod palette_internal_application;
+#[path = "timeline_application.rs"]
+mod timeline_application;
+#[path = "transform_application.rs"]
+mod transform_application;
+#[path = "typography_application.rs"]
+mod typography_application;
+#[path = "viewport_application.rs"]
+mod viewport_application;
+#[path = "writing_direction_application.rs"]
+mod writing_direction_application;
+
+#[path = "font_core_application.rs"]
+mod font_core_application;
 
 #[path = "font_variant_application.rs"]
 mod font_variant_application;
 
-#[path = "effects_application.rs"]
-mod effects_application;
-#[path = "color_ui_application.rs"]
-mod color_ui_application;
-#[path = "interaction_application.rs"]
-mod interaction_application;
 #[path = "border_image_application.rs"]
 mod border_image_application;
-#[path = "motion_application.rs"]
-mod motion_application;
+#[path = "color_application.rs"]
+mod color_application;
+#[path = "color_ui_application.rs"]
+mod color_ui_application;
+#[path = "content_application.rs"]
+mod content_application;
+#[path = "effects_application.rs"]
+mod effects_application;
 #[path = "grid_lanes_application.rs"]
 mod grid_lanes_application;
+#[path = "interaction_application.rs"]
+mod interaction_application;
+#[path = "motion_application.rs"]
+mod motion_application;
 #[path = "render_delay_application.rs"]
 mod render_delay_application;
 #[path = "timeline_trigger_application.rs"]
@@ -104,8 +113,13 @@ mod view_transition_application;
 pub use color_ui_application::ColorSchemeSettings;
 
 pub fn ApplyWithColorSchemeSettings(
-    id: CSSPropertyID, b: &mut ComputedStyleBuilder, parent: Option<&ComputedStyle>,
-    v: &Value, root: f32, media: &MediaValuesCachedData, settings: ColorSchemeSettings,
+    id: CSSPropertyID,
+    b: &mut ComputedStyleBuilder,
+    parent: Option<&ComputedStyle>,
+    v: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+    settings: ColorSchemeSettings,
 ) -> Result {
     if color_ui_application::IsColorUIProperty(id) {
         return color_ui_application::Apply(id, b, parent, v, media, settings);
@@ -164,13 +178,23 @@ pub fn ApplyWithImageResolver(
     media: &MediaValuesCachedData,
     images: &dyn URLImageResolver,
 ) -> Result {
-    if id==CSSPropertyID::kWebkitBoxReflect {return reflection_application::Apply(b,parent,v,root,media,Some(images));}
-    if border_image_application::IsBorderImageProperty(id) { return border_image_application::Apply(id, b, parent, v, root, media, Some(images)); }
-    if matches!(id, CSSPropertyID::kBackgroundImage | CSSPropertyID::kMaskImage) {
+    if id == CSSPropertyID::kWebkitBoxReflect {
+        return reflection_application::Apply(b, parent, v, root, media, Some(images));
+    }
+    if border_image_application::IsBorderImageProperty(id) {
+        return border_image_application::Apply(id, b, parent, v, root, media, Some(images));
+    }
+    if matches!(
+        id,
+        CSSPropertyID::kBackgroundImage | CSSPropertyID::kMaskImage
+    ) {
         return ApplyLayerImages(id, b, parent, v, Some(images));
     }
     if id == CSSPropertyID::kListStyleImage {
         return list_counter_application::Apply(id, b, parent, v, root, media, Some(images));
+    }
+    if id == CSSPropertyID::kContent {
+        return content_application::Apply(b, parent, v, Some(images));
     }
     Apply(id, b, parent, v, root, media)
 }
@@ -336,7 +360,11 @@ fn ApplyLayerImages(
     if initial {
         values.push(std::ptr::null_mut());
     } else if inherit {
-        let mut layer = if mask { parent.unwrap().MaskLayers() } else { parent.unwrap().BackgroundLayers() } as *const FillLayer;
+        let mut layer = if mask {
+            parent.unwrap().MaskLayers()
+        } else {
+            parent.unwrap().BackgroundLayers()
+        } as *const FillLayer;
         while let Some(current) = unsafe { layer.as_ref() } {
             if !current.IsImageSet() {
                 break;
@@ -346,14 +374,23 @@ fn ApplyLayerImages(
         }
     } else {
         if let CSSValuePayload::kValueListClass(list) = v.Payload() {
-            if list.separator != crate::production_css_value::ListSeparator::Comma || list.values.is_empty() {
+            if list.separator != crate::production_css_value::ListSeparator::Comma
+                || list.values.is_empty()
+            {
                 return Err(LonghandApplicationError::InvalidValue(id));
             }
-            for value in &list.values { values.push(ResolveStyleImage(id,value,images)?); }
-        } else { values.push(ResolveStyleImage(id,v,images)?); }
-
+            for value in &list.values {
+                values.push(ResolveStyleImage(id, value, images)?);
+            }
+        } else {
+            values.push(ResolveStyleImage(id, v, images)?);
+        }
     }
-    let mut current = if mask { b.AccessMaskLayers() } else { b.AccessBackgroundLayers() } as *mut FillLayer;
+    let mut current = if mask {
+        b.AccessMaskLayers()
+    } else {
+        b.AccessBackgroundLayers()
+    } as *mut FillLayer;
     let mut previous: *mut FillLayer = std::ptr::null_mut();
     for image in values {
         if current.is_null() {
@@ -373,137 +410,6 @@ fn ApplyLayerImages(
         b.SetHasExplicitInheritance();
         parent.unwrap().SetChildHasExplicitInheritance();
     }
-    Ok(())
-}
-
-// cpp: longhands_custom.cc:3158-3294 Content::Apply*.
-// The value converter is the custom longhand application. Shared cascade
-// substitution already converted attr() into typed strings before this call.
-fn ApplyContent(b: &mut ComputedStyleBuilder, v: &Value, inherit: bool, initial: bool) -> Result {
-    use layoutng_style::style::computed_style_constants::QuoteType;
-    use layoutng_style::style::content_data::{
-        AltCounterContentData, AltTextContentData, ContentData, CounterContentData, CounterData,
-        NoneContentData, QuoteContentData, TextContentData,
-    };
-    fn allocate<T: ContentData + foundation::Traceable + 'static>(
-        value: T,
-    ) -> *mut dyn ContentData {
-        foundation::MakeGarbageCollected(value) as *mut dyn ContentData
-    }
-    fn counter_data(value: &crate::production_css_value::CSSCounterContentValue) -> CounterData {
-        let CSSValuePayload::kCustomIdentClass(identifier) = value.identifier.Payload() else {
-            unreachable!("ConsumeCounterContent requires a custom identifier")
-        };
-        let CSSValuePayload::kCustomIdentClass(style) = value.list_style.Payload() else {
-            unreachable!("symbols() requires anonymous CounterStyle binding")
-        };
-        let separator = if value.separator.IsNull() {
-            foundation::AtomicString::default()
-        } else {
-            foundation::AtomicString::from_utf16(value.separator.Span16().unwrap_or_default())
-        };
-        // Native null scope represents the production document-root path.
-        // Shadow TreeScope population remains an explicit CSSValue dependency.
-        CounterData::new(
-            &identifier.name,
-            &style.name,
-            &separator,
-            std::ptr::null(),
-            std::ptr::null(),
-        )
-    }
-    let id = CSSPropertyID::kContent;
-    if initial {
-        b.SetContentOwned(None);
-        return Ok(());
-    }
-    if inherit {
-        // Chromium Content::ApplyInherit explicitly remains a no-op.
-        return Ok(());
-    }
-    if let CSSValuePayload::kIdentifierClass(value) = v.Payload() {
-        match value.0 {
-            CSSValueID::kNormal => b.SetContentOwned(None),
-            CSSValueID::kNone => b.SetContentOwned(Some(foundation::Member::from_ptr(allocate(
-                NoneContentData::new(),
-            )))),
-            _ => return Err(LonghandApplicationError::InvalidValue(id)),
-        }
-        return Ok(());
-    }
-    let CSSValuePayload::kValueListClass(outer) = v.Payload() else {
-        return Err(LonghandApplicationError::InvalidValue(id));
-    };
-    if outer.separator != crate::production_css_value::ListSeparator::Slash
-        || !(1..=2).contains(&outer.values.len())
-    {
-        return Err(LonghandApplicationError::InvalidValue(id));
-    }
-    let mut first: Option<*mut dyn ContentData> = None;
-    let mut previous: Option<*mut dyn ContentData> = None;
-    for (group, items) in outer.values.iter().enumerate() {
-        let CSSValuePayload::kValueListClass(items) = items.Payload() else {
-            return Err(LonghandApplicationError::InvalidValue(id));
-        };
-        if items.separator != crate::production_css_value::ListSeparator::Space
-            || items.values.is_empty()
-        {
-            return Err(LonghandApplicationError::InvalidValue(id));
-        }
-        for item in &items.values {
-            let next = match item.Payload() {
-                CSSValuePayload::kImageClass(_) => {
-                    // longhands_custom.cc:3213-3216 state.GetStyleImage(kContent).
-                    // Do not install a null or fake StyleImage before resources bind it.
-                    return Err(LonghandApplicationError::Unsupported(id));
-                }
-                CSSValuePayload::kCounterContentClass(value) => {
-                    let data = counter_data(value);
-                    if group == 0 {
-                        allocate(CounterContentData::from_data(data))
-                    } else {
-                        allocate(AltCounterContentData::from_data(data))
-                    }
-                }
-                CSSValuePayload::kIdentifierClass(value) if group == 0 => {
-                    let quote = match value.0 {
-                        CSSValueID::kOpenQuote => QuoteType::kOpen,
-                        CSSValueID::kCloseQuote => QuoteType::kClose,
-                        CSSValueID::kNoOpenQuote => QuoteType::kNoOpen,
-                        CSSValueID::kNoCloseQuote => QuoteType::kNoClose,
-                        _ => return Err(LonghandApplicationError::InvalidValue(id)),
-                    };
-                    allocate(QuoteContentData::new(quote))
-                }
-                CSSValuePayload::kStringClass(value) => {
-                    if group == 1 {
-                        allocate(AltTextContentData::new(&value.0))
-                    } else {
-                        if let Some(previous) = previous {
-                            if unsafe { (&*previous).IsText() } {
-                                let text = unsafe { &mut *(previous as *mut TextContentData) };
-                                let mut joined = text.GetText().clone();
-                                joined.push_string(&value.0);
-                                text.SetText(&joined);
-                                continue;
-                            }
-                        }
-                        allocate(TextContentData::new(&value.0))
-                    }
-                }
-                _ => return Err(LonghandApplicationError::InvalidValue(id)),
-            };
-            if let Some(previous) = previous {
-                unsafe {
-                    (&mut *previous).SetNext(Some(next));
-                }
-            } else {
-                first = Some(next);
-            }
-            previous = Some(next);
-        }
-    }
-    b.SetContentOwned(first.map(foundation::Member::from_ptr));
     Ok(())
 }
 
@@ -837,9 +743,9 @@ fn ApplyOverflowOutline(
     inherit: bool,
     initial: bool,
 ) -> Result {
+    use foundation::{EBorderStyle, EOverflow, LayoutUnit};
     use CSSPropertyID::*;
     use CSSValueID::*;
-    use foundation::{EBorderStyle, EOverflow, LayoutUnit};
     let identifier = || match v.Payload() {
         CSSValuePayload::kIdentifierClass(value) => Ok(value.0),
         _ => Err(LonghandApplicationError::InvalidValue(id)),
@@ -855,7 +761,11 @@ fn ApplyOverflowOutline(
                 }
             } else if inherit {
                 let p = parent.unwrap();
-                if x { p.OverflowX() } else { p.OverflowY() }
+                if x {
+                    p.OverflowX()
+                } else {
+                    p.OverflowY()
+                }
             } else {
                 match identifier()? {
                     kVisible => EOverflow::kVisible,
@@ -995,13 +905,21 @@ fn ApplyOverflowOutline(
                     // style_builder_converter.cc:1992-2003 ConvertOutlineOffset.
                     let absolute = pixels.abs();
                     if absolute > 0.0 && absolute < 1.0 {
-                        if pixels > 0.0 { 1 } else { -1 }
+                        if pixels > 0.0 {
+                            1
+                        } else {
+                            -1
+                        }
                     } else {
                         let integral = absolute
                             .floor()
                             .clamp(0.0, LayoutUnit::Max().ToInt() as f64)
                             as i32;
-                        if pixels < 0.0 { -integral } else { integral }
+                        if pixels < 0.0 {
+                            -integral
+                        } else {
+                            integral
+                        }
                     }
                 }
             };
@@ -1098,34 +1016,92 @@ pub fn Apply(
     root: f32,
     media: &MediaValuesCachedData,
 ) -> Result {
-    if !crate::production_corner_features::IsExposed(id) { return Err(LonghandApplicationError::Unsupported(id)); }
-    if !crate::production_render_delay_features::IsExposed(id) {return Err(LonghandApplicationError::Unsupported(id));}
-    if corner_application::IsProperty(id) { return corner_application::Apply(id, b, parent, v, root, media); }
-    if initial_scope_application::IsProperty(id) { return initial_scope_application::Apply(id, b, parent, v); }
-    if id==CSSPropertyID::kGridLanesDirection {return grid_lanes_application::ApplyInternal(b,parent,v);}
-    if render_delay_application::IsProperty(id) {return render_delay_application::ApplyInternal(id,b,parent,v,root,media);}
-    if timeline_trigger_application::IsProperty(id) {return timeline_trigger_application::Apply(id,b,parent,v,root,media);}
-    if view_transition_application::IsProperty(id) {return view_transition_application::Apply(id,b,parent,v);}
-    if motion_application::IsProperty(id) {return motion_application::Apply(id,b,parent,v,root,media);}
-    if border_image_application::IsBorderImageProperty(id) { return border_image_application::Apply(id, b, parent, v, root, media, None); }
-    if interaction_application::IsInteractionProperty(id) { return interaction_application::Apply(id, b, parent, v); }
-    if color_ui_application::IsColorUIProperty(id) { return color_ui_application::Apply(id,b,parent,v,media,ColorSchemeSettings::default()); }
-    if effects_application::IsEffectsProperty(id) { return effects_application::Apply(id,b,parent,v,root,media); }
-    if matches!(id,CSSPropertyID::kFontPalette|CSSPropertyID::kInternalAlignContentBlock|CSSPropertyID::kInternalEmptyLineHeight) {return palette_internal_application::Apply(id,b,parent,v);}
-    if id==CSSPropertyID::kWebkitBoxReflect {return reflection_application::Apply(b,parent,v,root,media,None);}
-    if stable_misc_application::IsProperty(id) {return stable_misc_application::Apply(id,b,parent,v,root,media);}
-    if column_rule_application::IsProperty(id) { return column_rule_application::Apply(id,b,parent,v,root,media); }
-    if rule_inset_application::IsProperty(id) { return rule_inset_application::Apply(id,b,parent,v,root,media); }
-    if text_box_application::IsProperty(id) { return text_box_application::Apply(id,b,parent,v,root,media); }
+    if !crate::production_corner_features::IsExposed(id) {
+        return Err(LonghandApplicationError::Unsupported(id));
+    }
+    if !crate::production_render_delay_features::IsExposed(id) {
+        return Err(LonghandApplicationError::Unsupported(id));
+    }
+    if super::position_repeat_application::IsPositionRepeatProperty(id) {
+        return super::position_repeat_application::Apply(id, b, parent, v, root, media);
+    }
+    if corner_application::IsProperty(id) {
+        return corner_application::Apply(id, b, parent, v, root, media);
+    }
+    if initial_scope_application::IsProperty(id) {
+        return initial_scope_application::Apply(id, b, parent, v);
+    }
+    if id == CSSPropertyID::kGridLanesDirection {
+        return grid_lanes_application::ApplyInternal(b, parent, v);
+    }
+    if render_delay_application::IsProperty(id) {
+        return render_delay_application::ApplyInternal(id, b, parent, v, root, media);
+    }
+    if timeline_trigger_application::IsProperty(id) {
+        return timeline_trigger_application::Apply(id, b, parent, v, root, media);
+    }
+    if view_transition_application::IsProperty(id) {
+        return view_transition_application::Apply(id, b, parent, v);
+    }
+    if motion_application::IsProperty(id) {
+        return motion_application::Apply(id, b, parent, v, root, media);
+    }
+    if border_image_application::IsBorderImageProperty(id) {
+        return border_image_application::Apply(id, b, parent, v, root, media, None);
+    }
+    if interaction_application::IsInteractionProperty(id) {
+        return interaction_application::Apply(id, b, parent, v);
+    }
+    if color_application::IsProperty(id) {
+        return color_application::Apply(id, b, parent, v);
+    }
+    if color_ui_application::IsColorUIProperty(id) {
+        return color_ui_application::Apply(
+            id,
+            b,
+            parent,
+            v,
+            media,
+            ColorSchemeSettings::default(),
+        );
+    }
+    if effects_application::IsEffectsProperty(id) {
+        return effects_application::Apply(id, b, parent, v, root, media);
+    }
+    if matches!(
+        id,
+        CSSPropertyID::kFontPalette
+            | CSSPropertyID::kInternalAlignContentBlock
+            | CSSPropertyID::kInternalEmptyLineHeight
+    ) {
+        return palette_internal_application::Apply(id, b, parent, v);
+    }
+    if id == CSSPropertyID::kWebkitBoxReflect {
+        return reflection_application::Apply(b, parent, v, root, media, None);
+    }
+    if stable_misc_application::IsProperty(id) {
+        return stable_misc_application::Apply(id, b, parent, v, root, media);
+    }
+    if column_rule_application::IsProperty(id) {
+        return column_rule_application::Apply(id, b, parent, v, root, media);
+    }
+    if rule_inset_application::IsProperty(id) {
+        return rule_inset_application::Apply(id, b, parent, v, root, media);
+    }
+    if text_box_application::IsProperty(id) {
+        return text_box_application::Apply(id, b, parent, v, root, media);
+    }
     if typography_application::IsTypographyProperty(id)
-        || id == CSSPropertyID::kTextEmphasisColor && (v.IsInitialValue() || v.IsInheritedValue() || v.IsUnsetValue()) {
+        || id == CSSPropertyID::kTextEmphasisColor
+            && (v.IsInitialValue() || v.IsInheritedValue() || v.IsUnsetValue())
+    {
         return typography_application::Apply(id, b, parent, v, root, media);
     }
     if line_application::IsLineProperty(id) {
-        return line_application::Apply(id,b,parent,v,root,media);
+        return line_application::Apply(id, b, parent, v, root, media);
     }
     if anchor_application::IsAnchorProperty(id) {
-        return anchor_application::Apply(id,b,parent,v);
+        return anchor_application::Apply(id, b, parent, v);
     }
     if id == CSSPropertyID::kLineHeight {
         return font_variant_application::ApplyLineHeight(b, parent, v, root, media);
@@ -1139,6 +1115,9 @@ pub fn Apply(
     if layout_misc_application::IsLayoutProperty(id) {
         return layout_misc_application::Apply(id, b, parent, v, root, media);
     }
+    if box_geometry_application::IsProperty(id) {
+        return box_geometry_application::Apply(id, b, parent, v, root, media);
+    }
     if matches!(id, CSSPropertyID::kDirection | CSSPropertyID::kWritingMode) {
         return writing_direction_application::Apply(id, b, parent, v);
     }
@@ -1148,7 +1127,9 @@ pub fn Apply(
     if transform_application::IsTransformProperty(id) {
         return transform_application::Apply(id, b, parent, v, root, media);
     }
-    if timeline_application::IsProperty(id) { return timeline_application::Apply(id,b,parent,v,root,media); }
+    if timeline_application::IsProperty(id) {
+        return timeline_application::Apply(id, b, parent, v, root, media);
+    }
     if viewport_application::IsProperty(id) {
         return viewport_application::Apply(id, b, parent, v, root, media);
     }
@@ -1161,8 +1142,28 @@ pub fn Apply(
     if border_application::IsBorderProperty(id) {
         return border_application::Apply(id, b, parent, v, root, media);
     }
-    if matches!(id, CSSPropertyID::kBackgroundImage | CSSPropertyID::kMaskImage) {
+    if matches!(
+        id,
+        CSSPropertyID::kBackgroundImage | CSSPropertyID::kMaskImage
+    ) {
         return ApplyLayerImages(id, b, parent, v, None);
+    }
+    // Font longhands own their conversion because spacing and size changes
+    // must update the staged FontDescription without constructing a platform
+    // Font before the layout host installs its resolver. In particular, do
+    // not let the generic math fast path call ComputedStyleBuilder's direct
+    // SetWordSpacing/SetLetterSpacing helpers.
+    if font_core_application::IsProperty(id) {
+        let inherit =
+            v.IsInheritedValue() || v.IsUnsetValue() && CSSProperty::Get(id).IsInherited();
+        let initial = v.IsInitialValue()
+            || v.IsUnsetValue() && !CSSProperty::Get(id).IsInherited()
+            || inherit && parent.is_none();
+        if inherit && !initial && v.IsInheritedValue() {
+            b.SetHasExplicitInheritance();
+            parent.unwrap().SetChildHasExplicitInheritance();
+        }
+        return font_core_application::Apply(id, b, parent, v, root, media, inherit, initial);
     }
     if let CSSValuePayload::kMathFunctionClass(math) = v.Payload() {
         use crate::css_math_expression_node::CalculationResultCategory as C;
@@ -1255,14 +1256,15 @@ pub fn Apply(
         || v.IsUnsetValue() && !CSSProperty::Get(id).IsInherited()
         || inherit && parent.is_none();
     if grid_application::IsGridProperty(id) {
-        return grid_application::Apply(id,b,parent,v,root,media,inherit,initial);
+        return grid_application::Apply(id, b, parent, v, root, media, inherit, initial);
     }
     if animation_application::IsAnimationProperty(id) {
         return animation_application::Apply(id, b, parent, v, inherit, initial);
     }
     if font_variant_application::IsFontProperty(id) {
         if inherit && !initial && v.IsInheritedValue() {
-            b.SetHasExplicitInheritance(); parent.unwrap().SetChildHasExplicitInheritance();
+            b.SetHasExplicitInheritance();
+            parent.unwrap().SetChildHasExplicitInheritance();
         }
         return font_variant_application::Apply(id, b, parent, v, inherit, initial);
     }
@@ -1279,14 +1281,7 @@ pub fn Apply(
         return ApplyOverflowOutline(id, b, parent, v, root, media, inherit, initial);
     }
     if id == CSSPropertyID::kContent {
-        if inherit && !initial && v.IsInheritedValue() {
-            b.SetHasExplicitInheritance();
-            parent.unwrap().SetChildHasExplicitInheritance();
-        }
-        return ApplyContent(b, v, inherit, initial);
-    }
-    if super::position_repeat_application::IsPositionRepeatProperty(id) {
-        return super::position_repeat_application::Apply(id, b, parent, v, root, media);
+        return content_application::Apply(b, parent, v, None);
     }
     if IsTimingStorageProperty(id) {
         if inherit && !initial && v.IsInheritedValue() {
@@ -1297,39 +1292,17 @@ pub fn Apply(
     }
     if matches!(
         id,
-        CSSPropertyID::kFontSize
-            | CSSPropertyID::kFontWeight
-            | CSSPropertyID::kFontStyle
-            | CSSPropertyID::kFontFamily
-            | CSSPropertyID::kFontFeatureSettings
+        CSSPropertyID::kFontFeatureSettings
             | CSSPropertyID::kFontVariationSettings
             | CSSPropertyID::kFontStretch
             | CSSPropertyID::kFontKerning
             | CSSPropertyID::kFontOpticalSizing
-            | CSSPropertyID::kLetterSpacing
-            | CSSPropertyID::kWordSpacing
     ) {
         if inherit && !initial && v.IsInheritedValue() {
             b.SetHasExplicitInheritance();
             parent.unwrap().SetChildHasExplicitInheritance();
         }
         return ApplyFont(id, b, parent, v, root, media, inherit, initial);
-    }
-    if id == CSSPropertyID::kColor {
-        if inherit {
-            let p = parent.unwrap();
-            b.SetColor(p.Color());
-            b.SetColorIsInherited(true);
-            b.SetColorIsCurrentColor(p.ColorIsCurrentColor());
-            return Ok(());
-        }
-        if initial {
-            let c = b.InitialColorForColorScheme();
-            b.SetColor(&c);
-            b.SetColorIsInherited(false);
-            b.SetColorIsCurrentColor(false);
-            return Ok(());
-        }
     }
     if inherit {
         if v.IsInheritedValue() && !CSSProperty::Get(id).IsInherited() {
@@ -1847,30 +1820,13 @@ fn ConvertFlexWrap(
     }
     Ok(StyleFlexWrapData::with_balance(mode, balanced))
 }
-// cpp: longhands_custom.cc:Color::ApplyValue (ordinary non-highlight tree).
 fn ApplyColor(
     id: CSSPropertyID,
     b: &mut ComputedStyleBuilder,
-    parent: Option<&ComputedStyle>,
+    _parent: Option<&ComputedStyle>,
     c: &StyleColor,
 ) -> Result {
-    if id == CSSPropertyID::kColor {
-        if c.IsCurrentColor() {
-            let color = parent
-                .map(|p| p.Color().clone())
-                .unwrap_or_else(|| b.InitialColorForColorScheme());
-            b.SetColor(&color);
-            b.SetColorIsInherited(true);
-            b.SetColorIsCurrentColor(true)
-        } else {
-            b.SetColor(c);
-            b.SetColorIsInherited(false);
-            b.SetColorIsCurrentColor(false)
-        }
-        Ok(())
-    } else {
-        ApplyConvertedColor(id, b, c)
-    }
+    ApplyConvertedColor(id, b, c)
 }
 // cpp: longhands.cc Font* Apply*; style_builder_converter.cc ConvertFontSize/Weight;
 // font_builder.cc:116-131,284-292,426-633 (unzoomed scalar-font branches).
@@ -1879,59 +1835,14 @@ fn ApplyFont(
     b: &mut ComputedStyleBuilder,
     parent: Option<&ComputedStyle>,
     v: &Value,
-    root: f32,
-    media: &MediaValuesCachedData,
+    _root: f32,
+    _media: &MediaValuesCachedData,
     inherit: bool,
     initial: bool,
 ) -> Result {
     let mut d = b.GetFontDescription().clone();
     let p = parent.map(ComputedStyle::GetFontDescription);
     match id {
-        CSSPropertyID::kFontSize => {
-            let size = if inherit && !initial {
-                p.unwrap().SpecifiedSize() as f64
-            } else if initial {
-                media.em_size as f64
-            } else {
-                match v.Payload() {
-                    CSSValuePayload::kNumericLiteralClass(n) => {
-                        if n.GetType() == UnitType::kPercentage {
-                            n.DoubleValue() * p.map_or(media.em_size, |p| p.SpecifiedSize()) as f64
-                                / 100.0
-                        } else {
-                            Pixels(
-                                id,
-                                n.DoubleValue(),
-                                n.GetType(),
-                                p.map_or(media.em_size, |p| p.SpecifiedSize()),
-                                root,
-                                media,
-                            )?
-                        }
-                    }
-                    CSSValuePayload::kIdentifierClass(i) => match i.0 {
-                        CSSValueID::kMedium => media.em_size as f64,
-                        CSSValueID::kLarger => {
-                            p.map_or(media.em_size, |p| p.SpecifiedSize()) as f64 * 1.2
-                        }
-                        CSSValueID::kSmaller => {
-                            p.map_or(media.em_size, |p| p.SpecifiedSize()) as f64 / 1.2
-                        }
-                        _ => return Err(LonghandApplicationError::Unsupported(id)),
-                    },
-                    _ => return Err(LonghandApplicationError::Unsupported(id)),
-                }
-            };
-            if size < 0.0 {
-                return Ok(());
-            }
-            let size = (size as f32)
-                .min(layoutng_style::style::computed_style_constants::kMaximumAllowedFontSize);
-            d.SetSpecifiedSize(size);
-            d.SetComputedSize(size);
-        }
-        // cpp: generated longhands.cc:352-360,927-935;
-        // style_builder_converter.cc:676-705,712-743; font_builder.h:109-110.
         CSSPropertyID::kFontFeatureSettings => {
             let settings = if inherit && !initial {
                 p.unwrap().FeatureSettings().cloned()
@@ -2024,116 +1935,6 @@ fn ApplyFont(
             };
             d.SetStretch(stretch);
         }
-        CSSPropertyID::kFontWeight => {
-            let w = if inherit && !initial {
-                p.unwrap().Weight()
-            } else if initial {
-                FontSelectionValue::from_int(400)
-            } else {
-                match v.Payload() {
-                    CSSValuePayload::kNumericLiteralClass(n) => {
-                        FontSelectionValue::from_double(n.DoubleValue().clamp(1.0, 1000.0))
-                    }
-                    CSSValuePayload::kIdentifierClass(i) => {
-                        FontSelectionValue::from_double(match i.0 {
-                            CSSValueID::kNormal => 400.0,
-                            CSSValueID::kBold => 700.0,
-                            CSSValueID::kBolder => {
-                                let w = p.map_or(400.0, |p| p.Weight().ToFloat()) as f64;
-                                if w < 350.0 {
-                                    400.0
-                                } else if w < 550.0 {
-                                    700.0
-                                } else if w < 900.0 {
-                                    900.0
-                                } else {
-                                    w
-                                }
-                            }
-                            CSSValueID::kLighter => {
-                                let w = p.map_or(400.0, |p| p.Weight().ToFloat()) as f64;
-                                if w < 100.0 {
-                                    w
-                                } else if w < 550.0 {
-                                    100.0
-                                } else if w < 750.0 {
-                                    400.0
-                                } else {
-                                    700.0
-                                }
-                            }
-                            _ => return Err(LonghandApplicationError::Unsupported(id)),
-                        })
-                    }
-                    _ => return Err(LonghandApplicationError::Unsupported(id)),
-                }
-            };
-            d.SetWeight(w);
-        }
-        CSSPropertyID::kFontStyle => {
-            let slope = if inherit && !initial {
-                p.unwrap().Style()
-            } else if initial {
-                FontSelectionValue::from_int(0)
-            } else {
-                match v.Payload() {
-                    CSSValuePayload::kIdentifierClass(i) => match i.0 {
-                        CSSValueID::kNormal => FontSelectionValue::from_int(0),
-                        CSSValueID::kItalic | CSSValueID::kOblique => {
-                            FontSelectionValue::from_int(14)
-                        }
-                        _ => return Err(LonghandApplicationError::Unsupported(id)),
-                    },
-                    _ => return Err(LonghandApplicationError::Unsupported(id)),
-                }
-            };
-            d.SetStyle(slope);
-            use font_engine::fonts::font_description::StyleSyntax;
-            d.SetStyleSyntax(if inherit && !initial { p.unwrap().GetStyleSyntax() }
-                else if !initial && matches!(v.Payload(), CSSValuePayload::kIdentifierClass(i) if i.0 == CSSValueID::kItalic) {
-                    StyleSyntax::kItalicKeyword
-                } else { StyleSyntax::kImplicitAngle });
-        }
-        CSSPropertyID::kFontFamily => {
-            if inherit && !initial {
-                d.SetFamily(p.unwrap().Family())
-            } else if initial {
-                d.SetFamily(&FontFamily::default())
-            } else {
-                d.SetFamily(&ConvertFamily(id, v)?);
-            }
-        }
-        CSSPropertyID::kLetterSpacing | CSSPropertyID::kWordSpacing => {
-            let length = if inherit && !initial {
-                if id == CSSPropertyID::kLetterSpacing {
-                    p.unwrap().ComputedLetterSpacing().clone()
-                } else {
-                    p.unwrap().ComputedWordSpacing().clone()
-                }
-            } else if initial {
-                Length::Fixed(0.0)
-            } else {
-                match v.Payload() {
-                    CSSValuePayload::kIdentifierClass(i) if i.0 == CSSValueID::kNormal => {
-                        Length::Fixed(0.0)
-                    }
-                    CSSValuePayload::kNumericLiteralClass(n) => Length::Fixed(Pixels(
-                        id,
-                        n.DoubleValue(),
-                        n.GetType(),
-                        d.ComputedSize(),
-                        root,
-                        media,
-                    )?),
-                    _ => return Err(LonghandApplicationError::Unsupported(id)),
-                }
-            };
-            if id == CSSPropertyID::kLetterSpacing {
-                d.SetLetterSpacing(&length)
-            } else {
-                d.SetWordSpacing(&length)
-            }
-        }
         _ => return Err(LonghandApplicationError::Unsupported(id)),
     }
     StageFontDescription(b, &d);
@@ -2215,49 +2016,6 @@ fn ConvertFontVariationSettings(
         settings.Append(FontVariationAxis::new(tag, value));
     }
     Ok(std::sync::Arc::new(settings))
-}
-
-// cpp: style_builder_converter.cc:ConvertFontFamily; platform/fonts/font_family.h.
-fn ConvertFamily(
-    id: CSSPropertyID,
-    v: &Value,
-) -> std::result::Result<FontFamily, LonghandApplicationError> {
-    fn one(
-        id: CSSPropertyID,
-        v: &Value,
-    ) -> std::result::Result<(foundation::AtomicString, FontFamilyType), LonghandApplicationError>
-    {
-        match v.Payload() {
-            CSSValuePayload::kFontFamilyClass(f) => Ok((
-                foundation::AtomicString::from_str(&f.0.Utf8()),
-                FontFamilyType::kFamilyName,
-            )),
-            CSSValuePayload::kIdentifierClass(i) => Ok((
-                foundation::AtomicString::from_str(crate::css_value_keywords::GetCSSValueName(i.0)),
-                FontFamilyType::kGenericFamily,
-            )),
-            _ => Err(LonghandApplicationError::Unsupported(id)),
-        }
-    }
-    if let CSSValuePayload::kValueListClass(list) = v.Payload() {
-        let mut values = list
-            .values
-            .iter()
-            .map(|v| one(id, v))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let mut next = None;
-        while values.len() > 1 {
-            let (name, kind) = values.pop().unwrap();
-            next = Some(font_engine::SharedFontFamily::Create(name, kind, next));
-        }
-        let (name, kind) = values
-            .pop()
-            .ok_or(LonghandApplicationError::InvalidValue(id))?;
-        Ok(FontFamily::new(name, kind, next))
-    } else {
-        let (name, kind) = one(id, v)?;
-        Ok(FontFamily::new(name, kind, None))
-    }
 }
 
 // cpp: platform/fonts/font_data.cc:33; computed_style_base.h:SetFont.
@@ -2374,7 +2132,7 @@ mod content_remaining_tests {
         )
         .unwrap();
         assert_eq!(
-            ApplyContent(&mut builder, image[0].Value(), false, false),
+            content_application::Apply(&mut builder, None, image[0].Value(), None),
             Err(LonghandApplicationError::Unsupported(
                 CSSPropertyID::kContent
             ))
@@ -2456,18 +2214,18 @@ mod background_linear_image_production_tests {
             crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
         )
         .unwrap();
+        Apply(
+            CSSPropertyID::kBackgroundSize,
+            &mut b,
+            None,
+            size[0].Value(),
+            16.0,
+            &MediaValuesCachedData::default(),
+        )
+        .unwrap();
         assert_eq!(
-            Apply(
-                CSSPropertyID::kBackgroundSize,
-                &mut b,
-                None,
-                size[0].Value(),
-                16.0,
-                &MediaValuesCachedData::default()
-            ),
-            Err(LonghandApplicationError::Unsupported(
-                CSSPropertyID::kBackgroundSize
-            ))
+            b.AccessBackgroundLayers().SizeLength().Width().Pixels(),
+            2.0
         );
         assert_eq!(b.AccessBackgroundLayers().GetImage(), previous);
         for css in [
@@ -2525,11 +2283,9 @@ mod background_linear_image_production_tests {
         drop(heap);
         foundation::CollectLayoutHeapForTesting();
         assert!(unsafe { &*(*parent.Get()).BackgroundLayers() }.GetImage() == previous);
-        assert!(
-            unsafe { &*(*retained.Get()).BackgroundLayers() }
-                .GetImage()
-                .is_null()
-        );
+        assert!(unsafe { &*(*retained.Get()).BackgroundLayers() }
+            .GetImage()
+            .is_null());
     }
 }
 

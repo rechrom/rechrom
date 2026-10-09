@@ -67,27 +67,47 @@ pub struct VariantLigatures {
 }
 impl VariantLigatures {
     pub fn new(state: LigaturesState) -> Self {
-        Self { common: state, discretionary: state, historical: state, contextual: state }
+        Self {
+            common: state,
+            discretionary: state,
+            historical: state,
+            contextual: state,
+        }
     }
 }
 impl Default for VariantLigatures {
-    fn default() -> Self { Self::new(LigaturesState::kNormalLigaturesState) }
+    fn default() -> Self {
+        Self::new(LigaturesState::kNormalLigaturesState)
+    }
 }
 // cpp: platform/fonts/font_description.h:120-124.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FontVariantPosition { kNormalVariantPosition, kSubVariantPosition, kSuperVariantPosition }
+pub enum FontVariantPosition {
+    kNormalVariantPosition,
+    kSubVariantPosition,
+    kSuperVariantPosition,
+}
 
 // cpp: platform/fonts/font_description.h:107-119.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FontSynthesisWeight { kAutoFontSynthesisWeight, kNoneFontSynthesisWeight }
+pub enum FontSynthesisWeight {
+    kAutoFontSynthesisWeight,
+    kNoneFontSynthesisWeight,
+}
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FontSynthesisStyle { kAutoFontSynthesisStyle, kNoneFontSynthesisStyle }
+pub enum FontSynthesisStyle {
+    kAutoFontSynthesisStyle,
+    kNoneFontSynthesisStyle,
+}
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FontSynthesisSmallCaps { kAutoFontSynthesisSmallCaps, kNoneFontSynthesisSmallCaps }
+pub enum FontSynthesisSmallCaps {
+    kAutoFontSynthesisSmallCaps,
+    kNoneFontSynthesisSmallCaps,
+}
 
 // cpp: font_engine/fonts/font_description.h:90
 #[repr(u8)]
@@ -328,64 +348,127 @@ impl FontDescription {
     // cpp: platform/fonts/font_description.h:238-240,264-270,292-294,355-357;
     // platform/fonts/font_description.cc:233-269. Original bitfield positions.
     // cpp: platform/fonts/font_description.h:244,384.
-    pub fn GetStyleSyntax(&self) -> StyleSyntax { self.style_syntax_ }
-    pub fn SetStyleSyntax(&mut self, value: StyleSyntax) { self.style_syntax_ = value; }
+    pub fn GetStyleSyntax(&self) -> StyleSyntax {
+        self.style_syntax_
+    }
+    pub fn SetStyleSyntax(&mut self, value: StyleSyntax) {
+        self.style_syntax_ = value;
+    }
     pub fn VariantCaps(&self) -> FontVariantCaps {
         match self.fields_.get(CAPS, 3) {
-            0 => FontVariantCaps::kCapsNormal, 1 => FontVariantCaps::kSmallCaps,
-            2 => FontVariantCaps::kAllSmallCaps, 3 => FontVariantCaps::kPetiteCaps,
-            4 => FontVariantCaps::kAllPetiteCaps, 5 => FontVariantCaps::kUnicase,
-            6 => FontVariantCaps::kTitlingCaps, _ => unreachable!(),
+            0 => FontVariantCaps::kCapsNormal,
+            1 => FontVariantCaps::kSmallCaps,
+            2 => FontVariantCaps::kAllSmallCaps,
+            3 => FontVariantCaps::kPetiteCaps,
+            4 => FontVariantCaps::kAllPetiteCaps,
+            5 => FontVariantCaps::kUnicase,
+            6 => FontVariantCaps::kTitlingCaps,
+            _ => unreachable!(),
         }
     }
     pub fn SetVariantCaps(&mut self, value: FontVariantCaps) {
-        self.fields_.set(CAPS, 3, value as u64); self.UpdateTypesettingFeatures();
+        self.fields_.set(CAPS, 3, value as u64);
+        self.UpdateTypesettingFeatures();
     }
     pub fn GetVariantLigatures(&self) -> VariantLigatures {
         let state = |shift| match self.fields_.get(shift, 2) {
             0 => LigaturesState::kNormalLigaturesState,
             1 => LigaturesState::kDisabledLigaturesState,
-            2 => LigaturesState::kEnabledLigaturesState, _ => unreachable!(),
+            2 => LigaturesState::kEnabledLigaturesState,
+            _ => unreachable!(),
         };
-        VariantLigatures { common: state(13), discretionary: state(15), historical: state(17), contextual: state(19) }
+        VariantLigatures {
+            common: state(13),
+            discretionary: state(15),
+            historical: state(17),
+            contextual: state(19),
+        }
     }
     pub fn SetVariantLigatures(&mut self, value: &VariantLigatures) {
-        for (shift, state) in [(13, value.common), (15, value.discretionary), (17, value.historical), (19, value.contextual)] {
+        for (shift, state) in [
+            (13, value.common),
+            (15, value.discretionary),
+            (17, value.historical),
+            (19, value.contextual),
+        ] {
             self.fields_.set(shift, 2, state as u64);
         }
         self.UpdateTypesettingFeatures();
     }
     pub fn VariantNumeric(&self) -> super::font_variant_numeric::FontVariantNumeric {
-        super::font_variant_numeric::FontVariantNumeric::InitializeFromUnsigned(self.fields_.get(39, 8) as u32)
+        super::font_variant_numeric::FontVariantNumeric::InitializeFromUnsigned(
+            self.fields_.get(39, 8) as u32,
+        )
     }
     pub fn SetVariantNumeric(&mut self, value: &super::font_variant_numeric::FontVariantNumeric) {
-        self.fields_.set(39, 8, value.FieldsAsUnsigned() as u64); self.UpdateTypesettingFeatures();
+        self.fields_.set(39, 8, value.FieldsAsUnsigned() as u64);
+        self.UpdateTypesettingFeatures();
     }
     pub fn VariantEastAsian(&self) -> super::font_variant_east_asian::FontVariantEastAsian {
-        super::font_variant_east_asian::FontVariantEastAsian::InitializeFromUnsigned(self.fields_.get(47, 6) as u32)
+        super::font_variant_east_asian::FontVariantEastAsian::InitializeFromUnsigned(
+            self.fields_.get(47, 6) as u32,
+        )
     }
-    pub fn SetVariantEastAsian(&mut self, value: super::font_variant_east_asian::FontVariantEastAsian) {
+    pub fn SetVariantEastAsian(
+        &mut self,
+        value: super::font_variant_east_asian::FontVariantEastAsian,
+    ) {
         self.fields_.set(47, 6, value.FieldsAsUnsigned() as u64);
     }
     pub fn VariantPosition(&self) -> FontVariantPosition {
         match self.fields_.get(56, 2) {
             0 => FontVariantPosition::kNormalVariantPosition,
             1 => FontVariantPosition::kSubVariantPosition,
-            2 => FontVariantPosition::kSuperVariantPosition, _ => unreachable!(),
+            2 => FontVariantPosition::kSuperVariantPosition,
+            _ => unreachable!(),
         }
     }
-    pub fn SetVariantPosition(&mut self, value: FontVariantPosition) { self.fields_.set(56, 2, value as u64); }
+    pub fn SetVariantPosition(&mut self, value: FontVariantPosition) {
+        self.fields_.set(56, 2, value as u64);
+    }
     // cpp: font_description.h:309-324,435-444,582-584. Original bit order.
-    pub fn GetFontSynthesisWeight(&self) -> FontSynthesisWeight { if self.fields_.get(32,1)==0 {FontSynthesisWeight::kAutoFontSynthesisWeight} else {FontSynthesisWeight::kNoneFontSynthesisWeight} }
-    pub fn GetFontSynthesisStyle(&self) -> FontSynthesisStyle { if self.fields_.get(33,1)==0 {FontSynthesisStyle::kAutoFontSynthesisStyle} else {FontSynthesisStyle::kNoneFontSynthesisStyle} }
-    pub fn GetFontSynthesisSmallCaps(&self) -> FontSynthesisSmallCaps { if self.fields_.get(34,1)==0 {FontSynthesisSmallCaps::kAutoFontSynthesisSmallCaps} else {FontSynthesisSmallCaps::kNoneFontSynthesisSmallCaps} }
-    pub fn SetFontSynthesisWeight(&mut self, value: FontSynthesisWeight) {self.fields_.set(32,1,value as u64);}
-    pub fn SetFontSynthesisStyle(&mut self, value: FontSynthesisStyle) {self.fields_.set(33,1,value as u64);}
-    pub fn SetFontSynthesisSmallCaps(&mut self, value: FontSynthesisSmallCaps) {self.fields_.set(34,1,value as u64);}
-    pub fn FontLanguageOverride(&self) -> &AtomicString { &self.language_override_ }
-    pub fn SetFontLanguageOverride(&mut self, value: AtomicString) { self.language_override_ = value; }
-    pub fn FontVariantAlternatesValue(&self) -> Option<&Arc<FontVariantAlternates>> { self.font_variant_alternates_.as_ref() }
-    pub fn SetFontVariantAlternates(&mut self, value: Option<Arc<FontVariantAlternates>>) { self.font_variant_alternates_ = value; }
+    pub fn GetFontSynthesisWeight(&self) -> FontSynthesisWeight {
+        if self.fields_.get(32, 1) == 0 {
+            FontSynthesisWeight::kAutoFontSynthesisWeight
+        } else {
+            FontSynthesisWeight::kNoneFontSynthesisWeight
+        }
+    }
+    pub fn GetFontSynthesisStyle(&self) -> FontSynthesisStyle {
+        if self.fields_.get(33, 1) == 0 {
+            FontSynthesisStyle::kAutoFontSynthesisStyle
+        } else {
+            FontSynthesisStyle::kNoneFontSynthesisStyle
+        }
+    }
+    pub fn GetFontSynthesisSmallCaps(&self) -> FontSynthesisSmallCaps {
+        if self.fields_.get(34, 1) == 0 {
+            FontSynthesisSmallCaps::kAutoFontSynthesisSmallCaps
+        } else {
+            FontSynthesisSmallCaps::kNoneFontSynthesisSmallCaps
+        }
+    }
+    pub fn SetFontSynthesisWeight(&mut self, value: FontSynthesisWeight) {
+        self.fields_.set(32, 1, value as u64);
+    }
+    pub fn SetFontSynthesisStyle(&mut self, value: FontSynthesisStyle) {
+        self.fields_.set(33, 1, value as u64);
+    }
+    pub fn SetFontSynthesisSmallCaps(&mut self, value: FontSynthesisSmallCaps) {
+        self.fields_.set(34, 1, value as u64);
+    }
+    pub fn FontLanguageOverride(&self) -> &AtomicString {
+        &self.language_override_
+    }
+    pub fn SetFontLanguageOverride(&mut self, value: AtomicString) {
+        self.language_override_ = value;
+    }
+    pub fn FontVariantAlternatesValue(&self) -> Option<&Arc<FontVariantAlternates>> {
+        self.font_variant_alternates_.as_ref()
+    }
+    pub fn SetFontVariantAlternates(&mut self, value: Option<Arc<FontVariantAlternates>>) {
+        self.font_variant_alternates_ = value;
+    }
 
     // cpp: font_engine/fonts/font_description.h:274-279
     pub fn GetFontPalette(&self) -> *const FontPalette {
@@ -414,7 +497,10 @@ impl FontDescription {
     }
 
     // cpp: platform/fonts/font_description.h:401-403
-    pub fn SetTextSpacingTrim(&mut self, value: super::shaping::text_spacing_trim::TextSpacingTrim) {
+    pub fn SetTextSpacingTrim(
+        &mut self,
+        value: super::shaping::text_spacing_trim::TextSpacingTrim,
+    ) {
         self.fields_.set(TEXT_SPACING_TRIM, 2, value as u64);
     }
 
@@ -576,6 +662,48 @@ impl FontDescription {
     }
 
     // cpp: font_engine/fonts/font_description.h:295-297
+    // cpp: font_description.h Size/FamilyDescription accessors and bitfields.
+    pub fn IsAbsoluteSize(&self) -> bool {
+        self.fields_.get(7, 1) != 0
+    }
+    pub fn SetIsAbsoluteSize(&mut self, value: bool) {
+        self.fields_.set(7, 1, value as u64);
+    }
+    pub fn KeywordSize(&self) -> u32 {
+        self.fields_.get(21, 4) as u32
+    }
+    pub fn SetKeywordSize(&mut self, value: u32) {
+        self.fields_.set(21, 4, value as u64);
+    }
+    pub fn GenericFamily(&self) -> GenericFamilyType {
+        use GenericFamilyType::*;
+        match self.fields_.get(8, 3) {
+            0 => kNoFamily,
+            1 => kStandardFamily,
+            2 => kWebkitBodyFamily,
+            3 => kSerifFamily,
+            4 => kSansSerifFamily,
+            5 => kMonospaceFamily,
+            6 => kCursiveFamily,
+            _ => kFantasyFamily,
+        }
+    }
+    pub fn SetGenericFamily(&mut self, value: GenericFamilyType) {
+        self.fields_.set(8, 3, value as u64);
+    }
+    pub fn IsMonospace(&self) -> bool {
+        self.GenericFamily() == GenericFamilyType::kMonospaceFamily
+    }
+    // cpp: font_description.h SetTextRendering also updates typesetting features.
+    pub fn SetTextRendering(&mut self, value: TextRenderingMode) {
+        self.fields_.set(27, 2, value as u64);
+        self.UpdateTypesettingFeatures();
+    }
+
+    // cpp: font_description.h:467-469.
+    pub fn GetTypesettingFeatures(&self) -> TypesettingFeatures {
+        self.fields_.get(TYPESETTING_FEATURES, 3) as TypesettingFeatures
+    }
     pub fn TextRendering(&self) -> TextRenderingMode {
         match self.fields_.get(27, 2) {
             0 => TextRenderingMode::kAutoTextRendering,
@@ -651,4 +779,39 @@ pub extern "Rust" fn FontDescriptionSetWidthVariantForInline(
     variant: FontWidthVariant,
 ) {
     description.SetWidthVariant(variant);
+}
+
+#[cfg(test)]
+mod core_font_input_tests {
+    use super::*;
+    #[test]
+    fn font_metadata_uses_source_bitfields_and_affects_equality() {
+        let original = FontDescription::default();
+        let mut d = original.clone();
+        d.SetKeywordSize(8);
+        d.SetGenericFamily(GenericFamilyType::kMonospaceFamily);
+        d.SetIsAbsoluteSize(true);
+        d.SetFontSmoothing(FontSmoothingMode::kAntialiased);
+        assert_eq!(d.KeywordSize(), 8);
+        assert!(d.IsMonospace() && d.IsAbsoluteSize());
+        assert_eq!(d.FontSmoothing(), FontSmoothingMode::kAntialiased);
+        assert_eq!(d.GetVariantLigatures(), original.GetVariantLigatures());
+        assert!(d != original);
+        let inherited = d.clone();
+        assert!(inherited == d);
+    }
+    #[test]
+    fn text_rendering_updates_native_typesetting_features() {
+        let mut d = FontDescription::default();
+        d.SetTextRendering(TextRenderingMode::kOptimizeLegibility);
+        assert_eq!(d.TextRendering(), TextRenderingMode::kOptimizeLegibility);
+        assert_eq!(
+            d.GetTypesettingFeatures() & (kKerning | kLigatures),
+            kKerning | kLigatures
+        );
+        d.SetKerning(Kerning::kNoneKerning);
+        assert_eq!(d.GetTypesettingFeatures() & kKerning, 0);
+        d.SetTextRendering(TextRenderingMode::kOptimizeSpeed);
+        assert_eq!(d.GetTypesettingFeatures() & kLigatures, 0);
+    }
 }

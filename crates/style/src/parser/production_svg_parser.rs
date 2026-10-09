@@ -8,6 +8,8 @@ pub(super) fn IsSVGProperty(id: CSSPropertyID) -> bool {
     matches!(
         id,
         kFill
+            | kFillRule
+            | kClipRule
             | kStroke
             | kInternalVisitedFill
             | kInternalVisitedStroke
@@ -68,7 +70,13 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
     mode: CSSParserMode,
 ) -> Result<Rc<Value>, PropertyParseError> {
     use CSSPropertyID::*;
-    if matches!(id, kFill | kStroke | kInternalVisitedFill | kInternalVisitedStroke) {
+    if matches!(id, kFillRule | kClipRule) {
+        return ConsumeLiteral(id, stream, mode, Grammar::Keywords(&["nonzero", "evenodd"]));
+    }
+    if matches!(
+        id,
+        kFill | kStroke | kInternalVisitedFill | kInternalVisitedStroke
+    ) {
         // css_parsing_utils.cc:9777-9805 ConsumeSVGPaint.
         if matches!(
             stream.Peek().Id(),

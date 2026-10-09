@@ -15,6 +15,12 @@ pub(super) fn IsSVGProperty(id: CSSPropertyID) -> bool {
     matches!(
         id,
         kFill
+            | kFillOpacity
+            | kFloodOpacity
+            | kStopOpacity
+            | kStrokeOpacity
+            | kFillRule
+            | kClipRule
             | kStroke
             | kInternalVisitedFill
             | kInternalVisitedStroke
@@ -198,7 +204,20 @@ pub(super) fn Apply(
         || inherit && parent.is_none();
     if inherit
         && parent.is_some()
-        && !matches!(id, kFill | kStroke | kInternalVisitedFill | kInternalVisitedStroke | kPaintOrder)
+        && !matches!(
+            id,
+            kFill
+                | kStroke
+                | kInternalVisitedFill
+                | kInternalVisitedStroke
+                | kPaintOrder
+                | kFillOpacity
+                | kFloodOpacity
+                | kStopOpacity
+                | kStrokeOpacity
+                | kFillRule
+                | kClipRule
+        )
         && b.EffectiveZoom() != parent.unwrap().EffectiveZoom()
     {
         // Generated ApplyParentValueIfZoomChanged requires the document's
@@ -209,18 +228,58 @@ pub(super) fn Apply(
         b.SetHasExplicitInheritance();
         parent.unwrap().SetChildHasExplicitInheritance();
     }
-    if matches!(id, kFill | kStroke | kInternalVisitedFill | kInternalVisitedStroke) {
+    if matches!(
+        id,
+        kFillOpacity | kFloodOpacity | kStopOpacity | kStrokeOpacity | kFillRule | kClipRule
+    ) {
+        if initial {
+            return ApplyInitial(id, b);
+        }
+        if inherit {
+            return ApplyInherit(id, b, parent.unwrap());
+        }
+        if matches!(id, kFillRule | kClipRule) {
+            // generated longhands.cc:5976,7910, css_value_id_mappings_generated.h.
+            let rule = match Identifier(id, v)? {
+                CSSValueID::kNonzero => foundation::WindRule::RULE_NONZERO,
+                CSSValueID::kEvenodd => foundation::WindRule::RULE_EVENODD,
+                _ => return Err(LonghandApplicationError::InvalidValue(id)),
+            };
+            if id == kFillRule {
+                b.SetFillRule(rule);
+            } else {
+                b.SetClipRule(rule);
+            }
+        } else {
+            // ConvertAlpha:2260-2263 uses number/percentage then clamps to [0,1].
+            let percent = matches!(v.Payload(), CSSValuePayload::kNumericLiteralClass(n) if n.GetType() == UnitType::kPercentage)
+                || matches!(v.Payload(), CSSValuePayload::kMathFunctionClass(m) if m.Category() == crate::css_math_expression_node::CalculationResultCategory::Percent);
+            let alpha = typography_application::Scalar(id, b, v, root, media, percent)?
+                / if percent { 100. } else { 1. };
+            let alpha = alpha.max(0.).min(1.) as f32;
+            match id {
+                kFillOpacity => b.SetFillOpacity(alpha),
+                kFloodOpacity => b.SetFloodOpacity(alpha),
+                kStopOpacity => b.SetStopOpacity(alpha),
+                kStrokeOpacity => b.SetStrokeOpacity(alpha),
+                _ => unreachable!(),
+            }
+        }
+    } else if matches!(
+        id,
+        kFill | kStroke | kInternalVisitedFill | kInternalVisitedStroke
+    ) {
         // generated longhands.cc:1752-1762,1826-1836 visited Apply* inherits
         // parent ordinary paint. ConvertSVGPaint ignores for_visited_link,
         // so both slots share this converter without color reinterpretation.
         let paint = if initial {
-            if matches!(id,kFill | kInternalVisitedFill) {
+            if matches!(id, kFill | kInternalVisitedFill) {
                 ComputedStyleInitialValues::InitialFillPaint()
             } else {
                 ComputedStyleInitialValues::InitialStrokePaint()
             }
         } else if inherit {
-            if matches!(id,kFill | kInternalVisitedFill) {
+            if matches!(id, kFill | kInternalVisitedFill) {
                 parent.unwrap().FillPaint().clone()
             } else {
                 parent.unwrap().StrokePaint().clone()
@@ -229,11 +288,11 @@ pub(super) fn Apply(
             ConvertPaint(id, v)?
         };
         match id {
-            kFill=>b.SetFillPaintOwned(paint),
-            kStroke=>b.SetStrokePaintOwned(paint),
-            kInternalVisitedFill=>b.SetInternalVisitedFillPaintOwned(paint),
-            kInternalVisitedStroke=>b.SetInternalVisitedStrokePaintOwned(paint),
-            _=>unreachable!(),
+            kFill => b.SetFillPaintOwned(paint),
+            kStroke => b.SetStrokePaintOwned(paint),
+            kInternalVisitedFill => b.SetInternalVisitedFillPaintOwned(paint),
+            kInternalVisitedStroke => b.SetInternalVisitedStrokePaintOwned(paint),
+            _ => unreachable!(),
         }
     } else if id == kPaintOrder {
         let order = if initial {

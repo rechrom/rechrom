@@ -7,12 +7,14 @@ use crate::{
     media_queries::MediaValuesCachedData, production_css_value::Value,
     properties::longhand_dispatch::LonghandApplicationError,
 };
-use foundation::{CSSPropertyID, CSSValueID, Length, LengthPoint, LengthSize, LengthType};
+use foundation::{
+    BlendMode, CSSPropertyID, CSSValueID, Length, LengthPoint, LengthSize, LengthType,
+};
 use layoutng_style::style::{
     computed_style::{ComputedStyle, ComputedStyleBuilder},
     computed_style_constants::{
-        BackgroundEdgeOrigin, CompositingOperator, EFillBox, EFillLayerType, EFillMaskMode,
-        EFillRepeat, EFillSizeType,
+        BackgroundEdgeOrigin, CompositingOperator, EFillAttachment, EFillBox, EFillLayerType,
+        EFillMaskMode, EFillRepeat, EFillSizeType,
     },
     computed_style_initial_values::ComputedStyleInitialValues,
     fill_layer::{FillLayer, FillRepeat, FillSize},
@@ -32,6 +34,11 @@ pub fn IsPositionRepeatProperty(id: CSSPropertyID) -> bool {
             | CSSPropertyID::kBackgroundPositionY
             | CSSPropertyID::kWebkitMaskPositionX
             | CSSPropertyID::kWebkitMaskPositionY
+            | CSSPropertyID::kBackgroundAttachment
+            | CSSPropertyID::kBackgroundBlendMode
+            | CSSPropertyID::kBackgroundClip
+            | CSSPropertyID::kBackgroundOrigin
+            | CSSPropertyID::kBackgroundSize
             | CSSPropertyID::kBackgroundRepeat
             | CSSPropertyID::kMaskRepeat
             | CSSPropertyID::kMaskSize
@@ -192,6 +199,8 @@ fn ConvertTransformOrigin(
 }
 #[derive(Clone, Copy)]
 enum Field {
+    Attachment,
+    BlendMode,
     X,
     Y,
     Repeat,
@@ -204,6 +213,11 @@ enum Field {
 fn LayerField(id: CSSPropertyID) -> Option<(EFillLayerType, Field)> {
     use CSSPropertyID::*;
     Some(match id {
+        kBackgroundAttachment => (EFillLayerType::kBackground, Field::Attachment),
+        kBackgroundBlendMode => (EFillLayerType::kBackground, Field::BlendMode),
+        kBackgroundClip => (EFillLayerType::kBackground, Field::Clip),
+        kBackgroundOrigin => (EFillLayerType::kBackground, Field::Origin),
+        kBackgroundSize => (EFillLayerType::kBackground, Field::Size),
         kBackgroundPositionX => (EFillLayerType::kBackground, Field::X),
         kBackgroundPositionY => (EFillLayerType::kBackground, Field::Y),
         kWebkitMaskPositionX => (EFillLayerType::kMask, Field::X),
@@ -219,6 +233,8 @@ fn LayerField(id: CSSPropertyID) -> Option<(EFillLayerType, Field)> {
     })
 }
 enum LayerValue {
+    Attachment(EFillAttachment),
+    BlendMode(BlendMode),
     Position(Length, Option<BackgroundEdgeOrigin>),
     Repeat(FillRepeat),
     Size(FillSize),
@@ -245,7 +261,15 @@ fn FillBox(id: CSSPropertyID, v: &Value) -> Result<EFillBox> {
         CSSValueID::kStrokeBox => EFillBox::kStrokeBox,
         CSSValueID::kViewBox => EFillBox::kViewBox,
         CSSValueID::kNoClip if id == CSSPropertyID::kMaskClip => EFillBox::kNoClip,
-        CSSValueID::kText if id == CSSPropertyID::kMaskClip => EFillBox::kText,
+        CSSValueID::kBorderArea if id == CSSPropertyID::kBackgroundClip => EFillBox::kBorderArea,
+        CSSValueID::kText
+            if matches!(
+                id,
+                CSSPropertyID::kMaskClip | CSSPropertyID::kBackgroundClip
+            ) =>
+        {
+            EFillBox::kText
+        }
         _ => return Err(LonghandApplicationError::InvalidValue(id)),
     })
 }
@@ -295,9 +319,53 @@ fn MapFill(
     media: &MediaValuesCachedData,
 ) -> Result<LayerValue> {
     if value.IsInitialValue() {
-        return Ok(InitialLayer(EFillLayerType::kMask, field));
+        return Ok(InitialLayer(LayerField(id).unwrap().0, field));
     }
     match field {
+        Field::Attachment => Ok(LayerValue::Attachment(match Ident(id, value)? {
+            CSSValueID::kScroll => EFillAttachment::kScroll,
+            CSSValueID::kLocal => EFillAttachment::kLocal,
+            CSSValueID::kFixed => EFillAttachment::kFixed,
+            _ => return Err(LonghandApplicationError::InvalidValue(id)),
+        })),
+        Field::BlendMode => Ok(LayerValue::BlendMode(match Ident(id, value)? {
+            CSSValueID::kNormal => BlendMode::kNormal,
+            CSSValueID::kMultiply => BlendMode::kMultiply,
+            CSSValueID::kScreen => BlendMode::kScreen,
+            CSSValueID::kOverlay => BlendMode::kOverlay,
+            CSSValueID::kDarken => BlendMode::kDarken,
+            CSSValueID::kLighten => BlendMode::kLighten,
+            CSSValueID::kColorDodge => BlendMode::kColorDodge,
+            CSSValueID::kColorBurn => BlendMode::kColorBurn,
+            CSSValueID::kHardLight => BlendMode::kHardLight,
+            CSSValueID::kSoftLight => BlendMode::kSoftLight,
+            CSSValueID::kDifference => BlendMode::kDifference,
+            CSSValueID::kExclusion => BlendMode::kExclusion,
+            CSSValueID::kHue => BlendMode::kHue,
+            CSSValueID::kSaturation => BlendMode::kSaturation,
+            CSSValueID::kColor => BlendMode::kColor,
+            CSSValueID::kLuminosity => BlendMode::kLuminosity,
+            CSSValueID::kPlusLighter => BlendMode::kPlusLighter,
+            _ => return Err(LonghandApplicationError::InvalidValue(id)),
+        })),
+        Field::Clip
+            if id == CSSPropertyID::kBackgroundClip
+                && matches!(value.Payload(), CSSValuePayload::kValuePairClass(_)) =>
+        {
+            let CSSValuePayload::kValuePairClass(pair) = value.Payload() else {
+                unreachable!()
+            };
+            let a = Ident(id, &pair.first)?;
+            let z = Ident(id, &pair.second)?;
+            if !matches!(
+                (a, z),
+                (CSSValueID::kText, CSSValueID::kBorderArea)
+                    | (CSSValueID::kBorderArea, CSSValueID::kText)
+            ) {
+                return Err(LonghandApplicationError::InvalidValue(id));
+            }
+            Ok(LayerValue::Box(EFillBox::kBorderAreaText))
+        }
         Field::Origin | Field::Clip => Ok(LayerValue::Box(FillBox(id, value)?)),
         Field::Composite => Ok(LayerValue::Composite(MaskComposite(id, value)?)),
         Field::Mode => Ok(LayerValue::Mode(match Ident(id, value)? {
@@ -317,7 +385,7 @@ fn MapFill(
                 _ => EFillSizeType::kSizeLength,
             };
             let size = if type_ != EFillSizeType::kSizeLength {
-                FillLayer::InitialFillSizeLength(EFillLayerType::kMask)
+                FillLayer::InitialFillSizeLength(LayerField(id).unwrap().0)
             } else if let CSSValuePayload::kValuePairClass(p) = value.Payload() {
                 LengthSize::new(
                     &FillLength(id, &p.first, b, root, media)?,
@@ -363,6 +431,8 @@ fn MapFill(
 }
 fn IsSet(layer: &FillLayer, field: Field) -> bool {
     match field {
+        Field::Attachment => layer.IsAttachmentSet(),
+        Field::BlendMode => layer.IsBlendModeSet(),
         Field::X => layer.IsPositionXSet(),
         Field::Y => layer.IsPositionYSet(),
         Field::Repeat => layer.IsRepeatSet(),
@@ -375,6 +445,8 @@ fn IsSet(layer: &FillLayer, field: Field) -> bool {
 }
 fn Clear(layer: &mut FillLayer, field: Field) {
     match field {
+        Field::Attachment => layer.ClearAttachment(),
+        Field::BlendMode => layer.ClearBlendMode(),
         Field::X => layer.ClearPositionX(),
         Field::Y => layer.ClearPositionY(),
         Field::Repeat => layer.ClearRepeat(),
@@ -387,6 +459,8 @@ fn Clear(layer: &mut FillLayer, field: Field) {
 }
 fn Set(layer: &mut FillLayer, field: Field, value: &LayerValue) {
     match (field, value) {
+        (Field::Attachment, LayerValue::Attachment(v)) => layer.SetAttachment(*v),
+        (Field::BlendMode, LayerValue::BlendMode(v)) => layer.SetBlendMode(*v),
         (Field::Repeat, LayerValue::Repeat(value)) => layer.SetRepeat(value),
         (Field::Size, LayerValue::Size(v)) => layer.SetSize(v),
         (Field::Origin, LayerValue::Box(v)) => layer.SetOrigin(*v),
@@ -438,6 +512,8 @@ fn ApplyLayers(
 }
 fn InitialLayer(type_: EFillLayerType, field: Field) -> LayerValue {
     match field {
+        Field::Attachment => LayerValue::Attachment(FillLayer::InitialFillAttachment(type_)),
+        Field::BlendMode => LayerValue::BlendMode(FillLayer::InitialFillBlendMode(type_)),
         Field::X => LayerValue::Position(FillLayer::InitialFillPositionX(type_), None),
         Field::Y => LayerValue::Position(FillLayer::InitialFillPositionY(type_), None),
         Field::Repeat => LayerValue::Repeat(FillLayer::InitialFillRepeat(type_)),
@@ -460,6 +536,8 @@ fn ParentLayers(parent: &ComputedStyle, type_: EFillLayerType, field: Field) -> 
             break;
         }
         values.push(match field {
+            Field::Attachment => LayerValue::Attachment(layer.Attachment()),
+            Field::BlendMode => LayerValue::BlendMode(layer.GetBlendMode()),
             Field::X => LayerValue::Position(
                 layer.PositionX().clone(),
                 layer
@@ -521,7 +599,28 @@ pub fn Apply(
         } else {
             vec![MapFill(id, field, value, b, root, media)?]
         };
-        ApplyLayers(b, type_, field, &converted);
+        if id == CSSPropertyID::kBackgroundClip && !initial && !inherit {
+            // cpp: longhands_custom.cc:1045-1071. Repeat complete list cycles
+            // across the existing chain; a final partial cycle creates layers.
+            if converted.is_empty() {
+                return Err(LonghandApplicationError::InvalidValue(id));
+            }
+            let mut current = b.AccessBackgroundLayers() as *mut FillLayer;
+            let mut previous: *mut FillLayer = std::ptr::null_mut();
+            while !current.is_null() {
+                for value in &converted {
+                    if current.is_null() {
+                        current = unsafe { (*previous).EnsureNext() };
+                    }
+                    let layer = unsafe { &mut *current };
+                    Set(layer, field, value);
+                    previous = current;
+                    current = layer.NextMut();
+                }
+            }
+        } else {
+            ApplyLayers(b, type_, field, &converted);
+        }
     } else if id == CSSPropertyID::kTransformOrigin {
         let converted = if initial {
             ComputedStyleInitialValues::InitialTransformOrigin()
@@ -608,6 +707,122 @@ mod tests {
         }
         Ok(())
     }
+    #[test]
+    fn background_fields_preserve_layer_lists_and_clip_cycles() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let mut b = ComputedStyleBuilder::from_style(initial());
+        apply(
+            &mut b,
+            CSSPropertyID::kBackgroundAttachment,
+            "fixed, local, scroll",
+            None,
+        )
+        .unwrap();
+        apply(
+            &mut b,
+            CSSPropertyID::kBackgroundBlendMode,
+            "multiply, screen",
+            None,
+        )
+        .unwrap();
+        apply(
+            &mut b,
+            CSSPropertyID::kBackgroundOrigin,
+            "content-box, border-box",
+            None,
+        )
+        .unwrap();
+        apply(
+            &mut b,
+            CSSPropertyID::kBackgroundSize,
+            "calc(2px + 3px) auto, cover",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            b.AccessBackgroundLayers().SizeLength().Width().Pixels(),
+            5.0
+        );
+        assert_eq!(
+            b.AccessBackgroundLayers().Attachment(),
+            EFillAttachment::kFixed
+        );
+        let third = unsafe { &*(*b.AccessBackgroundLayers().Next()).Next() };
+        assert!(
+            third.IsAttachmentSet()
+                && !third.IsBlendModeSet()
+                && !third.IsOriginSet()
+                && !third.IsSizeSet()
+        );
+        // BackgroundClip::ApplyValue repeats a complete two-value cycle over
+        // three existing layers, creating the fourth layer for the final item.
+        apply(
+            &mut b,
+            CSSPropertyID::kBackgroundClip,
+            "text, border-area",
+            None,
+        )
+        .unwrap();
+        let first = b.AccessBackgroundLayers();
+        let second = unsafe { &*first.Next() };
+        let third = unsafe { &*second.Next() };
+        let fourth = unsafe { &*third.Next() };
+        assert_eq!(
+            (first.Clip(), second.Clip(), third.Clip(), fourth.Clip()),
+            (
+                EFillBox::kText,
+                EFillBox::kBorderArea,
+                EFillBox::kText,
+                EFillBox::kBorderArea
+            )
+        );
+        assert_eq!(second.GetBlendMode(), BlendMode::kScreen);
+        assert_eq!(second.Origin(), EFillBox::kBorder);
+        assert!(fourth.IsClipSet() && !fourth.IsAttachmentSet());
+        apply(
+            &mut b,
+            CSSPropertyID::kBackgroundClip,
+            "border-area text",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            unsafe { &*b.AccessBackgroundLayers().Next() }.Clip(),
+            EFillBox::kBorderAreaText
+        );
+        apply(&mut b, CSSPropertyID::kBackgroundClip, "initial", None).unwrap();
+        assert_eq!(b.AccessBackgroundLayers().Clip(), EFillBox::kBorder);
+        assert!(!unsafe { &*b.AccessBackgroundLayers().Next() }.IsClipSet());
+        let parent = unsafe { &*b.TakeStyle() };
+        let mut child = ComputedStyleBuilder::from_style(parent);
+        apply(
+            &mut child,
+            CSSPropertyID::kBackgroundAttachment,
+            "initial",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            parent.BackgroundLayers().Attachment(),
+            EFillAttachment::kFixed
+        );
+        apply(
+            &mut child,
+            CSSPropertyID::kBackgroundAttachment,
+            "inherit",
+            Some(parent),
+        )
+        .unwrap();
+        assert_eq!(
+            unsafe { &*child.AccessBackgroundLayers().Next() }.Attachment(),
+            EFillAttachment::kLocal
+        );
+        assert!(
+            !unsafe { &*(*(*child.AccessBackgroundLayers().Next()).Next()).Next() }
+                .IsAttachmentSet()
+        );
+    }
+
     #[test]
     fn native_position_points_preserve_percentages_and_far_edge_calculations() {
         let _heap = foundation::LayoutHeapScope::new();

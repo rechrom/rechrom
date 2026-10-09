@@ -222,3 +222,138 @@ fn invalid_font_grammar_is_rejected_atomically_and_canonicalized() {
     .unwrap();
     assert_eq!(parsed.len(), 19);
 }
+
+#[test]
+fn core_font_and_text_longhands_reach_native_and_inherit() {
+    use font_engine::fonts::{
+        font_description::{GenericFamilyType, StyleSyntax},
+        font_smoothing_mode::FontSmoothingMode,
+        text_rendering_mode::TextRenderingMode,
+    };
+    use font_engine::FontOrientation;
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        r#"<div id=p style="font-family:'Example',serif,monospace;font-size:large;font-weight:550;font-style:oblique 0.125turn;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased;writing-mode:vertical-rl;text-orientation:upright;word-break:auto-phrase;letter-spacing:10%;word-spacing:calc(2px + 20%)"><div id=c style="font-size:200%;font-weight:bolder"></div><div id=i style="font-family:initial;font-size:initial;font-style:initial;text-rendering:initial;-webkit-font-smoothing:initial;text-orientation:initial;word-break:initial;letter-spacing:initial;word-spacing:normal"></div></div>"#,
+    );
+    update(&mut owner);
+    let (p, c, i) = (
+        native(&owner, "p"),
+        native(&owner, "c"),
+        native(&owner, "i"),
+    );
+    let (pd, cd, id) = (
+        p.GetFontDescription(),
+        c.GetFontDescription(),
+        i.GetFontDescription(),
+    );
+    assert_eq!(pd.Family().ToString(), "Example, serif, monospace");
+    assert_eq!(pd.GenericFamily(), GenericFamilyType::kMonospaceFamily);
+    assert_eq!(cd.GenericFamily(), pd.GenericFamily());
+    assert_eq!(pd.SpecifiedSize(), 18.0);
+    assert_eq!(pd.KeywordSize(), 5);
+    assert!(!pd.IsAbsoluteSize());
+    assert_eq!(cd.SpecifiedSize(), 36.0);
+    assert_eq!(cd.KeywordSize(), 0);
+    assert!(!cd.IsAbsoluteSize());
+    assert_eq!(cd.Weight().ToFloat(), 900.0);
+    assert_eq!(pd.Style().ToFloat(), 45.0);
+    assert_eq!(pd.GetStyleSyntax(), StyleSyntax::kExplicitAngle);
+    assert_eq!(cd.GetStyleSyntax(), StyleSyntax::kExplicitAngle);
+    assert_eq!(pd.TextRendering(), TextRenderingMode::kOptimizeLegibility);
+    assert_eq!(cd.TextRendering(), pd.TextRendering());
+    assert_eq!(pd.FontSmoothing(), FontSmoothingMode::kAntialiased);
+    assert_eq!(cd.FontSmoothing(), pd.FontSmoothing());
+    assert_eq!(pd.Orientation(), FontOrientation::kVerticalUpright);
+    assert_eq!(cd.Orientation(), FontOrientation::kVerticalUpright);
+    assert_eq!(p.WordBreak(), foundation::EWordBreak::kAutoPhrase);
+    assert_eq!(c.WordBreak(), p.WordBreak());
+    assert_eq!(p.ComputedLetterSpacing().PercentValue(), 10.0);
+    assert!((p.LetterSpacing() - 1.8).abs() < 0.001);
+    assert!((c.LetterSpacing() - 3.6).abs() < 0.001);
+    assert!((p.WordSpacing() - 5.6).abs() < 0.001);
+    assert!((c.WordSpacing() - 9.2).abs() < 0.001);
+    assert_eq!(id.GenericFamily(), GenericFamilyType::kStandardFamily);
+    assert_eq!(id.SpecifiedSize(), 16.0);
+    assert_eq!(id.KeywordSize(), 4);
+    assert_eq!(id.Style().ToFloat(), 0.0);
+    assert_eq!(id.TextRendering(), TextRenderingMode::kAutoTextRendering);
+    assert_eq!(id.FontSmoothing(), FontSmoothingMode::kAutoSmoothing);
+    assert_eq!(id.Orientation(), FontOrientation::kVerticalMixed);
+    assert_eq!(i.WordBreak(), foundation::EWordBreak::kNormal);
+    assert_eq!(i.LetterSpacing(), 0.0);
+    assert_eq!(i.WordSpacing(), 0.0);
+}
+
+#[test]
+fn font_size_keywords_use_chromium_table_and_preserve_absolute_metadata() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        r#"<div id=xs style="font-size:x-small"></div><div id=xxl style="font-size:xx-large"></div><div id=xxxl style="font-size:-webkit-xxx-large"></div><div id=p style="font-size:20px;font-style:italic"><div id=c style="font-size:smaller;font-style:inherit;font-weight:lighter"></div><div id=r style="font-size:2em"></div></div>"#,
+    );
+    update(&mut owner);
+    for (name, size, keyword) in [("xs", 10.0, 2), ("xxl", 32.0, 7), ("xxxl", 48.0, 8)] {
+        let d = native(&owner, name).GetFontDescription();
+        assert_eq!(d.SpecifiedSize(), size);
+        assert_eq!(d.KeywordSize(), keyword);
+        assert!(!d.IsAbsoluteSize());
+    }
+    for name in ["p", "c", "r"] {
+        assert!(native(&owner, name).GetFontDescription().IsAbsoluteSize());
+    }
+    assert!((native(&owner, "c").GetFontDescription().SpecifiedSize() - 20.0 / 1.2).abs() < 0.001);
+    assert_eq!(
+        native(&owner, "r").GetFontDescription().SpecifiedSize(),
+        40.0
+    );
+    assert_eq!(
+        native(&owner, "c").GetFontDescription().GetStyleSyntax(),
+        font_engine::fonts::font_description::StyleSyntax::kItalicKeyword
+    );
+    assert_eq!(
+        native(&owner, "c").GetFontDescription().Weight().ToFloat(),
+        100.0
+    );
+}
+
+#[test]
+fn oblique_angles_are_typed_and_invalid_ranges_are_rejected() {
+    for text in [
+        "oblique 91deg",
+        "oblique -91deg",
+        "oblique .5turn",
+        "oblique 5px",
+        "oblique 1deg 2deg",
+    ] {
+        assert!(
+            ParseProperty(
+                CSSPropertyID::kFontStyle,
+                &String::from(text),
+                false,
+                CSSParserMode::kHTMLStandardMode
+            )
+            .is_err(),
+            "{text}"
+        );
+    }
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        r#"<div id=a style="font-style:oblique calc(10deg + 20deg)"></div><div id=b style="font-style:oblique"></div>"#,
+    );
+    update(&mut owner);
+    assert_eq!(
+        native(&owner, "a").GetFontDescription().Style().ToFloat(),
+        30.0
+    );
+    assert_eq!(
+        native(&owner, "a").GetFontDescription().GetStyleSyntax(),
+        font_engine::fonts::font_description::StyleSyntax::kExplicitAngle
+    );
+    assert_eq!(
+        native(&owner, "b").GetFontDescription().Style().ToFloat(),
+        14.0
+    );
+    assert_eq!(
+        native(&owner, "b").GetFontDescription().GetStyleSyntax(),
+        font_engine::fonts::font_description::StyleSyntax::kImplicitAngle
+    );
+}

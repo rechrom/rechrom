@@ -20,7 +20,68 @@ pub(super) fn IsGridProperty(id: CSSPropertyID) -> bool {
             | CSSPropertyID::kGridAutoRows
             | CSSPropertyID::kGridAutoColumns
             | CSSPropertyID::kGridAutoFlow
+            | CSSPropertyID::kGridColumnStart
+            | CSSPropertyID::kGridColumnEnd
+            | CSSPropertyID::kGridRowStart
+            | CSSPropertyID::kGridRowEnd
     )
+}
+// style_builder_converter.cc:1534-1597. Grid line counts use the shared
+// integer CSSMath range and native kGridMaxTracks clamp.
+fn Position(
+    id: CSSPropertyID,
+    b: &ComputedStyleBuilder,
+    v: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+) -> std::result::Result<layoutng_style::style::grid_position::GridPosition, LonghandApplicationError>
+{
+    use layoutng_style::style::{grid_area::K_GRID_MAX_TRACKS, grid_position::GridPosition};
+    let mut position = GridPosition::default();
+    if let CSSValuePayload::kCustomIdentClass(name) = v.Payload() {
+        position.SetNamedGridArea(&name.name);
+        return Ok(position);
+    }
+    if matches!(v.Payload(), CSSValuePayload::kIdentifierClass(k) if k.0 == CSSValueID::kAuto) {
+        return Ok(position);
+    }
+    let items = List(id, v)?;
+    let span = matches!(items[0].Payload(), CSSValuePayload::kIdentifierClass(k) if k.0 == CSSValueID::kSpan);
+    let mut index = usize::from(span);
+    let mut count = 1;
+    if let Some(v) = items.get(index) {
+        if matches!(
+            v.Payload(),
+            CSSValuePayload::kNumericLiteralClass(_) | CSSValuePayload::kMathFunctionClass(_)
+        ) {
+            let number = typography_application::Scalar(id, b, v, root, media, false)?;
+            let number = (number + 0.5).floor() as i32;
+            count = if span {
+                number.clamp(1, K_GRID_MAX_TRACKS)
+            } else if number != 0 {
+                number.clamp(-K_GRID_MAX_TRACKS, K_GRID_MAX_TRACKS)
+            } else {
+                1
+            };
+            index += 1;
+        }
+    }
+    let mut name = foundation::AtomicString::default();
+    if let Some(v) = items.get(index) {
+        if let CSSValuePayload::kCustomIdentClass(ident) = v.Payload() {
+            name = ident.name.clone();
+            index += 1;
+        }
+    }
+    if index != items.len() || index == usize::from(span) {
+        return Err(LonghandApplicationError::InvalidValue(id));
+    }
+    if span {
+        position.SetSpanPosition(count, &name);
+    } else {
+        position.SetExplicitPosition(count, &name);
+    }
+    Ok(position)
 }
 fn List(
     id: CSSPropertyID,
@@ -131,6 +192,18 @@ pub(super) fn Apply(
         return ApplyInherit(id, b, p);
     }
     match id {
+        // generated longhands.cc:8460-8466,8495-8501,8600-8606,8635-8641.
+        kGridColumnStart | kGridColumnEnd | kGridRowStart | kGridRowEnd => {
+            let position = Position(id, b, v, root, media)?;
+            match id {
+                kGridColumnStart => b.SetGridColumnStart(&position),
+                kGridColumnEnd => b.SetGridColumnEnd(&position),
+                kGridRowStart => b.SetGridRowStart(&position),
+                kGridRowEnd => b.SetGridRowEnd(&position),
+                _ => unreachable!(),
+            }
+            Ok(())
+        }
         // cpp: style_builder_converter.cc:1602-1616; generated longhands.cc:8670.
         kGridTemplateAreas => {
             let areas = match v.Payload() {

@@ -58,8 +58,9 @@ use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder}
 use std::rc::Rc;
 use std::sync::Arc;
 
-// The genuine Size/FamilyDescription/nested font-description enums are not yet
-// present in font_engine. Their typed interfaces and missing accessors act on
+// The genuine Size/FamilyDescription nested types use backend construction.
+// Native generic-family/size bitfields and text-rendering setters now exist in
+// font_engine; backend adapters and remaining typed interfaces act on
 // the existing FontDescription only; no parallel description/state is stored.
 // Every method is required, including real settings/font-size/font allocation
 // collaborators. No default result, font, locale or selector is supplied.

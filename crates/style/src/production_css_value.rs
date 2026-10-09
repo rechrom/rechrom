@@ -16,10 +16,14 @@ use std::rc::Rc;
 
 #[path = "production_counter_value.rs"]
 mod counter_value;
-pub use counter_value::{CSSCounterValue, counter};
+pub use counter_value::{counter, CSSCounterValue};
 #[path = "production_scoped_keyword_value.rs"]
 mod scoped_keyword_value;
-pub use scoped_keyword_value::{CSSScopedKeywordValue,scoped_keyword};
+pub use scoped_keyword_value::{scoped_keyword, CSSScopedKeywordValue};
+
+#[path = "production_font_style_value.rs"]
+mod font_style_value;
+pub use font_style_value::CSSFontStyleRangeValue;
 
 pub struct ProductionCSSValueDispatch;
 pub type Value = CSSValue<ProductionCSSValueDispatch>;
@@ -129,7 +133,10 @@ impl CSSValueRandom for CSSRatioValue {
     }
 }
 pub fn ratio(first: Rc<Value>, second: Rc<Value>) -> Rc<Value> {
-    Rc::new(Value::new(CSSValuePayload::kRatioClass(CSSRatioValue { first, second })))
+    Rc::new(Value::new(CSSValuePayload::kRatioClass(CSSRatioValue {
+        first,
+        second,
+    })))
 }
 impl CSSValueSubclass for CSSValuePair {
     fn CustomCSSText(&self) -> String {
@@ -204,8 +211,8 @@ impl CSSValueCustomHash for CSSContentDistributionValue {
 // unavailable in this dispatch and are explicit collaborators, never fabricated.
 #[path = "production_grid_values.rs"]
 mod grid_values;
+pub use crate::production_border_image_values::{CSSBorderImageSliceValue, CSSQuadValue};
 pub use grid_values::CSSGridTemplateAreasValue;
-pub use crate::production_border_image_values::{CSSQuadValue,CSSBorderImageSliceValue};
 
 pub struct CSSCustomIdentValue {
     pub name: foundation::AtomicString,
@@ -369,7 +376,9 @@ impl CSSValueSubclass for CSSURIValue {
         text.push_str(")");
         text
     }
-    fn Equals(&self, other: &Self) -> bool { self.url == other.url }
+    fn Equals(&self, other: &Self) -> bool {
+        self.url == other.url
+    }
 }
 impl CSSValueUrl<()> for CSSURIValue {
     fn ReResolveUrl(&self, _: &()) {
@@ -1142,11 +1151,12 @@ impl CSSValueDispatch for ProductionCSSValueDispatch {
     type CSSStepsTimingFunctionValue = CSSStepsTimingFunctionValue;
     type CSSProgressValue = UnavailableCSSValue;
     type CSSBorderImageSliceValue = CSSBorderImageSliceValue;
-    type CSSDynamicRangeLimitMixValue = crate::production_dynamic_range_value::CSSDynamicRangeLimitMixValue;
+    type CSSDynamicRangeLimitMixValue =
+        crate::production_dynamic_range_value::CSSDynamicRangeLimitMixValue;
     type CSSFontFeatureValue = CSSFontFeatureValue;
     type CSSFontFaceSrcValue = CSSFontFaceSrcValue;
     type CSSFontFamilyValue = CSSFontFamilyValue;
-    type CSSFontStyleRangeValue = UnavailableCSSValue;
+    type CSSFontStyleRangeValue = CSSFontStyleRangeValue;
     type CSSFontVariationValue = CSSFontVariationValue;
     type CSSAlternateValue = CSSAlternateValue;
     type CSSInheritedValue = CSSInheritedValue;
@@ -1506,21 +1516,38 @@ pub fn math(
 }
 
 // cpp: css_alternate_value.h:17-43; css_alternate_value.cc:14-38.
-pub struct CSSAlternateValue { pub function: CSSFunctionValue, pub aliases: CSSValueList }
+pub struct CSSAlternateValue {
+    pub function: CSSFunctionValue,
+    pub aliases: CSSValueList,
+}
 impl CSSValueSubclass for CSSAlternateValue {
     fn CustomCSSText(&self) -> String {
-        String::from(format!("{}({})", GetCSSValueName(self.function.function_id), self.aliases.CustomCSSText().Utf8()).as_str())
+        String::from(
+            format!(
+                "{}({})",
+                GetCSSValueName(self.function.function_id),
+                self.aliases.CustomCSSText().Utf8()
+            )
+            .as_str(),
+        )
     }
     fn Equals(&self, other: &Self) -> bool {
         self.function.Equals(&other.function) && self.aliases.Equals(&other.aliases)
     }
 }
 impl CSSValueRandom for CSSAlternateValue {
-    fn HasRandomFunctions(&self) -> bool { self.function.arguments.HasRandomFunctions() || self.aliases.HasRandomFunctions() }
+    fn HasRandomFunctions(&self) -> bool {
+        self.function.arguments.HasRandomFunctions() || self.aliases.HasRandomFunctions()
+    }
 }
 pub fn alternate(function_id: CSSValueID, aliases: Vec<Rc<Value>>) -> Rc<Value> {
-    Rc::new(Value::new(CSSValuePayload::kAlternateClass(CSSAlternateValue {
-        function: CSSFunctionValue { function_id, arguments: CSSValueList::new(Vec::new(), ListSeparator::Comma) },
-        aliases: CSSValueList::new(aliases, ListSeparator::Comma),
-    })))
+    Rc::new(Value::new(CSSValuePayload::kAlternateClass(
+        CSSAlternateValue {
+            function: CSSFunctionValue {
+                function_id,
+                arguments: CSSValueList::new(Vec::new(), ListSeparator::Comma),
+            },
+            aliases: CSSValueList::new(aliases, ListSeparator::Comma),
+        },
+    )))
 }

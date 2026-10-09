@@ -14,6 +14,9 @@ pub(super) fn IsProperty(id: CSSPropertyID) -> bool {
             | kFontSynthesisWeight
             | kFontSynthesisStyle
             | kFontSynthesisSmallCaps
+            | kScrollBehavior
+            | kResize
+            | kUnicodeBidi
     )
 }
 fn Scalar(
@@ -38,6 +41,58 @@ pub(super) fn Apply(
     let initial = v.IsInitialValue() || v.IsUnsetValue() && !inherit || inherit && parent.is_none();
     let inherited = parent.filter(|_| inherit && !initial);
     match id {
+        kScrollBehavior | kResize | kUnicodeBidi => {
+            if initial {
+                return ApplyInitial(id, b);
+            }
+            if let Some(p) = inherited {
+                ApplyInherit(id, b, p)?;
+            } else {
+                // generated longhands.cc:14339,17858 and custom:8480-8499.
+                let keyword = Identifier(id, v)?;
+                match id {
+                    kScrollBehavior => {
+                        use layoutng_style::style::scroll_enums::mojom::blink::ScrollBehavior as S;
+                        b.SetScrollBehavior(match keyword {
+                            CSSValueID::kAuto => S::kAuto,
+                            CSSValueID::kSmooth => S::kSmooth,
+                            _ => return Err(LonghandApplicationError::InvalidValue(id)),
+                        });
+                    }
+                    kResize => {
+                        use foundation::EResize as R;
+                        b.SetResize(match keyword {
+                            CSSValueID::kNone => R::kNone,
+                            CSSValueID::kBoth => R::kBoth,
+                            CSSValueID::kHorizontal => R::kHorizontal,
+                            CSSValueID::kVertical => R::kVertical,
+                            CSSValueID::kBlock => R::kBlock,
+                            CSSValueID::kInline => R::kInline,
+                            CSSValueID::kAuto | CSSValueID::kInternalTextareaAuto => {
+                                return Err(LonghandApplicationError::Unsupported(id))
+                            }
+                            _ => return Err(LonghandApplicationError::InvalidValue(id)),
+                        });
+                    }
+                    kUnicodeBidi => {
+                        use foundation::UnicodeBidi as U;
+                        b.SetUnicodeBidi(match keyword {
+                            CSSValueID::kNormal => U::kNormal,
+                            CSSValueID::kEmbed => U::kEmbed,
+                            CSSValueID::kBidiOverride => U::kBidiOverride,
+                            CSSValueID::kIsolate => U::kIsolate,
+                            CSSValueID::kPlaintext | CSSValueID::kWebkitPlaintext => U::kPlaintext,
+                            CSSValueID::kIsolateOverride | CSSValueID::kWebkitIsolateOverride => {
+                                U::kIsolateOverride
+                            }
+                            CSSValueID::kWebkitIsolate => U::kIsolate,
+                            _ => return Err(LonghandApplicationError::InvalidValue(id)),
+                        });
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
         kMathDepth => {
             let depth = if initial {
                 ComputedStyleInitialValues::InitialMathDepth()

@@ -7,7 +7,8 @@ pub(super) fn IsTextProperty(id: CSSPropertyID) -> bool {
     use CSSPropertyID::*;
     matches!(
         id,
-        kTextTransform
+        kTextAlign
+            | kTextTransform
             | kTextOverflow
             | kTextIndent
             | kTextDecorationLine
@@ -26,6 +27,30 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
     use CSSPropertyID::*;
     use CSSValueID::*;
     match id {
+        // css_parser_fast_paths.cc:1388-1397. Unprefixed match-parent is
+        // experimental; the prefixed alias remains available at stable defaults.
+        kTextAlign => {
+            let keyword = stream.Peek().Id();
+            if !matches!(
+                keyword,
+                kWebkitAuto
+                    | CSSValueID::kLeft
+                    | CSSValueID::kRight
+                    | kCenter
+                    | kJustify
+                    | kWebkitLeft
+                    | kWebkitRight
+                    | kWebkitCenter
+                    | kWebkitMatchParent
+                    | kStart
+                    | kEnd
+            ) && !(keyword == kInternalCenter && mode == CSSParserMode::kUASheetMode)
+            {
+                return Err(invalid(id));
+            }
+            stream.ConsumeIncludingWhitespace();
+            Ok(values::identifier(keyword))
+        }
         // css_parsing_utils.cc:9319-9378. FullWidth/FullSizeKana/MultiKeyword
         // are experimental; stable consumes one case keyword or math-auto.
         kTextTransform => {
