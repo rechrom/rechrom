@@ -71,6 +71,8 @@ mod typography_application;
 mod text_box_application;
 #[path = "column_rule_application.rs"]
 mod column_rule_application;
+#[path = "rule_inset_application.rs"]
+mod rule_inset_application;
 #[path = "stable_misc_application.rs"]
 mod stable_misc_application;
 #[path = "reflection_application.rs"]
@@ -1113,6 +1115,7 @@ pub fn Apply(
     if id==CSSPropertyID::kWebkitBoxReflect {return reflection_application::Apply(b,parent,v,root,media,None);}
     if stable_misc_application::IsProperty(id) {return stable_misc_application::Apply(id,b,parent,v,root,media);}
     if column_rule_application::IsProperty(id) { return column_rule_application::Apply(id,b,parent,v,root,media); }
+    if rule_inset_application::IsProperty(id) { return rule_inset_application::Apply(id,b,parent,v,root,media); }
     if text_box_application::IsProperty(id) { return text_box_application::Apply(id,b,parent,v,root,media); }
     if typography_application::IsTypographyProperty(id)
         || id == CSSPropertyID::kTextEmphasisColor && (v.IsInitialValue() || v.IsInheritedValue() || v.IsUnsetValue()) {

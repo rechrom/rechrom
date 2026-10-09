@@ -56,6 +56,8 @@ mod typography_parser;
 mod text_box_parser;
 #[path = "production_column_rule_parser.rs"]
 mod column_rule_parser;
+#[path = "production_rule_inset_parser.rs"]
+mod rule_inset_parser;
 #[path = "production_stable_misc_parser.rs"]
 mod stable_misc_parser;
 #[path = "production_reflect_parser.rs"]
@@ -1000,6 +1002,7 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
     if id==CSSPropertyID::kWebkitBoxReflect {return reflect_parser::Consume(stream,mode);}
     if stable_misc_parser::IsProperty(id) { return stable_misc_parser::Consume(id,stream,mode); }
     if column_rule_parser::IsProperty(id) { return column_rule_parser::Consume(id, stream, mode); }
+    if rule_inset_parser::IsProperty(id) { return rule_inset_parser::Consume(id, stream, mode); }
     if text_box_parser::IsProperty(id) { return text_box_parser::Consume(id, stream, mode); }
     if typography_parser::IsTypographyProperty(id) {
         return typography_parser::Consume(id, stream, mode);
@@ -4287,6 +4290,7 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
     }
     if id==CSSPropertyID::kFontSynthesis {return stable_misc_parser::FontSynthesis(stream,out);}
     if column_rule_parser::IsShorthand(id) { return column_rule_parser::ParseShorthand(id,stream,mode,out); }
+    if rule_inset_parser::IsShorthand(id) { return rule_inset_parser::Expand(id,stream,mode,out); }
     if line_parser::IsLineShorthand(id) {
         return line_parser::ParseShorthand(id, stream, mode, out);
     }

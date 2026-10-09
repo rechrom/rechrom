@@ -157,6 +157,8 @@ grid_lanes_cluster={'GridLanes','GridLanesDirection','GridLanesPack'}
 manual.update(grid_lanes_cluster)
 rule_behavior_cluster={'RuleBreak','RuleVisibilityItems','ColumnRuleBreak','RowRuleBreak','ColumnRuleVisibilityItems','RowRuleVisibilityItems'}
 manual.update(rule_behavior_cluster)
+rule_inset_cluster={axis+'RuleInset'+suffix for axis in ('Column','Row','') for suffix in ('','Cap','Junction','Start','End')} | {axis+'RuleInset'+suffix for axis in ('Column','Row') for suffix in ('CapStart','CapEnd','JunctionStart','JunctionEnd')}
+manual.update(rule_inset_cluster)
 render_delay_cluster={'DynamicRangeLimit','FlowTolerance','InterestDelay','InterestDelayStart','InterestDelayEnd'}
 manual.update(render_delay_cluster)
 timeline_trigger_cluster={'TimelineTriggerName','TimelineTriggerSource','TimelineTriggerActivationRangeStart','TimelineTriggerActivationRangeEnd','TimelineTriggerActiveRangeStart','TimelineTriggerActiveRangeEnd','TimelineTrigger','TimelineTriggerActivationRange','TimelineTriggerActiveRange'}
@@ -352,6 +354,10 @@ for prop,consumer in {
     'RuleStyle': 'ConsumeGapDecorationPropertyList / one style list shared by column and row',
     'RuleWidth': 'ConsumeGapDecorationPropertyList / one width list shared by column and row',
     'Rule': 'ConsumeGapDecorationsRuleShorthand / same width-style-color lists into column then row; no inset reset',
+    **{prop: 'ConsumeGapDecorationsRuleInsetStartEndShorthand / overlap-join or signed length-percent into native Length' for prop in rule_inset_cluster if prop.endswith(('CapStart','CapEnd','JunctionStart','JunctionEnd'))},
+    **{prop: 'ConsumeGapDecorationsRuleInsetShorthand / cap pair, optional slash junction pair and source repetition defaults' for prop in ('ColumnRuleInset','RowRuleInset','RuleInset')},
+    **{prop: 'ConsumeGapDecorationsRuleInsetCapJunctionShorthand / start and optional end, source provenance preserved' for prop in rule_inset_cluster if prop.endswith(('InsetCap','InsetJunction'))},
+    **{prop: 'ConsumeGapDecorationsRuleInsetStartEndShorthand / one shared value for cap and junction on the selected end' for prop in rule_inset_cluster if prop.endswith(('InsetStart','InsetEnd'))},
     'FontSynthesis': 'FontSynthesis::ParseShorthand / complete source weight-style-small-caps reset (no position property in checkout)',
     'FontSynthesisWeight': 'source keyword grammar / auto-none native FontDescription bitfield',
     'FontSynthesisStyle': 'source keyword grammar / auto-none native FontDescription bitfield',
@@ -381,6 +387,7 @@ for prop,consumer in {
     'Scale': 'Scale::ParseSingleValue / ConsumeNumberOrPercent',
     'Translate': 'Translate::ParseSingleValue / ConsumeLengthOrPercent / ConsumeLength',
     'ClipPath': 'ClipPath::ParseSingleValue / ConsumeBasicShape / ConsumeGeometryBox / ConsumeUrl',
+    'BorderShape': 'BorderShape::ParseSingleValue / ConsumeBasicShapeAndGeometryBox',
     'Cursor': 'Cursor::ParseSingleValue / keyword branch / ConsumeImage',
     'ShapeOutside': 'ShapeOutside::ParseSingleValue / ConsumeImageOrNone / ConsumeBasicShape / ConsumeShapeBox',
     'AccentColor': 'AccentColor::ParseSingleValue / auto or ConsumeColor',
@@ -432,6 +439,8 @@ for prop,(file,line,consumer) in sorted(locations.items()):
         if prop=='GridLanes': pending += '; shared track-list bracketed/line names/repeat/minmax/fit-content/subgrid; shared CSSMath/length/changed-zoom contexts'
     if prop in rule_behavior_cluster:
         coverage='stable consumer complete'; pending='none'
+    if prop in rule_inset_cluster:
+        coverage='typed consumer branches'; pending='shared CSSMath unsupported functions/typed arithmetic; real font-metric/container-relative length conversion; changed-zoom inheritance requires standardized browser zoom owner'
     if prop in render_delay_cluster:
         coverage='typed consumer branches'; pending='extended shared CSSMath functions/typed arithmetic'
         if prop=='DynamicRangeLimit': pending += '; CSSParserLocalContext::FunctionLocalContext adapter'
@@ -653,6 +662,16 @@ for prop,(file,line,consumer) in sorted(locations.items()):
     if prop == 'Content':
         coverage='text branches'
         pending='images/quotes/counters/alternative text; attr uses shared substitution'
+    if prop == 'BorderShape':
+        coverage='typed consumer branches'
+        pending='circle/ellipse/inset/rect/xywh/path/shape shared typed/native BasicShape owners; native polygon GetPath; computed-value serialization; cross-zoom inheritance reapplication; relative-unit conversion contexts'
+    if prop.startswith('Corner'):
+        if prop.endswith('Shape'):
+            coverage='typed consumer branches'
+            pending='shared CSSMath unsupported functions/typed arithmetic and contextual number resolution; computed-value serialization'
+        else:
+            coverage='runtime-gated typed consumer'
+            pending='CSSCornersShorthand experimental (stable disabled): enabled ExecutionContext exposure, matching-shorthand index capacity and CSSOM serialization; shared CSSMath and radius length contexts'
     ledger_rows.append(f'{prop}\t{coverage}\t{file}\t{line}\t{consumer}\t{pending}')
 out += ['_ => ("third_party/blink/renderer/core/css/parser/css_property_parser.cc", 129, "CSSProperty::ParseShorthand / generated ParseSingleValue"),','} }']
 (HERE/'production_property_parser_ledger.tsv').write_text('\n'.join(ledger_rows)+'\n')

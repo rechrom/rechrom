@@ -278,9 +278,9 @@ BorderRightStyle	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer
 BorderRightStyle	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5075
 BorderRightStyle	Value	Identifier	identifier-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5078
 BorderRightWidth	Value	NativeBorder	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5116
-BorderShape	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5145
-BorderShape	Inherit		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5148
-BorderShape	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5156
+BorderShape	Initial	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5145
+BorderShape	Inherit	NativeCorner	production-same-zoom-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5148
+BorderShape	Value	NativeCorner	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5156
 BorderTopColor	Initial	NativeBorder	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5276
 BorderTopColor	Inherit	NativeBorder	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5280
 BorderTopColor	Value	NativeBorder	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	5284
@@ -418,18 +418,18 @@ ContentVisibility	Value	Identifier	identifier-branch	out/Min/gen/third_party/bli
 Continue	Initial	NativeLinePagination	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6934
 Continue	Inherit	NativeLinePagination	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6937
 Continue	Value	NativeLinePagination	production-runtime-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6940
-CornerBottomLeftShape	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6978
-CornerBottomLeftShape	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6981
-CornerBottomLeftShape	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6984
-CornerBottomRightShape	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7022
-CornerBottomRightShape	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7025
-CornerBottomRightShape	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7028
-CornerTopLeftShape	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7230
-CornerTopLeftShape	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7233
-CornerTopLeftShape	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7236
-CornerTopRightShape	Initial	Initial	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7274
-CornerTopRightShape	Inherit	Inherit	complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7277
-CornerTopRightShape	Value		unsupported	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7280
+CornerBottomLeftShape	Initial	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6978
+CornerBottomLeftShape	Inherit	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6981
+CornerBottomLeftShape	Value	NativeCorner	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	6984
+CornerBottomRightShape	Initial	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7022
+CornerBottomRightShape	Inherit	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7025
+CornerBottomRightShape	Value	NativeCorner	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7028
+CornerTopLeftShape	Initial	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7230
+CornerTopLeftShape	Inherit	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7233
+CornerTopLeftShape	Value	NativeCorner	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7236
+CornerTopRightShape	Initial	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7274
+CornerTopRightShape	Inherit	NativeCorner	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7277
+CornerTopRightShape	Value	NativeCorner	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7280
 CounterIncrement	Initial	NativeListCounter	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7303
 CounterIncrement	Inherit	NativeListCounter	production-complete	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7308
 CounterIncrement	Value	NativeListCounter	production-typed-branch	out/Min/gen/third_party/blink/renderer/core/css/properties/longhands.cc	7324
