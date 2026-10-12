@@ -1,6 +1,8 @@
 #![allow(non_snake_case)]
 
-use font_engine::{Font, FontDescription, FontFamily, FontSelector, SimpleFontData};
+use font_engine::{
+    Font, FontDescription, FontFallbackMetadata, FontFamily, FontSelector, SimpleFontData,
+};
 
 use crate::internal::layout_font_resolver::NativeFontRequest;
 use crate::internal::layout_input::WritingMode;
@@ -15,6 +17,8 @@ unsafe extern "Rust" {
         description: &FontDescription,
         ordered_fonts: &[*const SimpleFontData],
         primary_font: *const SimpleFontData,
+        fallback_metadata: &[FontFallbackMetadata],
+        font_group_length: usize,
     ) -> Font;
 }
 
@@ -45,7 +49,8 @@ pub fn FontFromSelector(description: &FontDescription, _selector: *mut FontSelec
         description.Weight().RawValue() as f64 / 4.0,
         description.Style().RawValue() >= 14 * 4,
         description.Orientation(),
-    );
+    )
+    .WithBaseDescription(description);
     let resolver = CurrentNativeFontResolver();
     let resolved = unsafe { &mut *resolver }.Resolve(&request);
     let primary_font = resolved.PrimaryFont();
@@ -55,7 +60,15 @@ pub fn FontFromSelector(description: &FontDescription, _selector: *mut FontSelec
         .iter()
         .map(|font| font.Get() as *const SimpleFontData)
         .collect();
-    unsafe { FontNewFromResolvedData(description, &ordered_fonts, primary_font) }
+    unsafe {
+        FontNewFromResolvedData(
+            description,
+            &ordered_fonts,
+            primary_font,
+            resolved.FallbackMetadata(),
+            resolved.FontGroupLength(),
+        )
+    }
 }
 
 // The constructor declaration lives in font_engine; this package supplies

@@ -1,10 +1,12 @@
 use crate::{CompositorScrollOffset, UnsupportedReason};
+use layoutng_assembly::fragment_tree::StickyAxisPaintData;
 use layoutng_assembly::internal::layout_input::TransformMatrix;
 use layoutng_assembly::internal::paint_input::{PaintBlendMode, PaintCornerRadii, PaintFilterType};
 use paint::paint_engine::{PaintRect, RasterEffectOutset};
 use paint::paint_property_tree::{
     ClipPaintPropertyNode, PropertyTreeState, TransformPaintPropertyNode,
 };
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -21,9 +23,18 @@ fn transform_diagnostic(first: &Arc<TransformPaintPropertyNode>, reason: &str, r
     );
     let mut current = Some(first);
     while let Some(node) = current {
-        eprintln!("[layer_tile transform state] node={} parent={:?} matrix={:?} origin={:?} scroll={:?} reasons={:?}",
-            node.id, node.parent.as_ref().map(|parent| parent.id), node.matrix.values,
-            node.origin, node.scroll.as_ref().map(|scroll| scroll.id), node.direct_compositing_reasons);
+        eprintln!(
+            "[layer_tile transform state] node={} parent={:?} matrix={:?} origin={:?} flatten={} context={} backface={:?} scroll={:?} reasons={:?}",
+            node.id,
+            node.parent.as_ref().map(|parent| parent.id),
+            node.matrix.values,
+            node.origin,
+            node.flattens_inherited_transform,
+            node.rendering_context_id,
+            node.backface_visibility,
+            node.scroll.as_ref().map(|scroll| scroll.id),
+            node.direct_compositing_reasons
+        );
         current = node.parent.as_ref();
     }
 }
@@ -128,6 +139,232 @@ fn affine_2d(matrix: &TransformMatrix) -> bool {
     })
 }
 
+fn multiply_4x4(left: TransformMatrix, right: TransformMatrix) -> TransformMatrix {
+    let mut out = TransformMatrix { values: [0.0; 16] };
+    for column in 0..4 {
+        for row in 0..4 {
+            out.values[column * 4 + row] = (0..4)
+                .map(|k| left.values[k * 4 + row] * right.values[column * 4 + k])
+                .sum();
+        }
+    }
+    out
+}
+
+fn flatten_3d(mut matrix: TransformMatrix) -> TransformMatrix {
+    matrix.values[2] = 0.0;
+    matrix.values[6] = 0.0;
+    matrix.values[8] = 0.0;
+    matrix.values[9] = 0.0;
+    matrix.values[10] = 1.0;
+    matrix.values[11] = 0.0;
+    matrix.values[14] = 0.0;
+    matrix
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct StickyAxisTotals {
+    sticky_box: f64,
+    containing_block: f64,
+}
+
+fn sticky_axis_offset(
+    constraint: StickyAxisPaintData,
+    scroll_position: f64,
+    ancestor_sticky_box_offset: f64,
+    ancestor_containing_block_offset: f64,
+) -> f64 {
+    let sticky_start = constraint.scroll_container_relative_sticky_box_offset
+        + ancestor_sticky_box_offset
+        + ancestor_containing_block_offset;
+    let sticky_end = sticky_start + constraint.scroll_container_relative_sticky_box_size;
+    let containing_start = constraint.scroll_container_relative_containing_block_offset
+        + ancestor_containing_block_offset;
+    let containing_end =
+        containing_start + constraint.scroll_container_relative_containing_block_size;
+    let constraint_start = constraint.constraining_offset + scroll_position;
+    let constraint_end = constraint_start + constraint.constraining_size;
+    let mut offset = 0.0;
+    // cc::StickyPositionConstraint applies the end edge first. Layout has
+    // already resolved logical-direction precedence into these physical insets.
+    if let Some(max_inset) = constraint.max_inset {
+        let delta = (constraint_end - max_inset - sticky_end)
+            .min(0.0)
+            .max((containing_start - sticky_start).min(0.0));
+        offset += delta;
+    }
+    if let Some(min_inset) = constraint.min_inset {
+        let delta = (constraint_start + min_inset - sticky_start)
+            .max(0.0)
+            .min((containing_end - sticky_end).max(0.0));
+        offset += delta;
+    }
+    offset
+}
+
+/// Complete property-tree mapping to device space. Flattening occurs at the
+/// same node boundary carried by Blink's TransformPaintPropertyNode; callers
+/// may retain the 4x4 result or admit only its affine subset.
+fn compositor_transforms_3d_with_scroll(
+    space: &Arc<TransformPaintPropertyNode>,
+    scale: f64,
+    scroll_override: Option<CompositorScrollOffset>,
+) -> Result<(TransformMatrix, Option<(u64, TransformMatrix)>), UnsupportedReason> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(UnsupportedReason::NonTranslationTransform);
+    }
+    let mut ancestors = Vec::new();
+    let mut current = Some(space);
+    while let Some(node) = current {
+        if node.origin != [0.0; 3] || node.matrix.values.iter().any(|value| !value.is_finite()) {
+            return Err(UnsupportedReason::NonTranslationTransform);
+        }
+        ancestors.push(node);
+        current = node.parent.as_ref();
+    }
+    let rendering_context_id = ancestors
+        .iter()
+        .find_map(|node| (node.rendering_context_id != 0).then_some(node.rendering_context_id));
+    let mut result = TransformMatrix::default();
+    result.values[0] = scale;
+    result.values[5] = scale;
+    let mut context_result = TransformMatrix::default();
+    let mut potentially_animated = false;
+    let mut scroll_positions = HashMap::new();
+    let mut overridden_scroll_owner = None;
+    let mut horizontal_totals: HashMap<u64, StickyAxisTotals> = HashMap::new();
+    let mut vertical_totals: HashMap<u64, StickyAxisTotals> = HashMap::new();
+    let root_scroll = PropertyTreeState::default().transform.scroll.clone();
+    for node in ancestors.into_iter().rev() {
+        if node.flattens_inherited_transform {
+            result = flatten_3d(result);
+        }
+        potentially_animated |= node.direct_compositing_reasons.iter().any(|reason| {
+            matches!(
+                *reason,
+                "ActiveTransformAnimation"
+                    | "ActiveScaleAnimation"
+                    | "ActiveRotateAnimation"
+                    | "ActiveTranslateAnimation"
+            )
+        });
+        let mut local = node.matrix;
+        if let Some(scroll) = node.scroll.as_ref() {
+            let mut position = (-node.matrix.values[12], -node.matrix.values[13]);
+            if scroll_override.is_some_and(|override_| scroll.id == override_.scroll_node_id) {
+                let override_ = scroll_override.unwrap();
+                local.values[12] += override_.translation_x;
+                local.values[13] += override_.translation_y;
+                position.0 -= override_.translation_x;
+                position.1 -= override_.translation_y;
+                overridden_scroll_owner = Some(scroll.owner_client_id);
+            }
+            scroll_positions.insert(scroll.owner_client_id, position);
+        }
+        if let Some(constraint) = node.sticky_constraint {
+            let resolve_axis =
+                |axis: StickyAxisPaintData,
+                 position: f64,
+                 totals: &HashMap<u64, StickyAxisTotals>| {
+                    if overridden_scroll_owner != Some(axis.scroll_container_client_id) {
+                        return (
+                            axis.current_sticky_offset,
+                            StickyAxisTotals {
+                                sticky_box: axis.current_total_sticky_box_offset,
+                                containing_block: axis.current_total_containing_block_offset,
+                            },
+                        );
+                    }
+                    let sticky_ancestor = totals
+                        .get(&axis.nearest_sticky_box_client_id)
+                        .copied()
+                        .unwrap_or_default()
+                        .sticky_box;
+                    let containing_ancestor = totals
+                        .get(&axis.nearest_containing_block_client_id)
+                        .copied()
+                        .unwrap_or_default()
+                        .containing_block;
+                    let own =
+                        sticky_axis_offset(axis, position, sticky_ancestor, containing_ancestor);
+                    (
+                        own,
+                        StickyAxisTotals {
+                            sticky_box: sticky_ancestor + own,
+                            containing_block: sticky_ancestor + containing_ancestor + own,
+                        },
+                    )
+                };
+            if let Some(axis) = constraint.horizontal {
+                let position = scroll_positions
+                    .get(&axis.scroll_container_client_id)
+                    .map_or(0.0, |position| position.0);
+                let (offset, totals) = resolve_axis(axis, position, &horizontal_totals);
+                local.values[12] += offset - axis.current_sticky_offset;
+                horizontal_totals.insert(constraint.owner_client_id, totals);
+            }
+            if let Some(axis) = constraint.vertical {
+                let position = scroll_positions
+                    .get(&axis.scroll_container_client_id)
+                    .map_or(0.0, |position| position.1);
+                let (offset, totals) = resolve_axis(axis, position, &vertical_totals);
+                local.values[13] += offset - axis.current_sticky_offset;
+                vertical_totals.insert(constraint.owner_client_id, totals);
+            }
+        }
+        if rendering_context_id.is_some_and(|id| node.rendering_context_id == id) {
+            if node.flattens_inherited_transform {
+                context_result = flatten_3d(context_result);
+            }
+            context_result = multiply_4x4(context_result, local);
+        }
+        result = multiply_4x4(result, local);
+        let real_scroll = node.scroll.as_ref().is_some_and(|scroll| {
+            root_scroll
+                .as_ref()
+                .is_none_or(|root| !scroll.lifecycle.same_node(&root.lifecycle))
+        });
+        if real_scroll
+            && !potentially_animated
+            && affine_2d(&result)
+            && result.values[1] == 0.0
+            && result.values[4] == 0.0
+            && result.values[0] != 0.0
+            && result.values[5] != 0.0
+        {
+            result.values[12] = result.values[12].round();
+            result.values[13] = result.values[13].round();
+        }
+    }
+    if result.values.iter().any(|value| !value.is_finite())
+        || context_result.values.iter().any(|value| !value.is_finite())
+    {
+        return Err(UnsupportedReason::NonTranslationTransform);
+    }
+    Ok((result, rendering_context_id.map(|id| (id, context_result))))
+}
+
+pub fn compositor_transform_3d_with_scroll(
+    space: &Arc<TransformPaintPropertyNode>,
+    scale: f64,
+    scroll_override: Option<CompositorScrollOffset>,
+) -> Result<TransformMatrix, UnsupportedReason> {
+    compositor_transforms_3d_with_scroll(space, scale, scroll_override)
+        .map(|transforms| transforms.0)
+}
+
+/// Transform used by cc for backface visibility inside a shared 3D sorting
+/// context. It includes the context root's to-parent matrix, but excludes
+/// transforms above that root. Isolated layers return `None`.
+pub fn compositor_context_transform_3d_with_scroll(
+    space: &Arc<TransformPaintPropertyNode>,
+    scale: f64,
+    scroll_override: Option<CompositorScrollOffset>,
+) -> Result<Option<(u64, TransformMatrix)>, UnsupportedReason> {
+    compositor_transforms_3d_with_scroll(space, scale, scroll_override)
+        .map(|transforms| transforms.1)
+}
+
 /// Compositor screen/device-space mapping, separate from logical paint/raster
 /// mapping. cc::TransformTree::UpdateSnapping rounds only scroll nodes, before
 /// descendants inherit their transform; an ordinary CSS translation retains
@@ -145,72 +382,8 @@ pub fn compositor_transform_with_scroll(
     scale: f64,
     scroll_override: Option<CompositorScrollOffset>,
 ) -> Result<TransformMatrix, UnsupportedReason> {
-    if !scale.is_finite() || scale <= 0.0 {
-        return Err(UnsupportedReason::NonTranslationTransform);
-    }
-    let mut ancestors = Vec::new();
-    let mut current = Some(space);
-    while let Some(node) = current {
-        let m = &node.matrix.values;
-        let pure_translation = m[0] == 1.0 && m[5] == 1.0 && m[1] == 0.0 && m[4] == 0.0;
-        // A pivot has no effect on translation. General affine origins are
-        // still required to be folded by the existing source builder.
-        if !affine_2d(&node.matrix) || (!pure_translation && node.origin != [0.0; 3]) {
-            return Err(UnsupportedReason::NonTranslationTransform);
-        }
-        ancestors.push(node);
-        current = node.parent.as_ref();
-    }
-    let mut result = TransformMatrix::default();
-    result.values[0] = scale;
-    result.values[5] = scale;
-    let mut potentially_animated = false;
-    let root_scroll = PropertyTreeState::default().transform.scroll.clone();
-    for node in ancestors.into_iter().rev() {
-        potentially_animated |= node.direct_compositing_reasons.iter().any(|reason| {
-            matches!(
-                *reason,
-                "ActiveTransformAnimation"
-                    | "ActiveScaleAnimation"
-                    | "ActiveRotateAnimation"
-                    | "ActiveTranslateAnimation"
-            )
-        });
-        let p = result.values;
-        let mut m = node.matrix.values;
-        if scroll_override.is_some_and(|override_| {
-            node.scroll
-                .as_ref()
-                .is_some_and(|scroll| scroll.id == override_.scroll_node_id)
-        }) {
-            m[13] += scroll_override.unwrap().translation_y;
-        }
-        result.values[0] = p[0] * m[0] + p[4] * m[1];
-        result.values[1] = p[1] * m[0] + p[5] * m[1];
-        result.values[4] = p[0] * m[4] + p[4] * m[5];
-        result.values[5] = p[1] * m[4] + p[5] * m[5];
-        result.values[12] = p[0] * m[12] + p[4] * m[13] + p[12];
-        result.values[13] = p[1] * m[12] + p[5] * m[13] + p[13];
-        let to_screen = &mut result.values;
-        // The shared root scroll is a sentinel, not a scroll translation.
-        // Scale/translation, invertibility and animation gates mirror cc.
-        let real_scroll = node.scroll.as_ref().is_some_and(|scroll| {
-            root_scroll
-                .as_ref()
-                .is_none_or(|root| !scroll.lifecycle.same_node(&root.lifecycle))
-        });
-        if real_scroll
-            && !potentially_animated
-            && to_screen[1] == 0.0
-            && to_screen[4] == 0.0
-            && to_screen[0] != 0.0
-            && to_screen[5] != 0.0
-        {
-            to_screen[12] = to_screen[12].round();
-            to_screen[13] = to_screen[13].round();
-        }
-    }
-    if !result.values.iter().all(|value| value.is_finite()) {
+    let result = compositor_transform_3d_with_scroll(space, scale, scroll_override)?;
+    if !affine_2d(&result) {
         return Err(UnsupportedReason::NonTranslationTransform);
     }
     Ok(result)
@@ -219,6 +392,8 @@ pub fn compositor_transform_with_scroll(
 #[cfg(test)]
 mod scroll_snapping_test {
     use super::*;
+    use layoutng_assembly::fragment_tree::{StickyAxisPaintData, StickyPositionPaintData};
+    use layoutng_assembly::internal::layout_input::Offset;
     use paint::paint_property_tree::{EffectPaintPropertyNode, ScrollPaintPropertyNode};
 
     #[test]
@@ -227,10 +402,13 @@ mod scroll_snapping_test {
         let scroll = Arc::new(ScrollPaintPropertyNode {
             lifecycle: Default::default(),
             id: 1,
+            owner_client_id: 10,
             parent: root.transform.scroll.clone(),
             overflow_clip: None,
             container_rect: PaintRect::default(),
             contents_rect: PaintRect::default(),
+            minimum_scroll_offset: Offset::default(),
+            maximum_scroll_offset: Offset { x: 0.0, y: 100.0 },
             user_scrollable_horizontal: false,
             user_scrollable_vertical: true,
         });
@@ -243,7 +421,11 @@ mod scroll_snapping_test {
                 parent: Some(parent),
                 matrix,
                 origin: [0.0; 3],
+                flattens_inherited_transform: false,
+                rendering_context_id: 0,
+                backface_visibility: Default::default(),
                 scroll,
+                sticky_constraint: None,
                 direct_compositing_reasons: reasons,
             })
         };
@@ -317,7 +499,9 @@ mod scroll_snapping_test {
             rect: Some(rect),
             radii: PaintCornerRadii::default(),
             clip_path: vec![],
+            clip_path_children: Vec::new(),
             clip_path_even_odd: false,
+            clip_path_error: None,
             pixel_moving_filter: None,
         });
         let effect = Arc::new(EffectPaintPropertyNode {
@@ -347,6 +531,7 @@ mod scroll_snapping_test {
             2.0,
             Some(CompositorScrollOffset {
                 scroll_node_id: 1,
+                translation_x: 0.0,
                 translation_y: -1.0,
             }),
         )
@@ -355,13 +540,125 @@ mod scroll_snapping_test {
         assert_eq!(scrolled_clip.unwrap().y, -2.75);
         assert_eq!(scrolling.matrix.values[13], -0.625);
     }
+
+    #[test]
+    fn impl_scroll_recomputes_sticky_translation_on_both_axes() {
+        let root = PropertyTreeState::default();
+        let scroll = Arc::new(ScrollPaintPropertyNode {
+            lifecycle: Default::default(),
+            id: 11,
+            owner_client_id: 101,
+            parent: root.transform.scroll.clone(),
+            overflow_clip: None,
+            container_rect: PaintRect::default(),
+            contents_rect: PaintRect::default(),
+            minimum_scroll_offset: Offset::default(),
+            maximum_scroll_offset: Offset { x: 500.0, y: 500.0 },
+            user_scrollable_horizontal: true,
+            user_scrollable_vertical: true,
+        });
+        let mut scroll_matrix = TransformMatrix::default();
+        scroll_matrix.values[12] = -20.0;
+        scroll_matrix.values[13] = -20.0;
+        let scrolling = Arc::new(TransformPaintPropertyNode {
+            lifecycle: Default::default(),
+            id: 12,
+            parent: Some(root.transform),
+            matrix: scroll_matrix,
+            origin: [0.0; 3],
+            flattens_inherited_transform: false,
+            rendering_context_id: 0,
+            backface_visibility: Default::default(),
+            scroll: Some(scroll),
+            sticky_constraint: None,
+            direct_compositing_reasons: Vec::new(),
+        });
+        let axis = StickyAxisPaintData {
+            min_inset: Some(0.0),
+            max_inset: None,
+            scroll_container_relative_containing_block_offset: 0.0,
+            scroll_container_relative_containing_block_size: 1000.0,
+            scroll_container_relative_sticky_box_offset: 10.0,
+            scroll_container_relative_sticky_box_size: 20.0,
+            constraining_offset: 0.0,
+            constraining_size: 100.0,
+            scroll_container_client_id: 101,
+            current_sticky_offset: 10.0,
+            current_total_sticky_box_offset: 10.0,
+            current_total_containing_block_offset: 10.0,
+            ..Default::default()
+        };
+        let mut sticky_matrix = TransformMatrix::default();
+        sticky_matrix.values[12] = 10.0;
+        sticky_matrix.values[13] = 10.0;
+        let sticky = Arc::new(TransformPaintPropertyNode {
+            lifecycle: Default::default(),
+            id: 13,
+            parent: Some(scrolling),
+            matrix: sticky_matrix,
+            origin: [0.0; 3],
+            flattens_inherited_transform: false,
+            rendering_context_id: 0,
+            backface_visibility: Default::default(),
+            scroll: None,
+            sticky_constraint: Some(StickyPositionPaintData {
+                owner_client_id: 202,
+                horizontal: Some(axis),
+                vertical: Some(axis),
+            }),
+            direct_compositing_reasons: vec!["StickyPosition"],
+        });
+        let baseline = compositor_transform(&sticky, 1.0).unwrap();
+        assert_eq!((baseline.values[12], baseline.values[13]), (-10.0, -10.0));
+        let moved = compositor_transform_with_scroll(
+            &sticky,
+            1.0,
+            Some(CompositorScrollOffset {
+                scroll_node_id: 11,
+                translation_x: -20.0,
+                translation_y: -20.0,
+            }),
+        )
+        .unwrap();
+        assert_eq!((moved.values[12], moved.values[13]), (-10.0, -10.0));
+    }
+}
+
+#[cfg(test)]
+mod effect_admission_test {
+    use super::*;
+
+    #[test]
+    fn admits_surface_blend_and_formal_mask_but_not_legacy_mask_metadata() {
+        let mut blended = PropertyTreeState::default();
+        Arc::make_mut(&mut blended.effect).blend_mode = PaintBlendMode::kMultiply;
+        assert!(resolve(&blended, 1.0).is_ok());
+        assert!(needs_transparent_backing(&blended));
+
+        let mut masked = PropertyTreeState::default();
+        let mut mask = (*masked.effect).clone();
+        mask.lifecycle = Default::default();
+        mask.id = 1;
+        mask.parent = Some(masked.effect.clone());
+        mask.is_mask = true;
+        masked.effect = Arc::new(mask);
+        assert!(resolve(&masked, 1.0).is_ok());
+
+        let mut legacy = PropertyTreeState::default();
+        Arc::make_mut(&mut legacy.effect).has_mask = true;
+        assert_eq!(
+            resolve(&legacy, 1.0),
+            Err(UnsupportedReason::MissingSemanticRecords)
+        );
+    }
 }
 
 /// PendingLayer-style raster-space upcast for ordinary 2D affine local
 /// transforms, including SVG viewBox scaling and paint-offset translations.
-/// Stop at a real scroll/direct-compositing anchor. Return existing ancestor
-/// nodes, never replacement identities or modified native chunk properties.
-/// Renderer must bake omitted transforms and clips into its local PaintRecord.
+/// Stop at a real scroll/direct-compositing or 3D anchor. Return existing
+/// ancestor nodes, never replacement identities or modified native chunk
+/// properties. Renderer must bake omitted transforms and clips into its local
+/// PaintRecord.
 pub fn raster_properties(
     state: &PropertyTreeState,
 ) -> Result<PropertyTreeState, UnsupportedReason> {
@@ -370,11 +667,20 @@ pub fn raster_properties(
     let mut omitted = Vec::new();
     let mut ancestor = state.transform.clone();
     loop {
-        let real_scroll = ancestor.scroll.as_ref().is_some_and(|scroll| {
+        let composited_scroll = ancestor.scroll.as_ref().is_some_and(|scroll| {
             root_scroll.is_none_or(|root| !scroll.lifecycle.same_node(&root.lifecycle))
+                && (scroll.user_scrollable_horizontal || scroll.user_scrollable_vertical)
         });
-        if real_scroll
+        // PropertyTreeState::CanUpcastWith stops at a *composited* scroll,
+        // not at every ScrollPaintPropertyNode.  Overflow clips create scroll
+        // translations even when neither axis is user-scrollable; Chromium
+        // records those ordinary translations/clips into the parent picture
+        // layer.  Treating all of them as compositor anchors needlessly splits
+        // layers and changes the picture-layer tile/dither coordinate space.
+        if composited_scroll
             || !ancestor.direct_compositing_reasons.is_empty()
+            || !affine_2d(&ancestor.matrix)
+            || ancestor.rendering_context_id != 0
             || ancestor.parent.is_none()
         {
             break;
@@ -398,7 +704,9 @@ pub fn raster_properties(
         omitted.push(ancestor);
         ancestor = parent;
     }
-    translation(&ancestor)?;
+    // A direct-compositing or 3D-context anchor remains outside the raster
+    // record; compositor owns its complete matrix and context identity.
+    compositor_transform_3d_with_scroll(&ancestor, 1.0, None)?;
 
     // PaintChunksToCcLayer can replay simple clips inside a root picture
     // layer, including clips whose local transform is already the root.
@@ -505,7 +813,23 @@ pub fn resolved_compositor_properties_with_scroll(
     scale: f64,
     scroll_override: Option<CompositorScrollOffset>,
 ) -> Result<((f64, f64), Option<PaintRect>), UnsupportedReason> {
-    resolve_with_record_clip_bounds(state, scale, true, false, true, scroll_override)
+    let (matrix, clip) = resolved_compositor_transform_with_scroll(state, scale, scroll_override)?;
+    Ok(((matrix.values[12], matrix.values[13]), clip))
+}
+
+/// Complete impl-side mapping from layer logical coordinates to target device
+/// pixels. The property tree remains Paint-owned; this 4x4 value is the typed
+/// layer_tile -> compositor boundary used for promoted affine and isolated
+/// planar 3D transforms.
+pub fn resolved_compositor_transform_with_scroll(
+    state: &PropertyTreeState,
+    scale: f64,
+    scroll_override: Option<CompositorScrollOffset>,
+) -> Result<(TransformMatrix, Option<PaintRect>), UnsupportedReason> {
+    let matrix = compositor_transform_3d_with_scroll(&state.transform, scale, scroll_override)?;
+    let (_, clip) =
+        resolve_with_record_clip_bounds(state, scale, true, false, true, scroll_override)?;
+    Ok((matrix, clip))
 }
 
 /// Bounding geometry for validating original record clips before raster
@@ -535,12 +859,20 @@ fn valid_record_clip_shape(node: &ClipPaintPropertyNode) -> bool {
     finite_radii && (radii == PaintCornerRadii::default() || node.rect.is_some_and(finite))
 }
 
-/// Shared raster backing policy for opacity, masks and synthetic rounded-clip
-/// surfaces. A page's opaque background must stay outside these groups.
+/// Shared raster backing policy for effect and synthetic clip surfaces. A
+/// page's opaque background must stay outside these groups.
 pub fn needs_transparent_backing(state: &PropertyTreeState) -> bool {
     let mut effect = Some(&state.effect);
     while let Some(node) = effect {
-        if node.opacity != 1.0 || node.is_mask || clip_chain_needs_mask(node.output_clip.as_ref()) {
+        if node.opacity != 1.0
+            || node.is_mask
+            || node.blend_mode != PaintBlendMode::kNormal
+            || node.isolates_blending
+            || !node.filters.is_empty()
+            || !node.backdrop_filters.is_empty()
+            || node.backdrop_filter_has_reference
+            || clip_chain_needs_mask(node.output_clip.as_ref())
+        {
             return true;
         }
         effect = node.parent.as_ref();
@@ -654,6 +986,88 @@ fn project_affine_rect(
         .ok_or(UnsupportedReason::UnsupportedClip)
 }
 
+// GeometryMapper/Viz keep the projected clip bounds only as a visibility and
+// allocation guard. Clip coverage itself remains the retained rect/rrect/path
+// and is evaluated by Renderer in the clip node's transform space. Clip the
+// source quad at the homogeneous near plane before dividing; treating a
+// perspective clip as its un-clipped AABB either rejects valid content or lets
+// pixels on the back side of the camera leak through.
+fn project_compositor_rect(
+    rect: PaintRect,
+    matrix: &TransformMatrix,
+) -> Result<PaintRect, UnsupportedReason> {
+    if affine_2d(matrix) {
+        return project_affine_rect(rect, matrix);
+    }
+    let m = &matrix.values;
+    if m.iter().any(|value| !value.is_finite()) {
+        return Err(UnsupportedReason::UnsupportedClip);
+    }
+    let source = [
+        (rect.x, rect.y),
+        (rect.x + rect.width, rect.y),
+        (rect.x + rect.width, rect.y + rect.height),
+        (rect.x, rect.y + rect.height),
+    ];
+    const NEAR: f64 = 1.0e-6;
+    let source_w = |point: (f64, f64)| m[3] * point.0 + m[7] * point.1 + m[15];
+    let mut clipped = Vec::with_capacity(6);
+    for index in 0..source.len() {
+        let a = source[index];
+        let b = source[(index + 1) % source.len()];
+        let wa = source_w(a);
+        let wb = source_w(b);
+        let a_inside = wa >= NEAR;
+        let b_inside = wb >= NEAR;
+        if a_inside {
+            clipped.push(a);
+        }
+        if a_inside != b_inside {
+            let t = (NEAR - wa) / (wb - wa);
+            clipped.push((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t));
+        }
+    }
+    if clipped.is_empty() {
+        return Ok(PaintRect::default());
+    }
+    let mut left = f64::INFINITY;
+    let mut top = f64::INFINITY;
+    let mut right = f64::NEG_INFINITY;
+    let mut bottom = f64::NEG_INFINITY;
+    // DeviceRect currently has signed i32 edges. A plane crossing the near
+    // clip can project toward infinity; saturating its scheduling bound to the
+    // representable target is conservative, while the retained mask still
+    // performs the exact near-plane test.
+    let limit = f64::from(i32::MAX);
+    for (x, y) in clipped {
+        let w = source_w((x, y));
+        if !w.is_finite() || w < NEAR {
+            continue;
+        }
+        let px = ((m[0] * x + m[4] * y + m[12]) / w).clamp(-limit, limit);
+        let py = ((m[1] * x + m[5] * y + m[13]) / w).clamp(-limit, limit);
+        if !px.is_finite() || !py.is_finite() {
+            return Err(UnsupportedReason::UnsupportedClip);
+        }
+        left = left.min(px);
+        top = top.min(py);
+        right = right.max(px);
+        bottom = bottom.max(py);
+    }
+    if left == f64::INFINITY {
+        return Ok(PaintRect::default());
+    }
+    let projected = PaintRect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    };
+    finite(projected)
+        .then_some(projected)
+        .ok_or(UnsupportedReason::UnsupportedClip)
+}
+
 pub(crate) fn pixel_aligned(value: f64, scale: f64) -> bool {
     let pixels = value * scale;
     pixels.is_finite() && pixels == pixels.round()
@@ -680,28 +1094,88 @@ fn resolve_with_record_clip_bounds(
     compositor: bool,
     scroll_override: Option<CompositorScrollOffset>,
 ) -> Result<((f64, f64), Option<PaintRect>), UnsupportedReason> {
-    let mut delta = translation(&state.transform)?;
-    if compositor {
-        let matrix = compositor_transform_with_scroll(&state.transform, scale, scroll_override)?;
-        delta = (matrix.values[12], matrix.values[13]);
-    }
+    let delta = if compositor {
+        let matrix = compositor_transform_3d_with_scroll(&state.transform, scale, scroll_override)?;
+        (matrix.values[12], matrix.values[13])
+    } else {
+        translation(&state.transform)?
+    };
     let mut effect = Some(&state.effect);
     let mut root_clip = None;
     while let Some(node) = effect {
         if !node.opacity.is_finite() || !(0.0..=1.0).contains(&node.opacity) {
             return Err(UnsupportedReason::OpacityEffect);
         }
-        if node.blend_mode != PaintBlendMode::kNormal || node.isolates_blending {
-            return Err(UnsupportedReason::BlendEffect);
-        }
+        // Chromium represents mix-blend-mode and `isolation:isolate` with
+        // effect/render surfaces. They are valid tiling input: Renderer keeps
+        // the shared effect identity, restores the surface once with Skia's
+        // corresponding blend equation, and treats the scope as an occlusion
+        // barrier. Do not flatten the blend into individual raster tiles.
         // Chromium promotes CSS filters to an isolated effect/render pass.
-        // This CPU path currently implements Skia's blur image filter; keep
-        // every other operation explicit instead of silently flattening it.
-        if node.filters.iter().any(|filter| {
-            filter.r#type != PaintFilterType::kBlur
-                || !filter.amount.is_finite()
-                || filter.amount < 0.0
-        }) {
+        // Validate the complete shorthand-filter payload here; Renderer owns
+        // execution of the ordered chain on the isolated surface.
+        if node.backdrop_filter_has_reference
+            || node
+                .filters
+                .iter()
+                .chain(&node.backdrop_filters)
+                .any(|filter| {
+                    let finite = filter.amount.is_finite()
+                        && filter.blur_radius.is_finite()
+                        && filter.offset.x.is_finite()
+                        && filter.offset.y.is_finite()
+                        && [
+                            filter.color.red,
+                            filter.color.green,
+                            filter.color.blue,
+                            filter.color.alpha,
+                        ]
+                        .iter()
+                        .all(|value| value.is_finite());
+                    !finite
+                        || match filter.r#type {
+                            PaintFilterType::kReference => {
+                                filter.reference_graph.is_none() || filter.reference_error.is_some()
+                            }
+                            PaintFilterType::kGrayscale
+                            | PaintFilterType::kSepia
+                            | PaintFilterType::kInvert
+                            | PaintFilterType::kOpacity => !(0.0..=1.0).contains(&filter.amount),
+                            PaintFilterType::kSaturate
+                            | PaintFilterType::kBrightness
+                            | PaintFilterType::kContrast
+                            | PaintFilterType::kBlur => filter.amount < 0.0,
+                            PaintFilterType::kHueRotate => false,
+                            PaintFilterType::kDropShadow => filter.blur_radius < 0.0,
+                            PaintFilterType::kBoxReflect => {
+                                !filter.reflection_offset.is_finite()
+                                    || filter.reflection_offset_percentage != 0.0
+                                    || filter.reflection_offset_calculation.is_some()
+                                    || filter.reflection_mask_image.is_some()
+                                    || filter.reflection_mask_layers.iter().any(|layer| {
+                                        ![
+                                            layer.clip_origin.x,
+                                            layer.clip_origin.y,
+                                            layer.clip_size.width,
+                                            layer.clip_size.height,
+                                            layer.source_origin.x,
+                                            layer.source_origin.y,
+                                            layer.source_size.width,
+                                            layer.source_size.height,
+                                            layer.tile_origin.x,
+                                            layer.tile_origin.y,
+                                            layer.tile_size.width,
+                                            layer.tile_size.height,
+                                            layer.tile_spacing.width,
+                                            layer.tile_spacing.height,
+                                        ]
+                                        .iter()
+                                        .all(|value| value.is_finite())
+                                    })
+                            }
+                        }
+                })
+        {
             return Err(UnsupportedReason::FilterEffect);
         }
         // A Mask is a real DstIn effect child, not a compositor coverage
@@ -710,7 +1184,12 @@ fn resolve_with_record_clip_bounds(
             return Err(UnsupportedReason::MaskEffect);
         }
         if node.has_mask {
-            return Err(UnsupportedReason::MaskEffect);
+            // This legacy bit has no mask-source child or PaintRecord. Formal
+            // CSS masks use an `is_mask` DstIn child whose parent is the
+            // isolated content effect above. Admitting this wrapper would
+            // silently render unmasked content, so classify it as missing
+            // semantic input rather than rejecting the supported Mask path.
+            return Err(UnsupportedReason::MissingSemanticRecords);
         }
         if let Some(output_clip) = &node.output_clip {
             intersect_clip_chain(
@@ -773,12 +1252,12 @@ fn intersect_clip_chain(
                 return Err(UnsupportedReason::UnsupportedClip);
             }
             let rect = if compositor {
-                let matrix = compositor_transform_with_scroll(
+                let matrix = compositor_transform_3d_with_scroll(
                     &node.local_transform_space,
                     scale,
                     scroll_override,
                 )?;
-                project_affine_rect(rect, &matrix)
+                project_compositor_rect(rect, &matrix)
             } else if allow_affine_record_clip {
                 project_record_rect(rect, &node.local_transform_space)
             } else {
@@ -820,10 +1299,24 @@ fn clip_diagnostic(
     });
     eprintln!(
         "[layer_tile clip unsupported] reason={} node={} parent={:?} rect={:?} radii={:?} pathlen={} pixelmovingfilter={} projected={:?} device_edges={:?} scale={} transform={} parent_transform={:?} axis={} sx={} sy={} tx={} ty={} origin={:?}",
-        reason, node.id, node.parent.as_ref().map(|parent| parent.id), node.rect,
-        node.radii, node.clip_path.len(), node.pixel_moving_filter.is_some(), projected,
-        projected_edges, scale, transform.id, transform.parent.as_ref().map(|parent| parent.id),
-        axis_aligned(&transform.matrix), m[0], m[5], m[12], m[13], transform.origin,
+        reason,
+        node.id,
+        node.parent.as_ref().map(|parent| parent.id),
+        node.rect,
+        node.radii,
+        node.clip_path.len(),
+        node.pixel_moving_filter.is_some(),
+        projected,
+        projected_edges,
+        scale,
+        transform.id,
+        transform.parent.as_ref().map(|parent| parent.id),
+        axis_aligned(&transform.matrix),
+        m[0],
+        m[5],
+        m[12],
+        m[13],
+        transform.origin,
     );
     let mut current = Some(transform);
     while let Some(space) = current {

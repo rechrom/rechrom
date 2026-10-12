@@ -266,6 +266,7 @@ impl image_decoder::image_decoder::ImageDecoder for Images {
         Ok(image_decoder::image_decoder::DecodedImage {
             width: 1,
             height: 1,
+            orientation: Default::default(),
             rgba8: input.bytes.into(),
         })
     }

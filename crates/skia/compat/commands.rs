@@ -2,6 +2,8 @@
 //! This is the explicitly local Rust command interface, not a translation of Chromium's
 //! DisplayItemList or an assertion of C++ SkCanvas API/ABI equivalence.
 #![allow(non_camel_case_types)]
+use std::sync::Arc;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Color {
@@ -165,6 +167,7 @@ pub enum PaintBlendMode {
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaintFilterType {
+    kReference,
     kBlur,
     kBrightness,
     kContrast,
@@ -175,15 +178,30 @@ pub enum PaintFilterType {
     kSaturate,
     kSepia,
     kDropShadow,
+    kBoxReflect,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaintReflectionDirection {
+    kAbove,
+    #[default]
+    kBelow,
+    kLeft,
+    kRight,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct PaintFilterOperation {
     pub r#type: PaintFilterType,
     pub amount: f64,
     pub offset: Offset,
     pub blur_radius: f64,
     pub color: Color,
+    pub reflection_direction: PaintReflectionDirection,
+    pub reflection_offset: f64,
+    pub reflection_has_mask: bool,
+    pub reflection_mask: Option<crate::compat::layer_filters::RenderReflectionMask>,
 }
 impl Default for PaintFilterOperation {
     fn default() -> Self {
@@ -193,6 +211,10 @@ impl Default for PaintFilterOperation {
             offset: Offset::default(),
             blur_radius: 0.0,
             color: Color::default(),
+            reflection_direction: PaintReflectionDirection::kBelow,
+            reflection_offset: 0.0,
+            reflection_has_mask: false,
+            reflection_mask: None,
         }
     }
 }
@@ -247,11 +269,123 @@ pub enum PaintRadialExtent {
     kFarthestCorner,
 }
 
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaintColorInterpolationSpace {
+    #[default]
+    kNone,
+    kSRGB,
+    kSRGBLegacy,
+    kSRGBLinear,
+    kDisplayP3,
+    kDisplayP3Linear,
+    kHSL,
+    kHWB,
+    kA98RGB,
+    kProPhotoRGB,
+    kRec2020,
+    kRec2100Linear,
+    kLab,
+    kLch,
+    kOklab,
+    kOklch,
+    kXYZD50,
+    kXYZD65,
+}
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaintHueInterpolationMethod {
+    #[default]
+    kShorter,
+    kLonger,
+    kIncreasing,
+    kDecreasing,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PaintColorStop {
     pub offset: f64,
     pub color: Color,
+    pub source_color_space: PaintColorInterpolationSpace,
+    pub source_components: [f32; 4],
+    pub missing_components: u8,
     pub offset_length: f64,
+    pub is_hint: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SvgPatternGeometry {
+    kPath,
+    kRectangle,
+    kEllipse,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SvgPatternPrimitive {
+    pub geometry: SvgPatternGeometry,
+    pub bounds_offset: Offset,
+    pub bounds_width: f64,
+    pub bounds_height: f64,
+    pub rectangle_radius_x: f64,
+    pub rectangle_radius_y: f64,
+    pub path: Vec<PaintPathCommand>,
+    pub fill: Option<Color>,
+    pub stroke: Option<Color>,
+    pub fill_server: Option<PaintShader>,
+    pub stroke_server: Option<PaintShader>,
+    pub stroke_width: f64,
+    pub stroke_dash_array: Vec<f64>,
+    pub stroke_dash_offset: f64,
+    pub stroke_line_cap: SvgStrokeLineCap,
+    pub stroke_line_join: SvgStrokeLineJoin,
+    pub stroke_miter_limit: f64,
+    pub fill_even_odd: bool,
+    pub non_scaling_stroke: bool,
+    pub antialias: bool,
+    pub transform: TransformMatrix,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SvgPatternImage {
+    pub resource_id: u64,
+    pub image_interpolation_quality: ImageInterpolationQuality,
+    pub destination: PaintRect,
+    pub source: PaintRect,
+    pub transform: TransformMatrix,
+    /// Raster supplies exact document-image pixels from the command's
+    /// ContainerKey. Bitmap images keep this empty and use ResourceContext.
+    pub raster_width: u32,
+    pub raster_height: u32,
+    pub rgba8: Arc<Vec<u8>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SvgPatternMask {
+    pub commands: Vec<SvgPatternCommand>,
+    pub content_transform: TransformMatrix,
+    pub clip_rect: PaintRect,
+    pub mode: PaintMaskMode,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SvgPatternCommand {
+    SaveLayerOpacity(f32),
+    SaveLayerFilter(Vec<PaintFilterOperation>),
+    SaveLayerReferenceFilter(Arc<crate::compat::layer_filters::RenderSvgFilterGraph>),
+    SaveLayerBlend(PaintBlendMode),
+    SaveLayerMask(Arc<SvgPatternMask>),
+    Restore,
+    DrawShape(SvgPatternPrimitive),
+    DrawGlyph(SvgPatternPrimitive),
+    DrawImage(SvgPatternImage),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SvgPatternData {
+    pub commands: Vec<SvgPatternCommand>,
+    pub content_transform: TransformMatrix,
+    pub opacity: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -262,6 +396,7 @@ pub struct PaintShader {
     pub start: Offset,
     pub end: Offset,
     pub linear_angle: Option<f64>,
+    pub linear_corner: Option<[i8; 2]>,
     pub linear_start_offset: f64,
     pub linear_end_offset: f64,
     pub center: Offset,
@@ -286,7 +421,10 @@ pub struct PaintShader {
     pub unit_coordinates: bool,
     pub object_bounding_box_coordinates: bool,
     pub interpolate_premultiplied: bool,
+    pub color_interpolation_space: PaintColorInterpolationSpace,
+    pub hue_interpolation_method: PaintHueInterpolationMethod,
     pub transform: TransformMatrix,
+    pub pattern: Option<std::sync::Arc<SvgPatternData>>,
 }
 impl Default for PaintShader {
     fn default() -> Self {
@@ -297,6 +435,7 @@ impl Default for PaintShader {
             start: Offset::default(),
             end: Offset::default(),
             linear_angle: None,
+            linear_corner: None,
             linear_start_offset: 0.0,
             linear_end_offset: 1.0,
             center: Offset::default(),
@@ -321,7 +460,10 @@ impl Default for PaintShader {
             unit_coordinates: false,
             object_bounding_box_coordinates: false,
             interpolate_premultiplied: true,
+            color_interpolation_space: PaintColorInterpolationSpace::kNone,
+            hue_interpolation_method: PaintHueInterpolationMethod::kShorter,
             transform: TransformMatrix::default(),
+            pattern: None,
         }
     }
 }
@@ -400,9 +542,45 @@ pub enum CommandKind {
     kDrawScrollbarCorner,
 }
 
+/// cc::PaintFlags::FilterQuality carried by immutable raster commands.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageInterpolationQuality {
+    kNone = 0,
+    kLow = 1,
+    #[default]
+    kMedium = 2,
+}
+
+/// Effective EXIF orientation for one image draw. The resource bytes stay in
+/// encoded storage order; source rectangles use this oriented coordinate space.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ImageOrientation {
+    #[default]
+    kDefault = 1,
+    kFlipHorizontal = 2,
+    kRotate180 = 3,
+    kFlipVertical = 4,
+    kTranspose = 5,
+    kRotate90 = 6,
+    kTransverse = 7,
+    kRotate270 = 8,
+}
+
+impl ImageOrientation {
+    pub fn uses_width_as_height(self) -> bool {
+        matches!(
+            self,
+            Self::kTranspose | Self::kRotate90 | Self::kTransverse | Self::kRotate270
+        )
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub struct MaskLayer {
     pub resource_id: u64,
+    pub image_interpolation_quality: ImageInterpolationQuality,
     pub paint_shader: Option<PaintShader>,
     pub clip_rect: PaintRect,
     pub clip_radii: PaintCornerRadii,
@@ -421,6 +599,7 @@ impl Default for MaskLayer {
     fn default() -> Self {
         Self {
             resource_id: 0,
+            image_interpolation_quality: ImageInterpolationQuality::kMedium,
             paint_shader: None,
             clip_rect: PaintRect::default(),
             clip_radii: PaintCornerRadii::default(),
@@ -468,8 +647,12 @@ pub struct DrawCommand {
     pub mask_layers: Vec<MaskLayer>,
     pub round_cap: bool,
     pub resource_id: u64,
+    pub image_interpolation_quality: ImageInterpolationQuality,
+    pub image_orientation: ImageOrientation,
     pub repeat_x: bool,
     pub repeat_y: bool,
+    pub tile_scale: Offset,
+    pub tile_phase: Offset,
     pub tile_spacing: Size,
     pub shadow_offset: Offset,
     pub blur_radius: f64,
@@ -483,6 +666,8 @@ pub struct DrawCommand {
     pub font_face_index: u32,
     pub font_variations: Vec<FontVariation>,
     pub font_size: f64,
+    pub text_line_top: f64,
+    pub text_line_height: f64,
     pub text_blob_origin: Offset,
     pub synthetic_bold: bool,
     pub synthetic_italic: bool,
@@ -520,8 +705,12 @@ impl Default for DrawCommand {
             mask_layers: Vec::new(),
             round_cap: false,
             resource_id: 0,
+            image_interpolation_quality: ImageInterpolationQuality::kMedium,
+            image_orientation: ImageOrientation::kDefault,
             repeat_x: false,
             repeat_y: false,
+            tile_scale: Offset { x: 1.0, y: 1.0 },
+            tile_phase: Offset::default(),
             tile_spacing: Size::default(),
             shadow_offset: Offset::default(),
             blur_radius: 0.0,
@@ -535,6 +724,8 @@ impl Default for DrawCommand {
             font_face_index: 0,
             font_variations: Vec::new(),
             font_size: 16.0,
+            text_line_top: 0.0,
+            text_line_height: 0.0,
             text_blob_origin: Offset::default(),
             synthetic_bold: false,
             synthetic_italic: false,

@@ -199,7 +199,11 @@ mod tests {
             parent: Some(root.transform.clone()),
             matrix: Default::default(),
             origin: [0.0; 3],
+            flattens_inherited_transform: false,
+            rendering_context_id: 0,
+            backface_visibility: Default::default(),
             scroll: None,
+            sticky_constraint: None,
             direct_compositing_reasons: Vec::new(),
         });
         let outer = id(10, DisplayItemIdType::kLayerChunk, 0);

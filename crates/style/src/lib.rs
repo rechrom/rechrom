@@ -33,6 +33,7 @@ pub mod css_value_keywords;
 pub mod element_rule_collector;
 pub mod fixed_size_cache;
 pub mod hash_tools;
+pub mod if_condition;
 pub mod invalidation;
 pub mod kleene_value;
 pub mod media_queries;
@@ -44,11 +45,14 @@ pub mod post_style_update_scope;
 #[path = "production_border_image_values.rs"]
 pub(crate) mod production_border_image_values;
 pub mod production_css_value;
+pub(crate) mod production_element_rule_collector;
 mod production_interaction_features;
 mod production_line_features;
 mod production_position_area;
 #[path = "production_reflect_value.rs"]
 pub(crate) mod production_reflect_value;
+pub(crate) mod production_rule_context;
+pub(crate) mod production_rule_matching;
 pub mod production_style_sheet;
 pub mod production_style_sheet_projection;
 mod production_text_box_features;
@@ -56,6 +60,7 @@ mod production_typography_features;
 pub mod properties;
 pub mod property_bitsets;
 pub mod resolver;
+pub mod responsive_image;
 pub mod rule_set;
 pub mod seeker;
 pub mod selector_checker;
@@ -89,7 +94,10 @@ pub use css_resource_fetch_restriction::ResourceFetchRestriction;
 pub use media_queries::preferred_color_scheme::PreferredColorScheme;
 pub use media_value_change::MediaValueChange;
 pub use pending_sheet_type::PendingSheetType;
-pub use production_style_sheet_projection::{ParseCSS, ParseCSSDeclarationList};
+pub use production_style_sheet_projection::{
+    ParseCSS, ParseCSSDeclarationList, ParseCSSWithBase, ParseUserAgentCSS,
+    ParseUserAgentCSSWithRole,
+};
 pub use style_engine::{
     AllowMarkForReattachFromRebuildLayoutTreeScope, AllowMarkStyleDirtyFromRecalcScope,
     AncestorAnalysis, AttachScrollMarkersScope, DOMRemovalScope, DetachLayoutTreeScope,
@@ -102,6 +110,9 @@ pub mod document_style_engine;
 pub use document_style_engine::{DocumentStyleEngine as StyleEngine, DocumentStyleError};
 #[cfg(test)]
 mod document_style_engine_test;
+#[cfg(test)]
+mod document_style_retained_pipeline_test;
+mod svg_paint_server;
 
 pub mod container_query;
 

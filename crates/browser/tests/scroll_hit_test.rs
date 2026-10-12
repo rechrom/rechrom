@@ -164,6 +164,49 @@ fn overflow_scroll_hit_tests_sticky_descendants_at_painted_offset() {
 }
 
 #[test]
+fn sticky_constraint_reaches_the_paint_property_scroll_owner() {
+    native_test_thread::run(|| {
+        let page = fixture(
+            br#"<!doctype html><style>
+            html, body { margin: 0; }
+            #scroller { width: 300px; height: 180px; overflow: auto; }
+            #sticky { position: sticky; top: 0; left: 0; width: 200px; height: 40px; background: red; }
+            #spacer { width: 900px; height: 1000px; }
+        </style><body><div id=scroller><div id=sticky></div><div id=spacer></div></div>"#,
+        );
+        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let sticky = artifact
+            .chunks
+            .iter()
+            .find_map(|chunk| {
+                let mut transform = Some(&chunk.properties.transform);
+                while let Some(node) = transform {
+                    if node.sticky_constraint.is_some() {
+                        return Some(node.clone());
+                    }
+                    transform = node.parent.as_ref();
+                }
+                None
+            })
+            .expect("sticky translation property");
+        let constraint = sticky.sticky_constraint.unwrap();
+        let vertical_owner = constraint.vertical.unwrap().scroll_container_client_id;
+        let horizontal_owner = constraint.horizontal.unwrap().scroll_container_client_id;
+        let mut found_vertical = false;
+        let mut found_horizontal = false;
+        let mut transform = sticky.parent.as_ref();
+        while let Some(node) = transform {
+            if let Some(scroll) = &node.scroll {
+                found_vertical |= scroll.owner_client_id == vertical_owner;
+                found_horizontal |= scroll.owner_client_id == horizontal_owner;
+            }
+            transform = node.parent.as_ref();
+        }
+        assert!(found_vertical && found_horizontal);
+    });
+}
+
+#[test]
 fn transformed_link_hit_test_applies_the_owner_transform_once() {
     native_test_thread::run(|| {
         let mut page = fixture(

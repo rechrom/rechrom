@@ -14,6 +14,7 @@ pub struct ImageDecodeInput<'a> {
 pub struct DecodedImage {
     pub width: u32,
     pub height: u32,
+    pub orientation: image_resource::ImageOrientation,
     pub rgba8: Vec<u8>,
 }
 

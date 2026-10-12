@@ -436,6 +436,27 @@ pub(crate) fn CollectFragmentClientRects(root: &FragmentNode) -> HashMap<u64, Ve
     RestoreLogicalSiblingOrder(&mut nodes);
     let mut output = HashMap::new();
     Collect(&nodes, 0, &mut output);
+    // cpp: document.cc:AdjustRectForScrollAndAbsoluteZoom;
+    // cpp: layout/adjust_for_absolute_zoom.h. Client quads are collected in
+    // LayoutZoomFactor coordinates, then exposed to script in CSS pixels. CSS
+    // `zoom` remains represented by the geometry itself; only the frame-level
+    // absolute layout zoom is removed here.
+    let layout_zoom = root
+        .paint
+        .resources
+        .as_ref()
+        .map_or(1.0, |resources| resources.layout_zoom_factor)
+        .max(f64::MIN_POSITIVE);
+    if layout_zoom != 1.0 {
+        for rects in output.values_mut() {
+            for rect in rects {
+                rect.x /= layout_zoom;
+                rect.y /= layout_zoom;
+                rect.width /= layout_zoom;
+                rect.height /= layout_zoom;
+            }
+        }
+    }
     output
 }
 

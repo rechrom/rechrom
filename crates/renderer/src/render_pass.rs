@@ -1,7 +1,9 @@
 //! CPU execution of immutable compositor frames. `raster` owns premultiplied
 //! tile pixels; this backend resolves them and writes the borrowed output.
 use crate::clip_mask::{ClipMaskCache, MaskCoverage};
-use layoutng_assembly::internal::paint_input::{PaintCornerRadii, PaintFilterType};
+use layoutng_assembly::internal::paint_input::{
+    PaintBlendMode, PaintCornerRadii, PaintFilterType, PaintReflectionDirection, SvgFilterGraph,
+};
 use paint::paint_property_tree::{ClipPaintPropertyNode, EffectPaintPropertyNode};
 use std::collections::HashMap;
 use std::io;
@@ -12,11 +14,14 @@ use crate::renderer::RenderUpdate;
 use layer_tile::{TileId, TilePlacement};
 use paint::paint_engine::PaintRect;
 use paint::paint_property_tree::PropertyTreeState;
+use raster::convert::ToSkia;
 use raster::{
     RasterResource as CachedTile, RasterResourceProvider, RasterRowSupport as TileRowSupport,
     RasterStats as LayerTileRasterStats, RowSupport,
 };
 use viz::LayerComposition;
+
+use skia::cpu::layer_filters::{ColorMatrixKind, RenderSurfaceFilter as EffectFilter};
 
 #[path = "layer_clip_quad.rs"]
 mod layer_clip_quad;
@@ -34,7 +39,10 @@ pub(crate) mod layer_solid;
 
 // Bounded stack storage for software sampling spans; larger tiles use the
 // existing general path. Tile geometry itself comes exclusively from FramePlan.
-const TILE_SIZE: u32 = 256;
+// LayerTreeSettings uses 512px CPU tiles on high-DPI macOS and permits
+// untiled CPU resources up to the same extent.  Scratch storage is bounded by
+// that backend maximum, not by the 256px default used on other platforms.
+const TILE_SIZE: u32 = 512;
 
 #[cfg(test)]
 fn sampled_opaque_device_rect_for_test(
@@ -74,6 +82,8 @@ struct CompositionPlan {
     scale: f64,
     raster_task_count: usize,
     root_damage: Option<SurfaceBounds>,
+    transparent_root: bool,
+    owner_effect: Option<Arc<EffectPaintPropertyNode>>,
     layers: Vec<CompositionLayer>,
     solid_quads: Vec<viz::SolidColorDrawQuad>,
 }
@@ -81,14 +91,24 @@ struct CompositionPlan {
 struct CompositionLayer {
     properties: PropertyTreeState,
     composition: LayerComposition,
+    visible_polygon: Option<viz::TargetPolygon>,
+    raster_content_bounds: Option<PaintRect>,
     retained_clips: Arc<[Arc<ClipPaintPropertyNode>]>,
     compositor_scroll: Option<layer_tile::CompositorScrollOffset>,
+    render_pass: Option<viz::RenderPassId>,
     tiles: Vec<TilePlacement>,
+}
+
+impl CompositionLayer {
+    fn has_drawable_content(&self) -> bool {
+        !self.tiles.is_empty() || self.render_pass.is_some()
+    }
 }
 
 impl CompositionPlan {
     fn from_pass(pass: &AggregatedRenderPass) -> io::Result<Self> {
         let mut tiles = vec![Vec::new(); pass.SharedQuadStates().len()];
+        let mut render_passes = vec![None; pass.SharedQuadStates().len()];
         let mut solid_quads = Vec::new();
         for quad in pass.Quads() {
             match quad {
@@ -108,27 +128,45 @@ impl CompositionPlan {
                     }
                     tiles[quad.shared_quad_state_index].push(quad.tile.clone());
                 }
+                DrawQuad::RenderPass(quad) => {
+                    pass.SharedQuadStates()
+                        .get(quad.shared_quad_state_index)
+                        .ok_or_else(|| io::Error::other("render-pass quad has no shared state"))?;
+                    let slot = &mut render_passes[quad.shared_quad_state_index];
+                    if slot.replace(quad.render_pass_id).is_some()
+                        || !tiles[quad.shared_quad_state_index].is_empty()
+                    {
+                        return Err(io::Error::other(
+                            "shared state mixes tile and surface quads",
+                        ));
+                    }
+                }
                 DrawQuad::SolidColor(quad) => solid_quads.push(quad.clone()),
             }
         }
         let layers = pass
             .SharedQuadStates()
             .iter()
-            .zip(tiles)
-            .map(|(state, tiles)| CompositionLayer {
+            .zip(tiles.into_iter().zip(render_passes))
+            .map(|(state, (tiles, render_pass))| CompositionLayer {
                 properties: state.properties.clone(),
                 composition: state.composition,
+                visible_polygon: state.visible_polygon.clone(),
+                raster_content_bounds: state.raster_content_bounds,
                 retained_clips: state.retained_clips.clone(),
                 compositor_scroll: state.compositor_scroll,
+                render_pass,
                 tiles,
             })
             .collect();
         Ok(Self {
             frame_id: pass.SourceFrameId(),
             viewport: pass.LogicalViewport(),
-            scale: pass.DeviceScaleFactor(),
+            scale: pass.RasterScaleFactor(),
             raster_task_count: pass.RasterTaskCount(),
             root_damage: compositor_damage_bounds(pass.DamageRect(), pass.Viewport())?,
+            transparent_root: !pass.IsRoot(),
+            owner_effect: pass.OwnerEffect().cloned(),
             layers,
             solid_quads,
         })
@@ -316,7 +354,21 @@ impl Scope {
         match (self, other) {
             (Self::Clip(a), Self::Clip(b)) => a.lifecycle.revision == b.lifecycle.revision,
             (Self::Effect(a), Self::Effect(b)) => {
-                a.lifecycle.revision == b.lifecycle.revision && a.opacity == b.opacity
+                a.lifecycle.revision == b.lifecycle.revision
+                    && a.opacity == b.opacity
+                    && a.blend_mode == b.blend_mode
+                    && a.isolates_blending == b.isolates_blending
+                    && a.filters == b.filters
+                    && a.filter_reference_box == b.filter_reference_box
+                    && a.filter_reference_scale == b.filter_reference_scale
+                    && a.backdrop_filters == b.backdrop_filters
+                    && a.backdrop_filter_has_reference == b.backdrop_filter_has_reference
+                    && a.backdrop_filter_clip
+                        .as_ref()
+                        .map(|clip| clip.lifecycle.revision)
+                        == b.backdrop_filter_clip
+                            .as_ref()
+                            .map(|clip| clip.lifecycle.revision)
             }
             (Self::DstIn(a), Self::DstIn(b)) => {
                 a.lifecycle.revision == b.lifecycle.revision && a.opacity == b.opacity
@@ -330,53 +382,339 @@ impl Scope {
             Self::Effect(effect) | Self::DstIn(effect) => effect.opacity,
         }
     }
+
+    fn blend_mode(&self) -> PaintBlendMode {
+        match self {
+            Self::Effect(effect) => effect.blend_mode,
+            Self::Clip(_) | Self::DstIn(_) => PaintBlendMode::kNormal,
+        }
+    }
 }
 
-fn effect_blur_sigmas(scope: &Scope, scale: f64) -> io::Result<Vec<(f32, f32)>> {
-    let Scope::Effect(effect) = scope else {
-        return Ok(Vec::new());
+fn color_matrix(filter: PaintFilterType, amount: f32) -> [f32; 20] {
+    let kind = match filter {
+        PaintFilterType::kGrayscale => ColorMatrixKind::Grayscale,
+        PaintFilterType::kSepia => ColorMatrixKind::Sepia,
+        PaintFilterType::kSaturate => ColorMatrixKind::Saturate,
+        PaintFilterType::kHueRotate => ColorMatrixKind::HueRotate,
+        PaintFilterType::kInvert => ColorMatrixKind::Invert,
+        PaintFilterType::kOpacity => ColorMatrixKind::Opacity,
+        PaintFilterType::kBrightness => ColorMatrixKind::Brightness,
+        PaintFilterType::kContrast => ColorMatrixKind::Contrast,
+        PaintFilterType::kReference
+        | PaintFilterType::kBlur
+        | PaintFilterType::kDropShadow
+        | PaintFilterType::kBoxReflect => {
+            unreachable!()
+        }
     };
-    if effect.filters.is_empty() {
-        return Ok(Vec::new());
-    }
-    let matrix = layer_tile::compositor_transform(&effect.local_transform_space, scale)
-        .map_err(|_| io::Error::new(io::ErrorKind::Unsupported, "filter-transform"))?;
+    skia::cpu::layer_filters::css_color_matrix(kind, amount)
+}
+
+fn svg_filter(
+    effect: &EffectPaintPropertyNode,
+    graph: &SvgFilterGraph,
+    scale: f64,
+    scroll: Option<layer_tile::CompositorScrollOffset>,
+) -> io::Result<EffectFilter> {
+    let reference = effect.filter_reference_box.ok_or_else(|| {
+        io::Error::new(io::ErrorKind::Unsupported, "missing-filter-reference-box")
+    })?;
+    let matrix =
+        layer_tile::compositor_transform_with_scroll(&effect.local_transform_space, scale, scroll)
+            .map_err(|_| io::Error::new(io::ErrorKind::Unsupported, "filter-transform"))?;
     let sx = matrix.values[0].hypot(matrix.values[1]);
     let sy = matrix.values[4].hypot(matrix.values[5]);
-    effect
-        .filters
+    if !sx.is_finite() || !sy.is_finite() || sx <= f64::EPSILON || sy <= f64::EPSILON {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "filter-transform",
+        ));
+    }
+    let determinant = matrix.values[0] * matrix.values[5] - matrix.values[4] * matrix.values[1];
+    if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "filter-transform",
+        ));
+    }
+    raster::svg_filter_graph::TranslateSvgFilterGraphWithTransform(
+        graph,
+        reference,
+        sx,
+        sy,
+        0.0,
+        0.0,
+        reference.x,
+        reference.y,
+        effect.filter_reference_scale,
+    )
+    .map(|graph| EffectFilter::AffineSvgGraph {
+        graph,
+        filter_to_device: [
+            (matrix.values[0] / sx) as f32,
+            (matrix.values[1] / sx) as f32,
+            (matrix.values[4] / sy) as f32,
+            (matrix.values[5] / sy) as f32,
+            matrix.values[12] as f32,
+            matrix.values[13] as f32,
+        ],
+    })
+}
+
+fn translated_filters(
+    effect: &EffectPaintPropertyNode,
+    filters: &[layoutng_assembly::internal::paint_input::PaintFilterOperation],
+    scale: f64,
+    prepare_masks: bool,
+    scroll: Option<layer_tile::CompositorScrollOffset>,
+) -> io::Result<Vec<EffectFilter>> {
+    if filters.is_empty() {
+        return Ok(Vec::new());
+    }
+    let matrix =
+        layer_tile::compositor_transform_with_scroll(&effect.local_transform_space, scale, scroll)
+            .map_err(|_| io::Error::new(io::ErrorKind::Unsupported, "filter-transform"))?;
+    let sx = matrix.values[0].hypot(matrix.values[1]);
+    let sy = matrix.values[4].hypot(matrix.values[5]);
+    filters
         .iter()
         .map(|filter| {
-            if filter.r#type != PaintFilterType::kBlur
-                || !filter.amount.is_finite()
-                || filter.amount < 0.0
+            if !filter.amount.is_finite()
+                || !filter.blur_radius.is_finite()
+                || !filter.offset.x.is_finite()
+                || !filter.offset.y.is_finite()
+                || ![
+                    filter.color.red,
+                    filter.color.green,
+                    filter.color.blue,
+                    filter.color.alpha,
+                ]
+                .iter()
+                .all(|value| value.is_finite())
             {
                 return Err(io::Error::new(io::ErrorKind::Unsupported, "filter-effect"));
             }
-            Ok(((filter.amount * sx) as f32, (filter.amount * sy) as f32))
+            let amount = filter.amount as f32;
+            match filter.r#type {
+                PaintFilterType::kReference => {
+                    if let Some(error) = &filter.reference_error {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Unsupported,
+                            format!("reference-filter: {error}"),
+                        ));
+                    }
+                    let graph = filter.reference_graph.as_ref().ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::Unsupported, "missing-reference-filter-graph")
+                    })?;
+                    svg_filter(effect, graph, scale, scroll)
+                }
+                PaintFilterType::kGrayscale
+                | PaintFilterType::kSepia
+                | PaintFilterType::kInvert
+                | PaintFilterType::kOpacity
+                    if !(0.0..=1.0).contains(&filter.amount) =>
+                {
+                    Err(io::Error::new(io::ErrorKind::Unsupported, "filter-effect"))
+                }
+                PaintFilterType::kSaturate
+                | PaintFilterType::kBrightness
+                | PaintFilterType::kContrast
+                    if filter.amount < 0.0 =>
+                {
+                    Err(io::Error::new(io::ErrorKind::Unsupported, "filter-effect"))
+                }
+                PaintFilterType::kBlur if filter.amount < 0.0 => {
+                    Err(io::Error::new(io::ErrorKind::Unsupported, "filter-effect"))
+                }
+                PaintFilterType::kDropShadow if filter.blur_radius < 0.0 => {
+                    Err(io::Error::new(io::ErrorKind::Unsupported, "filter-effect"))
+                }
+                PaintFilterType::kBlur => Ok(EffectFilter::Blur {
+                    sigma_x: (filter.amount * sx) as f32,
+                    sigma_y: (filter.amount * sy) as f32,
+                }),
+                PaintFilterType::kDropShadow => {
+                    // FilterEffectBuilder floors the CSS offset before cc
+                    // maps it through the render-surface transform.
+                    let x = filter.offset.x.floor();
+                    let y = filter.offset.y.floor();
+                    Ok(EffectFilter::DropShadow {
+                        sigma_x: (filter.blur_radius * sx) as f32,
+                        sigma_y: (filter.blur_radius * sy) as f32,
+                        offset_x: (matrix.values[0] * x + matrix.values[4] * y) as f32,
+                        offset_y: (matrix.values[1] * x + matrix.values[5] * y) as f32,
+                        color: [
+                            filter.color.red,
+                            filter.color.green,
+                            filter.color.blue,
+                            filter.color.alpha,
+                        ],
+                    })
+                }
+                PaintFilterType::kBoxReflect => {
+                    if filter.reflection_mask_image.is_some()
+                        || filter.reflection_offset_percentage != 0.0
+                        || filter.reflection_offset_calculation.is_some()
+                        || !filter.reflection_offset.is_finite()
+                    {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Unsupported,
+                            "box-reflect-mask",
+                        ));
+                    }
+                    let local = match filter.reflection_direction {
+                        PaintReflectionDirection::kAbove | PaintReflectionDirection::kBelow => {
+                            [1.0, 0.0, 0.0, -1.0, 0.0, filter.reflection_offset]
+                        }
+                        PaintReflectionDirection::kLeft | PaintReflectionDirection::kRight => {
+                            [-1.0, 0.0, 0.0, 1.0, filter.reflection_offset, 0.0]
+                        }
+                    };
+                    let affine = |a: [f64; 6], b: [f64; 6]| {
+                        [
+                            a[0] * b[0] + a[2] * b[1],
+                            a[1] * b[0] + a[3] * b[1],
+                            a[0] * b[2] + a[2] * b[3],
+                            a[1] * b[2] + a[3] * b[3],
+                            a[0] * b[4] + a[2] * b[5] + a[4],
+                            a[1] * b[4] + a[3] * b[5] + a[5],
+                        ]
+                    };
+                    let device = [
+                        matrix.values[0],
+                        matrix.values[1],
+                        matrix.values[4],
+                        matrix.values[5],
+                        matrix.values[12],
+                        matrix.values[13],
+                    ];
+                    let determinant = device[0] * device[3] - device[2] * device[1];
+                    if determinant.abs() <= f64::EPSILON {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Unsupported,
+                            "box-reflect-transform",
+                        ));
+                    }
+                    let inverse = [
+                        device[3] / determinant,
+                        -device[1] / determinant,
+                        -device[2] / determinant,
+                        device[0] / determinant,
+                        (device[2] * device[5] - device[3] * device[4]) / determinant,
+                        (device[1] * device[4] - device[0] * device[5]) / determinant,
+                    ];
+                    Ok(EffectFilter::BoxReflect {
+                        matrix: affine(affine(device, local), inverse).map(|value| value as f32),
+                        mask: if prepare_masks && filter.reflection_has_mask {
+                            Some(skia::cpu::layer_filters::RenderReflectionMask {
+                                layers: raster::CompileReflectionMaskLayers(
+                                    &filter.reflection_mask_layers,
+                                )?,
+                                local_to_device: device.map(|value| value as f32),
+                            })
+                        } else {
+                            None
+                        },
+                    })
+                }
+                _ => Ok(EffectFilter::ColorMatrix(color_matrix(
+                    filter.r#type,
+                    amount,
+                ))),
+            }
         })
         .collect()
 }
 
-fn expanded_for_blur(
+fn effect_filters(
+    scope: &Scope,
+    scale: f64,
+    prepare_masks: bool,
+    scroll: Option<layer_tile::CompositorScrollOffset>,
+) -> io::Result<Vec<EffectFilter>> {
+    let Scope::Effect(effect) = scope else {
+        return Ok(Vec::new());
+    };
+    translated_filters(effect, &effect.filters, scale, prepare_masks, scroll)
+}
+
+fn backdrop_filters(
+    scope: &Scope,
+    scale: f64,
+    scroll: Option<layer_tile::CompositorScrollOffset>,
+) -> io::Result<Vec<EffectFilter>> {
+    let Scope::Effect(effect) = scope else {
+        return Ok(Vec::new());
+    };
+    // A projected local url() is an ordinary reference operation in this
+    // chain. Unresolved/external references retain their missing graph or
+    // reference_error and are rejected by translated_filters below.
+    translated_filters(effect, &effect.backdrop_filters, scale, false, scroll)
+}
+
+fn expanded_for_filters(
     bounds: Option<SurfaceBounds>,
-    sigmas: &[(f32, f32)],
+    filters: &[EffectFilter],
     width: u32,
     height: u32,
 ) -> Option<SurfaceBounds> {
     let mut bounds = bounds?;
-    let x = sigmas
-        .iter()
-        .map(|(sigma, _)| (sigma * 3.0).ceil() as usize + 1)
-        .sum::<usize>();
-    let y = sigmas
-        .iter()
-        .map(|(_, sigma)| (sigma * 3.0).ceil() as usize + 1)
-        .sum::<usize>();
-    bounds.left = bounds.left.saturating_sub(x);
-    bounds.top = bounds.top.saturating_sub(y);
-    bounds.right = bounds.right.saturating_add(x).min(width as usize);
-    bounds.bottom = bounds.bottom.saturating_add(y).min(height as usize);
+    let clamp_floor = |value: f32, maximum: u32| value.floor().clamp(0.0, maximum as f32) as usize;
+    let clamp_ceil = |value: f32, maximum: u32| value.ceil().clamp(0.0, maximum as f32) as usize;
+    for filter in filters {
+        match *filter {
+            EffectFilter::ColorMatrix(_) => {}
+            EffectFilter::SvgGraph(_) | EffectFilter::AffineSvgGraph { .. } => {
+                bounds = SurfaceBounds {
+                    left: 0,
+                    top: 0,
+                    right: width as usize,
+                    bottom: height as usize,
+                };
+            }
+            EffectFilter::BoxReflect { .. } => {
+                // Reflection can move the input to either side of the effect
+                // origin after an arbitrary affine local transform.
+                bounds = SurfaceBounds {
+                    left: 0,
+                    top: 0,
+                    right: width as usize,
+                    bottom: height as usize,
+                };
+            }
+            EffectFilter::Blur { sigma_x, sigma_y } => {
+                let x = (sigma_x * 3.0).ceil() as usize + 1;
+                let y = (sigma_y * 3.0).ceil() as usize + 1;
+                bounds.left = bounds.left.saturating_sub(x);
+                bounds.top = bounds.top.saturating_sub(y);
+                bounds.right = bounds.right.saturating_add(x).min(width as usize);
+                bounds.bottom = bounds.bottom.saturating_add(y).min(height as usize);
+            }
+            EffectFilter::DropShadow {
+                sigma_x,
+                sigma_y,
+                offset_x,
+                offset_y,
+                ..
+            } => {
+                let x = (sigma_x * 3.0).ceil() + 1.0;
+                let y = (sigma_y * 3.0).ceil() + 1.0;
+                let shadow = SurfaceBounds {
+                    left: clamp_floor(bounds.left as f32 + offset_x - x, width),
+                    top: clamp_floor(bounds.top as f32 + offset_y - y, height),
+                    right: clamp_ceil(bounds.right as f32 + offset_x + x, width),
+                    bottom: clamp_ceil(bounds.bottom as f32 + offset_y + y, height),
+                };
+                bounds = SurfaceBounds {
+                    left: bounds.left.min(shadow.left),
+                    top: bounds.top.min(shadow.top),
+                    right: bounds.right.max(shadow.right),
+                    bottom: bounds.bottom.max(shadow.bottom),
+                };
+            }
+        }
+    }
     Some(bounds)
 }
 
@@ -400,6 +738,18 @@ fn append_clip_scopes(
     seen: &mut Vec<Arc<ClipPaintPropertyNode>>,
     scale: f64,
 ) {
+    scopes.extend(
+        take_unseen_clip_masks(leaf, seen, scale)
+            .into_iter()
+            .map(Scope::Clip),
+    );
+}
+fn take_unseen_clip_masks(
+    leaf: &Arc<ClipPaintPropertyNode>,
+    seen: &mut Vec<Arc<ClipPaintPropertyNode>>,
+    scale: f64,
+) -> Vec<Arc<ClipPaintPropertyNode>> {
+    let mut masks = Vec::new();
     let mut chain = Vec::new();
     let mut clip = Some(leaf.clone());
     while let Some(node) = clip {
@@ -412,11 +762,12 @@ fn append_clip_scopes(
             .any(|old| old.lifecycle.same_node(&clip.lifecycle))
         {
             if needs_clip_mask(&clip, scale) {
-                scopes.push(Scope::Clip(clip.clone()));
+                masks.push(clip.clone());
             }
             seen.push(clip);
         }
     }
+    masks
 }
 // Actual Mask effects require their content parent to be a render surface,
 // including opacity-one parents. Derive this from all committed mask layers,
@@ -445,11 +796,13 @@ fn masked_content_effects(plan: &CompositionPlan) -> io::Result<Vec<Arc<EffectPa
 }
 fn composition_scopes(
     effect: &Arc<EffectPaintPropertyNode>,
+    owner_effect: Option<&Arc<EffectPaintPropertyNode>>,
     retained: &[Arc<ClipPaintPropertyNode>],
     masked_parents: &[Arc<EffectPaintPropertyNode>],
     scale: f64,
-) -> io::Result<Vec<Scope>> {
+) -> io::Result<(Vec<Scope>, Vec<Arc<[Arc<ClipPaintPropertyNode>]>>)> {
     let mut scopes = Vec::new();
+    let mut scope_output_clips = Vec::new();
     let mut seen = Vec::new();
     let mut chain = Vec::new();
     let mut node = Some(effect.clone());
@@ -457,27 +810,50 @@ fn composition_scopes(
         node = effect.parent.clone();
         chain.push(effect);
     }
-    for effect in chain.into_iter().rev() {
+    chain.reverse();
+    let start = if let Some(owner) = owner_effect {
+        chain
+            .iter()
+            .position(|effect| effect.lifecycle.same_node(&owner.lifecycle))
+            .map(|index| index + 1)
+            .ok_or_else(|| io::Error::other("render-pass owner is not an effect ancestor"))?
+    } else {
+        0
+    };
+    for effect in chain.into_iter().skip(start) {
         if effect.is_mask {
             // Clip the mask source inside its DstIn surface. The content parent
             // must remain the immediate restore destination, so transparent
             // source outside its output clip also clears the parent contents.
             scopes.push(Scope::DstIn(effect.clone()));
+            scope_output_clips.push(Arc::from([]));
             if let Some(clip) = &effect.output_clip {
+                let old_len = scopes.len();
                 append_clip_scopes(clip, &mut scopes, &mut seen, scale);
+                scope_output_clips.extend((old_len..scopes.len()).map(|_| Arc::from([])));
             }
         } else if effect.opacity != 1.0
             || !effect.filters.is_empty()
+            || !effect.backdrop_filters.is_empty()
+            || effect.backdrop_filter_has_reference
+            || effect.blend_mode != PaintBlendMode::kNormal
+            || effect.isolates_blending
             || masked_parents
                 .iter()
                 .any(|parent| parent.lifecycle.same_node(&effect.lifecycle))
         {
-            // Ordinary opacity-one ancestors remain on the existing clip/tile
-            // path. Only actual isolated effects add an output-clip surface.
-            if let Some(clip) = &effect.output_clip {
-                append_clip_scopes(clip, &mut scopes, &mut seen, scale);
-            }
+            // Apply output coverage on the effect's restore. Nesting the
+            // blend surface inside a transparent synthesized-clip surface
+            // would make mix-blend-mode sample transparency instead of the
+            // real parent backdrop. A restore mask also preserves filter-then-
+            // clip ordering and avoids multiplying shared AA edges twice.
+            let output_clips = effect
+                .output_clip
+                .as_ref()
+                .map(|clip| take_unseen_clip_masks(clip, &mut seen, scale))
+                .unwrap_or_default();
             scopes.push(Scope::Effect(effect));
+            scope_output_clips.push(Arc::from(output_clips));
         }
     }
     for clip in retained.iter().rev() {
@@ -487,23 +863,233 @@ fn composition_scopes(
         {
             if needs_clip_mask(clip, scale) {
                 scopes.push(Scope::Clip(clip.clone()));
+                scope_output_clips.push(Arc::from([]));
             }
             seen.push(clip.clone());
         }
     }
-    Ok(scopes)
+    debug_assert_eq!(scopes.len(), scope_output_clips.len());
+    Ok((scopes, scope_output_clips))
+}
+
+fn clip_chain(leaf: &Arc<ClipPaintPropertyNode>) -> Vec<Arc<ClipPaintPropertyNode>> {
+    let mut chain = Vec::new();
+    let mut node = Some(leaf.clone());
+    while let Some(clip) = node {
+        node = clip.parent.clone();
+        chain.push(clip);
+    }
+    chain.reverse();
+    chain
+}
+
+fn backdrop_output_bounds(
+    effect: &EffectPaintPropertyNode,
+    width: u32,
+    height: u32,
+    scale: f64,
+    scroll: Option<layer_tile::CompositorScrollOffset>,
+) -> io::Result<Option<SurfaceBounds>> {
+    let Some(leaf) = &effect.backdrop_filter_clip else {
+        return Ok(None);
+    };
+    let mut output = SurfaceBounds {
+        left: 0,
+        top: 0,
+        right: width as usize,
+        bottom: height as usize,
+    };
+    for clip in clip_chain(leaf) {
+        let Some(rect) = clip.rect else {
+            continue;
+        };
+        let matrix = layer_tile::compositor_transform_with_scroll(
+            &clip.local_transform_space,
+            scale,
+            scroll,
+        )
+        .map_err(|_| io::Error::new(io::ErrorKind::Unsupported, "backdrop-filter-transform"))?;
+        let mut left = f64::INFINITY;
+        let mut top = f64::INFINITY;
+        let mut right = f64::NEG_INFINITY;
+        let mut bottom = f64::NEG_INFINITY;
+        for (x, y) in [
+            (rect.x, rect.y),
+            (rect.x + rect.width, rect.y),
+            (rect.x, rect.y + rect.height),
+            (rect.x + rect.width, rect.y + rect.height),
+        ] {
+            let px = matrix.values[0] * x + matrix.values[4] * y + matrix.values[12];
+            let py = matrix.values[1] * x + matrix.values[5] * y + matrix.values[13];
+            if !px.is_finite() || !py.is_finite() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "backdrop-filter-transform",
+                ));
+            }
+            left = left.min(px);
+            top = top.min(py);
+            right = right.max(px);
+            bottom = bottom.max(py);
+        }
+        let projected = SurfaceBounds {
+            left: left.floor().clamp(0.0, width as f64) as usize,
+            top: top.floor().clamp(0.0, height as f64) as usize,
+            right: right.ceil().clamp(0.0, width as f64) as usize,
+            bottom: bottom.ceil().clamp(0.0, height as f64) as usize,
+        };
+        let Some(intersection) = intersect_bounds(output, projected) else {
+            return Ok(None);
+        };
+        output = intersection;
+    }
+    Ok(Some(output))
+}
+
+#[inline]
+fn target_word_as_rgba(mut word: u32, format: skia::PixelFormat) -> u32 {
+    if format != skia::PixelFormat::Rgba8888 {
+        word = (word & 0xff00_ff00) | ((word & 0xff) << 16) | ((word >> 16) & 0xff);
+    }
+    if format == skia::PixelFormat::Bgrx8888 {
+        word |= 0xff00_0000;
+    }
+    word
+}
+
+fn copy_backdrop(
+    destination: &mut [u32],
+    destination_view: TargetView,
+    destination_bounds: SurfaceBounds,
+    source: &[u32],
+    source_view: TargetView,
+    source_bounds: SurfaceBounds,
+    source_format: skia::PixelFormat,
+) {
+    let Some(copy) = intersect_bounds(destination_bounds, source_bounds) else {
+        return;
+    };
+    for y in copy.top..copy.bottom {
+        let source_row = source_view.row_range(y, copy.left, copy.right);
+        let destination_row = destination_view.row_range(y, copy.left, copy.right);
+        for (output, &input) in destination[destination_row]
+            .iter_mut()
+            .zip(&source[source_row])
+        {
+            *output = target_word_as_rgba(input, source_format);
+        }
+    }
+}
+
+#[inline]
+fn mirror_coordinate(value: usize, start: usize, end: usize) -> usize {
+    debug_assert!(start < end);
+    let extent = end - start;
+    let period = extent * 2;
+    let offset = if value >= start {
+        (value - start) % period
+    } else {
+        let backwards = (start - value) % period;
+        if backwards == 0 {
+            0
+        } else {
+            period - backwards
+        }
+    };
+    if offset < extent {
+        start + offset
+    } else {
+        end - 1 - (offset - extent)
+    }
+}
+
+/// SoftwareRenderer::GetBackdropFilterShader reads only the backdrop-filter
+/// output rect. When a pixel-moving filter needs samples beyond that bitmap,
+/// ApplyBackdropFilterWithExactOutputSize composes an SkTileMode::kMirror crop.
+/// Keep the larger scratch allocation used by our CPU filter executor, but
+/// populate its input with that same mirrored output-rect backdrop.
+fn copy_backdrop_mirrored(
+    destination: &mut [u32],
+    destination_view: TargetView,
+    destination_bounds: SurfaceBounds,
+    output_bounds: SurfaceBounds,
+    source: &[u32],
+    source_view: TargetView,
+    source_bounds: SurfaceBounds,
+    source_format: skia::PixelFormat,
+) {
+    let Some(available) = intersect_bounds(output_bounds, source_bounds) else {
+        return;
+    };
+    for y in destination_bounds.top..destination_bounds.bottom {
+        let source_y = mirror_coordinate(y, available.top, available.bottom);
+        for x in destination_bounds.left..destination_bounds.right {
+            let source_x = mirror_coordinate(x, available.left, available.right);
+            destination[destination_view.row_start(y, x)] = target_word_as_rgba(
+                source[source_view.row_start(source_y, source_x)],
+                source_format,
+            );
+        }
+    }
+}
+
+fn apply_backdrop_coverage(
+    pixels: &mut [u32],
+    view: TargetView,
+    storage: SurfaceBounds,
+    output: SurfaceBounds,
+    coverage: &MaskCoverage,
+) -> Option<SurfaceBounds> {
+    let coverage_bounds = coverage
+        .bounds
+        .map(|(left, top, right, bottom)| SurfaceBounds {
+            left,
+            top,
+            right,
+            bottom,
+        })?;
+    let touched = intersect_bounds(output, coverage_bounds)?;
+    for y in storage.top..storage.bottom {
+        for x in storage.left..storage.right {
+            let alpha = if x >= output.left
+                && x < output.right
+                && y >= output.top
+                && y < output.bottom
+                && y >= coverage.origin.1
+                && y < coverage.origin.1 + coverage.rows.len()
+                && x >= coverage.origin.0
+                && x < coverage.origin.0 + coverage.stride
+            {
+                coverage.pixels[(y - coverage.origin.1) * coverage.stride + x - coverage.origin.0]
+            } else {
+                0
+            };
+            let index = view.row_start(y, x);
+            pixels[index] = scale_mask_word(pixels[index], alpha);
+        }
+    }
+    Some(touched)
 }
 
 struct EffectSurface {
+    run: usize,
     scope: Scope,
     direct_dst_in: bool,
     direct_clip: bool,
+    dst_in_root: bool,
     coverage: Option<Arc<MaskCoverage>>,
     // All intermediate surfaces retain premultiplied RGBA including alpha.
     pixels: Vec<u32>,
     view: TargetView,
     touched: Option<SurfaceBounds>,
-    blur_sigmas: Vec<(f32, f32)>,
+    filters: Vec<EffectFilter>,
+    // Backdrop sampling is deferred until the stable render-surface restore.
+    // A BSP-fragmented effect may be suspended while unrelated parent content
+    // is drawn; sampling on the first opening would miss that content.
+    backdrop_filters: Vec<EffectFilter>,
+    backdrop_output: Option<SurfaceBounds>,
+    backdrop_coverage: Option<Arc<MaskCoverage>>,
+    visible_polygon: Option<viz::TargetPolygon>,
 }
 struct EffectScratch {
     pixels: Vec<u32>,
@@ -513,13 +1099,26 @@ struct EffectScratch {
 
 struct LayerEffectPlan {
     chain: Vec<Scope>,
+    /// Nontrivial Effect::output_clip nodes applied once at surface restore.
+    /// This stays parallel to `chain`; ordinary synthesized Clip scopes have
+    /// an empty entry because their coverage owns a separate scope run.
+    scope_output_clips: Vec<Arc<[Arc<ClipPaintPropertyNode>]>>,
     opened_runs: Vec<usize>,
     direct_mask: Option<Vec<SurfaceBounds>>,
 }
+impl LayerEffectPlan {
+    fn has_backdrop(&self) -> bool {
+        self.chain.iter().any(
+            |scope| matches!(scope, Scope::Effect(effect) if !effect.backdrop_filters.is_empty() || effect.backdrop_filter_has_reference),
+        )
+    }
+}
 
-// Each opening gets its own run, even if the same native node reappears later.
-// Enclose all actual visible tile writes in that run, including nested groups.
-// Bounds affect allocation only; real mask coverage still runs at group exit.
+// A native effect owns one run even when legacy flat input reopens it. New
+// compositor frames encode isolated effects as child render passes, but this
+// lifecycle fallback remains required for ordinary clip/effect chains that do
+// not need their own Viz surface. Bounds affect allocation only; real mask
+// coverage still runs at group exit.
 fn effect_allocation_plan(
     plan: &CompositionPlan,
     width: u32,
@@ -530,17 +1129,36 @@ fn effect_allocation_plan(
     let mut layers = Vec::with_capacity(plan.layers.len());
     let mut runs = Vec::new();
     let mut active: Vec<(Scope, usize)> = Vec::new();
+    // Preserve one Viz render-surface identity when BSP ordering emits
+    // fragments from the same Effect node in separate stretches. Ordinary
+    // synthesized Clip scopes remain per-opening because they can be applied
+    // independently; opacity/blend/filter/mask scopes must accumulate all
+    // contributing fragments before one restore.
+    let mut persistent_runs: Vec<(Scope, usize)> = Vec::new();
     for layer in &plan.layers {
-        if layer.tiles.is_empty() && !layer.properties.effect.is_mask {
+        let mut effect_cursor = Some(&layer.properties.effect);
+        let mut has_backdrop = false;
+        while let Some(effect) = effect_cursor {
+            has_backdrop |=
+                !effect.backdrop_filters.is_empty() || effect.backdrop_filter_has_reference;
+            effect_cursor = effect.parent.as_ref();
+        }
+        if !layer.has_drawable_content() && !layer.properties.effect.is_mask && !has_backdrop {
             layers.push(LayerEffectPlan {
                 chain: Vec::new(),
+                scope_output_clips: Vec::new(),
                 opened_runs: Vec::new(),
                 direct_mask: None,
             });
             continue;
         }
-        let chain = composition_scopes(
-            &layer.properties.effect,
+        let scope_effect = layer
+            .render_pass
+            .and_then(|_| layer.properties.effect.parent.as_ref())
+            .unwrap_or(&layer.properties.effect);
+        let (chain, scope_output_clips) = composition_scopes(
+            scope_effect,
+            plan.owner_effect.as_ref(),
             &layer.retained_clips,
             &masked_parents,
             scale,
@@ -551,6 +1169,7 @@ fn effect_allocation_plan(
         {
             layers.push(LayerEffectPlan {
                 chain,
+                scope_output_clips,
                 opened_runs: Vec::new(),
                 direct_mask: None,
             });
@@ -564,14 +1183,33 @@ fn effect_allocation_plan(
         active.truncate(common);
         let mut opened_runs = Vec::with_capacity(chain.len() - common);
         for scope in chain.iter().skip(common) {
-            let index = runs.len();
-            runs.push(None);
+            let persistent = matches!(scope, Scope::Effect(_) | Scope::DstIn(_));
+            let index = persistent_runs
+                .iter()
+                .find(|(known, _)| known.same_node(scope))
+                .map(|(_, run)| *run)
+                .unwrap_or_else(|| {
+                    let run = runs.len();
+                    runs.push(None);
+                    if persistent {
+                        persistent_runs.push((scope.clone(), run));
+                    }
+                    run
+                });
             active.push((scope.clone(), index));
             opened_runs.push(index);
         }
         if !active.is_empty() {
             let composition = layer.composition;
             let mut bounds = None;
+            if layer.render_pass.is_some() {
+                bounds = Some(SurfaceBounds {
+                    left: 0,
+                    top: 0,
+                    right: width as usize,
+                    bottom: height as usize,
+                });
+            }
             for tile in &layer.tiles {
                 union_bounds(
                     &mut bounds,
@@ -579,17 +1217,32 @@ fn effect_allocation_plan(
                         .map(|(bounds, _, _)| bounds),
                 );
             }
-            for (scope, index) in &active {
-                let sigmas = effect_blur_sigmas(scope, scale)?;
-                union_bounds(
-                    &mut runs[*index],
-                    expanded_for_blur(bounds, &sigmas, width, height),
-                );
+            // A parent effect receives the already-filtered output of every
+            // descendant surface.  Accumulate from the innermost scope so a
+            // blur/drop-shadow chain cannot be clipped at a nested boundary.
+            let mut filtered_bounds = bounds;
+            for (scope, index) in active.iter().rev() {
+                let backdrop = backdrop_filters(scope, scale, layer.compositor_scroll)?;
+                if let Scope::Effect(effect) = scope {
+                    let output = backdrop_output_bounds(
+                        effect,
+                        width,
+                        height,
+                        scale,
+                        layer.compositor_scroll,
+                    )?;
+                    let input = expanded_for_filters(output, &backdrop, width, height);
+                    union_bounds(&mut filtered_bounds, input);
+                }
+                let filters = effect_filters(scope, scale, false, layer.compositor_scroll)?;
+                filtered_bounds = expanded_for_filters(filtered_bounds, &filters, width, height);
+                union_bounds(&mut runs[*index], filtered_bounds);
             }
         }
         let direct_mask = direct_mask_partition(plan, layer, &chain, width, height)?;
         layers.push(LayerEffectPlan {
             chain,
+            scope_output_clips,
             opened_runs,
             direct_mask,
         });
@@ -607,6 +1260,9 @@ fn direct_mask_partition(
     width: u32,
     height: u32,
 ) -> io::Result<Option<Vec<SurfaceBounds>>> {
+    if plan.owner_effect.is_some() {
+        return Ok(None);
+    }
     let effect = &layer.properties.effect;
     if !effect.is_mask
         || effect.opacity != 1.0
@@ -641,6 +1297,12 @@ fn layer_tile_partition(
     width: u32,
     height: u32,
 ) -> io::Result<Option<Vec<SurfaceBounds>>> {
+    // Rotated/skewed tile bounding boxes overlap even though their actual
+    // parallelograms do not.  Keep those layers on the general effect/clip
+    // surface instead of using the rectangular direct-mask partition proof.
+    if composition.projective.is_some() || !composition.transform.is_translation() {
+        return Ok(None);
+    }
     let mut rectangles = Vec::with_capacity(layer.tiles.len());
     for tile in &layer.tiles {
         if let Some((bounds, _, _)) = tile_composition_geometry(tile, composition, width, height)? {
@@ -761,44 +1423,138 @@ impl RenderPassRenderer {
         if group.direct_dst_in || group.direct_clip {
             return;
         }
-        if !group.blur_sigmas.is_empty() && !group.pixels.is_empty() {
+        if let (Some(output), Some(coverage)) =
+            (group.backdrop_output, group.backdrop_coverage.as_deref())
+        {
+            let mut backdrop = vec![0u32; group.pixels.len()];
+            let storage = SurfaceBounds {
+                left: group.view.origin.0,
+                top: group.view.origin.1,
+                right: group.view.origin.0 + group.view.stride,
+                bottom: group.view.origin.1 + group.pixels.len() / group.view.stride.max(1),
+            };
+            if let Some(parent) = groups.last() {
+                let source_bounds = SurfaceBounds {
+                    left: parent.view.origin.0,
+                    top: parent.view.origin.1,
+                    right: parent.view.origin.0 + parent.view.stride,
+                    bottom: parent.view.origin.1 + parent.pixels.len() / parent.view.stride.max(1),
+                };
+                copy_backdrop_mirrored(
+                    &mut backdrop,
+                    group.view,
+                    storage,
+                    output,
+                    &parent.pixels,
+                    parent.view,
+                    source_bounds,
+                    skia::PixelFormat::Rgba8888,
+                );
+            } else {
+                copy_backdrop_mirrored(
+                    &mut backdrop,
+                    group.view,
+                    storage,
+                    output,
+                    target,
+                    frame_view,
+                    SurfaceBounds {
+                        left: 0,
+                        top: 0,
+                        right: frame_view.stride,
+                        bottom: target.len() / frame_view.stride.max(1),
+                    },
+                    target_format,
+                );
+            }
+            if !group.backdrop_filters.is_empty() && !backdrop.is_empty() {
+                let bytes = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        backdrop.as_mut_ptr().cast::<u8>(),
+                        backdrop.len() * std::mem::size_of::<u32>(),
+                    )
+                };
+                for filter in &group.backdrop_filters {
+                    let ok = skia::cpu::layer_filters::apply_rgba(
+                        bytes,
+                        group.view.stride as u32,
+                        (backdrop.len() / group.view.stride.max(1)) as u32,
+                        filter,
+                    );
+                    debug_assert!(ok);
+                }
+            }
+            let mut touched =
+                apply_backdrop_coverage(&mut backdrop, group.view, storage, output, coverage);
+            let foreground = std::mem::replace(&mut group.pixels, backdrop);
+            let written = composite_effect_surface(
+                &mut group.pixels,
+                &foreground,
+                group.touched,
+                group.view,
+                group.view,
+                skia::PixelFormat::Rgba8888,
+                1.0,
+                PaintBlendMode::kNormal,
+                None,
+                None,
+            );
+            union_bounds(&mut touched, written);
+            group.touched = touched;
+        }
+        if !group.filters.is_empty() && !group.pixels.is_empty() {
             let width = group.view.stride;
             let height = group.pixels.len() / width;
             // Effect surfaces store native little-endian RGBA words, the same
-            // premultiplied byte layout consumed by SkBlurEngine.
+            // premultiplied byte layout consumed by the translated Skia
+            // render-surface filter adapters. Preserve CSS list order.
             let bytes = unsafe {
                 std::slice::from_raw_parts_mut(
                     group.pixels.as_mut_ptr().cast::<u8>(),
                     group.pixels.len() * std::mem::size_of::<u32>(),
                 )
             };
-            for &(sigma_x, sigma_y) in &group.blur_sigmas {
-                let ok = skia::cpu::layer_filters::blur_rgba(
+            for filter in &group.filters {
+                let ok = skia::cpu::layer_filters::apply_rgba_at(
                     bytes,
                     width as u32,
                     height as u32,
-                    sigma_x,
-                    sigma_y,
+                    filter,
+                    (group.view.origin.0 as i32, group.view.origin.1 as i32),
                 );
                 debug_assert!(ok);
-                if let Some(mut touched) = group.touched {
-                    let x = (sigma_x * 3.0).ceil() as usize + 1;
-                    let y = (sigma_y * 3.0).ceil() as usize + 1;
-                    touched.left = touched.left.saturating_sub(x).max(group.view.origin.0);
-                    touched.top = touched.top.saturating_sub(y).max(group.view.origin.1);
-                    touched.right = touched
-                        .right
-                        .saturating_add(x)
-                        .min(group.view.origin.0 + width);
-                    touched.bottom = touched
-                        .bottom
-                        .saturating_add(y)
-                        .min(group.view.origin.1 + height);
-                    group.touched = Some(touched);
-                }
             }
+            group.touched = expanded_for_filters(
+                group.touched,
+                &group.filters,
+                (group.view.origin.0 + width) as u32,
+                (group.view.origin.1 + height) as u32,
+            )
+            .map(|mut bounds| {
+                bounds.left = bounds.left.max(group.view.origin.0);
+                bounds.top = bounds.top.max(group.view.origin.1);
+                bounds
+            });
         }
         if let Scope::DstIn(effect) = &group.scope {
+            if group.dst_in_root {
+                let full = Some(SurfaceBounds {
+                    left: 0,
+                    top: 0,
+                    right: frame_view.stride,
+                    bottom: target.len() / frame_view.stride.max(1),
+                });
+                dst_in_effect_surface(
+                    target,
+                    &group.pixels,
+                    full,
+                    group.touched,
+                    frame_view,
+                    group.view,
+                    effect.opacity,
+                );
+                return;
+            }
             let parent = groups
                 .last_mut()
                 .expect("preflight validated isolated mask destination");
@@ -826,7 +1582,9 @@ impl RenderPassRenderer {
                 group.view,
                 skia::PixelFormat::Rgba8888,
                 group.scope.opacity(),
+                group.scope.blend_mode(),
                 group.coverage.as_deref(),
+                group.visible_polygon.as_ref(),
             );
             union_bounds(&mut parent.touched, written);
         } else {
@@ -838,7 +1596,9 @@ impl RenderPassRenderer {
                 group.view,
                 target_format,
                 group.scope.opacity(),
+                group.scope.blend_mode(),
                 group.coverage.as_deref(),
+                group.visible_polygon.as_ref(),
             );
         }
         // Scratch contains no reusable rendered result: every acquisition is
@@ -863,19 +1623,15 @@ impl RenderPassRenderer {
 
     fn cleared_effect_surface(&mut self, expected: usize) -> Vec<u32> {
         if let Some(mut scratch) = self.effect_scratch.pop() {
-            if scratch.pixels.len() == expected {
-                // All writes were enclosed by touched. Every other pixel has
-                // remained transparent since allocation; clear only old dirt.
-                if let Some(bounds) = scratch.touched {
-                    for y in bounds.top..bounds.bottom {
-                        scratch.pixels[scratch.view.row_range(y, bounds.left, bounds.right)]
-                            .fill(0);
-                    }
-                }
-            } else {
+            if scratch.pixels.len() != expected {
                 scratch.pixels.resize(expected, 0);
-                scratch.pixels.fill(0);
             }
+            // SkCanvas::saveLayer() starts with a transparent device.  Scratch
+            // reuse is only an allocation optimization; pixels outside the
+            // previous `touched` estimate may still have been written by a
+            // clip/effect close, so that estimate cannot weaken the clear
+            // semantics of the next layer.
+            scratch.pixels.fill(0);
             scratch.pixels
         } else {
             vec![0; expected]
@@ -891,6 +1647,7 @@ impl RenderPassRenderer {
         buffer: &mut [u32],
         format: skia::PixelFormat,
         row_stride: usize,
+        render_pass_outputs: &HashMap<viz::RenderPassId, &[u32]>,
     ) -> io::Result<RenderUpdate> {
         let mut render_trace = browser_tracing::span("render", "LayerTilePaint");
         render_trace.set("frame_id", pass.SourceFrameId() as f64);
@@ -927,6 +1684,7 @@ impl RenderPassRenderer {
             width as usize,
             resources.resources(),
             resources.prepared_damage_pixels(),
+            render_pass_outputs,
         );
         self.composed_pixels = composed;
         let result = result.map(|mut update| {
@@ -969,6 +1727,7 @@ impl RenderPassRenderer {
         row_stride: usize,
         resident: &HashMap<TileId, CachedTile>,
         raster_damage_pixels: usize,
+        render_pass_outputs: &HashMap<viz::RenderPassId, &[u32]>,
     ) -> io::Result<RenderUpdate> {
         let scale = plan.scale;
         let timing = (std::env::var_os("LAYOUTNG_LAYER_PROFILE").is_some()
@@ -997,22 +1756,96 @@ impl RenderPassRenderer {
                 "aggregated render-pass viewport does not match target",
             ));
         }
+        let child_extent = (width as usize)
+            .checked_mul(height as usize)
+            .ok_or_else(|| io::Error::other("child render-pass output is too large"))?;
+        for layer in plan
+            .layers
+            .iter()
+            .filter(|layer| layer.render_pass.is_some())
+        {
+            if layer.properties.effect.is_mask {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "mask-effect-cannot-own-render-pass-quad",
+                ));
+            }
+            let render_pass = layer.render_pass.unwrap();
+            if render_pass_outputs
+                .get(&render_pass)
+                .is_none_or(|pixels| pixels.len() != child_extent)
+            {
+                return Err(io::Error::other(
+                    "render-pass quad references unavailable child output",
+                ));
+            }
+        }
         let replay_trace = browser_tracing::span("render", "ValidateAggregatedRenderPass");
         if plan
             .layers
             .iter()
             .flat_map(|layer| &layer.tiles)
             .any(|tile| {
-                device_position(tile.tile_rect.x * tile.raster_scale).is_err()
-                    || device_position(tile.tile_rect.y * tile.raster_scale).is_err()
+                device_coordinate(tile.tile_rect.x * tile.raster_scale).is_err()
+                    || device_coordinate(tile.tile_rect.y * tile.raster_scale).is_err()
             })
         {
-            return self.unsupported("fractional-pixel-placement");
+            return Err(io::Error::other("invalid tile pixel placement"));
         }
         let replay_done = timing.map(|start| start.elapsed());
         drop(replay_trace);
         let staged: HashMap<TileId, CachedTile> = HashMap::new();
-        let compose_damage = plan.root_damage;
+        let (effect_plans, effect_bounds) = effect_allocation_plan(plan, width, height, scale)?;
+        let mut compose_damage = plan.root_damage;
+        if let Some(mut damage) = compose_damage {
+            // A backdrop output depends on parent pixels in the filter input
+            // outset. Damage to any sampled pixel invalidates the complete
+            // clipped backdrop output, even when that output lies beyond the
+            // original root damage rectangle.
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for (layer, effect_plan) in plan.layers.iter().zip(&effect_plans) {
+                    for scope in &effect_plan.chain {
+                        let Scope::Effect(effect) = scope else {
+                            continue;
+                        };
+                        if effect.backdrop_filters.is_empty()
+                            && !effect.backdrop_filter_has_reference
+                        {
+                            continue;
+                        }
+                        let output = backdrop_output_bounds(
+                            effect,
+                            width,
+                            height,
+                            scale,
+                            layer.compositor_scroll,
+                        )?;
+                        let filters = backdrop_filters(scope, scale, layer.compositor_scroll)?;
+                        let input = expanded_for_filters(output, &filters, width, height);
+                        if input
+                            .and_then(|input| intersect_bounds(input, damage))
+                            .is_some()
+                        {
+                            if let Some(output) = output {
+                                let before = damage;
+                                damage = SurfaceBounds {
+                                    left: damage.left.min(output.left),
+                                    top: damage.top.min(output.top),
+                                    right: damage.right.max(output.right),
+                                    bottom: damage.bottom.max(output.bottom),
+                                };
+                                if damage != before {
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            compose_damage = Some(damage);
+        }
         let damage_pixels = compose_damage.map_or(0, |bounds| {
             (bounds.right - bounds.left) * (bounds.bottom - bounds.top)
         });
@@ -1034,15 +1867,13 @@ impl RenderPassRenderer {
             });
         };
         let mut preflight_trace = browser_tracing::span("compose", "ComposePreflight");
-        let white = if format == skia::PixelFormat::Bgrx8888 {
+        let white = if plan.transparent_root {
+            0
+        } else if format == skia::PixelFormat::Bgrx8888 {
             0x00ff_ffff
         } else {
             u32::MAX
         };
-        let (effect_plans, mut effect_bounds) = effect_allocation_plan(plan, width, height, scale)?;
-        for bounds in &mut effect_bounds {
-            *bounds = bounds.and_then(|bounds| intersect_bounds(bounds, compose_damage));
-        }
         preflight_trace.set("effect_runs", effect_bounds.len() as f64);
         let direct_clips = layer_direct_clip::eligible_runs(plan, &effect_plans, width, height)?;
         let mut visible_rects = layer_occlusion::visible_rects(
@@ -1060,7 +1891,7 @@ impl RenderPassRenderer {
             }
         }
         let clip_observations = self.clip_masks.observations();
-        let prepared = match layer_composition_preflight::prepare(
+        let prepared = layer_composition_preflight::prepare(
             plan,
             &effect_plans,
             &effect_bounds,
@@ -1072,16 +1903,7 @@ impl RenderPassRenderer {
             height,
             scale,
             observe_costs,
-        ) {
-            Ok(prepared) => prepared,
-            Err(error)
-                if error.kind() == io::ErrorKind::Unsupported
-                    && error.to_string() == "non-contiguous-opacity-effect-group" =>
-            {
-                return self.unsupported("non-contiguous-opacity-effect-group");
-            }
-            Err(error) => return Err(error),
-        };
+        )?;
         let clip_after = self.clip_masks.observations();
         preflight_trace.set("clip_prepare_ms", prepared.clip_time.as_secs_f64() * 1000.0);
         for (index, name) in [
@@ -1112,7 +1934,7 @@ impl RenderPassRenderer {
                 right: width as usize,
                 bottom: height as usize,
             });
-        let root_clear_skipped = if full_damage {
+        let root_clear_skipped = if full_damage && !plan.transparent_root {
             if let (Some(layer), Some(effects)) = (plan.layers.first(), effect_plans.first()) {
                 let composition = layer.composition;
                 composition.white_backing
@@ -1156,18 +1978,20 @@ impl RenderPassRenderer {
         }
         let mut reused = 0usize;
         let mut groups: Vec<EffectSurface> = Vec::new();
+        let mut suspended_groups: HashMap<usize, EffectSurface> = HashMap::new();
         let mut compose_costs = observe_costs.then(|| ComposeCosts {
             clip: prepared.clip_time,
             ..Default::default()
         });
         #[cfg(feature = "compose_work_profile")]
         layer_compose_profile::begin();
-        for (((layer, effect_plan), layer_visible), direct_clip) in plan
+        for (layer_index, (((layer, effect_plan), layer_visible), direct_clip)) in plan
             .layers
             .iter()
             .zip(effect_plans)
             .zip(visible_rects)
             .zip(direct_clips)
+            .enumerate()
         {
             if layer.properties.effect.is_mask {
                 if let Some(cost) = &mut compose_costs {
@@ -1178,7 +2002,10 @@ impl RenderPassRenderer {
             // Keep the resident layer's identity, but a layer with no visible
             // tiles contributes no pixels or group coverage. Do not open a
             // full-size opacity/clip surface for offscreen animation layers.
-            if layer.tiles.is_empty() && !layer.properties.effect.is_mask {
+            if !layer.has_drawable_content()
+                && !layer.properties.effect.is_mask
+                && !effect_plan.has_backdrop()
+            {
                 continue;
             }
             let direct_mask = effect_plan.direct_mask;
@@ -1205,7 +2032,13 @@ impl RenderPassRenderer {
             debug_assert_eq!(chain.len() - common, effect_plan.opened_runs.len());
             let close_start = compose_costs.as_ref().map(|_| std::time::Instant::now());
             while groups.len() > common {
-                self.finish_effect_group(&mut groups, buffer, frame_view, format);
+                let run = groups.last().expect("active effect group").run;
+                if prepared.run_last_use[run] >= layer_index {
+                    let group = groups.pop().expect("active effect group");
+                    debug_assert!(suspended_groups.insert(run, group).is_none());
+                } else {
+                    self.finish_effect_group(&mut groups, buffer, frame_view, format);
+                }
             }
             if let Some(cost) = &mut compose_costs {
                 cost.close += close_start.unwrap().elapsed();
@@ -1214,6 +2047,12 @@ impl RenderPassRenderer {
             for (scope, run) in chain.into_iter().skip(common).zip(effect_plan.opened_runs) {
                 if let Some(cost) = &mut compose_costs {
                     cost.scopes += 1;
+                }
+                if let Some(group) = suspended_groups.remove(&run) {
+                    debug_assert!(group.scope.same_node(&scope));
+                    debug_assert!(group.scope.same_values(&scope));
+                    groups.push(group);
+                    continue;
                 }
                 let bounds = effect_bounds[run].unwrap_or(SurfaceBounds {
                     left: 0,
@@ -1232,8 +2071,38 @@ impl RenderPassRenderer {
                     .checked_mul(bounds.bottom - bounds.top)
                     .expect("preflight validated effect dimensions");
                 let direct_dst_in = direct_mask.is_some() && matches!(&scope, Scope::DstIn(_));
+                let dst_in_root = matches!(&scope, Scope::DstIn(effect)
+                    if plan.owner_effect.as_ref().is_some_and(|owner| effect.parent.as_ref()
+                        .is_some_and(|parent| parent.lifecycle.same_node(&owner.lifecycle))));
                 let direct_clip = direct_clip.is_some_and(|candidate| candidate.opening_run == run);
-                let blur_sigmas = effect_blur_sigmas(&scope, scale)?;
+                let filters = effect_filters(&scope, scale, true, layer.compositor_scroll)?;
+                let backdrop_filters = backdrop_filters(&scope, scale, layer.compositor_scroll)?;
+                let backdrop_output = match &scope {
+                    Scope::Effect(effect) => backdrop_output_bounds(
+                        effect,
+                        width,
+                        height,
+                        scale,
+                        layer.compositor_scroll,
+                    )?,
+                    Scope::Clip(_) | Scope::DstIn(_) => None,
+                };
+                let backdrop_coverage = match (&scope, backdrop_output) {
+                    (Scope::Effect(effect), Some(_)) => effect
+                        .backdrop_filter_clip
+                        .as_ref()
+                        .map(|clip| {
+                            self.clip_masks.coverage(
+                                &clip_chain(clip),
+                                width,
+                                height,
+                                scale,
+                                layer.compositor_scroll,
+                            )
+                        })
+                        .transpose()?,
+                    _ => None,
+                };
                 let pixels = if direct_dst_in || direct_clip {
                     Vec::new()
                 } else {
@@ -1243,14 +2112,20 @@ impl RenderPassRenderer {
                     cost.scratch += scratch_start.unwrap().elapsed();
                 }
                 groups.push(EffectSurface {
+                    run,
                     scope,
                     coverage,
                     direct_dst_in,
                     direct_clip,
+                    dst_in_root,
                     pixels,
                     view,
                     touched: None,
-                    blur_sigmas,
+                    filters,
+                    backdrop_filters,
+                    backdrop_output,
+                    backdrop_coverage,
+                    visible_polygon: None,
                 });
             }
             if let Some(cost) = &mut compose_costs {
@@ -1267,6 +2142,79 @@ impl RenderPassRenderer {
             }
             let composition = layer.composition;
             let blit_start = compose_costs.as_ref().map(|_| std::time::Instant::now());
+            if let Some(render_pass_id) = layer.render_pass {
+                let source = render_pass_outputs.get(&render_pass_id).ok_or_else(|| {
+                    io::Error::other("render-pass quad references unavailable child output")
+                })?;
+                let expected = (width as usize)
+                    .checked_mul(height as usize)
+                    .ok_or_else(|| io::Error::other("child render-pass output is too large"))?;
+                if source.len() != expected {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "invalid-effect-render-pass-output",
+                    ));
+                }
+                let owner = layer.properties.effect.clone();
+                let scope = Scope::Effect(owner.clone());
+                let output_clips = owner
+                    .output_clip
+                    .as_ref()
+                    .map(clip_chain)
+                    .unwrap_or_default();
+                let coverage = (!output_clips.is_empty())
+                    .then(|| {
+                        self.clip_masks.coverage(
+                            &output_clips,
+                            width,
+                            height,
+                            scale,
+                            layer.compositor_scroll,
+                        )
+                    })
+                    .transpose()?;
+                let backdrop_output =
+                    backdrop_output_bounds(&owner, width, height, scale, layer.compositor_scroll)?;
+                let backdrop_coverage = match (&owner.backdrop_filter_clip, backdrop_output) {
+                    (Some(clip), Some(_)) => Some(self.clip_masks.coverage(
+                        &clip_chain(clip),
+                        width,
+                        height,
+                        scale,
+                        layer.compositor_scroll,
+                    )?),
+                    _ => None,
+                };
+                groups.push(EffectSurface {
+                    run: usize::MAX,
+                    scope: scope.clone(),
+                    direct_dst_in: false,
+                    direct_clip: false,
+                    dst_in_root: false,
+                    coverage,
+                    pixels: source.to_vec(),
+                    view: TargetView {
+                        origin: (0, 0),
+                        stride: width as usize,
+                    },
+                    touched: Some(SurfaceBounds {
+                        left: 0,
+                        top: 0,
+                        right: width as usize,
+                        bottom: height as usize,
+                    }),
+                    filters: effect_filters(&scope, scale, true, layer.compositor_scroll)?,
+                    backdrop_filters: backdrop_filters(&scope, scale, layer.compositor_scroll)?,
+                    backdrop_output,
+                    backdrop_coverage,
+                    visible_polygon: layer.visible_polygon.clone(),
+                });
+                self.finish_effect_group(&mut groups, buffer, frame_view, format);
+                if let Some(cost) = &mut compose_costs {
+                    cost.blit += blit_start.unwrap().elapsed();
+                }
+                continue;
+            }
             if let Some(rectangles) = &direct_mask {
                 let index = groups
                     .len()
@@ -1294,8 +2242,109 @@ impl RenderPassRenderer {
                     cost.direct_mask_layers += 1;
                 }
             }
-            let needs_neighbors = composition.translation.0.fract() != 0.0
-                || composition.translation.1.fract() != 0.0;
+            if composition.projective.is_some() || !composition.transform.is_translation() {
+                debug_assert!(direct_mask.is_none());
+                let mut sources = Vec::with_capacity(layer.tiles.len());
+                for tile in &layer.tiles {
+                    let pixels = staged
+                        .get(&tile.tile_id)
+                        .or_else(|| resident.get(&tile.tile_id))
+                        .expect("preflight validated affine tile");
+                    debug_assert!(pixels.matches(tile, composition.white_backing));
+                    if !valid_tile_storage(pixels, tile.pixel_size)
+                        .expect("preflight validated affine tile storage")
+                    {
+                        unreachable!("preflight validated affine tile storage");
+                    }
+                    if !staged.contains_key(&tile.tile_id) && pixels.raster_frame != plan.frame_id {
+                        reused += 1;
+                    }
+                    sources.push(AffineTileSource {
+                        tile,
+                        pixels,
+                        origin: (
+                            device_coordinate(tile.tile_rect.x * tile.raster_scale)
+                                .expect("preflight validated affine x"),
+                            device_coordinate(tile.tile_rect.y * tile.raster_scale)
+                                .expect("preflight validated affine y"),
+                        ),
+                        content_bounds: layer.raster_content_bounds.map(|bounds| PaintRect {
+                            x: bounds.x * plan.scale,
+                            y: bounds.y * plan.scale,
+                            width: bounds.width * plan.scale,
+                            height: bounds.height * plan.scale,
+                        }),
+                    });
+                }
+                let mut affine_bounds = None;
+                for visible in layer_visible.iter().copied() {
+                    union_bounds(&mut affine_bounds, visible);
+                }
+                let touched = if direct_clip.is_some() {
+                    let clip_index = groups.len() - 1;
+                    let coverage = groups[clip_index].coverage.clone();
+                    match coverage {
+                        Some(coverage) if clip_index > 0 => {
+                            let parent = &mut groups[clip_index - 1];
+                            let touched = compose_affine_layer(
+                                &mut parent.pixels,
+                                parent.view,
+                                skia::PixelFormat::Rgba8888,
+                                composition,
+                                layer.visible_polygon.as_ref(),
+                                &sources,
+                                affine_bounds,
+                                Some(&coverage),
+                            )?;
+                            union_bounds(&mut parent.touched, touched);
+                            None
+                        }
+                        Some(coverage) => compose_affine_layer(
+                            buffer,
+                            frame_view,
+                            format,
+                            composition,
+                            layer.visible_polygon.as_ref(),
+                            &sources,
+                            affine_bounds,
+                            Some(&coverage),
+                        )?,
+                        None => None,
+                    }
+                } else if let Some(group) = groups.last_mut() {
+                    let touched = compose_affine_layer(
+                        &mut group.pixels,
+                        group.view,
+                        skia::PixelFormat::Rgba8888,
+                        composition,
+                        layer.visible_polygon.as_ref(),
+                        &sources,
+                        affine_bounds,
+                        None,
+                    )?;
+                    union_bounds(&mut group.touched, touched);
+                    None
+                } else {
+                    compose_affine_layer(
+                        buffer,
+                        frame_view,
+                        format,
+                        composition,
+                        layer.visible_polygon.as_ref(),
+                        &sources,
+                        affine_bounds,
+                        None,
+                    )?
+                };
+                let _ = touched;
+                fractional_tiles += layer.tiles.len();
+                continue;
+            }
+            let needs_neighbors = layer.tiles.first().is_some_and(|tile| {
+                let x = tile.tile_rect.x * tile.raster_scale + composition.transform.tx;
+                let y = tile.tile_rect.y * tile.raster_scale + composition.transform.ty;
+                x.fract() != 0.0 || y.fract() != 0.0
+            });
             let mut neighbors = HashMap::with_capacity(if needs_neighbors {
                 layer.tiles.len()
             } else {
@@ -1306,33 +2355,27 @@ impl RenderPassRenderer {
                     .get(&tile.tile_id)
                     .or_else(|| resident.get(&tile.tile_id))
                     .expect("preflight validated resident tile");
-                neighbors.insert(
-                    (
-                        device_position(tile.tile_rect.x * tile.raster_scale)
-                            .expect("preflight validated tile x"),
-                        device_position(tile.tile_rect.y * tile.raster_scale)
-                            .expect("preflight validated tile y"),
-                    ),
-                    pixels,
-                );
+                neighbors.insert(tile.tile_index, pixels);
             }
             for (tile, draw_visible) in layer.tiles.iter().zip(layer_visible) {
-                let origin = (
-                    device_position(tile.tile_rect.x * tile.raster_scale)
-                        .expect("preflight validated tile x"),
-                    device_position(tile.tile_rect.y * tile.raster_scale)
-                        .expect("preflight validated tile y"),
+                let origin_device = (
+                    device_coordinate(tile.tile_rect.x * tile.raster_scale)
+                        .expect("preflight validated tile x")
+                        + composition.transform.tx,
+                    device_coordinate(tile.tile_rect.y * tile.raster_scale)
+                        .expect("preflight validated tile y")
+                        + composition.transform.ty,
+                );
+                let phase = (
+                    origin_device.0.ceil() - origin_device.0,
+                    origin_device.1.ceil() - origin_device.1,
                 );
                 if let Some(cost) = &mut compose_costs {
-                    if composition.translation.0.fract() == 0.0
-                        && composition.translation.1.fract() == 0.0
-                    {
+                    if phase == (0.0, 0.0) {
                         cost.integral += 1;
                     } else {
                         cost.fractional += 1;
-                        let x = origin.0 as f64 + composition.translation.0;
-                        let y = origin.1 as f64 + composition.translation.1;
-                        let phases = [x.ceil() - x, y.ceil() - y];
+                        let phases = [phase.0, phase.1];
                         let exact = |scale: f64| {
                             phases.iter().all(|phase| {
                                 let weight = phase * scale;
@@ -1351,16 +2394,13 @@ impl RenderPassRenderer {
                 }
                 let adjacent = [
                     neighbors
-                        .get(&(origin.0 + i64::from(tile.pixel_size.0), origin.1))
+                        .get(&(tile.tile_index.0 + 1, tile.tile_index.1))
                         .copied(),
                     neighbors
-                        .get(&(origin.0, origin.1 + i64::from(tile.pixel_size.1)))
+                        .get(&(tile.tile_index.0, tile.tile_index.1 + 1))
                         .copied(),
                     neighbors
-                        .get(&(
-                            origin.0 + i64::from(tile.pixel_size.0),
-                            origin.1 + i64::from(tile.pixel_size.1),
-                        ))
+                        .get(&(tile.tile_index.0 + 1, tile.tile_index.1 + 1))
                         .copied(),
                 ];
                 let pixels = if let Some(pixels) = staged.get(&tile.tile_id) {
@@ -1412,25 +2452,15 @@ impl RenderPassRenderer {
                     }
                 }
                 let tile_start = compose_costs.as_ref().map(|_| std::time::Instant::now());
-                let origin_device = (
-                    origin.0 as f64 + composition.translation.0,
-                    origin.1 as f64 + composition.translation.1,
-                );
-                let phase = (
-                    origin_device.0.ceil() - origin_device.0,
-                    origin_device.1.ceil() - origin_device.1,
-                );
                 let tile_class = if direct_mask.is_some() {
                     3
                 } else if layer_solid::color_for_sampling(pixels, adjacent, phase).is_some() {
                     4
-                } else if composition.translation.0.fract() == 0.0
-                    && composition.translation.1.fract() == 0.0
-                {
+                } else if phase == (0.0, 0.0) {
                     0
                 } else {
-                    let horizontal = composition.translation.0.fract() != 0.0;
-                    let vertical = composition.translation.1.fract() != 0.0;
+                    let horizontal = phase.0 != 0.0;
+                    let vertical = phase.1 != 0.0;
                     let opaque = draw_visible
                         .is_some_and(|bounds| opaque_covers(composition, bounds))
                         || ((composition.white_backing || pixels.row_support.opaque)
@@ -1557,6 +2587,7 @@ impl RenderPassRenderer {
                 cost.blit += blit_start.unwrap().elapsed();
             }
         }
+        debug_assert!(suspended_groups.is_empty());
         let close_start = compose_costs.as_ref().map(|_| std::time::Instant::now());
         while !groups.is_empty() {
             self.finish_effect_group(&mut groups, buffer, frame_view, format);
@@ -1638,18 +2669,46 @@ impl RenderPassRenderer {
             let replay_time = replay_done.unwrap();
             let raster = raster_done.unwrap();
             let compose = compose_done.unwrap();
-            eprintln!("layer-tile-stages replay_ms={:.3} raster_ms={:.3} compose_ms={:.3} commit_ms={:.3} tasks={} reused={}",
+            eprintln!(
+                "layer-tile-stages replay_ms={:.3} raster_ms={:.3} compose_ms={:.3} commit_ms={:.3} tasks={} reused={}",
                 ms(replay_time),
-                ms(raster-replay_time), ms(compose-raster), ms(start.elapsed()-compose),
-                self.stats.raster_tasks, self.stats.reused_tiles);
+                ms(raster - replay_time),
+                ms(compose - raster),
+                ms(start.elapsed() - compose),
+                self.stats.raster_tasks,
+                self.stats.reused_tiles
+            );
             if let Some(cost) = compose_costs {
-                eprintln!("layer-tile-compose-cost open_ms={:.3} clip_ms={:.3} scratch_ms={:.3} blit_ms={:.3} close_ms={:.3} scopes={} integral_tiles={} fractional_tiles={} skip_zero_layers={} nominal_tile_pixels={} phase_8bit_tiles={} phase_16bit_tiles={} phase_f64_tiles={} mask_layers={} mask_raster_tasks={} mask_reused_tiles={} direct_mask_layers={} root_clear_skipped={} occluded_tiles={} occluded_pixels={} integral_blit_ms={:.3} fractional_opaque_blit_ms={:.3} fractional_blend_blit_ms={:.3} mask_blit_ms={:.3} solid_tiles={} solid_blit_ms={:.3} direct_clip_layers={}",
-                    ms(cost.open), ms(cost.clip), ms(cost.scratch), ms(cost.blit), ms(cost.close), cost.scopes,
-                    cost.integral, cost.fractional, cost.skipped_zero, cost.nominal_pixels,
-                    cost.fractional_phase_classes[0], cost.fractional_phase_classes[1], cost.fractional_phase_classes[2],
-                    cost.mask_layers, cost.mask_raster_tasks, cost.mask_reused_tiles, cost.direct_mask_layers, root_clear_skipped,
-                    cost.occluded_tiles, cost.occluded_pixels, ms(cost.tile_blits[0]), ms(cost.tile_blits[1]),
-                    ms(cost.tile_blits[2]), ms(cost.tile_blits[3]), cost.solid_tiles, ms(cost.tile_blits[4]), cost.direct_clip_layers);
+                eprintln!(
+                    "layer-tile-compose-cost open_ms={:.3} clip_ms={:.3} scratch_ms={:.3} blit_ms={:.3} close_ms={:.3} scopes={} integral_tiles={} fractional_tiles={} skip_zero_layers={} nominal_tile_pixels={} phase_8bit_tiles={} phase_16bit_tiles={} phase_f64_tiles={} mask_layers={} mask_raster_tasks={} mask_reused_tiles={} direct_mask_layers={} root_clear_skipped={} occluded_tiles={} occluded_pixels={} integral_blit_ms={:.3} fractional_opaque_blit_ms={:.3} fractional_blend_blit_ms={:.3} mask_blit_ms={:.3} solid_tiles={} solid_blit_ms={:.3} direct_clip_layers={}",
+                    ms(cost.open),
+                    ms(cost.clip),
+                    ms(cost.scratch),
+                    ms(cost.blit),
+                    ms(cost.close),
+                    cost.scopes,
+                    cost.integral,
+                    cost.fractional,
+                    cost.skipped_zero,
+                    cost.nominal_pixels,
+                    cost.fractional_phase_classes[0],
+                    cost.fractional_phase_classes[1],
+                    cost.fractional_phase_classes[2],
+                    cost.mask_layers,
+                    cost.mask_raster_tasks,
+                    cost.mask_reused_tiles,
+                    cost.direct_mask_layers,
+                    root_clear_skipped,
+                    cost.occluded_tiles,
+                    cost.occluded_pixels,
+                    ms(cost.tile_blits[0]),
+                    ms(cost.tile_blits[1]),
+                    ms(cost.tile_blits[2]),
+                    ms(cost.tile_blits[3]),
+                    cost.solid_tiles,
+                    ms(cost.tile_blits[4]),
+                    cost.direct_clip_layers
+                );
             }
         }
         #[cfg(feature = "compose_work_profile")]
@@ -1675,17 +2734,13 @@ fn tile_bytes(size: (u32, u32)) -> io::Result<usize> {
         .ok_or_else(|| io::Error::other("invalid tile pixel dimensions"))
 }
 
-fn device_position(value: f64) -> io::Result<i64> {
-    if !value.is_finite()
-        || value != value.round()
-        || value < i32::MIN as f64
-        || value > i32::MAX as f64
-    {
+fn device_coordinate(value: f64) -> io::Result<f64> {
+    if !value.is_finite() || value < i32::MIN as f64 || value > i32::MAX as f64 {
         return Err(io::Error::other(
-            "tile has unsupported fractional or overflowing pixel placement",
+            "tile has invalid or overflowing pixel placement",
         ));
     }
-    Ok(value as i64)
+    Ok(value)
 }
 
 pub(crate) fn tile_row_support(rgba: &[u8], width: usize, opaque: bool) -> TileRowSupport {
@@ -1865,7 +2920,13 @@ mod sparse_support_test {
             row_support: support,
         };
         let composition = LayerComposition {
-            translation: (0.0, 0.0),
+            transform: viz::AffineTransform {
+                tx: 0.0,
+                ty: 0.0,
+                ..viz::AffineTransform::IDENTITY
+            },
+            projective: None,
+            rendering_context_id: 0,
             clip: None,
             content_bounds: None,
             opaque_bounds: None,
@@ -2170,7 +3231,10 @@ mod sparse_support_test {
                 }
                 old.sort_by(f64::total_cmp);
                 new.sort_by(f64::total_cmp);
-                eprintln!("opaque-fractional-row-timing phase={phase:?} iterations=128 pixels=65536 baseline_ms={:.3} src_ms={:.3}",old[1],new[1]);
+                eprintln!(
+                    "opaque-fractional-row-timing phase={phase:?} iterations=128 pixels=65536 baseline_ms={:.3} src_ms={:.3}",
+                    old[1], new[1]
+                );
             }
         }
         if std::env::var_os("RENDERER_TIMING_SCROLL_SNAPPING").is_some() {
@@ -2192,7 +3256,13 @@ mod sparse_support_test {
                 ready: true,
             };
             let base = LayerComposition {
-                translation: (0.0, -0.25),
+                transform: viz::AffineTransform {
+                    tx: 0.0,
+                    ty: -0.25,
+                    ..viz::AffineTransform::IDENTITY
+                },
+                projective: None,
+                rendering_context_id: 0,
                 clip: None,
                 content_bounds: None,
                 opaque_bounds: None,
@@ -2200,7 +3270,11 @@ mod sparse_support_test {
                 grid_min: Some((0, 0)),
             };
             let snapped = LayerComposition {
-                translation: (0.0, 0.0),
+                transform: viz::AffineTransform {
+                    tx: 0.0,
+                    ty: 0.0,
+                    ..viz::AffineTransform::IDENTITY
+                },
                 ..base
             };
             let view = TargetView {
@@ -2237,8 +3311,10 @@ mod sparse_support_test {
             }
             fractional.sort_by(f64::total_cmp);
             integral.sort_by(f64::total_cmp);
-            eprintln!("scroll-snapping-compose-timing iterations=128 tile_pixels=65536 fractional_ms={:.3} integral_ms={:.3}",
-                fractional[1],integral[1]);
+            eprintln!(
+                "scroll-snapping-compose-timing iterations=128 tile_pixels=65536 fractional_ms={:.3} integral_ms={:.3}",
+                fractional[1], integral[1]
+            );
         }
     }
 }
@@ -3876,65 +4952,142 @@ fn fractional_tile_axes<const H: bool, const V: bool, const OPAQUE: bool>(
     }
 }
 
+fn projective_tile_bounds(
+    projective: viz::ProjectiveTransform,
+    input: [(f64, f64); 4],
+) -> Option<(f64, f64, f64, f64)> {
+    const NEAR: f64 = 1.0e-6;
+    let mut clipped = Vec::new();
+    for index in 0..4 {
+        let a = input[index];
+        let b = input[(index + 1) % 4];
+        let wa = projective.source_w(a.0, a.1);
+        let wb = projective.source_w(b.0, b.1);
+        let ina = wa >= NEAR;
+        let inb = wb >= NEAR;
+        if ina {
+            clipped.push(a);
+        }
+        if ina != inb {
+            let t = (NEAR - wa) / (wb - wa);
+            clipped.push((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t));
+        }
+    }
+    let mapped: Vec<_> = clipped
+        .into_iter()
+        .filter_map(|p| projective.map_point(p.0, p.1))
+        .collect();
+    (!mapped.is_empty()).then(|| {
+        (
+            mapped.iter().map(|p| p.0).fold(f64::INFINITY, f64::min),
+            mapped.iter().map(|p| p.1).fold(f64::INFINITY, f64::min),
+            mapped.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max),
+            mapped.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max),
+        )
+    })
+}
+
 fn tile_composition_geometry(
     tile: &TilePlacement,
     composition: LayerComposition,
     width: u32,
     height: u32,
 ) -> io::Result<Option<(SurfaceBounds, (i64, i64), (f64, f64))>> {
-    let origin_x =
-        device_position(tile.tile_rect.x * tile.raster_scale)? as f64 + composition.translation.0;
-    let origin_y =
-        device_position(tile.tile_rect.y * tile.raster_scale)? as f64 + composition.translation.1;
-    if !origin_x.is_finite()
-        || !origin_y.is_finite()
-        || origin_x.abs() > i32::MAX as f64
-        || origin_y.abs() > i32::MAX as f64
+    let source_x = device_coordinate(tile.tile_rect.x * tile.raster_scale)?;
+    let source_y = device_coordinate(tile.tile_rect.y * tile.raster_scale)?;
+    let transform = composition.transform;
+    let (mut left, mut top, mut right, mut bottom, origin, phase) = if composition
+        .projective
+        .is_none()
+        && transform.is_translation()
     {
-        return Err(io::Error::other("invalid composition placement"));
-    }
-    let x = origin_x.ceil() as i64;
-    let y = origin_y.ceil() as i64;
-    let phase = (x as f64 - origin_x, y as f64 - origin_y);
-    // The source grid may start exactly at recorded ink after a new layer is
-    // allocated. Linear filtering must still sample its transparent negative
-    // neighbor. Retained grids with padding already own this same output cell
-    // in their ordinary tile interior. Extend only the first row/column, so no
-    // internal seam is blended twice. This shared geometry also sizes effect
-    // targets and the direct Mask partition.
-    let leading = (!composition.white_backing)
-        .then_some(composition.grid_min)
-        .flatten();
-    let mut left =
-        (x - i64::from(phase.0 != 0.0 && leading.is_some_and(|min| tile.tile_index.0 == min.0)))
-            .max(0);
-    let mut top =
-        (y - i64::from(phase.1 != 0.0 && leading.is_some_and(|min| tile.tile_index.1 == min.1)))
-            .max(0);
-    let mut right = (x + tile.pixel_size.0 as i64).min(width as i64);
-    let mut bottom = (y + tile.pixel_size.1 as i64).min(height as i64);
-    // cc CoverageIterator's geometryRect is limited by the recorded content
-    // bounds as well as the external compositor scissor. Keep texture origin,
-    // phase and retained neighbor resources unchanged for the visible quad.
+        let origin_x = source_x + transform.tx;
+        let origin_y = source_y + transform.ty;
+        if !origin_x.is_finite()
+            || !origin_y.is_finite()
+            || origin_x.abs() > i32::MAX as f64
+            || origin_y.abs() > i32::MAX as f64
+        {
+            return Err(io::Error::other("invalid composition placement"));
+        }
+        let x = origin_x.ceil() as i64;
+        let y = origin_y.ceil() as i64;
+        let phase = (x as f64 - origin_x, y as f64 - origin_y);
+        let leading = (!composition.white_backing)
+            .then_some(composition.grid_min)
+            .flatten();
+        (
+            x - i64::from(phase.0 != 0.0 && leading.is_some_and(|min| tile.tile_index.0 == min.0)),
+            y - i64::from(phase.1 != 0.0 && leading.is_some_and(|min| tile.tile_index.1 == min.1)),
+            x + i64::from(tile.pixel_size.0),
+            y + i64::from(tile.pixel_size.1),
+            (x, y),
+            phase,
+        )
+    } else {
+        let x0 = source_x;
+        let y0 = source_y;
+        let x1 = x0 + f64::from(tile.pixel_size.0);
+        let y1 = y0 + f64::from(tile.pixel_size.1);
+        let (min_x, min_y, max_x, max_y) = if let Some(projective) = composition.projective {
+            let Some(bounds) =
+                projective_tile_bounds(projective, [(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+            else {
+                return Ok(None);
+            };
+            bounds
+        } else {
+            let points = [
+                transform.map_point(x0, y0),
+                transform.map_point(x1, y0),
+                transform.map_point(x0, y1),
+                transform.map_point(x1, y1),
+            ];
+            (
+                points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min),
+                points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min),
+                points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max),
+                points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max),
+            )
+        };
+        if ![min_x, min_y, max_x, max_y].into_iter().all(f64::is_finite) {
+            return Err(io::Error::other("invalid affine composition placement"));
+        }
+        (
+            min_x.floor() as i64,
+            min_y.floor() as i64,
+            max_x.ceil() as i64,
+            max_y.ceil() as i64,
+            (source_x.floor() as i64, source_y.floor() as i64),
+            (0.0, 0.0),
+        )
+    };
+    left = left.max(0);
+    top = top.max(0);
+    right = right.min(width as i64);
+    bottom = bottom.min(height as i64);
     for clip in [composition.clip, composition.content_bounds]
         .into_iter()
         .flatten()
     {
-        left = left.max(clip.x as i64);
-        top = top.max(clip.y as i64);
-        right = right.min(clip.x as i64 + clip.width as i64);
-        bottom = bottom.min(clip.y as i64 + clip.height as i64);
+        left = left.max(i64::from(clip.x));
+        top = top.max(i64::from(clip.y));
+        right = right.min(i64::from(clip.x) + i64::from(clip.width));
+        bottom = bottom.min(i64::from(clip.y) + i64::from(clip.height));
     }
     if left >= right || top >= bottom {
         return Ok(None);
     }
-    let bounds = SurfaceBounds {
-        left: left as usize,
-        top: top as usize,
-        right: right as usize,
-        bottom: bottom as usize,
-    };
-    Ok(Some((bounds, (x, y), phase)))
+    Ok(Some((
+        SurfaceBounds {
+            left: left as usize,
+            top: top as usize,
+            right: right as usize,
+            bottom: bottom as usize,
+        },
+        origin,
+        phase,
+    )))
 }
 
 // SkSwizzler_opts.inc::RGBA_to_BGRA (370-400): an opaque Src span needs
@@ -4049,6 +5202,281 @@ fn opaque_covers(composition: LayerComposition, bounds: SurfaceBounds) -> bool {
             && i64::from(rect.x) + i64::from(rect.width) >= bounds.right as i64
             && i64::from(rect.y) + i64::from(rect.height) >= bounds.bottom as i64
     })
+}
+
+struct AffineTileSource<'a> {
+    tile: &'a TilePlacement,
+    pixels: &'a CachedTile,
+    origin: (f64, f64),
+    content_bounds: Option<PaintRect>,
+}
+
+fn affine_source_word(source: &AffineTileSource<'_>, x: f64, y: f64) -> Option<u32> {
+    let local_x = x - source.origin.0;
+    let local_y = y - source.origin.1;
+    // Calls are made on the tiling's texel lattice.  Recovering the integer
+    // resource index with round absorbs only floating arithmetic drift; the
+    // lattice's device-space subpixel phase remains in `x`/`y`.
+    let pixel_x = local_x.round();
+    let pixel_y = local_y.round();
+    if (local_x - pixel_x).abs() > 1.0e-6
+        || (local_y - pixel_y).abs() > 1.0e-6
+        || pixel_x < 0.0
+        || pixel_y < 0.0
+        || pixel_x >= f64::from(source.tile.pixel_size.0)
+        || pixel_y >= f64::from(source.tile.pixel_size.1)
+        || source.content_bounds.is_some_and(|bounds| {
+            let x = x + 0.5;
+            let y = y + 0.5;
+            x < bounds.x
+                || y < bounds.y
+                || x >= bounds.x + bounds.width
+                || y >= bounds.y + bounds.height
+        })
+    {
+        return None;
+    }
+    if let Some(color) = compact_solid_color(source.pixels) {
+        return Some(color);
+    }
+    let width = source.tile.pixel_size.0 as usize;
+    let offset = (pixel_y as usize * width + pixel_x as usize) * 4;
+    let bytes = source.pixels.rgba.get(offset..offset + 4)?;
+    Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn affine_sample_word(sources: &[AffineTileSource<'_>], x: f64, y: f64) -> u32 {
+    sources
+        .iter()
+        .find_map(|source| affine_source_word(source, x, y))
+        .unwrap_or(0)
+}
+
+fn affine_has_owner(
+    sources: &[AffineTileSource<'_>],
+    composition: LayerComposition,
+    x: f64,
+    y: f64,
+) -> bool {
+    if composition
+        .projective
+        .is_some_and(|projective| projective.source_w(x, y) < 1.0e-6)
+    {
+        return false;
+    }
+    sources.iter().any(|source| {
+        x >= source.origin.0
+            && y >= source.origin.1
+            && x < source.origin.0 + f64::from(source.tile.pixel_size.0)
+            && y < source.origin.1 + f64::from(source.tile.pixel_size.1)
+            && source.content_bounds.is_none_or(|bounds| {
+                x >= bounds.x
+                    && y >= bounds.y
+                    && x < bounds.x + bounds.width
+                    && y < bounds.y + bounds.height
+            })
+    })
+}
+
+fn affine_sample_at(sources: &[AffineTileSource<'_>], source_x: f64, source_y: f64) -> u32 {
+    let lattice = sources.first().map_or((0.0, 0.0), |source| {
+        (
+            source.origin.0.rem_euclid(1.0),
+            source.origin.1.rem_euclid(1.0),
+        )
+    });
+    let texel_x = source_x - lattice.0 - 0.5;
+    let texel_y = source_y - lattice.1 - 0.5;
+    let left = texel_x.floor() as i64;
+    let top = texel_y.floor() as i64;
+    let phase = (texel_x - left as f64, texel_y - top as f64);
+    let left = left as f64 + lattice.0;
+    let top = top as f64 + lattice.1;
+    linear_word::<true, true>(
+        affine_sample_word(sources, left, top),
+        affine_sample_word(sources, left + 1.0, top),
+        affine_sample_word(sources, left, top + 1.0),
+        affine_sample_word(sources, left + 1.0, top + 1.0),
+        phase,
+        (1.0 - phase.0, 1.0 - phase.1),
+    )
+}
+
+fn affine_pixel(
+    sources: &[AffineTileSource<'_>],
+    composition: LayerComposition,
+    visible_polygon: Option<&viz::TargetPolygon>,
+    x: usize,
+    y: usize,
+) -> u32 {
+    let inverse_map = |x: f64, y: f64| match composition.projective {
+        Some(projective) => projective.inverse_point(x, y),
+        None => composition
+            .transform
+            .inverse()
+            .map(|inverse| inverse.map_point(x, y)),
+    };
+    // A BSP cut is an ownership boundary, not a new geometric edge. Assign
+    // the whole destination pixel by its center using a half-open fill rule;
+    // antialiasing both complementary fragments would source-over two partial
+    // pixels and leave a translucent seam along the intersection.
+    if !target_polygon_contains(visible_polygon, x as f64 + 0.5, y as f64 + 0.5, false) {
+        return 0;
+    }
+    let corners = [(0.01, 0.01), (0.99, 0.01), (0.01, 0.99), (0.99, 0.99)];
+    if corners.into_iter().all(|(dx, dy)| {
+        let target = (x as f64 + dx, y as f64 + dy);
+        target_polygon_contains(visible_polygon, target.0, target.1, true)
+            && inverse_map(target.0, target.1)
+                .is_some_and(|point| affine_has_owner(sources, composition, point.0, point.1))
+    }) {
+        let point = inverse_map(x as f64 + 0.5, y as f64 + 0.5).unwrap();
+        return affine_sample_at(sources, point.0, point.1);
+    }
+    // Skia anti-aliases the transformed quad independently from its bilinear
+    // image shader. A fixed subpixel grid is used only on edge pixels; it also
+    // retains continuous sampling across internal tile boundaries.
+    let mut channels = [0u32; 4];
+    for dy in [0.125, 0.375, 0.625, 0.875] {
+        for dx in [0.125, 0.375, 0.625, 0.875] {
+            if !target_polygon_contains(visible_polygon, x as f64 + dx, y as f64 + dy, true) {
+                continue;
+            }
+            let Some(point) = inverse_map(x as f64 + dx, y as f64 + dy) else {
+                continue;
+            };
+            if !affine_has_owner(sources, composition, point.0, point.1) {
+                continue;
+            }
+            let word = affine_sample_at(sources, point.0, point.1);
+            for (index, shift) in [0, 8, 16, 24].into_iter().enumerate() {
+                channels[index] += (word >> shift) & 255;
+            }
+        }
+    }
+    channels
+        .into_iter()
+        .zip([0, 8, 16, 24])
+        .fold(0, |word, (channel, shift)| {
+            word | (((channel + 8) / 16) << shift)
+        })
+}
+
+fn target_polygon_contains(
+    polygon: Option<&viz::TargetPolygon>,
+    x: f64,
+    y: f64,
+    antialias_edges: bool,
+) -> bool {
+    let Some(polygon) = polygon else {
+        return true;
+    };
+    if polygon.points.len() < 3 || polygon.antialias_edges.len() != polygon.points.len() {
+        return false;
+    }
+    let signed_area: f64 = (0..polygon.points.len())
+        .map(|index| {
+            let a = polygon.points[index];
+            let b = polygon.points[(index + 1) % polygon.points.len()];
+            a[0] * b[1] - b[0] * a[1]
+        })
+        .sum();
+    if signed_area.abs() <= 1.0e-12 {
+        return false;
+    }
+    let winding = signed_area.signum();
+    for index in 0..polygon.points.len() {
+        if polygon.antialias_edges[index] != antialias_edges {
+            continue;
+        }
+        let a = polygon.points[index];
+        let b = polygon.points[(index + 1) % polygon.points.len()];
+        let cross = winding * ((b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]));
+        if cross < -1.0e-9 {
+            return false;
+        }
+        if !antialias_edges && cross.abs() <= 1.0e-9 {
+            let dx = winding * (b[0] - a[0]);
+            let dy = winding * (b[1] - a[1]);
+            if !(dy > 0.0 || (dy == 0.0 && dx < 0.0)) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn clip_coverage_at(coverage: &MaskCoverage, x: usize, y: usize) -> u8 {
+    if x < coverage.origin.0
+        || y < coverage.origin.1
+        || x >= coverage.origin.0 + coverage.stride
+        || y >= coverage.origin.1 + coverage.rows.len()
+    {
+        return 0;
+    }
+    coverage.pixels[(y - coverage.origin.1) * coverage.stride + x - coverage.origin.0]
+}
+
+/// Draw one promoted affine layer as a single logical texture grid.  Selecting
+/// the source tile after inverse mapping preserves filtering across retained
+/// tile seams; each destination pixel is emitted once even though transformed
+/// tile AABBs overlap.
+fn compose_affine_layer(
+    target: &mut [u32],
+    view: TargetView,
+    format: skia::PixelFormat,
+    composition: LayerComposition,
+    visible_polygon: Option<&viz::TargetPolygon>,
+    sources: &[AffineTileSource<'_>],
+    bounds: Option<SurfaceBounds>,
+    coverage: Option<&MaskCoverage>,
+) -> io::Result<Option<SurfaceBounds>> {
+    let Some(bounds) = bounds else {
+        return Ok(None);
+    };
+
+    if composition
+        .projective
+        .is_some_and(|projective| projective.backface_hidden && projective.backface_visible)
+    {
+        return Ok(None);
+    }
+    let mut touched = None;
+    for y in bounds.top..bounds.bottom {
+        let mut row_first = None;
+        let mut row_last = 0;
+        for x in bounds.left..bounds.right {
+            let mut sampled = affine_pixel(sources, composition, visible_polygon, x, y);
+            if let Some(coverage) = coverage {
+                let alpha = clip_coverage_at(coverage, x, y);
+                if alpha == 0 {
+                    continue;
+                }
+                if alpha != 255 {
+                    sampled = scale_mask_word(sampled, alpha);
+                }
+            }
+            if sampled == 0 {
+                continue;
+            }
+            let at = view.row_start(y, x);
+            target[at] = source_over_rgba_word(target[at], sampled, format);
+            row_first.get_or_insert(x);
+            row_last = x + 1;
+        }
+        if let Some(left) = row_first {
+            union_bounds(
+                &mut touched,
+                Some(SurfaceBounds {
+                    left,
+                    top: y,
+                    right: row_last,
+                    bottom: y + 1,
+                }),
+            );
+        }
+    }
+    Ok(touched)
 }
 
 fn compose_tile(
@@ -4300,6 +5728,35 @@ fn blend_compositor_row(target: &mut [u32], source: &[u32], format: skia::PixelF
     // are RGBA. The existing BGRX SIMD store clears X in its blend pass,
     // avoiding the general helper's second complete source/destination scan.
     blend_rgba_words(target, source, format);
+}
+
+/// Blend an isolated effect surface with the same Skia raster-pipeline modes
+/// used by ordinary paint replay. Non-normal effects are uncommon, so a
+/// bounded row scratch keeps the compositor's retained surface format out of
+/// Skia's RGBA-only Pixmap adapter without adding a second blend implementation.
+fn blend_effect_row(
+    target: &mut [u32],
+    source: &[u32],
+    format: skia::PixelFormat,
+    mode: PaintBlendMode,
+) {
+    if mode == PaintBlendMode::kNormal {
+        blend_compositor_row(target, source, format);
+        return;
+    }
+    skia::cpu::effect_composite::blend_effect_row(
+        target,
+        source,
+        format,
+        mode.to_skia(),
+        1.0,
+        None,
+    );
+}
+
+#[cfg(test)]
+fn swap_red_blue(word: u32) -> u32 {
+    (word & 0xff00_ff00) | ((word & 0x0000_00ff) << 16) | ((word & 0x00ff_0000) >> 16)
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -4610,7 +6067,9 @@ fn composite_effect_surface(
     source_view: TargetView,
     format: skia::PixelFormat,
     opacity: f32,
+    blend_mode: PaintBlendMode,
     mask: Option<&MaskCoverage>,
+    visible_polygon: Option<&viz::TargetPolygon>,
 ) -> Option<SurfaceBounds> {
     let mut bounds = touched?;
     if opacity == 0.0 {
@@ -4646,8 +6105,56 @@ fn composite_effect_surface(
             let offset = (y - mask.origin.1) * mask.stride + left - mask.origin.0;
             &mask.pixels[offset..offset + right - left]
         });
+        if visible_polygon.is_some() {
+            for x in left..right {
+                if !target_polygon_contains(visible_polygon, x as f64 + 0.5, y as f64 + 0.5, false)
+                {
+                    continue;
+                }
+                let mut word = source[source_view.row_start(y, x)];
+                let mut samples = 0u16;
+                for dy in [0.125, 0.375, 0.625, 0.875] {
+                    for dx in [0.125, 0.375, 0.625, 0.875] {
+                        samples += u16::from(target_polygon_contains(
+                            visible_polygon,
+                            x as f64 + dx,
+                            y as f64 + dy,
+                            true,
+                        ));
+                    }
+                }
+                let clip_alpha = mask.map_or(255, |mask| {
+                    mask.pixels[(y - mask.origin.1) * mask.stride + x - mask.origin.0]
+                });
+                let polygon_alpha = ((u32::from(samples) * 255 + 8) / 16) as u8;
+                let combined =
+                    ((u16::from(clip_alpha) * u16::from(polygon_alpha) + 127) / 255) as u8;
+                word = scale_mask_word(word, combined);
+                if opacity != 1.0 {
+                    let bytes = word.to_le_bytes();
+                    word = u32::from_le_bytes(
+                        bytes.map(|v| (v as f32 * opacity).round_ties_even() as u8),
+                    );
+                }
+                if word >> 24 != 0 {
+                    let target_index = target_view.row_start(y, x);
+                    blend_effect_row(
+                        std::slice::from_mut(&mut target[target_index]),
+                        std::slice::from_ref(&word),
+                        format,
+                        blend_mode,
+                    );
+                }
+            }
+            continue;
+        }
         if alpha.is_none() && coverage.is_none() {
-            blend_compositor_row(&mut target[target_range], &source[source_range], format);
+            blend_effect_row(
+                &mut target[target_range],
+                &source[source_range],
+                format,
+                blend_mode,
+            );
             continue;
         }
         for (chunk, (output, input)) in target[target_range]
@@ -4660,7 +6167,7 @@ fn composite_effect_surface(
                 continue;
             }
             if alpha.is_none() && mask.is_none_or(|row| row.iter().all(|&v| v == 255)) {
-                blend_compositor_row(output, input, format);
+                blend_effect_row(output, input, format, blend_mode);
                 continue;
             }
             let scaled = &mut scratch[..input.len()];
@@ -4668,11 +6175,47 @@ fn composite_effect_surface(
             // both stages. SIMD only replaces the independent channel loop.
             let any = scale_effect_row(scaled, input, opacity, alpha.as_ref(), mask);
             if any != 0 {
-                blend_compositor_row(output, scaled, format);
+                blend_effect_row(output, scaled, format, blend_mode);
             }
         }
     }
     Some(bounds)
+}
+
+#[cfg(test)]
+mod effect_blend_test {
+    use super::*;
+
+    fn encode(rgba: u32, format: skia::PixelFormat) -> u32 {
+        match format {
+            skia::PixelFormat::Rgba8888 => rgba,
+            skia::PixelFormat::Bgra8888 => swap_red_blue(rgba),
+            skia::PixelFormat::Bgrx8888 => swap_red_blue(rgba) & 0x00ff_ffff,
+        }
+    }
+
+    #[test]
+    fn plus_lighter_effect_uses_skia_blend_for_every_output_format() {
+        // Premultiplied RGBA bytes: kPlus saturates each channel independently.
+        let destination = 0xc878_5030;
+        let source = 0x8060_2040;
+        let expected = 0xffd8_7070;
+        for format in [
+            skia::PixelFormat::Rgba8888,
+            skia::PixelFormat::Bgra8888,
+            skia::PixelFormat::Bgrx8888,
+        ] {
+            let mut actual = [encode(destination, format)];
+            blend_effect_row(&mut actual, &[source], format, PaintBlendMode::kPlusLighter);
+            let expected = if format == skia::PixelFormat::Bgrx8888 {
+                // An opaque presentation target remains opaque/X=0.
+                encode(expected | 0xff00_0000, format)
+            } else {
+                encode(expected, format)
+            };
+            assert_eq!(actual[0], expected, "format={format:?}");
+        }
+    }
 }
 
 #[inline]
@@ -4746,7 +6289,13 @@ mod direct_mask_quad_test {
     fn fractional_direct_mask_matches_isolated_source_with_holes_neighbors_and_clip() {
         let (width, height) = (112u32, 14u32);
         let composition = LayerComposition {
-            translation: (3.625, 2.6875),
+            transform: viz::AffineTransform {
+                tx: 3.625,
+                ty: 2.6875,
+                ..viz::AffineTransform::IDENTITY
+            },
+            projective: None,
+            rendering_context_id: 0,
             clip: Some(viz::DeviceRect {
                 x: 5,
                 y: 3,
@@ -4964,7 +6513,13 @@ mod opaque_quad_test {
                     bottom: (i64::from(opaque.y) + i64::from(opaque.height)) as usize,
                 };
                 let base = LayerComposition {
-                    translation,
+                    transform: viz::AffineTransform {
+                        tx: translation.0,
+                        ty: translation.1,
+                        ..viz::AffineTransform::IDENTITY
+                    },
+                    projective: None,
+                    rendering_context_id: 0,
                     clip: None,
                     content_bounds: None,
                     opaque_bounds: None,
@@ -5031,5 +6586,178 @@ mod opaque_quad_test {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod backdrop_filter_test {
+    use super::*;
+
+    #[test]
+    fn backdrop_filters_parent_pixels_before_group_content_and_clips_output() {
+        let (width, height) = (6u32, 4u32);
+        let view = TargetView {
+            origin: (0, 0),
+            stride: width as usize,
+        };
+        let mut parent = vec![0u32; width as usize * height as usize];
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                parent[y * width as usize + x] = u32::from_le_bytes([
+                    (20 + x * 23) as u8,
+                    (35 + y * 31) as u8,
+                    (170 - x * 11) as u8,
+                    255,
+                ]);
+            }
+        }
+        let root = PropertyTreeState::default();
+        let clip = Arc::new(ClipPaintPropertyNode {
+            lifecycle: Default::default(),
+            id: 9001,
+            parent: Some(root.clip.clone()),
+            local_transform_space: root.transform.clone(),
+            rect: Some(PaintRect {
+                x: 1.0,
+                y: 1.0,
+                width: 4.0,
+                height: 2.0,
+            }),
+            radii: PaintCornerRadii::default(),
+            clip_path: Vec::new(),
+            clip_path_children: Vec::new(),
+            clip_path_even_odd: false,
+            clip_path_error: None,
+            pixel_moving_filter: None,
+        });
+        let effect = EffectPaintPropertyNode {
+            lifecycle: Default::default(),
+            id: 9002,
+            parent: Some(root.effect.clone()),
+            local_transform_space: root.transform,
+            output_clip: Some(root.clip),
+            filter_reference_box: None,
+            filter_reference_scale: 1.0,
+            opacity: 1.0,
+            blend_mode: PaintBlendMode::kNormal,
+            filters: Vec::new(),
+            backdrop_filters: Vec::new(),
+            backdrop_filter_has_reference: false,
+            backdrop_filter_clip: Some(clip.clone()),
+            isolates_blending: false,
+            has_mask: false,
+            is_mask: false,
+            direct_compositing_reasons: Vec::new(),
+        };
+        let output = backdrop_output_bounds(&effect, width, height, 1.0, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            output,
+            SurfaceBounds {
+                left: 1,
+                top: 1,
+                right: 5,
+                bottom: 3,
+            }
+        );
+        let mut group = vec![0u32; parent.len()];
+        let viewport = SurfaceBounds {
+            left: 0,
+            top: 0,
+            right: width as usize,
+            bottom: height as usize,
+        };
+        copy_backdrop(
+            &mut group,
+            view,
+            viewport,
+            &parent,
+            view,
+            viewport,
+            skia::PixelFormat::Rgba8888,
+        );
+        let gray = EffectFilter::ColorMatrix(skia::cpu::layer_filters::css_color_matrix(
+            ColorMatrixKind::Grayscale,
+            1.0,
+        ));
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(group.as_mut_ptr().cast::<u8>(), group.len() * 4)
+        };
+        assert!(skia::cpu::layer_filters::apply_rgba(
+            bytes, width, height, &gray
+        ));
+        let mut cache = ClipMaskCache::default();
+        let coverage = cache
+            .coverage(&clip_chain(&clip), width, height, 1.0, None)
+            .unwrap();
+        let touched = apply_backdrop_coverage(&mut group, view, viewport, output, &coverage);
+        assert_eq!(touched, Some(output));
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                let pixel = group[y * width as usize + x].to_le_bytes();
+                if (1..5).contains(&x) && (1..3).contains(&y) {
+                    assert_eq!(pixel[0], pixel[1]);
+                    assert_eq!(pixel[1], pixel[2]);
+                    assert_eq!(pixel[3], 255);
+                } else {
+                    assert_eq!(pixel, [0, 0, 0, 0]);
+                }
+            }
+        }
+        // Group content is drawn after backdrop filtering; it is not fed back
+        // through the backdrop chain as an ordinary foreground filter.
+        let center = 2 * width as usize + 3;
+        group[center] = source_over_rgba_word(
+            group[center],
+            u32::from_le_bytes([200, 0, 0, 255]),
+            skia::PixelFormat::Rgba8888,
+        );
+        assert_eq!(group[center].to_le_bytes(), [200, 0, 0, 255]);
+    }
+
+    #[test]
+    fn backdrop_blur_mirrors_the_exact_output_backdrop() {
+        let (width, height) = (9u32, 9u32);
+        let view = TargetView {
+            origin: (0, 0),
+            stride: width as usize,
+        };
+        let viewport = SurfaceBounds {
+            left: 0,
+            top: 0,
+            right: width as usize,
+            bottom: height as usize,
+        };
+        let output = SurfaceBounds {
+            left: 3,
+            top: 3,
+            right: 6,
+            bottom: 6,
+        };
+        let outside = u32::from_le_bytes([180, 70, 30, 255]);
+        let inside = u32::from_le_bytes([0, 0, 0, 255]);
+        let mut parent = vec![outside; width as usize * height as usize];
+        for y in output.top..output.bottom {
+            parent[view.row_range(y, output.left, output.right)].fill(inside);
+        }
+        let mut group = vec![0; parent.len()];
+        copy_backdrop_mirrored(
+            &mut group,
+            view,
+            viewport,
+            output,
+            &parent,
+            view,
+            viewport,
+            skia::PixelFormat::Rgba8888,
+        );
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(group.as_mut_ptr().cast::<u8>(), group.len() * 4)
+        };
+        assert!(skia::cpu::layer_filters::blur_rgba(
+            bytes, width, height, 2.0, 2.0
+        ));
+        assert!(group.iter().all(|&pixel| pixel == inside));
     }
 }

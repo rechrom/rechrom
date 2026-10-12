@@ -6,8 +6,8 @@ use std::sync::Arc;
 use crate::RasterRecordContent;
 use layoutng_assembly::internal::layout_input::{PaintPathVerb, TransformMatrix};
 use layoutng_assembly::internal::paint_input::{
-    PaintBlendMode, PaintCornerRadii, PaintFilterOperation, PaintFilterType, PaintMaskComposite,
-    PaintMaskMode, PaintShaderKind, SvgStrokeLineJoin,
+    PaintBlendMode, PaintCornerRadii, PaintFilterOperation, PaintFilterType, PaintShaderKind,
+    SvgStrokeLineJoin,
 };
 use paint::paint_engine::{
     DisplayItem, DisplayItemType as Kind, PaintArtifact, PaintChunk, PaintRect, RecordedDisplayItem,
@@ -35,15 +35,68 @@ struct ExternalEffectScope {
     cursor: usize,
     node_id: u64,
     opacity: f32,
+    blend_mode: PaintBlendMode,
+    isolates_blending: bool,
     filters: Vec<PaintFilterOperation>,
 }
 
 fn supported_external_filters(filters: &[PaintFilterOperation]) -> bool {
     !filters.is_empty()
         && filters.iter().all(|filter| {
-            filter.r#type == PaintFilterType::kBlur
-                && filter.amount.is_finite()
-                && filter.amount >= 0.0
+            let finite = filter.amount.is_finite()
+                && filter.blur_radius.is_finite()
+                && filter.offset.x.is_finite()
+                && filter.offset.y.is_finite()
+                && [
+                    filter.color.red,
+                    filter.color.green,
+                    filter.color.blue,
+                    filter.color.alpha,
+                ]
+                .iter()
+                .all(|value| value.is_finite());
+            finite
+                && match filter.r#type {
+                    PaintFilterType::kReference => {
+                        filter.reference_graph.is_some() && filter.reference_error.is_none()
+                    }
+                    PaintFilterType::kGrayscale
+                    | PaintFilterType::kSepia
+                    | PaintFilterType::kInvert
+                    | PaintFilterType::kOpacity => (0.0..=1.0).contains(&filter.amount),
+                    PaintFilterType::kSaturate
+                    | PaintFilterType::kBrightness
+                    | PaintFilterType::kContrast
+                    | PaintFilterType::kBlur => filter.amount >= 0.0,
+                    PaintFilterType::kHueRotate => true,
+                    PaintFilterType::kDropShadow => filter.blur_radius >= 0.0,
+                    PaintFilterType::kBoxReflect => {
+                        filter.reflection_offset.is_finite()
+                            && filter.reflection_offset_percentage == 0.0
+                            && filter.reflection_offset_calculation.is_none()
+                            && filter.reflection_mask_image.is_none()
+                            && filter.reflection_mask_layers.iter().all(|layer| {
+                                [
+                                    layer.clip_origin.x,
+                                    layer.clip_origin.y,
+                                    layer.clip_size.width,
+                                    layer.clip_size.height,
+                                    layer.source_origin.x,
+                                    layer.source_origin.y,
+                                    layer.source_size.width,
+                                    layer.source_size.height,
+                                    layer.tile_origin.x,
+                                    layer.tile_origin.y,
+                                    layer.tile_size.width,
+                                    layer.tile_size.height,
+                                    layer.tile_spacing.width,
+                                    layer.tile_spacing.height,
+                                ]
+                                .iter()
+                                .all(|value| value.is_finite())
+                            })
+                    }
+                }
         })
 }
 
@@ -55,22 +108,39 @@ fn contains(a: PaintRect, b: PaintRect) -> bool {
             && a.y + a.height >= b.y + b.height)
 }
 fn validate_mask(item: &DisplayItem) -> Result<(), ReplayUnsupported> {
-    // compat/canvas.rs::end_mask_impl currently renders linear gradient mask
-    // coverage. Images, luminance and non-Add composites need their actual
-    // raster implementation; rendering these as white would silently lose CSS.
+    // Mask source raster is owned by compat/canvas::draw_mask_layers_with.
+    // It supports bitmap/document images and every resolved shader kind, then
+    // combines the resulting alpha/luminance planes with the four CSS
+    // mask-composite equations. Keep this boundary to payload/geometry
+    // validation; rejecting those canonical variants here loses semantics
+    // that Raster already implements.
     if item.mask_layers.is_empty() {
         return Err(ReplayUnsupported("missing-mask-payload"));
     }
     for (index, layer) in item.mask_layers.iter().enumerate() {
-        let valid = layer.resource_id == 0
-            && layer.mode == PaintMaskMode::kAlpha
-            && layer.composite == PaintMaskComposite::kAdd
-            && layer
-                .paint_shader
-                .as_ref()
-                .is_some_and(|shader| shader.kind == PaintShaderKind::kLinearGradient)
+        let source_count = usize::from(layer.resource_id != 0)
+            + usize::from(layer.paint_shader.is_some());
+        let radii = [
+            layer.clip_radii.top_left,
+            layer.clip_radii.top_right,
+            layer.clip_radii.bottom_right,
+            layer.clip_radii.bottom_left,
+        ];
+        let valid = source_count == 1
             && finite_rect(layer.clip_rect)
-            && finite_rect(layer.tile_rect);
+            && finite_rect(layer.source_rect)
+            && finite_rect(layer.tile_rect)
+            && [
+                layer.tile_scale.x,
+                layer.tile_scale.y,
+                layer.tile_spacing.width,
+                layer.tile_spacing.height,
+            ]
+            .iter()
+            .all(|value| value.is_finite())
+            && radii
+                .iter()
+                .all(|radius| radius.x.is_finite() && radius.y.is_finite());
         if !valid {
             if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
                 eprintln!("layer-replay unsupported-mask node={} layer={index} resource={} mode={:?} composite={:?} shader={:?} clip={:?} tile={:?}",
@@ -82,31 +152,35 @@ fn validate_mask(item: &DisplayItem) -> Result<(), ReplayUnsupported> {
     }
     Ok(())
 }
-// Only the real Mask DrawingDisplayItem may contain this outer DstIn
-// wrapper. It is retained in full-frame commands but stripped from source-tile
-// raster: blend belongs to the complete parent effect group at composition.
+// A real Mask DrawingDisplayItem has an *outer* DstIn wrapper.  Strip that
+// wrapper from source-tile raster because its blend belongs to the complete
+// parent effect group at composition.  Ordinary drawing records may contain
+// nested DstIn layers (background-clip:text and border-area-text); those are
+// local paint operations and must survive canonicalization and raster replay.
 fn mask_record_body(
     raw: &[DisplayItem],
     is_mask: bool,
 ) -> Result<&[DisplayItem], ReplayUnsupported> {
     if !is_mask {
-        if raw
-            .iter()
-            .any(|item| matches!(item.r#type, Kind::kDrawMask | Kind::kSaveLayerDstIn))
-        {
+        if raw.iter().any(|item| item.r#type == Kind::kDrawMask) {
             return Err(ReplayUnsupported("mask-drawing-without-mask-effect"));
         }
         return Ok(raw);
     }
-    if raw.len() < 3
+    if raw.len() < 2
         || raw[0].r#type != Kind::kSaveLayerDstIn
         || raw.last().unwrap().r#type != Kind::kRestore
     {
         return Err(ReplayUnsupported("invalid-mask-drawing-boundary"));
     }
     let body = &raw[1..raw.len() - 1];
-    if !body.iter().any(|item| item.r#type == Kind::kDrawMask)
-        || body.iter().any(|item| item.r#type == Kind::kSaveLayerDstIn)
+    // mask-image uses kDrawMask, while mask-border emits ordinary nine-piece
+    // image/gradient draws. A pending mask resource legitimately leaves this
+    // body empty, which is a transparent DstIn source and clears the content
+    // surface. The formal is_mask property is the semantic boundary proof.
+    if body
+        .iter()
+        .any(|item| item.r#type == Kind::kSaveLayerDstIn)
     {
         return Err(ReplayUnsupported("invalid-mask-source-record"));
     }
@@ -228,12 +302,20 @@ fn unrepresented_flat_clips(
     actual: &[RoundedClip],
     external: &[RoundedClip],
 ) -> Option<Vec<RoundedClip>> {
+    // PaintChunksToCcLayer::SwitchToClip treats the property tree as the
+    // semantic clip source. A DrawingDisplayItem may therefore omit every
+    // property clip from its PaintRecord; only additional flat-record clips
+    // need to be retained here. This is especially common for root/viewport
+    // clips, whose coordinate mapping belongs to the chunk transform tree.
+    if actual.is_empty() {
+        return Some(Vec::new());
+    }
     let mut external_index = 0;
     let mut extra = Vec::new();
     for shape in actual {
         if external
             .get(external_index)
-            .is_some_and(|external| external == shape)
+            .is_some_and(|external| raster_clip_equivalent(external, shape))
         {
             external_index += 1;
         } else {
@@ -241,6 +323,31 @@ fn unrepresented_flat_clips(
         }
     }
     (external_index == external.len()).then_some(extra)
+}
+
+// Paint records carry SkScalar geometry. The translated property path keeps
+// intermediate values as f64, while flat display items have already crossed
+// the f32 Skia boundary. Compare the geometry the raster backend will receive,
+// rather than rejecting two values which become the same SkScalar.
+fn raster_clip_equivalent(a: &RoundedClip, b: &RoundedClip) -> bool {
+    let scalar = |a: f64, b: f64| a as f32 == b as f32;
+    let radius =
+        |a: &layoutng_assembly::internal::paint_input::PaintCornerRadius,
+         b: &layoutng_assembly::internal::paint_input::PaintCornerRadius| {
+            scalar(a.x, b.x) && scalar(a.y, b.y)
+        };
+    a.antialias == b.antialias
+        && a.even_odd == b.even_odd
+        && a.path == b.path
+        && a.affine == b.affine
+        && scalar(a.rect.x, b.rect.x)
+        && scalar(a.rect.y, b.rect.y)
+        && scalar(a.rect.width, b.rect.width)
+        && scalar(a.rect.height, b.rect.height)
+        && radius(&a.radii.top_left, &b.radii.top_left)
+        && radius(&a.radii.top_right, &b.radii.top_right)
+        && radius(&a.radii.bottom_right, &b.radii.bottom_right)
+        && radius(&a.radii.bottom_left, &b.radii.bottom_left)
 }
 pub(crate) fn clip_transform_state(
     space: &Arc<paint::paint_property_tree::TransformPaintPropertyNode>,
@@ -278,6 +385,14 @@ fn rounded_clips_between_in_raster_space(
     while let Some(node) = clip {
         if stop.is_some_and(|stop| stop.lifecycle.same_node(&node.lifecycle)) {
             break;
+        }
+        if node.clip_path_children.len() > 1 {
+            // Multi-child SVG clipPath is unioned by the compositor's
+            // synthesized A8 clip. Recording has only an intersecting
+            // kClipPath command, so never flatten this into the wrong shape.
+            return Err(ReplayUnsupported(
+                "union-property-clip-requires-synthesized-mask",
+            ));
         }
         if !node.clip_path.is_empty() {
             let item = DisplayItem {
@@ -777,6 +892,21 @@ pub fn record_pixel_bounds(
     for item in raw {
         match item.r#type {
             Kind::kSave => saved.push(state),
+            Kind::kSaveLayer | Kind::kSaveLayerAlpha | Kind::kSaveLayerBlend
+                if item.opacity.is_finite()
+                    && (0.0..=1.0).contains(&item.opacity)
+                    && item.filters.is_empty()
+                    && item.mask_layers.is_empty()
+                    && item.paint_shader.is_none() =>
+            {
+                // A supported saveLayer changes pixel grouping, but it cannot
+                // create ink outside the union of its children. Keep the same
+                // geometry state so the matching Restore remains balanced.
+                // PaintChunksToCcLayer relies on these complete bounds when it
+                // decides whether an ordinary decoration chunk can merge back
+                // into its surrounding picture layer.
+                saved.push(state)
+            }
             Kind::kRestore => state = saved.pop()?,
             Kind::kConcat => concatenate_affine(&mut state, &item.transform).ok()?,
             Kind::kClipRect | Kind::kClipRoundedRect => {
@@ -1051,8 +1181,9 @@ fn update_state(
 ) -> Result<(), ReplayUnsupported> {
     match item.r#type {
         Kind::kSave => stack.push(*state),
-        // This wrapper belongs to a real Mask DrawingDisplayItem. Its blend
-        // is executed once by the effect tree, after source-tile rasterization.
+        // Internal DstIn is a paint-record operation (for example
+        // background-clip:text).  The outer wrapper of a real Mask display
+        // item was removed by mask_record_body() before this walk.
         Kind::kSaveLayerDstIn
             if !external
                 && finite_rect(item.rect)
@@ -1113,16 +1244,32 @@ fn update_state(
             stack.push(*state);
         }
         Kind::kSaveLayerBlend
-            if !external
-                && finite_rect(item.rect)
-                && item.opacity == 1.0
-                && item.blend_mode == PaintBlendMode::kNormal
+            if external
+                && item.rect.is_empty()
+                && item.opacity.is_finite()
+                && (0.0..=1.0).contains(&item.opacity)
                 && item.filters.is_empty()
                 && item.mask_layers.is_empty()
                 && item.paint_shader.is_none() =>
         {
-            // This pass computes replay geometry; the raster canvas still
-            // receives the command and performs its isolated SrcOver surface.
+            // Opacity, blend and isolation have a retained
+            // EffectPaintPropertyNode. PaintChunksToCcLayer removes this
+            // redundant outer recording wrapper; renderer restores the group
+            // exactly once from that effect node instead of replaying a
+            // saveLayer into every tile.
+            stack.push(*state);
+        }
+        Kind::kSaveLayerBlend
+            if !external
+                && finite_rect(item.rect)
+                && item.opacity == 1.0
+                && item.filters.is_empty()
+                && item.mask_layers.is_empty()
+                && item.paint_shader.is_none() =>
+        {
+            // Nested paint-record isolation (including a blended
+            // background-clip:text layer) is raster-local.  This pass only
+            // computes replay geometry; the canvas receives the blend mode.
             stack.push(*state);
         }
         Kind::kSaveLayerFilter
@@ -1164,18 +1311,31 @@ fn canonical_item(item: &DisplayItem, delta: (f64, f64)) -> Result<DisplayItem, 
     );
     let box_shadow = item.r#type == Kind::kDrawBoxShadow;
     let blurred_glyph = item.r#type == Kind::kDrawGlyphRun;
+    let text_decoration_shadow = item.r#type == Kind::kStrokeLine && item.is_text_decoration;
     let mask = item.r#type == Kind::kDrawMask;
     if mask {
         validate_mask(item)?;
     }
     if !item.filters.is_empty()
         || (!mask && !item.mask_layers.is_empty())
-        || item.blend_mode != PaintBlendMode::kNormal
+        // A SaveLayerBlend carries the blend operation itself.  Its scope was
+        // already validated by update_state(); keep the mode on the command so
+        // raster replay can composite an isolated background layer before the
+        // following DstIn text mask.  Other records must remain normal here.
+        || (item.blend_mode != PaintBlendMode::kNormal
+            && item.r#type != Kind::kSaveLayerBlend)
         || !item.blur_radius.is_finite()
         || item.blur_radius < 0.0
-        || (item.blur_radius != 0.0 && !box_shadow && !blurred_glyph)
+        || (item.blur_radius != 0.0
+            && !box_shadow
+            && !blurred_glyph
+            && !text_decoration_shadow)
         || (box_shadow
             && ![item.spread, item.shadow_offset.x, item.shadow_offset.y]
+                .iter()
+                .all(|value| value.is_finite()))
+        || (text_decoration_shadow
+            && ![item.shadow_offset.x, item.shadow_offset.y]
                 .iter()
                 .all(|value| value.is_finite()))
         || (item.paint_shader.is_some() && !gradient)
@@ -1186,17 +1346,6 @@ fn canonical_item(item: &DisplayItem, delta: (f64, f64)) -> Result<DisplayItem, 
                 item.paint_shader.as_ref().map(|shader|shader.kind));
         }
         return Err(ReplayUnsupported("unsupported-record-resource-or-effect"));
-    }
-    // compat/canvas.rs::draw_gradient_tile implements linear gradients only.
-    // Its start/end are absolute points; shader transform and tile spacing
-    // are local/resource quantities and must retain their original values.
-    if gradient
-        && !item
-            .paint_shader
-            .as_ref()
-            .is_some_and(|shader| shader.kind == PaintShaderKind::kLinearGradient)
-    {
-        return Err(ReplayUnsupported("unsupported-gradient-kind"));
     }
     if item.r#type == Kind::kDrawGlyphRun && item.transform != TransformMatrix::default() {
         return Err(ReplayUnsupported("transformed-glyph-record"));
@@ -1213,10 +1362,16 @@ fn canonical_item(item: &DisplayItem, delta: (f64, f64)) -> Result<DisplayItem, 
     }
     if gradient {
         let shader = output.paint_shader.as_mut().unwrap();
-        shader.start.x += delta.0;
-        shader.start.y += delta.1;
-        shader.end.x += delta.0;
-        shader.end.y += delta.1;
+        // The linear fast path consumes absolute endpoints. Radial/conic
+        // geometry is tile-local in compat/canvas (tile coordinate offset and
+        // destination transform cancel this record translation), and pattern
+        // placement is carried by its own resolved matrix.
+        if shader.kind == PaintShaderKind::kLinearGradient {
+            shader.start.x += delta.0;
+            shader.start.y += delta.1;
+            shader.end.x += delta.0;
+            shader.end.y += delta.1;
+        }
     }
     if mask {
         for layer in &mut output.mask_layers {
@@ -1233,6 +1388,7 @@ fn canonical_item(item: &DisplayItem, delta: (f64, f64)) -> Result<DisplayItem, 
     if item.r#type == Kind::kDrawGlyphRun {
         output.text_blob_origin.x += delta.0;
         output.text_blob_origin.y += delta.1;
+        output.text_line_top += delta.1;
     }
     for point in &mut output.path {
         if point.verb == PaintPathVerb::kClose {
@@ -1312,6 +1468,9 @@ fn translated_item_matches(item: &DisplayItem, delta: (f64, f64), old: &DisplayI
         mask_layers: _,
         round_cap: _,
         resource_id: _,
+        image_interpolation_quality: _,
+        image_orientation: _,
+        document_image_container_key: _,
         repeat_x: _,
         repeat_y: _,
         background_repeat_x: _,
@@ -1336,6 +1495,8 @@ fn translated_item_matches(item: &DisplayItem, delta: (f64, f64), old: &DisplayI
         font_variations: _,
         font_size: _,
         baseline: _,
+        text_line_top: _,
+        text_line_height: _,
         text_blob_origin: _,
         horizontal: _,
         at_start: _,
@@ -1359,6 +1520,9 @@ fn translated_item_matches(item: &DisplayItem, delta: (f64, f64), old: &DisplayI
         return false;
     }
     if item.source_rect != old.source_rect {
+        return false;
+    }
+    if item.image_interpolation_quality != old.image_interpolation_quality {
         return false;
     }
     if item.color != old.color {
@@ -1431,6 +1595,12 @@ fn translated_item_matches(item: &DisplayItem, delta: (f64, f64), old: &DisplayI
         return false;
     }
     if item.resource_id != old.resource_id {
+        return false;
+    }
+    if item.image_orientation != old.image_orientation {
+        return false;
+    }
+    if item.document_image_container_key != old.document_image_container_key {
         return false;
     }
     if item.repeat_x != old.repeat_x {
@@ -1529,6 +1699,9 @@ fn translated_item_matches(item: &DisplayItem, delta: (f64, f64), old: &DisplayI
     if item.glyphs != old.glyphs {
         return false;
     }
+    if item.text_line_height != old.text_line_height {
+        return false;
+    }
     if shift(item.rect, delta) != old.rect {
         return false;
     }
@@ -1560,6 +1733,14 @@ fn translated_item_matches(item: &DisplayItem, delta: (f64, f64), old: &DisplayI
         origin.y += delta.1;
     }
     if origin != old.text_blob_origin {
+        return false;
+    }
+    let line_top = if item.r#type == Kind::kDrawGlyphRun {
+        item.text_line_top + delta.1
+    } else {
+        item.text_line_top
+    };
+    if line_top != old.text_line_top {
         return false;
     }
     // Nonzero gradient offsets alter shader endpoints. Keep those records on
@@ -1718,6 +1899,9 @@ fn validate_property_only_update(
         let b = &new.transforms[&id];
         if !a.lifecycle.same_node(&b.lifecycle)
             || a.origin != b.origin
+            || a.flattens_inherited_transform != b.flattens_inherited_transform
+            || a.rendering_context_id != b.rendering_context_id
+            || a.backface_visibility != b.backface_visibility
             || a.direct_compositing_reasons != b.direct_compositing_reasons
             || !same_optional_node(a.parent.as_ref(), b.parent.as_ref(), |a, b| {
                 a.lifecycle.same_node(&b.lifecycle)
@@ -1749,6 +1933,7 @@ fn validate_property_only_update(
             || a.rect != b.rect
             || a.radii != b.radii
             || a.clip_path != b.clip_path
+            || a.clip_path_children != b.clip_path_children
             || a.clip_path_even_odd != b.clip_path_even_odd
             || !a
                 .local_transform_space
@@ -1772,6 +1957,13 @@ fn validate_property_only_update(
             || a.opacity != b.opacity
             || a.blend_mode != b.blend_mode
             || a.filters != b.filters
+            || a.backdrop_filters != b.backdrop_filters
+            || a.backdrop_filter_has_reference != b.backdrop_filter_has_reference
+            || !same_optional_node(
+                a.backdrop_filter_clip.as_ref(),
+                b.backdrop_filter_clip.as_ref(),
+                |a, b| a.lifecycle.same_node(&b.lifecycle),
+            )
             || a.isolates_blending != b.isolates_blending
             || a.has_mask != b.has_mask
             || a.direct_compositing_reasons != b.direct_compositing_reasons
@@ -2417,7 +2609,16 @@ fn prepare_raster_content(
                 let mut effect = Some(chunk.properties.effect.clone());
                 while let Some(current) = effect {
                     effect = current.parent.clone();
-                    if current.opacity != 1.0 || !current.filters.is_empty() {
+                    // PaintRecord wrappers carry foreground effects. Backdrop
+                    // filters remain compositor effect properties because
+                    // they sample pixels behind this record; Renderer applies
+                    // them when it evaluates the retained effect scope. Do not
+                    // require a duplicate flat-record wrapper for that path.
+                    if current.opacity != 1.0
+                        || current.blend_mode != PaintBlendMode::kNormal
+                        || current.isolates_blending
+                        || !current.filters.is_empty()
+                    {
                         effects.push(current);
                     }
                 }
@@ -2555,7 +2756,11 @@ fn prepare_raster_content(
                         .iter()
                         .zip(&effect_scopes_flat)
                         .any(|(effect, scope)| {
-                            effect.opacity != scope.opacity || effect.filters != scope.filters
+                            effect.opacity != scope.opacity
+                                || effect.blend_mode != scope.blend_mode
+                                || (scope.blend_mode == PaintBlendMode::kNormal
+                                    && effect.isolates_blending != scope.isolates_blending)
+                                || effect.filters != scope.filters
                         })
                 {
                     if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
@@ -2564,7 +2769,7 @@ fn prepare_raster_content(
                         let nearby_end = (record.record_end + 8).min(list.items.len());
                         eprintln!("layer-replay effect-mismatch record={index} id={:?} range={}..{} wrappers={effect_scopes_flat:?} effects={:?} nearby={:?}",
                             record.id, record.record_begin, record.record_end,
-                            effects.iter().map(|effect|(effect.id,effect.opacity,&effect.filters)).collect::<Vec<_>>(),
+                            effects.iter().map(|effect|(effect.id,effect.opacity,effect.blend_mode,effect.isolates_blending,&effect.filters)).collect::<Vec<_>>(),
                             list.items[nearby_begin..nearby_end].iter().enumerate().map(|(offset,item)|(nearby_begin+offset,item.r#type,item.node_id,item.opacity)).collect::<Vec<_>>());
                     }
                     return Err(ReplayUnsupported("external-effect-property-mismatch"));
@@ -2642,9 +2847,22 @@ fn prepare_raster_content(
                     }
                     return Err(ReplayUnsupported("external-rounded-clip-property-mismatch"));
                 }
-                let extra =
-                    unrepresented_flat_clips(&rounded_scopes, record_rounded[index].as_ref())
-                        .ok_or(ReplayUnsupported("external-rounded-clip-property-mismatch"))?;
+                let extra = match unrepresented_flat_clips(
+                    &rounded_scopes,
+                    record_rounded[index].as_ref(),
+                ) {
+                    Some(extra) => extra,
+                    None => {
+                        if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+                            eprintln!(
+                                "layer-replay rounded-order-mismatch record={index} id={:?} actual={rounded_scopes:?} expected={:?}",
+                                list.display_items[index].id,
+                                record_rounded[index]
+                            );
+                        }
+                        return Err(ReplayUnsupported("external-rounded-clip-property-mismatch"));
+                    }
+                };
                 let has_baked_flat_clip = !extra.is_empty();
                 if !extra.is_empty() {
                     let mut baked = baked_rounded[index].to_vec();
@@ -2660,6 +2878,10 @@ fn prepare_raster_content(
                 // below then replays both the clip and drawing exactly. This
                 // is the clip counterpart of retaining the SVG transform,
                 // rather than weakening the comparison or dropping state.
+                // PaintChunk properties are the source of truth for a clip;
+                // the DrawingDisplayItem's PaintRecord is allowed to omit
+                // that redundant wrapper. An additional flat clip still has
+                // to be proven equivalent or retained below.
                 if !raster_clips_equivalent(state.clip, expected.clip, scale)
                     && !has_baked_flat_clip
                     && !rect_record_clips_are_redundant(
@@ -2718,7 +2940,35 @@ fn prepare_raster_content(
             owners[cursor].is_none(),
         )?;
         match item.r#type {
-            Kind::kSave | Kind::kSaveLayerBlend | Kind::kSaveLayerDstIn => saved_effects.push((
+            Kind::kSave | Kind::kSaveLayerDstIn => saved_effects.push((
+                effect_scopes_flat.len(),
+                device_clip,
+                rounded_scopes.len(),
+                unsupported_complex,
+            )),
+            Kind::kSaveLayerBlend if owners[cursor].is_none() => {
+                saved_effects.push((
+                    effect_scopes_flat.len(),
+                    device_clip,
+                    rounded_scopes.len(),
+                    unsupported_complex,
+                ));
+                scope_output_clips.insert(cursor, Arc::from(rounded_scopes.clone()));
+                effect_scopes_flat.push(ExternalEffectScope {
+                    cursor,
+                    node_id: item.node_id,
+                    opacity: item.opacity,
+                    blend_mode: item.blend_mode,
+                    // A normal SaveLayerBlend exists only for
+                    // `isolation:isolate`; a non-normal blend may additionally
+                    // isolate, but the flat wrapper cannot distinguish that
+                    // bit. The retained property node below remains the
+                    // authoritative value, so accept either there.
+                    isolates_blending: item.blend_mode == PaintBlendMode::kNormal,
+                    filters: Vec::new(),
+                });
+            }
+            Kind::kSaveLayerBlend => saved_effects.push((
                 effect_scopes_flat.len(),
                 device_clip,
                 rounded_scopes.len(),
@@ -2737,6 +2987,8 @@ fn prepare_raster_content(
                         cursor,
                         node_id: item.node_id,
                         opacity: item.opacity,
+                        blend_mode: PaintBlendMode::kNormal,
+                        isolates_blending: false,
                         filters: Vec::new(),
                     });
                 }
@@ -2777,6 +3029,8 @@ fn prepare_raster_content(
                     cursor,
                     node_id: item.node_id,
                     opacity: 1.0,
+                    blend_mode: PaintBlendMode::kNormal,
+                    isolates_blending: false,
                     filters: item.filters.clone(),
                 });
             }

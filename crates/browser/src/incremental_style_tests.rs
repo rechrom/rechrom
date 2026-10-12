@@ -549,6 +549,7 @@ fn image_completion_updates_consumers_without_recalculating_unrelated_styles() {
                     natural_width: 10.0,
                     natural_height: 20.0,
                     resolution_scale: 1.0,
+                    orientation: Default::default(),
                 },
             );
             assert!(!owner.GetDocument().StyleState().all_dirty);
@@ -615,6 +616,7 @@ fn profile_loading_resource_and_shared_heap() {
                 natural_width: 10.0,
                 natural_height: 20.0,
                 resolution_scale: 1.0,
+                orientation: Default::default(),
             },
         );
         update(&mut owner);
@@ -662,6 +664,7 @@ fn image_notification_does_not_hide_simultaneous_dom_invalidation() {
                 natural_width: 10.0,
                 natural_height: 20.0,
                 resolution_scale: 1.0,
+                orientation: Default::default(),
             },
         );
         attribute(&mut owner, "a", "class", "box active");
@@ -730,6 +733,8 @@ fn image_completion_updates_intrinsic_size_and_keeps_unrelated_styles() {
                 width: 128,
                 height: 64,
                 resolution_scale: 2.0,
+                orientation: Default::default(),
+                document_container_key: None,
                 content: image_resource::PaintImageContent::Bitmap(vec![255; 128 * 64 * 4].into()),
             },
         );
@@ -1401,6 +1406,7 @@ fn parent_changed_bypasses_resource_only_shortcut_when_inherited_inputs_change()
                 natural_width: 20.,
                 natural_height: 20.,
                 resolution_scale: 1.,
+                orientation: Default::default(),
             },
         );
         update(&mut owner);

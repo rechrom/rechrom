@@ -82,30 +82,35 @@ fn Path<T: TokenStreamTokenizer>(
         return Ok(Some(values::identifier(kNone)));
     }
     let mut coord = CoordBox(s);
-    let ray = Ray(id, s, mode)?;
-    if ray.is_none()
+    let mut shape = Ray(id, s, mode)?;
+    if shape.is_none() {
+        shape = match s.Peek().FunctionId() {
+            Some(kPath) => Some(super::effects_parser::Path(id, s)?),
+            Some(kCircle) => Some(super::effects_parser::Circle(id, s, mode)?),
+            Some(kEllipse) => Some(super::effects_parser::Ellipse(id, s, mode)?),
+            Some(kInset) => Some(super::effects_parser::Inset(id, s, mode)?),
+            Some(kPolygon) => Some(super::effects_parser::Polygon(id, s, mode)?),
+            _ => None,
+        };
+    }
+    if shape.is_none()
         && (s.Peek().GetType() == kUrlToken
-            || matches!(
-                s.Peek().FunctionId(),
-                Some(
-                    kUrl | kPath | kCircle | kEllipse | kInset | kRect | kXywh | kPolygon | kShape
-                )
-            ))
+            || matches!(s.Peek().FunctionId(), Some(kUrl | kRect | kXywh | kShape)))
     {
         return Err(unsupported(
             id,
-            "OffsetPath BasicShape/Path or SVG resource owner",
+            "OffsetPath rect()/xywh()/shape() or SVG resource owner",
         ));
     }
     if coord.is_none() {
         coord = CoordBox(s);
     }
-    if ray.is_none() && coord.is_none() {
+    if shape.is_none() && coord.is_none() {
         return Ok(None);
     }
     let mut list = Vec::new();
-    let has_path = ray.is_some();
-    list.extend(ray);
+    let has_path = shape.is_some();
+    list.extend(shape);
     if !has_path
         || coord.as_ref().is_some_and(
             |c| !matches!(c.Payload(),CSSValuePayload::kIdentifierClass(k) if k.0==kBorderBox),

@@ -119,6 +119,118 @@ fn AddCategory(
     }
 }
 impl CSSMathExpressionNode {
+    /// css_math_expression_node.cc: AccumulateLengthUnitTypes.
+    ///
+    /// Property application uses this to transfer dependency bits after the
+    /// winning typed value has reached the native builder.  Keep the walk on
+    /// the typed expression tree so no serialized CSS is consulted.
+    pub fn UsesUnit(&self, unit: UnitType) -> bool {
+        match self {
+            Self::Numeric(value) => value.GetType() == unit,
+            Self::Operation { operands, .. } => {
+                operands.iter().any(|operand| operand.UsesUnit(unit))
+            }
+        }
+    }
+
+    // cpp: css_math_expression_node.cc:Create(const CalculationValue&),
+    // css_math_function_value.cc:49-59. StyleCascade numeric coercion first
+    // lowers a mixed length/percentage expression to foundation::Length and
+    // then recreates the CSS primitive value. Keep that round trip typed: the
+    // foundation calculation tree remains the owner of used-value semantics,
+    // while this conversion restores the equivalent CSS math tree.
+    pub fn FromCalculationValue(
+        value: &foundation::CalculationValue,
+        zoom: f32,
+    ) -> Result<Self, MathError> {
+        use foundation::{
+            CalculationExpressionNode as Node, CalculationOperator as Op, PixelsAndPercent,
+        };
+
+        fn pixels_and_percent(value: PixelsAndPercent, zoom: f32) -> CSSMathExpressionNode {
+            let pixels = CSSMathExpressionNode::Numeric(CSSNumericLiteralValue::Create(
+                value.pixels as f64 / zoom as f64,
+                UnitType::kPixels,
+            ));
+            let percent = CSSMathExpressionNode::Numeric(CSSNumericLiteralValue::Create(
+                value.percent as f64,
+                UnitType::kPercentage,
+            ));
+            if value.has_explicit_pixels && value.has_explicit_percent {
+                CSSMathExpressionNode::Operation(CSSMathOperator::Add, vec![pixels, percent])
+                    .expect("length and percentage form a valid typed sum")
+            } else if value.has_explicit_percent {
+                percent
+            } else {
+                pixels
+            }
+        }
+
+        fn convert(node: &Node, zoom: f32) -> Result<CSSMathExpressionNode, MathError> {
+            use CSSMathOperator as M;
+            use Op::*;
+            Ok(match node {
+                Node::Number(value) => CSSMathExpressionNode::Numeric(
+                    CSSNumericLiteralValue::Create(*value as f64, UnitType::kNumber),
+                ),
+                Node::PixelsAndPercent(value) => pixels_and_percent(*value, zoom),
+                Node::Operation { children, operator } => {
+                    let mut operands = children
+                        .iter()
+                        .map(|child| convert(child, zoom))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let operator = match operator {
+                        kAdd => M::Add,
+                        kSubtract => M::Subtract,
+                        kMultiply => M::Multiply,
+                        kInvert => {
+                            operands.insert(
+                                0,
+                                CSSMathExpressionNode::Numeric(CSSNumericLiteralValue::Create(
+                                    1.0,
+                                    UnitType::kNumber,
+                                )),
+                            );
+                            M::Divide
+                        }
+                        kMin => M::Min,
+                        kMax => M::Max,
+                        kClamp => M::Clamp,
+                        kRoundNearest => M::RoundNearest,
+                        kRoundUp => M::RoundUp,
+                        kRoundDown => M::RoundDown,
+                        kRoundToZero => M::RoundToZero,
+                        kMod => M::Mod,
+                        kRem => M::Rem,
+                        kLog => M::Log,
+                        kExp => M::Exp,
+                        kSqrt => M::Sqrt,
+                        kHypot => M::Hypot,
+                        kAbs => M::Abs,
+                        kSign => M::Sign,
+                        kPow => M::Pow,
+                        kSin => M::Sin,
+                        kCos => M::Cos,
+                        kTan => M::Tan,
+                        kAsin => M::Asin,
+                        kAcos => M::Acos,
+                        kAtan => M::Atan,
+                        kAtan2 => M::Atan2,
+                        kProgress | kContainerProgress | kCalcSize | kMediaProgress | kRandom => {
+                            return Err(MathError::UnsupportedFunction)
+                        }
+                    };
+                    CSSMathExpressionNode::Operation(operator, operands)?
+                }
+                Node::Identifier(_) | Node::SizingKeyword(_) | Node::ColorChannelKeyword(_) => {
+                    return Err(MathError::UnsupportedTypedArithmetic)
+                }
+            })
+        }
+
+        convert(value.GetOrCreateExpression().as_ref(), zoom)
+    }
+
     pub fn Category(&self) -> CalculationResultCategory {
         match self {
             Self::Numeric(n) => UnitCategory(n.GetType()).expect("validated math unit"),

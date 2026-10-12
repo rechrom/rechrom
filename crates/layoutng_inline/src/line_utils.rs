@@ -63,8 +63,8 @@ pub fn ComputeRelativeOffsetForOOFInInline(
 // cpp: layoutng_inline/line_utils.cc:65-74
 pub fn CalculateLeadingSpace(line_height: &LayoutUnit, current_height: &FontHeight) -> FontHeight {
     let remaining = *line_height - current_height.LineHeight();
-    // The C++ function floors the ascent half before assigning the remainder
-    // to descent, preserving odd fixed-point units and legacy text dumps.
+    // cpp: line_utils.cc:39-42. Blink floors both positive and negative
+    // half-leading for compatibility with its legacy line-box geometry.
     let ascent = LayoutUnit::from_signed((remaining / 2i32).Floor());
     let descent = remaining - ascent;
     FontHeight::new(ascent, descent)

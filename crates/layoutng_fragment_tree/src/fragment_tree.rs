@@ -8,9 +8,9 @@ pub use foundation::graphics_types::graphics::paint::display_item_client_types::
 use layoutng::internal::form_control_types::FormControlType;
 use layoutng::internal::layout_input::{
     BorderLineStyle, BoxDecorationBreak, Display, Edges, FloatSide, FontFace, FontSmoothing,
-    FontVariation, ListStyleType, NodeKind, Offset, Overflow, PaintImage, PaintStyle, Position,
-    Size, SvgShapeData, SvgViewBoxData, TextDirection, TransformMatrix, ViewportGeometry,
-    WritingMode,
+    FontVariation, ListStyleType, NodeKind, Offset, Overflow, OverscrollBehavior, PaintImage,
+    PaintStyle, Position, Size, SvgShapeData, SvgViewBoxData, TextDirection, TransformMatrix,
+    ViewportGeometry, WritingMode,
 };
 use layoutng::internal::layout_input_types::Color;
 use layoutng_style::style::appearance::AppearanceValue;
@@ -47,6 +47,16 @@ pub struct PaintResources {
     pub fonts: Vec<FontFace>,
     pub images: Vec<PaintImage>,
     pub device_pixel_ratio: f64,
+    /// CSS pixels to the retained Layout/Paint coordinate space. Blink calls
+    /// this LocalFrame::LayoutZoomFactor. Rechrom keeps device scale as the
+    /// separate raster input above, so this value contains page/browser zoom
+    /// only. LayerTile uses `device_pixel_ratio / layout_zoom_factor` when it
+    /// maps the retained artifact to output pixels.
+    pub layout_zoom_factor: f64,
+    /// Whether the embedder paints Chromium's opaque base canvas behind the
+    /// document. Screen rendering defaults to white; printing deliberately
+    /// leaves this transparent so paper/PDF consumers can provide the base.
+    pub paints_opaque_base_background: bool,
     pub viewport: Option<ViewportGeometry>,
 }
 
@@ -56,8 +66,22 @@ impl Default for PaintResources {
             fonts: Vec::new(),
             images: Vec::new(),
             device_pixel_ratio: 1.0,
+            layout_zoom_factor: 1.0,
+            paints_opaque_base_background: true,
             viewport: None,
         }
+    }
+}
+
+#[allow(non_snake_case)]
+impl PaintResources {
+    /// Retained LayoutNG/Paint coordinates are already multiplied by
+    /// LocalFrame::LayoutZoomFactor.  This is the remaining conversion from
+    /// one artifact unit to one device pixel.  Keeping it on the boundary
+    /// payload prevents Paint from accidentally applying DPR as a second
+    /// independent zoom.
+    pub fn ArtifactToDeviceScale(&self) -> f64 {
+        self.device_pixel_ratio / self.layout_zoom_factor.max(f64::MIN_POSITIVE)
     }
 }
 
@@ -103,10 +127,24 @@ pub struct StitchedDecorationData {
 }
 
 // cpp: layoutng_fragment_tree/fragment_tree.h:115-118
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ReplacedContentPaintData {
     pub offset: Offset,
     pub size: Size,
+    /// LayoutReplaced::ClipsToContentBox(). Ordinary images clip regardless
+    /// of computed overflow; replaced elements that opt into CSS overflow use
+    /// the property-tree overflow clip instead.
+    pub clips_to_content_box: bool,
+}
+
+impl Default for ReplacedContentPaintData {
+    fn default() -> Self {
+        Self {
+            offset: Offset::default(),
+            size: Size::default(),
+            clips_to_content_box: true,
+        }
+    }
 }
 
 // cpp: layoutng_fragment_tree/fragment_tree.h:123-130
@@ -218,10 +256,28 @@ pub struct FieldsetPaintData {
 }
 
 // cpp: layoutng_fragment_tree/fragment_tree.h:186-189
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ColumnRule {
     pub offset: Offset,
     pub size: Size,
+    /// The used decoration values for this gap. Chromium expands the
+    /// GapDataList patterns against the actual gap count before painting; a
+    /// single style value on PaintStyle cannot represent repeat()/list syntax.
+    pub color: Color,
+    pub line_style: BorderLineStyle,
+    pub stroke_width: f64,
+}
+
+impl Default for ColumnRule {
+    fn default() -> Self {
+        Self {
+            offset: Offset::default(),
+            size: Size::default(),
+            color: Color::default(),
+            line_style: BorderLineStyle::kNone,
+            stroke_width: 0.0,
+        }
+    }
 }
 
 // cpp: layoutng_fragment_tree/fragment_tree.h:185-191
@@ -416,6 +472,26 @@ pub struct TextControlCaretMetrics {
     pub line_height: f64,
 }
 
+/// Native LayoutTextCombine paint state carried across the Layout/Paint
+/// boundary. PrePaint owns the corresponding transform property node.
+#[derive(Clone, Default, PartialEq)]
+pub struct TextCombineEmphasisPaintData {
+    pub glyph_runs: Vec<PaintGlyphRun>,
+    /// Line-relative origin within the text-combine frame.
+    pub origin: Offset,
+    pub color: Color,
+}
+
+#[derive(Clone, Default, PartialEq)]
+pub struct TextCombinePaintData {
+    pub scale_x: Option<f64>,
+    pub inline_spacing: f64,
+    pub text_top_offset: f64,
+    pub synthetic_oblique: bool,
+    pub font_size: f64,
+    pub emphasis: Option<TextCombineEmphasisPaintData>,
+}
+
 // The native fragment is the complete paint input. Shared payloads use Arc
 // because C++ shared_ptr<const T> is shared immutable ownership.
 // cpp: layoutng_fragment_tree/fragment_tree.h:32-73
@@ -425,8 +501,80 @@ pub struct TextControlCaretMetrics {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollContainerPaintData {
     pub container_rect: FragmentPaintRect,
+    /// Native ScrollableArea bounds in LayoutZoomFactor coordinates.  The
+    /// minimum is not necessarily zero (for example RTL and vertical writing
+    /// modes), so downstream input code must clamp against this interval
+    /// rather than reconstructing `0..contents-container`.
+    pub minimum_scroll_offset: Offset,
+    pub maximum_scroll_offset: Offset,
     pub user_scrollable_horizontal: bool,
     pub user_scrollable_vertical: bool,
+}
+
+/// One axis of Blink's StickyPositionScrollingConstraints at the Layout/Paint
+/// boundary.  These are layout coordinates; Paint resolves the associated
+/// ScrollPaintPropertyNode identity when it builds the property tree.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StickyAxisPaintData {
+    pub min_inset: Option<f64>,
+    pub max_inset: Option<f64>,
+    pub scroll_container_relative_containing_block_offset: f64,
+    pub scroll_container_relative_containing_block_size: f64,
+    pub scroll_container_relative_sticky_box_offset: f64,
+    pub scroll_container_relative_sticky_box_size: f64,
+    pub constraining_offset: f64,
+    pub constraining_size: f64,
+    pub scroll_container_client_id: u64,
+    pub nearest_sticky_box_client_id: u64,
+    pub nearest_containing_block_client_id: u64,
+    pub current_sticky_offset: f64,
+    pub current_total_sticky_box_offset: f64,
+    pub current_total_containing_block_offset: f64,
+}
+
+/// Sticky constraint geometry exported from the native LayoutNG owner.  The
+/// compositor consumes this through Paint's transform property node rather
+/// than reaching back into the resident layout tree.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StickyPositionPaintData {
+    pub owner_client_id: u64,
+    pub horizontal: Option<StickyAxisPaintData>,
+    pub vertical: Option<StickyAxisPaintData>,
+}
+
+/// CSS canvas background selected by Layout from the document element or its
+/// first body element.  It is owned by the root fragment because Paint must
+/// cover the viewport and must not repaint the source element's own box.
+///
+/// This is the package-boundary equivalent of Blink's propagated LayoutView
+/// background.  Keeping the selected immutable style here avoids asking Paint
+/// to rediscover DOM roles or containment rules.
+#[derive(Clone, PartialEq)]
+pub struct CanvasBackgroundPaintData {
+    pub style: PaintStyle,
+    pub effective_zoom: f32,
+}
+
+/// LayoutBox::BackgroundPaintLocation is a canonical Layout decision.  It
+/// accounts for scrolling overflow, attachment types, border opacity, inset
+/// shadows, border images and 3D context; Paint must not infer it again from
+/// the projected style.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BackgroundPaintLocation {
+    #[default]
+    BorderBox,
+    Contents,
+    Both,
+}
+
+impl BackgroundPaintLocation {
+    pub fn PaintsBorderBox(self) -> bool {
+        matches!(self, Self::BorderBox | Self::Both)
+    }
+
+    pub fn PaintsContents(self) -> bool {
+        matches!(self, Self::Contents | Self::Both)
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -454,6 +602,11 @@ pub struct PaintProperties {
     pub paint_layer_client_is_cacheable: bool,
     pub paint_layer_client_is_just_created: bool,
     pub paint_layer_is_self_painting: bool,
+    /// Canonical LayoutObject/PaintLayer stacking metadata. Paint must not
+    /// reconstruct these from the projected style because native adjustment
+    /// includes flex/grid items, containment and other grouping properties.
+    pub paint_layer_is_stacking_context: bool,
+    pub paint_layer_stacking_level: i32,
     pub display_item_client_is_cacheable: bool,
     pub display_item_client_is_just_created: bool,
     // The active ScopedDisplayItemFragment value: inline FragmentId(), layer
@@ -472,6 +625,17 @@ pub struct PaintProperties {
     pub source_kind: NodeKind,
     pub effective_zoom: f32,
     pub style: PaintStyle,
+    /// True for an element whose CSS background is painted by the root canvas
+    /// painter. Borders, shadows and outlines remain ordinary box decoration.
+    pub background_transfers_to_view: bool,
+    /// Present only on the root LayoutView fragment.
+    pub canvas_background: Option<CanvasBackgroundPaintData>,
+    pub background_paint_location: BackgroundPaintLocation,
+    /// LayoutObject::CanCompositeBackgroundAttachmentFixed is the canonical
+    /// eligibility decision. It includes the one-layer, clip, shadow,
+    /// appearance and border-radius restrictions required by BackgroundClip.
+    pub can_composite_background_attachment_fixed: bool,
+    pub margin: Edges,
     pub border: Edges,
     pub border_sides: FragmentBoxSides,
     pub border_styles: [BorderLineStyle; 4],
@@ -485,8 +649,11 @@ pub struct PaintProperties {
     pub fixed_to_view: bool,
     pub floating: FloatSide,
     pub sticky_offset: Offset,
+    pub sticky_constraint: Option<StickyPositionPaintData>,
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
+    pub overscroll_behavior_x: OverscrollBehavior,
+    pub overscroll_behavior_y: OverscrollBehavior,
     /// CSS 2.1 `clip: rect(...)` in the box's local stitched coordinate space.
     /// This is distinct from overflow clipping: it clips the box's own paint
     /// as well as descendants and is ordered between Effect and Filter.
@@ -501,6 +668,10 @@ pub struct PaintProperties {
     pub direction: TextDirection,
     pub first_baseline: Option<f64>,
     pub text_line_top_offset: Option<f64>,
+    pub text_line_height: Option<f64>,
+    pub text_combine: Option<TextCombinePaintData>,
+    /// LayoutTextCombine::AdjustTextLeftForPaint, quantized as LayoutUnit.
+    pub text_combine_inline_offset: f64,
     pub replaced_content: Option<ReplacedContentPaintData>,
     pub resources: Option<Arc<PaintResources>>,
     pub glyph_runs: Vec<PaintGlyphRun>,
@@ -541,6 +712,8 @@ impl Default for PaintProperties {
             paint_layer_client_is_cacheable: false,
             paint_layer_client_is_just_created: false,
             paint_layer_is_self_painting: false,
+            paint_layer_is_stacking_context: false,
+            paint_layer_stacking_level: 0,
             display_item_client_is_cacheable: false,
             display_item_client_is_just_created: false,
             display_item_fragment: 0,
@@ -555,6 +728,11 @@ impl Default for PaintProperties {
             source_kind: NodeKind::kBox,
             effective_zoom: 1.0,
             style: PaintStyle::default(),
+            background_transfers_to_view: false,
+            canvas_background: None,
+            background_paint_location: BackgroundPaintLocation::BorderBox,
+            can_composite_background_attachment_fixed: false,
+            margin: Edges::default(),
             border: Edges::default(),
             border_sides: FragmentBoxSides::default(),
             border_styles: [BorderLineStyle::kNone; 4],
@@ -566,8 +744,11 @@ impl Default for PaintProperties {
             fixed_to_view: false,
             floating: FloatSide::kNone,
             sticky_offset: Offset::default(),
+            sticky_constraint: None,
             overflow_x: Overflow::kVisible,
             overflow_y: Overflow::kVisible,
+            overscroll_behavior_x: Default::default(),
+            overscroll_behavior_y: Default::default(),
             css_clip: None,
             overflow_clip_margin_outsets: None,
             scroll_offset: Offset::default(),
@@ -577,6 +758,9 @@ impl Default for PaintProperties {
             direction: TextDirection::kLtr,
             first_baseline: None,
             text_line_top_offset: None,
+            text_line_height: None,
+            text_combine: None,
+            text_combine_inline_offset: 0.0,
             replaced_content: None,
             resources: None,
             glyph_runs: Vec::new(),

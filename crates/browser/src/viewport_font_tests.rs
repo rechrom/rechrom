@@ -25,6 +25,7 @@ impl URLLoader for Loader {
 fn page(html: &str, width: u32, height: u32, scale: f64) -> Page {
     let mut constraints = crate::CreateBrowserConstraints(width, height);
     constraints.device_pixel_ratio = scale;
+    constraints.layout_zoom_factor = scale;
     let assembly = crate::CreateLayoutAssembly();
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader(html.into()))),

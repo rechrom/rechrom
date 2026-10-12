@@ -41,6 +41,23 @@ pub enum InteractionOutput {
 }
 
 pub type InteractionOutputEmitter = Rc<dyn Fn(InteractionOutput)>;
+
+// Native input is expressed in CSS viewport pixels. Fragment geometry is in
+// LocalFrame::LayoutZoomFactor coordinates, matching Blink's
+// LocalFrameView::ViewportToFrame conversion before hit testing.
+fn LayoutPoint(fragments: &FragmentNode, point: Offset) -> Offset {
+    let zoom = fragments
+        .paint
+        .resources
+        .as_ref()
+        .map_or(1.0, |resources| resources.layout_zoom_factor)
+        .max(f64::MIN_POSITIVE);
+    Offset {
+        x: point.x * zoom,
+        y: point.y * zoom,
+    }
+}
+
 // Map a root-space point through the exact same transform and scroll state as paint.
 fn LocalPoint(fragment: &FragmentNode, point: Offset, parent: Offset) -> Option<(Offset, Offset)> {
     let absolute = Offset {
@@ -63,10 +80,16 @@ fn LocalPoint(fragment: &FragmentNode, point: Offset, parent: Offset) -> Option<
         && fragment.paint.style.transform.is_some()
     {
         let transform = fragment.paint.style.transform.as_ref().unwrap();
-        let matrix = paint::geometry_mapper::ResolveTransformAroundOrigin(
+        let reference_rect = paint::geometry_mapper::ResolveTransformReferenceRect(
+            fragment.paint.style.transform_reference_box,
+            fragment.size,
+            fragment.paint.border,
+            fragment.paint.padding,
+        );
+        let matrix = paint::geometry_mapper::ResolveTransformAroundReferenceBox(
             transform,
             absolute,
-            fragment.size,
+            reference_rect,
             fragment.paint.style.transform_origin.as_ref(),
         );
         point = paint::geometry_mapper::MapPointWithTransform(point, &matrix, true)?;
@@ -120,6 +143,44 @@ fn HitGeometry(
         return None;
     }
     Some((point, absolute, inside))
+}
+
+fn HitsScrollbar(fragment: &FragmentNode, point: Offset, absolute: Offset) -> bool {
+    let Some(scrollbars) = fragment.paint.scrollbars.as_ref() else {
+        return false;
+    };
+    let local = Offset {
+        x: point.x - absolute.x,
+        y: point.y - absolute.y,
+    };
+    let contains = |offset: Offset, size: layoutng_assembly::internal::layout_input::Size| {
+        local.x >= offset.x
+            && local.y >= offset.y
+            && local.x < offset.x + size.width
+            && local.y < offset.y + size.height
+    };
+    scrollbars
+        .horizontal
+        .as_ref()
+        .is_some_and(|axis| contains(axis.track_offset, axis.track_size))
+        || scrollbars
+            .vertical
+            .as_ref()
+            .is_some_and(|axis| contains(axis.track_offset, axis.track_size))
+        || contains(scrollbars.corner_offset, scrollbars.corner_size)
+}
+
+fn ScrollbarHitTarget(
+    document: &Document,
+    fragment: &FragmentNode,
+    point: Offset,
+    absolute: Offset,
+) -> Option<u64> {
+    (fragment.paint.style.visible
+        && !fragment.paint.style.pointer_events_none
+        && HitsScrollbar(fragment, point, absolute)
+        && document.FindNodeById(fragment.node_id).is_some())
+    .then_some(fragment.node_id)
 }
 
 #[derive(Clone, Copy)]
@@ -189,6 +250,12 @@ fn HitTestNormalFlow(
     include_self: bool,
 ) -> Option<u64> {
     let (point, absolute, inside) = HitGeometry(fragment, point, parent)?;
+    // Overflow controls are painted after this subtree. Give their owner the
+    // same frontmost hit priority, especially for overlay scrollbars which
+    // otherwise dispatch through to covered links and controls.
+    if let Some(target) = ScrollbarHitTarget(document, fragment, point, absolute) {
+        return Some(target);
+    }
     let children_are_flex_or_grid_items = ChildrenAreFlexOrGridItems(fragment);
     for child in fragment.children.iter().rev() {
         if paint::paint_order::ClassifyFragmentPaintLayer(
@@ -247,7 +314,10 @@ fn HitTestStackingContext(
     parent: Offset,
     root_point: Offset,
 ) -> Option<u64> {
-    let (_, _, inside) = HitGeometry(fragment, point, parent)?;
+    let (local_point, absolute, inside) = HitGeometry(fragment, point, parent)?;
+    if let Some(target) = ScrollbarHitTarget(document, fragment, local_point, absolute) {
+        return Some(target);
+    }
     let mut layers = Vec::new();
     CollectHitLayers(fragment, point, parent, root_point, &mut layers);
     // Stable sorting preserves physical order for equal z-index, matching
@@ -552,6 +622,7 @@ impl<'a> Interaction<'a> {
     ) -> crate::cursor::Cursor {
         let owner = document.borrow();
         let doc = owner.GetDocument();
+        let point = LayoutPoint(fragments, point);
         crate::cursor::SelectCursor(
             doc,
             HitTest(doc, fragments, point, Offset::default(), point),
@@ -623,6 +694,7 @@ impl<'a> Interaction<'a> {
         }
         if target.is_none() {
             if let Some(point) = EventPosition(input) {
+                let point = LayoutPoint(fragments, point);
                 let owner = document.borrow();
                 target = HitTest(
                     owner.GetDocument(),
@@ -806,6 +878,7 @@ impl<'a> Interaction<'a> {
         point: Offset,
         extend: bool,
     ) {
+        let point = LayoutPoint(fragments, point);
         if let Some((owner, local)) = ControlPoint(fragments, id, point, Offset::default(), point) {
             let empty =
                 ReadNode(document, id, |d, _, i| d.ControlValue(i).is_empty()).unwrap_or(true);
@@ -821,6 +894,7 @@ impl<'a> Interaction<'a> {
         id: u64,
         point: Offset,
     ) {
+        let point = LayoutPoint(fragments, point);
         if let Some((owner, local)) = ControlPoint(fragments, id, point, Offset::default(), point) {
             let empty =
                 ReadNode(document, id, |d, _, i| d.ControlValue(i).is_empty()).unwrap_or(true);

@@ -5,6 +5,7 @@
 //! Grammar tables are generated from current Chromium inputs. Unsupported
 //! consumers produce an explicit typed diagnostic, never an opaque CSS value.
 #![allow(non_snake_case)]
+use super::css_parser_context::{CSSParserContext, SecureContextMode};
 use super::css_parser_mode::CSSParserMode;
 use super::css_parser_token::{BlockType, CSSParserTokenType::*, NumericValueType};
 use super::css_parser_token_stream::{
@@ -16,9 +17,12 @@ use crate::css_primitive_value::UnitType;
 use crate::css_property_name::CSSPropertyName;
 use crate::css_property_names::{FindProperty, ResolveCSSPropertyID};
 use crate::css_value::CSSValuePayload;
-use crate::css_value_keywords::GetCSSValueName;
+use crate::css_value_keywords::{GetCSSValueName, IsValueAllowedInMode};
 use crate::production_css_value::{self as values, PropertyValue, Value};
-use foundation::{CSSPropertyID, CSSValueID, Color, String, StringView};
+use crate::production_style_sheet::Backend;
+use foundation::{
+    CSSPropertyID, CSSValueID, Color, ColorSpace, HueInterpolationMethod, String, StringView,
+};
 use std::rc::Rc;
 
 #[path = "production_corner_parser.rs"]
@@ -270,6 +274,18 @@ pub fn ParseProperty(
     important: bool,
     mode: CSSParserMode,
 ) -> Result<Vec<PropertyValue>, PropertyParseError> {
+    let context =
+        CSSParserContext::<Backend>::FromMode(mode, SecureContextMode::kInsecureContext, None);
+    ParsePropertyWithContext(unresolved, text, important, &context)
+}
+
+pub fn ParsePropertyWithContext(
+    unresolved: CSSPropertyID,
+    text: &String,
+    important: bool,
+    context: &CSSParserContext<Backend>,
+) -> Result<Vec<PropertyValue>, PropertyParseError> {
+    let mode = context.Mode();
     let id = ResolveCSSPropertyID(unresolved);
     if id == CSSPropertyID::kInvalid || id == CSSPropertyID::kVariable {
         return Err(unsupported(
@@ -319,9 +335,18 @@ pub fn ParseProperty(
             "CSSProperty::Exposure / kUA internal property",
         ));
     }
-    let (data, parsed_important) = ParseVariableData(text, true, true).map_err(|_| invalid(id))?;
+    let (mut data, parsed_important) =
+        ParseVariableData(text, true, true).map_err(|_| invalid(id))?;
+    // cpp: css_variable_parser.cc:334-355,601-610. The UA-only function is a
+    // substitution reference just like var()/env()/attr(), so the original
+    // token owner must survive until StyleCascade selects one argument.
+    if mode == CSSParserMode::kUASheetMode
+        && ContainsValidInternalAutoBase(&data.tokens).map_err(|_| invalid(id))?
+    {
+        data.features |= values::CSSVariableData::HAS_REFERENCES;
+    }
     if data.NeedsVariableResolution() {
-        let value = values::unparsed(data, mode);
+        let value = values::unparsed_with_base(data, mode, context.BaseURL().clone());
         let important = important || parsed_important;
         let longhands = ShorthandFor(id);
         return Ok(if longhands.is_empty() {
@@ -341,16 +366,17 @@ pub fn ParseProperty(
         });
     }
     let mut stream: Stream = Stream::new(StringView::from(text), 0);
-    ParsePropertyStream(unresolved, important, mode, true, &mut stream)
+    ParsePropertyStream(unresolved, important, context, true, &mut stream)
 }
 
 fn ParsePropertyStream<T: TokenStreamTokenizer>(
     unresolved: CSSPropertyID,
     important: bool,
-    mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
     allow_important: bool,
     stream: &mut Stream<T>,
 ) -> Result<Vec<PropertyValue>, PropertyParseError> {
+    let mode = context.Mode();
     let id = ResolveCSSPropertyID(unresolved);
     if !crate::production_corner_features::IsExposed(id) {
         return Err(unsupported(
@@ -408,9 +434,9 @@ fn ParsePropertyStream<T: TokenStreamTokenizer>(
             }
         }
     } else if crate::properties::css_property::CSSProperty::Get(id).IsShorthand() {
-        ParseShorthand(id, unresolved, stream, mode, &mut parsed)?;
+        ParseShorthand(id, unresolved, stream, context, &mut parsed)?;
     } else {
-        let value = ConsumeLonghandWithAlias(id, stream, mode, unresolved != id)?;
+        let value = ConsumeLonghandWithAlias(id, stream, context, unresolved != id)?;
         parsed.push(make_property(id, value, false));
     }
     // cpp: css_parsing_utils.cc MaybeConsumeImportant. CSS whitespace/comments
@@ -458,6 +484,28 @@ pub fn ParseCustomProperty(
 ) -> Result<PropertyValue, PropertyParseError> {
     ParseCustomPropertyWithArgumentGrammar(name, text, important, mode, false)
 }
+
+pub fn ParseCustomPropertyWithContext(
+    name: &str,
+    text: &String,
+    important: bool,
+    context: &CSSParserContext<Backend>,
+) -> Result<PropertyValue, PropertyParseError> {
+    ParseCustomPropertyWithArgumentGrammarAndBase(
+        name,
+        text,
+        important,
+        context.Mode(),
+        false,
+        context.BaseURL().clone(),
+    )
+}
+pub(crate) fn ConsumeAnchoredFallbackQueryValue<T: TokenStreamTokenizer>(
+    stream: &mut CSSParserTokenStream<'_, T>,
+    mode: CSSParserMode,
+) -> Option<Rc<Value>> {
+    anchor_parser::ConsumeAnchoredFallbackQueryValue(stream, mode).ok()
+}
 /// Explicit CSSArgumentGrammar context for token declarations admitted by a
 /// caller enabling Chromium's test-only runtime feature. Stable entry is false.
 pub fn ParseCustomPropertyWithArgumentGrammar(
@@ -466,6 +514,24 @@ pub fn ParseCustomPropertyWithArgumentGrammar(
     important: bool,
     mode: CSSParserMode,
     argument_grammar: bool,
+) -> Result<PropertyValue, PropertyParseError> {
+    ParseCustomPropertyWithArgumentGrammarAndBase(
+        name,
+        text,
+        important,
+        mode,
+        argument_grammar,
+        values::ProductionURL::Null,
+    )
+}
+
+fn ParseCustomPropertyWithArgumentGrammarAndBase(
+    name: &str,
+    text: &String,
+    important: bool,
+    mode: CSSParserMode,
+    argument_grammar: bool,
+    base_url: values::ProductionURL,
 ) -> Result<PropertyValue, PropertyParseError> {
     if !name.starts_with("--") || name.chars().count() < 3 {
         return Err(invalid(CSSPropertyID::kVariable));
@@ -478,9 +544,10 @@ pub fn ParseCustomPropertyWithArgumentGrammar(
         .filter(|item| !IsTrivia(&item.token))
         .collect::<Vec<_>>();
     let value = if significant.len() == 1 {
-        values::wide(significant[0].token.Id()).unwrap_or_else(|| values::unparsed(data, mode))
+        values::wide(significant[0].token.Id())
+            .unwrap_or_else(|| values::unparsed_with_base(data, mode, base_url.clone()))
     } else {
-        values::unparsed(data, mode)
+        values::unparsed_with_base(data, mode, base_url)
     };
     Ok(PropertyValue::new(
         &CSSPropertyName::custom(foundation::AtomicString::from_str(name)),
@@ -493,6 +560,60 @@ pub fn ParseCustomPropertyWithArgumentGrammar(
 }
 fn IsTrivia(token: &super::css_parser_token::CSSParserToken) -> bool {
     matches!(token.GetType(), kWhitespaceToken | kCommentToken)
+}
+
+// cpp: css_variable_parser.cc:334-355 ConsumeInternalAutoBase. Each occurrence
+// has exactly two non-empty unparsed values separated by one top-level comma.
+// Nested component blocks are skipped as units while locating that comma.
+fn ContainsValidInternalAutoBase(tokens: &[values::VariableToken]) -> Result<bool, ()> {
+    let mut found = false;
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = &tokens[index].token;
+        if token.GetBlockType() != BlockType::kBlockStart {
+            index += 1;
+            continue;
+        }
+        let end = VariableBlockEnd(tokens, index);
+        let inner = &tokens[index + 1..end];
+        if token.FunctionId() == Some(CSSValueID::kInternalAutoBase) {
+            found = true;
+            let mut cursor = 0;
+            let mut comma = None;
+            while cursor < inner.len() {
+                let inner_token = &inner[cursor].token;
+                if inner_token.GetBlockType() == BlockType::kBlockStart {
+                    let nested_end = VariableBlockEnd(inner, cursor);
+                    cursor = if nested_end == inner.len() {
+                        nested_end
+                    } else {
+                        nested_end + 1
+                    };
+                    continue;
+                }
+                if inner_token.GetType() == kCommaToken {
+                    if comma.is_some() {
+                        return Err(());
+                    }
+                    comma = Some(cursor);
+                }
+                cursor += 1;
+            }
+            let comma = comma.ok_or(())?;
+            let first = &inner[..comma];
+            let second = &inner[comma + 1..];
+            if !first.iter().any(|item| !IsTrivia(&item.token))
+                || !second.iter().any(|item| !IsTrivia(&item.token))
+                || !ValidateVariableTokensWithArgumentGrammar(first, false, true, false)
+                || !ValidateVariableTokensWithArgumentGrammar(second, false, true, false)
+            {
+                return Err(());
+            }
+        }
+        found |= ContainsValidInternalAutoBase(inner)?;
+        index = if end == tokens.len() { end } else { end + 1 };
+    }
+    Ok(found)
 }
 /// Finds the closing token of a component block; EOF closes unfinished blocks
 /// according to CSS Syntax (the tokenizer has already classified mismatches).
@@ -864,10 +985,16 @@ fn ParseVariableDataWithArgumentGrammar(
     if !ValidateVariableTokensWithArgumentGrammar(&tokens, restricted, true, argument_grammar) {
         return Err(invalid(CSSPropertyID::kVariable));
     }
-    Ok((
-        values::CSSVariableData::FromTokens(tokens, false, false),
-        important,
-    ))
+    let mut data = values::CSSVariableData::FromTokens(tokens, false, false);
+    // cpp: css_variable_parser.cc:560-572. A valid dashed function is a
+    // substitution reference when CSS Functions are enabled. The production
+    // parser enables the same feature for @function ingestion, so a longhand
+    // containing --foo() must retain CSSUnparsedDeclarationValue ownership
+    // and reach StyleCascade::ResolveFunctionInto.
+    if data.features & values::CSSVariableData::HAS_DASHED_FUNCTIONS != 0 {
+        data.features |= values::CSSVariableData::HAS_REFERENCES;
+    }
+    Ok((data, important))
 }
 
 /// Replays substituted tokenizer output through the same property consumers.
@@ -877,8 +1004,39 @@ pub fn ParsePropertyTokens(
     data: &values::CSSVariableData,
     mode: CSSParserMode,
 ) -> Result<Vec<PropertyValue>, PropertyParseError> {
+    let context =
+        CSSParserContext::<Backend>::FromMode(mode, SecureContextMode::kInsecureContext, None);
+    ParsePropertyTokensWithContext(unresolved, data, &context)
+}
+
+pub fn ParsePropertyTokensWithBase(
+    unresolved: CSSPropertyID,
+    data: &values::CSSVariableData,
+    mode: CSSParserMode,
+    base_url: values::ProductionURL,
+) -> Result<Vec<PropertyValue>, PropertyParseError> {
+    let context = CSSParserContext::<Backend>::new(
+        base_url,
+        true,
+        None,
+        mode,
+        String::from(""),
+        false,
+        SecureContextMode::kInsecureContext,
+        None,
+        None,
+        crate::css_resource_fetch_restriction::ResourceFetchRestriction::kNone,
+    );
+    ParsePropertyTokensWithContext(unresolved, data, &context)
+}
+
+pub fn ParsePropertyTokensWithContext(
+    unresolved: CSSPropertyID,
+    data: &values::CSSVariableData,
+    context: &CSSParserContext<Backend>,
+) -> Result<Vec<PropertyValue>, PropertyParseError> {
     let mut stream = CSSParserTokenStream::FromTokenizer(VariableTokenReplay::new(data));
-    ParsePropertyStream(unresolved, false, mode, false, &mut stream)
+    ParsePropertyStream(unresolved, false, context, false, &mut stream)
 }
 pub(crate) struct VariableTokenReplay {
     records: Vec<(super::css_parser_token::CSSParserToken, u32)>,
@@ -1018,7 +1176,16 @@ fn ConsumeLonghand<T: TokenStreamTokenizer>(
     stream: &mut Stream<T>,
     mode: CSSParserMode,
 ) -> Result<Rc<Value>, PropertyParseError> {
-    ConsumeLonghandWithAlias(id, stream, mode, false)
+    let context =
+        CSSParserContext::<Backend>::FromMode(mode, SecureContextMode::kInsecureContext, None);
+    ConsumeLonghandWithContext(id, stream, &context)
+}
+fn ConsumeLonghandWithContext<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    context: &CSSParserContext<Backend>,
+) -> Result<Rc<Value>, PropertyParseError> {
+    ConsumeLonghandWithAlias(id, stream, context, false)
 }
 // css_parsing_utils.cc:5764-5782. Reused by physical/logical radius and Corner.
 fn ConsumeBorderRadiusCorner<T: TokenStreamTokenizer>(
@@ -1056,9 +1223,10 @@ fn ConsumeBorderRadiusCorner<T: TokenStreamTokenizer>(
 fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
-    mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
     alias: bool,
 ) -> Result<Rc<Value>, PropertyParseError> {
+    let mode = context.Mode();
     if corner_parser::IsProperty(id) {
         return corner_parser::Consume(id, stream, mode);
     }
@@ -1081,7 +1249,7 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
         return motion_parser::Consume(id, stream, mode);
     }
     if border_image_parser::IsBorderImageProperty(id) {
-        return border_image_parser::Consume(id, stream, mode);
+        return border_image_parser::Consume(id, stream, mode, context);
     }
     if interaction_parser::IsInteractionProperty(id) {
         return interaction_parser::Consume(id, stream, mode);
@@ -1090,7 +1258,7 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
         return palette_internal_parser::Consume(id, stream, mode);
     }
     if id == CSSPropertyID::kWebkitBoxReflect {
-        return reflect_parser::Consume(stream, mode);
+        return reflect_parser::Consume(stream, mode, context);
     }
     if stable_misc_parser::IsProperty(id) {
         return stable_misc_parser::Consume(id, stream, mode);
@@ -1117,13 +1285,13 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
         return scroll_parser::Consume(id, stream, mode);
     }
     if list_counter_parser::IsListCounterProperty(id) {
-        return list_counter_parser::Consume(id, stream, mode);
+        return list_counter_parser::Consume(id, stream, mode, context);
     }
     if color_ui_parser::IsColorUIProperty(id) {
         return color_ui_parser::Consume(id, stream, mode);
     }
     if effects_parser::IsEffectsProperty(id) {
-        return effects_parser::Consume(id, stream, mode);
+        return effects_parser::Consume(id, stream, mode, context);
     }
     if font_parser::IsFontProperty(id) {
         return font_parser::Consume(id, stream, mode);
@@ -1144,16 +1312,16 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
         return viewport_parser::Consume(id, stream, mode);
     }
     if svg_presentation_parser::IsProperty(id) {
-        return svg_presentation_parser::Consume(id, stream, mode);
+        return svg_presentation_parser::Consume(id, stream, mode, context);
     }
     if svg_parser::IsSVGProperty(id) {
-        return svg_parser::Consume(id, stream, mode);
+        return svg_parser::Consume(id, stream, mode, context);
     }
     if matches!(
         id,
         CSSPropertyID::kBackgroundImage | CSSPropertyID::kMaskImage
     ) {
-        return ConsumeBackgroundImage(id, stream, mode);
+        return ConsumeBackgroundImage(id, stream, mode, context);
     }
     // cpp: longhands_custom.cc:2009-2016,10171-10178.
     if matches!(id, CSSPropertyID::kBoxShadow | CSSPropertyID::kTextShadow) {
@@ -1171,7 +1339,7 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
         if stream.Peek().Id() == CSSValueID::kWebkitFocusRingColor {
             return Ok(values::identifier(stream.ConsumeIncludingWhitespace().Id()));
         }
-        return ConsumeColor(id, stream);
+        return ConsumeColor(id, stream, mode);
     }
     // cpp: css_parser_fast_paths.cc:1288-1291. Outline excludes hidden,
     // includes auto, unlike the generic EBorderStyle field's keyword metadata.
@@ -1684,6 +1852,9 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
             },
         );
     }
+    if id == CSSPropertyID::kContent {
+        return ConsumeContent(id, stream, mode, context);
+    }
     ConsumeLiteral(id, stream, mode, GrammarFor(id))
 }
 // cpp: css_parsing_utils.cc:149-170,187-208,4358-4391,4499-4563;
@@ -1901,6 +2072,39 @@ fn IsMathFunction<T: TokenStreamTokenizer>(stream: &mut Stream<T>) -> bool {
         )
     )
 }
+// The translated expression tree understands advanced math syntax, but the
+// Rechrom production property boundary does not yet carry the corresponding
+// application capability. Keep that boundary explicit instead of silently
+// accepting values which downstream property code cannot promise to apply.
+fn IsRuntimeGatedMathFunction<T: TokenStreamTokenizer>(stream: &mut Stream<T>) -> bool {
+    IsMathFunction(stream)
+        && !matches!(
+            stream.Peek().FunctionId(),
+            Some(
+                CSSValueID::kCalc
+                    | CSSValueID::kWebkitCalc
+                    | CSSValueID::kMin
+                    | CSSValueID::kMax
+                    | CSSValueID::kClamp
+            )
+        )
+}
+fn ContainsRuntimeGatedMathOperation(
+    expression: &crate::css_math_expression_node::CSSMathExpressionNode,
+) -> bool {
+    use crate::css_math_expression_node::{CSSMathExpressionNode as Node, CSSMathOperator as Op};
+    match expression {
+        Node::Numeric(_) => false,
+        Node::Operation {
+            operator, operands, ..
+        } => {
+            !matches!(
+                operator,
+                Op::Add | Op::Subtract | Op::Multiply | Op::Divide | Op::Min | Op::Max | Op::Clamp
+            ) || operands.iter().any(ContainsRuntimeGatedMathOperation)
+        }
+    }
+}
 // cpp: css_parsing_utils.cc:CalcParser and numeric consumers. The permitted
 // range clamps at computation, so a negative calc is accepted then clamped.
 fn ConsumeMath<T: TokenStreamTokenizer>(
@@ -1909,6 +2113,12 @@ fn ConsumeMath<T: TokenStreamTokenizer>(
     categories: &[crate::css_math_expression_node::CalculationResultCategory],
     range: crate::css_math_function_value::ValueRange,
 ) -> Result<Rc<Value>, PropertyParseError> {
+    if IsRuntimeGatedMathFunction(stream) {
+        return Err(unsupported(
+            id,
+            "CSSMathExpressionNode runtime-gated math functions",
+        ));
+    }
     let expression = crate::css_math_expression_node::ConsumeMathFunction(stream).map_err(|e| {
         if e == crate::css_math_expression_node::MathError::UnsupportedFunction {
             unsupported(id, "CSSMathExpressionNode extended math functions")
@@ -1918,6 +2128,12 @@ fn ConsumeMath<T: TokenStreamTokenizer>(
             invalid(id)
         }
     })?;
+    if ContainsRuntimeGatedMathOperation(&expression) {
+        return Err(unsupported(
+            id,
+            "CSSMathExpressionNode nested runtime-gated math functions",
+        ));
+    }
     if !categories.contains(&expression.Category()) {
         return Err(invalid(id));
     }
@@ -3239,7 +3455,6 @@ fn ConsumeOverflowClipMargin<T: TokenStreamTokenizer>(
     Ok(values::list(items, values::ListSeparator::Space))
 }
 // cpp: css_parsing_utils.cc:7291-7385 ConsumeGridLine, numeric/auto/span branches.
-// CSSCustomIdentValue and tree-scoped names remain explicitly unavailable.
 fn ConsumeGridLine<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
@@ -3255,7 +3470,25 @@ fn ConsumeGridLine<T: TokenStreamTokenizer>(
         stream.ConsumeIncludingWhitespace();
     }
     if stream.Peek().GetType() == kIdentToken {
-        return Err(GridLineIdentError(id, stream.Peek().Id()));
+        let token = stream.Peek().clone();
+        if matches!(
+            token.Id(),
+            CSSValueID::kAuto | CSSValueID::kSpan | CSSValueID::kDefault
+        ) || values::wide(token.Id()).is_some()
+        {
+            return Err(invalid(id));
+        }
+        let name = token.Value().ToString();
+        stream.ConsumeIncludingWhitespace();
+        let name = values::custom_ident(&name, CSSPropertyID::kInvalid);
+        return Ok(if span {
+            values::list(
+                vec![values::identifier(CSSValueID::kSpan), name],
+                values::ListSeparator::Space,
+            )
+        } else {
+            name
+        });
     }
     let count = ConsumeLiteral(
         id,
@@ -3278,28 +3511,30 @@ fn ConsumeGridLine<T: TokenStreamTokenizer>(
     {
         return Err(invalid(id));
     }
-    if stream.Peek().GetType() == kIdentToken {
-        return Err(GridLineIdentError(id, stream.Peek().Id()));
-    }
+    let name = if stream.Peek().GetType() == kIdentToken {
+        let token = stream.Peek().clone();
+        if matches!(
+            token.Id(),
+            CSSValueID::kAuto | CSSValueID::kSpan | CSSValueID::kDefault
+        ) || values::wide(token.Id()).is_some()
+        {
+            return Err(invalid(id));
+        }
+        let name = token.Value().ToString();
+        stream.ConsumeIncludingWhitespace();
+        Some(values::custom_ident(&name, CSSPropertyID::kInvalid))
+    } else {
+        None
+    };
     let mut items = Vec::new();
     if span {
         items.push(values::identifier(CSSValueID::kSpan));
     }
     items.push(count);
-    Ok(values::list(items, values::ListSeparator::Space))
-}
-// cpp: css_parsing_utils.cc:7037-7045 ConsumeCustomIdentForGridLine;
-// ConsumeCustomIdent excludes CSS-wide keywords and default before creating a value.
-fn GridLineIdentError(id: CSSPropertyID, keyword: CSSValueID) -> PropertyParseError {
-    if matches!(
-        keyword,
-        CSSValueID::kAuto | CSSValueID::kSpan | CSSValueID::kDefault
-    ) || values::wide(keyword).is_some()
-    {
-        invalid(id)
-    } else {
-        unsupported(id, "ConsumeCustomIdentForGridLine CSSCustomIdentValue")
+    if let Some(name) = name {
+        items.push(name);
     }
+    Ok(values::list(items, values::ListSeparator::Space))
 }
 // cpp: longhands_custom.cc ValidateDisplayKeywords / AdjustDisplayKeywords /
 // ParseDisplayMultipleKeywords:3650-3780. Source adjusts compatible pairs to
@@ -3534,7 +3769,8 @@ fn ConsumeCounterContent<T: TokenStreamTokenizer>(
 fn ConsumeUrl<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
-) -> Result<Option<String>, PropertyParseError> {
+    context: &CSSParserContext<Backend>,
+) -> Result<Option<values::CSSUrlData>, PropertyParseError> {
     let start = stream.LookAheadOffset();
     let url = if stream.Peek().GetType() == kUrlToken {
         stream.ConsumeIncludingWhitespace().Value().ToString()
@@ -3563,13 +3799,15 @@ fn ConsumeUrl<T: TokenStreamTokenizer>(
     if stream.IsAttrTainted(start, end) {
         return Err(invalid(id));
     }
-    Ok(Some(url))
+    let resolved = context.CompleteNonEmptyURL(&url);
+    Ok(Some(values::CSSUrlData::new(url, resolved)))
 }
 fn ConsumeContentImage<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
+    context: &CSSParserContext<Backend>,
 ) -> Result<Option<Rc<Value>>, PropertyParseError> {
-    Ok(ConsumeUrl(id, stream)?.map(values::image))
+    Ok(ConsumeUrl(id, stream, context)?.map(values::image_from_url_data))
 }
 // cpp: longhands_custom.cc:3058-3138 ParseContentValue.
 // attr() reaches this consumer through shared typed-token cascade substitution.
@@ -3577,6 +3815,7 @@ fn ConsumeContent<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
 ) -> Result<Rc<Value>, PropertyParseError> {
     if matches!(stream.Peek().Id(), CSSValueID::kNormal | CSSValueID::kNone) {
         return Ok(values::identifier(stream.ConsumeIncludingWhitespace().Id()));
@@ -3584,11 +3823,25 @@ fn ConsumeContent<T: TokenStreamTokenizer>(
     let mut items = Vec::new();
     let mut alt_present = false;
     loop {
-        let value = if stream.Peek().FunctionId() == Some(CSSValueID::kLinearGradient) {
+        let value = if matches!(
+            stream.Peek().FunctionId(),
+            Some(CSSValueID::kImageSet | CSSValueID::kWebkitImageSet)
+        ) {
+            Some(ConsumeImageSet(id, stream, mode, context)?)
+        } else if matches!(
+            stream.Peek().FunctionId(),
+            Some(
+                CSSValueID::kLinearGradient
+                    | CSSValueID::kRepeatingLinearGradient
+                    | CSSValueID::kRadialGradient
+                    | CSSValueID::kRepeatingRadialGradient
+                    | CSSValueID::kConicGradient
+                    | CSSValueID::kRepeatingConicGradient
+            )
+        ) {
             // cpp: css_parsing_utils.cc ConsumeImage/ConsumeGeneratedImage.
-            // Reuse background/mask's typed linear-gradient consumer.
-            Some(ConsumeLinearGradient(id, stream, mode)?)
-        } else if let Some(image) = ConsumeContentImage(id, stream)? {
+            Some(ConsumeGeneratedGradient(id, stream, mode)?)
+        } else if let Some(image) = ConsumeContentImage(id, stream, context)? {
             Some(image)
         } else if matches!(
             stream.Peek().Id(),
@@ -3707,10 +3960,12 @@ fn ConsumeLiteral<T: TokenStreamTokenizer>(
         ));
     }
     if matches!(grammar, Grammar::Content) {
-        return ConsumeContent(id, stream, mode);
+        let context =
+            CSSParserContext::<Backend>::FromMode(mode, SecureContextMode::kInsecureContext, None);
+        return ConsumeContent(id, stream, mode, &context);
     }
     if matches!(grammar, Grammar::Color) {
-        return ConsumeColor(id, stream);
+        return ConsumeColor(id, stream, mode);
     }
     if IsMathFunction(stream) {
         use crate::css_math_expression_node::CalculationResultCategory as C;
@@ -3761,6 +4016,17 @@ fn ConsumeLiteral<T: TokenStreamTokenizer>(
         0.0
     };
     let value = match grammar {
+        // cpp: css_parser_fast_paths.cc:1358-1365 and
+        // longhands_custom.cc Resize::ParseSingleValue. The internal value is
+        // admitted only by the UA parser; `auto` remains gated by the disabled
+        // CSSResizeAuto runtime feature at the fixed revision.
+        Grammar::Keywords(_)
+            if id == CSSPropertyID::kResize
+                && mode == CSSParserMode::kUASheetMode
+                && token.Id() == CSSValueID::kInternalTextareaAuto =>
+        {
+            values::identifier(token.Id())
+        }
         Grammar::Keywords(words) if matches(token.Id(), words) => values::identifier(token.Id()),
         Grammar::Number { nonnegative }
             if token.GetType() == kNumberToken && (!nonnegative || number >= 0.0) =>
@@ -3822,26 +4088,11 @@ fn ConsumeBackgroundImage<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
 ) -> Result<Rc<Value>, PropertyParseError> {
     let mut layers = Vec::new();
     loop {
-        let value = if stream.Peek().Id() == CSSValueID::kNone {
-            values::identifier(stream.ConsumeIncludingWhitespace().Id())
-        } else if let Some(image) = ConsumeContentImage(id, stream)? {
-            image
-        } else if matches!(
-            stream.Peek().FunctionId(),
-            Some(CSSValueID::kLinearGradient | CSSValueID::kRepeatingLinearGradient)
-        ) {
-            ConsumeLinearGradient(id, stream, mode)?
-        } else {
-            return Err(if is_function(stream) {
-                unsupported(id, "ConsumeImage generated/image-set subtype")
-            } else {
-                invalid(id)
-            });
-        };
-        layers.push(value);
+        layers.push(ConsumeSingleBackgroundImage(id, stream, mode, context)?);
         if stream.Peek().GetType() != kCommaToken {
             break;
         }
@@ -3849,28 +4100,232 @@ fn ConsumeBackgroundImage<T: TokenStreamTokenizer>(
     }
     Ok(values::list(layers, values::ListSeparator::Comma))
 }
-fn ConsumeLinearGradient<T: TokenStreamTokenizer>(
+
+pub(super) fn ConsumeImageSet<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
+) -> Result<Rc<Value>, PropertyParseError> {
+    use crate::css_primitive_value::UnitType;
+    let mut options = Vec::new();
+    {
+        let mut args = BlockGuard::new(stream);
+        args.ConsumeWhitespace();
+        loop {
+            let image = if args.Peek().GetType() == kStringToken {
+                let url = args.ConsumeIncludingWhitespace().Value().ToString();
+                values::image_from_url_data(values::CSSUrlData::new(
+                    url.clone(),
+                    context.CompleteNonEmptyURL(&url),
+                ))
+            } else if let Some(image) = ConsumeContentImage(id, &mut args, context)? {
+                image
+            } else if matches!(
+                args.Peek().FunctionId(),
+                Some(
+                    CSSValueID::kLinearGradient
+                        | CSSValueID::kRepeatingLinearGradient
+                        | CSSValueID::kRadialGradient
+                        | CSSValueID::kRepeatingRadialGradient
+                        | CSSValueID::kConicGradient
+                        | CSSValueID::kRepeatingConicGradient
+                )
+            ) {
+                ConsumeGeneratedGradient(id, &mut args, mode)?
+            } else {
+                return Err(invalid(id));
+            };
+
+            // CSS Images 4 defaults a missing resolution to 1x. Resolution
+            // expressions and type() need their own typed owners; reject them
+            // instead of silently selecting with an invented value.
+            let mut resolution = 1.0f32;
+            if args.Peek().GetType() == kDimensionToken {
+                let token = args.Peek();
+                let value = token.NumericValue();
+                let converted = match token.GetUnitType() {
+                    UnitType::kX | UnitType::kDotsPerPixel => value,
+                    UnitType::kDotsPerInch => value / 96.0,
+                    UnitType::kDotsPerCentimeter => value * 2.54 / 96.0,
+                    _ => return Err(invalid(id)),
+                };
+                if !converted.is_finite() || converted <= 0.0 {
+                    return Err(invalid(id));
+                }
+                resolution = converted as f32;
+                args.ConsumeIncludingWhitespace();
+            }
+            if args.Peek().FunctionId() == Some(CSSValueID::kType) {
+                return Err(unsupported(id, "image-set type() selection"));
+            }
+            options.push(values::image_set_option(image, resolution));
+            if args.AtEnd() {
+                break;
+            }
+            if args.Peek().GetType() != kCommaToken {
+                return Err(invalid(id));
+            }
+            args.ConsumeIncludingWhitespace();
+            if args.AtEnd() {
+                return Err(invalid(id));
+            }
+        }
+    }
+    stream.ConsumeWhitespace();
+    Ok(values::image_set(options))
+}
+
+fn ConsumeSingleBackgroundImage<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
+) -> Result<Rc<Value>, PropertyParseError> {
+    if stream.Peek().Id() == CSSValueID::kNone {
+        return Ok(values::identifier(stream.ConsumeIncludingWhitespace().Id()));
+    }
+    if let Some(image) = ConsumeContentImage(id, stream, context)? {
+        return Ok(image);
+    }
+    if matches!(
+        stream.Peek().FunctionId(),
+        Some(CSSValueID::kImageSet | CSSValueID::kWebkitImageSet)
+    ) {
+        return ConsumeImageSet(id, stream, mode, context);
+    }
+    if matches!(
+        stream.Peek().FunctionId(),
+        Some(
+            CSSValueID::kLinearGradient
+                | CSSValueID::kRepeatingLinearGradient
+                | CSSValueID::kRadialGradient
+                | CSSValueID::kRepeatingRadialGradient
+                | CSSValueID::kConicGradient
+                | CSSValueID::kRepeatingConicGradient
+        )
+    ) {
+        return ConsumeGeneratedGradient(id, stream, mode);
+    }
+    if stream.Peek().FunctionId() == Some(CSSValueID::kLightDark) {
+        // cpp: css_parsing_utils.cc ConsumeImage / ConsumeLightDarkImage.
+        // Keep both typed image arms. StyleResolverState selects the arm from
+        // the element's used color scheme when converting each image layer.
+        let pair = {
+            let mut args = BlockGuard::new(stream);
+            args.ConsumeWhitespace();
+            let light = ConsumeSingleBackgroundImage(id, &mut args, mode, context)?;
+            if args.Peek().GetType() != kCommaToken {
+                return Err(invalid(id));
+            }
+            args.ConsumeIncludingWhitespace();
+            let dark = ConsumeSingleBackgroundImage(id, &mut args, mode, context)?;
+            if !args.AtEnd() {
+                return Err(invalid(id));
+            }
+            values::light_dark(light, dark)
+        };
+        stream.ConsumeWhitespace();
+        return Ok(pair);
+    }
+    Err(if is_function(stream) {
+        unsupported(id, "ConsumeImage generated subtype")
+    } else {
+        invalid(id)
+    })
+}
+#[derive(Clone, Copy)]
+enum GradientStopPosition {
+    LengthPercentage,
+    AnglePercentage,
+}
+
+pub(super) fn ConsumeGeneratedGradient<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
 ) -> Result<Rc<Value>, PropertyParseError> {
-    fn optional<T: TokenStreamTokenizer>(
+    match stream.Peek().FunctionId() {
+        Some(CSSValueID::kLinearGradient | CSSValueID::kRepeatingLinearGradient) => {
+            ConsumeLinearGradient(id, stream, mode)
+        }
+        Some(CSSValueID::kRadialGradient | CSSValueID::kRepeatingRadialGradient) => {
+            ConsumeRadialGradient(id, stream, mode)
+        }
+        Some(CSSValueID::kConicGradient | CSSValueID::kRepeatingConicGradient) => {
+            ConsumeConicGradient(id, stream, mode)
+        }
+        _ => Err(invalid(id)),
+    }
+}
+
+fn ConsumeGradientAngle<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    allow_percentage: bool,
+) -> Result<Option<Rc<Value>>, PropertyParseError> {
+    if IsMathFunction(stream) {
+        use crate::css_math_expression_node::CalculationResultCategory as C;
+        use crate::css_math_function_value::ValueRange as R;
+        return ConsumeMath(id, stream, &[C::Angle], R::All).map(Some);
+    }
+    let token = stream.Peek().clone();
+    let valid = matches!(
+        token.GetUnitType(),
+        UnitType::kDegrees | UnitType::kRadians | UnitType::kGradians | UnitType::kTurns
+    ) || allow_percentage && token.GetType() == kPercentageToken
+        || token.GetType() == kNumberToken && token.NumericValue() == 0.0;
+    if !valid {
+        return Ok(None);
+    }
+    let unit = if token.GetType() == kNumberToken {
+        UnitType::kDegrees
+    } else {
+        token.GetUnitType()
+    };
+    let value = values::numeric(token.NumericValue(), unit);
+    stream.ConsumeIncludingWhitespace();
+    Ok(Some(value))
+}
+
+fn ConsumeGradientStops<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+    position: GradientStopPosition,
+) -> Result<Vec<values::CSSGradientColorStop>, PropertyParseError> {
+    fn optional_color<T: TokenStreamTokenizer>(
         id: CSSPropertyID,
         stream: &mut Stream<T>,
         mode: CSSParserMode,
-        color: bool,
     ) -> Result<Option<Rc<Value>>, PropertyParseError> {
-        if color && IsMathFunction(stream)
-            || !color && is_function(stream) && !IsMathFunction(stream)
-        {
+        if IsMathFunction(stream) {
             return Ok(None);
         }
         stream.EnsureLookAhead();
         let save = stream.Save();
-        let result = if color {
-            ConsumeColor(id, stream)
-        } else {
-            ConsumeLiteral(
+        match ConsumeColor(id, stream, mode) {
+            Ok(value) => Ok(Some(value)),
+            Err(error) => {
+                stream.Restore(save);
+                if error.kind == PropertyParseErrorKind::Unsupported {
+                    Err(error)
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+    fn optional_position<T: TokenStreamTokenizer>(
+        id: CSSPropertyID,
+        stream: &mut Stream<T>,
+        mode: CSSParserMode,
+        position: GradientStopPosition,
+    ) -> Result<Option<Rc<Value>>, PropertyParseError> {
+        stream.EnsureLookAhead();
+        let save = stream.Save();
+        let result = match position {
+            GradientStopPosition::LengthPercentage => ConsumeLiteral(
                 id,
                 stream,
                 mode,
@@ -3881,46 +4336,74 @@ fn ConsumeLinearGradient<T: TokenStreamTokenizer>(
                     keywords: &[],
                 },
             )
+            .map(Some),
+            GradientStopPosition::AnglePercentage => ConsumeGradientAngle(id, stream, true),
         };
         match result {
-            Ok(v) => Ok(Some(v)),
-            Err(e) => {
+            Ok(value) => Ok(value),
+            Err(error) => {
                 stream.Restore(save);
-                if e.kind == PropertyParseErrorKind::Unsupported {
-                    Err(e)
+                if error.kind == PropertyParseErrorKind::Unsupported {
+                    Err(error)
                 } else {
                     Ok(None)
                 }
             }
         }
     }
+
+    let mut stops = Vec::new();
+    let mut previous_hint = true;
+    loop {
+        let color = optional_color(id, stream, mode)?;
+        if color.is_none() && previous_hint {
+            return Err(invalid(id));
+        }
+        previous_hint = color.is_none();
+        let offset = optional_position(id, stream, mode, position)?;
+        if color.is_none() && offset.is_none() {
+            return Err(invalid(id));
+        }
+        stops.push(values::CSSGradientColorStop {
+            color: color.clone(),
+            offset: offset.clone(),
+        });
+        // A double-position color stop is represented as two adjacent stops
+        // with the same color, matching CSSGradientValue's native storage.
+        if color.is_some() && offset.is_some() {
+            if let Some(offset) = optional_position(id, stream, mode, position)? {
+                stops.push(values::CSSGradientColorStop {
+                    color,
+                    offset: Some(offset),
+                });
+            }
+        }
+        if stream.Peek().GetType() != kCommaToken {
+            break;
+        }
+        stream.ConsumeIncludingWhitespace();
+    }
+    if previous_hint || stops.is_empty() {
+        return Err(invalid(id));
+    }
+    Ok(stops)
+}
+
+fn ConsumeLinearGradient<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Rc<Value>, PropertyParseError> {
     let repeating = stream.Peek().FunctionId() == Some(CSSValueID::kRepeatingLinearGradient);
     let gradient;
     {
         let mut args = RestoringBlockGuard::new(stream);
         args.ConsumeWhitespace();
-        if args.Peek().Id() == CSSValueID::kIn {
-            return Err(unsupported(id, "ConsumeColorInterpolationSpace"));
-        }
-        let mut angle = None;
+        let mut interpolation = ConsumeGradientColorInterpolationMethod(id, &mut args)?;
+        let mut angle = ConsumeGradientAngle(id, &mut args, false)?;
         let mut end_x = None;
         let mut end_y = None;
-        if IsMathFunction(&mut args) {
-            return Err(unsupported(id, "ConsumeAngle CSSMathFunctionValue"));
-        }
-        let token = args.Peek().clone();
-        if token.GetType() == kDimensionToken
-            && matches!(
-                token.GetUnitType(),
-                UnitType::kDegrees | UnitType::kRadians | UnitType::kGradians | UnitType::kTurns
-            )
-        {
-            angle = Some(values::numeric(token.NumericValue(), token.GetUnitType()));
-            args.ConsumeIncludingWhitespace();
-        } else if token.GetType() == kNumberToken && token.NumericValue() == 0.0 {
-            angle = Some(values::numeric(0.0, UnitType::kDegrees));
-            args.ConsumeIncludingWhitespace();
-        } else if token.Id() == CSSValueID::kTo {
+        if angle.is_none() && args.Peek().Id() == CSSValueID::kTo {
             args.ConsumeIncludingWhitespace();
             loop {
                 match args.Peek().Id() {
@@ -3939,51 +4422,31 @@ fn ConsumeLinearGradient<T: TokenStreamTokenizer>(
             }
         }
         if args.Peek().Id() == CSSValueID::kIn {
-            return Err(unsupported(id, "ConsumeColorInterpolationSpace"));
+            if interpolation.is_some() {
+                return Err(invalid(id));
+            }
+            interpolation = ConsumeGradientColorInterpolationMethod(id, &mut args)?;
         }
-        if angle.is_some() || end_x.is_some() || end_y.is_some() {
+        if angle.is_some() || end_x.is_some() || end_y.is_some() || interpolation.is_some() {
             if args.Peek().GetType() != kCommaToken {
                 return Err(invalid(id));
             }
             args.ConsumeIncludingWhitespace();
         }
-        let mut stops = Vec::new();
-        let mut previous_hint = true;
-        loop {
-            let color = optional(id, &mut args, mode, true)?;
-            if color.is_none() && previous_hint {
-                return Err(invalid(id));
-            }
-            previous_hint = color.is_none();
-            let offset = optional(id, &mut args, mode, false)?;
-            if color.is_none() && offset.is_none() {
-                return Err(invalid(id));
-            }
-            stops.push(values::CSSGradientColorStop {
-                color: color.clone(),
-                offset: offset.clone(),
-            });
-            if color.is_some() && offset.is_some() {
-                if let Some(offset) = optional(id, &mut args, mode, false)? {
-                    stops.push(values::CSSGradientColorStop {
-                        color,
-                        offset: Some(offset),
-                    });
-                }
-            }
-            if args.Peek().GetType() != kCommaToken {
-                break;
-            }
-            args.ConsumeIncludingWhitespace();
-        }
-        if previous_hint || !args.AtEnd() || !args.Release() {
+        let stops =
+            ConsumeGradientStops(id, &mut args, mode, GradientStopPosition::LengthPercentage)?;
+        if !args.AtEnd() || !args.Release() {
             return Err(invalid(id));
         }
+        let (color_interpolation_space, hue_interpolation_method) =
+            interpolation.unwrap_or((ColorSpace::kNone, HueInterpolationMethod::kShorter));
         gradient = values::CSSLinearGradientValue {
-            angle,
+            angle: angle.take(),
             end_x,
             end_y,
             repeating,
+            color_interpolation_space,
+            hue_interpolation_method,
             stops,
         };
     }
@@ -3991,6 +4454,265 @@ fn ConsumeLinearGradient<T: TokenStreamTokenizer>(
     Ok(Rc::new(Value::new(CSSValuePayload::kLinearGradientClass(
         gradient,
     ))))
+}
+
+fn ConsumeRadialGradient<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Rc<Value>, PropertyParseError> {
+    use values::{CSSRadialGradientExtent as Extent, CSSRadialGradientShape as Shape};
+    let repeating = stream.Peek().FunctionId() == Some(CSSValueID::kRepeatingRadialGradient);
+    let gradient;
+    {
+        let mut args = RestoringBlockGuard::new(stream);
+        args.ConsumeWhitespace();
+        let mut interpolation = ConsumeGradientColorInterpolationMethod(id, &mut args)?;
+        let mut shape = None;
+        let mut extent = None;
+        let mut sizes = Vec::new();
+        let mut position = None;
+        let mut consumed_prefix = false;
+        loop {
+            let keyword = args.Peek().Id();
+            if keyword == CSSValueID::kAt {
+                if position.is_some() {
+                    return Err(invalid(id));
+                }
+                args.ConsumeIncludingWhitespace();
+                position = Some(ConsumePosition(id, &mut args, mode, false, true)?);
+                consumed_prefix = true;
+                continue;
+            }
+            let next_shape = match keyword {
+                CSSValueID::kCircle => Some(Shape::Circle),
+                CSSValueID::kEllipse => Some(Shape::Ellipse),
+                _ => None,
+            };
+            if let Some(value) = next_shape {
+                if shape.replace(value).is_some() {
+                    return Err(invalid(id));
+                }
+                args.ConsumeIncludingWhitespace();
+                consumed_prefix = true;
+                continue;
+            }
+            let next_extent = match keyword {
+                CSSValueID::kClosestSide => Some(Extent::ClosestSide),
+                CSSValueID::kClosestCorner => Some(Extent::ClosestCorner),
+                CSSValueID::kFarthestSide => Some(Extent::FarthestSide),
+                CSSValueID::kFarthestCorner => Some(Extent::FarthestCorner),
+                _ => None,
+            };
+            if let Some(value) = next_extent {
+                if extent.replace(value).is_some() || !sizes.is_empty() {
+                    return Err(invalid(id));
+                }
+                args.ConsumeIncludingWhitespace();
+                consumed_prefix = true;
+                continue;
+            }
+            if extent.is_none() && sizes.len() < 2 {
+                args.EnsureLookAhead();
+                let save = args.Save();
+                match ConsumeLiteral(
+                    id,
+                    &mut args,
+                    mode,
+                    Grammar::Length {
+                        percent: true,
+                        nonnegative: true,
+                        quirks: false,
+                        keywords: &[],
+                    },
+                ) {
+                    Ok(value) => {
+                        sizes.push(value);
+                        consumed_prefix = true;
+                        continue;
+                    }
+                    Err(error) if error.kind == PropertyParseErrorKind::Unsupported => {
+                        return Err(error)
+                    }
+                    Err(_) => args.Restore(save),
+                }
+            }
+            break;
+        }
+        if args.Peek().Id() == CSSValueID::kIn {
+            if interpolation.is_some() {
+                return Err(invalid(id));
+            }
+            interpolation = ConsumeGradientColorInterpolationMethod(id, &mut args)?;
+        }
+        if !sizes.is_empty() {
+            if extent.is_some()
+                || shape == Some(Shape::Circle) && sizes.len() != 1
+                || shape == Some(Shape::Ellipse) && sizes.len() != 2
+                || shape.is_none() && !matches!(sizes.len(), 1 | 2)
+            {
+                return Err(invalid(id));
+            }
+            if sizes.len() == 1
+                && matches!(sizes[0].Payload(), CSSValuePayload::kNumericLiteralClass(value) if value.GetType() == UnitType::kPercentage)
+            {
+                return Err(invalid(id));
+            }
+            shape.get_or_insert(if sizes.len() == 1 {
+                Shape::Circle
+            } else {
+                Shape::Ellipse
+            });
+        }
+        if consumed_prefix || interpolation.is_some() {
+            if args.Peek().GetType() != kCommaToken {
+                return Err(invalid(id));
+            }
+            args.ConsumeIncludingWhitespace();
+        }
+        let stops =
+            ConsumeGradientStops(id, &mut args, mode, GradientStopPosition::LengthPercentage)?;
+        if !args.AtEnd() || !args.Release() {
+            return Err(invalid(id));
+        }
+        let center = values::identifier(CSSValueID::kCenter);
+        let (position_x, position_y) = position.unwrap_or_else(|| (center.clone(), center));
+        let (color_interpolation_space, hue_interpolation_method) =
+            interpolation.unwrap_or((ColorSpace::kNone, HueInterpolationMethod::kShorter));
+        gradient = values::CSSRadialGradientValue {
+            shape,
+            extent,
+            size_x: sizes.first().cloned(),
+            size_y: sizes.get(1).cloned(),
+            position_x,
+            position_y,
+            repeating,
+            color_interpolation_space,
+            hue_interpolation_method,
+            stops,
+        };
+    }
+    stream.ConsumeWhitespace();
+    Ok(Rc::new(Value::new(CSSValuePayload::kRadialGradientClass(
+        gradient,
+    ))))
+}
+
+fn ConsumeConicGradient<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Rc<Value>, PropertyParseError> {
+    let repeating = stream.Peek().FunctionId() == Some(CSSValueID::kRepeatingConicGradient);
+    let gradient;
+    {
+        let mut args = RestoringBlockGuard::new(stream);
+        args.ConsumeWhitespace();
+        let mut interpolation = ConsumeGradientColorInterpolationMethod(id, &mut args)?;
+        let mut angle = None;
+        let mut position = None;
+        let mut consumed_prefix = false;
+        loop {
+            if args.Peek().Id() == CSSValueID::kFrom && angle.is_none() {
+                args.ConsumeIncludingWhitespace();
+                angle = ConsumeGradientAngle(id, &mut args, false)?;
+                if angle.is_none() {
+                    return Err(invalid(id));
+                }
+                consumed_prefix = true;
+            } else if args.Peek().Id() == CSSValueID::kAt && position.is_none() {
+                args.ConsumeIncludingWhitespace();
+                position = Some(ConsumePosition(id, &mut args, mode, false, true)?);
+                consumed_prefix = true;
+            } else {
+                break;
+            }
+        }
+        if args.Peek().Id() == CSSValueID::kIn {
+            if interpolation.is_some() {
+                return Err(invalid(id));
+            }
+            interpolation = ConsumeGradientColorInterpolationMethod(id, &mut args)?;
+        }
+        if consumed_prefix || interpolation.is_some() {
+            if args.Peek().GetType() != kCommaToken {
+                return Err(invalid(id));
+            }
+            args.ConsumeIncludingWhitespace();
+        }
+        let stops =
+            ConsumeGradientStops(id, &mut args, mode, GradientStopPosition::AnglePercentage)?;
+        if !args.AtEnd() || !args.Release() {
+            return Err(invalid(id));
+        }
+        let center = values::identifier(CSSValueID::kCenter);
+        let (position_x, position_y) = position.unwrap_or_else(|| (center.clone(), center));
+        let (color_interpolation_space, hue_interpolation_method) =
+            interpolation.unwrap_or((ColorSpace::kNone, HueInterpolationMethod::kShorter));
+        gradient = values::CSSConicGradientValue {
+            angle,
+            position_x,
+            position_y,
+            repeating,
+            color_interpolation_space,
+            hue_interpolation_method,
+            stops,
+        };
+    }
+    stream.ConsumeWhitespace();
+    Ok(Rc::new(Value::new(CSSValuePayload::kConicGradientClass(
+        gradient,
+    ))))
+}
+
+// css_parsing_utils.cc ConsumeColorInterpolationSpace. The standard gradient
+// functions accept this clause on either side of their geometry prefix.
+fn ConsumeGradientColorInterpolationMethod<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+) -> Result<Option<(ColorSpace, HueInterpolationMethod)>, PropertyParseError> {
+    if stream.Peek().Id() != CSSValueID::kIn {
+        return Ok(None);
+    }
+    stream.ConsumeIncludingWhitespace();
+    let space = match stream.Peek().Id() {
+        CSSValueID::kSRGB => ColorSpace::kSRGB,
+        CSSValueID::kSRGBLinear => ColorSpace::kSRGBLinear,
+        CSSValueID::kDisplayP3 => ColorSpace::kDisplayP3,
+        CSSValueID::kHsl => ColorSpace::kHSL,
+        CSSValueID::kHwb => ColorSpace::kHWB,
+        CSSValueID::kA98Rgb => ColorSpace::kA98RGB,
+        CSSValueID::kProphotoRgb => ColorSpace::kProPhotoRGB,
+        CSSValueID::kRec2020 => ColorSpace::kRec2020,
+        CSSValueID::kLab => ColorSpace::kLab,
+        CSSValueID::kLch => ColorSpace::kLch,
+        CSSValueID::kOklab => ColorSpace::kOklab,
+        CSSValueID::kOklch => ColorSpace::kOklch,
+        CSSValueID::kXyz | CSSValueID::kXyzD65 => ColorSpace::kXYZD65,
+        CSSValueID::kXyzD50 => ColorSpace::kXYZD50,
+        _ => return Err(unsupported(id, "gradient color interpolation space")),
+    };
+    stream.ConsumeIncludingWhitespace();
+    let hue = match stream.Peek().Id() {
+        CSSValueID::kShorter => Some(HueInterpolationMethod::kShorter),
+        CSSValueID::kLonger => Some(HueInterpolationMethod::kLonger),
+        CSSValueID::kIncreasing => Some(HueInterpolationMethod::kIncreasing),
+        CSSValueID::kDecreasing => Some(HueInterpolationMethod::kDecreasing),
+        _ => None,
+    };
+    if let Some(hue) = hue {
+        if !Color::ColorSpaceHasHue(space) {
+            return Err(invalid(id));
+        }
+        stream.ConsumeIncludingWhitespace();
+        if stream.Peek().Id() != CSSValueID::kHue {
+            return Err(invalid(id));
+        }
+        stream.ConsumeIncludingWhitespace();
+        Ok(Some((space, hue)))
+    } else {
+        Ok(Some((space, HueInterpolationMethod::kShorter)))
+    }
 }
 // cpp: css_parsing_utils.cc:5987-6060 ConsumeShadow/ParseSingleShadow.
 fn ConsumeShadow<T: TokenStreamTokenizer>(
@@ -4001,6 +4723,7 @@ fn ConsumeShadow<T: TokenStreamTokenizer>(
     fn color<T: TokenStreamTokenizer>(
         id: CSSPropertyID,
         stream: &mut Stream<T>,
+        mode: CSSParserMode,
     ) -> Result<Option<Rc<Value>>, PropertyParseError> {
         // ConsumeColor never consumes a math function. Reuse the translated
         // token-level math classifier so the length collaborator sees it.
@@ -4009,7 +4732,7 @@ fn ConsumeShadow<T: TokenStreamTokenizer>(
         }
         stream.EnsureLookAhead();
         let save = stream.Save();
-        match ConsumeColor(id, stream) {
+        match ConsumeColor(id, stream, mode) {
             Ok(value) => Ok(Some(value)),
             Err(error) => {
                 stream.Restore(save);
@@ -4064,7 +4787,7 @@ fn ConsumeShadow<T: TokenStreamTokenizer>(
         if at_value_end(stream) {
             return Err(invalid(id));
         }
-        let mut color_value = color(id, stream)?;
+        let mut color_value = color(id, stream, mode)?;
         let mut style = None;
         if stream.Peek().Id() == CSSValueID::kInset {
             if !allow {
@@ -4072,7 +4795,7 @@ fn ConsumeShadow<T: TokenStreamTokenizer>(
             }
             style = Some(values::identifier(stream.ConsumeIncludingWhitespace().Id()));
             if color_value.is_none() {
-                color_value = color(id, stream)?;
+                color_value = color(id, stream, mode)?;
             }
         }
         let x = length(id, stream, mode, false)?.ok_or_else(|| invalid(id))?;
@@ -4085,7 +4808,7 @@ fn ConsumeShadow<T: TokenStreamTokenizer>(
         };
         if !at_value_end(stream) {
             if color_value.is_none() {
-                color_value = color(id, stream)?;
+                color_value = color(id, stream, mode)?;
             }
             if stream.Peek().Id() == CSSValueID::kInset {
                 if !allow || style.is_some() {
@@ -4093,7 +4816,7 @@ fn ConsumeShadow<T: TokenStreamTokenizer>(
                 }
                 style = Some(values::identifier(stream.ConsumeIncludingWhitespace().Id()));
                 if color_value.is_none() {
-                    color_value = color(id, stream)?;
+                    color_value = color(id, stream, mode)?;
                 }
             }
         }
@@ -4321,7 +5044,7 @@ fn ConsumeBorderColorSide<T: TokenStreamTokenizer>(
 ) -> Result<Rc<Value>, PropertyParseError> {
     stream.EnsureLookAhead();
     let savepoint = stream.Save();
-    let error = match ConsumeColor(id, stream) {
+    let error = match ConsumeColor(id, stream, mode) {
         Ok(value) => return Ok(value),
         Err(error) => error,
     };
@@ -4364,11 +5087,101 @@ fn ConsumeBorderColorSide<T: TokenStreamTokenizer>(
         255,
     )))
 }
-// cpp: css_parsing_utils.cc ConsumeColor:2421-2485; ParseHexColor:2355-2366;
+fn ConsumeColorMixOperand<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<(Rc<Value>, Option<Rc<Value>>), PropertyParseError> {
+    let mut percentage = None;
+    if stream.Peek().GetType() == kPercentageToken {
+        let number = stream.Peek().NumericValue();
+        if !(0.0..=100.0).contains(&number) {
+            return Err(invalid(id));
+        }
+        percentage = Some(values::numeric(number, UnitType::kPercentage));
+        stream.ConsumeIncludingWhitespace();
+    }
+    let color = ConsumeColor(id, stream, mode)?;
+    if percentage.is_none() && stream.Peek().GetType() == kPercentageToken {
+        let number = stream.Peek().NumericValue();
+        if !(0.0..=100.0).contains(&number) {
+            return Err(invalid(id));
+        }
+        percentage = Some(values::numeric(number, UnitType::kPercentage));
+        stream.ConsumeIncludingWhitespace();
+    }
+    Ok((color, percentage))
+}
+
+fn ConsumeColorFunctionNumber<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    number_scale: f64,
+    percentage_scale: f64,
+) -> Result<Option<f32>, PropertyParseError> {
+    let token = stream.Peek().clone();
+    if token.Id() == CSSValueID::kNone {
+        stream.ConsumeIncludingWhitespace();
+        return Ok(None);
+    }
+    let scale = match token.GetType() {
+        kNumberToken => number_scale,
+        kPercentageToken => percentage_scale,
+        _ => return Err(invalid(id)),
+    };
+    let value = token.NumericValue() * scale;
+    if !value.is_finite() {
+        return Err(invalid(id));
+    }
+    stream.ConsumeIncludingWhitespace();
+    Ok(Some(value as f32))
+}
+
+fn ConsumeColorFunctionHue<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+) -> Result<Option<f32>, PropertyParseError> {
+    let token = stream.Peek().clone();
+    if token.Id() == CSSValueID::kNone {
+        stream.ConsumeIncludingWhitespace();
+        return Ok(None);
+    }
+    let degrees = match token.GetType() {
+        kNumberToken => token.NumericValue(),
+        kDimensionToken => {
+            token.NumericValue()
+                * match token.GetUnitType() {
+                    UnitType::kDegrees => 1.0,
+                    UnitType::kRadians => 180.0 / std::f64::consts::PI,
+                    UnitType::kGradians => 0.9,
+                    UnitType::kTurns => 360.0,
+                    _ => return Err(invalid(id)),
+                }
+        }
+        _ => return Err(invalid(id)),
+    };
+    stream.ConsumeIncludingWhitespace();
+    Ok(Some(degrees.rem_euclid(360.0) as f32))
+}
+
+fn ConsumeColorFunctionAlpha<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+) -> Result<Option<f32>, PropertyParseError> {
+    if stream.Peek().GetType() != kDelimiterToken || stream.Peek().Delimiter() != b'/' as u16 {
+        return Ok(Some(1.0));
+    }
+    stream.ConsumeIncludingWhitespace();
+    Ok(ConsumeColorFunctionNumber(id, stream, 1.0, 0.01)?.map(|value| value.clamp(0.0, 1.0)))
+}
+
+// cpp: css_parsing_utils.cc ConsumeColor:2421-2485; css_value_keywords.cc
+// IsValueAllowedInMode:7485-7521; ParseHexColor:2355-2366;
 // platform/graphics/color.cc ParseHexColorInternal (3/4/6/8-digit forms).
 pub(crate) fn ConsumeColor<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
+    mode: CSSParserMode,
 ) -> Result<Rc<Value>, PropertyParseError> {
     let token = stream.Peek().clone();
     let keyword = token.Id();
@@ -4379,6 +5192,9 @@ pub(crate) fn ConsumeColor<T: TokenStreamTokenizer>(
                 .contains(&(keyword as i32))
             || keyword == CSSValueID::kMenu)
     {
+        if !IsValueAllowedInMode(keyword, mode) {
+            return Err(invalid(id));
+        }
         if matches!(
             keyword,
             CSSValueID::kAccentcolor | CSSValueID::kAccentcolortext
@@ -4420,89 +5236,272 @@ pub(crate) fn ConsumeColor<T: TokenStreamTokenizer>(
         )));
     }
     if token.GetType() == kFunctionToken {
+        let function = token.FunctionId();
+        if function == Some(CSSValueID::kColorMix) {
+            // cpp: css_parsing_utils.cc:2215-2301 ConsumeColorMixFunction.
+            // html.css uses the spec default interpolation (Oklab/shorter),
+            // whose grammar omits both `in` and its following comma. Keep the
+            // general two-color/optional-percentage operand grammar typed;
+            // explicit interpolation spaces wait for their native converters.
+            let mix = {
+                let mut args = BlockGuard::new(stream);
+                args.ConsumeWhitespace();
+                if args.Peek().Id() == CSSValueID::kIn {
+                    return Err(unsupported(
+                        id,
+                        "ConsumeColorInterpolationSpace explicit space",
+                    ));
+                }
+                let (color1, percentage1) = ConsumeColorMixOperand(id, &mut args, mode)?;
+                if args.Peek().GetType() != kCommaToken {
+                    return Err(invalid(id));
+                }
+                args.ConsumeIncludingWhitespace();
+                let (color2, percentage2) = ConsumeColorMixOperand(id, &mut args, mode)?;
+                if !args.AtEnd() {
+                    return Err(invalid(id));
+                }
+                if percentage1.as_ref().is_some_and(|value| {
+                    matches!(value.Payload(), CSSValuePayload::kNumericLiteralClass(value) if value.DoubleValue() == 0.0)
+                }) && percentage2.as_ref().is_some_and(|value| {
+                    matches!(value.Payload(), CSSValuePayload::kNumericLiteralClass(value) if value.DoubleValue() == 0.0)
+                }) {
+                    return Err(invalid(id));
+                }
+                values::color_mix(color1, color2, percentage1, percentage2)
+            };
+            stream.ConsumeWhitespace();
+            return Ok(mix);
+        }
+        if function == Some(CSSValueID::kLightDark) {
+            // cpp: color_function_parser.cc
+            // ColorFunctionParser::ConsumeLightDark: the two arms are full
+            // <color> values and therefore recurse through this same consumer.
+            // The resolver selects an arm from UsedColorScheme; parsing must
+            // retain both values rather than collapsing to the document mode.
+            let pair = {
+                let mut args = BlockGuard::new(stream);
+                args.ConsumeWhitespace();
+                let light = ConsumeColor(id, &mut args, mode)?;
+                if args.Peek().GetType() != kCommaToken {
+                    return Err(invalid(id));
+                }
+                args.ConsumeIncludingWhitespace();
+                let dark = ConsumeColor(id, &mut args, mode)?;
+                if !args.AtEnd() {
+                    return Err(invalid(id));
+                }
+                values::light_dark(light, dark)
+            };
+            stream.ConsumeWhitespace();
+            return Ok(pair);
+        }
+        if matches!(
+            function,
+            Some(
+                CSSValueID::kHwb
+                    | CSSValueID::kLab
+                    | CSSValueID::kLch
+                    | CSSValueID::kOklab
+                    | CSSValueID::kOklch
+                    | CSSValueID::kColor
+            )
+        ) {
+            let parsed = {
+                let mut args = BlockGuard::new(stream);
+                args.ConsumeWhitespace();
+                let space = match function.unwrap() {
+                    CSSValueID::kHwb => ColorSpace::kHWB,
+                    CSSValueID::kLab => ColorSpace::kLab,
+                    CSSValueID::kLch => ColorSpace::kLch,
+                    CSSValueID::kOklab => ColorSpace::kOklab,
+                    CSSValueID::kOklch => ColorSpace::kOklch,
+                    CSSValueID::kColor => {
+                        let space = match args.Peek().Id() {
+                            CSSValueID::kSRGB => ColorSpace::kSRGB,
+                            CSSValueID::kSRGBLinear => ColorSpace::kSRGBLinear,
+                            CSSValueID::kDisplayP3 => ColorSpace::kDisplayP3,
+                            CSSValueID::kDisplayP3Linear => ColorSpace::kDisplayP3Linear,
+                            CSSValueID::kA98Rgb => ColorSpace::kA98RGB,
+                            CSSValueID::kProphotoRgb => ColorSpace::kProPhotoRGB,
+                            CSSValueID::kRec2020 => ColorSpace::kRec2020,
+                            CSSValueID::kXyz | CSSValueID::kXyzD65 => ColorSpace::kXYZD65,
+                            CSSValueID::kXyzD50 => ColorSpace::kXYZD50,
+                            _ => return Err(unsupported(id, "color() predefined color space")),
+                        };
+                        args.ConsumeIncludingWhitespace();
+                        space
+                    }
+                    _ => unreachable!(),
+                };
+                let (param0, param1, param2) = match space {
+                    ColorSpace::kHWB => (
+                        ConsumeColorFunctionHue(id, &mut args)?,
+                        ConsumeColorFunctionNumber(id, &mut args, 1.0, 0.01)?
+                            .map(|value| value.clamp(0.0, 1.0)),
+                        ConsumeColorFunctionNumber(id, &mut args, 1.0, 0.01)?
+                            .map(|value| value.clamp(0.0, 1.0)),
+                    ),
+                    ColorSpace::kLab | ColorSpace::kLch => (
+                        ConsumeColorFunctionNumber(id, &mut args, 1.0, 1.0)?
+                            .map(|value| value.clamp(0.0, 100.0)),
+                        ConsumeColorFunctionNumber(
+                            id,
+                            &mut args,
+                            1.0,
+                            if space == ColorSpace::kLab { 1.25 } else { 1.5 },
+                        )?,
+                        if space == ColorSpace::kLch {
+                            ConsumeColorFunctionHue(id, &mut args)?
+                        } else {
+                            ConsumeColorFunctionNumber(id, &mut args, 1.0, 1.25)?
+                        },
+                    ),
+                    ColorSpace::kOklab | ColorSpace::kOklch => (
+                        ConsumeColorFunctionNumber(id, &mut args, 1.0, 0.01)?
+                            .map(|value| value.clamp(0.0, 1.0)),
+                        ConsumeColorFunctionNumber(
+                            id,
+                            &mut args,
+                            1.0,
+                            if space == ColorSpace::kOklab {
+                                0.004
+                            } else {
+                                0.004
+                            },
+                        )?,
+                        if space == ColorSpace::kOklch {
+                            ConsumeColorFunctionHue(id, &mut args)?
+                        } else {
+                            ConsumeColorFunctionNumber(id, &mut args, 1.0, 0.004)?
+                        },
+                    ),
+                    _ => (
+                        ConsumeColorFunctionNumber(id, &mut args, 1.0, 0.01)?,
+                        ConsumeColorFunctionNumber(id, &mut args, 1.0, 0.01)?,
+                        ConsumeColorFunctionNumber(id, &mut args, 1.0, 0.01)?,
+                    ),
+                };
+                let alpha = ConsumeColorFunctionAlpha(id, &mut args)?;
+                if !args.AtEnd() {
+                    return Err(invalid(id));
+                }
+                Color::FromColorSpace(space, param0, param1, param2, alpha)
+            };
+            stream.ConsumeWhitespace();
+            return Ok(values::color(parsed));
+        }
         if !matches!(
-            token.FunctionId(),
-            Some(CSSValueID::kRgb | CSSValueID::kRgba)
+            function,
+            Some(CSSValueID::kRgb | CSSValueID::kRgba | CSSValueID::kHsl | CSSValueID::kHsla)
         ) {
             return Err(unsupported(
                 id,
                 "ColorFunctionParser::ConsumeFunctionalSyntaxColor",
             ));
         }
-        // cpp: core/css/properties/color_function_parser.cc RGB component,
-        // legacy-comma and modern-space branches. Relative and missing-component
-        // syntax require unresolved-color payloads and are explicit Unsupported.
-        let parsed = {
-            let mut args = BlockGuard::new(stream);
-            args.ConsumeWhitespace();
-            if args.Peek().GetType() == kIdentToken {
-                return Err(unsupported(
-                    id,
-                    "ColorFunctionParser relative / none RGB channels",
-                ));
-            }
-            let mut channels = [0f32; 3];
-            let mut types = [kNumberToken; 3];
-            let mut legacy = false;
-            for i in 0..3 {
-                let t = args.Peek().clone();
-                types[i] = t.GetType();
-                if !matches!(t.GetType(), kNumberToken | kPercentageToken) {
-                    return Err(invalid(id));
-                }
-                channels[i] = (t.NumericValue()
-                    / if t.GetType() == kPercentageToken {
-                        100.0
-                    } else {
-                        255.0
-                    })
-                .clamp(0.0, 1.0) as f32;
-                args.Consume();
-                let had_whitespace = args.Peek().GetType() == kWhitespaceToken;
+        if matches!(function, Some(CSSValueID::kHsl | CSSValueID::kHsla)) {
+            let parsed = {
+                let mut args = BlockGuard::new(stream);
                 args.ConsumeWhitespace();
-                if i == 0 {
-                    legacy = args.Peek().GetType() == kCommaToken;
-                }
-                if i < 2 && !legacy && !had_whitespace {
-                    return Err(invalid(id));
-                }
-                if i < 2 && legacy {
-                    if args.Peek().GetType() != kCommaToken {
+                let hue = ConsumeColorFunctionHue(id, &mut args)?;
+                let legacy = args.Peek().GetType() == kCommaToken;
+                if legacy {
+                    if hue.is_none() {
                         return Err(invalid(id));
                     }
                     args.ConsumeIncludingWhitespace();
                 }
-                if i < 2 && !legacy && args.Peek().GetType() == kCommaToken {
+                let saturation = ConsumeColorFunctionNumber(id, &mut args, 1.0, 0.01)?
+                    .map(|value| value.clamp(0.0, 1.0));
+                if legacy {
+                    if saturation.is_none() || args.Peek().GetType() != kCommaToken {
+                        return Err(invalid(id));
+                    }
+                    args.ConsumeIncludingWhitespace();
+                }
+                let lightness = ConsumeColorFunctionNumber(id, &mut args, 1.0, 0.01)?
+                    .map(|value| value.clamp(0.0, 1.0));
+                let alpha = if legacy && args.Peek().GetType() == kCommaToken {
+                    args.ConsumeIncludingWhitespace();
+                    let alpha = ConsumeColorFunctionNumber(id, &mut args, 1.0, 0.01)?;
+                    if alpha.is_none() {
+                        return Err(invalid(id));
+                    }
+                    alpha.map(|value| value.clamp(0.0, 1.0))
+                } else {
+                    ConsumeColorFunctionAlpha(id, &mut args)?
+                };
+                if !args.AtEnd() {
+                    return Err(invalid(id));
+                }
+                Color::FromColorSpace(ColorSpace::kHSL, hue, saturation, lightness, alpha)
+            };
+            stream.ConsumeWhitespace();
+            return Ok(values::color(parsed));
+        }
+        // cpp: ColorFunctionParser RGB legacy-comma and modern-space
+        // grammars. Modern syntax retains `none` through the typed Color.
+        let parsed = {
+            let mut args = BlockGuard::new(stream);
+            args.ConsumeWhitespace();
+            let mut channels = [None; 3];
+            let mut types = [kNumberToken; 3];
+            types[0] = args.Peek().GetType();
+            channels[0] = ConsumeColorFunctionNumber(id, &mut args, 1.0 / 255.0, 0.01)?
+                .map(|value| value.clamp(0.0, 1.0));
+            let legacy = args.Peek().GetType() == kCommaToken;
+            if legacy && channels[0].is_none() {
+                return Err(invalid(id));
+            }
+            for index in 1..3 {
+                if legacy {
+                    if args.Peek().GetType() != kCommaToken {
+                        return Err(invalid(id));
+                    }
+                    args.ConsumeIncludingWhitespace();
+                } else if args.Peek().GetType() == kCommaToken {
+                    return Err(invalid(id));
+                }
+                types[index] = args.Peek().GetType();
+                channels[index] = ConsumeColorFunctionNumber(id, &mut args, 1.0 / 255.0, 0.01)?
+                    .map(|value| value.clamp(0.0, 1.0));
+                if legacy && channels[index].is_none() {
                     return Err(invalid(id));
                 }
             }
             if legacy && (types[0] != types[1] || types[0] != types[2]) {
                 return Err(invalid(id));
             }
-            let mut alpha = 1.0;
-            if (legacy && args.Peek().GetType() == kCommaToken)
-                || (!legacy
-                    && args.Peek().GetType() == kDelimiterToken
-                    && args.Peek().Delimiter() == b'/' as u16)
-            {
+            let alpha = if legacy && args.Peek().GetType() == kCommaToken {
                 args.ConsumeIncludingWhitespace();
-                let t = args.Peek().clone();
-                if !matches!(t.GetType(), kNumberToken | kPercentageToken) {
+                let alpha = ConsumeColorFunctionNumber(id, &mut args, 1.0, 0.01)?;
+                if alpha.is_none() {
                     return Err(invalid(id));
                 }
-                alpha = (t.NumericValue()
-                    / if t.GetType() == kPercentageToken {
-                        100.0
-                    } else {
-                        1.0
-                    })
-                .clamp(0.0, 1.0) as f32;
-                args.ConsumeIncludingWhitespace();
-            }
+                alpha.map(|value| value.clamp(0.0, 1.0))
+            } else {
+                ConsumeColorFunctionAlpha(id, &mut args)?
+            };
             if !args.AtEnd() {
                 return Err(invalid(id));
             }
-            Color::FromRGBAFloat(channels[0], channels[1], channels[2], alpha)
+            if legacy {
+                Color::FromRGBAFloat(
+                    channels[0].unwrap(),
+                    channels[1].unwrap(),
+                    channels[2].unwrap(),
+                    alpha.unwrap(),
+                )
+            } else {
+                Color::FromColorSpace(
+                    ColorSpace::kSRGB,
+                    channels[0],
+                    channels[1],
+                    channels[2],
+                    alpha,
+                )
+            }
         };
         stream.ConsumeWhitespace();
         return Ok(values::color(parsed));
@@ -4517,6 +5516,16 @@ fn ConsumeShorthandGreedilyViaLonghands<T: TokenStreamTokenizer>(
     mode: CSSParserMode,
     out: &mut Vec<PropertyValue>,
 ) -> Result<(), PropertyParseError> {
+    let context =
+        CSSParserContext::<Backend>::FromMode(mode, SecureContextMode::kInsecureContext, None);
+    ConsumeShorthandGreedilyViaLonghandsWithContext(id, stream, &context, out)
+}
+fn ConsumeShorthandGreedilyViaLonghandsWithContext<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    context: &CSSParserContext<Backend>,
+    out: &mut Vec<PropertyValue>,
+) -> Result<(), PropertyParseError> {
     let longhands = ShorthandFor(id);
     let mut parsed = vec![None; longhands.len()];
     let mut found_any = false;
@@ -4528,7 +5537,7 @@ fn ConsumeShorthandGreedilyViaLonghands<T: TokenStreamTokenizer>(
             }
             stream.EnsureLookAhead();
             let savepoint = stream.Save();
-            if let Ok(value) = ConsumeLonghand(longhand, stream, mode) {
+            if let Ok(value) = ConsumeLonghandWithContext(longhand, stream, context) {
                 parsed[index] = Some(value);
                 found = true;
                 found_any = true;
@@ -4571,9 +5580,10 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     unresolved: CSSPropertyID,
     stream: &mut Stream<T>,
-    mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
     out: &mut Vec<PropertyValue>,
 ) -> Result<(), PropertyParseError> {
+    let mode = context.Mode();
     if grid_lanes_parser::IsShorthand(id) {
         return grid_lanes_parser::Expand(id, stream, mode, out);
     }
@@ -4584,7 +5594,7 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
         return timeline_trigger_parser::Expand(id, stream, mode, out);
     }
     if id == CSSPropertyID::kMarker {
-        return svg_presentation_parser::ParseMarker(stream, mode, out);
+        return svg_presentation_parser::ParseMarker(stream, mode, context, out);
     }
     if logical_border_parser::IsShorthand(id) {
         return logical_border_parser::ParseShorthand(id, stream, mode, out);
@@ -4594,13 +5604,13 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
         id,
         CSSPropertyID::kWebkitTextStroke | CSSPropertyID::kTextEmphasis
     ) {
-        return ConsumeShorthandGreedilyViaLonghands(id, stream, mode, out);
+        return ConsumeShorthandGreedilyViaLonghandsWithContext(id, stream, context, out);
     }
     if matches!(
         id,
         CSSPropertyID::kBorderImage | CSSPropertyID::kWebkitMaskBoxImage
     ) {
-        return border_image_parser::ParseShorthand(id, stream, mode, out);
+        return border_image_parser::ParseShorthand(id, stream, mode, context, out);
     }
     if matches!(
         id,
@@ -4612,7 +5622,7 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
         return motion_parser::ParseShorthand(stream, mode, out);
     }
     if id == CSSPropertyID::kMask {
-        return mask_parser::ParseShorthand(id, unresolved, stream, mode, out);
+        return mask_parser::ParseShorthand(id, unresolved, stream, mode, context, out);
     }
     if matches!(id, CSSPropertyID::kTextBox | CSSPropertyID::kTextSpacing) {
         return text_box_parser::ParseShorthand(id, stream, mode, out);
@@ -4642,7 +5652,7 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
         return scroll_parser::ParseShorthand(id, stream, mode, out);
     }
     if id == CSSPropertyID::kListStyle {
-        return list_counter_parser::ParseShorthand(id, stream, mode, out);
+        return list_counter_parser::ParseShorthand(id, stream, mode, context, out);
     }
     if matches!(
         id,
@@ -4789,7 +5799,11 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
         let longhands = ShorthandFor(id);
         let mut parsed = Vec::new();
         while parsed.len() < 4 && !at_value_end(stream) {
-            parsed.push(ConsumeLonghand(longhands[parsed.len()], stream, mode)?);
+            parsed.push(ConsumeLonghandWithContext(
+                longhands[parsed.len()],
+                stream,
+                context,
+            )?);
         }
         if parsed.is_empty() {
             return Err(invalid(id));
@@ -4916,12 +5930,12 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
             | CSSPropertyID::kBorderInlineWidth
     ) {
         let longhands = ShorthandFor(id);
-        let first = ConsumeLonghand(longhands[0], stream, mode)?;
+        let first = ConsumeLonghandWithContext(longhands[0], stream, context)?;
         let implicit = at_value_end(stream);
         let second = if implicit {
             first.clone()
         } else {
-            ConsumeLonghand(longhands[1], stream, mode)?
+            ConsumeLonghandWithContext(longhands[1], stream, context)?
         };
         out.push(make_expanded(longhands[0], id, first, false));
         let implicit = implicit
@@ -4971,19 +5985,19 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
             }
             stream.Restore(savepoint);
         }
-        return ConsumeShorthandGreedilyViaLonghands(id, stream, mode, out);
+        return ConsumeShorthandGreedilyViaLonghandsWithContext(id, stream, context, out);
     }
     // cpp: shorthands_custom.cc:5299-5308 TextWrap; generated keyword longhands.
     if id == CSSPropertyID::kTextWrap {
-        return ConsumeShorthandGreedilyViaLonghands(id, stream, mode, out);
+        return ConsumeShorthandGreedilyViaLonghandsWithContext(id, stream, context, out);
     }
     // cpp: shorthands_custom.cc:4485-4493.
     // cpp: shorthands_custom.cc:5232-5243.
     if id == CSSPropertyID::kTextDecoration {
-        return ConsumeShorthandGreedilyViaLonghands(id, stream, mode, out);
+        return ConsumeShorthandGreedilyViaLonghandsWithContext(id, stream, context, out);
     }
     if id == CSSPropertyID::kOutline {
-        return ConsumeShorthandGreedilyViaLonghands(id, stream, mode, out);
+        return ConsumeShorthandGreedilyViaLonghandsWithContext(id, stream, context, out);
     }
     // cpp: shorthands_custom.cc:2070-2101.
     if id == CSSPropertyID::kContainer {
@@ -5012,7 +6026,7 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
     }
     // cpp: shorthands_custom.cc:3052-3063, greedy parse with concrete defaults.
     if id == CSSPropertyID::kFlexFlow {
-        return ConsumeShorthandGreedilyViaLonghands(id, stream, mode, out);
+        return ConsumeShorthandGreedilyViaLonghandsWithContext(id, stream, context, out);
     }
     // cpp: shorthands_custom.cc Flex::ParseShorthand:2942-3041.
     if id == CSSPropertyID::kFlex {
@@ -5051,7 +6065,11 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
             } else if basis.is_none() {
                 // A third numeric zero is accepted as the basis only after both
                 // flex factors, matching Blink's unitless-basis disambiguation.
-                basis = Some(ConsumeLonghand(CSSPropertyID::kFlexBasis, stream, mode)?);
+                basis = Some(ConsumeLonghandWithContext(
+                    CSSPropertyID::kFlexBasis,
+                    stream,
+                    context,
+                )?);
                 if grow.is_some() && shrink.is_none() {
                     shrink = Some(values::numeric(1.0, UnitType::kNumber));
                 }
@@ -5098,6 +6116,7 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
             let ty = stream.Peek().GetType();
             if width.is_none()
                 && (matches!(ty, kNumberToken | kDimensionToken)
+                    || IsMathFunction(stream)
                     || matches(keyword, &["thin", "medium", "thick"]))
             {
                 width = Some(ConsumeLiteral(
@@ -5123,7 +6142,7 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
                 style = Some(values::identifier(keyword));
                 stream.ConsumeIncludingWhitespace();
             } else if color.is_none() {
-                color = Some(ConsumeColor(id, stream)?);
+                color = Some(ConsumeColor(id, stream, mode)?);
             } else {
                 return Err(invalid(id));
             }
@@ -5170,27 +6189,117 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
         }
         return Ok(());
     }
-    // cpp: shorthands_custom.cc Background::ParseShorthand / ParseBackgroundOrMask.
-    // This complete color-only branch resets every other background longhand.
+    // cpp: shorthands_custom.cc Background::ParseShorthand;
+    // css_parsing_utils.cc:5384-5548 ParseBackgroundOrMask.
     if id == CSSPropertyID::kBackground {
-        let color = ConsumeColor(id, stream)?;
-        if !at_value_end(stream) {
-            return Err(unsupported(
-                id,
-                "ParseBackgroundOrMask layered CSSValueList / image / position",
-            ));
-        }
-        for &longhand in ShorthandFor(id) {
-            out.push(make_expanded(
-                longhand,
-                id,
-                if longhand == CSSPropertyID::kBackgroundColor {
-                    color.clone()
+        let longhands = ShorthandFor(id);
+        let index = |property| {
+            longhands
+                .iter()
+                .position(|candidate| *candidate == property)
+                .expect("background longhand")
+        };
+        let image_index = index(CSSPropertyID::kBackgroundImage);
+        let x_index = index(CSSPropertyID::kBackgroundPositionX);
+        let y_index = index(CSSPropertyID::kBackgroundPositionY);
+        let size_index = index(CSSPropertyID::kBackgroundSize);
+        let origin_index = index(CSSPropertyID::kBackgroundOrigin);
+        let clip_index = index(CSSPropertyID::kBackgroundClip);
+        let color_index = index(CSSPropertyID::kBackgroundColor);
+        let mut layer_values = vec![Vec::<Rc<Value>>::new(); longhands.len()];
+
+        loop {
+            let mut parsed = vec![false; longhands.len()];
+            let mut found_any = false;
+            let mut origin = None;
+            loop {
+                let mut found = false;
+                for (i, &longhand) in longhands.iter().enumerate() {
+                    if parsed[i] || i == y_index || i == size_index {
+                        continue;
+                    }
+                    stream.EnsureLookAhead();
+                    let saved = stream.Save();
+                    let consumed = if i == image_index {
+                        ConsumeSingleBackgroundImage(longhand, stream, mode, context)
+                            .map(|value| (value, None))
+                    } else if i == x_index {
+                        ConsumePosition(id, stream, mode, false, true).map(|(x, y)| (x, Some(y)))
+                    } else if longhand == CSSPropertyID::kBackgroundRepeat {
+                        ConsumeRepeatStyleValue(longhand, stream).map(|value| (value, None))
+                    } else if longhand == CSSPropertyID::kBackgroundColor {
+                        ConsumeColor(longhand, stream, mode).map(|value| (value, None))
+                    } else {
+                        ConsumeLayer(longhand, stream, mode, false).map(|value| (value, None))
+                    };
+                    let Ok((value, paired_y)) = consumed else {
+                        stream.EnsureLookAhead();
+                        stream.Restore(saved);
+                        continue;
+                    };
+                    parsed[i] = true;
+                    layer_values[i].push(value.clone());
+                    if i == x_index {
+                        parsed[y_index] = true;
+                        layer_values[y_index].push(paired_y.expect("background position y"));
+                        if stream.Peek().GetType() == kDelimiterToken
+                            && stream.Peek().Delimiter() == b'/' as u16
+                        {
+                            stream.ConsumeIncludingWhitespace();
+                            layer_values[size_index].push(ConsumeBackgroundSize(
+                                CSSPropertyID::kBackgroundSize,
+                                stream,
+                                mode,
+                                false,
+                            )?);
+                            parsed[size_index] = true;
+                        }
+                    }
+                    if i == origin_index {
+                        origin = Some(value);
+                    }
+                    found = true;
+                    found_any = true;
+                }
+                if !found || at_value_end(stream) || stream.Peek().GetType() == kCommaToken {
+                    break;
+                }
+            }
+            if !found_any {
+                return Err(invalid(id));
+            }
+            for (i, _) in longhands.iter().enumerate() {
+                if parsed[i] {
+                    continue;
+                }
+                let value = if i == clip_index {
+                    origin
+                        .clone()
+                        .unwrap_or_else(|| values::wide(CSSValueID::kInitial).unwrap())
                 } else {
                     values::wide(CSSValueID::kInitial).unwrap()
-                },
-                longhand != CSSPropertyID::kBackgroundColor,
-            ));
+                };
+                layer_values[i].push(value);
+            }
+            if stream.Peek().GetType() != kCommaToken {
+                break;
+            }
+            if parsed[color_index] {
+                return Err(invalid(id));
+            }
+            stream.ConsumeIncludingWhitespace();
+        }
+
+        for (i, &longhand) in longhands.iter().enumerate() {
+            let mut layer = std::mem::take(&mut layer_values[i]);
+            let value = if i == color_index {
+                layer.pop().expect("background color layer")
+            } else if layer.len() == 1 {
+                layer.pop().unwrap()
+            } else {
+                values::list(layer, values::ListSeparator::Comma)
+            };
+            out.push(make_expanded(longhand, id, value, false));
         }
         return Ok(());
     }
@@ -5272,6 +6381,77 @@ mod tests {
         };
         assert!(g.repeating);
         assert_eq!(g.Degrees(), Some(90.0));
+        let explicit = parse(
+            CSSPropertyID::kBackgroundImage,
+            "linear-gradient(in oklch longer hue to right, red, blue), radial-gradient(circle at left top in display-p3, red, blue), conic-gradient(in xyz from 30deg, red, blue)",
+        );
+        let CSSValuePayload::kValueListClass(explicit) = explicit[0].Value().Payload() else {
+            panic!("gradient list")
+        };
+        let CSSValuePayload::kLinearGradientClass(linear) = explicit.values[0].Payload() else {
+            panic!("linear gradient")
+        };
+        assert_eq!(linear.color_interpolation_space, ColorSpace::kOklch);
+        assert_eq!(
+            linear.hue_interpolation_method,
+            HueInterpolationMethod::kLonger
+        );
+        assert_eq!(
+            explicit.values[0].CssText().Utf8(),
+            "linear-gradient(to right in oklch longer hue, red, blue)"
+        );
+        let CSSValuePayload::kRadialGradientClass(radial) = explicit.values[1].Payload() else {
+            panic!("radial gradient")
+        };
+        assert_eq!(radial.color_interpolation_space, ColorSpace::kDisplayP3);
+        let CSSValuePayload::kConicGradientClass(conic) = explicit.values[2].Payload() else {
+            panic!("conic gradient")
+        };
+        assert_eq!(conic.color_interpolation_space, ColorSpace::kXYZD65);
+        for (name, expected) in [
+            ("hsl", ColorSpace::kHSL),
+            ("hwb", ColorSpace::kHWB),
+            ("a98-rgb", ColorSpace::kA98RGB),
+            ("prophoto-rgb", ColorSpace::kProPhotoRGB),
+            ("rec2020", ColorSpace::kRec2020),
+        ] {
+            let values = parse(
+                CSSPropertyID::kBackgroundImage,
+                &format!("linear-gradient(in {name}, red, blue)"),
+            );
+            let CSSValuePayload::kValueListClass(list) = values[0].Value().Payload() else {
+                panic!("gradient list")
+            };
+            let CSSValuePayload::kLinearGradientClass(gradient) = list.values[0].Payload() else {
+                panic!("linear gradient")
+            };
+            assert_eq!(gradient.color_interpolation_space, expected);
+        }
+        let missing = parse(
+            CSSPropertyID::kBackgroundImage,
+            "linear-gradient(in hsl, hsl(none 100% 50%), hsl(120 100% 50%))",
+        );
+        let CSSValuePayload::kValueListClass(list) = missing[0].Value().Payload() else {
+            panic!("gradient list")
+        };
+        let CSSValuePayload::kLinearGradientClass(gradient) = list.values[0].Payload() else {
+            panic!("linear gradient")
+        };
+        let CSSValuePayload::kColorClass(color) =
+            gradient.stops[0].color.as_ref().unwrap().Payload()
+        else {
+            panic!("typed color")
+        };
+        assert_eq!(color.0.GetColorSpace(), ColorSpace::kHSL);
+        assert!(color.0.Param0IsNone());
+        assert_eq!(
+            rejected(
+                CSSPropertyID::kBackgroundImage,
+                "linear-gradient(in srgb longer hue, red, blue)"
+            )
+            .kind,
+            PropertyParseErrorKind::Invalid
+        );
         for css in [
             "linear-gradient(to, red, blue)",
             "linear-gradient(10%, red, blue)",
@@ -5302,16 +6482,34 @@ mod tests {
             g.stops[0].offset.as_ref().unwrap().Payload(),
             CSSValuePayload::kMathFunctionClass(_)
         ));
-        for css in [
-            "linear-gradient(in oklab, red,blue)",
-            "radial-gradient(red,blue)",
-        ] {
-            assert_eq!(
-                rejected(CSSPropertyID::kBackgroundImage, css).kind,
-                PropertyParseErrorKind::Unsupported,
-                "{css}"
-            );
-        }
+        let radial = parse(
+            CSSPropertyID::kBackgroundImage,
+            "radial-gradient(circle closest-side at 25% 75%, red 10px, 30%, blue)",
+        );
+        let CSSValuePayload::kValueListClass(list) = radial[0].Value().Payload() else {
+            panic!()
+        };
+        let CSSValuePayload::kRadialGradientClass(g) = list.values[0].Payload() else {
+            panic!()
+        };
+        assert_eq!(g.shape, Some(values::CSSRadialGradientShape::Circle));
+        assert_eq!(g.extent, Some(values::CSSRadialGradientExtent::ClosestSide));
+        assert_eq!(g.stops.len(), 3);
+        assert!(g.stops[1].color.is_none());
+
+        let conic = parse(
+            CSSPropertyID::kBackgroundImage,
+            "repeating-conic-gradient(from 45deg at right 10px bottom 20%, red 0deg 30deg, blue 75%)",
+        );
+        let CSSValuePayload::kValueListClass(list) = conic[0].Value().Payload() else {
+            panic!()
+        };
+        let CSSValuePayload::kConicGradientClass(g) = list.values[0].Payload() else {
+            panic!()
+        };
+        assert!(g.repeating);
+        assert_eq!(g.stops.len(), 3);
+        assert_eq!(g.angle.as_ref().unwrap().CssText().Utf8(), "45deg");
     }
     #[test]
     fn shadow_properties_use_shared_typed_list_and_source_component_order() {
@@ -5620,6 +6818,8 @@ mod tests {
             "counter(item)",
             "url(image.png)",
             "linear-gradient(red, blue)",
+            "radial-gradient(red, blue)",
+            "conic-gradient(red, blue)",
             "open-quote",
             "'text' / 'alt'",
         ] {
@@ -5627,7 +6827,7 @@ mod tests {
                 .Value()
                 .IsValueList());
         }
-        for unavailable in ["radial-gradient(red, blue)", "counter(item, symbols('x'))"] {
+        for unavailable in ["counter(item, symbols('x'))"] {
             assert_eq!(
                 rejected(CSSPropertyID::kContent, unavailable).kind,
                 PropertyParseErrorKind::Unsupported
@@ -7205,6 +8405,24 @@ mod tests {
         assert_eq!(color.0.Param0(), 255.0);
         assert_eq!(color.0.Alpha(), 0.5);
         assert_eq!(border[0].ShorthandID(), CSSPropertyID::kBorder);
+    }
+    #[test]
+    fn hsl_color_functions_reach_every_color_consumer_and_border_shorthand() {
+        let border = parse(CSSPropertyID::kBorder, "1px solid hsl(212, 44%, 33%)");
+        assert_eq!(border.len(), 17);
+        let CSSValuePayload::kColorClass(color) = border[0].Value().Payload() else {
+            panic!("border color")
+        };
+        assert!((color.0.Param0() - 47.124).abs() < 0.01);
+        assert!((color.0.Param1() - 83.936).abs() < 0.01);
+        assert!((color.0.Param2() - 121.176).abs() < 0.01);
+        assert_eq!(color.0.Alpha(), 1.0);
+
+        let modern = parse(CSSPropertyID::kColor, "hsl(212deg 44% 33% / 50%)");
+        let CSSValuePayload::kColorClass(color) = modern[0].Value().Payload() else {
+            panic!("color")
+        };
+        assert_eq!(color.0.Alpha(), 0.5);
     }
     #[test]
     fn display_compounds_radius_pairs_and_rgb_token_boundaries_match_source() {

@@ -136,6 +136,8 @@ extern "C" {
     fn CTFontManagerCreateFontDescriptorsFromData(data: Ref) -> Ref;
     fn CTFontManagerCreateFontDescriptorFromData(data: Ref) -> Ref;
     fn CTFontGetBoundingBox(font: Ref) -> Rect;
+    fn CTFontGetAscent(font: Ref) -> f64;
+    fn CTFontGetDescent(font: Ref) -> f64;
     fn CTFontGetSymbolicTraits(font: Ref) -> u32;
     fn CTFontCopyVariationAxes(font: Ref) -> Ref;
     fn CTFontCopyAttribute(font: Ref, attribute: Ref) -> Ref;
@@ -454,6 +456,14 @@ impl PreparedGlyphRun<'_> {
         assert!(self.color_glyphs);
         self.remaining.kx = self.remaining.sx * -0.25 + self.remaining.kx;
         self.remaining.sy = self.remaining.ky * -0.25 + self.remaining.sy;
+    }
+    pub(crate) fn device_ascent_descent(&self) -> (f32, f32) {
+        unsafe {
+            (
+                CTFontGetAscent(self.font).round() as f32,
+                CTFontGetDescent(self.font).round() as f32,
+            )
+        }
     }
     /// Exact allocation extent of this port's native gray mask, without
     /// generating its image. Unlike whole-font bounds this uses the resolved
@@ -958,15 +968,16 @@ impl SkScalerContext_Mac {
             });
             self.next_typeface
         };
-        // TypefaceForFontSize: optical size follows the painted size.
+        // Font selection may already have resolved optical sizing from the
+        // specified CSS size. Preserve that explicit value when raster scales
+        // the same run to its zoomed/device size; only synthesize `opsz` for
+        // callers that did not carry a selection decision across the boundary.
         let mut axes = variations.to_vec();
         if self.has_optical_axis(face) {
-            if let Some(axis) = axes
-                .iter_mut()
-                .find(|axis| axis.tag == u32::from_be_bytes(*b"opsz"))
+            if !axes
+                .iter()
+                .any(|axis| axis.tag == u32::from_be_bytes(*b"opsz"))
             {
-                axis.value = size;
-            } else {
                 axes.push(FontVariation {
                     tag: u32::from_be_bytes(*b"opsz"),
                     value: size,
@@ -974,6 +985,15 @@ impl SkScalerContext_Mac {
             }
         }
         let variations = axes.as_slice();
+        // CoreText chooses AAT tracking and the source optical instance from
+        // the logical/specifed font size before Skia resizes that font for the
+        // device matrix. A zoomed Paint font can therefore be 28px while its
+        // logical optical/tracking size remains 14px.
+        let source_size = variations
+            .iter()
+            .rev()
+            .find(|axis| axis.tag == u32::from_be_bytes(*b"opsz"))
+            .map_or(size, |axis| axis.value);
         let key = (
             typeface,
             size.to_bits(),
@@ -1000,7 +1020,8 @@ impl SkScalerContext_Mac {
                         0x08000100,
                         false,
                     ));
-                    let matched = match_native_family(name.get(), face.weight, face.italic, size);
+                    let matched =
+                        match_native_family(name.get(), face.weight, face.italic, source_size);
                     if CTFontGetSymbolicTraits(matched.get()) & (1 << 13) != 0 {
                         // Original SkFontMgr_mac_ct typeface starts at size0;
                         // its scaler then always makes the exact device copy.
@@ -1030,7 +1051,7 @@ impl SkScalerContext_Mac {
                         let descriptor = Owned::new(descriptor);
                         Owned::new(CTFontCreateWithFontDescriptor(
                             descriptor.get(),
-                            size.into(),
+                            source_size.into(),
                             ptr::null(),
                         ))
                     } else {
@@ -1044,13 +1065,13 @@ impl SkScalerContext_Mac {
                         );
                         Owned::new(CTFontCreateWithFontDescriptor(
                             CFArrayGetValueAtIndex(descriptors.get(), index),
-                            size.into(),
+                            source_size.into(),
                             ptr::null(),
                         ))
                     }
                 };
                 if variations.is_empty() {
-                    return if device_size == size
+                    return if device_size == source_size
                         && CTFontGetSymbolicTraits(base.get()) & (1 << 13) == 0
                     {
                         base
@@ -1078,11 +1099,11 @@ impl SkScalerContext_Mac {
                 let descriptor = Owned::new(CTFontDescriptorCreateWithAttributes(attributes.get()));
                 let varied = Owned::new(CTFontCreateCopyWithAttributes(
                     base.get(),
-                    size.into(),
+                    source_size.into(),
                     ptr::null(),
                     descriptor.get(),
                 ));
-                if device_size == size {
+                if device_size == source_size {
                     varied
                 } else {
                     let opsz = variations

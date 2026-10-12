@@ -4,5 +4,6 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+image_resource = { path = "../image_resource" }
 zune-jpeg = { version = "0.5.15", features = ["source_compat"] }
 image = { version = "0.25.10", default-features = false, features = ["bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }

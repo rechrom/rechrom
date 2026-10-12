@@ -8,7 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
 use crate::PaintRect;
-use layoutng_assembly::internal::layout_input::{Offset, PaintPathCommand, TransformMatrix};
+use layoutng_assembly::fragment_tree::StickyPositionPaintData;
+use layoutng_assembly::internal::layout_input::{
+    Offset, PaintClipPathChild, PaintPathCommand, TransformMatrix,
+};
 use layoutng_assembly::internal::paint_input::{
     PaintBlendMode, PaintCornerRadii, PaintFilterOperation,
 };
@@ -72,6 +75,14 @@ impl PaintPropertyNodeLifecycle {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaintBackfaceVisibility {
+    #[default]
+    Inherited,
+    Visible,
+    Hidden,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransformPaintPropertyNode {
     pub lifecycle: PaintPropertyNodeLifecycle,
@@ -81,7 +92,14 @@ pub struct TransformPaintPropertyNode {
     // The standalone geometry mapper has already folded transform-origin into
     // the matrix. Keeping origin zero preserves that resolved transformation.
     pub origin: [f64; 3],
+    pub flattens_inherited_transform: bool,
+    pub rendering_context_id: u64,
+    pub backface_visibility: PaintBackfaceVisibility,
     pub scroll: Option<Arc<ScrollPaintPropertyNode>>,
+    /// Layout's immutable sticky geometry. The compositor resolves its scroll
+    /// and ancestor identities through the property chain when applying an
+    /// impl-side scroll delta.
+    pub sticky_constraint: Option<StickyPositionPaintData>,
     pub direct_compositing_reasons: Vec<&'static str>,
 }
 
@@ -94,7 +112,9 @@ pub struct ClipPaintPropertyNode {
     pub rect: Option<PaintRect>,
     pub radii: PaintCornerRadii,
     pub clip_path: Vec<PaintPathCommand>,
+    pub clip_path_children: Vec<PaintClipPathChild>,
     pub clip_path_even_odd: bool,
+    pub clip_path_error: Option<String>,
     /// UpdatePixelMovingFilterClipExpander retains the filter whose input
     /// bounds must be expanded; an infinite rect alone loses this relationship.
     pub pixel_moving_filter: Option<Arc<EffectPaintPropertyNode>>,
@@ -107,9 +127,25 @@ pub struct EffectPaintPropertyNode {
     pub parent: Option<Arc<Self>>,
     pub local_transform_space: Arc<TransformPaintPropertyNode>,
     pub output_clip: Option<Arc<ClipPaintPropertyNode>>,
+    /// Filter reference box in `local_transform_space`.  This is independent
+    /// of `output_clip`: SVG filterUnits/primitiveUnits and the filter region
+    /// are resolved from the owning border box, while the output clip belongs
+    /// to the surrounding property tree.
+    pub filter_reference_box: Option<PaintRect>,
+    /// SVG userSpaceOnUse values are raw resource coordinates. HTML/CSS
+    /// owners map them through EffectiveZoom before the property transform;
+    /// native SVG owners use one.
+    pub filter_reference_scale: f64,
     pub opacity: f32,
     pub blend_mode: PaintBlendMode,
     pub filters: Vec<PaintFilterOperation>,
+    /// Filters applied to pixels already present in the parent render target.
+    /// They are never folded into the foreground `filters` chain.
+    pub backdrop_filters: Vec<PaintFilterOperation>,
+    pub backdrop_filter_has_reference: bool,
+    /// Border-box backdrop output clip. It is separate from `output_clip` so
+    /// foreground descendants keep their ordinary overflow semantics.
+    pub backdrop_filter_clip: Option<Arc<ClipPaintPropertyNode>>,
     pub isolates_blending: bool,
     // Legacy standalone wrapper metadata; formal Mask nodes use is_mask.
     pub has_mask: bool,
@@ -123,10 +159,15 @@ pub struct EffectPaintPropertyNode {
 pub struct ScrollPaintPropertyNode {
     pub lifecycle: PaintPropertyNodeLifecycle,
     pub id: u64,
+    /// Stable native owner identity used to connect Layout's sticky scroll
+    /// ancestor to this Paint property node without exposing either owner.
+    pub owner_client_id: u64,
     pub parent: Option<Arc<Self>>,
     pub overflow_clip: Option<Arc<ClipPaintPropertyNode>>,
     pub container_rect: PaintRect,
     pub contents_rect: PaintRect,
+    pub minimum_scroll_offset: Offset,
+    pub maximum_scroll_offset: Offset,
     pub user_scrollable_horizontal: bool,
     pub user_scrollable_vertical: bool,
 }
@@ -169,10 +210,13 @@ impl Default for PropertyTreeState {
             let scroll = Arc::new(ScrollPaintPropertyNode {
                 lifecycle: PaintPropertyNodeLifecycle::root(),
                 id: 0,
+                owner_client_id: 0,
                 parent: None,
                 overflow_clip: None,
                 container_rect: infinite,
                 contents_rect: infinite,
+                minimum_scroll_offset: Offset::default(),
+                maximum_scroll_offset: Offset::default(),
                 user_scrollable_horizontal: false,
                 user_scrollable_vertical: false,
             });
@@ -182,7 +226,11 @@ impl Default for PropertyTreeState {
                 parent: None,
                 matrix: TransformMatrix::default(),
                 origin: [0.0; 3],
+                flattens_inherited_transform: false,
+                rendering_context_id: 0,
+                backface_visibility: PaintBackfaceVisibility::Visible,
                 scroll: Some(scroll),
+                sticky_constraint: None,
                 direct_compositing_reasons: Vec::new(),
             });
             let clip = Arc::new(ClipPaintPropertyNode {
@@ -193,7 +241,9 @@ impl Default for PropertyTreeState {
                 rect: None,
                 radii: PaintCornerRadii::default(),
                 clip_path: Vec::new(),
+                clip_path_children: Vec::new(),
                 clip_path_even_odd: false,
+                clip_path_error: None,
                 pixel_moving_filter: None,
             });
             let effect = Arc::new(EffectPaintPropertyNode {
@@ -202,9 +252,14 @@ impl Default for PropertyTreeState {
                 parent: None,
                 local_transform_space: transform.clone(),
                 output_clip: None,
+                filter_reference_box: None,
+                filter_reference_scale: 1.0,
                 opacity: 1.0,
                 blend_mode: PaintBlendMode::kNormal,
                 filters: Vec::new(),
+                backdrop_filters: Vec::new(),
+                backdrop_filter_has_reference: false,
+                backdrop_filter_clip: None,
                 isolates_blending: false,
                 has_mask: false,
                 is_mask: false,
@@ -347,6 +402,9 @@ impl PaintPropertyTrees {
         if let Some(clip) = &node.output_clip {
             self.add_clip(clip);
         }
+        if let Some(clip) = &node.backdrop_filter_clip {
+            self.add_clip(clip);
+        }
     }
     fn add_scroll(&mut self, node: &Arc<ScrollPaintPropertyNode>) {
         if self.scrolls.contains_key(&node.id) {
@@ -370,10 +428,14 @@ pub(crate) enum PaintPropertyRole {
     ViewportClip,
     PaintOffsetTranslation,
     StickyTranslation,
+    TextCombineTransform,
     Transform,
+    Perspective,
     SvgLocalTransform,
     ClipPathClip,
     CssClip,
+    BackgroundClip,
+    BackdropFilterClip,
     MaskClip,
     Effect,
     Mask,
@@ -752,7 +814,11 @@ impl RetainedScrollSnapshotRebinder {
                 parent,
                 matrix,
                 origin: input.origin,
+                flattens_inherited_transform: input.flattens_inherited_transform,
+                rendering_context_id: input.rendering_context_id,
+                backface_visibility: input.backface_visibility,
                 scroll,
+                sticky_constraint: input.sticky_constraint,
                 direct_compositing_reasons: input.direct_compositing_reasons.clone(),
             })
         };
@@ -784,7 +850,9 @@ impl RetainedScrollSnapshotRebinder {
                 rect: input.rect,
                 radii: input.radii,
                 clip_path: input.clip_path.clone(),
+                clip_path_children: input.clip_path_children.clone(),
                 clip_path_even_odd: input.clip_path_even_odd,
+                clip_path_error: input.clip_path_error.clone(),
                 pixel_moving_filter: filter,
             })
         };
@@ -798,9 +866,14 @@ impl RetainedScrollSnapshotRebinder {
         let parent = input.parent.as_ref().map(|parent| self.effect(parent));
         let transform = self.transform(&input.local_transform_space);
         let clip = input.output_clip.as_ref().map(|clip| self.clip(clip));
+        let backdrop_clip = input
+            .backdrop_filter_clip
+            .as_ref()
+            .map(|clip| self.clip(clip));
         let node = if same_snapshot_option(&parent, &input.parent)
             && Arc::ptr_eq(&transform, &input.local_transform_space)
             && same_snapshot_option(&clip, &input.output_clip)
+            && same_snapshot_option(&backdrop_clip, &input.backdrop_filter_clip)
             && input.lifecycle.changed == PaintPropertyChangeType::Unchanged
         {
             input.clone()
@@ -811,9 +884,14 @@ impl RetainedScrollSnapshotRebinder {
                 parent,
                 local_transform_space: transform,
                 output_clip: clip,
+                filter_reference_box: input.filter_reference_box,
+                filter_reference_scale: input.filter_reference_scale,
                 opacity: input.opacity,
                 blend_mode: input.blend_mode,
                 filters: input.filters.clone(),
+                backdrop_filters: input.backdrop_filters.clone(),
+                backdrop_filter_has_reference: input.backdrop_filter_has_reference,
+                backdrop_filter_clip: backdrop_clip,
                 isolates_blending: input.isolates_blending,
                 has_mask: input.has_mask,
                 is_mask: input.is_mask,
@@ -838,10 +916,13 @@ impl RetainedScrollSnapshotRebinder {
             Arc::new(ScrollPaintPropertyNode {
                 lifecycle: input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
                 id: input.id,
+                owner_client_id: input.owner_client_id,
                 parent,
                 overflow_clip: clip,
                 container_rect: input.container_rect,
                 contents_rect: input.contents_rect,
+                minimum_scroll_offset: input.minimum_scroll_offset,
+                maximum_scroll_offset: input.maximum_scroll_offset,
                 user_scrollable_horizontal: input.user_scrollable_horizontal,
                 user_scrollable_vertical: input.user_scrollable_vertical,
             })
@@ -927,6 +1008,10 @@ fn transform_state_change(
     use PaintPropertyChangeType::*;
     if !same_optional(&a.parent, &b.parent, |n| &n.lifecycle)
         || !same_optional(&a.scroll, &b.scroll, |n| &n.lifecycle)
+        || a.flattens_inherited_transform != b.flattens_inherited_transform
+        || a.rendering_context_id != b.rendering_context_id
+        || a.backface_visibility != b.backface_visibility
+        || a.sticky_constraint != b.sticky_constraint
         || a.direct_compositing_reasons != b.direct_compositing_reasons
     {
         return ChangedOnlyValues;
@@ -934,8 +1019,7 @@ fn transform_state_change(
     if a.matrix == b.matrix && a.origin == b.origin {
         return Unchanged;
     }
-    // Animation/sticky direct compositor updates are unavailable. Only the
-    // unambiguous 2D translation case uses the official simple-value class;
+    // Only the unambiguous 2D translation case uses the official simple-value class;
     // other matrix updates conservatively request a full property update.
     let is_translation = |m: &TransformMatrix| {
         let mut v = m.values;
@@ -960,7 +1044,9 @@ fn clip_state_change(
         && a.rect == b.rect
         && a.radii == b.radii
         && a.clip_path == b.clip_path
+        && a.clip_path_children == b.clip_path_children
         && a.clip_path_even_odd == b.clip_path_even_odd
+        && a.clip_path_error == b.clip_path_error
         && same_optional(&a.pixel_moving_filter, &b.pixel_moving_filter, |n| {
             &n.lifecycle
         })
@@ -983,6 +1069,13 @@ fn effect_state_change(
         || !same_optional(&a.output_clip, &b.output_clip, |n| &n.lifecycle)
         || a.blend_mode != b.blend_mode
         || a.filters != b.filters
+        || a.filter_reference_box != b.filter_reference_box
+        || a.filter_reference_scale != b.filter_reference_scale
+        || a.backdrop_filters != b.backdrop_filters
+        || a.backdrop_filter_has_reference != b.backdrop_filter_has_reference
+        || !same_optional(&a.backdrop_filter_clip, &b.backdrop_filter_clip, |n| {
+            &n.lifecycle
+        })
         || a.isolates_blending != b.isolates_blending
         || a.has_mask != b.has_mask
         || a.is_mask != b.is_mask
@@ -1015,6 +1108,9 @@ fn scroll_state_change(
         && same_optional(&a.overflow_clip, &b.overflow_clip, |n| &n.lifecycle)
         && a.container_rect == b.container_rect
         && a.contents_rect == b.contents_rect
+        && a.owner_client_id == b.owner_client_id
+        && a.minimum_scroll_offset == b.minimum_scroll_offset
+        && a.maximum_scroll_offset == b.maximum_scroll_offset
         && a.user_scrollable_horizontal == b.user_scrollable_horizontal
         && a.user_scrollable_vertical == b.user_scrollable_vertical
     {
@@ -1175,7 +1271,9 @@ mod retained_scroll_update_tests {
             }),
             radii: Default::default(),
             clip_path: Vec::new(),
+            clip_path_children: Vec::new(),
             clip_path_even_odd: false,
+            clip_path_error: None,
             pixel_moving_filter: None,
         });
         let mut state = PropertyTreeState { clip, ..root };
@@ -1226,6 +1324,8 @@ mod retained_scroll_update_tests {
             overflow_clip: Some(root.clip.clone()),
             container_rect: PaintRect::default(),
             contents_rect: PaintRect::default(),
+            minimum_scroll_offset: Offset::default(),
+            maximum_scroll_offset: Offset { x: 0.0, y: 100.0 },
             user_scrollable_horizontal: false,
             user_scrollable_vertical: true,
         });
@@ -1235,7 +1335,11 @@ mod retained_scroll_update_tests {
             parent: Some(root.transform.clone()),
             matrix: TransformMatrix::default(),
             origin: [0.0; 3],
+            flattens_inherited_transform: false,
+            rendering_context_id: 0,
+            backface_visibility: Default::default(),
             scroll: Some(scroll.clone()),
+            sticky_constraint: None,
             direct_compositing_reasons: Vec::new(),
         });
         let child = Arc::new(TransformPaintPropertyNode {
@@ -1244,7 +1348,11 @@ mod retained_scroll_update_tests {
             parent: Some(translation.clone()),
             matrix: TransformMatrix::default(),
             origin: [0.0; 3],
+            flattens_inherited_transform: false,
+            rendering_context_id: 0,
+            backface_visibility: Default::default(),
             scroll: None,
+            sticky_constraint: None,
             direct_compositing_reasons: Vec::new(),
         });
         let clip = Arc::new(ClipPaintPropertyNode {
@@ -1255,7 +1363,9 @@ mod retained_scroll_update_tests {
             rect: None,
             radii: PaintCornerRadii::default(),
             clip_path: Vec::new(),
+            clip_path_children: Vec::new(),
             clip_path_even_odd: false,
+            clip_path_error: None,
             pixel_moving_filter: None,
         });
         let effect = Arc::new(EffectPaintPropertyNode {
@@ -1264,9 +1374,14 @@ mod retained_scroll_update_tests {
             parent: Some(root.effect.clone()),
             local_transform_space: child.clone(),
             output_clip: Some(clip.clone()),
+            filter_reference_box: None,
+            filter_reference_scale: 1.0,
             opacity: 0.5,
             blend_mode: PaintBlendMode::kNormal,
             filters: Vec::new(),
+            backdrop_filters: Vec::new(),
+            backdrop_filter_has_reference: false,
+            backdrop_filter_clip: None,
             isolates_blending: false,
             has_mask: false,
             is_mask: false,
@@ -1279,6 +1394,8 @@ mod retained_scroll_update_tests {
             overflow_clip: Some(clip.clone()),
             container_rect: PaintRect::default(),
             contents_rect: PaintRect::default(),
+            minimum_scroll_offset: Offset::default(),
+            maximum_scroll_offset: Offset::default(),
             user_scrollable_horizontal: false,
             user_scrollable_vertical: false,
         });

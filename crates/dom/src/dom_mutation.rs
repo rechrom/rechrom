@@ -1,7 +1,10 @@
 #![allow(non_snake_case)]
 
 use crate::error::{DOMException, DOMExceptionKind};
-use crate::persistent_document::{DOMAttribute, DOMNamespace, DOMNodeType, PersistentDocument};
+use crate::persistent_document::{
+    DOMAttribute, DOMNamespace, DOMNodeType, DOMShadowRootMode, DOMSlotAssignmentMode,
+    PersistentDocument,
+};
 
 /// Existing DOM exception categories exposed through the mutation facade.
 pub type DOMMutationError = DOMException;
@@ -16,6 +19,7 @@ pub enum DOMMutationType {
     kCreateText,
     kCreateComment,
     kCreateFragment,
+    kAttachShadowRoot,
     kCloneNode,
     kAppendChild,
     kInsertBefore,
@@ -27,6 +31,11 @@ pub enum DOMMutationType {
     kSetInnerHTML,
     kSetControlChecked,
     kSetControlValue,
+    kSetControlIndeterminate,
+    kSetDialogModal,
+    kSetPopoverOpen,
+    kRequestFullscreen,
+    kExitFullscreen,
 }
 
 // cpp: dom/dom_mutation.h:40-51
@@ -76,6 +85,19 @@ pub(crate) fn ValidateDOMMutation(
                 return Err(DOMException {
                     kind: DOMExceptionKind::InvalidArgument,
                     message: "invalid node allocation mutation",
+                });
+            }
+        }
+        DOMMutationType::kAttachShadowRoot => {
+            if document.Node(target).Type() != DOMNodeType::kElement
+                || mutation.child_node_id != document.NextNodeId()
+                || document.ShadowRoot(target).is_some()
+                || !matches!(mutation.value.as_str(), "open" | "closed")
+                || !matches!(mutation.name.as_str(), "named" | "manual")
+            {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "invalid shadow root attachment",
                 });
             }
         }
@@ -193,6 +215,48 @@ pub(crate) fn ValidateDOMMutation(
                 });
             }
         }
+        DOMMutationType::kSetControlIndeterminate => {
+            if !document.Node(target).IsHTMLElement("input") {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "indeterminate state mutation target is not an input",
+                });
+            }
+        }
+        DOMMutationType::kSetDialogModal => {
+            if !document.Node(target).IsHTMLElement("dialog") {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "modal state mutation target is not a dialog",
+                });
+            }
+        }
+        DOMMutationType::kSetPopoverOpen => {
+            if !document.IsPopover(target) {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "popover state mutation target is not a popover",
+                });
+            }
+        }
+        DOMMutationType::kRequestFullscreen => {
+            if document.Node(target).Type() != DOMNodeType::kElement
+                || !document.IsConnectedToDocument(target)
+            {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "fullscreen request target is not a connected element",
+                });
+            }
+        }
+        DOMMutationType::kExitFullscreen => {
+            if document.Node(target).Type() != DOMNodeType::kDocument {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "exitFullscreen target is not a document",
+                });
+            }
+        }
         DOMMutationType::kSetControlValue => {
             if !document.Node(target).IsHTMLElement("input")
                 && !document.Node(target).IsHTMLElement("textarea")
@@ -252,6 +316,21 @@ pub fn TryApplyDOMMutations(
             DOMMutationType::kCreateFragment => {
                 document.CreateDocumentFragment();
             }
+            DOMMutationType::kAttachShadowRoot => {
+                let mode = if mutation.value == "open" {
+                    DOMShadowRootMode::kOpen
+                } else {
+                    DOMShadowRootMode::kClosed
+                };
+                let slot_assignment = if mutation.name == "named" {
+                    DOMSlotAssignmentMode::kNamed
+                } else {
+                    DOMSlotAssignmentMode::kManual
+                };
+                let root =
+                    document.AttachShadowRootWithSlotAssignment(target, mode, slot_assignment);
+                debug_assert_eq!(document.Node(root).Id(), mutation.child_node_id);
+            }
             DOMMutationType::kCloneNode => {
                 document.CloneNode(target, mutation.bool_value);
             }
@@ -304,6 +383,29 @@ pub fn TryApplyDOMMutations(
             DOMMutationType::kSetControlChecked => {
                 document.SetControlChecked(target, mutation.bool_value);
             }
+            DOMMutationType::kSetControlIndeterminate => {
+                document.SetControlIndeterminate(target, mutation.bool_value);
+            }
+            DOMMutationType::kSetDialogModal => {
+                if mutation.bool_value {
+                    document.ShowModalDialog(target);
+                } else {
+                    document.CloseDialog(target);
+                }
+            }
+            DOMMutationType::kSetPopoverOpen => {
+                if mutation.bool_value {
+                    document.ShowPopover(target);
+                } else {
+                    document.HidePopover(target);
+                }
+            }
+            DOMMutationType::kRequestFullscreen => {
+                document.RequestFullscreen(target);
+            }
+            DOMMutationType::kExitFullscreen => {
+                document.ExitFullscreen();
+            }
             DOMMutationType::kSetControlValue => {
                 document.SetControlValue(target, mutation.value.clone());
             }
@@ -334,6 +436,7 @@ pub fn DOMMutationTypeName(mutation_type: DOMMutationType) -> &'static str {
         DOMMutationType::kCreateText => "create-text",
         DOMMutationType::kCreateComment => "create-comment",
         DOMMutationType::kCreateFragment => "create-fragment",
+        DOMMutationType::kAttachShadowRoot => "attach-shadow-root",
         DOMMutationType::kCloneNode => "clone-node",
         DOMMutationType::kAppendChild => "append-child",
         DOMMutationType::kInsertBefore => "insert-before",
@@ -343,7 +446,12 @@ pub fn DOMMutationTypeName(mutation_type: DOMMutationType) -> &'static str {
         DOMMutationType::kSetTextContent => "set-text-content",
         DOMMutationType::kSetInnerHTML => "set-inner-html",
         DOMMutationType::kSetControlChecked => "set-control-checked",
+        DOMMutationType::kSetControlIndeterminate => "set-control-indeterminate",
         DOMMutationType::kSetControlValue => "set-control-value",
+        DOMMutationType::kSetDialogModal => "set-dialog-modal",
+        DOMMutationType::kSetPopoverOpen => "set-popover-open",
+        DOMMutationType::kRequestFullscreen => "request-fullscreen",
+        DOMMutationType::kExitFullscreen => "exit-fullscreen",
     }
 }
 
@@ -356,16 +464,22 @@ pub fn DOMMutationTypeNameRaw(value: u8) -> &'static str {
         3 => "create-text",
         4 => "create-comment",
         5 => "create-fragment",
-        6 => "clone-node",
-        7 => "append-child",
-        8 => "insert-before",
-        9 => "remove-child",
-        10 => "set-attribute",
-        11 => "remove-attribute",
-        12 => "set-text-content",
-        13 => "set-inner-html",
-        14 => "set-control-checked",
-        15 => "set-control-value",
+        6 => "attach-shadow-root",
+        7 => "clone-node",
+        8 => "append-child",
+        9 => "insert-before",
+        10 => "remove-child",
+        11 => "set-attribute",
+        12 => "remove-attribute",
+        13 => "set-text-content",
+        14 => "set-inner-html",
+        15 => "set-control-checked",
+        16 => "set-control-value",
+        17 => "set-control-indeterminate",
+        18 => "set-dialog-modal",
+        19 => "set-popover-open",
+        20 => "request-fullscreen",
+        21 => "exit-fullscreen",
         _ => "unknown",
     }
 }

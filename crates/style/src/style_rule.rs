@@ -1112,6 +1112,13 @@ impl<D: StyleRuleDependencies> StyleRule<D> {
             .get_or_insert_with(Vec::new)
             .push(child);
     }
+    /// Rust ownership equivalent of moving `*ChildRules()` out of Chromium's
+    /// Oilpan-owned fake parent after parsing @result/@apply/@contents. Taking
+    /// the vector breaks the otherwise cyclic `Rc` edge while selectors keep
+    /// the same parent allocation alive.
+    pub fn TakeChildRules(&self) -> Vec<Rc<StyleRuleBase<D>>> {
+        self.child_rules_.borrow_mut().take().unwrap_or_default()
+    }
     // cpp: style_rule.cc:550-558
     pub fn ReplaceChildRuleIfExists(
         &mut self,
@@ -1346,6 +1353,9 @@ impl<D: StyleRuleDependencies> StyleRuleScope<D> {
     }
     pub fn GetStyleScope(&self) -> &D::StyleScope {
         &self.style_scope_
+    }
+    pub fn StyleScopeHandle(&self) -> Rc<D::StyleScope> {
+        self.style_scope_.clone()
     }
 }
 // cpp: style_rule.h:437-453; style_rule.cc:941-949,955-957

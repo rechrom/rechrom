@@ -13,7 +13,8 @@ use crate::selector_checker::*;
 use crate::selector_filter::*;
 use crate::selector_query::*;
 use dom::persistent_document::{
-    CompatibilityMode, DOMAttribute, DOMNamespace, DOMNodeType, DOMOwnerHandle,
+    CompatibilityMode, DOMAttribute, DOMAutofillState, DOMNamespace, DOMNodeType, DOMOwnerHandle,
+    DOMPartNamesMap, DOMShadowRootMode,
 };
 use dom::user_interaction_state::UserInteractionState;
 use dom::Document;
@@ -45,6 +46,78 @@ pub struct HasFilter {
     allocated: Cell<bool>,
     hashes: RefCell<HashSet<u32>>,
 }
+
+// cpp: third_party/blink/renderer/core/css/part_names.h:12-31.
+// PartNames is a set in Blink. A small vector keeps the same membership
+// semantics here and avoids making AtomicString hashing part of this boundary.
+#[derive(Debug, Default)]
+pub(crate) struct PersistentPartNames {
+    names: RefCell<Vec<AtomicString>>,
+    pending_maps: RefCell<Vec<DOMPartNamesMap>>,
+}
+impl PersistentPartNames {
+    pub(crate) fn FromNames(names: impl IntoIterator<Item = AtomicString>) -> Self {
+        let mut result = Self::default();
+        for name in names {
+            if !result.names.get_mut().contains(&name) {
+                result.names.get_mut().push(name);
+            }
+        }
+        result
+    }
+    // cpp: part_names.cc:26-28. Blink queues retained NamesMap references and
+    // applies them only when a selector asks Contains(). We retain map values
+    // so a cloned collector/checker observes the same pending mapping chain.
+    pub(crate) fn PushMap(&mut self, map: &DOMPartNamesMap) {
+        self.pending_maps.get_mut().push(map.clone());
+    }
+
+    fn ApplyPendingMaps(&self) {
+        let pending = std::mem::take(&mut *self.pending_maps.borrow_mut());
+        if pending.is_empty() {
+            return;
+        }
+        let mut names = self.names.borrow_mut();
+        for map in pending {
+            let mut forwarded = Vec::new();
+            for name in names.iter() {
+                if let Some(values) = map.Get(&name.Utf8()) {
+                    for value in values {
+                        let value = AtomicString::from_str(value);
+                        if !forwarded.contains(&value) {
+                            forwarded.push(value);
+                        }
+                    }
+                }
+            }
+            *names = forwarded;
+        }
+    }
+
+    pub(crate) fn Contains(&self, name: &AtomicString) -> bool {
+        self.ApplyPendingMaps();
+        self.names.borrow().contains(name)
+    }
+
+    pub(crate) fn Len(&self) -> usize {
+        self.ApplyPendingMaps();
+        self.names.borrow().len()
+    }
+
+    #[cfg(test)]
+    fn NamesForTest(&self) -> Vec<String> {
+        self.ApplyPendingMaps();
+        self.names.borrow().iter().map(AtomicString::Utf8).collect()
+    }
+}
+impl Clone for PersistentPartNames {
+    fn clone(&self) -> Self {
+        Self {
+            names: RefCell::new(self.names.borrow().clone()),
+            pending_maps: RefCell::new(self.pending_maps.borrow().clone()),
+        }
+    }
+}
 // cpp: style_scope_frame.h:34-124; rule_set.cc:1068-1075.
 // These records own the compiled boundaries and parent chain for a rule.
 // Frame caches live only for one match request, so DOM mutation cannot leave
@@ -53,12 +126,28 @@ pub struct PersistentStyleScope {
     from: Option<Rc<CSSSelectorList>>,
     to: Option<Rc<CSSSelectorList>>,
     parent: Option<Rc<Self>>,
-    implicit_root: Option<usize>,
+    // cpp: style_scope_data.h:20-45. A shared StyleSheetContents can back
+    // multiple CSSStyleSheets, so one parser-owned StyleScope may be
+    // triggered by more than one stylesheet owner parent.
+    implicit_roots: Vec<usize>,
 }
 pub struct PersistentStyleScopeFrame {
     element: Rc<usize>,
     parent: Option<Rc<Self>>,
     data: RefCell<HashMap<usize, Rc<PersistentStyleScopeActivations>>>,
+}
+impl PersistentStyleScopeFrame {
+    pub(crate) fn new(element: Rc<usize>, parent: Option<Rc<Self>>) -> Rc<Self> {
+        Rc::new(Self {
+            element,
+            parent,
+            data: RefCell::new(HashMap::new()),
+        })
+    }
+
+    pub(crate) fn Element(&self) -> &Rc<usize> {
+        &self.element
+    }
 }
 pub struct PersistentStyleScopeActivation {
     root: Option<Rc<usize>>,
@@ -73,12 +162,11 @@ pub struct ScopedSelectorMatch {
     pub specificity: u32,
     pub proximity: u32,
 }
-pub struct PersistentSelectorBackend<'d> {
+pub(crate) struct PersistentSelectorBackend<'d> {
     document: &'d Document,
-    nodes: Vec<Rc<usize>>,
+    nodes: Rc<Vec<Rc<usize>>>,
     interaction: UserInteractionState,
     forced: HashMap<u64, Vec<PseudoType>>,
-    indeterminate: HashSet<u64>,
     frame_active: bool,
     slot_assignment_dirty: HashSet<u64>,
     vtt_elements: HashSet<u64>,
@@ -87,14 +175,16 @@ pub struct PersistentSelectorBackend<'d> {
     nth_depth: Cell<u32>,
     element_flags: RefCell<HashMap<usize, Vec<ElementInvalidationFlag>>>,
     container_flags: RefCell<HashMap<usize, Vec<ContainerInvalidationFlag>>>,
+    local_name_atoms: RefCell<HashMap<usize, AtomicString>>,
+    id_atoms: RefCell<HashMap<usize, AtomicString>>,
+    logical_pseudo_enabled: Cell<bool>,
 }
 impl<'d> PersistentSelectorBackend<'d> {
     fn new(
         document: &'d Document,
-        nodes: Vec<Rc<usize>>,
+        nodes: Rc<Vec<Rc<usize>>>,
         interaction: UserInteractionState,
         forced: HashMap<u64, Vec<PseudoType>>,
-        indeterminate: HashSet<u64>,
         frame_active: bool,
         slot_assignment_dirty: HashSet<u64>,
         vtt_elements: HashSet<u64>,
@@ -104,7 +194,6 @@ impl<'d> PersistentSelectorBackend<'d> {
             nodes,
             interaction,
             forced,
-            indeterminate,
             frame_active,
             slot_assignment_dirty,
             vtt_elements,
@@ -113,10 +202,42 @@ impl<'d> PersistentSelectorBackend<'d> {
             nth_depth: Cell::new(0),
             element_flags: RefCell::new(HashMap::new()),
             container_flags: RefCell::new(HashMap::new()),
+            local_name_atoms: RefCell::new(HashMap::new()),
+            id_atoms: RefCell::new(HashMap::new()),
+            logical_pseudo_enabled: Cell::new(true),
         })
     }
-    fn handle(&self, index: usize) -> Rc<usize> {
+    pub(crate) fn handle(&self, index: usize) -> Rc<usize> {
         self.nodes[index].clone()
+    }
+
+    pub(crate) fn document(&self) -> &'d Document {
+        self.document
+    }
+
+    /// Runs one translated SelectorChecker operation with Chromium's runtime
+    /// feature state for logical pseudo matching, then restores the shared
+    /// selector service before it can be reused by querySelector or another
+    /// rule-collection pass.
+    pub(crate) fn WithLogicalPseudoMode<T>(
+        &self,
+        enabled: bool,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        struct LogicalPseudoScope<'a> {
+            value: &'a Cell<bool>,
+            previous: bool,
+        }
+        impl Drop for LogicalPseudoScope<'_> {
+            fn drop(&mut self) {
+                self.value.set(self.previous);
+            }
+        }
+        let _scope = LogicalPseudoScope {
+            value: &self.logical_pseudo_enabled,
+            previous: self.logical_pseudo_enabled.replace(enabled),
+        };
+        operation()
     }
     fn element(&self, index: usize) -> Option<Rc<usize>> {
         (self.document.Node(index).Type() == DOMNodeType::kElement).then(|| self.handle(index))
@@ -133,6 +254,31 @@ impl<'d> PersistentSelectorBackend<'d> {
             i = p;
         }
         i
+    }
+    // cpp: user_action_element_traversal.h:19-35;
+    //      document.cc:8977-9099. Blink materializes :hover/:active on the
+    // target's inclusive flat-tree ancestor chain. HTMLLabelElement also
+    // mirrors both states to its associated control. The stable top-layer
+    // behavior stops before leaving a modal/popover subtree.
+    fn in_user_action_chain(&self, element: usize, target: Option<u64>) -> bool {
+        let Some(mut current) = target.and_then(|id| self.document.FindNodeById(id)) else {
+            return false;
+        };
+        loop {
+            if current == element
+                || (self.document.Node(current).IsHTMLElement("label")
+                    && self.document.LabelControl(current) == Some(element))
+            {
+                return true;
+            }
+            if self.document.IsInTopLayer(current) {
+                return false;
+            }
+            let Some(parent) = self.document.FlatTreeParentElement(current) else {
+                return false;
+            };
+            current = parent;
+        }
     }
     fn sibling(&self, index: usize, forward: bool, elements: bool) -> Option<Rc<usize>> {
         let siblings = self
@@ -162,9 +308,9 @@ impl<'d> PersistentSelectorBackend<'d> {
         self.attr(index, "class").is_some_and(|v| {
             v.split_ascii_whitespace().any(|v| {
                 if self.InQuirksMode(&index) {
-                    v.eq_ignore_ascii_case(&class.Utf8())
+                    class.EqualsUtf8IgnoringAsciiCase(v)
                 } else {
-                    v == class.Utf8()
+                    class.EqualsUtf8(v)
                 }
             })
         })
@@ -290,7 +436,9 @@ impl SelectorQueryBackend for PersistentSelectorBackend<'_> {
         self.InQuirksMode(node)
     }
     fn QueryIsInTreeScope(&self, node: &usize) -> bool {
-        self.document.Node(self.scope(*node)).Type() == DOMNodeType::kDocument
+        let root = self.scope(*node);
+        self.document.Node(root).Type() == DOMNodeType::kDocument
+            || self.document.ShadowHost(root).is_some()
     }
     fn QueryTreeScope(&self, node: &usize) -> Rc<usize> {
         self.handle(self.scope(*node))
@@ -330,7 +478,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
     type StyleScopeActivations = PersistentStyleScopeActivations;
     type StyleScopeActivation = PersistentStyleScopeActivation;
     type ElementResolveContext = ();
-    type PartNames = ();
+    type PartNames = PersistentPartNames;
     type CustomScrollbar = ();
     type ScrollbarPart = ();
     type StyleRequest = ();
@@ -373,14 +521,15 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         ()
     }
     fn TreeScopeShadowHost(&self, s: &Self::TreeScope) -> Option<Rc<Self::Element>> {
-        None
+        self.document.ShadowHost(*s).map(|host| self.handle(host))
     }
     fn TreeScopeIsShadowRoot(&self, s: &Self::TreeScope) -> bool {
-        self.document.Node(*s).Type() == DOMNodeType::kDocumentFragment
-            && self.attr(*s, "shadowrootmode").is_some()
+        self.document.ShadowHost(*s).is_some()
     }
     fn ParentTreeScope(&self, s: &Self::TreeScope) -> Option<Rc<Self::TreeScope>> {
-        None
+        self.document
+            .ShadowHost(*s)
+            .map(|host| self.handle(self.document.TreeScopeRoot(host)))
     }
     fn ElementTreeScope(&self, e: &Self::Element) -> Rc<Self::TreeScope> {
         self.handle(self.scope(*e))
@@ -392,7 +541,9 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
             .and_then(|v| self.element(v))
     }
     fn ParentOrShadowHostElement(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
-        self.ParentElement(e)
+        self.document
+            .ParentOrShadowHostElement(*e)
+            .map(|element| self.handle(element))
     }
     fn PreviousSibling(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
         self.sibling(*e, false, true)
@@ -429,10 +580,10 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         None
     }
     fn AssignedSlot(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
-        panic!("Chromium DOM/runtime collaborator pending: AssignedSlot")
+        self.document.AssignedSlot(*e).map(|slot| self.handle(slot))
     }
     fn IsSlotSupportingAssignment(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsSlotSupportingAssignment")
+        self.document.IsSlotSupportingAssignment(*e)
     }
     fn InQuirksMode(&self, e: &Self::Element) -> bool {
         self.document.GetCompatibilityMode() == CompatibilityMode::kQuirks
@@ -460,17 +611,22 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
     fn ElementPseudoId(&self, e: &Self::Element) -> PseudoId {
         PseudoId::kPseudoIdNone
     }
-    fn TransitionForElement(&self, e: &Self::Element) -> Option<Rc<Self::ViewTransition>> {
-        panic!("Chromium DOM/runtime collaborator pending: TransitionForElement")
+    fn TransitionForElement(&self, _: &Self::Element) -> Option<Rc<Self::ViewTransition>> {
+        // PersistentDocument does not currently retain a ViewTransition
+        // object. Ordinary element matching therefore has no transition.
+        None
     }
     fn CSSLogicalCombinationPseudoEnabled(&self) -> bool {
-        true
+        self.logical_pseudo_enabled.get()
     }
     fn ParentElementOrShadowRoot(&self, e: &Self::Element) -> Option<Rc<Self::ContainerNode>> {
         self.document
             .Node(*e)
             .Parent()
-            .filter(|&p| self.document.Node(p).Type() == DOMNodeType::kElement)
+            .filter(|&p| {
+                self.document.Node(p).Type() == DOMNodeType::kElement
+                    || self.document.ShadowHost(p).is_some()
+            })
             .map(|p| self.handle(p))
     }
     fn SetChildrenAffectedByDirectAdjacentRules(&self, node: &Self::ContainerNode) {
@@ -488,7 +644,9 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
             .push(ContainerInvalidationFlag::ChildrenAffectedByForwardPositionalRules);
     }
     fn OwnerShadowHost(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
-        panic!("Chromium DOM/runtime collaborator pending: OwnerShadowHost")
+        self.document
+            .OwnerShadowHost(*e)
+            .map(|host| self.handle(host))
     }
     fn ActivationMatchFlags(&self, activations: &Self::StyleScopeActivations) -> MatchFlags {
         activations.flags
@@ -511,11 +669,14 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
     fn SynchronizeAttribute(&self, e: &Self::Element, name: &AtomicString) { // PersistentDocument::SetAttribute commits attribute values synchronously.
     }
     fn CouldHaveAttribute(&self, e: &Self::Element, name: &QualifiedName) -> bool {
-        self.document
-            .Node(*e)
-            .Attributes()
-            .iter()
-            .any(|a| self.AttributeMatchesName(a, name))
+        let html_element = self.IsHTMLElement(e);
+        let html_document = self.IsInHTMLDocument(e);
+        self.document.Node(*e).Attributes().iter().any(|attribute| {
+            self.AttributeMatchesName(attribute, name)
+                || (!html_element
+                    && html_document
+                    && self.AttributeMatchesNameCaseInsensitive(attribute, name))
+        })
     }
     fn CSSAttributeValueCaseSensitiveNonHTMLEnabled(&self) -> bool {
         true
@@ -524,11 +685,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         self.document.Node(*e).Namespace() == DOMNamespace::kHTML
     }
     fn IsInHTMLDocument(&self, e: &Self::Element) -> bool {
-        self.document
-            .Node(self.document.Root())
-            .Children()
-            .iter()
-            .any(|&v| self.document.Node(v).IsHTMLElement("html"))
+        self.document.IsInHTMLDocument(*e)
     }
     fn AttributesWithoutUpdate(&self, e: &Self::Element) -> Vec<Rc<Self::Attribute>> {
         self.document
@@ -540,20 +697,20 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
             .collect()
     }
     fn AttributeMatchesName(&self, a: &Self::Attribute, name: &QualifiedName) -> bool {
-        AtomicString::from_str(&a.local_name) == *name.LocalName()
+        name.LocalName().EqualsUtf8(&a.local_name)
             && (name.NamespaceURI().IsNull() && a.namespace_uri.is_empty()
                 || name.NamespaceURI() == &AtomicString::from_str("*")
-                || AtomicString::from_str(&a.namespace_uri) == *name.NamespaceURI())
+                || name.NamespaceURI().EqualsUtf8(&a.namespace_uri))
     }
     fn AttributeMatchesNameCaseInsensitive(
         &self,
         a: &Self::Attribute,
         name: &QualifiedName,
     ) -> bool {
-        a.local_name.eq_ignore_ascii_case(&name.LocalName().Utf8())
+        name.LocalName().EqualsUtf8IgnoringAsciiCase(&a.local_name)
             && (name.NamespaceURI().IsNull() && a.namespace_uri.is_empty()
                 || name.NamespaceURI() == &AtomicString::from_str("*")
-                || AtomicString::from_str(&a.namespace_uri) == *name.NamespaceURI())
+                || name.NamespaceURI().EqualsUtf8(&a.namespace_uri))
     }
     fn AttributeValue(&self, a: &Self::Attribute) -> AtomicString {
         AtomicString::from_str(&a.value)
@@ -571,7 +728,11 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         self.attr(*e, "id").is_some_and(|v| !v.is_empty())
     }
     fn IdForStyleResolution(&self, e: &Self::Element) -> AtomicString {
-        self.attr(*e, "id")
+        if let Some(value) = self.id_atoms.borrow().get(e) {
+            return value.clone();
+        }
+        let value = self
+            .attr(*e, "id")
             .filter(|v| !v.is_empty())
             .map(|v| {
                 let a = AtomicString::from_str(v);
@@ -581,7 +742,9 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
                     a
                 }
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        self.id_atoms.borrow_mut().insert(*e, value.clone());
+        value
     }
     fn ElementIs(&self, e: &Self::Element, class: ElementClass) -> bool {
         let node = self.document.Node(*e);
@@ -646,7 +809,12 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         }
     }
     fn ElementLocalName(&self, e: &Self::Element) -> AtomicString {
-        AtomicString::from_str(self.document.Node(*e).Name())
+        if let Some(value) = self.local_name_atoms.borrow().get(e) {
+            return value.clone();
+        }
+        let value = AtomicString::from_str(self.document.Node(*e).Name());
+        self.local_name_atoms.borrow_mut().insert(*e, value.clone());
+        value
     }
     fn ElementNamespaceURI(&self, e: &Self::Element) -> AtomicString {
         Self::namespace(self.document.Node(*e).Namespace())
@@ -665,26 +833,33 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: MenuOwnerItems")
     }
     fn CorrespondingSVGElement(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
-        panic!("Chromium DOM/runtime collaborator pending: CorrespondingSVGElement")
+        self.document
+            .CorrespondingSVGElement(*e)
+            .map(|corresponding| self.handle(corresponding))
     }
     fn HasShadowRoot(&self, e: &Self::Element) -> bool {
-        self.document
-            .Node(*e)
-            .Children()
-            .iter()
-            .any(|&v| self.TreeScopeIsShadowRoot(&v))
+        self.document.ShadowRoot(*e).is_some()
     }
     fn ShadowRootIsUserAgent(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: ShadowRootIsUserAgent")
+        self.document
+            .ShadowRoot(*e)
+            .and_then(|root| self.document.ShadowRootMode(root))
+            == Some(DOMShadowRootMode::kUserAgent)
     }
     fn ContainingShadowRootIsUserAgent(&self, e: &Self::Element) -> Option<bool> {
-        panic!("Chromium DOM/runtime collaborator pending: ContainingShadowRootIsUserAgent")
+        self.document
+            .ContainingShadowRoot(*e)
+            .and_then(|root| self.document.ShadowRootMode(root))
+            .map(|mode| mode == DOMShadowRootMode::kUserAgent)
     }
     fn UltimateOriginatingElement(&self, e: &Self::Element) -> Rc<Self::Element> {
-        panic!("Chromium DOM/runtime collaborator pending: UltimateOriginatingElement")
+        self.handle(self.document.UltimateOriginatingElement(*e))
     }
     fn ShadowPseudoId(&self, e: &Self::Element) -> AtomicString {
-        panic!("Chromium DOM/runtime collaborator pending: ShadowPseudoId")
+        self.document
+            .ShadowPseudoId(*e)
+            .map(AtomicString::from_str)
+            .unwrap_or_default()
     }
     fn ElementPseudoIdForStyling(&self, e: &Self::Element) -> PseudoId {
         PseudoId::kPseudoIdNone
@@ -696,7 +871,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: ElementViewTransitionClasses")
     }
     fn PartNamesContain(&self, p: &Self::PartNames, name: &AtomicString) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: PartNamesContain")
+        p.Contains(name)
     }
     fn TreeScopeRoot(&self, s: &Self::TreeScope) -> Rc<Self::ContainerNode> {
         self.handle(*s)
@@ -705,14 +880,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         self.element(*n)
     }
     fn ContainerShadowHost(&self, n: &Self::ContainerNode) -> Option<Rc<Self::Element>> {
-        self.TreeScopeIsShadowRoot(n)
-            .then(|| {
-                self.document
-                    .Node(*n)
-                    .Parent()
-                    .and_then(|host| self.element(host))
-            })
-            .flatten()
+        self.document.ShadowHost(*n).map(|host| self.handle(host))
     }
     fn ElementAsContainer(&self, e: &Self::Element) -> Rc<Self::ContainerNode> {
         self.handle(*e)
@@ -722,7 +890,9 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         self.QueryFirstChildElement(&root)
     }
     fn FlatTreeParentElement(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
-        self.ParentElement(e)
+        self.document
+            .FlatTreeParentElement(*e)
+            .map(|parent| self.handle(parent))
     }
     fn ParentElementOrDocumentFragment(
         &self,
@@ -763,13 +933,15 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
             .then(|| AtomicString::from_str(self.document.Node(*n).Data()))
     }
     fn NumDescendantInputs(&self, e: &Self::Element) -> usize {
-        panic!("Chromium DOM/runtime collaborator pending: NumDescendantInputs")
+        self.document.NumDescendantInputs(*e)
     }
     fn SlottedButton(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
-        panic!("Chromium DOM/runtime collaborator pending: SlottedButton")
+        self.document
+            .SelectSlottedButton(*e)
+            .map(|button| self.handle(button))
     }
-    fn CssTarget(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
-        panic!("Chromium DOM/runtime collaborator pending: CssTarget")
+    fn CssTarget(&self, _e: &Self::Element) -> Option<Rc<Self::Element>> {
+        self.document.CssTarget().map(|target| self.handle(target))
     }
     fn ProbeForcePseudoState(&self, e: &Self::Element, pseudo: PseudoType) -> bool {
         self.forced
@@ -834,7 +1006,9 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: OwnerDataListElement")
     }
     fn OwnerSelectElement(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
-        panic!("Chromium DOM/runtime collaborator pending: OwnerSelectElement")
+        self.document
+            .OptionOwnerSelect(*e)
+            .map(|select| self.handle(select))
     }
     fn ActiveOption(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
         panic!("Chromium DOM/runtime collaborator pending: ActiveOption")
@@ -875,14 +1049,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: RecalcSlotAssignments")
     }
     fn CachedDirectionIsRtl(&self, e: &Self::Element) -> bool {
-        let mut current = Some(*e);
-        while let Some(v) = current {
-            if let Some(dir) = self.attr(v, "dir") {
-                return dir.eq_ignore_ascii_case("rtl");
-            }
-            current = self.document.Node(v).Parent();
-        }
-        false
+        self.document.CachedDirectionality(*e) == foundation::TextDirection::kRtl
     }
     fn PopoverInvoker(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
         panic!("Chromium DOM/runtime collaborator pending: PopoverInvoker")
@@ -894,7 +1061,13 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: InternalsHasState")
     }
     fn GetPseudoElement(&self, e: &Self::Element, pseudo: PseudoId) -> Option<Rc<Self::Element>> {
-        panic!("Chromium DOM/runtime collaborator pending: GetPseudoElement")
+        let shadow_id = match pseudo {
+            PseudoId::kPseudoIdPlaceholder => "-webkit-input-placeholder",
+            _ => return None,
+        };
+        self.document
+            .UAShadowPseudoElement(*e, shadow_id)
+            .map(|element| self.handle(element))
     }
     fn FocusedElement(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
         self.interaction
@@ -1211,7 +1384,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         s.to.clone()
     }
     fn ElementTriggersScope(&self, e: &Self::Element, s: &Self::StyleScope) -> bool {
-        s.implicit_root == Some(*e)
+        s.implicit_roots.contains(e)
     }
     fn StyleScopeFrameElement(&self, f: &Self::StyleScopeFrame) -> Rc<Self::Element> {
         f.element.clone()
@@ -1256,16 +1429,24 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: SpatialNavigationFocused")
     }
     fn HasDatalist(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: HasDatalist")
+        self.document.InputHasDataList(*e)
     }
     fn IsSubmenuOpen(&self, e: &Self::Element) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: IsSubmenuOpen")
     }
     fn UsesMenuList(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: UsesMenuList")
+        self.document.SelectUsesMenuList(*e)
     }
     fn IsMultiSelectFocused(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsMultiSelectFocused")
+        let Some(select) = self.document.OptionOwnerSelect(*e) else {
+            return false;
+        };
+        self.document
+            .Node(select)
+            .FindAttribute("multiple")
+            .is_some()
+            && !self.document.SelectUsesMenuList(select)
+            && self.interaction.multi_select_focused_option_id == Some(self.document.Node(*e).Id())
     }
     fn IsResourceTarget(&self, e: &Self::Element) -> bool {
         self.ElementIs(e, ElementClass::SVG)
@@ -1279,8 +1460,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: CachedImageIsAnimated")
     }
     fn IsPlaceholderVisible(&self, e: &Self::Element) -> bool {
-        self.attr(*e, "placeholder").is_some_and(|v| !v.is_empty())
-            && self.document.ControlValue(*e).is_empty()
+        self.document.TextControlPlaceholderIsVisible(*e)
     }
     fn MatchesToolFormActive(&self, e: &Self::Element) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: MatchesToolFormActive")
@@ -1317,67 +1497,41 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: HasFlattenedAssignedNodes")
     }
     fn IsHovered(&self, e: &Self::Element) -> bool {
-        self.interaction.hovered_node_id == Some(self.document.Node(*e).Id())
+        self.in_user_action_chain(*e, self.interaction.hovered_node_id)
     }
     fn IsActive(&self, e: &Self::Element) -> bool {
-        self.interaction.pressed_node_id == Some(self.document.Node(*e).Id())
+        self.in_user_action_chain(*e, self.interaction.pressed_node_id)
     }
     fn MatchesEnabled(&self, e: &Self::Element) -> bool {
-        self.ElementIs(e, ElementClass::FormControl) && !self.MatchesDisabled(e)
+        self.document.MatchesEnabledPseudoClass(*e)
     }
     fn IsMediaDocument(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsMediaDocument")
+        // cpp: selector_checker.cc kPseudoFullPageMedia asks the owning
+        // Document class, not the element. PersistentDocument currently
+        // represents HTML/XML/SVG document trees; the media-document parser
+        // and its generated full-page media wrapper are not exposed by the
+        // DOM input boundary. Consequently every document representable by
+        // this backend answers false. Keep the query here so introducing a
+        // media-document kind later remains a DOM boundary change rather than
+        // a selector special case.
+        false
     }
     fn MatchesDefault(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: MatchesDefault")
+        self.document.MatchesDefaultPseudoClass(*e)
     }
     fn MatchesDisabled(&self, e: &Self::Element) -> bool {
-        if !self.ElementIs(e, ElementClass::FormControl) {
-            return false;
-        }
-        if self.attr(*e, "disabled").is_some() {
-            return true;
-        }
-        let mut current = self.document.Node(*e).Parent();
-        while let Some(p) = current {
-            let parent = self.document.Node(p);
-            if parent.IsHTMLElement("optgroup")
-                && parent.FindAttribute("disabled").is_some()
-                && self.document.Node(*e).IsHTMLElement("option")
-            {
-                return true;
-            }
-            if parent.IsHTMLElement("fieldset") && parent.FindAttribute("disabled").is_some() {
-                let legend = parent
-                    .Children()
-                    .iter()
-                    .copied()
-                    .find(|&v| self.document.Node(v).IsHTMLElement("legend"));
-                let mut inside = false;
-                let mut ancestor = Some(*e);
-                while let Some(v) = ancestor {
-                    if Some(v) == legend {
-                        inside = true;
-                        break;
-                    }
-                    if v == p {
-                        break;
-                    }
-                    ancestor = self.document.Node(v).Parent();
-                }
-                if !inside {
-                    return true;
-                }
-            }
-            current = parent.Parent();
-        }
-        false
+        self.document.MatchesDisabledPseudoClass(*e)
     }
     fn MatchesReadOnly(&self, e: &Self::Element) -> bool {
         !self.MatchesReadWrite(e)
     }
     fn MatchesReadWrite(&self, e: &Self::Element) -> bool {
-        if self.IsTextField(e) || self.document.Node(*e).IsHTMLElement("textarea") {
+        if self
+            .document
+            .InputType(*e)
+            .is_some_and(|input_type| input_type.SupportsReadOnly())
+            || self.document.Node(*e).IsHTMLElement("textarea")
+        {
             !self.MatchesDisabled(e) && self.attr(*e, "readonly").is_none()
         } else {
             let mut current = Some(*e);
@@ -1393,17 +1547,10 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         }
     }
     fn IsOptionalFormControl(&self, e: &Self::Element) -> bool {
-        self.ElementIs(e, ElementClass::FormControl) && !self.IsRequiredFormControl(e)
+        self.document.IsOptionalFormControl(*e)
     }
     fn IsRequiredFormControl(&self, e: &Self::Element) -> bool {
-        (self.document.Node(*e).IsHTMLElement("textarea")
-            || self.document.Node(*e).IsHTMLElement("select")
-            || self.document.Node(*e).IsHTMLElement("input")
-                && !matches!(
-                    self.attr(*e, "type").unwrap_or("text"),
-                    "hidden" | "button" | "submit" | "reset" | "image" | "range" | "color"
-                ))
-            && self.attr(*e, "required").is_some()
+        self.document.IsRequiredFormControl(*e)
     }
     fn MatchesUserInvalid(&self, e: &Self::Element) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: MatchesUserInvalid")
@@ -1421,33 +1568,30 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         self.document.ControlChecked(*e)
     }
     fn ShouldAppearIndeterminate(&self, e: &Self::Element) -> bool {
-        self.indeterminate.contains(&self.document.Node(*e).Id())
-            || self.document.Node(*e).IsHTMLElement("progress") && self.attr(*e, "value").is_none()
+        self.document.ShouldAppearIndeterminate(*e)
     }
     fn OptionSelected(&self, e: &Self::Element) -> bool {
-        self.attr(*e, "selected").is_some()
+        self.document.OptionSelected(*e)
     }
     fn ScrollMarkerIsSelected(&self, e: &Self::Element) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: ScrollMarkerIsSelected")
     }
     fn IsTextField(&self, e: &Self::Element) -> bool {
-        self.document.Node(*e).IsHTMLElement("input")
-            && matches!(
-                self.attr(*e, "type").unwrap_or("text"),
-                "text" | "search" | "email" | "url" | "tel" | "password" | "number"
-            )
+        self.document
+            .InputType(*e)
+            .is_some_and(|input_type| input_type.IsTextFieldInputType())
     }
     fn IsDialogInTopLayer(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsDialogInTopLayer")
+        self.document.IsDialogInTopLayer(*e)
     }
     fn IsPopoverInTopLayer(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsPopoverInTopLayer")
+        self.document.IsPopoverInTopLayer(*e)
     }
     fn IsPopover(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsPopover")
+        self.document.IsPopover(*e)
     }
     fn PopoverOpen(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: PopoverOpen")
+        self.document.PopoverOpen(*e)
     }
     fn MatchesOverscrollOpen(&self, e: &Self::Element) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: MatchesOverscrollOpen")
@@ -1462,10 +1606,10 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: IsPickerVisible")
     }
     fn FullscreenFlag(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: FullscreenFlag")
+        self.document.FullscreenFlag(*e)
     }
     fn ContainsFullScreenElement(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: ContainsFullScreenElement")
+        self.document.ContainsFullscreenElement(*e)
     }
     fn Granted(&self, e: &Self::Element) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: Granted")
@@ -1488,17 +1632,17 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
     fn MediaMuted(&self, e: &Self::Element) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: MediaMuted")
     }
-    fn VideoPersistent(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: VideoPersistent")
+    fn VideoPersistent(&self, _e: &Self::Element) -> bool {
+        false
     }
-    fn ContainsPersistentVideo(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: ContainsPersistentVideo")
+    fn ContainsPersistentVideo(&self, _e: &Self::Element) -> bool {
+        false
     }
-    fn IsXrOverlay(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsXrOverlay")
+    fn IsXrOverlay(&self, _e: &Self::Element) -> bool {
+        false
     }
     fn IsFullscreenElement(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsFullscreenElement")
+        self.document.FullscreenElement() == Some(*e)
     }
     fn IsInRange(&self, e: &Self::Element) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: IsInRange")
@@ -1525,16 +1669,16 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: DidAttachInternals")
     }
     fn DialogIsModal(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: DialogIsModal")
+        self.document.DialogIsModal(*e)
     }
     fn IsAutofilled(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsAutofilled")
+        self.document.AutofillState(*e) == DOMAutofillState::kAutofilled
     }
     fn IsPreviewed(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsPreviewed")
+        self.document.AutofillState(*e) == DOMAutofillState::kPreviewed
     }
     fn AutofillStateIsPreviewed(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: AutofillStateIsPreviewed")
+        self.document.AutofillState(*e) == DOMAutofillState::kPreviewed
     }
     fn IsFocused(&self, e: &Self::Element) -> bool {
         self.interaction.focused_node_id == Some(self.document.Node(*e).Id())
@@ -1562,13 +1706,15 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
 pub struct PersistentSelectorService {
     cache: SelectorQueryCache,
     owner: Option<(DOMOwnerHandle, CompatibilityMode)>,
-    nodes: Vec<Rc<usize>>,
+    nodes: Rc<Vec<Rc<usize>>>,
     pub interaction: UserInteractionState,
     pub forced_pseudo_states: HashMap<u64, Vec<PseudoType>>,
-    pub indeterminate_controls: HashSet<u64>,
     pub frame_focused_and_active: bool,
     pub slot_assignment_dirty: HashSet<u64>,
     pub vtt_elements: HashSet<u64>,
+}
+pub struct PersistentSelectorMatchSession<'d> {
+    backend: Rc<PersistentSelectorBackend<'d>>,
 }
 #[derive(Debug)]
 pub enum PersistentSelectorError {
@@ -1585,10 +1731,9 @@ impl Default for PersistentSelectorService {
         Self {
             cache: SelectorQueryCache::default(),
             owner: None,
-            nodes: vec![],
+            nodes: Rc::new(vec![]),
             interaction: Default::default(),
             forced_pseudo_states: HashMap::new(),
-            indeterminate_controls: HashSet::new(),
             frame_focused_and_active: true,
             slot_assignment_dirty: HashSet::new(),
             vtt_elements: HashSet::new(),
@@ -1596,6 +1741,39 @@ impl Default for PersistentSelectorService {
     }
 }
 impl PersistentSelectorService {
+    fn backend<'d>(&mut self, document: &'d Document) -> Rc<PersistentSelectorBackend<'d>> {
+        let owner = (document.RootHandle(), document.GetCompatibilityMode());
+        if self.owner.map(|previous| previous.0) != Some(owner.0) {
+            Rc::make_mut(&mut self.nodes).clear();
+        }
+        if self.owner != Some(owner) {
+            self.owner = Some(owner);
+            self.cache.Invalidate();
+        }
+        while self.nodes.len() < document.NodeCount() {
+            let next = self.nodes.len();
+            Rc::make_mut(&mut self.nodes).push(Rc::new(next));
+        }
+        PersistentSelectorBackend::new(
+            document,
+            self.nodes.clone(),
+            self.interaction,
+            self.forced_pseudo_states.clone(),
+            self.frame_focused_and_active,
+            self.slot_assignment_dirty.clone(),
+            self.vtt_elements.clone(),
+        )
+    }
+
+    pub fn StyleMatchSession<'d>(
+        &mut self,
+        document: &'d Document,
+    ) -> PersistentSelectorMatchSession<'d> {
+        PersistentSelectorMatchSession {
+            backend: self.backend(document),
+        }
+    }
+
     fn prepare<'d>(
         &mut self,
         document: &'d Document,
@@ -1609,27 +1787,7 @@ impl PersistentSelectorService {
                 feature
             )));
         }
-        let owner = (document.RootHandle(), document.GetCompatibilityMode());
-        if self.owner.map(|previous| previous.0) != Some(owner.0) {
-            self.nodes.clear();
-        }
-        if self.owner != Some(owner) {
-            self.owner = Some(owner);
-            self.cache.Invalidate();
-        }
-        while self.nodes.len() < document.NodeCount() {
-            self.nodes.push(Rc::new(self.nodes.len()));
-        }
-        let backend = PersistentSelectorBackend::new(
-            document,
-            self.nodes.clone(),
-            self.interaction,
-            self.forced_pseudo_states.clone(),
-            self.indeterminate_controls.clone(),
-            self.frame_focused_and_active,
-            self.slot_assignment_dirty.clone(),
-            self.vtt_elements.clone(),
-        );
+        let backend = self.backend(document);
         let context = SelectorParserContext {
             html: backend.IsInHTMLDocument(&document.Root()),
             quirks: backend.InQuirksMode(&document.Root()),
@@ -1719,7 +1877,7 @@ impl PersistentSelectorService {
                 from,
                 to,
                 parent,
-                implicit_root,
+                implicit_roots: implicit_root.into_iter().collect(),
             }));
         }
         let mut ancestors = Vec::new();
@@ -1777,6 +1935,207 @@ impl PersistentSelectorService {
         let (q, b) = self.prepare(document, selector)?;
         Ok(q.MatchingSpecificity(b.clone(), b.handle(index)))
     }
+
+    // cpp: element_rule_collector.cc:551-572; selector_checker.cc:1035-1072.
+    // Style rules are compiled when the stylesheet is installed. Match that
+    // retained selector list directly instead of feeding its serialized text
+    // through the querySelector cache for every element/rule pair.
+    pub fn MatchingCompiledSpecificity(
+        &mut self,
+        document: &Document,
+        index: usize,
+        list: &CSSSelectorList,
+    ) -> Option<u32> {
+        self.StyleMatchSession(document)
+            .MatchingCompiledSpecificity(index, list)
+    }
+}
+
+impl<'d> PersistentSelectorMatchSession<'d> {
+    pub(crate) fn RuleStyleScope(
+        scope: &crate::style_scope::StyleScope,
+        implicit_root: Option<usize>,
+    ) -> Rc<PersistentStyleScope> {
+        let implicit_roots = implicit_root.into_iter().collect::<Vec<_>>();
+        Self::RuleStyleScopeWithImplicitRoots(scope, &implicit_roots)
+    }
+
+    /// Builds the SelectorChecker view of one retained StyleScope chain with
+    /// the exact StyleScopeData trigger set installed by active sheet owners.
+    /// Each chain belongs to one StyleSheetContents, so every implicit scope
+    /// in the chain observes the same owner-parent set, as in
+    /// ScopedStyleResolver::ForEachImplicitScopeTrigger.
+    pub(crate) fn RuleStyleScopeWithImplicitRoots(
+        scope: &crate::style_scope::StyleScope,
+        implicit_roots: &[usize],
+    ) -> Rc<PersistentStyleScope> {
+        Rc::new(PersistentStyleScope {
+            from: scope.From().map(|selectors| Rc::new(selectors.clone())),
+            to: scope.To().map(|selectors| Rc::new(selectors.clone())),
+            parent: scope
+                .Parent()
+                .map(|parent| Self::RuleStyleScopeWithImplicitRoots(parent, implicit_roots)),
+            implicit_roots: implicit_roots.to_vec(),
+        })
+    }
+
+    pub(crate) fn Backend(&self) -> Rc<PersistentSelectorBackend<'d>> {
+        self.backend.clone()
+    }
+
+    fn StyleScopeFrame(&self, index: usize) -> Rc<PersistentStyleScopeFrame> {
+        let backend = &self.backend;
+        let mut ancestors = Vec::new();
+        let mut ancestor = Some(backend.handle(index));
+        while let Some(element) = ancestor {
+            ancestor = backend.ParentOrShadowHostElement(&element);
+            ancestors.push(element);
+        }
+        let mut frame = None;
+        for element in ancestors.into_iter().rev() {
+            frame = Some(Rc::new(PersistentStyleScopeFrame {
+                element,
+                parent: frame,
+                data: RefCell::new(HashMap::new()),
+            }));
+        }
+        frame.expect("an element always contributes a style scope frame")
+    }
+
+    fn SubjectMayMatch(
+        &self,
+        index: usize,
+        selector: crate::css_selector::CSSSelectorComplex<'_>,
+    ) -> bool {
+        use crate::css_selector::MatchType;
+        for simple in selector.SimpleSelectors() {
+            let matches = match simple.Match() {
+                MatchType::kId => {
+                    self.backend.HasID(&index)
+                        && self.backend.IdForStyleResolution(&index) == *simple.Value()
+                }
+                MatchType::kClass => self.backend.ClassNamesContain(&index, &simple.Value()),
+                MatchType::kTag => {
+                    // cpp: selector_checker.cc:1561-1573.  Parsed HTML type
+                    // selectors normally carry the wildcard namespace; a
+                    // strict QualifiedName comparison would reject every one
+                    // of them before SelectorChecker sees it (including the
+                    // UA `head`, `style`, `script`, and `title` rules).
+                    let name = simple.TagQName();
+                    let local = self.backend.ElementLocalName(&index);
+                    let local_matches = name.LocalName() == &local
+                        || (!self.backend.IsHTMLElement(&index)
+                            && self.backend.IsInHTMLDocument(&index)
+                            && local.EqualsUtf8IgnoringAsciiCase(&name.LocalName().Utf8()));
+                    local_matches
+                        && (name.NamespaceURI() == &AtomicString::from_str("*")
+                            || name.NamespaceURI() == &self.backend.ElementNamespaceURI(&index))
+                }
+                _ => true,
+            };
+            if !matches {
+                return false;
+            }
+            if simple.Relation() != RelationType::kSubSelector {
+                break;
+            }
+        }
+        true
+    }
+
+    /// Matches one retained complex selector from a translated `RuleData`.
+    ///
+    /// ElementRuleCollector operates on the selector selected by
+    /// `RuleData::SelectorIndex`, rather than the complete selector list owned
+    /// by the style rule.  Keeping this entry point on the match session lets
+    /// the production RuleSet bridge use the same translated SelectorChecker
+    /// without serializing or reparsing the selector.
+    pub fn MatchesCompiledComplex(
+        &self,
+        index: usize,
+        selector: crate::css_selector::CSSSelectorComplex<'_>,
+    ) -> bool {
+        if !self.SubjectMayMatch(index, selector) {
+            return false;
+        }
+        let backend = &self.backend;
+        let checker = SelectorChecker::new(backend.clone(), Mode::kResolvingStyle);
+        let mut context = SelectorCheckingContext::new(backend.handle(index));
+        context.selector = Some(selector);
+        context.tree_scope = Some(backend.ElementTreeScope(&index));
+        checker.Match(&context, &mut MatchResult::default())
+    }
+
+    /// Matches retained `RuleData` selector storage with the contexts that
+    /// ElementRuleCollector normally installs before invoking SelectorChecker.
+    /// The scope boundaries are the parser-owned typed lists; no selector text
+    /// is serialized or parsed again.
+    pub(crate) fn MatchesCompiledComplexInRuleContext(
+        &self,
+        index: usize,
+        selector: crate::css_selector::CSSSelectorComplex<'_>,
+        scope: Option<&crate::style_scope::StyleScope>,
+        implicit_scope_root: Option<usize>,
+        pseudo_id: layoutng_style::style::computed_style_constants::PseudoId,
+        pseudo_argument: Option<&AtomicString>,
+        pseudo_ident_list: &[AtomicString],
+    ) -> Option<ScopedSelectorMatch> {
+        if !self.SubjectMayMatch(index, selector) {
+            return None;
+        }
+        let backend = &self.backend;
+        let checker = SelectorChecker::ForPseudoRequest(
+            backend.clone(),
+            Mode::kResolvingStyle,
+            pseudo_argument.cloned().unwrap_or_default(),
+            pseudo_ident_list.to_vec(),
+        );
+        let mut context = SelectorCheckingContext::new(backend.handle(index));
+        context.selector = Some(selector);
+        context.tree_scope = Some(backend.ElementTreeScope(&index));
+        context.pseudo_id = pseudo_id;
+        context.pseudo_argument = pseudo_argument.cloned();
+        if let Some(scope) = scope {
+            context.style_scope = Some(Self::RuleStyleScope(scope, implicit_scope_root));
+            context.style_scope_frame = Some(self.StyleScopeFrame(index));
+        }
+        let mut result = MatchResult::default();
+        // The source feature is disabled at the audited Chromium commit. A
+        // pseudo StyleRequest therefore uses SelectorChecker's dynamic-pseudo
+        // result, while selector queries retain their existing logical mode.
+        let did_match = backend.WithLogicalPseudoMode(pseudo_id == PseudoId::kPseudoIdNone, || {
+            checker.Match(&context, &mut result)
+        });
+        let matched = did_match.then_some(ScopedSelectorMatch {
+            specificity: selector.Specificity(),
+            proximity: result.proximity,
+        });
+        matched
+    }
+
+    pub fn MatchingCompiledSpecificity(&self, index: usize, list: &CSSSelectorList) -> Option<u32> {
+        let backend = &self.backend;
+        let checker = SelectorChecker::new(backend.clone(), Mode::kResolvingStyle);
+        let mut best = None;
+        for selector in list.ComplexSelectors() {
+            if !self.SubjectMayMatch(index, selector) {
+                continue;
+            }
+            let mut context = SelectorCheckingContext::new(backend.handle(index));
+            context.selector = Some(selector);
+            context.tree_scope = Some(backend.ElementTreeScope(&index));
+            let mut result = MatchResult::default();
+            if checker.Match(&context, &mut result) {
+                best = Some(best.map_or(selector.Specificity(), |specificity: u32| {
+                    specificity.max(selector.Specificity())
+                }));
+            }
+        }
+        best
+    }
+}
+
+impl PersistentSelectorService {
     pub fn Matches(
         &mut self,
         document: &Document,
@@ -1887,5 +2246,60 @@ mod tests {
         assert!(Rc::ptr_eq(&identity, &service.nodes[a]));
         assert!(service.QueryFirst(d, root, "p >").is_err());
         assert!(service.QueryAll(d, root, "").is_err());
+    }
+
+    #[test]
+    fn compiled_html_type_selector_preserves_wildcard_namespace_matching() {
+        let mut owner = dom::DOM::new();
+        let d = owner.GetDocumentMut();
+        let html = element(d, d.Root(), "html", "", "");
+        let head = element(d, html, "head", "", "");
+        let body = element(d, html, "body", "", "");
+        let selector = CSSSelectorList::AdoptSelectorVector(CSSSelectorParser::ParseSelector(
+            &foundation::String::from("head"),
+            &SelectorParserContext {
+                html: true,
+                quirks: false,
+            },
+        ));
+        let mut service = PersistentSelectorService::default();
+        assert!(service
+            .MatchingCompiledSpecificity(d, head, &selector)
+            .is_some());
+        assert!(service
+            .MatchingCompiledSpecificity(d, body, &selector)
+            .is_none());
+    }
+
+    #[test]
+    fn part_names_apply_retained_export_maps_in_order() {
+        let mut owner = dom::DOM::new();
+        let d = owner.GetDocumentMut();
+        let inner_host = d.CreateElement(
+            DOMNamespace::kHTML,
+            "x-inner".into(),
+            vec![DOMAttribute {
+                local_name: "exportparts".into(),
+                value: "label: middle, label: badge".into(),
+                ..Default::default()
+            }],
+        );
+        let outer_host = d.CreateElement(
+            DOMNamespace::kHTML,
+            "x-outer".into(),
+            vec![DOMAttribute {
+                local_name: "exportparts".into(),
+                value: "middle: public, badge: public-badge".into(),
+                ..Default::default()
+            }],
+        );
+        let mut names = PersistentPartNames::FromNames([AtomicString::from_str("label")]);
+        names.PushMap(d.PartNamesMap(inner_host).unwrap());
+        names.PushMap(d.PartNamesMap(outer_host).unwrap());
+
+        assert!(names.Contains(&AtomicString::from_str("public")));
+        assert!(names.Contains(&AtomicString::from_str("public-badge")));
+        assert!(!names.Contains(&AtomicString::from_str("label")));
+        assert_eq!(names.NamesForTest(), vec!["public", "public-badge"]);
     }
 }

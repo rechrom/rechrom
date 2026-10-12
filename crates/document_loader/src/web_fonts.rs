@@ -151,7 +151,10 @@ fn FontWeight(input: &str) -> Option<f64> {
 // cpp: browser/browser.cc:1114-1128
 fn SupportsFontSource(url: &str, format: &str) -> bool {
     if !format.is_empty() {
-        return format == "woff2"
+        return format == "woff"
+            || format == "woff-variations"
+            || format.starts_with("woff ")
+            || format == "woff2"
             || format == "woff2-variations"
             || format.starts_with("woff2 ")
             || matches!(format, "truetype" | "opentype" | "ttf" | "otf");
@@ -161,9 +164,7 @@ fn SupportsFontSource(url: &str, format: &str) -> bool {
         .next()
         .unwrap_or(url)
         .to_ascii_lowercase();
-    ![".eot", ".woff", ".svg"]
-        .iter()
-        .any(|ext| path.ends_with(ext))
+    ![".eot", ".svg"].iter().any(|ext| path.ends_with(ext))
 }
 
 #[derive(Clone)]
@@ -244,5 +245,7 @@ mod tests {
         assert_eq!(values.len(), 2);
         assert!(!SupportsFontSource(&values[0].0, &values[0].1));
         assert!(SupportsFontSource(&values[1].0, &values[1].1));
+        assert!(SupportsFontSource("font.woff", "woff"));
+        assert!(SupportsFontSource("font.woff", ""));
     }
 }

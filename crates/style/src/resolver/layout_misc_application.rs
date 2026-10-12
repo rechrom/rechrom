@@ -53,6 +53,8 @@ fn Number(
                     root,
                     b.EffectiveZoom(),
                     media,
+                    Some(super::CurrentComputedLineHeight(b)),
+                    None,
                 ),
                 None,
             )
@@ -76,6 +78,8 @@ fn Pixels(
         root,
         b.EffectiveZoom(),
         media,
+        Some(super::CurrentComputedLineHeight(b)),
+        None,
     );
     let pixels = match v.Payload() {
         CSSValuePayload::kNumericLiteralClass(n)

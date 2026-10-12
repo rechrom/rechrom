@@ -5,14 +5,152 @@
 use foundation::{LayoutUnit, Member, TabSize, Traceable, Visitor};
 
 use super::font_description::FontDescription;
-use super::shaping::font_features::FontFeatureRange;
+use super::font_fallback_metadata::{FontFallbackMetadata, FontFallbackRole};
+use super::font_fallback_priority::{
+    FontFallbackPriority, IsEmojiPresentationEmoji, IsTextPresentationEmoji,
+};
+use super::shaping::font_features::{FontFeatureRange, FontFeatureRanges};
 use super::simple_font_data::SimpleFontData;
 use super::text_fragment_paint_info::TextFragmentPaintInfo;
+use crate::text::native::character::Character;
 use foundation::gfx;
 
 // C++ forward declarations; these uninhabited Rust types cannot be created.
 pub enum FontFallbackList {}
 pub enum FontSelector {}
+
+fn LocaleRank(candidate_locales: &[String], requested: &str) -> u8 {
+    if candidate_locales.is_empty() {
+        return 2;
+    }
+    let requested = requested.replace('_', "-").to_ascii_lowercase();
+    let requested_language = requested.split('-').next().unwrap_or("");
+    let mut rank = 3;
+    for candidate in candidate_locales {
+        let candidate = candidate.replace('_', "-").to_ascii_lowercase();
+        if candidate == requested
+            || (!candidate.is_empty()
+                && (requested.starts_with(&(candidate.clone() + "-"))
+                    || candidate.starts_with(&(requested.clone() + "-"))))
+        {
+            return 0;
+        }
+        if !requested_language.is_empty()
+            && candidate.split('-').next().unwrap_or("") == requested_language
+        {
+            rank = rank.min(1);
+        }
+    }
+    rank
+}
+
+fn IsMathCharacter(character: u32) -> bool {
+    matches!(
+        character,
+        0x2190..=0x21ff
+            | 0x2200..=0x22ff
+            | 0x27c0..=0x27ef
+            | 0x2980..=0x2aff
+            | 0x1d400..=0x1d7ff
+    )
+}
+
+fn IsSymbolCharacter(character: u32) -> bool {
+    matches!(
+        character,
+        0x2000..=0x206f
+            | 0x20a0..=0x20cf
+            | 0x2100..=0x214f
+            | 0x2300..=0x27bf
+            | 0x2b00..=0x2bff
+    )
+}
+
+fn RoleRank(role: FontFallbackRole, hint: u32, priority: FontFallbackPriority) -> u8 {
+    let order = if IsEmojiPresentationEmoji(priority) {
+        [
+            FontFallbackRole::kEmoji,
+            FontFallbackRole::kSymbol,
+            FontFallbackRole::kText,
+            FontFallbackRole::kMath,
+        ]
+    } else if IsTextPresentationEmoji(priority) {
+        [
+            FontFallbackRole::kSymbol,
+            FontFallbackRole::kText,
+            FontFallbackRole::kMath,
+            FontFallbackRole::kEmoji,
+        ]
+    } else if IsMathCharacter(hint) {
+        [
+            FontFallbackRole::kMath,
+            FontFallbackRole::kSymbol,
+            FontFallbackRole::kText,
+            FontFallbackRole::kEmoji,
+        ]
+    } else if IsSymbolCharacter(hint) {
+        [
+            FontFallbackRole::kSymbol,
+            FontFallbackRole::kText,
+            FontFallbackRole::kMath,
+            FontFallbackRole::kEmoji,
+        ]
+    } else {
+        [
+            FontFallbackRole::kText,
+            FontFallbackRole::kSymbol,
+            FontFallbackRole::kMath,
+            FontFallbackRole::kEmoji,
+        ]
+    };
+    order
+        .iter()
+        .position(|candidate| *candidate == role)
+        .map_or(5, |rank| rank as u8)
+}
+
+// CSS Fonts directional weight matching, shared with the face-group binding.
+fn FallbackWeightRank(candidate: f32, requested: f32) -> (u8, f32) {
+    if requested < 400.0 {
+        if candidate <= requested {
+            (0, requested - candidate)
+        } else {
+            (1, candidate - requested)
+        }
+    } else if requested <= 500.0 {
+        if candidate >= requested && candidate <= 500.0 {
+            (0, candidate - requested)
+        } else if candidate < requested {
+            (1, requested - candidate)
+        } else {
+            (2, candidate - requested)
+        }
+    } else if candidate >= requested {
+        (0, candidate - requested)
+    } else {
+        (1, requested - candidate)
+    }
+}
+
+fn FallbackCandidateRank(
+    font: &SimpleFontData,
+    metadata: &FontFallbackMetadata,
+    hint: u32,
+    locale: &str,
+    priority: FontFallbackPriority,
+    requested_weight: f32,
+    requested_italic: bool,
+) -> (u8, u8, u8, bool, u8, f32) {
+    let (weight_direction, weight_distance) = FallbackWeightRank(metadata.weight, requested_weight);
+    (
+        (!font.PlatformData().FontContainsCharacter(hint)) as u8,
+        RoleRank(metadata.role, hint, priority),
+        LocaleRank(&metadata.locales, locale),
+        metadata.italic != requested_italic,
+        weight_direction,
+        weight_distance,
+    )
+}
 
 // cpp: font_engine/fonts/font.h:67-229
 #[derive(Clone)]
@@ -21,6 +159,8 @@ pub struct Font {
     font_fallback_list_: Member<FontFallbackList>,
     primary_font_: Member<SimpleFontData>,
     fallback_fonts_: Vec<Member<SimpleFontData>>,
+    fallback_metadata_: Vec<FontFallbackMetadata>,
+    font_group_length_: usize,
 }
 
 // cpp: font_engine/fonts/font_data.cc:31
@@ -31,6 +171,8 @@ impl Default for Font {
             font_fallback_list_: Member::default(),
             primary_font_: Member::default(),
             fallback_fonts_: Vec::new(),
+            fallback_metadata_: Vec::new(),
+            font_group_length_: 0,
         }
     }
 }
@@ -64,6 +206,8 @@ impl Font {
             font_fallback_list_: Member::default(),
             primary_font_: member,
             fallback_fonts_: vec![member],
+            fallback_metadata_: vec![FontFallbackMetadata::default()],
+            font_group_length_: 1,
         }
     }
 
@@ -84,8 +228,30 @@ impl Font {
         ordered_fonts: &[*const SimpleFontData],
         primary_font: *const SimpleFontData,
     ) -> Self {
+        let metadata = vec![FontFallbackMetadata::default(); ordered_fonts.len()];
+        Self::new_with_fallback_metadata(
+            description,
+            ordered_fonts,
+            primary_font,
+            &metadata,
+            ordered_fonts.len(),
+        )
+    }
+
+    /// Constructor used by the Browser -> LayoutNG -> FontEngine catalog
+    /// boundary. Family membership is request-specific; the immutable role and
+    /// locale metadata remains attached to each resolved face.
+    pub fn new_with_fallback_metadata(
+        description: FontDescription,
+        ordered_fonts: &[*const SimpleFontData],
+        primary_font: *const SimpleFontData,
+        fallback_metadata: &[FontFallbackMetadata],
+        font_group_length: usize,
+    ) -> Self {
         assert!(!ordered_fonts.is_empty());
         assert!(!primary_font.is_null());
+        assert_eq!(ordered_fonts.len(), fallback_metadata.len());
+        assert!(font_group_length <= ordered_fonts.len());
         let mut fallback_fonts = Vec::with_capacity(ordered_fonts.len());
         for font in ordered_fonts {
             assert!(!font.is_null());
@@ -96,6 +262,8 @@ impl Font {
             font_fallback_list_: Member::default(),
             primary_font_: Member::from_ptr(primary_font.cast_mut()),
             fallback_fonts_: fallback_fonts,
+            fallback_metadata_: fallback_metadata.to_vec(),
+            font_group_length_: font_group_length,
         }
     }
 
@@ -122,6 +290,88 @@ impl Font {
     // cpp: font_engine/fonts/font.h:168-170
     pub fn OrderedFontData(&self) -> &[Member<SimpleFontData>] {
         &self.fallback_fonts_
+    }
+
+    pub fn FallbackMetadata(&self) -> &[FontFallbackMetadata] {
+        &self.fallback_metadata_
+    }
+
+    pub fn FontGroupLength(&self) -> usize {
+        self.font_group_length_
+    }
+
+    // cpp: font_engine/fonts/font_fallback_iterator.cc:99-198
+    //
+    // The concrete platform faces cross the package boundary once, but their
+    // order after the CSS family group is selected here for each shaping
+    // segment. This keeps character/locale/presentation policy in FontEngine
+    // rather than baking a global filesystem order into Layout.
+    pub fn FallbackOrderForHint(
+        &self,
+        hint: u32,
+        priority: FontFallbackPriority,
+    ) -> Vec<Member<SimpleFontData>> {
+        if self.fallback_fonts_.is_empty() {
+            return Vec::new();
+        }
+        let group_length = self.font_group_length_.min(self.fallback_fonts_.len());
+        let mut result = self.fallback_fonts_[..group_length].to_vec();
+        let locale = self.font_description_.LocaleOrDefault().Ascii();
+        let requested_weight = self.font_description_.Weight().RawValue() as f32 / 4.0;
+        let requested_italic = self.font_description_.Style().RawValue() >= 14 * 4;
+        let skip_system =
+            Character::IsPrivateUse(hint as i32) || Character::IsNonCharacter(hint as i32);
+        let mut system: Vec<usize> = (group_length..self.fallback_fonts_.len())
+            .filter(|&index| {
+                !matches!(
+                    self.fallback_metadata_[index].role,
+                    FontFallbackRole::kFamilyOnly | FontFallbackRole::kLastResort
+                )
+            })
+            .collect();
+        if !skip_system {
+            system.sort_by(|&left, &right| {
+                let left_font = unsafe { &*self.fallback_fonts_[left].Get() };
+                let right_font = unsafe { &*self.fallback_fonts_[right].Get() };
+                let left_metadata = &self.fallback_metadata_[left];
+                let right_metadata = &self.fallback_metadata_[right];
+                FallbackCandidateRank(
+                    left_font,
+                    left_metadata,
+                    hint,
+                    &locale,
+                    priority,
+                    requested_weight,
+                    requested_italic,
+                )
+                .partial_cmp(&FallbackCandidateRank(
+                    right_font,
+                    right_metadata,
+                    hint,
+                    &locale,
+                    priority,
+                    requested_weight,
+                    requested_italic,
+                ))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.cmp(&right))
+            });
+            result.extend(system.into_iter().map(|index| self.fallback_fonts_[index]));
+        }
+        result.extend(
+            (group_length..self.fallback_fonts_.len())
+                .filter(|&index| {
+                    self.fallback_metadata_[index].role == FontFallbackRole::kLastResort
+                })
+                .map(|index| self.fallback_fonts_[index]),
+        );
+
+        // FontFallbackIterator remembers its first candidate and retries that
+        // exact face last so unresolved text receives the expected .notdef.
+        // Keep the duplicate: ShapeWithFallback commits the final candidate.
+        let first = result.first().copied().unwrap_or(self.fallback_fonts_[0]);
+        result.push(first);
+        result
     }
 
     // cpp: font_engine/fonts/font.h:207
@@ -235,8 +485,10 @@ impl Font {
     }
 
     // cpp: font_engine/fonts/font_services.cc:93
-    pub fn GetFontFeatures(&self) -> &[FontFeatureRange] {
-        &[]
+    pub fn GetFontFeatures(&self) -> FontFeatureRanges {
+        let mut features = FontFeatureRanges::new();
+        FontFeatureRange::FromFontDescription(&self.font_description_, &mut features);
+        features
     }
 
     // cpp: font_engine/fonts/font_services.cc:95
@@ -287,8 +539,16 @@ pub extern "Rust" fn FontNewFromResolvedData(
     description: &FontDescription,
     ordered_fonts: &[*const SimpleFontData],
     primary_font: *const SimpleFontData,
+    fallback_metadata: &[FontFallbackMetadata],
+    font_group_length: usize,
 ) -> Font {
-    Font::new_with_ordered_fonts_and_primary(description.clone(), ordered_fonts, primary_font)
+    Font::new_with_fallback_metadata(
+        description.clone(),
+        ordered_fonts,
+        primary_font,
+        fallback_metadata,
+        font_group_length,
+    )
 }
 
 unsafe extern "Rust" {

@@ -39,7 +39,10 @@ pub(super) fn eligible_runs(
     for (layer_index, (layer, effect_plan)) in plan.layers.iter().zip(effects).enumerate() {
         // Mirror effect_allocation_plan and actual execution: these layers
         // do not enter/exit any target. Empty Mask layers DO perform DstIn.
-        if layer.tiles.is_empty() && !layer.properties.effect.is_mask {
+        if !layer.has_drawable_content()
+            && !layer.properties.effect.is_mask
+            && !effect_plan.has_backdrop()
+        {
             continue;
         }
         if effect_plan
@@ -76,7 +79,7 @@ pub(super) fn eligible_runs(
             .skip(common)
             .zip(&effect_plan.opened_runs)
         {
-            if !seen_runs.insert(run) {
+            if matches!(scope, Scope::Clip(_)) && !seen_runs.insert(run) {
                 return Err(io::Error::other(
                     "direct clip allocation reused a closed opening run",
                 ));
@@ -109,7 +112,7 @@ pub(super) fn eligible_runs(
                 && !has_mask
                 && scope_index + 1 == active.len()
                 && candidate.scope_index == scope_index;
-            if !layer.tiles.is_empty() {
+            if layer.has_drawable_content() {
                 candidate.layers.push(layer_index);
             }
         }
@@ -228,7 +231,8 @@ fn fast_rounded_shape(clip: &ClipPaintPropertyNode) -> bool {
     // SynthesizeCcEffectsForClipsIfNeeded keeps nested rounded ancestors on a
     // surface; SoftwareRenderer::SetClipRRect then clips the actual leaf quad
     // directly with AA=true, without creating a saveLayer.
-    if !clip.clip_path.is_empty()
+    if clip.clip_path_error.is_some()
+        || !clip.clip_path.is_empty()
         || clip.pixel_moving_filter.is_some()
         || !translation_space(&clip.local_transform_space)
     {
@@ -342,7 +346,9 @@ mod test {
             }),
             radii: paint::border_shape_utils::UniformCornerRadii(9.75),
             clip_path: vec![],
+            clip_path_children: Vec::new(),
             clip_path_even_odd: false,
+            clip_path_error: None,
             pixel_moving_filter: None,
         });
         let effect = Arc::new(EffectPaintPropertyNode {

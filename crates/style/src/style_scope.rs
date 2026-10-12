@@ -54,6 +54,13 @@ impl StyleScope {
     pub fn Parent(&self) -> Option<&Self> {
         self.parent_.as_deref()
     }
+    pub fn CopyWithParent(&self, parent: Option<Rc<Self>>) -> Rc<Self> {
+        Rc::new(Self {
+            from_: self.from_.clone(),
+            to_: self.to_.clone(),
+            parent_: parent,
+        })
+    }
     // CSSScopeifiedParentPseudoClass is stable in the mapped source commit.
     pub fn RuleForNesting(&self) -> Option<Rc<StyleRule<Backend>>> {
         None

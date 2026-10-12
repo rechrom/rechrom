@@ -14,6 +14,7 @@ pub mod internal {
         pub mod control_theme_validation;
         pub mod font_from_selector;
         pub mod layout_boundary;
+        pub mod native_paint_style;
         pub mod native_input;
         pub mod node_metadata_input;
     }
@@ -89,6 +90,7 @@ pub mod internal {
     pub mod layout_algorithm_set;
     pub mod layout_alignment_utils;
     pub mod layout_box;
+    pub mod motion_path_geometry;
     pub mod layout_box_core_services;
     pub mod layout_box_layout;
     pub mod layout_box_lifecycle;

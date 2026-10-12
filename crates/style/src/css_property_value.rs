@@ -120,6 +120,9 @@ impl<D: CSSPropertyValueBackend> CSSPropertyValue<D> {
     pub fn ValueRef(&self) -> Rc<CSSValue<D>> {
         self.value_.clone()
     }
+    pub(crate) fn ValueHandle(&self) -> &Rc<CSSValue<D>> {
+        &self.value_
+    }
 }
 // Source equality intentionally ignores name/shorthand/implicit metadata.
 impl<D: CSSPropertyValueBackend> PartialEq for CSSPropertyValue<D> {

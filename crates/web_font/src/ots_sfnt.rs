@@ -4,7 +4,7 @@
 //! Untranslated OTS table handlers report their capability; they are never
 //! treated as sanitized data or substituted with fixture font bytes.
 use crate::{
-    be_u16, be_u32, invalid_font, ots_cmap, ots_device_tables, ots_glyf, ots_metrics,
+    be_u16, be_u32, invalid_font, ots_cff, ots_cmap, ots_device_tables, ots_glyf, ots_metrics,
     ots_name::OpenTypeName,
 };
 use std::{collections::BTreeMap, io};
@@ -221,7 +221,11 @@ pub(crate) fn Sanitize(data: &[u8]) -> io::Result<Vec<u8>> {
             optional(&mut tables, name, if glyf { result } else { None });
         }
     }
-    for name in ["CFF ", "VORG", "MATH"] {
+    if cff {
+        let result = ots_cff::Cff(get(&tables, "CFF ")?, glyphs)?;
+        set(&mut tables, "CFF ", result);
+    }
+    for name in ["VORG", "MATH"] {
         if tables.contains_key(&tag(name)) {
             return Err(capability(name.as_bytes()));
         }

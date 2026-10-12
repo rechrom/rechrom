@@ -735,6 +735,7 @@ fn unsupported_reason(reason: layer_tile::UnsupportedReason) -> &'static str {
         layer_tile::UnsupportedReason::InvalidChunkRange => "invalid-chunk-range",
         layer_tile::UnsupportedReason::InvalidRecordRange => "invalid-record-range",
         layer_tile::UnsupportedReason::NonTranslationTransform => "non-translation-transform",
+        layer_tile::UnsupportedReason::Preserve3dContext => "preserve-3d-context",
         layer_tile::UnsupportedReason::FractionalPixelPlacement => "fractional-pixel-placement",
         layer_tile::UnsupportedReason::UnsupportedClip => "unsupported-clip",
         layer_tile::UnsupportedReason::OpacityEffect => "opacity-effect",

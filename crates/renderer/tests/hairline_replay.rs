@@ -14,17 +14,25 @@ fn radii(r: f64) -> PaintCornerRadii {
     }
 }
 fn compare(item: DisplayItem, clip: Option<DisplayItem>, label: &str) -> usize {
+    compare_at_scale(item, clip, label, 1.0)
+}
+fn compare_at_scale(
+    item: DisplayItem,
+    clip: Option<DisplayItem>,
+    label: &str,
+    scale: f64,
+) -> usize {
     let mut items = Vec::new();
     if let Some(c) = clip {
         items.push(c);
     }
     items.push(item);
     let list = PaintArtifact {
-        items,
+        items: items.into(),
         ..Default::default()
     };
-    let a = raster::source_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
-    let b = raster::pure_replay::RasterizeSourceDisplayItemList(&list, 1024, 768);
+    let a = raster::source_replay::RasterizeSourceDisplayItemListWithScale(&list, 1024, 768, scale);
+    let b = raster::pure_replay::RasterizeSourceDisplayItemListWithScale(&list, 1024, 768, scale);
     let diff: Vec<_> = a
         .chunks_exact(4)
         .zip(b.chunks_exact(4))
@@ -37,6 +45,46 @@ fn compare(item: DisplayItem, clip: Option<DisplayItem>, label: &str) -> usize {
     } else {
         0
     }
+}
+#[test]
+fn device_scaled_rectangular_borders_match_skia() {
+    let mut failures = 0;
+    for (x, y) in [(32.0, 198.0), (620.0, 265.0)] {
+        for radius in [0.0] {
+            let item = DisplayItem {
+                r#type: T::kDrawDoubleRoundedRect,
+                rect: PaintRect {
+                    x,
+                    y,
+                    width: 440.0,
+                    height: 80.0,
+                },
+                inner_rect: PaintRect {
+                    x: x + 1.0,
+                    y: y + 1.0,
+                    width: 438.0,
+                    height: 78.0,
+                },
+                corner_radii: radii(radius),
+                inner_corner_radii: radii((radius - 1.0).max(0.0)),
+                color: Color {
+                    red: 209.0 / 255.0,
+                    green: 217.0 / 255.0,
+                    blue: 224.0 / 255.0,
+                    alpha: 1.0,
+                },
+                antialias: true,
+                ..Default::default()
+            };
+            failures += compare_at_scale(
+                item,
+                None,
+                &format!("scaled border xy={x},{y} radius={radius}"),
+                2.0,
+            );
+        }
+    }
+    assert_eq!(failures, 0);
 }
 #[test]
 fn rounded_uniform_hairline_borders_match_skia() {

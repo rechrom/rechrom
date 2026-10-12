@@ -259,13 +259,16 @@ fn ConsumeSingleType<T: TokenStreamTokenizer>(
             return Ok(values::string(t.Value().ToString()));
         }
         kColor => {
-            return ConsumeColor(CSSPropertyID::kInitialValue, s).map_err(|error| {
-                match error.kind {
+            return ConsumeColor(
+                CSSPropertyID::kInitialValue,
+                s,
+                crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
+            )
+            .map_err(|error| match error.kind {
                 crate::parser::production_property_parser::PropertyParseErrorKind::Unsupported => {
                     Unsupported(ty)
                 }
                 _ => Invalid,
-            }
             })
         }
         kImage | kUrl | kTransformFunction | kTransformList => return Err(Unsupported(ty)),

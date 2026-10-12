@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 foundation = { package = "layoutng_foundation", path = "../foundation" }
 font_engine = { path = "../font_engine" }
+image_resource = { path = "../image_resource" }
 layoutng_geometry = { path = "../layoutng_geometry" }
 
 [lib]

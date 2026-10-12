@@ -140,6 +140,14 @@ impl<B: ContainerQueryParserBackend> ContainerQueryParser<B> {
         stream.Restore(savepoint);
         ExpressionParser { parent: self, set }.ConsumeCondition(stream, ParseMode::kNormal)
     }
+    /// `CSSIfParser`'s `style()` branch uses the same style feature grammar as
+    /// container queries; exposing this narrow entry avoids a second parser.
+    pub(crate) fn ConsumeStyleFeatureQuery<T: TokenStreamTokenizer>(
+        &mut self,
+        stream: &mut CSSParserTokenStream<'_, T>,
+    ) -> Option<Rc<ConditionalExpNode<B::Value, B::UnparsedValue>>> {
+        self.ConsumeFeatureQuery(stream, FeatureSet::Style)
+    }
     fn ConsumeContainerQuery<T: TokenStreamTokenizer>(
         &mut self,
         stream: &mut CSSParserTokenStream<'_, T>,

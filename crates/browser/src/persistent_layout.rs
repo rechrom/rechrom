@@ -1120,6 +1120,7 @@ mod tests {
                 natural_width: 32.0,
                 natural_height: 24.0,
                 resolution_scale: 2.0,
+                orientation: Default::default(),
             },
         );
         let interaction = UserInteractionState {

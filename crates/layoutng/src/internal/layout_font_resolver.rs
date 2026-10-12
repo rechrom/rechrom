@@ -1,9 +1,13 @@
-use font_engine::{Font, FontOrientation, SimpleFontData};
+use font_engine::{Font, FontDescription, FontOrientation, SimpleFontData};
 
 use super::layout_input::{FontSmoothing, FontVariation, WritingMode};
 
 // cpp: layoutng/internal/layout_font_resolver.h:18-31
 pub struct NativeFontRequest<'a> {
+    /// The immutable computed description produced by Style. Layout only
+    /// rebinds it to the ConstraintSpace's resolved faces; it must not rebuild
+    /// the description from the smaller face-selection key.
+    pub base_description: Option<&'a FontDescription>,
     pub size: f64,
     pub specified_size: f64,
     pub letter_spacing: f64,
@@ -31,6 +35,7 @@ impl<'a> NativeFontRequest<'a> {
         orientation: FontOrientation,
     ) -> Self {
         Self {
+            base_description: None,
             size,
             specified_size: size,
             letter_spacing,
@@ -43,6 +48,20 @@ impl<'a> NativeFontRequest<'a> {
             orientation,
             smoothing: FontSmoothing::kAuto,
         }
+    }
+
+    pub fn WithBaseDescription(mut self, description: &'a FontDescription) -> Self {
+        self.base_description = Some(description);
+        self.specified_size = description.SpecifiedSize() as f64;
+        self.smoothing = match description.FontSmoothing() {
+            font_engine::FontSmoothingMode::kNoSmoothing => FontSmoothing::kNone,
+            font_engine::FontSmoothingMode::kAntialiased => FontSmoothing::kAntialiased,
+            font_engine::FontSmoothingMode::kSubpixelAntialiased => {
+                FontSmoothing::kSubpixelAntialiased
+            }
+            font_engine::FontSmoothingMode::kAutoSmoothing => FontSmoothing::kAuto,
+        };
+        self
     }
 }
 

@@ -34,9 +34,9 @@ pub(super) fn visible_rects(
     let targets = draw_target_runs(
         effects,
         direct_clips,
-        plan.layers
-            .iter()
-            .map(|layer| !layer.tiles.is_empty() || layer.properties.effect.is_mask),
+        plan.layers.iter().zip(effects).map(|(layer, effect)| {
+            layer.has_drawable_content() || layer.properties.effect.is_mask || effect.has_backdrop()
+        }),
     )?;
     // OcclusionTracker tracks actual render targets, not clip state. A direct
     // rounded clip is a SoftwareRenderer::SetClipRRect on the current target;
@@ -60,20 +60,20 @@ pub(super) fn visible_rects(
         for index in (start..end).rev() {
             let layer = &plan.layers[index];
             let composition = layer.composition;
-            let fractional = composition.translation.0.fract() != 0.0
-                || composition.translation.1.fract() != 0.0;
+            let affine =
+                composition.projective.is_some() || !composition.transform.is_translation();
+            let fractional = !affine
+                && layer.tiles.first().is_some_and(|tile| {
+                    let x = tile.tile_rect.x * tile.raster_scale + composition.transform.tx;
+                    let y = tile.tile_rect.y * tile.raster_scale + composition.transform.ty;
+                    x.fract() != 0.0 || y.fract() != 0.0
+                });
             let mut neighbors =
                 HashMap::with_capacity(if fractional { layer.tiles.len() } else { 0 });
             for tile in &layer.tiles {
                 let pixels = checked_pixels(tile, composition, staged, resident)?;
                 if fractional {
-                    neighbors.insert(
-                        (
-                            device_position(tile.tile_rect.x * tile.raster_scale)?,
-                            device_position(tile.tile_rect.y * tile.raster_scale)?,
-                        ),
-                        pixels,
-                    );
+                    neighbors.insert(tile.tile_index, pixels);
                 }
             }
             for (tile_index, tile) in layer.tiles.iter().enumerate().rev() {
@@ -81,6 +81,12 @@ pub(super) fn visible_rects(
                     continue;
                 };
                 visible[index][tile_index] = subtract_visible(original, opaque.rect);
+                // A transformed opaque tile covers a parallelogram. Its AABB
+                // remains valid visible work, but must never become rectangular
+                // occlusion for content behind it.
+                if affine {
+                    continue;
+                }
                 // MarkOccludedBehindLayer refuses a nonempty mask_filter_info.
                 // Rounded quads can be occluded, but never contribute their
                 // enclosing rectangle as opaque coverage of the rounded corners.
@@ -113,26 +119,19 @@ pub(super) fn visible_rects(
                     continue;
                 }
                 let origin = (
-                    device_position(tile.tile_rect.x * tile.raster_scale)?,
-                    device_position(tile.tile_rect.y * tile.raster_scale)?,
+                    device_coordinate(tile.tile_rect.x * tile.raster_scale)?
+                        + composition.transform.tx,
+                    device_coordinate(tile.tile_rect.y * tile.raster_scale)?
+                        + composition.transform.ty,
                 );
-                let horizontal = composition.translation.0.fract() != 0.0;
-                let vertical = composition.translation.1.fract() != 0.0;
+                let horizontal = origin.0.fract() != 0.0;
+                let vertical = origin.1.fract() != 0.0;
                 let required = [
-                    (
-                        horizontal,
-                        (origin.0 + i64::from(tile.pixel_size.0), origin.1),
-                    ),
-                    (
-                        vertical,
-                        (origin.0, origin.1 + i64::from(tile.pixel_size.1)),
-                    ),
+                    (horizontal, (tile.tile_index.0 + 1, tile.tile_index.1)),
+                    (vertical, (tile.tile_index.0, tile.tile_index.1 + 1)),
                     (
                         horizontal && vertical,
-                        (
-                            origin.0 + i64::from(tile.pixel_size.0),
-                            origin.1 + i64::from(tile.pixel_size.1),
-                        ),
+                        (tile.tile_index.0 + 1, tile.tile_index.1 + 1),
                     ),
                 ];
                 // Same real neighbors as tile_edge_pixel. A missing neighbor

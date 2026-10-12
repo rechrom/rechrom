@@ -120,11 +120,13 @@ pub mod compat {
     pub mod canvas;
     pub mod color;
     pub mod commands;
+    pub mod effect_composite;
     pub mod f16;
     pub mod geometry;
     pub(crate) mod glyph_paths;
     pub mod glyph_position;
     pub(crate) mod glyph_rasters;
+    pub(crate) mod gradient_interpolation;
     pub mod hairline;
     pub mod image_sampling;
     pub mod layer_filters;

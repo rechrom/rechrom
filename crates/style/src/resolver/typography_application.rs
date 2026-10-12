@@ -153,6 +153,8 @@ pub(super) fn Scalar(
                     root,
                     b.EffectiveZoom(),
                     media,
+                    Some(CurrentComputedLineHeight(b)),
+                    None,
                 ),
                 None,
             )

@@ -384,11 +384,22 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         if paint_controls {
             self.context.borrow_mut().EndEscapableGeometry(node);
         }
+        let restore_text_combine = enter_node
+            && node.applies_transform
+            && node
+                .fragment
+                .as_deref()
+                .is_some_and(|fragment| fragment.paint.text_combine.is_some());
+        if restore_text_combine {
+            // BoxFragmentPainter restores the text-combine CTM before
+            // TextCombinePainter draws the parent's decorations/emphasis.
+            self.context.borrow_mut().EndGeometry(node);
+        }
         BoxFragmentPainter::PaintFragmentAfterChildren(node, paint_info);
         if paint_controls {
             self.context.borrow_mut().BeginEscapableGeometry(node, None);
         }
-        if enter_node {
+        if enter_node && !restore_text_combine {
             self.context.borrow_mut().EndNode(node);
         }
     }

@@ -10,15 +10,17 @@ mod analytic_aa;
 mod basic_replay;
 pub mod convert;
 mod engine;
-#[cfg(feature = "source_replay")]
+#[cfg(feature = "font_backend")]
 pub mod font_backend;
 mod layer_replay;
+mod reflection_mask;
 #[cfg(feature = "profiling")]
 pub mod profiling_snapshot;
 #[cfg(feature = "pure_replay")]
 pub mod pure_replay;
 mod solid;
 mod solid_analysis;
+pub mod svg_filter_graph;
 #[cfg(feature = "source_replay")]
 pub mod source_replay;
 #[cfg(feature = "pure_replay")]
@@ -31,6 +33,7 @@ pub use engine::{
     RasterUpdate, RowSupport,
 };
 pub use skia::compat::png::EncodeRgbaPng;
+pub use reflection_mask::CompileReflectionMaskLayers;
 #[cfg(feature = "pure_replay")]
 pub use skia::cpu::hvgl;
 pub use skia::PixelFormat;

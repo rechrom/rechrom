@@ -2,7 +2,9 @@
 #![allow(non_snake_case)]
 use crate::metadata::{MimeTypeFor, ParseContentType};
 use crate::{URLLoadOperation, URLRequest, URLResponse};
-use http_transport::{HTTPRequestData, HTTPRequestOperation, HTTPRequestTransport};
+use http_transport::{
+    HTTPRequestData, HTTPRequestOperation, HTTPRequestPriority, HTTPRequestTransport,
+};
 use std::io;
 
 // cpp: resource_loader/default_resource_loader.cc:236-257
@@ -22,6 +24,7 @@ impl HTTPURLLoad {
             referrer: request.referrer.clone(),
             body: request.body.clone(),
             headers: request.headers.clone(),
+            priority: PriorityFor(request.destination),
         })?;
         Ok(Self {
             request: request_operation,
@@ -51,6 +54,10 @@ impl URLLoadOperation for HTTPURLLoad {
         }
         Ok(Some(result))
     }
+
+    fn SetWakeCallback(&mut self, callback: crate::URLWakeCallback) {
+        self.request.SetWakeCallback(callback);
+    }
 }
 
 /// Main-document HTTP streams preserve headers-before-body delivery.
@@ -70,9 +77,19 @@ impl HTTPURLStream {
                 referrer: request.referrer.clone(),
                 body: request.body.clone(),
                 headers: request.headers.clone(),
+                priority: PriorityFor(request.destination),
             })?,
             fallback_mime: MimeTypeFor(request).to_owned(),
         })
+    }
+}
+
+fn PriorityFor(destination: crate::RequestDestination) -> HTTPRequestPriority {
+    match destination {
+        crate::RequestDestination::kDocument
+        | crate::RequestDestination::kStyleSheet
+        | crate::RequestDestination::kImage => HTTPRequestPriority::High,
+        _ => HTTPRequestPriority::Normal,
     }
 }
 impl crate::URLStreamOperation for HTTPURLStream {

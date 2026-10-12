@@ -9,6 +9,7 @@ foundation = { package = "layoutng_foundation", path = "../foundation" }
 font_engine = { path = "../font_engine" }
 layoutng_geometry = { path = "../layoutng_geometry" }
 layoutng_style = { path = "../layoutng_style" }
+skia = { path = "../skia" }
 
 [lib]
 path = "src/lib.rs"

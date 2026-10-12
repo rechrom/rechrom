@@ -389,6 +389,12 @@ impl<'o> PaintContext<'o> {
         self.next_property_id = next;
     }
 
+    pub(crate) fn AllocatePropertyId(&mut self) -> u64 {
+        let id = self.next_property_id;
+        self.next_property_id += 1;
+        id
+    }
+
     pub(crate) fn chunk_properties(&self) -> PropertyTreeState {
         self.chunker.current_properties().clone()
     }
@@ -432,7 +438,9 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.has_source || !fragment.paint.establishes_paint_state {
+        if !fragment.paint.establishes_paint_state
+            || (!fragment.paint.has_source && fragment.paint.text_combine.is_none())
+        {
             return;
         }
         if node.applies_transform {
@@ -482,7 +490,7 @@ impl<'o> PaintContext<'o> {
                 );
             }
         }
-        if node.applies_clip_path {
+        if node.applies_clip_path && node.local_clip_path_children.len() <= 1 {
             self.Append(
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
@@ -589,6 +597,25 @@ impl<'o> PaintContext<'o> {
                 node,
             );
         }
+        if node.applies_backdrop_filter
+            && !node.applies_compositing_layer
+            && !node.applies_blend
+            && !node.applies_opacity
+            && !node.applies_mask
+        {
+            // Backdrop execution belongs to the retained Effect node. This
+            // redundant wrapper only keeps flat PaintRecord effect boundaries
+            // aligned for PaintChunksToCcLayer lowering.
+            self.Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kSaveLayer,
+                    phase: PaintPhase::kForeground,
+                    node_id: fragment.node_id,
+                    ..Default::default()
+                },
+                node,
+            );
+        }
         if node.applies_blend {
             self.Append(
                 DisplayItem {
@@ -666,7 +693,11 @@ impl<'o> PaintContext<'o> {
                 node_id: fragment.node_id,
                 ..Default::default()
             };
-            item.filters = style.filters.clone();
+            // PrePaint owns size-dependent filter resolution (including the
+            // physical box-reflection offset and fetched filter resources).
+            // Recording the raw style chain here would feed percentages to
+            // Raster a second time and bypass that typed boundary.
+            item.filters = node.properties.nodes.effect.filters.clone();
             self.Append(item, node);
         }
     }
@@ -729,7 +760,7 @@ impl<'o> PaintContext<'o> {
         self.EndEffectsAfterFilter(node);
     }
 
-    fn BeginCssClip(&mut self, node: &PaintTreeNode<'_>) {
+    pub(crate) fn BeginCssClip(&mut self, node: &PaintTreeNode<'_>) {
         let fragment = node
             .fragment
             .as_deref()
@@ -826,6 +857,22 @@ impl<'o> PaintContext<'o> {
                 node,
             );
         }
+        if node.applies_backdrop_filter
+            && !node.applies_compositing_layer
+            && !node.applies_blend
+            && !node.applies_opacity
+            && !node.applies_mask
+        {
+            self.Append(
+                DisplayItem {
+                    r#type: DisplayItemType::kRestore,
+                    phase: PaintPhase::kForeground,
+                    node_id: fragment.node_id,
+                    ..Default::default()
+                },
+                node,
+            );
+        }
         if node.applies_compositing_layer {
             self.Append(
                 DisplayItem {
@@ -846,10 +893,12 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.has_source || !fragment.paint.establishes_paint_state {
+        if !fragment.paint.establishes_paint_state
+            || (!fragment.paint.has_source && fragment.paint.text_combine.is_none())
+        {
             return;
         }
-        if node.applies_clip_path {
+        if node.applies_clip_path && node.local_clip_path_children.len() <= 1 {
             self.Append(
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
@@ -918,6 +967,16 @@ pub(crate) struct ScopedPaintChunkProperties<'c, 'o> {
 }
 
 impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
+    pub(crate) fn state(
+        context: &'c std::cell::RefCell<PaintContext<'o>>,
+        properties: PropertyTreeState,
+    ) -> Self {
+        let mut borrowed = context.borrow_mut();
+        let previous = borrowed.chunk_properties();
+        borrowed.update_chunk_properties(properties);
+        Self { context, previous }
+    }
+
     pub(crate) fn caret(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
         caret: crate::paint_engine::CaretPosition,
@@ -940,9 +999,14 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             parent: Some(previous.effect.clone()),
             local_transform_space: previous.transform.clone(),
             output_clip: None,
+            filter_reference_box: None,
+            filter_reference_scale: 1.0,
             opacity: if caret.visible { 1.0 } else { 0.001 },
             blend_mode: layoutng_assembly::internal::paint_input::PaintBlendMode::kNormal,
             filters: Vec::new(),
+            backdrop_filters: Vec::new(),
+            backdrop_filter_has_reference: false,
+            backdrop_filter_clip: None,
             isolates_blending: false,
             has_mask: false,
             is_mask: false,
@@ -1058,6 +1122,35 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         let mut borrowed = context.borrow_mut();
         let previous = borrowed.chunk_properties();
         borrowed.update_chunk_properties(node.properties.nodes.clone());
+        Self { context, previous }
+    }
+
+    /// TextCombinePainter records parent decorations after the anonymous
+    /// wrapper's scale/skew transform has been restored.  Mirror that canvas
+    /// state in the paint chunk property tree as well.
+    pub(crate) fn text_combine_parent(
+        context: &'c std::cell::RefCell<PaintContext<'o>>,
+        node: &PaintTreeNode<'_>,
+        phase: PaintPhase,
+    ) -> Self {
+        let fragment = node.fragment.as_deref().expect("text combine fragment");
+        let mut borrowed = context.borrow_mut();
+        let previous = borrowed.chunk_properties();
+        let mut properties = node.properties.nodes.clone();
+        properties.transform = properties
+            .transform
+            .parent
+            .clone()
+            .expect("text combine transform must have a parent");
+        borrowed.chunker.update_id_and_properties(
+            DisplayItemId {
+                client_id: fragment.paint.display_item_client_id,
+                r#type: DisplayItemIdType::PaintPhaseToDrawingType(phase),
+                fragment: fragment.paint.display_item_fragment,
+            },
+            DisplayItemClientInfo::from_fragment(fragment),
+            properties,
+        );
         Self { context, previous }
     }
 

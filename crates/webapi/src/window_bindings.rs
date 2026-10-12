@@ -77,6 +77,7 @@ pub struct WindowJavaScriptBindings {
     height: f64,
     scale: f64,
     preferred_color_scheme: style::PreferredColorScheme,
+    forced_colors: style::media_queries::forced_colors::ForcedColors,
     start: Instant,
     time_origin: f64,
     next_timer: u64,
@@ -210,6 +211,7 @@ impl WindowJavaScriptBindings {
             height: 0.0,
             scale: 1.0,
             preferred_color_scheme: style::PreferredColorScheme::kLight,
+            forced_colors: style::media_queries::forced_colors::ForcedColors::kNone,
             start: Instant::now(),
             time_origin: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -296,6 +298,12 @@ impl WindowJavaScriptBindings {
     /// Inject a host preference; this binding never queries platform APIs.
     pub fn SetPreferredColorScheme(&mut self, preference: style::PreferredColorScheme) {
         self.preferred_color_scheme = preference;
+    }
+    pub fn SetForcedColors(
+        &mut self,
+        forced_colors: style::media_queries::forced_colors::ForcedColors,
+    ) {
+        self.forced_colors = forced_colors;
     }
     pub fn BootstrapSource() -> String {
         crate::WindowBootstrapSource()
@@ -419,6 +427,7 @@ impl WindowJavaScriptBindings {
                         device_pixel_ratio: self.scale as f32,
                         media_type: foundation::String::from("screen"),
                         preferred_color_scheme: self.preferred_color_scheme,
+                        forced_colors: self.forced_colors,
                         scripting: style::media_queries::scripting::Scripting::kEnabled,
                         ..Default::default()
                     });

@@ -4,7 +4,8 @@ mod proxy_connector;
 mod static_get;
 
 pub use http_request::{
-    HTTPRequestData, HTTPRequestOperation, HTTPRequestTransport, HTTPResponseData, StartHTTPRequest,
+    HTTPRequestData, HTTPRequestOperation, HTTPRequestPriority, HTTPRequestTransport,
+    HTTPResponseData, StartHTTPRequest,
 };
 pub use http_transport_options::HTTPTransportOptions;
 pub use static_get::{Get, GetResponse, Response};

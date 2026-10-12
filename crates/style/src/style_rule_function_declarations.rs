@@ -3,9 +3,11 @@
 // found in the LICENSE file.
 //
 // cpp: third_party/blink/renderer/core/css/style_rule_function_declarations.h
-// Source physical h55; production logic pending: 0.
-// Trace, GC allocation and DowncastTraits are represented by Rust ownership
-// and StyleRuleBase dispatch.
+// Chromium commit 6c1d401fcca5e1b0030563a90c2f2bba168e0c15.
+// style_rule_function_declarations.h: 55 / 23 / 15 / 8 / 0.
+// The eight omitted effective lines are the C++ forward declaration plus
+// Trace/GC and DowncastTraits machinery represented by Rust ownership and
+// StyleRuleBase enum dispatch.
 
 #![allow(non_snake_case)]
 

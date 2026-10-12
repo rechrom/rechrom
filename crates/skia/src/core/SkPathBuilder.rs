@@ -181,7 +181,7 @@ impl SkPathBuilder {
 
     // We do not support conic segments, but Skia still relies on them from time to time.
     // This method will simply convert the input data into quad segments.
-    pub(crate) fn conic_to(&mut self, x1: f32, y1: f32, x: f32, y: f32, weight: f32) {
+    pub fn conic_to(&mut self, x1: f32, y1: f32, x: f32, y: f32, weight: f32) {
         // check for <= 0 or NaN with this test
         if !(weight > 0.0) {
             self.line_to(x, y);

@@ -18,8 +18,10 @@ pub(crate) struct ScrollNode {
     pub id: u64,
     pub parent_id: Option<u64>,
     pub container_rect: PaintRect,
-    pub committed_y: f64,
-    pub maximum_y: f64,
+    pub committed: Offset,
+    pub minimum: Offset,
+    pub maximum: Offset,
+    pub user_scrollable_horizontal: bool,
     pub user_scrollable_vertical: bool,
 }
 
@@ -31,21 +33,21 @@ pub(crate) struct ScrollTreeSnapshot {
 
 impl ScrollTreeSnapshot {
     pub fn new(nodes: Vec<ScrollNode>) -> Self {
-        // The viewport scroller is the outermost user-scrollable node.  The
-        // largest-range fallback preserves older artifacts which did not keep
-        // the parent link, while normal retained property trees take the
-        // parentless branch.
+        // The viewport scroller is the outermost user-scrollable node. The
+        // shared ScrollRoot sentinel has id zero, so a real root may name it
+        // as its parent. Never promote an arbitrary nested scroller: without
+        // compositor hit testing and gesture latching that would scroll it for
+        // wheel events delivered anywhere in the viewport.
         let root_id = nodes
             .iter()
             .filter(|node| {
-                node.parent_id.is_none() && node.user_scrollable_vertical && node.maximum_y > 0.0
+                (node.parent_id.is_none() || node.parent_id == Some(0))
+                    && ((node.user_scrollable_horizontal && node.maximum.x > node.minimum.x)
+                        || (node.user_scrollable_vertical && node.maximum.y > node.minimum.y))
             })
-            .max_by(|a, b| a.maximum_y.total_cmp(&b.maximum_y))
-            .or_else(|| {
-                nodes
-                    .iter()
-                    .filter(|node| node.user_scrollable_vertical && node.maximum_y > 0.0)
-                    .max_by(|a, b| a.maximum_y.total_cmp(&b.maximum_y))
+            .max_by(|a, b| {
+                ((a.maximum.x - a.minimum.x) + (a.maximum.y - a.minimum.y))
+                    .total_cmp(&((b.maximum.x - b.minimum.x) + (b.maximum.y - b.minimum.y)))
             })
             .map(|node| node.id);
         Self { nodes, root_id }
@@ -55,21 +57,46 @@ impl ScrollTreeSnapshot {
         let id = self.root_id?;
         self.nodes.iter().find(|node| node.id == id).copied()
     }
+
+    /// This compositor currently owns one mutable scroll offset. Do not admit
+    /// a root-only gesture when the immutable property tree contains another
+    /// scrollable node: Page will target and chain that gesture on the main
+    /// thread. Treating it as root scroll here moves both nodes when Page's
+    /// committed nested offset arrives.
+    pub fn supports_root_only_input(&self) -> bool {
+        let Some(root) = self.root() else {
+            return false;
+        };
+        !self.nodes.iter().any(|node| {
+            node.id != root.id
+                && ((node.user_scrollable_horizontal && node.maximum.x > node.minimum.x)
+                    || (node.user_scrollable_vertical && node.maximum.y > node.minimum.y))
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct WheelUpdate {
     pub blocked_on_main: bool,
-    pub desired: Option<f64>,
+    pub desired: Option<Offset>,
     pub did_scroll: bool,
     pub active_changed: bool,
+}
+
+struct ScrollChainEntry {
+    id: u64,
+    before: Offset,
+    minimum: Offset,
+    maximum: Offset,
+    allows_x_chaining: bool,
+    allows_y_chaining: bool,
 }
 
 /// Mutable state belonging to the active compositor tree.
 #[derive(Default)]
 pub(crate) struct CompositorScrollTree {
     root: Option<ScrollNode>,
-    pending_delta_y: f64,
+    pending_delta: Offset,
     gesture_blocked_on_main: Option<bool>,
     active: bool,
 }
@@ -87,35 +114,45 @@ impl CompositorScrollTree {
         self.active
     }
 
-    pub fn current_position(&self) -> Option<(u64, f64)> {
+    pub fn current_position(&self) -> Option<(u64, Offset)> {
         let root = self.root?;
         Some((
             root.id,
-            (root.committed_y + self.pending_delta_y).clamp(0.0, root.maximum_y),
+            Offset {
+                x: (root.committed.x + self.pending_delta.x).clamp(root.minimum.x, root.maximum.x),
+                y: (root.committed.y + self.pending_delta.y).clamp(root.minimum.y, root.maximum.y),
+            },
         ))
     }
 
-    pub fn pending_delta_y(&self) -> f64 {
-        self.pending_delta_y
+    pub fn pending_delta(&self) -> Offset {
+        self.pending_delta
     }
 
-    pub fn visual_offset_for(&self, root: ScrollNode) -> f64 {
+    pub fn visual_offset_for(&self, root: ScrollNode) -> Offset {
         if self.root.is_some_and(|active| active.id == root.id) {
-            (root.committed_y + self.pending_delta_y).clamp(0.0, root.maximum_y)
+            Offset {
+                x: (root.committed.x + self.pending_delta.x).clamp(root.minimum.x, root.maximum.x),
+                y: (root.committed.y + self.pending_delta.y).clamp(root.minimum.y, root.maximum.y),
+            }
         } else {
-            root.committed_y.clamp(0.0, root.maximum_y)
+            Offset {
+                x: root.committed.x.clamp(root.minimum.x, root.maximum.x),
+                y: root.committed.y.clamp(root.minimum.y, root.maximum.y),
+            }
         }
     }
 
     /// Activate the immutable tree while retaining the live compositor offset
     /// for a property node with stable identity.
-    pub fn activate(&mut self, root: Option<ScrollNode>, retained: Option<(u64, f64)>) {
+    pub fn activate(&mut self, root: Option<ScrollNode>, retained: Option<(u64, Offset)>) {
         self.root = root;
-        self.pending_delta_y = match (root, retained) {
-            (Some(root), Some((id, offset))) if id == root.id => {
-                offset.clamp(0.0, root.maximum_y) - root.committed_y
-            }
-            _ => 0.0,
+        self.pending_delta = match (root, retained) {
+            (Some(root), Some((id, offset))) if id == root.id => Offset {
+                x: offset.x.clamp(root.minimum.x, root.maximum.x) - root.committed.x,
+                y: offset.y.clamp(root.minimum.y, root.maximum.y) - root.committed.y,
+            },
+            _ => Offset::default(),
         };
         if root.is_none() {
             self.active = false;
@@ -126,7 +163,7 @@ impl CompositorScrollTree {
     pub fn apply_wheel(
         &mut self,
         phase: WheelPhase,
-        delta_y: f64,
+        delta: Offset,
         compositor_allowed: bool,
         candidate_blocks_main: bool,
     ) -> WheelUpdate {
@@ -146,11 +183,27 @@ impl CompositorScrollTree {
         let mut did_scroll = false;
         if !blocked_on_main {
             if let Some(root) = self.root {
-                let old = (root.committed_y + self.pending_delta_y).clamp(0.0, root.maximum_y);
-                let next = (old + delta_y).clamp(0.0, root.maximum_y);
+                let old = self.visual_offset_for(root);
+                let next = Offset {
+                    x: (old.x
+                        + if root.user_scrollable_horizontal {
+                            delta.x
+                        } else {
+                            0.0
+                        })
+                    .clamp(root.minimum.x, root.maximum.x),
+                    y: (old.y
+                        + if root.user_scrollable_vertical {
+                            delta.y
+                        } else {
+                            0.0
+                        })
+                    .clamp(root.minimum.y, root.maximum.y),
+                };
                 desired = Some(next);
                 if next != old {
-                    self.pending_delta_y += next - old;
+                    self.pending_delta.x += next.x - old.x;
+                    self.pending_delta.y += next.y - old.y;
                     did_scroll = true;
                 }
             }
@@ -185,69 +238,77 @@ pub fn ComputeMainThreadScrollUpdates(
     current_offset: &impl Fn(u64, Offset) -> Offset,
 ) -> Vec<(u64, Offset)> {
     let mut updates: Vec<(u64, Offset)> = Vec::new();
+    let layout_zoom = fragments
+        .paint
+        .resources
+        .as_ref()
+        .map_or(1.0, |resources| resources.layout_zoom_factor)
+        .max(f64::MIN_POSITIVE);
+    let position = Offset {
+        x: wheel.position.x * layout_zoom,
+        y: wheel.position.y * layout_zoom,
+    };
+    let constrained = wheel.DefaultScrollDelta();
+    let target = wheel
+        .target_node_id
+        .filter(|target| FragmentContainsNode(fragments, *target));
     for delta in [
         Offset {
-            x: wheel.delta.x,
+            x: constrained.x * layout_zoom,
             y: 0.0,
         },
         Offset {
             x: 0.0,
-            y: wheel.delta.y,
+            y: constrained.y * layout_zoom,
         },
     ] {
-        let constrained = wheel.DefaultScrollDelta();
-        let delta = if delta.x != 0.0 {
-            Offset {
-                x: constrained.x,
-                y: 0.0,
-            }
-        } else {
-            Offset {
-                x: 0.0,
-                y: constrained.y,
-            }
-        };
         if delta.x == 0.0 && delta.y == 0.0 {
             continue;
         }
         let mut remaining = delta;
+        let mut bypass_ancestors_to_viewport = false;
         if let Some(chain) = ScrollChain(
             fragments,
-            wheel.position,
+            position,
             Offset::default(),
             delta,
-            viewport_height,
+            viewport_height * layout_zoom,
             true,
+            target,
+            &mut bypass_ancestors_to_viewport,
             current_offset,
         ) {
             let mut visited = Vec::new();
-            for (id, before, maximum) in chain {
-                if visited.contains(&id) {
+            for entry in chain {
+                if visited.contains(&entry.id) {
                     continue;
                 }
-                visited.push(id);
+                visited.push(entry.id);
                 let offset = Offset {
-                    x: (before.x + remaining.x).clamp(0.0, maximum.x),
-                    y: (before.y + remaining.y).clamp(0.0, maximum.y),
+                    x: (entry.before.x + remaining.x).clamp(entry.minimum.x, entry.maximum.x),
+                    y: (entry.before.y + remaining.y).clamp(entry.minimum.y, entry.maximum.y),
                 };
-                remaining.x -= offset.x - before.x;
-                remaining.y -= offset.y - before.y;
-                if let Some((_, merged)) = updates.iter_mut().find(|(node, _)| *node == id) {
+                remaining.x -= offset.x - entry.before.x;
+                remaining.y -= offset.y - entry.before.y;
+                if let Some((_, merged)) = updates.iter_mut().find(|(node, _)| *node == entry.id) {
                     if delta.x != 0.0 {
                         merged.x = offset.x;
                     }
                     if delta.y != 0.0 {
                         merged.y = offset.y;
                     }
-                } else if offset != before {
-                    updates.push((id, offset));
+                } else if offset != entry.before {
+                    updates.push((entry.id, offset));
                 }
                 if std::env::var_os("BROWSER_APP_TRACE_INPUT").is_some() {
                     eprintln!(
-                        "scroll-target node={id} before={before:?} after={offset:?} maximum={maximum:?} delta={delta:?}"
+                        "scroll-target node={} before={:?} after={offset:?} minimum={:?} maximum={:?} delta={delta:?}",
+                        entry.id, entry.before, entry.minimum, entry.maximum
                     );
                 }
-                if remaining.x == 0.0 && remaining.y == 0.0 {
+                let chaining_blocked = (delta.x != 0.0 && !entry.allows_x_chaining)
+                    || (delta.y != 0.0 && !entry.allows_y_chaining);
+                if chaining_blocked || (remaining.x == 0.0 && remaining.y == 0.0) {
                     break;
                 }
             }
@@ -263,8 +324,10 @@ fn ScrollChain(
     delta: Offset,
     viewport_height: f64,
     root: bool,
+    target: Option<u64>,
+    bypass_ancestors_to_viewport: &mut bool,
     current_offset: &impl Fn(u64, Offset) -> Offset,
-) -> Option<Vec<(u64, Offset, Offset)>> {
+) -> Option<Vec<ScrollChainEntry>> {
     if fragment.paint.hidden {
         return None;
     }
@@ -274,7 +337,8 @@ fn ScrollChain(
     };
     let inside_x = point.x >= origin.x && point.x < origin.x + fragment.size.width;
     let inside_y = point.y >= origin.y && point.y < origin.y + fragment.size.height;
-    if !root
+    if target.is_none()
+        && !root
         && ((fragment.paint.overflow_x != Overflow::kVisible && !inside_x)
             || (fragment.paint.overflow_y != Overflow::kVisible && !inside_y))
     {
@@ -287,16 +351,33 @@ fn ScrollChain(
         child_origin.y -= offset.y;
     }
     let mut chain = None;
+    let target_here = target == Some(fragment.node_id);
     for child in fragment.children.iter().rev() {
-        if let Some(value) = ScrollChain(
+        let child_is_target_branch = target.is_some()
+            && !target_here
+            && FragmentContainsNode(child, target.unwrap());
+        if target.is_some() && !child_is_target_branch {
+            continue;
+        }
+        let child_chain = ScrollChain(
             child,
             point,
             child_origin,
             delta,
             viewport_height,
             false,
+            target,
+            bypass_ancestors_to_viewport,
             current_offset,
-        ) {
+        );
+        // A fixed-to-view subtree is parented above document scroll in the
+        // paint property tree. Its own nested scrollers still consume wheel
+        // input, then chaining resumes at the viewport rather than at DOM/
+        // fragment ancestors which do not geometrically contain it.
+        if child_is_target_branch && child.paint.fixed_to_view {
+            *bypass_ancestors_to_viewport = true;
+        }
+        if let Some(value) = child_chain {
             chain = Some(value);
             break;
         }
@@ -316,39 +397,98 @@ fn ScrollChain(
             },
         )
     };
-    let maximum = Offset {
-        x: if user_scrollable(fragment.paint.overflow_x, true) {
-            (fragment.paint.scroll_size.width - fragment.size.width).max(0.0)
-        } else {
-            0.0
+    let (minimum, maximum) = fragment.paint.scroll_container.map_or_else(
+        || {
+            let maximum = Offset {
+                x: if user_scrollable(fragment.paint.overflow_x, true) {
+                    (fragment.paint.scroll_size.width - fragment.size.width).max(0.0)
+                } else {
+                    0.0
+                },
+                y: if user_scrollable(fragment.paint.overflow_y, false) {
+                    if root {
+                        (fragment
+                            .content_size
+                            .height
+                            .max(fragment.paint.scroll_size.height)
+                            - viewport_height)
+                            .max(0.0)
+                    } else {
+                        (fragment.paint.scroll_size.height - fragment.size.height).max(0.0)
+                    }
+                } else {
+                    0.0
+                },
+            };
+            (Offset::default(), maximum)
         },
-        y: if user_scrollable(fragment.paint.overflow_y, false) {
-            if root {
-                (fragment
-                    .content_size
-                    .height
-                    .max(fragment.paint.scroll_size.height)
-                    - viewport_height)
-                    .max(0.0)
-            } else {
-                (fragment.paint.scroll_size.height - fragment.size.height).max(0.0)
+        |container| {
+            let mut minimum = container.minimum_scroll_offset;
+            let mut maximum = container.maximum_scroll_offset;
+            if !user_scrollable(fragment.paint.overflow_x, true) {
+                minimum.x = 0.0;
+                maximum.x = 0.0;
             }
-        } else {
-            0.0
+            if !user_scrollable(fragment.paint.overflow_y, false) {
+                minimum.y = 0.0;
+                maximum.y = 0.0;
+            }
+            // The host viewport can be smaller than the LayoutView's exported
+            // clip while browser controls are present. Preserve its native
+            // minimum and extend only the positive block-end range.
+            if root {
+                maximum.y = maximum.y.max(
+                    minimum.y
+                        + (fragment
+                            .content_size
+                            .height
+                            .max(fragment.paint.scroll_size.height)
+                            - viewport_height)
+                            .max(0.0),
+                );
+            }
+            (minimum, maximum)
         },
-    };
-    let can_move = (delta.x != 0.0 && (offset.x + delta.x).clamp(0.0, maximum.x) != offset.x)
-        || (delta.y != 0.0 && (offset.y + delta.y).clamp(0.0, maximum.y) != offset.y);
-    if (root || inside_x && inside_y)
+    );
+    let can_move = (delta.x != 0.0 && (offset.x + delta.x).clamp(minimum.x, maximum.x) != offset.x)
+        || (delta.y != 0.0 && (offset.y + delta.y).clamp(minimum.y, maximum.y) != offset.y);
+    let allows_x_chaining = fragment.paint.overscroll_behavior_x.AllowsScrollChaining();
+    let allows_y_chaining = fragment.paint.overscroll_behavior_y.AllowsScrollChaining();
+    let blocks_chain = (delta.x != 0.0
+        && user_scrollable(fragment.paint.overflow_x, true)
+        && !allows_x_chaining)
+        || (delta.y != 0.0
+            && user_scrollable(fragment.paint.overflow_y, false)
+            && !allows_y_chaining);
+    // Once EventHandler has resolved a DOM target, that target's ancestor
+    // branch is authoritative. Re-testing an untransformed fragment rect here
+    // drops nested scrollers beneath transforms and fixed/sticky positioning.
+    if (root || !*bypass_ancestors_to_viewport)
+        && (root || target.is_some() || inside_x && inside_y)
         && fragment.node_id != 0
         && (root || fragment.paint.establishes_paint_state)
-        && can_move
+        && (can_move || blocks_chain)
     {
         chain
             .get_or_insert_with(Vec::new)
-            .push((fragment.node_id, offset, maximum));
+            .push(ScrollChainEntry {
+                id: fragment.node_id,
+                before: offset,
+                minimum,
+                maximum,
+                allows_x_chaining,
+                allows_y_chaining,
+            });
     }
     chain
+}
+
+fn FragmentContainsNode(fragment: &FragmentNode, node_id: u64) -> bool {
+    fragment.node_id == node_id
+        || fragment
+            .children
+            .iter()
+            .any(|child| FragmentContainsNode(child, node_id))
 }
 
 #[cfg(test)]
@@ -360,8 +500,10 @@ mod tests {
             id: 7,
             parent_id: None,
             container_rect: PaintRect::default(),
-            committed_y: 20.0,
-            maximum_y: 100.0,
+            committed: Offset { x: 0.0, y: 20.0 },
+            minimum: Offset::default(),
+            maximum: Offset { x: 0.0, y: 100.0 },
+            user_scrollable_horizontal: false,
             user_scrollable_vertical: true,
         }
     }
@@ -370,27 +512,68 @@ mod tests {
     fn wheel_gesture_latches_main_thread_disposition() {
         let mut tree = CompositorScrollTree::default();
         tree.activate(Some(root()), None);
-        let began = tree.apply_wheel(WheelPhase::kBegan, 10.0, true, true);
+        let began = tree.apply_wheel(WheelPhase::kBegan, Offset { x: 0.0, y: 10.0 }, true, true);
         assert!(began.blocked_on_main);
-        let changed = tree.apply_wheel(WheelPhase::kChanged, 10.0, true, false);
+        let changed = tree.apply_wheel(
+            WheelPhase::kChanged,
+            Offset { x: 0.0, y: 10.0 },
+            true,
+            false,
+        );
         assert!(changed.blocked_on_main);
-        assert_eq!(tree.current_position(), Some((7, 20.0)));
-        tree.apply_wheel(WheelPhase::kEnded, 0.0, true, false);
-        let next = tree.apply_wheel(WheelPhase::kBegan, 10.0, true, false);
+        assert_eq!(
+            tree.current_position(),
+            Some((7, Offset { x: 0.0, y: 20.0 }))
+        );
+        tree.apply_wheel(WheelPhase::kEnded, Offset::default(), true, false);
+        let next = tree.apply_wheel(WheelPhase::kBegan, Offset { x: 0.0, y: 10.0 }, true, false);
         assert!(next.did_scroll);
-        assert_eq!(tree.current_position(), Some((7, 30.0)));
+        assert_eq!(
+            tree.current_position(),
+            Some((7, Offset { x: 0.0, y: 30.0 }))
+        );
     }
 
     #[test]
     fn activation_retains_offset_for_the_same_scroll_node() {
         let mut tree = CompositorScrollTree::default();
         tree.activate(Some(root()), None);
-        tree.apply_wheel(WheelPhase::kBegan, 35.0, true, false);
+        tree.apply_wheel(WheelPhase::kBegan, Offset { x: 0.0, y: 35.0 }, true, false);
         let retained = tree.current_position();
         let mut committed = root();
-        committed.committed_y = 30.0;
+        committed.committed.y = 30.0;
         tree.activate(Some(committed), retained);
-        assert_eq!(tree.current_position(), Some((7, 55.0)));
+        assert_eq!(
+            tree.current_position(),
+            Some((7, Offset { x: 0.0, y: 55.0 }))
+        );
+    }
+
+    #[test]
+    fn compositor_scroll_preserves_a_negative_native_range() {
+        let mut tree = CompositorScrollTree::default();
+        let mut negative_range = root();
+        negative_range.committed.y = -20.0;
+        negative_range.minimum.y = -100.0;
+        negative_range.maximum.y = 0.0;
+        tree.activate(Some(negative_range), None);
+        tree.apply_wheel(
+            WheelPhase::kBegan,
+            Offset { x: 0.0, y: -200.0 },
+            true,
+            false,
+        );
+        assert_eq!(
+            tree.current_position(),
+            Some((7, Offset { x: 0.0, y: -100.0 }))
+        );
+        tree.apply_wheel(
+            WheelPhase::kChanged,
+            Offset { x: 0.0, y: 500.0 },
+            true,
+            false,
+        );
+        assert_eq!(tree.current_position(), Some((7, Offset::default())));
     }
 
     #[test]
@@ -398,7 +581,7 @@ mod tests {
         let mut nested = root();
         nested.id = 8;
         nested.parent_id = Some(7);
-        nested.maximum_y = 1000.0;
+        nested.maximum.y = 1000.0;
         let tree = ScrollTreeSnapshot::new(vec![nested, root()]);
         assert_eq!(tree.root().map(|node| node.id), Some(7));
     }

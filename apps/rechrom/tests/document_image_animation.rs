@@ -12,6 +12,51 @@ const RESPONSIVE_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width=
 <style>rect{fill:red}@media (min-width:100px){rect{fill:blue}}</style>
 <rect width="100%" height="100%"/></svg>"#;
 
+#[test]
+fn svg_presentation_transform_and_fill_reach_document_paint_record() {
+    on_layout_thread(|| {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 190">
+          <g transform="translate(-111.5 -66.5) scale(.35)">
+            <path fill="#15919d" d="M519 324V282C519 244 551 211 590 216L849 259C883 265 910 290 910 326V545C910 584 880 609 844 602L790 594V538L830 545C849 549 861 538 861 521V354C861 337 850 327 834 325L597 283C580 280 568 290 568 306V331Z"/>
+            <path fill="#062142" d="M355 388C355 347 386 320 427 327L728 376C757 381 775 403 775 432V476C760 454 745 446 717 441L441 392C422 388 409 399 409 419V575C409 591 418 602 434 605L701 648C714 651 722 645 722 631V461C750 467 775 486 775 512V651C775 692 747 716 710 709L410 660C377 654 355 630 355 595Z"/>
+          </g>
+        </svg>"##;
+        let assembly = browser::CreateLayoutAssembly();
+        let constraints = browser::CreateBrowserConstraints(220, 190);
+        let mut decoder = SVGImageDecoder::new_with_constraints(&assembly, &constraints);
+        let frame = decoder
+            .create(
+                99,
+                Arc::from(svg.as_slice()),
+                "image/svg+xml",
+                &ContainerKey::new(220, 190, 1.0, 1.0),
+            )
+            .unwrap()
+            .initial_frame;
+        let record = frame
+            .record
+            .as_any()
+            .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
+            .unwrap();
+        let paths = record
+            .artifact
+            .items
+            .iter()
+            .filter(|item| item.r#type == paint::paint_engine::DisplayItemType::kDrawPath)
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 2);
+        assert!((paths[0].color.red - 0x15 as f32 / 255.0).abs() < 1e-6);
+        assert!((paths[0].color.green - 0x91 as f32 / 255.0).abs() < 1e-6);
+        assert!((paths[1].color.blue - 0x42 as f32 / 255.0).abs() < 1e-6);
+        assert!(record.artifact.items.iter().any(|item| {
+            item.r#type == paint::paint_engine::DisplayItemType::kConcat
+                && (item.transform.values[0] - 0.35).abs() < 1e-9
+                && (item.transform.values[12] + 111.5).abs() < 1e-9
+                && (item.transform.values[13] + 66.5).abs() < 1e-9
+        }));
+    });
+}
+
 fn on_layout_thread(test: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
         .name("document-image-test".into())

@@ -2,11 +2,12 @@
 //! Native auto/caret/visited colors and color-scheme application.
 #![allow(non_snake_case)]
 use super::*;
-use foundation::{AtomicString, Vector};
+use foundation::{AtomicString, MakeGarbageCollected, Vector};
 use layoutng_style::css::{
     color_scheme_flags::{ColorSchemeFlag as F, ColorSchemeFlags},
     style_auto_color::StyleAutoColor,
     style_caret_color::StyleCaretColor,
+    style_color::{UnresolvedColorFunction, UnresolvedColorMix},
 };
 use layoutng_style::style::color_scheme::mojom::blink::PreferredColorScheme;
 use CSSPropertyID::*;
@@ -47,6 +48,22 @@ pub(super) fn ConvertStyleColorValue(
         CSSValuePayload::kIdentifierClass(i) => crate::production_css_value::NamedColor(i.0)
             .map(StyleColor::from_color)
             .ok_or(LonghandApplicationError::Unsupported(id)),
+        CSSValuePayload::kColorMixClass(mix) => {
+            let first = ConvertStyleColorValue(id, &mix.color1)?;
+            let second = ConvertStyleColorValue(id, &mix.color2)?;
+            let (amount, alpha) = mix
+                .NormalizePercentages()
+                .ok_or(LonghandApplicationError::InvalidValue(id))?;
+            let unresolved = UnresolvedColorFunction::ColorMix(UnresolvedColorMix::new(
+                mix.color_interpolation_space,
+                mix.hue_interpolation_method,
+                &first,
+                &second,
+                amount,
+                alpha,
+            ));
+            Ok(StyleColor::from_function(MakeGarbageCollected(unresolved)))
+        }
         _ => Err(LonghandApplicationError::Unsupported(id)),
     }
 }

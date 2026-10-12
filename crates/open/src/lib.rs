@@ -17,7 +17,9 @@ pub use connected_resources::{
     ConnectedResourceDiscovery, ConnectedResourceEffects, ConnectedScriptPreparer,
 };
 
-use document_loader::{DocumentLoadBudget, DocumentLoader, DocumentLoaderStatus, ResourceFetcher};
+use document_loader::{
+    DocumentLoadBudget, DocumentLoadProgress, DocumentLoader, DocumentLoaderStatus, ResourceFetcher,
+};
 use dom::DOM;
 use javascript::javascript_runtime::JavaScriptException;
 use javascript::script_engine::{ScriptExecutor, ScriptExecutorHandle};
@@ -76,6 +78,13 @@ impl OpenDocumentPipeline {
         }
     }
 
+    fn DidBeginRendering(&self) {
+        match self {
+            Self::Script { scheduler, .. } => scheduler.DidBeginRendering(),
+            Self::Resource(parser) => parser.DidBeginRendering(),
+        }
+    }
+
     fn BeginDocument(&mut self, loader: &mut DocumentLoader) -> io::Result<()> {
         match self {
             Self::Script {
@@ -97,7 +106,7 @@ impl OpenDocumentPipeline {
         loader: &mut DocumentLoader,
         budget: DocumentLoadBudget,
         client: &mut dyn script_scheduler::ScriptLoadClient,
-    ) -> io::Result<()> {
+    ) -> io::Result<DocumentLoadProgress> {
         match self {
             Self::Script {
                 scheduler,
@@ -108,13 +117,10 @@ impl OpenDocumentPipeline {
                     result =
                         Some(scheduler.PumpDocumentLoader(loader, budget, runtime, realm, client));
                 });
-                result.expect("ScriptExecutor must invoke the task")?;
+                result.expect("ScriptExecutor must invoke the task")
             }
-            Self::Resource(parser) => {
-                parser.PumpDocumentLoader(loader, budget, client)?;
-            }
+            Self::Resource(parser) => parser.PumpDocumentLoader(loader, budget, client),
         }
-        Ok(())
     }
 
     fn PollDocumentCompletion(
@@ -279,6 +285,7 @@ pub struct OpenEngine {
     pipeline: Option<OpenDocumentPipeline>,
     script_executor: Option<ScriptExecutorHandle>,
     resource_completion_budget: Option<usize>,
+    parser_immediate_work_pending: bool,
 }
 
 /// Opaque saved admission state while a rendering opportunity runs. Rendering
@@ -302,6 +309,7 @@ impl OpenEngine {
             pipeline: None,
             script_executor,
             resource_completion_budget: None,
+            parser_immediate_work_pending: false,
         }
     }
 
@@ -433,7 +441,11 @@ impl OpenEngine {
         &mut self,
         adapter: &mut dyn OpenDocumentAdapter,
     ) -> io::Result<Vec<OpenEffect>> {
+        let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
+            .is_some()
+            .then(std::time::Instant::now);
         let mut effects = Vec::new();
+        self.parser_immediate_work_pending = false;
         if self.loader.Status() == DocumentLoaderStatus::kLoading {
             let Some(response) = self.PollResponse()? else {
                 return Ok(effects);
@@ -462,6 +474,7 @@ impl OpenEngine {
             self.document_started = true;
             effects.push(OpenEffect::DocumentStarted);
         }
+        let response_done = profile.map(|start| start.elapsed());
         if self.loader.Status() == DocumentLoaderStatus::kParsing {
             let pipeline = self.pipeline.as_mut().expect("document pipeline installed");
             let loader = &mut self.loader;
@@ -470,8 +483,10 @@ impl OpenEngine {
             adapter.WithScriptLoadClient(&mut |client| {
                 result = Some(pipeline.PumpDocument(loader, budget, client));
             });
-            result.expect("adapter must provide the script load client")?;
+            let progress = result.expect("adapter must provide the script load client")?;
+            self.parser_immediate_work_pending = progress.immediate_work_pending;
         }
+        let parser_done = profile.map(|start| start.elapsed());
         let parser_finished = if self.loader.Status() == DocumentLoaderStatus::kFinished {
             let pipeline = self.pipeline.as_mut().expect("document pipeline installed");
             let mut result = None;
@@ -482,6 +497,7 @@ impl OpenEngine {
         } else {
             false
         };
+        let completion_done = profile.map(|start| start.elapsed());
         let task_available = self
             .pipeline
             .as_ref()
@@ -493,6 +509,7 @@ impl OpenEngine {
             None => usize::MAX,
         };
         let completed = adapter.UpdateDocumentResources(allowance)?;
+        let resources_done = profile.map(|start| start.elapsed());
         if let Some(remaining) = self.resource_completion_budget.as_mut() {
             *remaining = remaining.saturating_sub(completed);
             if completed != 0 {
@@ -535,6 +552,19 @@ impl OpenEngine {
             adapter.FinishLoad(self.pipeline.as_mut().expect("document pipeline installed"));
         }
         effects.push(completion);
+        if let Some(start) = profile {
+            if start.elapsed() >= std::time::Duration::from_millis(16) {
+                eprintln!(
+                    "open-advance-profile response_ms={:.3} parser_ms={:.3} completion_ms={:.3} resources_ms={:.3} readiness_ms={:.3} total_ms={:.3}",
+                    response_done.unwrap().as_secs_f64() * 1000.0,
+                    (parser_done.unwrap() - response_done.unwrap()).as_secs_f64() * 1000.0,
+                    (completion_done.unwrap() - parser_done.unwrap()).as_secs_f64() * 1000.0,
+                    (resources_done.unwrap() - completion_done.unwrap()).as_secs_f64() * 1000.0,
+                    (start.elapsed() - resources_done.unwrap()).as_secs_f64() * 1000.0,
+                    start.elapsed().as_secs_f64() * 1000.0,
+                );
+            }
+        }
         Ok(effects)
     }
 
@@ -677,6 +707,7 @@ impl OpenEngine {
         if let Some(executor) = &self.script_executor {
             executor.SetModuleCompilationWake(Some(callback.clone()));
         }
+        self.resources.SetWakeCallback(callback.clone());
         self.loader.SetWakeCallback(callback);
     }
 
@@ -709,6 +740,15 @@ impl OpenEngine {
         self.pipeline
             .as_ref()
             .is_some_and(OpenDocumentPipeline::HasPendingRenderBlockingStyleSheets)
+    }
+
+    /// Records the first committed render for this document. Parser-discovered
+    /// stylesheets after this point may restyle a retained frame without
+    /// suspending input or presentation of that frame.
+    pub fn DidBeginRendering(&self) {
+        if let Some(pipeline) = &self.pipeline {
+            pipeline.DidBeginRendering();
+        }
     }
 
     /// Admit loading-related script work for this host task. The caller only
@@ -769,6 +809,14 @@ impl OpenEngine {
 
     pub fn LoaderStatus(&self) -> DocumentLoaderStatus {
         self.loader.Status()
+    }
+
+    /// True only when the last bounded parser task deliberately yielded while
+    /// more parser/input work was already available. Rendering the partial DOM
+    /// in this state would interleave an avoidable full lifecycle between two
+    /// halves of the same input burst.
+    pub fn ParserImmediateWorkPending(&self) -> bool {
+        self.parser_immediate_work_pending
     }
 
     pub fn Resources(&self) -> Rc<ResourceEngine> {

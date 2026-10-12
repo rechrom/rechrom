@@ -9,7 +9,7 @@ use document::{
     DocumentEffects, DocumentEngine, LayoutMutation as DocumentLayoutMutation, ResourceRequest,
 };
 use document_loader::{DocumentLoadBudget, ResourceFetcher, ResourceFetcherClient};
-use dom::{dom_mutation::DOMMutationType, UserInteractionState, DOM};
+use dom::{dom_mutation::DOMMutationType, Document, UserInteractionState, DOM};
 use image_decoder::image_decoder::ImageDecoder;
 use image_resource::DocumentImageDecoder;
 pub use interaction::cursor::Cursor;
@@ -21,7 +21,7 @@ use javascript::javascript_runtime::{
 };
 use javascript::script_engine::ScriptEngine;
 use layoutng_assembly::{
-    fragment_tree::{FragmentNode, PaintResources},
+    fragment_tree::{FragmentKind, FragmentNode, PaintResources},
     internal::{
         layout_input::{ConstraintSpace, Offset},
         layout_input_types::IntSize,
@@ -34,12 +34,12 @@ pub use paint::paint_engine::{CaretGeometry, PaintRect as CaretRect};
 use resource::ResourceEngine;
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     io,
     rc::{Rc, Weak},
     sync::Arc,
 };
-pub use style::PreferredColorScheme;
+pub use style::{media_queries::forced_colors::ForcedColors, PreferredColorScheme};
 use url_loader::{URLLoader, URLRequest, URLWakeCallback};
 use webapi::{
     dom_bindings::{DOMBindingsHost, DOMJavaScriptBindings},
@@ -89,14 +89,22 @@ impl PageRenderPipeline {
 
         // Page is the composition root. Every stage keeps its own retained
         // state, while immutable protocol values cross each boundary directly.
+        let layout_zoom = artifact
+            .resources
+            .as_ref()
+            .map_or(1.0, |resources| resources.layout_zoom_factor)
+            .max(f64::MIN_POSITIVE);
+        let raster_scale = scale / layout_zoom;
         let config = FrameConfig {
             viewport: paint::PaintRect {
                 x: 0.0,
                 y: 0.0,
-                width: width as f64 / scale,
-                height: height as f64 / scale,
+                width: width as f64 / raster_scale,
+                height: height as f64 / raster_scale,
             },
-            raster_scale: scale,
+            raster_scale,
+            device_scale_factor: scale,
+            layout_zoom_factor: layout_zoom,
             activation_scroll: None,
             frame_time: None,
         };
@@ -274,6 +282,7 @@ struct PageState {
     animation_engine: RefCell<animation::AnimationEngine>,
     animation_begin_frame_requested: Cell<bool>,
     preferred_color_scheme: Cell<PreferredColorScheme>,
+    forced_colors: Cell<ForcedColors>,
 }
 impl PageState {
     fn WithEngines(
@@ -317,6 +326,7 @@ impl PageState {
             animation_engine: RefCell::new(animation::AnimationEngine::new()),
             animation_begin_frame_requested: Cell::new(false),
             preferred_color_scheme: Cell::new(PreferredColorScheme::kLight),
+            forced_colors: Cell::new(ForcedColors::kNone),
         })
     }
 
@@ -372,6 +382,8 @@ impl PageState {
                 fonts: constraints.fonts.clone(),
                 images: constraints.images.clone(),
                 device_pixel_ratio: constraints.device_pixel_ratio,
+                layout_zoom_factor: constraints.layout_zoom_factor,
+                paints_opaque_base_background: !constraints.printing,
                 viewport: constraints.viewport,
             }))
         } else {
@@ -548,10 +560,10 @@ impl PageState {
             if !node.IsHTMLElement("img") {
                 return;
             }
-            let Some(src) = node.FindAttribute("src").filter(|a| !a.value.is_empty()) else {
+            let Some(source) = tree.CurrentImageSource(i) else {
                 return;
             };
-            src.value.clone()
+            source.to_owned()
         };
         self.CancelImageEvent(id);
         let active = Rc::new(Cell::new(true));
@@ -618,6 +630,7 @@ impl PageState {
                             node_id,
                             effect_id,
                             declarations,
+                            ..Default::default()
                         }],
                         ..Default::default()
                     },
@@ -811,12 +824,29 @@ impl PageState {
         if self.styles_resolved.get() {
             return;
         }
-        crate::style_services::ResolveLayoutStylesWithEngine(
-            &mut self.style_engine.borrow_mut(),
-            &mut self.document.borrow_mut(),
-            &self.constraints.borrow(),
-            self.preferred_color_scheme.get(),
-        );
+        {
+            let interaction = *self.interaction.borrow();
+            let mut style_engine = self.style_engine.borrow_mut();
+            let mut document = self.document.borrow_mut();
+            style_engine
+                .SetUserInteractionState(&mut document, interaction)
+                .expect("Page StyleEngine belongs to its retained Document");
+            crate::style_services::ResolveLayoutStylesWithEngineAndForcedColors(
+                &mut style_engine,
+                &mut document,
+                &self.constraints.borrow(),
+                self.preferred_color_scheme.get(),
+                self.forced_colors.get(),
+            );
+        }
+        {
+            let document = self.document.borrow();
+            let state = document.GetDocument().StyleState();
+            trace.set("document_nodes", document.GetDocument().NodeCount() as f64);
+            trace.set("resolved_nodes", state.stats.resolved_nodes as f64);
+            trace.set("changed_nodes", state.stats.changed_nodes as f64);
+            trace.set("rule_sets_built", state.stats.rule_sets_built as f64);
+        }
         self.styles_resolved.set(true);
     }
 
@@ -941,6 +971,13 @@ impl PageState {
             PageMutation::InteractionStateMutation(m) => {
                 let previous = *self.interaction.borrow();
                 if previous != m.state {
+                    let selector_state_changed = previous.focused_node_id
+                        != m.state.focused_node_id
+                        || previous.focus_visible_node_id != m.state.focus_visible_node_id
+                        || previous.hovered_node_id != m.state.hovered_node_id
+                        || previous.pressed_node_id != m.state.pressed_node_id
+                        || previous.multi_select_focused_option_id
+                            != m.state.multi_select_focused_option_id;
                     let needs_paint = {
                         let owner = self.document.borrow();
                         let document = owner.GetDocument();
@@ -956,6 +993,13 @@ impl PageState {
                         bindings
                             .borrow_mut()
                             .SetFocusedNode(m.state.focused_node_id);
+                    }
+                    if selector_state_changed {
+                        // User-action selectors and
+                        // :-internal-multi-select-focus consume this snapshot.
+                        // The StyleEngine setter below turns the state change
+                        // into selector invalidation at the next lifecycle.
+                        self.styles_resolved.set(false);
                     }
                     if needs_paint {
                         self.document.borrow_mut().InvalidatePaint();
@@ -1079,7 +1123,13 @@ impl PageState {
                     dom::error::invalid_argument("animated image revision must increase");
                 }
                 image.revision = m.frame.revision;
-                image.content = image_resource::PaintImageContent::Document(m.frame.record.clone());
+                image.document_container_key = Some(m.frame.container_key.clone());
+                let image_resource::PaintImageContent::Document(content) = &image.content else {
+                    dom::error::invalid_argument("document image frame targeted a bitmap resource")
+                };
+                image.content = image_resource::PaintImageContent::Document(Arc::new(
+                    content.with_variant(m.frame.container_key.clone(), m.frame.record.clone()),
+                ));
                 drop(constraints);
                 self.pending_paint_mutations.borrow_mut().push(
                     paint::paint_engine::PaintMutation::ImageChanged {
@@ -1107,6 +1157,7 @@ impl PageState {
                 image.height = m.size.height;
                 image.revision = m.revision;
                 let resolution_scale = image.resolution_scale;
+                let orientation = image.orientation;
                 drop(constraints);
                 if !self
                     .document
@@ -1119,12 +1170,19 @@ impl PageState {
                             natural_width: m.size.width as f64 / resolution_scale,
                             natural_height: m.size.height as f64 / resolution_scale,
                             resolution_scale,
+                            orientation,
                         },
                     )
                 {
                     dom::error::invalid_argument("document image source missing");
                 }
                 self.InvalidateMeasurement();
+                // StyleFetchedImage retains the resource's natural size and
+                // resolution. Re-resolve actual consumers so CSS backgrounds,
+                // masks, border images and generated content observe the new
+                // intrinsic dimensions; a layout-only invalidation would keep
+                // their old immutable StyleImage payload.
+                self.styles_resolved.set(false);
                 self.document.borrow_mut().InvalidateLayout();
                 self.scroll_only.set(false);
                 self.dirty.set(true);
@@ -1197,6 +1255,271 @@ pub struct Page {
     editing_paint_dirty: bool,
 }
 impl Page {
+    /// Publish HTMLImageElement's rendered auto-sizes width and run the same
+    /// source reselection that ResizeObserver::OnResize triggers in Blink.
+    /// The content-box width is unzoomed and rounded before it becomes the
+    /// retained `last auto-sizes width`.
+    fn ReconcileResponsiveAutoSizes(
+        &mut self,
+        mut fragments: Rc<FragmentNode>,
+    ) -> io::Result<Rc<FragmentNode>> {
+        fn collect(document: &Document, node: &FragmentNode, output: &mut Vec<(usize, f64)>) {
+            if node.kind == FragmentKind::kBox && node.paint.replaced_content.is_some() {
+                if let Some(index) = document.FindNodeById(node.node_id) {
+                    if document.AllowsResponsiveImageAutoSizes(index) {
+                        let zoom = node.paint.effective_zoom.max(f32::MIN_POSITIVE);
+                        let width = (node.content_size.width as f32 / zoom).round() as f64;
+                        output.push((index, width));
+                    }
+                }
+            }
+            for child in &node.children {
+                collect(document, child, output);
+            }
+        }
+
+        // A candidate change can alter intrinsic geometry. Re-run the native
+        // layout batch until the rounded content widths and selected sources
+        // stabilize, with the document size as the same finite convergence
+        // bound used by the container-query lifecycle.
+        let limit = self.state.document.borrow().GetDocument().NodeCount() + 1;
+        let mut observed = std::collections::HashSet::new();
+        for _ in 0..limit {
+            let widths = {
+                let owner = self.state.document.borrow();
+                let mut widths = Vec::new();
+                collect(owner.GetDocument(), &fragments, &mut widths);
+                widths
+            };
+            if widths.is_empty() {
+                break;
+            }
+            let signature = widths
+                .iter()
+                .map(|(node, width)| (*node, width.to_bits()))
+                .collect::<Vec<_>>();
+            if !observed.insert(signature) {
+                break;
+            }
+            let width_changed = {
+                let mut owner = self.state.document.borrow_mut();
+                let document = owner.GetDocumentMut();
+                widths.into_iter().fold(false, |changed, (node, width)| {
+                    document.SetResponsiveImageAutoSize(node, width) || changed
+                })
+            };
+            if !width_changed || !self.resources.QueueReferencedImages()? {
+                break;
+            }
+            self.state.LayoutWithContainerQueries();
+            fragments = self
+                .state
+                .layout_engine
+                .borrow_mut()
+                .TakeLayoutResult()
+                .expect("responsive auto-size relayout has fragments");
+        }
+        Ok(fragments)
+    }
+
+    /// Resolve the per-use SVG viewport after Layout has produced the replaced
+    /// content rectangle and before Paint snapshots image resources. Blink
+    /// creates SVGImageForContainer from this same LayoutImageResource size.
+    /// Each distinct ContainerKey is retained as an immutable resource
+    /// variant. Paint binds each image display item to its exact key, avoiding
+    /// the resource-wide last-use-wins behavior.
+    fn ConfigureDocumentImageContainers(
+        &mut self,
+        fragments: &mut Rc<FragmentNode>,
+    ) -> io::Result<()> {
+        fn collect(
+            node: &FragmentNode,
+            images: &[layoutng_assembly::internal::layout_input::PaintImage],
+            device_pixel_ratio: f64,
+            preferred_color_scheme: u8,
+            output: &mut BTreeMap<u64, Vec<image_resource::ContainerKey>>,
+        ) {
+            if let (Some(id), Some(replaced)) = (
+                node.paint.style.image_resource_id,
+                node.paint.replaced_content.as_ref(),
+            ) {
+                if let Some(image) = images
+                    .iter()
+                    .find(|image| image.id == id)
+                    .filter(|image| image.IsDocumentImage())
+                {
+                    let zoom = f64::from(node.paint.effective_zoom).max(f64::MIN_POSITIVE);
+                    let width = (replaced.size.width / zoom).round().max(1.0) as u32;
+                    let height = (replaced.size.height / zoom).round().max(1.0) as u32;
+                    let mut key =
+                        image_resource::ContainerKey::new(width, height, zoom, device_pixel_ratio);
+                    key.preferred_color_scheme = if node.paint.style.color_scheme_flags_is_normal {
+                        preferred_color_scheme
+                    } else {
+                        u8::from(node.paint.style.used_dark_color_scheme)
+                    };
+                    key.preferred_color_scheme_is_explicit = true;
+                    if let Some(current) = &image.document_container_key {
+                        key.view_specification = current.view_specification.clone();
+                    }
+                    let keys = output.entry(id).or_default();
+                    if !keys.contains(&key) {
+                        keys.push(key);
+                    }
+                }
+            }
+            for child in &node.children {
+                collect(
+                    child,
+                    images,
+                    device_pixel_ratio,
+                    preferred_color_scheme,
+                    output,
+                );
+            }
+        }
+        fn install_resources(node: &mut FragmentNode, resources: &Arc<PaintResources>) {
+            node.paint.resources = Some(resources.clone());
+            for child in &mut node.children {
+                install_resources(child, resources);
+            }
+        }
+
+        let preferred_color_scheme = match self.state.preferred_color_scheme.get() {
+            PreferredColorScheme::kDark => 1,
+            _ => 0,
+        };
+        let requirements = {
+            let constraints = self.state.constraints.borrow();
+            let mut requirements = BTreeMap::new();
+            collect(
+                fragments,
+                &constraints.images,
+                constraints.device_pixel_ratio,
+                preferred_color_scheme,
+                &mut requirements,
+            );
+            requirements
+        };
+        if requirements.is_empty() {
+            return Ok(());
+        }
+        let resources = self.resources.clone();
+        let state = self.state.clone();
+        let mut client = ResourceClient {
+            state,
+            scripts: self.scripts.as_deref_mut(),
+        };
+        let mut changed = false;
+        for (resource_id, requirements) in requirements {
+            for container in requirements {
+                let already_published = self
+                    .state
+                    .constraints
+                    .borrow()
+                    .images
+                    .iter()
+                    .find(|image| image.id == resource_id)
+                    .is_some_and(|image| match &image.content {
+                        image_resource::PaintImageContent::Document(content) => {
+                            content.exact_record_for(&container).is_some()
+                        }
+                        image_resource::PaintImageContent::Bitmap(_) => false,
+                    });
+                if already_published {
+                    continue;
+                }
+                changed |= resources.ConfigureDocumentImageContainer(
+                    resource_id,
+                    container,
+                    preferred_color_scheme,
+                    &mut client,
+                )?;
+            }
+        }
+        if changed {
+            let constraints = self.state.constraints.borrow();
+            let resources = Arc::new(PaintResources {
+                fonts: constraints.fonts.clone(),
+                images: constraints.images.clone(),
+                device_pixel_ratio: constraints.device_pixel_ratio,
+                layout_zoom_factor: constraints.layout_zoom_factor,
+                paints_opaque_base_background: !constraints.printing,
+                viewport: constraints.viewport,
+            });
+            install_resources(Rc::make_mut(fragments), &resources);
+        }
+        Ok(())
+    }
+
+    fn ConfigurePaintDocumentImageContainers(
+        &mut self,
+        fragments: &mut Rc<FragmentNode>,
+        requirements: Vec<(image_resource::ImageId, image_resource::ContainerKey)>,
+    ) -> io::Result<bool> {
+        if requirements.is_empty() {
+            return Ok(false);
+        }
+        let preferred_color_scheme = match self.state.preferred_color_scheme.get() {
+            PreferredColorScheme::kDark => 1,
+            _ => 0,
+        };
+        let resources = self.resources.clone();
+        let state = self.state.clone();
+        let mut client = ResourceClient {
+            state,
+            scripts: self.scripts.as_deref_mut(),
+        };
+        let mut changed = false;
+        for (resource_id, mut container) in requirements {
+            if !container.preferred_color_scheme_is_explicit {
+                container.preferred_color_scheme = preferred_color_scheme;
+                container.preferred_color_scheme_is_explicit = true;
+            }
+            let already_published = self
+                .state
+                .constraints
+                .borrow()
+                .images
+                .iter()
+                .find(|image| image.id == resource_id)
+                .is_some_and(|image| match &image.content {
+                    image_resource::PaintImageContent::Document(content) => {
+                        content.exact_record_for(&container).is_some()
+                    }
+                    image_resource::PaintImageContent::Bitmap(_) => false,
+                });
+            if already_published {
+                continue;
+            }
+            changed |= resources.ConfigureDocumentImageContainer(
+                resource_id,
+                container,
+                preferred_color_scheme,
+                &mut client,
+            )?;
+        }
+        if changed {
+            let constraints = self.state.constraints.borrow();
+            let resources = Arc::new(PaintResources {
+                fonts: constraints.fonts.clone(),
+                images: constraints.images.clone(),
+                device_pixel_ratio: constraints.device_pixel_ratio,
+                layout_zoom_factor: constraints.layout_zoom_factor,
+                paints_opaque_base_background: !constraints.printing,
+                viewport: constraints.viewport,
+            });
+            fn install(node: &mut FragmentNode, resources: &Arc<PaintResources>) {
+                node.paint.resources = Some(resources.clone());
+                for child in &mut node.children {
+                    install(child, resources);
+                }
+            }
+            install(Rc::make_mut(fragments), &resources);
+        }
+        Ok(changed)
+    }
+
     pub fn HasBlockingWheelListener(&self) -> bool {
         self.scripts
             .as_ref()
@@ -1261,6 +1584,20 @@ impl Page {
             state.document.Handle(),
             state.constraints.clone(),
         ));
+        let responsive_state = Rc::downgrade(&state);
+        resources.SetResponsiveImageSelector(Rc::new(
+            move |document, node, constraints, is_loaded| {
+                let state = responsive_state.upgrade()?;
+                crate::style_services::SelectResponsiveImage(
+                    document,
+                    node,
+                    constraints,
+                    state.preferred_color_scheme.get(),
+                    state.forced_colors.get(),
+                    is_loaded,
+                )
+            },
+        ));
         state.ConnectResources(resources.clone());
         let script_client: Rc<RefCell<dyn ScriptLoadClient>> =
             Rc::new(RefCell::new(ScriptClient(client, Rc::downgrade(&state))));
@@ -1315,6 +1652,15 @@ impl Page {
             scripts.SetPreferredColorScheme(preference);
         }
         if self.state.preferred_color_scheme.replace(preference) != preference {
+            self.state.InvalidateMeasurement();
+            self.state.InvalidateStyle();
+        }
+    }
+    pub fn SetForcedColors(&mut self, forced_colors: ForcedColors) {
+        if let Some(scripts) = &self.scripts {
+            scripts.SetForcedColors(forced_colors);
+        }
+        if self.state.forced_colors.replace(forced_colors) != forced_colors {
             self.state.InvalidateMeasurement();
             self.state.InvalidateStyle();
         }
@@ -1608,7 +1954,13 @@ impl Page {
         }
         self.state.constraints.borrow_mut().device_pixel_ratio = device_scale;
         if let Some(scripts) = &self.scripts {
-            scripts.ResizeViewport(width, height, device_scale);
+            let zoom = self
+                .state
+                .constraints
+                .borrow()
+                .layout_zoom_factor
+                .max(f64::MIN_POSITIVE);
+            scripts.ResizeViewport(width, height, device_scale * zoom);
         }
         self.Apply(PageMutation::ViewportMutation(
             page_mutation::ViewportMutation {
@@ -1828,6 +2180,7 @@ impl Page {
             &self.resources,
             &mut self.scripts,
             usize::MAX,
+            true,
         )
         .map(|_| ())
     }
@@ -1839,14 +2192,39 @@ impl Page {
         trace.set("presented", 0.0);
         self.UpdateCaret(false);
         if self.DeferLifecycleForBeginFrame() {
+            trace.set("deferred_for_begin_frame", 1.0);
+            return Ok(());
+        }
+        if self.open_engine.ParserImmediateWorkPending() {
+            // The parser yielded only because its bounded token/byte budget
+            // expired and has already scheduled the continuation. Chromium's
+            // parser scheduler resumes that burst before committing a partial
+            // lifecycle. This prevents repeated full style/layout work over a
+            // monotonically growing DOM while retaining progressive rendering
+            // whenever the network actually stalls.
+            trace.set("deferred_for_parser", 1.0);
             return Ok(());
         }
         if !self.state.dirty.get() {
+            trace.set("clean", 1.0);
             return Ok(());
         }
-        if !self.IsRenderingReady() {
+        let document_committed = self.open_engine.HasCommittedDocument();
+        let render_blocking_styles = self.open_engine.HasPendingRenderBlockingStyleSheets();
+        let renderable_root = self.state.document.HasRenderableRoot();
+        trace.set("document_committed", document_committed as u8 as f64);
+        trace.set(
+            "render_blocking_styles",
+            render_blocking_styles as u8 as f64,
+        );
+        trace.set("renderable_root", renderable_root as u8 as f64);
+        if self.frame.is_none()
+            && (!document_committed || render_blocking_styles || !renderable_root)
+        {
+            trace.set("rendering_ready", 0.0);
             return Ok(());
         }
+        trace.set("rendering_ready", 1.0);
         let profile = std::env::var_os("BROWSER_PROFILE_INPUT").map(|_| std::time::Instant::now());
         // Resource completions are separate Page tasks. An offset-only input
         // must not synchronously decode images or dispatch unrelated load
@@ -1992,6 +2370,8 @@ impl Page {
                 .TakeLayoutResult()
                 .expect("successful layout has fragments")
         });
+        fragments = self.ReconcileResponsiveAutoSizes(fragments)?;
+        self.ConfigureDocumentImageContainers(&mut fragments)?;
         let layout_done = profile.map(|start| start.elapsed());
         self.state.document.borrow().EmitEditingState(
             self.state.layout_editing.clone(),
@@ -2004,11 +2384,30 @@ impl Page {
         );
         let display_items = {
             trace.set("full_paint", 1.0);
-            let mut paint = self.state.paint_engine.borrow_mut();
-            paint.Paint(
+            self.state.paint_engine.borrow_mut().Paint(
                 &fragments,
                 self.state.layout_editing.caret.borrow().paint_state(),
             );
+            let document_image_requirements = self
+                .state
+                .paint_engine
+                .borrow()
+                .GetPaintResult()
+                .expect("successful paint has artifact")
+                .DocumentImageContainerRequirements();
+            if self.ConfigurePaintDocumentImageContainers(
+                &mut fragments,
+                document_image_requirements,
+            )? {
+                // Background, mask and border-image target sizes are owned by
+                // Paint geometry. Re-record once after their typed SVG
+                // variants arrive so every display item names its exact key.
+                self.state.paint_engine.borrow_mut().Paint(
+                    &fragments,
+                    self.state.layout_editing.caret.borrow().paint_state(),
+                );
+            }
+            let mut paint = self.state.paint_engine.borrow_mut();
             paint.CommitPaintResult(|artifact| {
                 CommitPaint(
                     &mut self.state.layout_engine.borrow_mut(),
@@ -2064,6 +2463,7 @@ impl Page {
             }
         }
         self.frame = Some(frame);
+        self.open_engine.DidBeginRendering();
         self.editing_paint_dirty = false;
         // LocalFrameView::PerformPostLayoutTasks marks hover dirty. The
         // synthetic move is deliberately deferred to BeginFrame so script
@@ -2315,9 +2715,9 @@ fn EnqueueImageEventTasks(
                     tree.FindNodeById(event.id).is_some_and(|i| {
                         let node = tree.Node(i);
                         node.IsHTMLElement("img")
-                            && node
-                                .FindAttribute("src")
-                                .is_some_and(|a| a.value == event.source)
+                            && tree
+                                .CurrentImageSource(i)
+                                .is_some_and(|source| source == event.source)
                     })
                 };
                 if current_request {

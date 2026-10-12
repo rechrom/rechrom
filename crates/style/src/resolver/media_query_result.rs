@@ -23,12 +23,14 @@
 
 // cpp: third_party/blink/renderer/core/css/resolver/media_query_result.h:35-82
 
-use std::rc::Rc;
+use std::{any::Any, rc::Rc};
 
 // media_list.h owns the concrete query set. The result only retains and
 // returns it, so this is its complete dependency rather than a replacement
 // parser or evaluator.
-pub trait MediaQuerySet {}
+pub trait MediaQuerySet: Any {
+    fn AsAny(&self) -> &dyn Any;
+}
 
 // cpp: media_query_result.h:35-50
 #[derive(Clone)]
@@ -83,7 +85,11 @@ mod tests {
     use super::*;
 
     struct Queries;
-    impl MediaQuerySet for Queries {}
+    impl MediaQuerySet for Queries {
+        fn AsAny(&self) -> &dyn Any {
+            self
+        }
+    }
 
     #[test]
     fn result_retains_query_set_and_flags_combine_then_clear() {

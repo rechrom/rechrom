@@ -77,6 +77,8 @@ pub(super) fn ConvertLength(
         root,
         b.EffectiveZoom(),
         media,
+        Some(super::CurrentComputedLineHeight(b)),
+        None,
     );
     if let CSSValuePayload::kMathFunctionClass(math) = v.Payload() {
         return math

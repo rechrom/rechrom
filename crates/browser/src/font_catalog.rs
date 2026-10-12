@@ -3,7 +3,9 @@
 use std::sync::{Arc, OnceLock};
 
 use font_engine::SharedFontBytes;
-use layoutng_assembly::internal::layout_input::{FontFace, FontUnicodeRange, FontVariation};
+use layoutng_assembly::internal::layout_input::{
+    FontFace, FontFallbackRole, FontUnicodeRange, FontVariation,
+};
 
 // Match the host faces used by the C++ demo/browser input boundary. The
 // current acceptance page requests system-ui, then -apple-system.
@@ -221,6 +223,7 @@ fn LoadDemoFontsWithReader(
                 native_family: "Arial".into(),
                 metrics_family: metrics_family.into(),
                 bytes: arial.clone(),
+                fallback_role: FontFallbackRole::kText,
                 ..FontFace::default()
             });
         }
@@ -235,6 +238,8 @@ fn LoadDemoFontsWithReader(
                 start: 0x0b80,
                 end: 0x0bff,
             }],
+            fallback_locales: vec!["ta".into()],
+            fallback_role: FontFallbackRole::kText,
             ..FontFace::default()
         });
     }
@@ -254,13 +259,27 @@ fn LoadDemoFontsWithReader(
                     end: 0x1faff,
                 },
             ],
+            fallback_role: FontFallbackRole::kEmoji,
+            ..FontFace::default()
+        });
+    }
+    if let Ok(bytes) = ReadFont("/System/Library/Fonts/Apple Symbols.ttf") {
+        faces.push(FontFace {
+            family: "symbol-fallback".into(),
+            native_family: "Apple Symbols".into(),
+            metrics_family: "Apple Symbols".into(),
+            bytes: bytes.into(),
+            fallback_role: FontFallbackRole::kSymbol,
             ..FontFace::default()
         });
     }
     if let Ok(bytes) = ReadFont("/System/Library/Fonts/Supplemental/STIXTwoMath.otf") {
         faces.push(FontFace {
             family: "math".into(),
+            native_family: "STIX Two Math".into(),
+            metrics_family: "STIX Two Math".into(),
             bytes: bytes.into(),
+            fallback_role: FontFallbackRole::kMath,
             ..FontFace::default()
         });
     }
@@ -278,6 +297,8 @@ fn LoadDemoFontsWithReader(
                     value: axis_weight,
                 }],
                 unicode_ranges: cjk_ranges(),
+                fallback_locales: vec!["zh-Hans".into(), "zh-CN".into(), "zh-SG".into()],
+                fallback_role: FontFallbackRole::kText,
                 ..FontFace::default()
             });
         }
@@ -298,6 +319,8 @@ fn LoadDemoFontsWithReader(
                     tag: WGHT,
                     value: axis_weight,
                 }],
+                fallback_locales: vec!["zh-Hans".into(), "zh-CN".into(), "zh-SG".into()],
+                fallback_role: FontFallbackRole::kText,
                 ..FontFace::default()
             });
         }
@@ -317,6 +340,7 @@ fn LoadDemoFontsWithReader(
                         start: 0,
                         end: 0x2fff,
                     }],
+                    fallback_role: FontFallbackRole::kText,
                     ..FontFace::default()
                 });
             }
@@ -347,6 +371,8 @@ fn LoadDemoFontsWithReader(
                 weight,
                 bytes: bytes.into(),
                 unicode_ranges: vec![range],
+                fallback_locales: vec!["ja".into()],
+                fallback_role: FontFallbackRole::kText,
                 ..FontFace::default()
             });
         }
@@ -361,6 +387,7 @@ fn LoadDemoFontsWithReader(
                 start: 0,
                 end: 0x2fff,
             }],
+            fallback_role: FontFallbackRole::kText,
             ..FontFace::default()
         });
     }
@@ -394,6 +421,7 @@ fn LoadDemoFontsWithReader(
                 weight,
                 italic,
                 bytes: bytes.into(),
+                fallback_role: FontFallbackRole::kText,
                 ..FontFace::default()
             });
         }
@@ -411,6 +439,7 @@ fn LoadDemoFontsWithReader(
                         tag: WGHT,
                         value: weight as f32,
                     }],
+                    fallback_role: FontFallbackRole::kText,
                     ..FontFace::default()
                 });
             }
@@ -432,6 +461,7 @@ fn LoadDemoFontsWithReader(
                 italic,
                 face_index,
                 bytes: bytes.clone(),
+                fallback_role: FontFallbackRole::kLastResort,
                 ..FontFace::default()
             });
         }
@@ -452,6 +482,7 @@ fn LoadDemoFontsWithReader(
                 italic,
                 face_index,
                 bytes: bytes.clone(),
+                fallback_role: FontFallbackRole::kText,
                 ..FontFace::default()
             });
         }
@@ -464,6 +495,7 @@ fn LoadDemoFontsWithReader(
             )
             .as_slice()
             .into(),
+            fallback_role: FontFallbackRole::kText,
             ..FontFace::default()
         });
     }
@@ -483,7 +515,7 @@ mod tests {
         #[cfg(target_os = "macos")]
         assert_eq!(
             actual.len(),
-            39,
+            40,
             "all host faces must remain in the catalog"
         );
         for (a, b) in actual.iter().zip(&reference) {

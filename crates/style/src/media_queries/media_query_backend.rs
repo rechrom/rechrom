@@ -1,18 +1,16 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
 //! Production media-query literal consumer and typed source feature dispatch.
 //! Source commit: 6c1d401fcca5e1b0030563a90c2f2bba168e0c15.
-//! Literal control-flow mapping: media_query_exp.cc:61-126,145-179,193-197,
-//! 254-370,535-562,568-572,580-605. These branches consume actual typed literals;
-//! their CSSMathFunctionValue dependencies remain pending rather than mapped.
+//! Literal control-flow mapping: media_query_exp.cc:58-371,491-606. These
+//! branches consume actual numeric/CSSMathFunctionValue payloads and preserve
+//! them as typed production CSSValue objects for container queries.
 //! Runtime gates follow runtime_enabled_features.json5 stable-status defaults.
-//! Pending dependencies: CSSMathFunctionValue/Consume{Integer,Number,Length,Resolution}
-//! math-function branches; custom declarations, anchored/container style functions.
 //! Evaluation source ranges/counts are in media_query_evaluator.rs and the
 //! exact media_query_evaluator_ledger.tsv. Typed enum dispatch replaces the
 //! global function map; new container axes/state/video/custom-media branches
 //! use required MediaValues reads and real StyleRuleCustomMedia ownership.
-//! Container style/fallback control flow lives in media_query_container.rs;
-//! concrete owners/coercion adapters and telemetry omissions are tracked there.
+//! Container style/fallback control flow and concrete owner adapters live in
+//! production_container_parser.rs and parser/production_anchor_parser.rs.
 //! Unknown AST stays Kleene Unknown; there is no fallback string parser.
 use super::device_posture_provider::DevicePostureType;
 use super::display_mode::DisplayMode as DisplayModeValue;
@@ -296,6 +294,13 @@ fn ValidIdent(feature: Feature, id: CSSValueID) -> bool {
 fn ConsumeNumeric<T: TokenStreamTokenizer>(
     stream: &mut CSSParserTokenStream<'_, T>,
 ) -> Option<CSSNumericLiteralValue> {
+    if stream.Peek().GetType() == kFunctionToken {
+        let expression = crate::css_math_expression_node::ConsumeMathFunction(stream).ok()?;
+        return Some(CSSNumericLiteralValue::CreateMath(
+            expression,
+            crate::css_math_function_value::ValueRange::All,
+        ));
+    }
     let token = stream.Peek();
     let unit = match token.GetType() {
         kNumberToken => {
@@ -341,24 +346,44 @@ impl MediaQueryParserBackend for MediaQueryFeatureFlags {
             return (prefix == MediaQueryOperator::kNone && ValidIdent(feature, id))
                 .then(|| MediaQueryExpValue::FromId(id));
         }
+        let integer_feature = matches!(
+            feature,
+            Color | ColorIndex | Monochrome | Grid | HorizontalSegments | VerticalSegments
+        );
         let value = ConsumeNumeric(stream)?;
+        // Blink tries ConsumeInteger before ConsumeNumber/Length/Resolution.
+        // A number-category math function therefore carries the integer target
+        // range even for features that later accept a general number.
+        let range = if integer_feature || value.MathValue().is_some() && value.IsNumber() {
+            crate::css_math_function_value::ValueRange::Integer
+        } else {
+            crate::css_math_function_value::ValueRange::All
+        };
+        let value = value.WithValueRange(range);
         if matches!(feature, AspectRatio | DeviceAspectRatio) {
-            if value.DoubleValue() < 0.0 {
+            if value.GetValueIfKnown().is_some_and(|value| value < 0.0) {
                 return None;
             }
             let denominator = if stream.Peek().GetType() == kDelimiterToken
                 && stream.Peek().Delimiter() == b'/' as u16
             {
                 stream.ConsumeIncludingWhitespace();
-                let denominator = ConsumeNumeric(stream)?;
-                if !denominator.IsNumber() || denominator.DoubleValue() < 0.0 {
+                let denominator = ConsumeNumeric(stream)?
+                    .WithValueRange(crate::css_math_function_value::ValueRange::NonNegative);
+                if !denominator.IsNumber()
+                    || denominator
+                        .GetValueIfKnown()
+                        .is_some_and(|value| value < 0.0)
+                {
                     return None;
                 }
                 denominator
             } else {
                 CSSNumericLiteralValue::Create(1.0, UnitType::kNumber)
             };
-            let numerator = if value.DoubleValue() == 0.0 && denominator.DoubleValue() == 0.0 {
+            let numerator = if value.GetValueIfKnown() == Some(0.0)
+                && denominator.GetValueIfKnown() == Some(0.0)
+            {
                 CSSNumericLiteralValue::Create(1.0, UnitType::kNumber)
             } else {
                 value
@@ -370,13 +395,20 @@ impl MediaQueryParserBackend for MediaQueryFeatureFlags {
         }
         let valid = match feature {
             Width | Height | InlineSize | BlockSize | DeviceWidth | DeviceHeight => {
-                value.IsLength() || value.IsNumber() && value.DoubleValue() == 0.0
+                value.IsLength() || value.IsNumber() && value.GetValueIfKnown() == Some(0.0)
             }
-            Resolution => value.IsResolution() && value.DoubleValue() >= 0.0,
+            Resolution => {
+                value.IsResolution() && !value.GetValueIfKnown().is_some_and(|value| value < 0.0)
+            }
             Color | ColorIndex | Monochrome | HorizontalSegments | VerticalSegments => {
                 value.IsInteger()
             }
-            Grid => value.IsInteger() && matches!(value.DoubleValue(), 0.0 | 1.0),
+            Grid => {
+                value.IsInteger()
+                    && value
+                        .GetValueIfKnown()
+                        .is_none_or(|value| matches!(value, 0.0 | 1.0))
+            }
             DevicePixelRatio | Transform3d => value.IsNumber(),
             _ => false,
         };
@@ -401,6 +433,15 @@ pub struct MediaQueryValueBackend<'a> {
     features: MediaQueryFeatureFlags,
 }
 impl<'a> MediaQueryEvaluator<'a, MediaQueryValueBackend<'a>> {
+    pub fn ForMediaType(media_type: foundation::String, values: &'a dyn MediaValues) -> Self {
+        Self::FromMediaType(
+            media_type,
+            MediaQueryValueBackend {
+                values,
+                features: MediaQueryFeatureFlags::default(),
+            },
+        )
+    }
     pub fn ForMediaValues(values: &'a dyn MediaValues) -> Self {
         Self::ForMediaValuesWithFeatures(values, MediaQueryFeatureFlags::default())
     }
@@ -485,8 +526,7 @@ impl MediaQueryEvaluationBackend for MediaQueryValueBackend<'_> {
         if let Some(flags) = flags {
             flags.is_viewport_dependent |= feature.IsViewportDependent();
             flags.is_device_dependent |= feature.IsDeviceDependent();
-            flags.unit_flags |=
-                LiteralUnitFlags(&bounds.left.value) | LiteralUnitFlags(&bounds.right.value);
+            flags.unit_flags |= feature.GetUnitFlags();
         }
         if result {
             KleeneValue::kTrue
@@ -495,44 +535,13 @@ impl MediaQueryEvaluationBackend for MediaQueryValueBackend<'_> {
         }
     }
 }
-fn LiteralUnitFlags(value: &MediaQueryExpValue<CSSNumericLiteralValue>) -> u32 {
-    use UnitType::*;
-    match value {
-        MediaQueryExpValue::Value(value) => match value.GetType() {
-            kEms | kExs | kChs | kIcs | kCaps => MediaQueryExpValue::<()>::kFontRelative,
-            kRems | kRexs | kRchs | kRics | kRcaps => MediaQueryExpValue::<()>::kRootRelative,
-            kLhs => MediaQueryExpValue::<()>::kLineHeightRelative,
-            kRlhs => MediaQueryExpValue::<()>::kRootRelative,
-            kDynamicViewportWidth
-            | kDynamicViewportHeight
-            | kDynamicViewportInlineSize
-            | kDynamicViewportBlockSize
-            | kDynamicViewportMin
-            | kDynamicViewportMax => MediaQueryExpValue::<()>::kDynamicViewport,
-            kViewportWidth
-            | kViewportHeight
-            | kViewportInlineSize
-            | kViewportBlockSize
-            | kViewportMin
-            | kViewportMax
-            | kSmallViewportWidth
-            | kSmallViewportHeight
-            | kSmallViewportInlineSize
-            | kSmallViewportBlockSize
-            | kSmallViewportMin
-            | kSmallViewportMax
-            | kLargeViewportWidth
-            | kLargeViewportHeight
-            | kLargeViewportInlineSize
-            | kLargeViewportBlockSize
-            | kLargeViewportMin
-            | kLargeViewportMax => MediaQueryExpValue::<()>::kStaticViewport,
-            kContainerWidth | kContainerHeight | kContainerInlineSize | kContainerBlockSize
-            | kContainerMin | kContainerMax => MediaQueryExpValue::<()>::kContainer,
-            _ => 0,
-        },
-        _ => 0,
-    }
+fn ResolveNumeric(
+    value: &CSSNumericLiteralValue,
+    values: &dyn MediaValues,
+) -> Option<CSSNumericLiteralValue> {
+    value
+        .Resolve(&mut |number, unit| Ok(values.ComputeLength(number, unit)))
+        .ok()
 }
 fn EvalLiteral(
     kind: Feature,
@@ -546,10 +555,14 @@ fn EvalLiteral(
         MediaQueryExpValue::Id(id) => Some(*id),
         _ => None,
     };
-    let number = match value {
-        MediaQueryExpValue::Value(value) if value.IsNumber() => Some(value.DoubleValue()),
+    let resolved = match value {
+        MediaQueryExpValue::Value(value) => ResolveNumeric(value, v),
         _ => None,
     };
+    let number = resolved
+        .as_ref()
+        .filter(|value| value.IsNumber())
+        .map(|value| value.DoubleValue());
     let boolean = !value.IsValid();
     let print = v.MediaType().Utf8().eq_ignore_ascii_case("print");
     match kind {
@@ -569,13 +582,13 @@ fn EvalLiteral(
                     actual != 0.0
                 };
             }
-            match value {
-                MediaQueryExpValue::Value(value) if value.IsLength() => CompareDoubleValue(
+            match resolved.as_ref() {
+                Some(value) if value.IsLength() => CompareDoubleValue(
                     actual,
                     v.ComputeLength(value.DoubleValue(), value.GetType()),
                     op,
                 ),
-                MediaQueryExpValue::Value(value) if value.IsNumber() => {
+                Some(value) if value.IsNumber() => {
                     let query = value.DoubleValue() as i32;
                     (!v.StrictMode() || query == 0) && CompareDoubleValue(actual, query as f64, op)
                 }
@@ -592,18 +605,26 @@ fn EvalLiteral(
                 (v.DeviceWidth(), v.DeviceHeight())
             };
             match value {
-                MediaQueryExpValue::Ratio(ratio) => CompareDoubleValue(
-                    width as f64 * ratio.1.DoubleValue(),
-                    height as f64
-                        * if ratio.0.IsLength() {
-                            v.ComputeLength(ratio.0.DoubleValue(), ratio.0.GetType())
-                        } else if ratio.0.IsResolution() {
-                            ratio.0.ComputeDotsPerPixel()
-                        } else {
-                            ratio.0.DoubleValue()
-                        },
-                    op,
-                ),
+                MediaQueryExpValue::Ratio(ratio) => {
+                    let Some(numerator) = ResolveNumeric(&ratio.0, v) else {
+                        return false;
+                    };
+                    let Some(denominator) = ResolveNumeric(&ratio.1, v) else {
+                        return false;
+                    };
+                    CompareDoubleValue(
+                        width as f64 * denominator.DoubleValue(),
+                        height as f64
+                            * if numerator.IsLength() {
+                                v.ComputeLength(numerator.DoubleValue(), numerator.GetType())
+                            } else if numerator.IsResolution() {
+                                numerator.ComputeDotsPerPixel()
+                            } else {
+                                numerator.DoubleValue()
+                            },
+                        op,
+                    )
+                }
                 _ => false,
             }
         }
@@ -629,13 +650,11 @@ fn EvalLiteral(
             if boolean {
                 return actual != 0.0;
             }
-            match value {
-                MediaQueryExpValue::Value(value)
-                    if kind == DevicePixelRatio && value.IsNumber() =>
-                {
+            match resolved.as_ref() {
+                Some(value) if kind == DevicePixelRatio && value.IsNumber() => {
                     CompareValue(actual, value.DoubleValue() as f32, op)
                 }
-                MediaQueryExpValue::Value(value) if kind == Resolution && value.IsResolution() => {
+                Some(value) if kind == Resolution && value.IsResolution() => {
                     let query = value.ComputeDotsPerPixel() as f32;
                     if value.GetType() == UnitType::kDotsPerCentimeter {
                         CompareValue(
@@ -893,6 +912,27 @@ mod tests {
             None
         ));
         assert!(flags.is_device_dependent);
+    }
+    #[test]
+    fn production_media_math_keeps_typed_values_until_evaluation() {
+        let values = values();
+        let evaluator = MediaQueryEvaluator::ForMediaValues(&values);
+        assert!(evaluator.Eval(&ParseMediaQuerySet("(width >= calc(10em + 640px))")));
+        assert!(!evaluator.Eval(&ParseMediaQuerySet("(width > calc(10em + 640px))")));
+        assert!(!evaluator.Eval(&ParseMediaQuerySet("(width: calc(50% + 400px))")));
+        assert!(evaluator.Eval(&ParseMediaQuerySet("(color >= calc(4 * 2))")));
+        assert!(evaluator.Eval(&ParseMediaQuerySet(
+            "(-webkit-device-pixel-ratio: calc(1.5))"
+        )));
+
+        let query = ParseMediaQuerySet("(width: calc(10em + 80dvw))");
+        let mut flags = MediaQueryResultFlags::default();
+        assert!(evaluator.EvalSet(&query, Some(&mut flags), None));
+        assert_eq!(
+            flags.unit_flags,
+            MediaQueryExpValue::<()>::kFontRelative | MediaQueryExpValue::<()>::kDynamicViewport
+        );
+        assert!(query.MediaText().Utf8().contains("calc("));
     }
     #[test]
     fn production_media_values_are_container_specific_and_updateable() {

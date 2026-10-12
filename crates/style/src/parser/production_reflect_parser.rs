@@ -5,6 +5,7 @@ use super::*;
 pub(super) fn Consume<T: TokenStreamTokenizer>(
     s: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
 ) -> Result<Rc<Value>, PropertyParseError> {
     let id = CSSPropertyID::kWebkitBoxReflect;
     if !matches!(
@@ -42,7 +43,9 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
     let mask = if at_value_end(s) {
         None
     } else {
-        Some(border_image_parser::ConsumeWebkitBorderImage(id, s, mode)?)
+        Some(border_image_parser::ConsumeWebkitBorderImage(
+            id, s, mode, context,
+        )?)
     };
     Ok(crate::production_reflect_value::reflect(
         direction, offset, mask,

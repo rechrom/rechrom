@@ -57,7 +57,7 @@ pub enum SelectorCheckerMode {
     kCollectingCSSRules,
     kQueryingRules,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchTextRequest {
     kNone,
     kCurrent,
@@ -69,12 +69,8 @@ pub enum SearchTextRequest {
 /// always the existing concrete model. No selector matches or defaults are
 /// supplied by this interface. SelectorFilter currently exposes only Mark in
 /// its module; this associated type is the real filter, not a second Bloom.
-pub trait ElementRuleCollectorBackend:
-    RuleSetBackend<
-    CSSPropertyValueSet: MatchedPropertySet + 'static,
-    MixinParameterBindings: MatchMixinBindings + 'static,
->
-{
+pub trait ElementRuleCollectorRuntime<R: RuleSetBackend>: Sized {
+    type RuntimeDocument;
     type Element;
     type ContainerNode;
     type ScopedStyleResolver;
@@ -124,11 +120,11 @@ pub trait ElementRuleCollectorBackend:
     fn RecalcIsEnsuringStyle(&self, c: &Self::StyleRecalcContext) -> bool;
     fn RecalcHasOldStyle(&self, c: &Self::StyleRecalcContext) -> bool;
     fn RecalcSizeContainer(&self, c: &Self::StyleRecalcContext) -> Option<Rc<Self::Element>>;
-    fn RecalcTrySet(&self, c: &Self::StyleRecalcContext) -> Option<Rc<Self::CSSPropertyValueSet>>;
+    fn RecalcTrySet(&self, c: &Self::StyleRecalcContext) -> Option<Rc<R::CSSPropertyValueSet>>;
     fn RecalcTryTacticsSet(
         &self,
         c: &Self::StyleRecalcContext,
-    ) -> Option<Rc<Self::CSSPropertyValueSet>>;
+    ) -> Option<Rc<R::CSSPropertyValueSet>>;
     fn NewStyleScopeFrame(
         &self,
         origin: Rc<Self::Element>,
@@ -142,9 +138,9 @@ pub trait ElementRuleCollectorBackend:
     fn FrameHasSeenImplicitScope(
         &self,
         frame: &Self::StyleScopeFrame,
-        scope: &Self::StyleScope,
+        scope: &R::StyleScope,
     ) -> bool;
-    fn StyleScopeIsImplicit(&self, scope: &Self::StyleScope) -> bool;
+    fn StyleScopeIsImplicit(&self, scope: &R::StyleScope) -> bool;
     fn NewSelectorCheckingContext(
         &self,
         c: &Self::ElementResolveContext,
@@ -182,13 +178,7 @@ pub trait ElementRuleCollectorBackend:
     fn SetCheckingStyleScope(
         &self,
         c: &mut Self::SelectorCheckingContext,
-        scope: Option<Rc<Self::StyleScope>>,
-    );
-    fn SetCheckingSelectorAndVisited(
-        &self,
-        c: &mut Self::SelectorCheckingContext,
-        s: CSSSelectorComplex<'_>,
-        visited: bool,
+        scope: Option<Rc<R::StyleScope>>,
     );
     fn NewSelectorChecker(
         &self,
@@ -202,6 +192,8 @@ pub trait ElementRuleCollectorBackend:
         &self,
         checker: &Self::SelectorChecker,
         c: &mut Self::SelectorCheckingContext,
+        selector: CSSSelectorComplex<'_>,
+        match_visited: bool,
         result: &mut Self::CheckerMatchResult,
     ) -> bool;
     fn EasySelectorMatch(
@@ -234,8 +226,8 @@ pub trait ElementRuleCollectorBackend:
         &self,
         resolver: &Self::ScopedStyleResolver,
     ) -> Option<Rc<CascadeLayerMap>>;
-    fn UserCascadeLayerMap(&self, document: &Self::Document) -> Option<Rc<CascadeLayerMap>>;
-    fn ElementDocument(&self, e: &Self::Element) -> Rc<Self::Document>;
+    fn UserCascadeLayerMap(&self, document: &Self::RuntimeDocument) -> Option<Rc<CascadeLayerMap>>;
+    fn ElementDocument(&self, e: &Self::Element) -> Rc<Self::RuntimeDocument>;
     fn AttributeOrClassBloomFilter(&self, e: &Self::Element) -> u32;
     fn ShadowPseudoId(&self, e: &Self::Element) -> AtomicString;
     fn IsVTTElement(&self, e: &Self::Element) -> bool;
@@ -245,7 +237,7 @@ pub trait ElementRuleCollectorBackend:
     fn HasClass(&self, e: &Self::Element) -> bool;
     fn ClassNames(&self, e: &Self::Element) -> Vec<AtomicString>;
     fn IsHTMLElement(&self, e: &Self::Element) -> bool;
-    fn IsHTMLDocument(&self, d: &Self::Document) -> bool;
+    fn IsHTMLDocument(&self, d: &Self::RuntimeDocument) -> bool;
     fn Attributes(&self, e: &Self::Element) -> Vec<Rc<Self::Attribute>>;
     fn AttributesWithoutStyleUpdate(&self, e: &Self::Element) -> Vec<Rc<Self::Attribute>>;
     fn AttributesWithoutUpdate(&self, e: &Self::Element) -> Vec<Rc<Self::Attribute>>;
@@ -264,70 +256,91 @@ pub trait ElementRuleCollectorBackend:
     fn NewContainerSelectorCache(&self) -> Self::ContainerSelectorCache;
     fn ContainerQuerySetParent(
         &self,
-        set: &Self::ContainerQuerySet,
-    ) -> Option<Rc<Self::ContainerQuerySet>>;
-    fn ContainerQueries(&self, set: &Self::ContainerQuerySet) -> Vec<Rc<Self::ContainerQuery>>;
+        set: &R::ContainerQuerySet,
+    ) -> Option<Rc<R::ContainerQuerySet>>;
+    fn ContainerQueries(&self, set: &R::ContainerQuerySet) -> Vec<Rc<R::ContainerQuery>>;
     fn DetermineContainerStartingElement(
         &self,
         e: &Self::Element,
         pseudo: PseudoId,
-        query: &Self::ContainerQuery,
+        query: &R::ContainerQuery,
         nearest: Option<Rc<Self::Element>>,
     ) -> Option<Rc<Self::Element>>;
     fn EvalAndAddContainerQuery(
         &self,
         start: Option<Rc<Self::Element>>,
         recalc: &Self::StyleRecalcContext,
-        query: &Self::ContainerQuery,
+        query: &R::ContainerQuery,
         cache: &mut Self::ContainerSelectorCache,
         result: &mut MatchResult,
     ) -> bool;
-    fn SetContainerDependencyFlags(&self, query: &Self::ContainerQuery, result: &mut MatchResult);
-    fn PropertyIDs(&self, set: &Self::CSSPropertyValueSet) -> Vec<CSSPropertyID>;
-    fn PropertiesIsEmpty(&self, set: &Self::CSSPropertyValueSet) -> bool;
-    fn PropertiesHasProperty(&self, set: &Self::CSSPropertyValueSet, id: CSSPropertyID) -> bool;
+    fn SetContainerDependencyFlags(&self, query: &R::ContainerQuery, result: &mut MatchResult);
+    fn PropertyIDs(&self, set: &R::CSSPropertyValueSet) -> Vec<CSSPropertyID>;
+    fn PropertiesIsEmpty(&self, set: &R::CSSPropertyValueSet) -> bool;
+    fn PropertiesHasProperty(&self, set: &R::CSSPropertyValueSet, id: CSSPropertyID) -> bool;
     fn CollectionLength(&self, c: &Self::CSSRuleCollection) -> usize;
     fn CollectionItemInternal(
         &self,
         c: &Self::CSSRuleCollection,
         index: usize,
     ) -> Rc<Self::CSSRule>;
-    fn StyleRuleFromCSSRule(&self, r: &Self::CSSRule) -> Option<Rc<StyleRule<Self>>>;
+    fn StyleRuleFromCSSRule(&self, r: &Self::CSSRule) -> Option<Rc<StyleRule<R>>>;
     fn ImportSheetFromCSSRule(&self, r: &Self::CSSRule) -> Option<Rc<Self::CSSStyleSheet>>;
     fn CSSRuleChildren(&self, r: &Self::CSSRule) -> Option<Rc<Self::CSSRuleCollection>>;
     fn NestedDeclarationsFromCSSRule(
         &self,
         r: &Self::CSSRule,
-    ) -> Option<(Rc<StyleRule<Self>>, Rc<Self::CSSRule>)>;
+    ) -> Option<(Rc<StyleRule<R>>, Rc<Self::CSSRule>)>;
     fn SheetRuleCollection(&self, sheet: &Self::CSSStyleSheet) -> Rc<Self::CSSRuleCollection>;
     fn ActiveScopeStyleSheets(&self, scope: &Self::TreeScope) -> Vec<Rc<Self::CSSStyleSheet>>;
-    fn ActiveUserStyleSheets(&self, document: &Self::Document) -> Vec<Rc<Self::CSSStyleSheet>>;
+    fn ActiveUserStyleSheets(
+        &self,
+        document: &Self::RuntimeDocument,
+    ) -> Vec<Rc<Self::CSSStyleSheet>>;
     fn SheetContents(&self, sheet: &Self::CSSStyleSheet) -> Rc<Self::StyleSheetContents>;
     fn StartOrStopSelectorMapTracking(
         &self,
         scope: Option<&Self::TreeScope>,
-        document: &Self::Document,
+        document: &Self::RuntimeDocument,
     );
     fn LookupStyleSheetContentsForRule(
         &self,
-        rule: &StyleRule<Self>,
+        rule: &StyleRule<R>,
     ) -> Option<Rc<Self::StyleSheetContents>>;
     fn ContentsClientInTreeScope(
         &self,
         c: &Self::StyleSheetContents,
         scope: &Self::TreeScope,
     ) -> Option<Rc<Self::CSSStyleSheet>>;
-    fn CreateCSSOMWrapper(&self, rule: &Rc<StyleRule<Self>>, position: usize) -> Rc<Self::CSSRule>;
+    fn CreateCSSOMWrapper(&self, rule: &Rc<StyleRule<R>>, position: usize) -> Rc<Self::CSSRule>;
     fn TrackRule(
         &self,
         tracker: &mut Self::StyleRuleUsageTracker,
         sheet: Option<Rc<Self::CSSStyleSheet>>,
-        rule: &Rc<StyleRule<Self>>,
+        rule: &Rc<StyleRule<R>>,
     );
 }
 
+/// Compatibility name for translated owners that use one type for both the
+/// immutable RuleSet model and live DOM collaborators. Production can instead
+/// bind `ElementRuleCollectorRuntime<RuleBackend>` on a separate runtime type.
+pub trait ElementRuleCollectorBackend:
+    RuleSetBackend<
+        CSSPropertyValueSet: MatchedPropertySet + 'static,
+        MixinParameterBindings: MatchMixinBindings + 'static,
+    > + ElementRuleCollectorRuntime<Self, RuntimeDocument = <Self as RuleSetBackend>::Document>
+{
+}
+impl<T> ElementRuleCollectorBackend for T where
+    T: RuleSetBackend<
+            CSSPropertyValueSet: MatchedPropertySet + 'static,
+            MixinParameterBindings: MatchMixinBindings + 'static,
+        > + ElementRuleCollectorRuntime<T, RuntimeDocument = <T as RuleSetBackend>::Document>
+{
+}
+
 // cpp: match_request.h:63-136; match_request.cc:8-45.
-pub struct RuleSetGroup<B: ElementRuleCollectorBackend> {
+pub struct RuleSetGroup<B: RuleSetBackend> {
     rule_sets: Vec<Rc<RuleSet<B>>>,
     first_index: u32,
     single_scope: u32,
@@ -340,7 +353,7 @@ pub struct RuleSetGroup<B: ElementRuleCollectorBackend> {
     focus_visible: u32,
     need_style_synchronized: bool,
 }
-impl<B: ElementRuleCollectorBackend> RuleSetGroup<B> {
+impl<B: RuleSetBackend> RuleSetGroup<B> {
     pub const kRulesetsRoom: usize = 32;
     pub fn new(group_index: u32) -> Self {
         Self {
@@ -394,9 +407,17 @@ impl<B: ElementRuleCollectorBackend> RuleSetGroup<B> {
         }
         self.rule_sets.push(set);
     }
+
+    /// Borrows the parser-owned rule sets retained by this request group.
+    /// Production host adapters use this only to keep ownership across the
+    /// trait callback boundary; selector matching remains in
+    /// `ElementRuleCollector::CollectMatchingRules`.
+    pub(crate) fn RuleSets(&self) -> &[Rc<RuleSet<B>>] {
+        &self.rule_sets
+    }
 }
 // cpp: match_request.cc:47-54.
-pub fn AddRuleSetToRuleSetGroupList<B: ElementRuleCollectorBackend>(
+pub fn AddRuleSetToRuleSetGroupList<B: RuleSetBackend>(
     set: Rc<RuleSet<B>>,
     groups: &mut Vec<RuleSetGroup<B>>,
 ) {
@@ -405,15 +426,15 @@ pub fn AddRuleSetToRuleSetGroupList<B: ElementRuleCollectorBackend>(
     }
     groups.last_mut().unwrap().AddRuleSet(set);
 }
-pub struct RuleSetWithIndex<'a, B: ElementRuleCollectorBackend> {
+pub struct RuleSetWithIndex<'a, B: RuleSetBackend> {
     pub rule_set: &'a RuleSet<B>,
     pub style_sheet_index: u32,
 }
-pub struct RuleSetIterator<'a, B: ElementRuleCollectorBackend> {
+pub struct RuleSetIterator<'a, B: RuleSetBackend> {
     group: &'a RuleSetGroup<B>,
     bitmap: u32,
 }
-impl<'a, B: ElementRuleCollectorBackend> Iterator for RuleSetIterator<'a, B> {
+impl<'a, B: RuleSetBackend> Iterator for RuleSetIterator<'a, B> {
     type Item = RuleSetWithIndex<'a, B>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.bitmap == 0 {
@@ -429,17 +450,19 @@ impl<'a, B: ElementRuleCollectorBackend> Iterator for RuleSetIterator<'a, B> {
 }
 // cpp: match_request.h:142-307. Borrowing the group keeps RuleData buckets
 // immutable for the complete matching operation, as required by Chromium.
-pub struct MatchRequest<'a, B: ElementRuleCollectorBackend> {
+// The rule backend and runtime handles are deliberately separate: production
+// RuleSets are parser-owned, while element/scope handles belong to the live DOM.
+pub struct MatchRequest<'a, B: RuleSetBackend, ContainerNode, Element> {
     group: &'a RuleSetGroup<B>,
-    scope: Option<Rc<B::ContainerNode>>,
-    vtt: Option<Rc<B::Element>>,
+    scope: Option<Rc<ContainerNode>>,
+    vtt: Option<Rc<Element>>,
     enabled: u32,
 }
-impl<'a, B: ElementRuleCollectorBackend> MatchRequest<'a, B> {
+impl<'a, B: RuleSetBackend, ContainerNode, Element> MatchRequest<'a, B, ContainerNode, Element> {
     pub fn new(
         group: &'a RuleSetGroup<B>,
-        scope: Option<Rc<B::ContainerNode>>,
-        vtt: Option<Rc<B::Element>>,
+        scope: Option<Rc<ContainerNode>>,
+        vtt: Option<Rc<Element>>,
     ) -> Self {
         Self {
             group,
@@ -448,12 +471,17 @@ impl<'a, B: ElementRuleCollectorBackend> MatchRequest<'a, B> {
             enabled: group.single_scope | group.not_single_scope,
         }
     }
-    pub fn ForCollector(
+    pub fn ForCollector<C>(
         group: &'a RuleSetGroup<B>,
-        scope: Option<Rc<B::ContainerNode>>,
-        vtt: Option<Rc<B::Element>>,
-        collector: &ElementRuleCollector<'_, B>,
-    ) -> Self {
+        scope: Option<Rc<ContainerNode>>,
+        vtt: Option<Rc<Element>>,
+        collector: &ElementRuleCollector<'_, B, C>,
+    ) -> Self
+    where
+        C: ElementRuleCollectorRuntime<B, ContainerNode = ContainerNode, Element = Element>,
+        B::CSSPropertyValueSet: MatchedPropertySet + 'static,
+        B::MixinParameterBindings: MatchMixinBindings + 'static,
+    {
         let mut result = Self {
             group,
             scope,
@@ -470,10 +498,10 @@ impl<'a, B: ElementRuleCollectorBackend> MatchRequest<'a, B> {
         }
         result
     }
-    pub fn Scope(&self) -> Option<&Rc<B::ContainerNode>> {
+    pub fn Scope(&self) -> Option<&Rc<ContainerNode>> {
         self.scope.as_ref()
     }
-    pub fn VTTOriginatingElement(&self) -> Option<&Rc<B::Element>> {
+    pub fn VTTOriginatingElement(&self) -> Option<&Rc<Element>> {
         self.vtt.as_ref()
     }
     fn Iter(&self, bitmap: u32) -> RuleSetIterator<'a, B> {
@@ -519,7 +547,7 @@ impl<'a, B: ElementRuleCollectorBackend> MatchRequest<'a, B> {
 
 // cpp: element_rule_collector.h:51-124. Owns the same StyleRule allocation;
 // RuleData itself cannot escape the borrowed RuleSet.
-pub struct MatchedRule<B: ElementRuleCollectorBackend> {
+pub struct MatchedRule<B: RuleSetBackend> {
     sort_key_: u64,
     position_: u64,
     rule_: Rc<StyleRule<B>>,
@@ -527,7 +555,7 @@ pub struct MatchedRule<B: ElementRuleCollectorBackend> {
     valid_property_filter_: ValidPropertyFilter,
     selector_index_: u16,
 }
-impl<B: ElementRuleCollectorBackend> MatchedRule<B> {
+impl<B: RuleSetBackend> MatchedRule<B> {
     fn new(data: &RuleData<B>, layer: u16, proximity: u32, sheet: u32) -> Self {
         Self {
             sort_key_: ((layer as u64) << 48)
@@ -549,8 +577,20 @@ impl<B: ElementRuleCollectorBackend> MatchedRule<B> {
     pub fn SortKey(&self) -> u64 {
         self.sort_key_
     }
+    pub fn Specificity(&self) -> u32 {
+        ((self.sort_key_ >> 16) & u32::MAX as u64) as u32
+    }
+    pub fn Proximity(&self) -> u32 {
+        65535 - (self.sort_key_ & 0xffff) as u32
+    }
     pub fn GetPosition(&self) -> u64 {
         self.position_
+    }
+    pub fn StyleSheetIndex(&self) -> usize {
+        (self.position_ >> 18) as usize
+    }
+    pub fn PositionInStyleSheet(&self) -> u32 {
+        (self.position_ & ((1 << 18) - 1)) as u32
     }
     pub fn LinkMatchType(&self) -> u8 {
         self.link_match_type_
@@ -567,30 +607,30 @@ impl<B: ElementRuleCollectorBackend> MatchedRule<B> {
     }
 }
 // css_rule_list.h IndexedRule, with the genuine external CSSOM object.
-pub struct IndexedRule<B: ElementRuleCollectorBackend> {
-    pub rule: Option<Rc<B::CSSRule>>,
-    pub tree_scope: Option<Rc<B::TreeScope>>,
+pub struct IndexedRule<B: RuleSetBackend, C: ElementRuleCollectorRuntime<B>> {
+    pub rule: Option<Rc<C::CSSRule>>,
+    pub tree_scope: Option<Rc<C::TreeScope>>,
     pub index: i32,
 }
 pub type StyleRuleList<B> = Vec<Rc<StyleRule<B>>>;
-pub type RuleIndexList<B> = Vec<IndexedRule<B>>;
+pub type RuleIndexList<B, C> = Vec<IndexedRule<B, C>>;
 
 // cpp: element_rule_collector.cc:91-215. Keeps the actual checking context and
 // frame; only the source's precomputed values are duplicated in this wrapper.
-struct ContextWithStyleScopeFrame<B: ElementRuleCollectorBackend> {
-    _frame: Rc<B::StyleScopeFrame>,
-    context: B::SelectorCheckingContext,
+struct ContextWithStyleScopeFrame<B: RuleSetBackend, C: ElementRuleCollectorRuntime<B>> {
+    _frame: Rc<C::StyleScopeFrame>,
+    context: C::SelectorCheckingContext,
     layer_map: Option<Rc<CascadeLayerMap>>,
     reject_starting_styles: bool,
     can_use_easy_selector_matching: bool,
 }
-impl<B: ElementRuleCollectorBackend> ContextWithStyleScopeFrame<B> {
+impl<B: RuleSetBackend, C: ElementRuleCollectorRuntime<B>> ContextWithStyleScopeFrame<B, C> {
     fn new(
-        backend: &B,
-        context: &B::ElementResolveContext,
-        request: &MatchRequest<'_, B>,
-        pseudo: &B::StyleRequest,
-        recalc: &B::StyleRecalcContext,
+        backend: &C,
+        context: &C::ElementResolveContext,
+        request: &MatchRequest<'_, B, C::ContainerNode, C::Element>,
+        pseudo: &C::StyleRequest,
+        recalc: &C::StyleRecalcContext,
         mode: SelectorCheckerMode,
         ua: bool,
         no_sheet: bool,
@@ -692,11 +732,11 @@ fn SeekInterval<'a, T>(
     }
 }
 
-pub fn FindStyleRule<B: ElementRuleCollectorBackend>(
-    backend: &B,
-    rules: Option<&B::CSSRuleCollection>,
+pub fn FindStyleRule<B: RuleSetBackend, C: ElementRuleCollectorRuntime<B>>(
+    backend: &C,
+    rules: Option<&C::CSSRuleCollection>,
     target: &Rc<StyleRule<B>>,
-) -> Option<Rc<B::CSSRule>> {
+) -> Option<Rc<C::CSSRule>> {
     let rules = rules?;
     for index in 0..backend.CollectionLength(rules) {
         let rule = backend.CollectionItemInternal(rules, index);
@@ -727,12 +767,12 @@ pub fn FindStyleRule<B: ElementRuleCollectorBackend>(
     }
     None
 }
-pub fn SlowFindStyleSheet<B: ElementRuleCollectorBackend>(
-    backend: &B,
-    scope: Option<&B::TreeScope>,
-    document: &B::Document,
+pub fn SlowFindStyleSheet<B: RuleSetBackend, C: ElementRuleCollectorRuntime<B>>(
+    backend: &C,
+    scope: Option<&C::TreeScope>,
+    document: &C::RuntimeDocument,
     rule: &Rc<StyleRule<B>>,
-) -> Option<Rc<B::CSSStyleSheet>> {
+) -> Option<Rc<C::CSSStyleSheet>> {
     if let Some(scope) = scope {
         for sheet in backend.ActiveScopeStyleSheets(scope) {
             if FindStyleRule(backend, Some(&backend.SheetRuleCollection(&sheet)), rule).is_some() {
@@ -747,12 +787,12 @@ pub fn SlowFindStyleSheet<B: ElementRuleCollectorBackend>(
     }
     None
 }
-pub fn FindStyleSheet<B: ElementRuleCollectorBackend>(
-    backend: &B,
-    scope: Option<&B::TreeScope>,
-    document: &B::Document,
+pub fn FindStyleSheet<B: RuleSetBackend, C: ElementRuleCollectorRuntime<B>>(
+    backend: &C,
+    scope: Option<&C::TreeScope>,
+    document: &C::RuntimeDocument,
     rule: &Rc<StyleRule<B>>,
-) -> Option<Rc<B::CSSStyleSheet>> {
+) -> Option<Rc<C::CSSStyleSheet>> {
     backend.StartOrStopSelectorMapTracking(scope, document);
     if let Some(contents) = backend.LookupStyleSheetContentsForRule(rule) {
         if let Some(scope) = scope {
@@ -769,32 +809,40 @@ pub fn FindStyleSheet<B: ElementRuleCollectorBackend>(
     }
 }
 
-pub struct ElementRuleCollector<'a, B: ElementRuleCollectorBackend> {
-    backend: &'a B,
-    context_: &'a B::ElementResolveContext,
-    style_recalc_context_: B::StyleRecalcContext,
-    selector_filter_: &'a B::SelectorFilter,
-    pseudo_style_request_: B::StyleRequest,
+pub struct ElementRuleCollector<'a, B: RuleSetBackend, C: ElementRuleCollectorRuntime<B> = B> {
+    backend: &'a C,
+    context_: &'a C::ElementResolveContext,
+    style_recalc_context_: C::StyleRecalcContext,
+    selector_filter_: &'a C::SelectorFilter,
+    pseudo_style_request_: C::StyleRequest,
     mode_: SelectorCheckerMode,
     can_use_fast_reject_: bool,
     matching_ua_rules_: bool,
     matching_rules_from_no_style_sheet_: bool,
     suppress_visited_: bool,
     inside_link_: EInsideLink,
-    current_rule_tree_scope_: Option<Rc<B::TreeScope>>,
+    current_rule_tree_scope_: Option<Rc<C::TreeScope>>,
     matched_rules_: Vec<MatchedRule<B>>,
-    container_selector_cache_: B::ContainerSelectorCache,
-    css_rule_list_: Option<RuleIndexList<B>>,
+    candidates_considered_: usize,
+    container_selector_cache_: C::ContainerSelectorCache,
+    css_rule_list_: Option<RuleIndexList<B, C>>,
     style_rule_list_: Option<StyleRuleList<B>>,
     result_: &'a mut MatchResult,
 }
-impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
+impl<'a, B, C> ElementRuleCollector<'a, B, C>
+where
+    B: RuleSetBackend<
+        CSSPropertyValueSet: MatchedPropertySet + 'static,
+        MixinParameterBindings: MatchMixinBindings + 'static,
+    >,
+    C: ElementRuleCollectorRuntime<B>,
+{
     // cpp: element_rule_collector.cc:427-473
     pub fn new(
-        backend: &'a B,
-        context: &'a B::ElementResolveContext,
-        recalc: &B::StyleRecalcContext,
-        filter: &'a B::SelectorFilter,
+        backend: &'a C,
+        context: &'a C::ElementResolveContext,
+        recalc: &C::StyleRecalcContext,
+        filter: &'a C::SelectorFilter,
         result: &'a mut MatchResult,
         inside: EInsideLink,
     ) -> Self {
@@ -819,6 +867,7 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
             inside_link_: inside,
             current_rule_tree_scope_: None,
             matched_rules_: Vec::new(),
+            candidates_considered_: 0,
             container_selector_cache_: backend.NewContainerSelectorCache(),
             css_rule_list_: None,
             style_rule_list_: None,
@@ -828,7 +877,7 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
     pub fn SetMode(&mut self, mode: SelectorCheckerMode) {
         self.mode_ = mode;
     }
-    pub fn SetPseudoElementStyleRequest(&mut self, request: &B::StyleRequest) {
+    pub fn SetPseudoElementStyleRequest(&mut self, request: &C::StyleRequest) {
         self.pseudo_style_request_ = request.clone();
     }
     pub fn SetMatchingUARules(&mut self, value: bool) {
@@ -846,7 +895,7 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
     pub fn MatchedStyleRuleList(&mut self) -> Option<StyleRuleList<B>> {
         self.style_rule_list_.take()
     }
-    pub fn MatchedCSSRuleList(&mut self) -> Option<RuleIndexList<B>> {
+    pub fn MatchedCSSRuleList(&mut self) -> Option<RuleIndexList<B, C>> {
         self.css_rule_list_.take()
     }
     pub fn ClearMatchedRules(&mut self) {
@@ -855,7 +904,7 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
     fn EnsureStyleRuleList(&mut self) -> &mut StyleRuleList<B> {
         self.style_rule_list_.get_or_insert_with(Vec::new)
     }
-    fn EnsureRuleList(&mut self) -> &mut RuleIndexList<B> {
+    fn EnsureRuleList(&mut self) -> &mut RuleIndexList<B, C> {
         self.css_rule_list_.get_or_insert_with(Vec::new)
     }
     pub fn GetPseudoId(&self) -> PseudoId {
@@ -865,12 +914,27 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
         self.backend
             .RequestPseudoArgument(&self.pseudo_style_request_)
     }
-    pub fn BeginAddingAuthorRulesForTreeScope(&mut self, scope: Rc<B::TreeScope>) {
+    pub fn BeginAddingAuthorRulesForTreeScope(&mut self, scope: Rc<C::TreeScope>) {
         self.current_rule_tree_scope_ = Some(scope.clone());
         self.result_.BeginAddingAuthorRulesForTreeScope(scope);
     }
     pub fn MatchedRulesForTest(&self) -> &[MatchedRule<B>] {
         &self.matched_rules_
+    }
+    /// Retains the matched rules owned by the caller's active production
+    /// route before SortAndTransferMatchedRules writes the final MatchResult.
+    ///
+    /// Chromium normally constructs MatchRequests from already-selected
+    /// ScopedStyleResolver rule sets. Rechrom keeps unsupported/scope/query
+    /// rules in an explicit compatibility route, so the package-local
+    /// assembly applies the same selection at this boundary while preserving
+    /// the collector's sorting and transfer implementation.
+    pub fn RetainMatchedRules(&mut self, mut retain: impl FnMut(&MatchedRule<B>) -> bool) {
+        self.matched_rules_.retain(|rule| retain(rule));
+    }
+    /// Number of RuleData entries visited through translated RuleSet buckets.
+    pub fn CandidatesConsidered(&self) -> usize {
+        self.candidates_considered_
     }
     pub fn CanRejectScope(&self, scope: &B::StyleScope) -> bool {
         if !self.backend.StyleScopeIsImplicit(scope) {
@@ -989,8 +1053,8 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
         rules: &[RuleData<B>],
         set: &RuleSet<B>,
         sheet: u32,
-        checker: &B::SelectorChecker,
-        context: &mut ContextWithStyleScopeFrame<B>,
+        checker: &C::SelectorChecker,
+        context: &mut ContextWithStyleScopeFrame<B, C>,
     ) -> bool {
         if rules.is_empty() {
             return false;
@@ -1001,6 +1065,7 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
         let pseudo_element = self.backend.CheckingPseudoElement(&context.context);
         let is_pseudo = pseudo_element.is_some() || self.GetPseudoId() != PseudoId::kPseudoIdNone;
         for data in rules {
+            self.candidates_considered_ += 1;
             if data.RejectElement(bloom)
                 || (self.can_use_fast_reject_
                     && self.backend.FastRejectSelector(
@@ -1035,14 +1100,13 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
                     continue;
                 }
             } else {
-                self.backend.SetCheckingSelectorAndVisited(
+                let matched = self.backend.CheckerMatch(
+                    checker,
                     &mut context.context,
                     selector,
                     !self.suppress_visited_ && data.LinkMatchType() == 2,
+                    &mut result,
                 );
-                let matched = self
-                    .backend
-                    .CheckerMatch(checker, &mut context.context, &mut result);
                 self.result_.AddFlags(self.backend.MatchFlags(&result));
                 if !matched {
                     continue;
@@ -1091,8 +1155,8 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
     // after every matching call; source-order bucket iteration stays explicit.
     fn CollectMatchingRulesInternal<const STOP: bool>(
         &mut self,
-        request: &MatchRequest<'_, B>,
-        parts: Option<&B::PartNames>,
+        request: &MatchRequest<'_, B, C::ContainerNode, C::Element>,
+        parts: Option<&C::PartNames>,
     ) -> bool {
         let checker = self.backend.NewSelectorChecker(
             parts,
@@ -1370,17 +1434,20 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
     }
     pub fn CollectMatchingRules(
         &mut self,
-        request: &MatchRequest<'_, B>,
-        parts: Option<&B::PartNames>,
+        request: &MatchRequest<'_, B, C::ContainerNode, C::Element>,
+        parts: Option<&C::PartNames>,
     ) {
         self.CollectMatchingRulesInternal::<false>(request, parts);
     }
-    pub fn CheckIfAnyRuleMatches(&mut self, request: &MatchRequest<'_, B>) -> bool {
+    pub fn CheckIfAnyRuleMatches(
+        &mut self,
+        request: &MatchRequest<'_, B, C::ContainerNode, C::Element>,
+    ) -> bool {
         self.CollectMatchingRulesInternal::<true>(request, None)
     }
     fn CollectMatchingShadowHostRulesInternal<const STOP: bool>(
         &mut self,
-        request: &MatchRequest<'_, B>,
+        request: &MatchRequest<'_, B, C::ContainerNode, C::Element>,
     ) -> bool {
         let checker = self.backend.NewSelectorChecker(
             None,
@@ -1422,13 +1489,22 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
         }
         false
     }
-    pub fn CollectMatchingShadowHostRules(&mut self, request: &MatchRequest<'_, B>) {
+    pub fn CollectMatchingShadowHostRules(
+        &mut self,
+        request: &MatchRequest<'_, B, C::ContainerNode, C::Element>,
+    ) {
         self.CollectMatchingShadowHostRulesInternal::<false>(request);
     }
-    pub fn CheckIfAnyShadowHostRuleMatches(&mut self, request: &MatchRequest<'_, B>) -> bool {
+    pub fn CheckIfAnyShadowHostRuleMatches(
+        &mut self,
+        request: &MatchRequest<'_, B, C::ContainerNode, C::Element>,
+    ) -> bool {
         self.CollectMatchingShadowHostRulesInternal::<true>(request)
     }
-    pub fn CollectMatchingSlottedRules(&mut self, request: &MatchRequest<'_, B>) {
+    pub fn CollectMatchingSlottedRules(
+        &mut self,
+        request: &MatchRequest<'_, B, C::ContainerNode, C::Element>,
+    ) {
         let checker = self.backend.NewSelectorChecker(
             None,
             &self.pseudo_style_request_,
@@ -1457,8 +1533,8 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
     }
     pub fn CollectMatchingPartPseudoRules(
         &mut self,
-        request: &MatchRequest<'_, B>,
-        parts: Option<&B::PartNames>,
+        request: &MatchRequest<'_, B, C::ContainerNode, C::Element>,
+        parts: Option<&C::PartNames>,
     ) {
         let checker = self.backend.NewSelectorChecker(
             parts,
@@ -1493,7 +1569,7 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
         layer: u16,
         queries: Option<&Rc<B::ContainerQuerySet>>,
         proximity: u32,
-        result: &B::CheckerMatchResult,
+        result: &C::CheckerMatchResult,
         sheet: u32,
     ) {
         let pseudo = self.backend.MatchDynamicPseudo(result);
@@ -1600,7 +1676,7 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
         &mut self,
         origin: CascadeOrigin,
         vtt: bool,
-        tracker: Option<&mut B::StyleRuleUsageTracker>,
+        tracker: Option<&mut C::StyleRuleUsageTracker>,
     ) {
         if self.matched_rules_.is_empty() {
             return;
@@ -1645,7 +1721,7 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
             self.AddMatchedRulesToTracker(tracker);
         }
     }
-    pub fn AddMatchedRulesToTracker(&self, tracker: &mut B::StyleRuleUsageTracker) {
+    pub fn AddMatchedRulesToTracker(&self, tracker: &mut C::StyleRuleUsageTracker) {
         let document = self
             .backend
             .ElementDocument(&self.backend.ContextElement(self.context_));
@@ -1661,8 +1737,8 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
     }
     pub fn ScopedRuleTreeScope<'s>(
         &'s mut self,
-        scope: Rc<B::TreeScope>,
-    ) -> ScopedRuleTreeScope<'s, 'a, B> {
+        scope: Rc<C::TreeScope>,
+    ) -> ScopedRuleTreeScope<'s, 'a, B, C> {
         let previous = self.current_rule_tree_scope_.replace(scope);
         ScopedRuleTreeScope {
             collector: self,
@@ -1672,22 +1748,28 @@ impl<'a, B: ElementRuleCollectorBackend> ElementRuleCollector<'a, B> {
 }
 // cpp: element_rule_collector.h:252-265. RAII overrides only the rule's origin
 // scope, preserving the MatchResult's cascading/tree-scoped reference scope.
-pub struct ScopedRuleTreeScope<'s, 'a, B: ElementRuleCollectorBackend> {
-    collector: &'s mut ElementRuleCollector<'a, B>,
-    previous: Option<Rc<B::TreeScope>>,
+pub struct ScopedRuleTreeScope<'s, 'a, B: RuleSetBackend, C: ElementRuleCollectorRuntime<B> = B> {
+    collector: &'s mut ElementRuleCollector<'a, B, C>,
+    previous: Option<Rc<C::TreeScope>>,
 }
-impl<'s, 'a, B: ElementRuleCollectorBackend> Deref for ScopedRuleTreeScope<'s, 'a, B> {
-    type Target = ElementRuleCollector<'a, B>;
+impl<'s, 'a, B: RuleSetBackend, C: ElementRuleCollectorRuntime<B>> Deref
+    for ScopedRuleTreeScope<'s, 'a, B, C>
+{
+    type Target = ElementRuleCollector<'a, B, C>;
     fn deref(&self) -> &Self::Target {
         self.collector
     }
 }
-impl<'s, 'a, B: ElementRuleCollectorBackend> DerefMut for ScopedRuleTreeScope<'s, 'a, B> {
+impl<'s, 'a, B: RuleSetBackend, C: ElementRuleCollectorRuntime<B>> DerefMut
+    for ScopedRuleTreeScope<'s, 'a, B, C>
+{
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.collector
     }
 }
-impl<B: ElementRuleCollectorBackend> Drop for ScopedRuleTreeScope<'_, '_, B> {
+impl<B: RuleSetBackend, C: ElementRuleCollectorRuntime<B>> Drop
+    for ScopedRuleTreeScope<'_, '_, B, C>
+{
     fn drop(&mut self) {
         self.collector.current_rule_tree_scope_ = self.previous.take();
     }

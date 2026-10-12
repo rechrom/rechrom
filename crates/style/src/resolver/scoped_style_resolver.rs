@@ -50,8 +50,12 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-pub type ActiveStyleSheetVector<B> =
-    Vec<ActiveStyleSheet<<B as ElementRuleCollectorBackend>::CSSStyleSheet, RuleSet<B>>>;
+pub type ActiveStyleSheetVector<B> = Vec<
+    ActiveStyleSheet<
+        <B as crate::element_rule_collector::ElementRuleCollectorRuntime<B>>::CSSStyleSheet,
+        RuleSet<B>,
+    >,
+>;
 pub type VisitedStyleSheetContents<B> =
     HashMap<usize, Rc<StyleSheetContents<<B as ScopedStyleResolverSheetBackend>::ContentsBackend>>>;
 type KeyframesRuleMap<B> = HashMap<
@@ -447,7 +451,10 @@ impl<B: ScopedStyleResolverBackend> ScopedStyleResolver<B> {
         &self,
         collector: &mut ElementRuleCollector<'_, B>,
         scope_root: Rc<B::ContainerNode>,
-        mut collect: impl FnMut(&mut ElementRuleCollector<'_, B>, &MatchRequest<'_, B>),
+        mut collect: impl FnMut(
+            &mut ElementRuleCollector<'_, B>,
+            &MatchRequest<'_, B, B::ContainerNode, B::Element>,
+        ),
     ) {
         for group in self.rule_set_groups_.borrow().iter() {
             let request =

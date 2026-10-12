@@ -6,11 +6,13 @@ pub(super) fn Apply(
     b: &mut ComputedStyleBuilder,
     parent: Option<&ComputedStyle>,
     v: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
     images: Option<&dyn URLImageResolver>,
 ) -> Result {
     let inherit = v.IsInheritedValue();
     let initial = v.IsInitialValue() || v.IsUnsetValue() || inherit && parent.is_none();
-    ApplyContent(b, v, inherit, initial, images)?;
+    ApplyContent(b, v, inherit, initial, root, media, images)?;
     if inherit && !initial {
         b.SetHasExplicitInheritance();
         parent.unwrap().SetChildHasExplicitInheritance();
@@ -26,6 +28,8 @@ fn ApplyContent(
     v: &Value,
     inherit: bool,
     initial: bool,
+    root: f32,
+    media: &MediaValuesCachedData,
     images: Option<&dyn URLImageResolver>,
 ) -> Result {
     use layoutng_style::style::computed_style_constants::QuoteType;
@@ -106,12 +110,16 @@ fn ApplyContent(
         }
         for item in &items.values {
             let next = match item.Payload() {
-                CSSValuePayload::kImageClass(_) | CSSValuePayload::kLinearGradientClass(_)
+                CSSValuePayload::kImageClass(_)
+                | CSSValuePayload::kImageSetClass(_)
+                | CSSValuePayload::kLinearGradientClass(_)
+                | CSSValuePayload::kRadialGradientClass(_)
+                | CSSValuePayload::kConicGradientClass(_)
                     if group == 0 =>
                 {
                     // GetStyleImage remains a typed resource-owner boundary.
                     allocate(ImageContentData::new(super::ResolveStyleImage(
-                        id, item, images,
+                        id, b, item, root, media, images,
                     )?))
                 }
                 CSSValuePayload::kCounterContentClass(value) => {
@@ -196,7 +204,15 @@ mod tests {
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
         let mut b = ComputedStyleBuilder::from_style(initial);
         let gradient = value("linear-gradient(red, blue) / \"icon\"");
-        Apply(&mut b, None, &gradient, None).unwrap();
+        Apply(
+            &mut b,
+            None,
+            &gradient,
+            16.0,
+            &MediaValuesCachedData::default(),
+            None,
+        )
+        .unwrap();
         let content = b.GetContentData().unwrap();
         assert!(unsafe { (&*content).IsImage() });
         let image = unsafe { &*(content as *const ImageContentData) };
@@ -204,7 +220,14 @@ mod tests {
         let previous = b.GetContentData();
         let url = value("\"before\" url(icon.svg)");
         assert_eq!(
-            Apply(&mut b, None, &url, None),
+            Apply(
+                &mut b,
+                None,
+                &url,
+                16.0,
+                &MediaValuesCachedData::default(),
+                None,
+            ),
             Err(LonghandApplicationError::Unsupported(
                 CSSPropertyID::kContent
             ))

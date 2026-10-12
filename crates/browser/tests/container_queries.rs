@@ -20,7 +20,7 @@ impl URLLoader for Loader {
             #target{width:11px;height:10px}
             @container (min-width:250px){#target{width:91px}}
             @container (max-width:249px){#target{height:37px}}
-            </style><div id=container><div id=target></div></div>"#.to_vec(),..Default::default()}))))
+            </style><div id=container><div id=target></div><svg width=10 height=10><path d="M0 0h10v10z"/></svg></div>"#.to_vec(),..Default::default()}))))
     }
 }
 fn id(page: &Page, name: &str) -> u64 {

@@ -159,6 +159,7 @@ impl CachedMatchedPropertiesKey {
     }
 }
 // cpp: matched_properties_cache.h:59-90
+#[derive(Clone)]
 pub struct Entry<E> {
     pub computed_style: ComputedStyleHandle,
     pub parent_computed_style: ComputedStyleHandle,
@@ -257,6 +258,32 @@ pub struct AdditionalHash {
 pub struct Key<'a> {
     result_: &'a MatchResult,
     hash_: u32,
+}
+
+/// Owning form of Chromium's stack-only `MatchedPropertiesCache::Key` for
+/// adapters whose `StyleResolver` instance is short-lived while the cache is
+/// retained by a longer-lived StyleEngine owner.  The cache bucket still keeps
+/// only weak property references; this clone exists solely for the lookup/add
+/// operation and is dropped with `CacheSuccess`.
+#[derive(Clone)]
+pub struct OwnedKey {
+    result_: MatchResult,
+    hash_: u32,
+}
+impl OwnedKey {
+    pub fn new(result: &MatchResult, additional: AdditionalHash) -> Self {
+        Self {
+            result_: result.clone(),
+            hash_: if result.IsCacheable() {
+                ComputeMatchedPropertiesHash(result, additional.hash)
+            } else {
+                0
+            },
+        }
+    }
+    pub fn IsCacheable(&self) -> bool {
+        self.result_.IsCacheable()
+    }
 }
 impl<'a> Key<'a> {
     // cpp: matched_properties_cache.cc:88-96
@@ -431,10 +458,124 @@ impl<E: Eq> MatchedPropertiesCache<E> {
         item.RefreshKey(key.result_.GetMatchedProperties());
         Some(&item.entries[index])
     }
+
+    /// The same source lookup as [`Self::Find`], with the already-retained
+    /// StyleResolverState inputs passed explicitly.  This keeps the production
+    /// StyleEngine boundary typed without introducing a second cache model.
+    pub fn FindForNonHighlightWithStyles(
+        &mut self,
+        key: &OwnedKey,
+        element_type: &E,
+        style_type: PseudoId,
+        parent: &ComputedStyleHandle,
+        layout_parent: &ComputedStyleHandle,
+        is_at_shadow_boundary: bool,
+        is_style_adjusted: impl Fn(&E) -> bool,
+        is_cache_compatible: impl Fn(
+            &ComputedStyle,
+            &ComputedStyle,
+            &ComputedStyle,
+            &ComputedStyle,
+        ) -> bool,
+    ) -> Option<Entry<E>>
+    where
+        E: Clone,
+    {
+        let item = self.cache_.get(&key.hash_)?;
+        if !item.CorrespondsTo(key.result_.GetMatchedProperties()) {
+            self.cache_entries_ = self.cache_entries_.wrapping_sub(item.entries.len() as u32);
+            self.cache_.remove(&key.hash_);
+            return None;
+        }
+        let parent_style = style(parent);
+        let item = self
+            .cache_
+            .get_mut(&key.hash_)
+            .expect("bucket remains present");
+        let mut hit = None;
+        for index in (0..item.entries.len()).rev() {
+            let entry = &item.entries[index];
+            let adjusted = is_style_adjusted(&entry.element_type);
+            if adjusted && *element_type != entry.element_type {
+                continue;
+            }
+            if entry.originating_element_computed_style.is_some() {
+                continue;
+            }
+            let cached_parent = style(&entry.parent_computed_style);
+            if !parent_style.InheritedEqualIncludingInheritedVariables(cached_parent) {
+                continue;
+            }
+            if adjusted
+                && (style_type != style(&entry.computed_style).StyleType()
+                    || !is_cache_compatible(
+                        parent_style,
+                        style(layout_parent),
+                        cached_parent,
+                        style(&entry.layout_parent_style),
+                    ))
+            {
+                continue;
+            }
+            if style(&entry.computed_style).HasExplicitInheritance()
+                && parent.Get() != entry.parent_computed_style.Get()
+                && !parent_style.NonInheritedEqual(cached_parent)
+            {
+                continue;
+            }
+            if is_at_shadow_boundary
+                && cached_parent.UserModify() != ComputedStyleInitialValues::InitialUserModify()
+            {
+                continue;
+            }
+            if cached_parent.IsEnsuredInDisplayNone() && !parent_style.IsEnsuredInDisplayNone() {
+                continue;
+            }
+            hit = Some(index);
+            break;
+        }
+        let index = hit?;
+        item.entries[index].last_used = self.clock_;
+        self.clock_ = self.clock_.wrapping_add(1);
+        item.RefreshKey(key.result_.GetMatchedProperties());
+        Some(item.entries[index].clone())
+    }
     // cpp: matched_properties_cache.cc:281-309
     pub fn Add(
         &mut self,
         key: &Key<'_>,
+        element_type: E,
+        computed_style: ComputedStyleHandle,
+        parent_computed_style: ComputedStyleHandle,
+        layout_parent_style: ComputedStyleHandle,
+        originating_element_computed_style: Option<ComputedStyleHandle>,
+    ) {
+        let entry = Entry {
+            computed_style,
+            parent_computed_style,
+            layout_parent_style,
+            originating_element_computed_style,
+            element_type,
+            last_used: self.clock_,
+        };
+        self.clock_ = self.clock_.wrapping_add(1);
+        match self.cache_.entry(key.hash_) {
+            std::collections::hash_map::Entry::Vacant(bucket) => {
+                bucket.insert(CachedMatchedProperties::new(
+                    entry,
+                    key.result_.GetMatchedProperties(),
+                ));
+            }
+            std::collections::hash_map::Entry::Occupied(mut bucket) => {
+                bucket.get_mut().entries.push(entry);
+            }
+        }
+        self.cache_entries_ = self.cache_entries_.wrapping_add(1);
+    }
+
+    pub fn AddOwned(
+        &mut self,
+        key: &OwnedKey,
         element_type: E,
         computed_style: ComputedStyleHandle,
         parent_computed_style: ComputedStyleHandle,

@@ -4980,6 +4980,20 @@ pub fn ConvertBorderStyle(
 // cpp: css_direction_aware_resolver.cc:336-402; generated longhands.cc ToPhysicalInternal.
 pub fn ResolvePhysical(property: CSSPropertyID, direction: WritingDirectionMode) -> CSSPropertyID {
     match property {
+        // cpp: generated longhands.cc:1143
+        CSSPropertyID::kWebkitTextOrientation => CSSPropertyID::kTextOrientation,
+        // cpp: generated longhands.cc:1166
+        CSSPropertyID::kWebkitWritingMode => CSSPropertyID::kWritingMode,
+        // cpp: generated longhands.cc:2923
+        CSSPropertyID::kAppRegion => CSSPropertyID::kWindowDrag,
+        // cpp: generated longhands.cc:18350
+        CSSPropertyID::kWebkitBoxDecorationBreak => CSSPropertyID::kBoxDecorationBreak,
+        // cpp: generated longhands.cc:18558
+        CSSPropertyID::kWebkitLineBreak => CSSPropertyID::kLineBreak,
+        // cpp: generated longhands.cc:19075
+        CSSPropertyID::kWebkitRubyPosition => CSSPropertyID::kRubyPosition,
+        // cpp: generated longhands.cc:19133
+        CSSPropertyID::kWebkitTextCombine => CSSPropertyID::kTextCombineUpright,
         // cpp: generated longhands.cc:1306
         CSSPropertyID::kInternalVisitedBorderBlockEndColor => [
             CSSPropertyID::kInternalVisitedBorderTopColor,

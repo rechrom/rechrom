@@ -41,6 +41,25 @@ fn update(owner: &mut dom::DOM) {
 }
 
 #[test]
+fn hsl_border_shorthand_preserves_geometry_for_following_width_shorthand() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<style>#target{border:1px solid hsl(212,44%,33%);border-width:1px 0}</style>\
+         <div id=target></div>",
+    );
+    update(&mut owner);
+    let target = native(&owner, "target");
+    assert_eq!(target.BorderTopStyle(), EBorderStyle::kSolid);
+    assert_eq!(target.BorderBottomStyle(), EBorderStyle::kSolid);
+    assert_eq!(target.BorderLeftStyle(), EBorderStyle::kSolid);
+    assert_eq!(target.BorderRightStyle(), EBorderStyle::kSolid);
+    assert_eq!(target.BorderTopWidth(), 1);
+    assert_eq!(target.BorderBottomWidth(), 1);
+    assert_eq!(target.BorderLeftWidth(), 0);
+    assert_eq!(target.BorderRightWidth(), 0);
+}
+
+#[test]
 fn border_native_values_initial_inherit_and_math_pairs() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=p style='border-color:red green blue currentcolor;border-radius:2px 4px / 6px 8px;border-spacing:3.999px 5.2px'><div id=c style='border-color:inherit;border-radius:inherit;border-spacing:inherit'></div><div id=i style='border-color:initial;border-radius:initial;border-spacing:initial'></div><div id=m style='border-top-left-radius:calc(10% + 2px) max(3px, 4px);border-spacing:calc(1px + 3px)'></div></div>");

@@ -162,6 +162,7 @@ impl PartialEq for MatchedProperties {
 impl Eq for MatchedProperties {}
 
 // cpp: match_result.h:124-285
+#[derive(Clone)]
 pub struct MatchResult {
     matched_properties_: Vec<MatchedProperties>,
     matched_properties_hashes_: Vec<MatchedPropertiesHash>,
@@ -249,6 +250,36 @@ impl MatchResult {
             mixin_parameter_bindings,
             data,
         ));
+    }
+
+    /// Inserts a source-defined declaration block before every collected
+    /// rule. Blink uses this position for the document element's internal
+    /// initial-color UA declaration before `ElementRuleCollector` transfers
+    /// the remaining UA/author rules (style_resolver.cc:593-602,1767-1778).
+    pub(crate) fn PrependMatchedProperties(
+        &mut self,
+        properties: Rc<dyn MatchedPropertySet>,
+        mixin_parameter_bindings: Option<Rc<dyn MixinParameterBindings>>,
+        mut data: MatchedPropertiesData,
+    ) {
+        let mixin_hash = mixin_parameter_bindings
+            .as_ref()
+            .map_or(0, |bindings| bindings.GetHash());
+        data.tree_order = 0;
+        self.matched_properties_hashes_.insert(
+            0,
+            MatchedPropertiesHash {
+                hash: properties.GetHash() ^ mixin_hash,
+                data,
+            },
+        );
+        if properties.ModifiedSinceHashing() {
+            self.is_cacheable_ = false;
+        }
+        self.matched_properties_.insert(
+            0,
+            MatchedProperties::new(properties, mixin_parameter_bindings, data),
+        );
     }
 
     pub fn HasMatchedProperties(&self) -> bool {

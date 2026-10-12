@@ -1479,6 +1479,11 @@ impl<B: RuleSetBackend> RuleSet<B> {
     pub fn UAShadowPseudoElementRules(&self, key: &AtomicString) -> &[RuleData<B>] {
         self.ua_shadow_pseudo_element_rules.Find(key)
     }
+    pub fn UAShadowPseudoElementRuleBuckets(
+        &self,
+    ) -> impl Iterator<Item = (AtomicString, &[RuleData<B>])> {
+        self.ua_shadow_pseudo_element_rules.Buckets()
+    }
     pub fn LinkPseudoClassRules(&self) -> &[RuleData<B>] {
         &self.link_pseudo_class_rules
     }
@@ -1514,6 +1519,45 @@ impl<B: RuleSetBackend> RuleSet<B> {
     }
     pub fn RootElementRules(&self) -> &[RuleData<B>] {
         &self.root_element_rules
+    }
+    /// Returns every selector-bearing RuleData retained by this RuleSet.
+    ///
+    /// This is intentionally an identity-preserving view over the translated
+    /// buckets.  Production collectors use it to prove that every selector in
+    /// a retained StyleRule has a RuleData entry before making the translated
+    /// buckets authoritative.  Callers must still use the keyed bucket
+    /// accessors for candidate selection.
+    pub fn AllRuleData(&self) -> Vec<&RuleData<B>> {
+        let mut result = Vec::new();
+        for map in [
+            &self.id_rules,
+            &self.class_rules,
+            &self.attr_rules,
+            &self.tag_rules,
+            &self.ua_shadow_pseudo_element_rules,
+            &self.input_rules,
+        ] {
+            for (_, bucket) in map.Buckets() {
+                result.extend(bucket);
+            }
+        }
+        for bucket in [
+            self.link_pseudo_class_rules.as_slice(),
+            self.cue_pseudo_rules.as_slice(),
+            self.focus_pseudo_class_rules.as_slice(),
+            self.focus_visible_pseudo_class_rules.as_slice(),
+            self.scrollbar_rules.as_slice(),
+            self.universal_rules.as_slice(),
+            self.shadow_host_rules.as_slice(),
+            self.part_pseudo_rules.as_slice(),
+            self.slotted_pseudo_element_rules.as_slice(),
+            self.active_view_transition_rules.as_slice(),
+            self.unbounded_pseudo_class_rules.as_slice(),
+            self.root_element_rules.as_slice(),
+        ] {
+            result.extend(bucket);
+        }
+        result
     }
     pub fn PageRules(&self) -> &[CascadeLayered<TypedRuleRef<B, PageRuleKind>>] {
         &self.page_rules
@@ -1875,11 +1919,20 @@ impl<B: RuleSetBackend> RuleSet<B> {
         current.is_some_and(|current| current != self.navigation_state.as_deref().unwrap())
     }
     pub fn GetLayerForTest(&self, rule: &RuleData<B>) -> Option<&CascadeLayer> {
+        self.LayerForRule(rule)
+    }
+    pub fn LayerForRule(&self, rule: &RuleData<B>) -> Option<&CascadeLayer> {
         layer_for_position(
             &self.layer_intervals,
             self.implicit_outer_layer.as_ref(),
             rule.GetPosition(),
         )
+    }
+    pub fn ContainerQueriesForRule(&self, rule: &RuleData<B>) -> Option<Rc<B::ContainerQuerySet>> {
+        value_at_position(&self.container_query_intervals, rule.GetPosition())
+    }
+    pub fn ScopeForRule(&self, rule: &RuleData<B>) -> Option<Rc<B::StyleScope>> {
+        value_at_position(&self.scope_intervals, rule.GetPosition())
     }
 }
 
@@ -1916,6 +1969,9 @@ fn scope_at_position<B: RuleSetBackend>(
     intervals: &[Interval<Rc<B::StyleScope>>],
     position: u32,
 ) -> Option<Rc<B::StyleScope>> {
+    value_at_position(intervals, position)
+}
+fn value_at_position<T: Clone>(intervals: &[Interval<T>], position: u32) -> Option<T> {
     let end = intervals.partition_point(|interval| interval.start_position <= position);
     end.checked_sub(1)
         .and_then(|index| intervals[index].value.clone())
@@ -2580,7 +2636,11 @@ mod tests {
     struct TestBackend;
     struct TestProperties;
     struct TestQueries(bool);
-    impl MediaQuerySet for TestQueries {}
+    impl MediaQuerySet for TestQueries {
+        fn AsAny(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
     impl crate::style_rule::StyleRulePropertySet for TestProperties {
         type CSSValue = ();
         fn IsMutable(&self) -> bool {

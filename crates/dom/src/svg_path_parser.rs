@@ -5,7 +5,6 @@ use std::ffi::c_char;
 
 unsafe extern "C" {
     fn strtod(input: *const c_char, end: *mut *mut c_char) -> f64;
-    fn remainder(x: f64, y: f64) -> f64;
     fn isalpha(c: std::ffi::c_int) -> std::ffi::c_int;
     fn isspace(c: std::ffi::c_int) -> std::ffi::c_int;
     fn isdigit(c: std::ffi::c_int) -> std::ffi::c_int;
@@ -139,6 +138,62 @@ fn FlattenCubic(
     FlattenCubic(middle, e, c, end, tolerance, depth + 1, output);
 }
 
+fn ConicPoint(start: Offset, control: Offset, end: Offset, weight: f64, t: f64) -> Offset {
+    let u = 1.0 - t;
+    let denominator = u * u + 2.0 * weight * u * t + t * t;
+    Offset {
+        x: (u * u * start.x + 2.0 * weight * u * t * control.x + t * t * end.x) / denominator,
+        y: (u * u * start.y + 2.0 * weight * u * t * control.y + t * t * end.y) / denominator,
+    }
+}
+
+fn FlattenConicRange(
+    start: Offset,
+    control: Offset,
+    end: Offset,
+    weight: f64,
+    t0: f64,
+    p0: Offset,
+    t1: f64,
+    p1: Offset,
+    tolerance: f64,
+    depth: u32,
+    output: &mut Vec<Offset>,
+) {
+    let tm = (t0 + t1) * 0.5;
+    let middle = ConicPoint(start, control, end, weight, tm);
+    if depth >= 12 || DistanceToLine(middle, p0, p1) <= tolerance {
+        output.push(p1);
+        return;
+    }
+    FlattenConicRange(
+        start,
+        control,
+        end,
+        weight,
+        t0,
+        p0,
+        tm,
+        middle,
+        tolerance,
+        depth + 1,
+        output,
+    );
+    FlattenConicRange(
+        start,
+        control,
+        end,
+        weight,
+        tm,
+        middle,
+        t1,
+        p1,
+        tolerance,
+        depth + 1,
+        output,
+    );
+}
+
 // cpp: dom/svg_path_parser.cc:71-76
 // cpp: dom/svg_path_parser.cc:396-407
 struct Parser {
@@ -202,7 +257,12 @@ impl Parser {
             loop {
                 self.ParseArguments(command)?;
                 if upper == b'M' {
-                    command = if command == b'm' { b'l' } else { b'L' };
+                    // Every pair after a moveto is an implicit lineto and
+                    // retains the original absolute/relative mode. Once the
+                    // command has become `l`/`L`, keep that case for every
+                    // remaining pair instead of turning a third relative pair
+                    // into an absolute line.
+                    command = if IsLower(command) { b'l' } else { b'L' };
                 }
                 if !self.HasNumber() {
                     break;
@@ -347,6 +407,33 @@ impl Parser {
         self.previous_cubic_control = control2;
         self.ResetSmoothControls(command);
     }
+    fn AddConic(&mut self, control: Offset, point: Offset, weight: f64, command: u8) {
+        self.result.commands.push(PaintPathCommand {
+            verb: PaintPathVerb::kConicTo,
+            control1: control,
+            point,
+            conic_weight: weight,
+            ..PaintPathCommand::default()
+        });
+        if self.result.flattened_points.is_empty() {
+            self.result.flattened_points.push(self.current);
+        }
+        FlattenConicRange(
+            self.current,
+            control,
+            point,
+            weight,
+            0.0,
+            self.current,
+            1.0,
+            point,
+            self.tolerance,
+            0,
+            &mut self.result.flattened_points,
+        );
+        self.current = point;
+        self.ResetSmoothControls(command);
+    }
     fn AddClose(&mut self) {
         self.result.commands.push(PaintPathCommand {
             verb: PaintPathVerb::kClose,
@@ -359,93 +446,167 @@ impl Parser {
         self.ResetSmoothControls(b'Z');
     }
 
-    // cpp: dom/svg_path_parser.cc:211-293
+    // cpp: platform/geometry/path_builder.cc:185-197
+    // cpp: skia/src/core/SkPathBuilder.cpp:568-694
     fn AddArc(
         &mut self,
-        mut rx: f64,
-        mut ry: f64,
+        rx: f64,
+        ry: f64,
         rotation: f64,
         large_arc: bool,
         sweep: bool,
         point: Offset,
     ) {
-        rx = rx.abs();
-        ry = ry.abs();
-        if rx == 0.0 || ry == 0.0 || point == self.current {
-            if point != self.current {
-                self.AddLine(point);
-            } else {
-                self.ResetSmoothControls(b'A');
-            }
+        // Blink sends SVG arcs to SkPathBuilder::arcTo. Keep all arc
+        // construction in SkScalar precision and retain its rational conics;
+        // a generic <=90-degree cubic approximation changes both bounds and
+        // edge coverage for ordinary SVG icons.
+        let source = (self.current.x as f32, self.current.y as f32);
+        let target = (point.x as f32, point.y as f32);
+        let target_offset = Offset {
+            x: f64::from(target.0),
+            y: f64::from(target.1),
+        };
+        let mut rx = (rx as f32).abs();
+        let mut ry = (ry as f32).abs();
+        if rx == 0.0 || ry == 0.0 {
+            self.AddLine(target_offset);
             return;
         }
-        let phi = unsafe { remainder(rotation, 360.0) } * std::f64::consts::PI / 180.0;
-        let cos_phi = phi.cos();
-        let sin_phi = phi.sin();
-        let dx = (self.current.x - point.x) / 2.0;
-        let dy = (self.current.y - point.y) / 2.0;
-        let x1 = cos_phi * dx + sin_phi * dy;
-        let y1 = -sin_phi * dx + cos_phi * dy;
-        let lambda = x1 * x1 / (rx * rx) + y1 * y1 / (ry * ry);
-        if lambda > 1.0 {
-            let scale = lambda.sqrt();
-            rx *= scale;
-            ry *= scale;
+        if source == target {
+            // SkPathBuilder emits the zero-length line for continuity.
+            self.AddLine(target_offset);
+            return;
         }
-        let rx2 = rx * rx;
-        let ry2 = ry * ry;
-        // The optimized C++ arm64 expression contracts these subtractions.
-        // Preserve its rounding near diameter endpoints: changing the tiny
-        // center offset can change ceil(sweep_angle / (pi / 2)) and the path.
-        let numerator = 0.0_f64.max((-ry2 * x1).mul_add(x1, (-rx2 * y1).mul_add(y1, rx2 * ry2)));
-        let denominator = rx2 * y1 * y1 + ry2 * x1 * x1;
-        let sign = if large_arc == sweep { -1.0 } else { 1.0 };
-        let coefficient = if denominator == 0.0 {
-            0.0
-        } else {
-            sign * (numerator / denominator).sqrt()
-        };
-        let cx1 = coefficient * (rx * y1 / ry);
-        let cy1 = coefficient * (-ry * x1 / rx);
-        let center_x = cos_phi * cx1 - sin_phi * cy1 + (self.current.x + point.x) / 2.0;
-        let center_y = sin_phi * cx1 + cos_phi * cy1 + (self.current.y + point.y) / 2.0;
-        let angle =
-            |ux: f64, uy: f64, vx: f64, vy: f64| (ux * vy - uy * vx).atan2(ux * vx + uy * vy);
-        let ux = (x1 - cx1) / rx;
-        let uy = (y1 - cy1) / ry;
-        let vx = (-x1 - cx1) / rx;
-        let vy = (-y1 - cy1) / ry;
-        let start_angle = angle(1.0, 0.0, ux, uy);
-        let mut sweep_angle = angle(ux, uy, vx, vy);
-        let tau = 2.0 * std::f64::consts::PI;
-        if !sweep && sweep_angle > 0.0 {
-            sweep_angle -= tau;
+
+        let angle = rotation as f32 * std::f32::consts::PI / 180.0;
+        let (sin_angle, cos_angle) = angle.sin_cos();
+        let midpoint = ((source.0 - target.0) * 0.5, (source.1 - target.1) * 0.5);
+        let transformed_midpoint = (
+            cos_angle * midpoint.0 + sin_angle * midpoint.1,
+            -sin_angle * midpoint.0 + cos_angle * midpoint.1,
+        );
+        let mut square_rx = rx * rx;
+        let mut square_ry = ry * ry;
+        let square_x = transformed_midpoint.0 * transformed_midpoint.0;
+        let square_y = transformed_midpoint.1 * transformed_midpoint.1;
+        let mut radii_scale = square_x / square_rx + square_y / square_ry;
+        if radii_scale > 1.0 {
+            radii_scale = radii_scale.sqrt();
+            rx *= radii_scale;
+            ry *= radii_scale;
+            square_rx = rx * rx;
+            square_ry = ry * ry;
         }
-        if sweep && sweep_angle < 0.0 {
-            sweep_angle += tau;
+        debug_assert!(square_rx.is_finite() && square_ry.is_finite());
+
+        // Skia builds a scale matrix from the reciprocals and then maps the
+        // points through it. Multiplying by a rounded reciprocal is not
+        // bit-equivalent to dividing every coordinate here; the difference is
+        // visible on antialiased SVG edges. Preserve SkMatrix's operation
+        // order so the retained path is identical to Chromium's.
+        let inverse_rx = 1.0_f32 / rx;
+        let inverse_ry = 1.0_f32 / ry;
+        let normalize = |point: (f32, f32)| {
+            let rotated = (
+                cos_angle * point.0 + sin_angle * point.1,
+                -sin_angle * point.0 + cos_angle * point.1,
+            );
+            (rotated.0 * inverse_rx, rotated.1 * inverse_ry)
+        };
+        let mut unit_start = normalize(source);
+        let mut unit_end = normalize(target);
+        let mut delta = (unit_end.0 - unit_start.0, unit_end.1 - unit_start.1);
+        let distance = delta.0 * delta.0 + delta.1 * delta.1;
+        let mut center_scale = (0.0_f32.max(1.0 / distance - 0.25)).sqrt();
+        let counter_clockwise = !sweep;
+        if counter_clockwise != large_arc {
+            center_scale = -center_scale;
         }
-        let segments = 1u32.max((sweep_angle.abs() / (std::f64::consts::PI / 2.0)).ceil() as u32);
-        let step = sweep_angle / segments as f64;
-        let ellipse_point = |theta: f64| Offset {
-            x: center_x + rx * cos_phi * theta.cos() - ry * sin_phi * theta.sin(),
-            y: center_y + rx * sin_phi * theta.cos() + ry * cos_phi * theta.sin(),
+        delta.0 *= center_scale;
+        delta.1 *= center_scale;
+        let center = (
+            (unit_start.0 + unit_end.0) * 0.5 - delta.1,
+            (unit_start.1 + unit_end.1) * 0.5 + delta.0,
+        );
+        unit_start.0 -= center.0;
+        unit_start.1 -= center.1;
+        unit_end.0 -= center.0;
+        unit_end.1 -= center.1;
+        let theta1 = unit_start.1.atan2(unit_start.0);
+        let theta2 = unit_end.1.atan2(unit_end.0);
+        let mut theta_arc = theta2 - theta1;
+        if theta_arc < 0.0 && sweep {
+            theta_arc += std::f32::consts::TAU;
+        } else if theta_arc > 0.0 && !sweep {
+            theta_arc -= std::f32::consts::TAU;
+        }
+        if theta_arc.abs() < std::f32::consts::PI / 1_000_000.0 {
+            self.AddLine(target_offset);
+            return;
+        }
+        let segments = (theta_arc.abs() / (std::f32::consts::TAU / 3.0)).ceil() as u32;
+        let theta_width = theta_arc / segments as f32;
+        let tangent = (0.5 * theta_width).tan();
+        if !tangent.is_finite() {
+            self.ResetSmoothControls(b'A');
+            return;
+        }
+        let weight = (0.5 + theta_width.cos() * 0.5).sqrt();
+        let expect_integers = (std::f32::consts::FRAC_PI_2 - theta_width.abs()).abs()
+            <= 1.0 / 4096.0
+            && rx == rx.floor()
+            && ry == ry.floor()
+            && target.0 == target.0.floor()
+            && target.1 == target.1.floor();
+        let denormalize = |point: (f32, f32)| {
+            let scaled = (point.0 * rx, point.1 * ry);
+            (
+                cos_angle * scaled.0 - sin_angle * scaled.1,
+                sin_angle * scaled.0 + cos_angle * scaled.1,
+            )
         };
-        let ellipse_derivative = |theta: f64| Offset {
-            x: -rx * cos_phi * theta.sin() - ry * sin_phi * theta.cos(),
-            y: -rx * sin_phi * theta.sin() + ry * cos_phi * theta.cos(),
-        };
-        for index in 0..segments {
-            let a0 = start_angle + step * index as f64;
-            let a1 = a0 + step;
-            let alpha = 4.0 / 3.0 * (step / 4.0).tan();
-            let p0 = ellipse_point(a0);
-            let mut p1 = ellipse_point(a1);
-            if index + 1 == segments {
-                p1 = point;
+        let snap_trig = |value: f32| {
+            if value.abs() <= 1.0 / 65_536.0 {
+                0.0
+            } else {
+                value
             }
-            let control1 = Add(p0, Scale(ellipse_derivative(a0), alpha));
-            let control2 = Subtract(p1, Scale(ellipse_derivative(a1), alpha));
-            self.AddCubic(control1, control2, p1, b'A');
+        };
+        let mut start_theta = theta1;
+        for index in 0..segments {
+            let end_theta = start_theta + theta_width;
+            let sin_end = snap_trig(end_theta.sin());
+            let cos_end = snap_trig(end_theta.cos());
+            let endpoint_unit = (cos_end + center.0, sin_end + center.1);
+            let control_unit = (
+                endpoint_unit.0 + tangent * sin_end,
+                endpoint_unit.1 - tangent * cos_end,
+            );
+            let mut control = denormalize(control_unit);
+            let mut endpoint = denormalize(endpoint_unit);
+            if expect_integers {
+                control = (control.0.round(), control.1.round());
+                endpoint = (endpoint.0.round(), endpoint.1.round());
+            }
+            let end = if index + 1 == segments {
+                target_offset
+            } else {
+                Offset {
+                    x: f64::from(endpoint.0),
+                    y: f64::from(endpoint.1),
+                }
+            };
+            self.AddConic(
+                Offset {
+                    x: f64::from(control.0),
+                    y: f64::from(control.1),
+                },
+                end,
+                f64::from(weight),
+                b'A',
+            );
+            start_theta = end_theta;
         }
         self.ResetSmoothControls(b'A');
     }

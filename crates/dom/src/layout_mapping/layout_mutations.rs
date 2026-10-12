@@ -36,9 +36,14 @@ impl DOM {
         let Some(resolved) = document.ResolvedStyleFor(index) else {
             return false;
         };
+        let native_style = resolved.native_style.Get();
+        let Some(native_style) = (unsafe { native_style.as_ref() }) else {
+            return false;
+        };
         receive(LayoutMutation::PaintStyle {
             node_id,
-            style: &resolved.style,
+            style: native_style,
+            projected: &resolved.style.paint,
         });
         true
     }

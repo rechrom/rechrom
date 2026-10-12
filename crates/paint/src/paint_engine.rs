@@ -13,10 +13,36 @@ use layoutng_assembly::internal::layout_input::{
 };
 use layoutng_assembly::internal::layout_input_types::Color;
 use layoutng_assembly::internal::paint_input::{
-    BackgroundRepeatRule, PaintBlendMode, PaintCornerRadii, PaintFilterOperation,
-    PaintImageTileRule, PaintMaskComposite, PaintMaskMode, PaintShader, SvgStrokeLineCap,
-    SvgStrokeLineJoin,
+    BackgroundRepeatRule, InterpolationQuality, PaintBlendMode, PaintCornerRadii,
+    PaintFilterOperation, PaintImageTileRule, PaintMaskComposite, PaintMaskMode, PaintShader,
+    SvgStrokeLineCap, SvgStrokeLineJoin,
 };
+
+pub(crate) fn ResolveDocumentImageContainerKey(
+    image: &layoutng_assembly::internal::layout_input::PaintImage,
+    target_size: Size,
+    effective_zoom: f64,
+    device_pixel_ratio: f64,
+    embedding_style: &layoutng_assembly::internal::paint_input::PaintStyleData,
+) -> Option<image_resource::ContainerKey> {
+    let image_resource::PaintImageContent::Document(content) = &image.content else {
+        return None;
+    };
+    let zoom = effective_zoom.max(f64::MIN_POSITIVE);
+    let width = (target_size.width / zoom).round().max(1.0) as u32;
+    let height = (target_size.height / zoom).round().max(1.0) as u32;
+    let mut key = image_resource::ContainerKey::new(width, height, zoom, device_pixel_ratio);
+    if !embedding_style.color_scheme_flags_is_normal {
+        key.preferred_color_scheme = u8::from(embedding_style.used_dark_color_scheme);
+        key.preferred_color_scheme_is_explicit = true;
+    }
+    if let Some(current) = &image.document_container_key {
+        key.view_specification = current.view_specification.clone();
+    } else if let Some(initial) = content.variants().first() {
+        key.view_specification = initial.container_key.view_specification.clone();
+    }
+    Some(key)
+}
 
 // cpp: paint/paint_engine.h:15-31
 #[repr(u8)]
@@ -220,6 +246,8 @@ impl PaintRect {
 #[derive(Clone, PartialEq)]
 pub struct DisplayMaskLayer {
     pub resource_id: u64,
+    pub image_interpolation_quality: InterpolationQuality,
+    pub document_image_container_key: Option<image_resource::ContainerKey>,
     pub paint_shader: Option<PaintShader>,
     pub clip_rect: PaintRect,
     pub clip_radii: PaintCornerRadii,
@@ -239,6 +267,8 @@ impl Default for DisplayMaskLayer {
     fn default() -> Self {
         Self {
             resource_id: 0,
+            image_interpolation_quality: InterpolationQuality::kInterpolationMedium,
+            document_image_container_key: None,
             paint_shader: None,
             clip_rect: PaintRect::default(),
             clip_radii: PaintCornerRadii::default(),
@@ -293,6 +323,11 @@ pub struct DisplayItem {
     pub mask_layers: Vec<DisplayMaskLayer>,
     pub round_cap: bool,
     pub resource_id: u64,
+    pub image_interpolation_quality: InterpolationQuality,
+    /// Effective orientation for this image use after CSS image-orientation.
+    /// Source rectangles are expressed in the oriented image coordinate space.
+    pub image_orientation: image_resource::ImageOrientation,
+    pub document_image_container_key: Option<image_resource::ContainerKey>,
     pub repeat_x: bool,
     pub repeat_y: bool,
     pub background_repeat_x: BackgroundRepeatRule,
@@ -317,6 +352,8 @@ pub struct DisplayItem {
     pub font_variations: Vec<FontVariation>,
     pub font_size: f64,
     pub baseline: f64,
+    pub text_line_top: f64,
+    pub text_line_height: f64,
     pub text_blob_origin: Offset,
     pub horizontal: bool,
     pub at_start: bool,
@@ -365,6 +402,9 @@ impl Default for DisplayItem {
             mask_layers: Vec::new(),
             round_cap: false,
             resource_id: 0,
+            image_interpolation_quality: InterpolationQuality::kInterpolationMedium,
+            image_orientation: Default::default(),
+            document_image_container_key: None,
             repeat_x: false,
             repeat_y: false,
             background_repeat_x: BackgroundRepeatRule::kNoRepeat,
@@ -389,6 +429,8 @@ impl Default for DisplayItem {
             font_variations: Vec::new(),
             font_size: 16.0,
             baseline: 0.0,
+            text_line_top: 0.0,
+            text_line_height: 0.0,
             text_blob_origin: Offset::default(),
             horizontal: true,
             at_start: false,
@@ -519,7 +561,11 @@ impl ImageDependencyIndex {
         self.by_image.get(&image_id).map_or(&[], Vec::as_slice)
     }
 
-    fn build(items: &[DisplayItem], records: &[RecordedDisplayItem]) -> Self {
+    fn build(
+        items: &[DisplayItem],
+        records: &[RecordedDisplayItem],
+        chunks: &[PaintChunk],
+    ) -> Self {
         let mut by_image: HashMap<_, Vec<_>> = HashMap::new();
         for (record_index, record) in records.iter().enumerate() {
             let mut ids = std::collections::HashSet::new();
@@ -541,6 +587,29 @@ impl ImageDependencyIndex {
                             ids.insert(shader.resource_id);
                         }
                     }
+                }
+            }
+            if let Some(chunk) = chunks.iter().find(|chunk| {
+                chunk.begin_index as usize <= record_index
+                    && record_index < chunk.end_index as usize
+            }) {
+                let mut effect = Some(chunk.properties.effect.as_ref());
+                while let Some(node) = effect {
+                    for filter in node.filters.iter().chain(&node.backdrop_filters) {
+                        for layer in &filter.reflection_mask_layers {
+                            if let Some(image) = &layer.image {
+                                if image.id != 0 {
+                                    ids.insert(image.id);
+                                }
+                            }
+                            if let Some(shader) = &layer.paint_shader {
+                                if shader.resource_id != 0 {
+                                    ids.insert(shader.resource_id);
+                                }
+                            }
+                        }
+                    }
+                    effect = node.parent.as_deref();
                 }
             }
             for image_id in ids {
@@ -651,6 +720,87 @@ impl PartialEq for PaintArtifact {
     }
 }
 
+impl PaintArtifact {
+    pub fn DocumentImageContainerRequirements(
+        &self,
+    ) -> Vec<(image_resource::ImageId, image_resource::ContainerKey)> {
+        fn pattern_requirements(
+            shader: &PaintShader,
+            output: &mut Vec<(image_resource::ImageId, image_resource::ContainerKey)>,
+        ) {
+            let Some(pattern) = shader.pattern.as_ref() else {
+                return;
+            };
+            for command in &pattern.commands {
+                match command {
+                    layoutng_assembly::internal::paint_input::SvgPatternCommand::DrawImage(
+                        image,
+                    ) => {
+                        if let Some(key) = &image.document_container_key {
+                            let pair = (image.resource_id, key.clone());
+                            if image.resource_id != 0 && !output.contains(&pair) {
+                                output.push(pair);
+                            }
+                        }
+                    }
+                    layoutng_assembly::internal::paint_input::SvgPatternCommand::DrawShape(
+                        shape,
+                    )
+                    | layoutng_assembly::internal::paint_input::SvgPatternCommand::DrawGlyph(
+                        shape,
+                    ) => {
+                        if let Some(shader) = &shape.fill_server {
+                            pattern_requirements(shader, output);
+                        }
+                        if let Some(shader) = &shape.stroke_server {
+                            pattern_requirements(shader, output);
+                        }
+                    }
+                    layoutng_assembly::internal::paint_input::SvgPatternCommand::SaveLayerMask(
+                        mask,
+                    ) => {
+                        let nested = PaintShader {
+                            pattern: Some(Arc::new(
+                                layoutng_assembly::internal::paint_input::SvgPatternData {
+                                    commands: mask.commands.clone(),
+                                    ..Default::default()
+                                },
+                            )),
+                            ..Default::default()
+                        };
+                        pattern_requirements(&nested, output);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut output = Vec::new();
+        for item in self.items.iter() {
+            if let Some(key) = &item.document_image_container_key {
+                let pair = (item.resource_id, key.clone());
+                if item.resource_id != 0 && !output.contains(&pair) {
+                    output.push(pair);
+                }
+            }
+            if let Some(shader) = &item.paint_shader {
+                pattern_requirements(shader, &mut output);
+            }
+            for mask in &item.mask_layers {
+                if let Some(key) = &mask.document_image_container_key {
+                    let pair = (mask.resource_id, key.clone());
+                    if mask.resource_id != 0 && !output.contains(&pair) {
+                        output.push(pair);
+                    }
+                }
+                if let Some(shader) = &mask.paint_shader {
+                    pattern_requirements(shader, &mut output);
+                }
+            }
+        }
+        output
+    }
+}
+
 #[cfg(test)]
 #[test]
 fn artifact_property_updates_share_ops_and_real_op_edits_isolate_old_frames() {
@@ -727,6 +877,7 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
     let dependencies = Arc::new(ImageDependencyIndex::build(
         &items,
         std::slice::from_ref(&display),
+        &[],
     ));
     let old_record: Arc<dyn image_resource::DocumentPaintRecord> = Arc::new(1u8);
     let resources = Arc::new(PaintResources {
@@ -735,7 +886,12 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
             revision: 1,
             width: 80,
             height: 40,
-            content: PaintImageContent::Document(old_record),
+            content: PaintImageContent::Document(Arc::new(
+                image_resource::DocumentPaintContent::new(
+                    ContainerKey::new(80, 40, 1.0, 1.0),
+                    old_record,
+                ),
+            )),
             ..Default::default()
         }],
         ..Default::default()
@@ -829,6 +985,8 @@ pub fn FragmentClientRectsByNode(
 #[cfg(feature = "translation_in_progress")]
 fn SameReplayResources(a: &PaintResources, b: &PaintResources) -> bool {
     if a.device_pixel_ratio != b.device_pixel_ratio
+        || a.layout_zoom_factor != b.layout_zoom_factor
+        || a.viewport != b.viewport
         || a.fonts.len() != b.fonts.len()
         || a.images.len() != b.images.len()
     {
@@ -848,8 +1006,13 @@ fn ValidateReplayResources(resources: Option<&PaintResources>) {
     let Some(resources) = resources else {
         return;
     };
-    if !resources.device_pixel_ratio.is_finite() || resources.device_pixel_ratio <= 0.0 {
-        panic!("PaintResources device pixel ratio must be finite and positive");
+    if !resources.device_pixel_ratio.is_finite()
+        || resources.device_pixel_ratio <= 0.0
+        || !resources.layout_zoom_factor.is_finite()
+        || resources.layout_zoom_factor <= 0.0
+        || !resources.ArtifactToDeviceScale().is_finite()
+    {
+        panic!("PaintResources device and layout scales must be finite and positive");
     }
     if let Some(viewport) = resources.viewport {
         if viewport.size.width < 0 || viewport.size.height < 0 {
@@ -1008,6 +1171,7 @@ fn RecordPaint(
     output.image_dependencies = Arc::new(ImageDependencyIndex::build(
         &output.items,
         &output.display_items,
+        &output.chunks,
     ));
     output.recording_revision = foundation::NewUniqueObjectId();
     if pre_paint.scroll_recording_basis.is_some()
@@ -1176,8 +1340,9 @@ impl PaintEngine {
         if revision <= old.revision {
             if revision == old.revision
                 && !matches!(&old.content,
-                    image_resource::PaintImageContent::Document(record)
-                    if Arc::ptr_eq(record, &frame.record))
+                    image_resource::PaintImageContent::Document(content)
+                    if content.record_for(&frame.container_key)
+                        .is_some_and(|record| Arc::ptr_eq(record, &frame.record)))
             {
                 return None;
             }
@@ -1190,7 +1355,13 @@ impl PaintEngine {
             .iter_mut()
             .find(|image| image.id == image_id)?;
         image.revision = revision;
-        image.content = image_resource::PaintImageContent::Document(frame.record.clone());
+        image.document_container_key = Some(frame.container_key.clone());
+        let image_resource::PaintImageContent::Document(content) = &image.content else {
+            return None;
+        };
+        image.content = image_resource::PaintImageContent::Document(Arc::new(
+            content.with_variant(frame.container_key.clone(), frame.record.clone()),
+        ));
         Arc::make_mut(artifact).resources = Some(Arc::new(resources));
         Some(PaintMutationResult { damaged_records })
     }

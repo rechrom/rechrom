@@ -40,6 +40,7 @@ pub fn AddImageResource(
 
     let natural_width = image.width as f64 / image.resolution_scale;
     let natural_height = image.height as f64 / image.resolution_scale;
+    let is_document_image = image.IsDocumentImage();
     owner.GetDocumentMut().SetImageResource(
         source,
         ImageResourceMetadata {
@@ -47,7 +48,11 @@ pub fn AddImageResource(
             natural_width,
             natural_height,
             resolution_scale: image.resolution_scale,
+            orientation: image.orientation,
         },
     );
+    owner
+        .GetDocumentMut()
+        .SetImageResourceIsDocument(image.id, is_document_image);
     constraints.images.push(image);
 }

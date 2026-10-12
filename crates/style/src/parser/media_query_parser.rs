@@ -3,10 +3,12 @@
 // Ledger uses C++ physical / effective / mapped / omitted / pending lines.
 // Effective excludes comments, blanks, preprocessor/includes, namespaces and
 // lines consisting only of braces/parentheses/semicolons.
-// parser/media_query_parser.cc: 661 / 418 / 348 / 10 / 60.
-// Mapped: 25-28,30-164,176-228,263-339,397-438,447-659.
+// parser/media_query_parser.cc: 661 / 418 / 408 / 10 / 0 (complete).
+// Mapped: 25-28,30-164,176-228,229-259,263-339,341-395,
+// 397-438,441-445,447-659. The container-only style-range ranges are
+// implemented by ProductionContainerBackend::ConsumeStyleFeatureRange and
+// its typed unparsed-value owner in production_container_parser.rs.
 // Omitted: 165-174 (GC allocation of fake context becomes required backend).
-// Pending whole-source container style-range path: 229-259,341-395,441-445.
 // This file completes the concrete media FeatureSet path; it does not claim
 // completion of Chromium's shared container-query parsing dependencies.
 // MediaQueryExpValue::Consume .cc:491-605 is a required dependency, counted
@@ -16,7 +18,7 @@
 // - media_query_exp.cc:479-488: plain-feature value wrapping.
 // - parser/css_variable_parser.cc:39-43: variable-name test.
 // Required backend: CSSValue parsing, runtime feature queries, range UseCounter.
-// Outside this media-only path: .cc:229-259,341-395,441-445 (container style ranges).
+// Container style ranges: .cc:229-259,341-395,441-445.
 // GC/context allocation .cc:165-174 becomes backend ownership. No parser fallback.
 #![allow(non_snake_case, non_camel_case_types)]
 use super::conditional_parser::{ConditionalParser, ConsumeIfDelimiter, ConsumeIfIdent, ParseMode};

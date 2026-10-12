@@ -718,6 +718,39 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
             is_ua_rule_: false,
         }
     }
+    /// Constructs a checker for an already decoded pseudo style request.
+    /// Production RuleSet matching has no CSSOM StyleRequest object, but must
+    /// preserve the same pseudo argument and identifier-list inputs.
+    pub(crate) fn ForPseudoRequest(
+        backend: Rc<B>,
+        mode: Mode,
+        pseudo_argument: AtomicString,
+        pseudo_ident_list: Vec<AtomicString>,
+    ) -> Self {
+        Self::ForPseudoRequestWithParts(
+            backend,
+            None,
+            mode,
+            pseudo_argument,
+            pseudo_ident_list,
+            false,
+        )
+    }
+    pub(crate) fn ForPseudoRequestWithParts(
+        backend: Rc<B>,
+        parts: Option<Rc<B::PartNames>>,
+        mode: Mode,
+        pseudo_argument: AtomicString,
+        pseudo_ident_list: Vec<AtomicString>,
+        ua: bool,
+    ) -> Self {
+        let mut checker = Self::new(backend, mode);
+        checker.part_names_ = parts;
+        checker.pseudo_argument_ = pseudo_argument;
+        checker.pseudo_ident_list_ = pseudo_ident_list;
+        checker.is_ua_rule_ = ua;
+        checker
+    }
     pub fn ForStyleRequest(
         backend: Rc<B>,
         parts: Option<Rc<B::PartNames>>,
@@ -892,7 +925,7 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
                     matched = FeaturelessMatch::kFeaturelessFails
                 }
                 FeaturelessMatch::kFeaturelessUnknown => {
-                    return FeaturelessMatch::kFeaturelessUnknown
+                    return FeaturelessMatch::kFeaturelessUnknown;
                 }
             }
             sub.selector = selector.NextSimpleSelector();
@@ -915,7 +948,7 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
             sub.selector = Some(selector);
             match self.MatchesShadowHostInComplexSelector(&sub, r) {
                 FeaturelessMatch::kFeaturelessMatches => {
-                    return FeaturelessMatch::kFeaturelessMatches
+                    return FeaturelessMatch::kFeaturelessMatches;
                 }
                 FeaturelessMatch::kFeaturelessFails => {
                     matched = FeaturelessMatch::kFeaturelessFails

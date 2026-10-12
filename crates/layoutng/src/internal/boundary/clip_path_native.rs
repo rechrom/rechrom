@@ -5,10 +5,12 @@
 use super::LengthPercentage;
 use crate::internal::layout_input::{Offset, PaintPathVerb};
 use crate::internal::paint_input::ClipPathPaint;
+use foundation::String as BlinkString;
 use foundation::{MakeGarbageCollected, WindRule};
 use layoutng_style::style::basic_shapes::{BasicShape, BasicShapePolygon};
 use layoutng_style::style::clip_path_operation::ClipPathOperation;
 use layoutng_style::style::computed_style_constants::GeometryBox;
+use layoutng_style::style::reference_clip_path_operation::ReferenceClipPathOperation;
 use layoutng_style::style::shape_clip_path_operation::ShapeClipPathOperation;
 use layoutng_style::style::style_path::StylePath;
 use layoutng_style::style::svg_path_byte_stream::SVGPathByteStream;
@@ -62,6 +64,11 @@ fn PathByteStream(input: &ClipPathPaint) -> SVGPathByteStream {
 }
 
 pub(super) fn NativeClipPath(input: &ClipPathPaint) -> *mut dyn ClipPathOperation {
+    if let Some(url) = &input.reference_url {
+        return MakeGarbageCollected(ReferenceClipPathOperation::new(BlinkString::FromUtf8(
+            url.as_bytes(),
+        )));
+    }
     assert!(
         !input.commands.is_empty(),
         "native clip-path requires actual geometry"

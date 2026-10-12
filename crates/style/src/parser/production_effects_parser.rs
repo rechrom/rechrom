@@ -40,6 +40,9 @@ use crate::{
     css_math_function_value::ValueRange as R,
 };
 use CSSValueID::*;
+
+#[path = "production_svg_path_byte_stream.rs"]
+mod svg_path_byte_stream;
 pub(super) fn IsEffectsProperty(id: CSSPropertyID) -> bool {
     matches!(
         id,
@@ -104,6 +107,7 @@ fn Filter<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
 ) -> Result<Rc<Value>, PropertyParseError> {
     if stream.Peek().Id() == kNone {
         stream.ConsumeIncludingWhitespace();
@@ -112,8 +116,8 @@ fn Filter<T: TokenStreamTokenizer>(
     let mut filters = Vec::new();
     loop {
         if stream.Peek().GetType() == kUrlToken || stream.Peek().FunctionId() == Some(kUrl) {
-            filters.push(values::uri(
-                ConsumeUrl(id, stream)?.ok_or_else(|| invalid(id))?,
+            filters.push(values::uri_from_url_data(
+                ConsumeUrl(id, stream, context)?.ok_or_else(|| invalid(id))?,
             ));
             continue;
         }
@@ -269,6 +273,213 @@ pub(super) fn Polygon<T: TokenStreamTokenizer>(
         ),
     )))
 }
+
+fn CanStartLength<T: TokenStreamTokenizer>(stream: &mut Stream<T>) -> bool {
+    matches!(
+        stream.Peek().GetType(),
+        kNumberToken | kPercentageToken | kDimensionToken
+    ) || IsMathFunction(stream)
+}
+
+fn ShapeRadius<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Option<Rc<Value>>, PropertyParseError> {
+    if matches!(
+        stream.Peek().Id(),
+        kClosestSide | kFarthestSide | kClosestCorner | kFarthestCorner
+    ) {
+        return Ok(Some(values::identifier(
+            stream.ConsumeIncludingWhitespace().Id(),
+        )));
+    }
+    if CanStartLength(stream) {
+        return LengthValue(id, stream, mode, true, true).map(Some);
+    }
+    Ok(None)
+}
+
+pub(super) fn Circle<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Rc<Value>, PropertyParseError> {
+    let mut guard = RestoringBlockGuard::new(stream);
+    guard.ConsumeWhitespace();
+    let radius = ShapeRadius(id, &mut guard, mode)?;
+    let (center_x, center_y) = if guard.Peek().Id() == kAt {
+        guard.ConsumeIncludingWhitespace();
+        let (x, y) = super::ConsumePosition(id, &mut guard, mode, false, true)?;
+        (Some(x), Some(y))
+    } else {
+        (None, None)
+    };
+    if !guard.AtEnd() {
+        return Err(invalid(id));
+    }
+    guard.Release();
+    drop(guard);
+    stream.ConsumeWhitespace();
+    Ok(Rc::new(Value::new(
+        CSSValuePayload::kBasicShapeCircleClass(
+            crate::production_effects_value::CSSBasicShapeCircleValue {
+                center_x,
+                center_y,
+                radius,
+            },
+        ),
+    )))
+}
+
+pub(super) fn Ellipse<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Rc<Value>, PropertyParseError> {
+    let mut guard = RestoringBlockGuard::new(stream);
+    guard.ConsumeWhitespace();
+    let radius_x = ShapeRadius(id, &mut guard, mode)?;
+    let radius_y = if radius_x.is_some() {
+        Some(ShapeRadius(id, &mut guard, mode)?.ok_or_else(|| invalid(id))?)
+    } else {
+        None
+    };
+    let (center_x, center_y) = if guard.Peek().Id() == kAt {
+        guard.ConsumeIncludingWhitespace();
+        let (x, y) = super::ConsumePosition(id, &mut guard, mode, false, true)?;
+        (Some(x), Some(y))
+    } else {
+        (None, None)
+    };
+    if !guard.AtEnd() {
+        return Err(invalid(id));
+    }
+    guard.Release();
+    drop(guard);
+    stream.ConsumeWhitespace();
+    Ok(Rc::new(Value::new(
+        CSSValuePayload::kBasicShapeEllipseClass(
+            crate::production_effects_value::CSSBasicShapeEllipseValue {
+                center_x,
+                center_y,
+                radius_x,
+                radius_y,
+            },
+        ),
+    )))
+}
+
+pub(super) fn Path<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+) -> Result<Rc<Value>, PropertyParseError> {
+    let mut guard = RestoringBlockGuard::new(stream);
+    guard.ConsumeWhitespace();
+    let mut wind_rule = foundation::WindRule::RULE_NONZERO;
+    if matches!(guard.Peek().Id(), kEvenodd | kNonzero) {
+        if guard.ConsumeIncludingWhitespace().Id() == kEvenodd {
+            wind_rule = foundation::WindRule::RULE_EVENODD;
+        }
+        if guard.Peek().GetType() != kCommaToken {
+            return Err(invalid(id));
+        }
+        guard.ConsumeIncludingWhitespace();
+    }
+    if guard.Peek().GetType() != kStringToken {
+        return Err(invalid(id));
+    }
+    let path_text = guard.ConsumeIncludingWhitespace().Value().ToString();
+    if !guard.AtEnd() {
+        return Err(invalid(id));
+    }
+    let utf8 = path_text.Utf8();
+    let byte_stream =
+        svg_path_byte_stream::ParseSVGPathByteStream(&utf8).ok_or_else(|| invalid(id))?;
+    guard.Release();
+    drop(guard);
+    stream.ConsumeWhitespace();
+    Ok(Rc::new(Value::new(CSSValuePayload::kBasicShapePathClass(
+        crate::production_effects_value::CSSPathValue {
+            byte_stream,
+            wind_rule,
+            path_text,
+        },
+    ))))
+}
+
+fn CompleteFour(values: &mut Vec<Rc<Value>>) {
+    match values.len() {
+        1 => values.extend([values[0].clone(), values[0].clone(), values[0].clone()]),
+        2 => values.extend([values[0].clone(), values[1].clone()]),
+        3 => values.push(values[1].clone()),
+        4 => {}
+        _ => unreachable!("CSS four-side expansion needs one through four values"),
+    }
+}
+
+fn RadiusList<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Vec<Rc<Value>>, PropertyParseError> {
+    let mut values = Vec::new();
+    while values.len() < 4 && CanStartLength(stream) {
+        values.push(LengthValue(id, stream, mode, true, true)?);
+    }
+    if values.is_empty() {
+        return Err(invalid(id));
+    }
+    CompleteFour(&mut values);
+    Ok(values)
+}
+
+// cpp: css_parsing_utils.cc:594-650,9117-9167.
+pub(super) fn Inset<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Rc<Value>, PropertyParseError> {
+    let mut guard = RestoringBlockGuard::new(stream);
+    guard.ConsumeWhitespace();
+    let mut sides = Vec::new();
+    while sides.len() < 4 && CanStartLength(&mut guard) {
+        sides.push(LengthValue(id, &mut guard, mode, true, false)?);
+    }
+    if sides.is_empty() {
+        return Err(invalid(id));
+    }
+    CompleteFour(&mut sides);
+    let radii = if guard.Peek().Id() == kRound {
+        guard.ConsumeIncludingWhitespace();
+        let horizontal = RadiusList(id, &mut guard, mode)?;
+        let vertical = if guard.Peek().GetType() == kDelimiterToken
+            && guard.Peek().Delimiter() == b'/' as u16
+        {
+            guard.ConsumeIncludingWhitespace();
+            RadiusList(id, &mut guard, mode)?
+        } else {
+            horizontal.clone()
+        };
+        Some(std::array::from_fn(|index| {
+            [horizontal[index].clone(), vertical[index].clone()]
+        }))
+    } else {
+        None
+    };
+    if !guard.AtEnd() {
+        return Err(invalid(id));
+    }
+    guard.Release();
+    drop(guard);
+    stream.ConsumeWhitespace();
+    Ok(Rc::new(Value::new(CSSValuePayload::kBasicShapeInsetClass(
+        crate::production_effects_value::CSSBasicShapeInsetValue {
+            sides: std::array::from_fn(|index| sides[index].clone()),
+            radii,
+        },
+    ))))
+}
 fn BoxValue<T: TokenStreamTokenizer>(stream: &mut Stream<T>, geometry: bool) -> Option<Rc<Value>> {
     let keyword = stream.Peek().Id();
     if matches!(keyword, kContentBox | kPaddingBox | kBorderBox | kMarginBox)
@@ -285,6 +496,7 @@ fn Shape<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
 ) -> Result<Rc<Value>, PropertyParseError> {
     let clip = id == CSSPropertyID::kClipPath;
     if stream.Peek().Id() == kNone {
@@ -293,11 +505,11 @@ fn Shape<T: TokenStreamTokenizer>(
     }
     if stream.Peek().GetType() == kUrlToken || stream.Peek().FunctionId() == Some(kUrl) {
         return if clip {
-            Ok(values::uri(
-                ConsumeUrl(id, stream)?.ok_or_else(|| invalid(id))?,
+            Ok(values::uri_from_url_data(
+                ConsumeUrl(id, stream, context)?.ok_or_else(|| invalid(id))?,
             ))
         } else {
-            ConsumeContentImage(id, stream)?.ok_or_else(|| invalid(id))
+            ConsumeContentImage(id, stream, context)?.ok_or_else(|| invalid(id))
         };
     }
     if !clip
@@ -315,10 +527,15 @@ fn Shape<T: TokenStreamTokenizer>(
     let function = stream.Peek().FunctionId();
     let shape = if function == Some(kPolygon) {
         Some(Polygon(id, stream, mode)?)
-    } else if matches!(
-        function,
-        Some(kCircle | kEllipse | kInset | kRect | kXywh | kPath | kShape)
-    ) {
+    } else if function == Some(kInset) {
+        Some(Inset(id, stream, mode)?)
+    } else if function == Some(kCircle) {
+        Some(Circle(id, stream, mode)?)
+    } else if function == Some(kEllipse) {
+        Some(Ellipse(id, stream, mode)?)
+    } else if function == Some(kPath) {
+        Some(Path(id, stream)?)
+    } else if matches!(function, Some(kRect | kXywh | kShape)) {
         return Err(unsupported(
             id,
             "BasicShape native Path/equality owner or typed shape subtype",
@@ -379,10 +596,13 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
 ) -> Result<Rc<Value>, PropertyParseError> {
     match id {
-        CSSPropertyID::kFilter | CSSPropertyID::kBackdropFilter => Filter(id, stream, mode),
-        CSSPropertyID::kClipPath | CSSPropertyID::kShapeOutside => Shape(id, stream, mode),
+        CSSPropertyID::kFilter | CSSPropertyID::kBackdropFilter => {
+            Filter(id, stream, mode, context)
+        }
+        CSSPropertyID::kClipPath | CSSPropertyID::kShapeOutside => Shape(id, stream, mode, context),
         CSSPropertyID::kCursor => Cursor(id, stream, mode),
         CSSPropertyID::kShapeImageThreshold => {
             let value = if IsMathFunction(stream) {

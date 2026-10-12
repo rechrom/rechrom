@@ -37,9 +37,16 @@ pub(super) fn Apply(
     b: &mut ComputedStyleBuilder,
     parent: Option<&ComputedStyle>,
     v: &Value,
+    document_text_color: Option<foundation::Color>,
 ) -> Result {
     let inherit = v.IsInheritedValue() || v.IsUnsetValue() && CSSProperty::Get(id).IsInherited();
-    let initial = v.IsInitialValue() || v.IsUnsetValue() && !inherit || inherit && parent.is_none();
+    // cpp: longhands_custom.cc:2377-2381,2400-2404. The document-root-only
+    // CSSInitialColorValue resolves against the used color scheme at apply
+    // time, after color-scheme's cascade-affecting pass.
+    let initial = v.IsInitialColorValue()
+        || v.IsInitialValue()
+        || v.IsUnsetValue() && !inherit
+        || inherit && parent.is_none();
     let p = parent.filter(|_| inherit && !initial);
     if matches!(id, kWebkitTapHighlightColor | kWebkitTextFillColor) {
         // generated longhands.cc:19105-19113,19192-19201. Tap highlight
@@ -61,7 +68,7 @@ pub(super) fn Apply(
         let visited = id == kInternalVisitedColor;
         let current = matches!(v.Payload(), CSSValuePayload::kIdentifierClass(k) if k.0 == CSSValueID::kCurrentcolor);
         let inheriting = p.is_some() || current && parent.is_some();
-        let color = if initial || current && parent.is_none() {
+        let mut color = if initial || current && parent.is_none() {
             b.InitialColorForColorScheme()
         } else if inheriting {
             if b.ShouldPreserveParentColor() {
@@ -75,9 +82,33 @@ pub(super) fn Apply(
             } else {
                 parent.Color().clone()
             }
+        } else if matches!(v.Payload(), CSSValuePayload::kIdentifierClass(k) if k.0 == CSSValueID::kInternalQuirkInherit)
+        {
+            // cpp: style_builder_converter.cc:160-175,2898-2914;
+            // style_resolver.cc:1444-1448. The UA-only quirks keyword reads
+            // Document::TextLinkColors, whose custom text color is the body's
+            // resolved current color. Before a body publishes that owner,
+            // TextLinkColors returns the used-scheme initial text color.
+            StyleColor::from_color(
+                document_text_color.unwrap_or_else(|| b.InitialColorForColorScheme().GetColor()),
+            )
         } else {
             color_ui_application::ConvertStyleColorValue(id, v)?
         };
+        // cpp: longhands_custom.cc Color/InternalVisitedColor::ApplyValue.
+        // In the color property, currentColor inside an unresolved function
+        // refers to the parent's computed current color, so it becomes fully
+        // resolved at apply time rather than remaining self-referential.
+        if color.IsUnresolvedColorFunction() {
+            let inherited = parent
+                .map(|style| style.GetCurrentColor(None))
+                .unwrap_or_else(|| b.InitialColorForColorScheme().GetColor());
+            color = StyleColor::from_color(color.Resolve(
+                inherited,
+                layoutng_style::style::color_scheme::mojom::blink::ColorScheme::kLight,
+                None,
+            ));
+        }
         if visited {
             b.SetInternalVisitedColor(&color);
             b.SetInternalVisitedColorIsCurrentColor(

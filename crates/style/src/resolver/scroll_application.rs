@@ -71,6 +71,8 @@ fn ConvertLength(
         root,
         b.EffectiveZoom(),
         media,
+        Some(super::CurrentComputedLineHeight(b)),
+        None,
     );
     let padding = Padding(id);
     if let CSSValuePayload::kMathFunctionClass(math) = value.Payload() {

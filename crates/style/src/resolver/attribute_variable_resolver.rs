@@ -8,6 +8,7 @@ use crate::{
         css_parser_token::{
             BlockType, CSSParserToken, CSSParserTokenType::*, NumericSign, NumericValueType,
         },
+        css_parser_token_stream::CSSParserTokenStream,
         css_tokenizer::CSSTokenizer,
     },
     production_css_value as values,
@@ -23,11 +24,17 @@ pub trait AttributeSource {
 }
 pub trait AttributeResolutionState {
     fn SetHasAttrFunction(&self);
+    fn HasAttrFunction(&self) -> bool {
+        false
+    }
 }
 pub trait AttributeVariableResolver {
     fn CSSArgumentGrammarEnabled(&self) -> bool;
     fn SetHasAttrFunction(&self);
     fn GetAttribute(&self, local_name: &AtomicString) -> String;
+    fn HasAttrFunction(&self) -> bool {
+        false
+    }
 }
 pub struct AttributeResolver<'a, S, R> {
     source: &'a S,
@@ -54,6 +61,9 @@ impl<S: AttributeSource, R: AttributeResolutionState> AttributeVariableResolver
     }
     fn GetAttribute(&self, local_name: &AtomicString) -> String {
         self.source.GetAttribute(local_name)
+    }
+    fn HasAttrFunction(&self) -> bool {
+        self.state.HasAttrFunction()
     }
 }
 /// Uses the admitted DOM owner directly. Attribute namespaces other than null
@@ -101,6 +111,50 @@ impl AttributeSource for PersistentAttributeSource<'_> {
 pub(crate) enum AttributeType {
     RawString,
     Unit(UnitType),
+}
+
+/// Consumes the legacy `attr()` type component from StyleCascade's retained
+/// token stream.  Keeping this beside `ParseAttributeValue` makes the typed
+/// attribute owner responsible for both halves of CSSAttrType; the production
+/// cascade adapter only forwards the translated callback.
+pub(crate) fn ConsumeAttributeType(
+    stream: &mut CSSParserTokenStream<'_, CSSTokenizer>,
+) -> Option<AttributeType> {
+    let token = stream.Peek().clone();
+    let result = if token.GetType() == kDelimiterToken && token.Delimiter() == b'%' as u16 {
+        Some(AttributeType::Unit(UnitType::kPercentage))
+    } else if token.GetType() == kIdentToken {
+        let text = token.Value().ToString();
+        match text.Utf8().as_str() {
+            "raw-string" => Some(AttributeType::RawString),
+            "number" => Some(AttributeType::Unit(UnitType::kNumber)),
+            _ => {
+                let unit = StringToUnitType(&StringView::from(&text));
+                (crate::css_numeric_literal_value::IsLength(unit)
+                    || matches!(
+                        unit,
+                        UnitType::kUserUnits
+                            | UnitType::kQuirkyEms
+                            | UnitType::kDegrees
+                            | UnitType::kRadians
+                            | UnitType::kGradians
+                            | UnitType::kTurns
+                            | UnitType::kMilliseconds
+                            | UnitType::kSeconds
+                            | UnitType::kHertz
+                            | UnitType::kKilohertz
+                            | UnitType::kFlex
+                    ))
+                .then_some(AttributeType::Unit(unit))
+            }
+        }
+    } else {
+        None
+    };
+    if result.is_some() {
+        stream.ConsumeIncludingWhitespace();
+    }
+    result
 }
 // cpp: css_attr_type.cc:23-79 ConsumeDimensionUnitType/CSSAttrType::Consume;
 // css_variable_parser.cc:255-293 ConsumeAttributeReference.

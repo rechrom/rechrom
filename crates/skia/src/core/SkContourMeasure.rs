@@ -28,6 +28,59 @@ pub fn path_length(path: &Path) -> f32 {
         .sum()
 }
 
+/// Position and unit tangent sampled with Skia's contour subdivision rules.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PathPointAndTangent {
+    pub x: f32,
+    pub y: f32,
+    pub tangent_x: f32,
+    pub tangent_y: f32,
+}
+
+/// Samples across all contours, matching Blink's `Path::PointAndNormalAtLength`.
+pub fn point_and_tangent_at_length(path: &Path, distance: f32) -> PathPointAndTangent {
+    let distance = if distance.is_finite() { distance } else { 0.0 };
+    let mut contour_start = 0.0;
+    for contour in SkContourMeasureIter::new(path, 1.0) {
+        let contour_end = contour_start + contour.length;
+        if distance <= contour_end {
+            let local_distance = (distance - contour_start).clamp(0.0, contour.length);
+            if let Some((segment_index, t)) = contour.distance_to_segment(local_distance) {
+                let segment = contour.segments[segment_index];
+                let mut position = Point::zero();
+                let mut tangent = Point::zero();
+                compute_pos_tan(
+                    &contour.points[segment.point_index..],
+                    segment.kind,
+                    t,
+                    Some(&mut position),
+                    Some(&mut tangent),
+                );
+                return PathPointAndTangent {
+                    x: position.x,
+                    y: position.y,
+                    tangent_x: tangent.x,
+                    tangent_y: tangent.y,
+                };
+            }
+        }
+        contour_start = contour_end;
+    }
+
+    let first = path.points().first().copied().unwrap_or_else(Point::zero);
+    PathPointAndTangent {
+        x: first.x,
+        y: first.y,
+        tangent_x: 1.0,
+        tangent_y: 0.0,
+    }
+}
+
+/// Whether the final contour is closed, matching `SkPath::isLastContourClosed`.
+pub fn last_contour_is_closed(path: &Path) -> bool {
+    path.verbs().last() == Some(&PathVerb::Close)
+}
+
 impl<'a> SkContourMeasureIter<'a> {
     pub(crate) fn new(path: &'a Path, res_scale: f32) -> Self {
         // can't use tangents, since we need [0..1..................2] to be seen

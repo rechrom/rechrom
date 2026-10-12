@@ -11,6 +11,7 @@ use layoutng_assembly::internal::layout_input::{
     PaintImage, ShapeCoordinate, ShapeOutsideGeometry, ShapeOutsideKind, ShapeRadius,
     ShapeRadiusKind,
 };
+use layoutng_assembly::internal::layout_replaced::LayoutReplaced;
 use layoutng_assembly::internal::length_utils::ComputePhysicalMarginsForSpace;
 use layoutng_assembly::internal::paint_input::{PaintCornerRadii, PaintCornerRadius};
 use layoutng_assembly::internal::shapes::shape::{LineSegment, Shape, ShapeBase};
@@ -184,21 +185,31 @@ fn CreateImageShape(
         empty.SetShapeMargin(margin);
         return Box::new(empty);
     }
-    let target_width = 1.max(physical_width.round() as i32);
-    let target_height = 1.max(physical_height.round() as i32);
-    let image_physical_size = gfx::Size::new(target_width, target_height);
     let reference_physical_size = ToPhysicalSize(reference_logical_size, writing_mode);
     let converter = WritingModeConverter::new(
         WritingDirectionMode::new(writing_mode, TextDirection::kLtr),
         reference_physical_size,
     );
-    let image_rect = converter.ToLogicalRect(PhysicalRect::new(
-        PhysicalOffset::default(),
-        PhysicalSize::new(
-            LayoutUnit::from_signed(target_width),
-            LayoutUnit::from_signed(target_height),
-        ),
-    ));
+    // cpp: ShapeOutsideInfo::CreateShapeForImage. An <img> float samples the
+    // alpha image in its final object-fit/object-position content rectangle;
+    // other boxes use the StyleImage's concrete image size at EffectiveZoom.
+    let image_physical_rect = if box_.IsLayoutImage() {
+        let replaced = unsafe { &*(box_ as *const LayoutBox as *const LayoutReplaced) };
+        replaced.ReplacedContentRect()
+    } else {
+        PhysicalRect::new(
+            PhysicalOffset::default(),
+            PhysicalSize::new(
+                LayoutUnit::from_signed(1.max(physical_width.round() as i32)),
+                LayoutUnit::from_signed(1.max(physical_height.round() as i32)),
+            ),
+        )
+    };
+    let image_physical_size = gfx::Size::new(
+        1.max(image_physical_rect.size.width.Round()),
+        1.max(image_physical_rect.size.height.Round()),
+    );
+    let image_rect = converter.ToLogicalRect(image_physical_rect);
     let margin_border_padding = box_.MarginOutsets() + box_.BorderOutsets() + box_.PaddingOutsets();
     let physical_margin_rect = PhysicalRect::from_units(
         -margin_border_padding.left,
@@ -427,6 +438,9 @@ impl Shape for ContourShape {
 
 // cpp: layoutng_float/shape_outside_algorithm.cc:337-339
 fn Resolve(value: &ShapeCoordinate, basis: f32) -> f32 {
+    if let Some(calculation) = &value.calculation {
+        return calculation.Evaluate(basis, &foundation::EvaluationInput::default());
+    }
     (value.pixels + value.percentage * basis as f64 / 100.0) as f32
 }
 
@@ -505,7 +519,7 @@ fn LogicalRadii(mut physical: [gfx::SizeF; 4], writing_mode: WritingMode) -> [gf
 }
 
 // cpp: layoutng_float/shape_outside_algorithm.cc:405-420
-fn InputBorderRadii(box_: &LayoutBox) -> [gfx::SizeF; 4] {
+fn InputBorderRadii(box_: &LayoutBox, physical_size: PhysicalSize) -> [gfx::SizeF; 4] {
     let node = box_.GetNode();
     assert!(!node.is_null());
     let paint = &unsafe { &*node }.InputStyle().paint;
@@ -519,12 +533,20 @@ fn InputBorderRadii(box_: &LayoutBox) -> [gfx::SizeF; 4] {
         bottom_right: fallback,
         bottom_left: fallback,
     });
-    let size = |radius: PaintCornerRadius| gfx::SizeF::new(radius.x as f32, radius.y as f32);
+    let percentages = paint.border_radii_percentages;
+    let width = physical_size.width.ToFloat() as f64;
+    let height = physical_size.height.ToFloat() as f64;
+    let size = |radius: PaintCornerRadius, percentage: PaintCornerRadius| {
+        gfx::SizeF::new(
+            (radius.x + percentage.x * width / 100.0).max(0.0) as f32,
+            (radius.y + percentage.y * height / 100.0).max(0.0) as f32,
+        )
+    };
     [
-        size(radii.top_left),
-        size(radii.top_right),
-        size(radii.bottom_right),
-        size(radii.bottom_left),
+        size(radii.top_left, percentages.top_left),
+        size(radii.top_right, percentages.top_right),
+        size(radii.bottom_right, percentages.bottom_right),
+        size(radii.bottom_left, percentages.bottom_left),
     ]
 }
 
@@ -589,7 +611,7 @@ pub fn CreateShapeOutside(
                 gfx::RectF::new(gfx::PointF::default(), gfx::SizeF::new(width, height));
             let mut shape = InsetShape::new(
                 converter.ToLogicalRectF(physical_bounds),
-                LogicalRadii(InputBorderRadii(box_), writing_mode),
+                LogicalRadii(InputBorderRadii(box_, physical_size), writing_mode),
             );
             shape.SetShapeMargin(margin);
             Box::new(shape)

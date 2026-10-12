@@ -185,6 +185,8 @@ fn ConvertZoom(
                         root,
                         builder.EffectiveZoom(),
                         media,
+                        Some(CurrentComputedLineHeight(builder)),
+                        None,
                     ),
                     None,
                 )

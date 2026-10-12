@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 use std::io;
+mod ots_cff;
 mod ots_cmap;
 mod ots_device_tables;
 mod ots_glyf;

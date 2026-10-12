@@ -220,6 +220,17 @@ impl InlineBoxState {
             line_height *= paint_scale;
         }
         let leading_space = CalculateLeadingSpace(&line_height, &self.text_metrics);
+        if std::env::var_os("RECHROM_TRACE_INLINE_METRICS").is_some() {
+            eprintln!(
+                "inline-metrics font={:.4} line={:.4} raw-ascent={:.4} raw-descent={:.4} leading={:.4},{:.4}",
+                style.ComputedFontSize(),
+                line_height.ToDouble(),
+                self.text_metrics.ascent.ToDouble(),
+                self.text_metrics.descent.ToDouble(),
+                leading_space.ascent.ToDouble(),
+                leading_space.descent.ToDouble(),
+            );
+        }
         if emphasis_marks_outsets.IsEmpty() {
             self.text_metrics.AddLeading(&leading_space);
         } else {

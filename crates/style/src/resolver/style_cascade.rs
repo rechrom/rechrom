@@ -2,6 +2,7 @@
 // BSD-style license; see the LICENSE file.
 // cpp: third_party/blink/renderer/core/css/resolver/style_cascade.h
 // cpp: third_party/blink/renderer/core/css/resolver/style_cascade.cc
+// Source ledger, Chromium commit 6c1d401fcca5e1b0030563a90c2f2bba168e0c15.
 // Complete StyleCascade production logic, including token/variable/function
 // substitution, attr/env/if, numeric coercion and safe-area processing.
 // Source ledger (physical/effective/mapped/omitted/pending):

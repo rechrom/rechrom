@@ -10,12 +10,13 @@ use interaction::input_event::{WheelEvent, WheelPhase};
 
 impl Page {
     pub fn ScrollWheelDefault(&mut self, wheel: &WheelEvent) -> io::Result<()> {
-        self.ApplyWheelDefaultWithoutLifecycle(wheel)?;
+        self.ApplyWheelDefaultWithoutLifecycle(wheel, wheel.target_node_id)?;
         self.UpdateFrameIfNeeded()
     }
     pub(super) fn ApplyWheelDefaultWithoutLifecycle(
         &mut self,
         wheel: &WheelEvent,
+        target_node_id: Option<u64>,
     ) -> io::Result<()> {
         if !wheel.delta.x.is_finite() || !wheel.delta.y.is_finite() {
             return Ok(());
@@ -32,9 +33,11 @@ impl Page {
                     .map_or(fallback, |index| document.ScrollOffsetFor(index))
             };
             let viewport_height = self.state.constraints.borrow().available_size.height;
+            let mut targeted_wheel = wheel.clone();
+            targeted_wheel.target_node_id = target_node_id;
             compositor::ComputeMainThreadScrollUpdates(
                 &frame.fragments,
-                wheel,
+                &targeted_wheel,
                 viewport_height,
                 &current_offset,
             )

@@ -200,6 +200,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintFilterType {
     type Output = target::PaintFilterType;
     fn to_skia(&self) -> Self::Output {
         match self {
+            Self::kReference => target::PaintFilterType::kReference,
             Self::kBlur => target::PaintFilterType::kBlur,
             Self::kBrightness => target::PaintFilterType::kBrightness,
             Self::kContrast => target::PaintFilterType::kContrast,
@@ -210,18 +211,49 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintFilterType {
             Self::kSaturate => target::PaintFilterType::kSaturate,
             Self::kSepia => target::PaintFilterType::kSepia,
             Self::kDropShadow => target::PaintFilterType::kDropShadow,
+            Self::kBoxReflect => target::PaintFilterType::kBoxReflect,
         }
     }
 }
 impl ToSkia for layoutng_assembly::internal::paint_input::PaintFilterOperation {
     type Output = target::PaintFilterOperation;
     fn to_skia(&self) -> Self::Output {
+        debug_assert!(self.reflection_offset_calculation.is_none());
         target::PaintFilterOperation {
             r#type: self.r#type.to_skia(),
             amount: self.amount.to_skia(),
             offset: self.offset.to_skia(),
             blur_radius: self.blur_radius.to_skia(),
             color: self.color.to_skia(),
+            reflection_direction: match self.reflection_direction {
+                layoutng_assembly::internal::paint_input::PaintReflectionDirection::kAbove => {
+                    target::PaintReflectionDirection::kAbove
+                }
+                layoutng_assembly::internal::paint_input::PaintReflectionDirection::kBelow => {
+                    target::PaintReflectionDirection::kBelow
+                }
+                layoutng_assembly::internal::paint_input::PaintReflectionDirection::kLeft => {
+                    target::PaintReflectionDirection::kLeft
+                }
+                layoutng_assembly::internal::paint_input::PaintReflectionDirection::kRight => {
+                    target::PaintReflectionDirection::kRight
+                }
+            },
+            reflection_offset: self.reflection_offset,
+            reflection_has_mask: self.reflection_has_mask,
+            reflection_mask: self.reflection_has_mask.then(|| {
+                skia::cpu::layer_filters::RenderReflectionMask {
+                    // A specified but pending/empty mask is transparent. It
+                    // must not degrade into an unmasked reflected branch.
+                    layers: crate::reflection_mask::CompileReflectionMaskLayers(
+                        &self.reflection_mask_layers,
+                    )
+                    .unwrap_or_default(),
+                    // Flat replay samples the actual CTM when SaveLayerFilter
+                    // opens and replaces this identity below.
+                    local_to_device: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                }
+            }),
         }
     }
 }
@@ -287,13 +319,180 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintRadialExtent {
         }
     }
 }
+impl ToSkia for layoutng_assembly::internal::paint_input::PaintColorInterpolationSpace {
+    type Output = target::PaintColorInterpolationSpace;
+    fn to_skia(&self) -> Self::Output {
+        match self {
+            Self::kNone => target::PaintColorInterpolationSpace::kNone,
+            Self::kSRGB => target::PaintColorInterpolationSpace::kSRGB,
+            Self::kSRGBLegacy => target::PaintColorInterpolationSpace::kSRGBLegacy,
+            Self::kSRGBLinear => target::PaintColorInterpolationSpace::kSRGBLinear,
+            Self::kDisplayP3 => target::PaintColorInterpolationSpace::kDisplayP3,
+            Self::kDisplayP3Linear => target::PaintColorInterpolationSpace::kDisplayP3Linear,
+            Self::kHSL => target::PaintColorInterpolationSpace::kHSL,
+            Self::kHWB => target::PaintColorInterpolationSpace::kHWB,
+            Self::kA98RGB => target::PaintColorInterpolationSpace::kA98RGB,
+            Self::kProPhotoRGB => target::PaintColorInterpolationSpace::kProPhotoRGB,
+            Self::kRec2020 => target::PaintColorInterpolationSpace::kRec2020,
+            Self::kRec2100Linear => target::PaintColorInterpolationSpace::kRec2100Linear,
+            Self::kLab => target::PaintColorInterpolationSpace::kLab,
+            Self::kLch => target::PaintColorInterpolationSpace::kLch,
+            Self::kOklab => target::PaintColorInterpolationSpace::kOklab,
+            Self::kOklch => target::PaintColorInterpolationSpace::kOklch,
+            Self::kXYZD50 => target::PaintColorInterpolationSpace::kXYZD50,
+            Self::kXYZD65 => target::PaintColorInterpolationSpace::kXYZD65,
+        }
+    }
+}
+impl ToSkia for layoutng_assembly::internal::paint_input::PaintHueInterpolationMethod {
+    type Output = target::PaintHueInterpolationMethod;
+    fn to_skia(&self) -> Self::Output {
+        match self {
+            Self::kShorter => target::PaintHueInterpolationMethod::kShorter,
+            Self::kLonger => target::PaintHueInterpolationMethod::kLonger,
+            Self::kIncreasing => target::PaintHueInterpolationMethod::kIncreasing,
+            Self::kDecreasing => target::PaintHueInterpolationMethod::kDecreasing,
+        }
+    }
+}
 impl ToSkia for layoutng_assembly::internal::paint_input::PaintColorStop {
     type Output = target::PaintColorStop;
     fn to_skia(&self) -> Self::Output {
         target::PaintColorStop {
             offset: self.offset.to_skia(),
             color: self.color.to_skia(),
+            source_color_space: self.source_color_space.to_skia(),
+            source_components: self.source_components,
+            missing_components: self.missing_components,
             offset_length: self.offset_length.to_skia(),
+            is_hint: self.is_hint,
+        }
+    }
+}
+impl ToSkia for layoutng_assembly::internal::paint_input::SvgMarkerPrimitive {
+    type Output = target::SvgPatternPrimitive;
+    fn to_skia(&self) -> Self::Output {
+        use layoutng_assembly::internal::layout_input::SvgShapeGeometry;
+        target::SvgPatternPrimitive {
+            geometry: match self.shape.geometry {
+                SvgShapeGeometry::kPath => target::SvgPatternGeometry::kPath,
+                SvgShapeGeometry::kRectangle => target::SvgPatternGeometry::kRectangle,
+                SvgShapeGeometry::kEllipse => target::SvgPatternGeometry::kEllipse,
+            },
+            bounds_offset: self.shape.bounds_offset.to_skia(),
+            bounds_width: self.shape.bounds_width,
+            bounds_height: self.shape.bounds_height,
+            rectangle_radius_x: self.shape.rectangle_radius_x,
+            rectangle_radius_y: self.shape.rectangle_radius_y,
+            path: self.shape.path.to_skia(),
+            fill: self.fill.to_skia(),
+            stroke: self.stroke.to_skia(),
+            fill_server: self.fill_server.to_skia(),
+            stroke_server: self.stroke_server.to_skia(),
+            stroke_width: self.stroke_width,
+            stroke_dash_array: self.stroke_dash_array.clone(),
+            stroke_dash_offset: self.stroke_dash_offset,
+            stroke_line_cap: self.stroke_line_cap.to_skia(),
+            stroke_line_join: self.stroke_line_join.to_skia(),
+            stroke_miter_limit: self.stroke_miter_limit,
+            fill_even_odd: self.fill_even_odd,
+            non_scaling_stroke: self.non_scaling_stroke,
+            antialias: self.antialias,
+            transform: self.transform.unwrap_or_default().to_skia(),
+        }
+    }
+}
+impl ToSkia for layoutng_assembly::internal::paint_input::SvgPatternImage {
+    type Output = target::SvgPatternImage;
+    fn to_skia(&self) -> Self::Output {
+        target::SvgPatternImage {
+            resource_id: self.resource_id,
+            image_interpolation_quality: self.image_interpolation_quality.to_skia(),
+            destination: target::PaintRect {
+                x: self.destination_offset.x,
+                y: self.destination_offset.y,
+                width: self.destination_width,
+                height: self.destination_height,
+            },
+            source: target::PaintRect {
+                x: self.source_offset.x,
+                y: self.source_offset.y,
+                width: self.source_width,
+                height: self.source_height,
+            },
+            transform: self.transform.to_skia(),
+            raster_width: 0,
+            raster_height: 0,
+            rgba8: Vec::new().into(),
+        }
+    }
+}
+impl ToSkia for layoutng_assembly::internal::paint_input::SvgPatternCommand {
+    type Output = target::SvgPatternCommand;
+    fn to_skia(&self) -> Self::Output {
+        match self {
+            Self::SaveLayerOpacity(opacity) => {
+                target::SvgPatternCommand::SaveLayerOpacity(*opacity)
+            }
+            Self::SaveLayerFilter(filters) => {
+                target::SvgPatternCommand::SaveLayerFilter(filters.to_skia())
+            }
+            Self::SaveLayerReferenceFilter(filter) => {
+                let [x, y, width, height] = filter
+                    .reference
+                    .expect("unresolved SVG pattern reference filter reached raster conversion");
+                let graph = crate::svg_filter_graph::TranslateSvgFilterGraph(
+                    &filter.graph,
+                    paint::paint_engine::PaintRect {
+                        x,
+                        y,
+                        width,
+                        height,
+                    },
+                    1.0,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("unsupported SVG pattern reference filter: {error}")
+                });
+                target::SvgPatternCommand::SaveLayerReferenceFilter(std::sync::Arc::new(graph))
+            }
+            Self::SaveLayerBlend(mode) => target::SvgPatternCommand::SaveLayerBlend(mode.to_skia()),
+            Self::SaveLayerMask(mask) => {
+                let [x, y, width, height] = mask
+                    .resolved_clip
+                    .expect("unresolved SVG pattern mask reached raster conversion");
+                target::SvgPatternCommand::SaveLayerMask(std::sync::Arc::new(
+                    target::SvgPatternMask {
+                        commands: mask.commands.to_skia(),
+                        content_transform: mask.content_transform.to_skia(),
+                        clip_rect: target::PaintRect {
+                            x,
+                            y,
+                            width,
+                            height,
+                        },
+                        mode: mask.mode.to_skia(),
+                    },
+                ))
+            }
+            Self::SaveLayerClip(_) => {
+                panic!("unresolved SVG pattern clipPath reached raster conversion")
+            }
+            Self::Restore => target::SvgPatternCommand::Restore,
+            Self::DrawShape(shape) => target::SvgPatternCommand::DrawShape(shape.to_skia()),
+            Self::DrawGlyph(glyph) => target::SvgPatternCommand::DrawGlyph(glyph.to_skia()),
+            Self::DrawText(_) => panic!("unresolved SVG pattern text reached raster conversion"),
+            Self::DrawImage(image) => target::SvgPatternCommand::DrawImage(image.to_skia()),
+        }
+    }
+}
+impl ToSkia for layoutng_assembly::internal::paint_input::SvgPatternData {
+    type Output = target::SvgPatternData;
+    fn to_skia(&self) -> Self::Output {
+        target::SvgPatternData {
+            commands: self.commands.to_skia(),
+            content_transform: self.content_transform.to_skia(),
+            opacity: self.opacity,
         }
     }
 }
@@ -307,6 +506,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintShader {
             start: self.start.to_skia(),
             end: self.end.to_skia(),
             linear_angle: self.linear_angle.to_skia(),
+            linear_corner: self.linear_corner,
             linear_start_offset: self.linear_start_offset.to_skia(),
             linear_end_offset: self.linear_end_offset.to_skia(),
             center: self.center.to_skia(),
@@ -331,7 +531,13 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintShader {
             unit_coordinates: self.unit_coordinates.to_skia(),
             object_bounding_box_coordinates: self.object_bounding_box_coordinates.to_skia(),
             interpolate_premultiplied: self.interpolate_premultiplied.to_skia(),
+            color_interpolation_space: self.color_interpolation_space.to_skia(),
+            hue_interpolation_method: self.hue_interpolation_method.to_skia(),
             transform: self.transform.to_skia(),
+            pattern: self
+                .pattern
+                .as_ref()
+                .map(|pattern| std::sync::Arc::new(pattern.as_ref().to_skia())),
         }
     }
 }
@@ -343,6 +549,16 @@ impl ToSkia for layoutng_assembly::internal::paint_input::BackgroundRepeatRule {
             Self::kNoRepeat => target::BackgroundRepeatRule::kNoRepeat,
             Self::kRound => target::BackgroundRepeatRule::kRound,
             Self::kSpace => target::BackgroundRepeatRule::kSpace,
+        }
+    }
+}
+impl ToSkia for layoutng_assembly::internal::paint_input::InterpolationQuality {
+    type Output = target::ImageInterpolationQuality;
+    fn to_skia(&self) -> Self::Output {
+        match self {
+            Self::kInterpolationNone => target::ImageInterpolationQuality::kNone,
+            Self::kInterpolationLow => target::ImageInterpolationQuality::kLow,
+            Self::kInterpolationMedium => target::ImageInterpolationQuality::kMedium,
         }
     }
 }
@@ -420,11 +636,27 @@ impl ToSkia for paint::paint_engine::DisplayItemType {
         }
     }
 }
+impl ToSkia for image_resource::ImageOrientation {
+    type Output = target::ImageOrientation;
+    fn to_skia(&self) -> Self::Output {
+        match self {
+            Self::kDefault => target::ImageOrientation::kDefault,
+            Self::kFlipHorizontal => target::ImageOrientation::kFlipHorizontal,
+            Self::kRotate180 => target::ImageOrientation::kRotate180,
+            Self::kFlipVertical => target::ImageOrientation::kFlipVertical,
+            Self::kTranspose => target::ImageOrientation::kTranspose,
+            Self::kRotate90 => target::ImageOrientation::kRotate90,
+            Self::kTransverse => target::ImageOrientation::kTransverse,
+            Self::kRotate270 => target::ImageOrientation::kRotate270,
+        }
+    }
+}
 impl ToSkia for paint::paint_engine::DisplayMaskLayer {
     type Output = target::MaskLayer;
     fn to_skia(&self) -> Self::Output {
         target::MaskLayer {
             resource_id: self.resource_id.to_skia(),
+            image_interpolation_quality: self.image_interpolation_quality.to_skia(),
             paint_shader: self.paint_shader.to_skia(),
             clip_rect: self.clip_rect.to_skia(),
             clip_radii: self.clip_radii.to_skia(),
@@ -473,8 +705,12 @@ impl ToSkia for paint::paint_engine::DisplayItem {
             mask_layers: self.mask_layers.to_skia(),
             round_cap: self.round_cap.to_skia(),
             resource_id: self.resource_id.to_skia(),
+            image_interpolation_quality: self.image_interpolation_quality.to_skia(),
+            image_orientation: self.image_orientation.to_skia(),
             repeat_x: self.repeat_x.to_skia(),
             repeat_y: self.repeat_y.to_skia(),
+            tile_scale: self.tile_scale.to_skia(),
+            tile_phase: self.tile_phase.to_skia(),
             tile_spacing: self.tile_spacing.to_skia(),
             shadow_offset: self.shadow_offset.to_skia(),
             blur_radius: self.blur_radius.to_skia(),
@@ -488,6 +724,8 @@ impl ToSkia for paint::paint_engine::DisplayItem {
             font_face_index: self.font_face_index.to_skia(),
             font_variations: self.font_variations.to_skia(),
             font_size: self.font_size.to_skia(),
+            text_line_top: self.text_line_top.to_skia(),
+            text_line_height: self.text_line_height.to_skia(),
             text_blob_origin: self.text_blob_origin.to_skia(),
             synthetic_bold: self.synthetic_bold.to_skia(),
             synthetic_italic: self.synthetic_italic.to_skia(),

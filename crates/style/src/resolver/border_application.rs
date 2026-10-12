@@ -38,6 +38,8 @@ fn ConvertPixels(
         root,
         b.EffectiveZoom(),
         media,
+        Some(super::CurrentComputedLineHeight(b)),
+        None,
     );
     let pixels = match v.Payload() {
         CSSValuePayload::kNumericLiteralClass(number)
@@ -97,6 +99,8 @@ fn ConvertLength(
         root,
         b.EffectiveZoom(),
         media,
+        Some(super::CurrentComputedLineHeight(b)),
+        None,
     );
     if let CSSValuePayload::kMathFunctionClass(math) = v.Payload() {
         return math

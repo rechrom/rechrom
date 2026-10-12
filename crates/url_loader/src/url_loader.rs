@@ -64,6 +64,11 @@ impl Default for URLResponse {
 // cpp: resource_loader/resource_loader.h:44-50
 pub trait URLLoadOperation {
     fn Poll(&mut self) -> io::Result<Option<URLResponse>>;
+    /// Notify the embedding event loop when a previously pending complete
+    /// response becomes pollable. Resident/synchronous loaders may invoke the
+    /// callback immediately; application-defined loaders can retain polling by
+    /// using this default implementation.
+    fn SetWakeCallback(&mut self, _callback: crate::URLWakeCallback) {}
 }
 
 // cpp: resource_loader/resource_loader.h:52-56

@@ -1,6 +1,8 @@
 mod layout_mutations;
 pub mod layout_object_tree_builder;
 mod persistent_tree_builder;
+mod svg_clip_path_graph;
+mod svg_filter_graph;
 #[cfg(test)]
 pub use persistent_tree_builder::BuildLayoutObjectTree;
 pub use persistent_tree_builder::EmitLayoutMutations;

@@ -36,6 +36,7 @@ pub(super) fn ParseShorthand<T: TokenStreamTokenizer>(
     unresolved: CSSPropertyID,
     s: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
     out: &mut Vec<PropertyValue>,
 ) -> Result<(), PropertyParseError> {
     let mut longhands: [Vec<Rc<Value>>; 9] = std::array::from_fn(|_| Vec::new());
@@ -60,7 +61,7 @@ pub(super) fn ParseShorthand<T: TokenStreamTokenizer>(
                             || s.Peek().GetType() == kUrlToken
                             || is_function(s) && !IsMathFunction(s)
                         {
-                            Some(list_counter_parser::ListImage(property, s, mode)?)
+                            Some(list_counter_parser::ListImage(property, s, mode, context)?)
                         } else {
                             None
                         }

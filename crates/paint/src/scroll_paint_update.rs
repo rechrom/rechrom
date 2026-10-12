@@ -18,6 +18,7 @@ use crate::{
 use layoutng_assembly::{
     fragment_tree::FragmentNode,
     internal::layout_input::{Offset, Size, TransformMatrix},
+    internal::paint_input::BackgroundAttachment,
 };
 use std::{
     cell::RefCell,
@@ -365,11 +366,15 @@ impl RetainedScrollPaintState {
         for node in nodes {
             let f = node.fragment.as_deref()?;
             // Pixel-moving effects need an effect-specific input cull proof.
-            if !f.paint.style.filters.is_empty() {
+            if !f.paint.style.filters.is_empty()
+                || !f.paint.style.backdrop_filters.is_empty()
+                || f.paint.style.backdrop_filter_has_reference
+            {
                 if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
                     eprintln!(
                         "scroll-coverage-capture rejected=filter node={} filters={:?}",
-                        f.node_id, f.paint.style.filters
+                        f.node_id,
+                        (&f.paint.style.filters, &f.paint.style.backdrop_filters)
                     );
                 }
                 return None;
@@ -504,6 +509,20 @@ fn collect_current_fragments<'a>(
         .all(|child| collect_current_fragments(child, retained, nodes, offsets, collected))
 }
 
+fn has_scroll_dependent_background(fragment: &FragmentNode) -> bool {
+    (fragment.paint.has_source
+        && fragment
+            .paint
+            .style
+            .background_images
+            .iter()
+            .any(|layer| layer.attachment != BackgroundAttachment::kScroll))
+        || fragment
+            .children
+            .iter()
+            .any(has_scroll_dependent_background)
+}
+
 fn contains(outer: PaintRect, inner: PaintRect, roundoff: Offset) -> bool {
     inner.is_empty()
         || (inner.x >= outer.x - roundoff.x
@@ -618,18 +637,32 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
         return Err(FragmentChanged);
     }
     drop(collect_trace);
+    // These layers are recorded in the owning box-decoration record. Until
+    // they are promoted to Chromium's dedicated scrolling/fixed background
+    // chunk, their phase is a function of the current scroll offsets. Reject
+    // the property-only path so Paint re-records exact geometry instead of
+    // reusing a tile phase from the preceding scroll position.
+    let recorded_offsets = prepaint.property_node_store.scroll_offsets();
+    let scroll_changed = offsets.iter().any(|(owner, current)| {
+        recorded_offsets
+            .get(owner)
+            .is_some_and(|recorded| recorded != current)
+    });
+    if scroll_changed && has_scroll_dependent_background(fragments) {
+        return Err(FragmentChanged);
+    }
     let property_trace = browser_tracing::span("paint", "ScrollPaint.RebindPropertyTrees");
     let (updated_store, mut trees) = prepaint
         .property_node_store
         .retained_scroll_update(&offsets)
         .ok_or(PropertyChanged)?;
     drop(property_trace);
-    let device_scale = fragments
+    let artifact_to_device_scale = fragments
         .paint
         .resources
         .as_ref()
-        .map_or(1.0, |resources| resources.device_pixel_ratio);
-    if !device_scale.is_finite() || device_scale <= 0.0 {
+        .map_or(1.0, |resources| resources.ArtifactToDeviceScale());
+    if !artifact_to_device_scale.is_finite() || artifact_to_device_scale <= 0.0 {
         return Err(UnsupportedTransform);
     }
     let mut worlds = BTreeMap::new();
@@ -685,7 +718,7 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
             updated_store.viewport_clip(),
             &mut worlds,
             &mut clip_cache,
-            (1.0 / device_scale).max(1.0),
+            (1.0 / artifact_to_device_scale).max(1.0),
         )
         .ok_or(UnsupportedTransform)?
         .ok_or(CoverageExceeded)?;
@@ -914,10 +947,20 @@ mod coverage_tests {
                 controls: None,
             })
             .collect();
-        let fragment_indices = fragments
+        let fragment_indices = order
             .iter()
             .enumerate()
-            .map(|(i, f)| (f.identity, i))
+            .map(|(i, f)| {
+                (
+                    (
+                        f.node_id,
+                        f.fragment_instance_id,
+                        f.paint.display_item_client_id,
+                        f.paint.display_item_fragment,
+                    ),
+                    i,
+                )
+            })
             .collect();
         let retained = RetainedScrollPaintState {
             fragments,

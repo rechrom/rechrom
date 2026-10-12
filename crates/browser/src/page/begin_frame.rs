@@ -101,6 +101,14 @@ impl Page {
                 source == args.source_id && sequence >= args.sequence_number
             })
         {
+            // The host may receive the same physical pulse through both its
+            // direct and compositor routes. That pulse still acknowledges the
+            // outstanding callback, but it cannot satisfy dirty work which was
+            // requested after the original delivery. Clear Page's in-flight
+            // bit and re-arm against the next frame instead of leaving it
+            // permanently stuck at `requested = true`.
+            self.begin_frame.requested = false;
+            self.RequestBeginFrameIfNeeded();
             trace.set("duplicate", 1.0);
             return Ok(());
         }
@@ -319,7 +327,7 @@ impl Page {
                 input_trace.set("default_prevented", result.default_prevented as u8 as f64);
                 if !result.default_prevented {
                     if let InputEvent::Wheel(wheel) = &entry.input {
-                        self.ApplyWheelDefaultWithoutLifecycle(wheel)?;
+                        self.ApplyWheelDefaultWithoutLifecycle(wheel, result.target_node_id)?;
                     }
                 }
                 Ok(())

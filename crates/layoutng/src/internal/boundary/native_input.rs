@@ -381,6 +381,9 @@ fn ConvertShapeReferenceBox(value: ShapeReferenceBox) -> ShapeBox {
 fn ShapeMarginLength(value: &ShapeCoordinate) -> Length {
     Number(value.pixels, "shape_margin", false);
     Number(value.percentage, "shape_margin", false);
+    if let Some(calculation) = &value.calculation {
+        return Length::from_calculation_value(calculation.clone());
+    }
     if value.percentage == 0.0 {
         return Pixels(value.pixels, "shape_margin", true);
     }
@@ -1318,6 +1321,11 @@ fn BeginNativeStyle(input: &ComputedStyle, extra: &ExtendedStyle) -> ComputedSty
     );
     builder.SetWritingMode(direction.GetWritingMode());
     builder.SetDirection(direction.Direction());
+    builder.SetImageOrientation(if input.paint.respect_image_orientation {
+        foundation::RespectImageOrientationEnum::kRespectImageOrientation
+    } else {
+        foundation::RespectImageOrientationEnum::kDoNotRespectImageOrientation
+    });
     builder.SetObjectFit(ConvertObjectFit(input.paint.object_fit));
     let object_position_x = PositionLength(
         input.paint.object_position.x,
@@ -2111,10 +2119,20 @@ fn ApplyNativeStylePaintGrouping(builder: &mut ComputedStyleBuilder, input: &Com
     });
     // Preserve each supported CSS filter's real native class/payload.
     // cpp: core/css/resolver/filter_operation_resolver.cc:307-351
-    if !input.paint.filters.is_empty() {
+    if input.paint.backdrop_filter_has_reference {
+        Invalid("backdrop reference filter graph");
+    }
+    for (projected_filters, is_backdrop) in [
+        (&input.paint.filters, false),
+        (&input.paint.backdrop_filters, true),
+    ] {
+        if projected_filters.is_empty() {
+            continue;
+        }
         let mut filters = FilterOperations::new();
-        for filter in &input.paint.filters {
+        for filter in projected_filters {
             let operation: *mut FilterOperation = match filter.r#type {
+                PaintFilterType::kReference => Invalid("reference filter graph"),
                 PaintFilterType::kGrayscale
                 | PaintFilterType::kSepia
                 | PaintFilterType::kSaturate
@@ -2175,12 +2193,17 @@ fn ApplyNativeStylePaintGrouping(builder: &mut ComputedStyleBuilder, input: &Com
                     );
                     MakeGarbageCollected(DropShadowFilterOperation::new(shadow)).cast()
                 }
+                PaintFilterType::kBoxReflect => Invalid("box-reflect paint effect"),
             };
             filters
                 .OperationsMut()
                 .push_back(Member::from_ptr(operation));
         }
-        builder.SetFilterOwned(filters);
+        if is_backdrop {
+            builder.SetBackdropFilterOwned(filters);
+        } else {
+            builder.SetFilterOwned(filters);
+        }
     }
     if let Some(index) = input.paint.z_index {
         builder.SetZIndex(index);
@@ -2556,9 +2579,17 @@ pub fn PrepareNativeConstraints(
         ConvertWritingMode(root_style.writing_mode),
         ConvertTextDirection(root_style.direction),
     );
-    let width = LayoutUnit::from_f64(Number(space.available_size.width, "available width", true));
+    // cpp: web_frame_widget_impl.cc:2540-2568; local_frame_view.cc:1138-1146.
+    // Native LayoutNG operates in LayoutZoomFactor coordinates. Device scale
+    // is a separate raster input and must never enlarge the layout viewport.
+    let layout_zoom = Number(space.layout_zoom_factor, "layout zoom", true);
+    let width = LayoutUnit::from_f64(Number(
+        space.available_size.width * layout_zoom,
+        "available width",
+        true,
+    ));
     let height = LayoutUnit::from_f64(Number(
-        space.available_size.height,
+        space.available_size.height * layout_zoom,
         "available height",
         true,
     ));
@@ -2569,8 +2600,11 @@ pub fn PrepareNativeConstraints(
     };
     if let Some(block_size) = space.fragmentainer_block_size {
         // In paged layout the initial containing block uses the page area.
-        available.block_size =
-            LayoutUnit::from_f64(Number(block_size, "fragmentainer block size", true));
+        available.block_size = LayoutUnit::from_f64(Number(
+            block_size * layout_zoom,
+            "fragmentainer block size",
+            true,
+        ));
     }
     let mut builder = ConstraintSpaceBuilder::new_without_parent_space(
         direction.GetWritingMode(),

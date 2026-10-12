@@ -118,8 +118,14 @@ fn Path(
     } else {
         CoordBox::kBorderBox
     };
+    if !matches!(first.Payload(), CSSValuePayload::kRayClass(..)) {
+        let shape = super::effects_application::Shape(id, first, b, root, media)?;
+        return Ok(Member::from_ptr(MakeGarbageCollected(unsafe {
+            ShapeOffsetPathOperation::new(shape, coord)
+        }) as *mut dyn OffsetPathOperation));
+    }
     let CSSValuePayload::kRayClass(ray) = first.Payload() else {
-        return Err(LonghandApplicationError::Unsupported(id));
+        unreachable!()
     };
     let size = match Identifier(id, &ray.size)? {
         CSSValueID::kClosestSide => RaySize::kClosestSide,
@@ -389,7 +395,7 @@ mod tests {
         assert!(child.OffsetAnchor().X().IsAuto() && child.OffsetPath().GetNonNull().is_none());
     }
     #[test]
-    fn production_motion_invalid_unavailable_path_resource_and_zoom_boundaries() {
+    fn production_motion_basic_shapes_unavailable_resource_and_zoom_boundaries() {
         let _heap = foundation::LayoutHeapScope::new();
         for (id, value) in [
             (CSSPropertyID::kOffsetPath, "ray(0)"),
@@ -417,12 +423,26 @@ mod tests {
                 "{id:?}:{value}"
             );
         }
-        for value in [
-            "circle(20%)",
-            "polygon(0 0,100% 0,50% 100%)",
-            "path('M0 0 L10 10')",
-            "url(#path)",
+        let mut shapes = ComputedStyleBuilder::from_style(initial());
+        for (value, expected) in [
+            ("circle(20%)", ShapeType::kBasicShapeCircleType),
+            ("ellipse(20% 30%)", ShapeType::kBasicShapeEllipseType),
+            ("inset(10% round 4px)", ShapeType::kBasicShapeInsetType),
+            (
+                "polygon(0 0,100% 0,50% 100%)",
+                ShapeType::kBasicShapePolygonType,
+            ),
+            ("path('M0 0 L10 10')", ShapeType::kStylePathType),
         ] {
+            apply(&mut shapes, None, &format!("offset-path:{value}"));
+            let operation = operation(&shapes);
+            let shape = unsafe {
+                &*(operation as *const dyn OffsetPathOperation as *const ShapeOffsetPathOperation)
+            }
+            .GetBasicShape();
+            assert_eq!(shape.GetType(), expected);
+        }
+        for value in ["shape(from 0 0, line to 10px 10px)", "url(#path)"] {
             assert_eq!(
                 ParseProperty(
                     CSSPropertyID::kOffsetPath,

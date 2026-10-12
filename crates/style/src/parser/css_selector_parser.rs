@@ -2720,6 +2720,7 @@ impl CSSSelectorParser {
                 ) && !matches!(
                     selector.GetPseudoType(),
                     kPseudoIs
+                        | kPseudoAny
                         | kPseudoWhere
                         | kPseudoNot
                         | kPseudoHas
@@ -2743,7 +2744,14 @@ impl CSSSelectorParser {
                         | kPseudoMarker
                         | kPseudoBackdrop
                         | kPseudoPlaceholder
+                        | kPseudoSelection
+                        | kPseudoSearchText
+                        | kPseudoTargetText
+                        | kPseudoHighlight
+                        | kPseudoSpellingError
+                        | kPseudoGrammarError
                         | kPseudoAnyLink
+                        | kPseudoWebkitAnyLink
                         | kPseudoLink
                         | kPseudoVisited
                         | kPseudoHover
@@ -2758,12 +2766,30 @@ impl CSSSelectorParser {
                         | kPseudoRequired
                         | kPseudoOptional
                         | kPseudoChecked
+                        | kPseudoDefault
                         | kPseudoIndeterminate
+                        | kPseudoModal
+                        | kPseudoPopoverOpen
+                        | kPseudoDialogInTopLayer
+                        | kPseudoPopoverInTopLayer
                         | kPseudoPlaceholderShown
+                        | kPseudoTextField
+                        | kPseudoHasDatalist
+                        | kPseudoListBox
+                        | kPseudoMultiSelectFocus
+                        | kPseudoIsHtml
+                        | kPseudoSelectContainsInput
+                        | kPseudoSelectHasSlottedButton
                         | kPseudoLang
                         | kPseudoDir
                         | kPseudoRelativeAnchor
                         | kPseudoParent
+                        | kPseudoHost
+                        | kPseudoHostContext
+                        | kPseudoSlotted
+                        | kPseudoPart
+                        | kPseudoWebKitCustomElement
+                        | kPseudoBlinkInternalElement
                         | kPseudoUnparsed
                 ) {
                     return Some(selector.Value().Utf8());

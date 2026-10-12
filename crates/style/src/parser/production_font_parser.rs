@@ -335,14 +335,18 @@ pub(super) fn ParseShorthand<T: TokenStreamTokenizer>(
         }
         return Ok(());
     }
-    if matches!(
-        stream.Peek().Id(),
-        kCaption | kIcon | kMenu | kMessageBox | kSmallCaption | kStatusBar
-    ) {
-        return Err(unsupported(
-            id,
-            "ConsumeSystemFont CSSPendingSystemFontValue and platform settings",
-        ));
+    // cpp: css_parser_fast_paths.cc:1896-1898 IsValidSystemFont;
+    // shorthands_custom.cc:3074-3085 ConsumeSystemFont. Every font longhand
+    // receives the same pending marker and resolves it against the document at
+    // application time.
+    let system_font = stream.Peek().Id();
+    if (kCaption as i32..=kStatusBar as i32).contains(&(system_font as i32)) {
+        stream.ConsumeIncludingWhitespace();
+        let value = values::pending_system_font(system_font);
+        for &property in ShorthandFor(id) {
+            out.push(make_expanded(property, id, value.clone(), false));
+        }
+        return Ok(());
     }
     let mut optional = [None, None, None, None];
     let optional_ids = [kFontStyle, kFontVariantCaps, kFontWeight, kFontStretch];

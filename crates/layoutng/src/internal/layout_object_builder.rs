@@ -21,10 +21,12 @@ use super::layout_object_factory_set::LayoutObjectFactorySet;
 use super::layout_pass_scope::LayoutObjectFactoryScope;
 use super::layout_text::LayoutText;
 use foundation::{
-    DynamicTo, InitStringStatics, LayoutHeapScope, Length, MakeGarbageCollected, Persistent,
-    RuntimeEnabledFeatures, String as BlinkString,
+    DynamicTo, InitStringStatics, LayoutHeapScope, Length, MakeGarbageCollected, Member,
+    Persistent, RuntimeEnabledFeatures, String as BlinkString,
 };
-use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
+use layoutng_style::style::computed_style::{
+    ComputedStyle as NativeComputedStyle, ComputedStyleBuilder,
+};
 use std::collections::HashMap;
 
 // Native theme state and scroll translations affect paint, not box geometry.
@@ -39,6 +41,32 @@ fn PreserveNonGeometryMetadata(
         new.control_focused = old.control_focused;
         new.scroll_offset = old.scroll_offset;
     }
+}
+
+// Chromium's ComputedStyle already owns the Font selected for its document
+// environment. Rechrom deliberately keeps that platform binding at the
+// Style -> Layout boundary, so a paint-only replacement of the immutable
+// style payload must retain the previous binding. Otherwise an incremental
+// paint update installs StyleEngine's unresolved canonical style and then
+// (correctly) skips font/layout work, leaving existing text with a null
+// PrimaryFont and a zero paint baseline.
+fn PreservePaintOnlyFontBinding(
+    style: *const NativeComputedStyle,
+    previous: &NativeComputedStyle,
+) -> *const NativeComputedStyle {
+    let font = previous.GetFont();
+    let container_font = previous.ContainerFont();
+    if font.is_null() && container_font.is_null() {
+        return style;
+    }
+    let mut builder = ComputedStyleBuilder::from_style(unsafe { &*style });
+    if !font.is_null() {
+        builder.SetFont(Member::from_ptr(font));
+    }
+    if !container_font.is_null() {
+        builder.SetContainerFont(Member::from_ptr(container_font));
+    }
+    builder.TakeStyle()
 }
 
 // The one-argument constructor is defined by //src/main/default_layout_engine.cc
@@ -69,6 +97,14 @@ struct ManagedObject {
     parent: *mut LayoutObject,
     input: NativeNodeConstructionData,
     effective_style: ComputedStyle,
+}
+
+/// Non-CSS data attached by DOM/resource loading and needed when a native
+/// `ComputedStyle` is frozen for Paint.  This stays separate from Blink's
+/// style object, matching the resource/client relationship in Chromium.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PaintStyleBinding {
+    pub image_resource_id: Option<u64>,
 }
 
 // cpp: layoutng/internal/layout_object_builder.h:75-77
@@ -380,9 +416,15 @@ impl LayoutObjectTreeStorage {
                 unsafe { &*parent_node }.InputKind()
             }
         };
-        // Geometry-equivalent colors live in input paint data. Keep the native
-        // style (including the font bound from the actual constraint space).
-        // Preparing it again here would replace that font with construction data.
+        // A paint-only style change retains geometry, not the old style object.
+        // Blink's LayoutObject::SetStyle installs the new ComputedStyle even
+        // when StyleDifference does not require layout; Paint then observes
+        // updated StyleImage/effect/color data through StyleRef().  Keeping the
+        // previous pointer here made the Rust projection current while the
+        // resident LayoutObject and fragment export stayed one revision behind.
+        // PrepareNativeStyle returns StyleEngine's canonical native pointer
+        // when one is present, so this does not translate the projection back
+        // into a second style.
         let native_style = if paint_only {
             if kind == NodeKind::kText {
                 input.style = if !explicit_text_style.is_null() {
@@ -392,7 +434,15 @@ impl LayoutObjectTreeStorage {
                     unsafe { &*parent_node }.InputStyle().clone()
                 };
             }
-            unsafe { &*previous.as_ref().unwrap().object }.StylePtr()
+            prepare_style(
+                &input,
+                if parent.is_null() {
+                    std::ptr::null()
+                } else {
+                    unsafe { &*parent }.StyleRef()
+                },
+                parent_kind,
+            )
         } else if kind == NodeKind::kText {
             if parent.is_null() {
                 panic!("LayoutText cannot be the layout root");
@@ -413,6 +463,14 @@ impl LayoutObjectTreeStorage {
             };
             prepare_style(&input, parent_style, parent_kind)
         };
+        let native_style = if paint_only {
+            let old = previous
+                .as_ref()
+                .expect("paint-only update has a previous object");
+            PreservePaintOnlyFontBinding(native_style, unsafe { &*old.object }.StyleRef())
+        } else {
+            native_style
+        };
         let mut native_first_line_style: *const NativeComputedStyle = std::ptr::null();
         if !first_line_style.is_null() {
             if kind == NodeKind::kText {
@@ -429,11 +487,8 @@ impl LayoutObjectTreeStorage {
                     parent_first_line_style = unsafe { &*parent }.StyleRef();
                 }
             }
-            native_first_line_style = if paint_only {
-                unsafe { &*previous.as_ref().unwrap().node }.InputFirstLineStyle()
-            } else {
-                prepare_style(&first_line_input, parent_first_line_style, parent_kind)
-            };
+            native_first_line_style =
+                prepare_style(&first_line_input, parent_first_line_style, parent_kind);
         }
         if kind == NodeKind::kText && !source_text_style.is_null() {
             input.style = unsafe { &*source_text_style }.clone();
@@ -515,7 +570,9 @@ impl LayoutObjectTreeStorage {
         }
         if kind != NodeKind::kText {
             let paint = &input.style.paint;
-            let establishes_fixed_container = !paint.filters.is_empty()
+            let establishes_fixed_container = (!paint.filters.is_empty()
+                || !paint.backdrop_filters.is_empty()
+                || paint.backdrop_filter_has_reference)
                 || (paint.transform.is_some() && unsafe { &*object }.IsBox());
             if establishes_fixed_container {
                 unsafe { &mut *object }.SetCanContainFixedPositionObjects(true);
@@ -822,6 +879,34 @@ impl LayoutObjectTree {
         unsafe { &mut *object }
     }
 
+    /// Anonymous replaced child created by generated ContentData. Chromium's
+    /// ImageContentData::CreateLayoutObject creates a LayoutImage and applies
+    /// the originating pseudo style; keep that identity distinct from a real
+    /// DOM replaced element while using the same translated replaced factory.
+    pub fn AddGeneratedReplaced(
+        &mut self,
+        parent: &mut LayoutObject,
+        id: u64,
+        style: &ComputedStyle,
+        element: ElementData,
+        debug_name: String,
+    ) -> &mut LayoutObject {
+        let object = unsafe { &mut *self.storage_ }.Create(
+            parent,
+            id,
+            NodeKind::kReplaced,
+            style,
+            Some(element),
+            debug_name,
+            String::new(),
+            std::ptr::null(),
+            true,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+        unsafe { &mut *object }
+    }
+
     pub fn AddReplacedDefault(
         &mut self,
         parent: &mut LayoutObject,
@@ -958,37 +1043,35 @@ impl LayoutObjectTree {
     /// targeted counterpart of the paint-only branch in Create(): the native
     /// layout style/result remain resident, while fragment export reads the new
     /// paint data from the element metadata.
-    pub fn UpdatePaintStyle(&mut self, id: u64, style: &ComputedStyle) -> bool {
+    pub fn UpdatePaintStyle(
+        &mut self,
+        id: u64,
+        style: &NativeComputedStyle,
+    ) -> Option<PaintStyleBinding> {
         let storage = unsafe { &mut *self.storage_ };
         assert!(!storage.updating);
-        let eligible = storage.managed.values().filter(|record| {
-            record.input.id == id
-                && !record.input.style_generated
-                && record.input.kind != NodeKind::kText
-        });
-        let mut found = false;
-        for record in eligible {
-            found = true;
-            if !record.input.style.LayoutEquivalent(style)
-                || !record.effective_style.LayoutEquivalent(style)
-            {
-                return false;
-            }
-        }
-        if !found {
-            return false;
-        }
+        let native_style = style as *const NativeComputedStyle;
+        let mut binding = None;
         for record in storage.managed.values_mut().filter(|record| {
             record.input.id == id
                 && !record.input.style_generated
                 && record.input.kind != NodeKind::kText
         }) {
-            record.input.style = style.clone();
-            record.effective_style = style.clone();
-            unsafe { &mut *record.node.cast::<super::layout_node_metadata::Element>() }
-                .UpdateElementInput(&record.input);
+            let current = PaintStyleBinding {
+                image_resource_id: record.input.style.paint.image_resource_id,
+            };
+            if let Some(previous) = binding {
+                debug_assert_eq!(previous, current);
+            } else {
+                binding = Some(current);
+            }
+            record.input.style.native_style = native_style;
+            record.effective_style.native_style = native_style;
+            let node = unsafe { &mut *record.node };
+            node.SetComputedStyle(native_style);
+            unsafe { &mut *record.object }.SetStyle(native_style);
         }
-        true
+        binding
     }
 
     /// Exclusive access to the tree-owned root for the layout entry point.

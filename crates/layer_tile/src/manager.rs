@@ -1,6 +1,7 @@
 use crate::geometry::{finite, intersection, intersects, outset, pixel_aligned, shifted};
 use crate::*;
 use layoutng_assembly::fragment_tree::PaintResources;
+use layoutng_assembly::internal::layout_input::TransformMatrix;
 use paint::display_item_id::{DisplayItemId, DisplayItemIdType};
 use paint::paint_engine::{
     DisplayItem, DisplayItemType, PaintArtifact, PaintChunk, PaintRect, RasterEffectOutset,
@@ -41,11 +42,20 @@ struct TileState {
     generation: u64,
     ready: bool,
     last_used: u64,
+    geometry: TileGeometryKey,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TileGeometryKey {
+    visible_pixels: (u32, u32),
+    raster_pixels: (u32, u32),
+    content_offset: (u32, u32),
 }
 
 #[derive(Clone)]
 struct TilingState {
     scale: f64,
+    tile_size: (u32, u32),
     origin: (f64, f64),
     last_used: u64,
     tiles: BTreeMap<(i32, i32), TileState>,
@@ -82,7 +92,8 @@ struct PendingLayer {
 /// General upcasts across compositing/effect boundaries remain unsupported.
 #[derive(Clone)]
 pub struct LayerTileManager {
-    tile_size: u32,
+    default_tile_size: u32,
+    max_untiled_layer_size: u32,
     tile_budget: usize,
     frame_id: u64,
     next_layer_id: u64,
@@ -113,7 +124,11 @@ impl LayerTileManager {
     pub fn new(tile_size: u32) -> Self {
         assert!(tile_size > 0, "tile dimensions must be nonzero");
         Self {
-            tile_size,
+            default_tile_size: tile_size,
+            // Chromium's desktop LayerTreeSettings keeps the untiled limit
+            // at 512 even when macOS high-DPI policy raises the default tile
+            // size from 256 to 512.
+            max_untiled_layer_size: tile_size.max(512),
             tile_budget: 2048,
             frame_id: 0,
             next_layer_id: 1,
@@ -238,6 +253,10 @@ impl LayerTileManager {
         if !finite(config.viewport)
             || !config.raster_scale.is_finite()
             || config.raster_scale <= 0.0
+            || !config.device_scale_factor.is_finite()
+            || config.device_scale_factor <= 0.0
+            || !config.layout_zoom_factor.is_finite()
+            || config.layout_zoom_factor <= 0.0
         {
             plan.unsupported = Some(UnsupportedReason::InvalidFrameGeometry);
             return plan;
@@ -297,22 +316,15 @@ impl LayerTileManager {
                 return plan;
             }
             let key = state_snapshot_key(&layer.properties);
-            let (translation, root_clip) = if let Some(resolved) = resolved_states.get(&key) {
+            let (transform, root_clip) = if let Some(resolved) = resolved_states.get(&key) {
                 *resolved
             } else {
-                match resolved_compositor_properties(&layer.properties, config.raster_scale) {
+                match resolved_compositor_transform_with_scroll(
+                    &layer.properties,
+                    config.raster_scale,
+                    None,
+                ) {
                     Ok(g) => {
-                        // Scheduling uses CSS coordinates; renderer keeps the
-                        // exact snapped device transform through composition.
-                        let g = (
-                            (g.0 .0 / config.raster_scale, g.0 .1 / config.raster_scale),
-                            g.1.map(|r| PaintRect {
-                                x: r.x / config.raster_scale,
-                                y: r.y / config.raster_scale,
-                                width: r.width / config.raster_scale,
-                                height: r.height / config.raster_scale,
-                            }),
-                        );
                         resolved_states.insert(key, g);
                         g
                     }
@@ -322,6 +334,10 @@ impl LayerTileManager {
                     }
                 }
             };
+            let translation = (
+                transform.values[12] / config.raster_scale,
+                transform.values[13] / config.raster_scale,
+            );
             let matched = old_matches.get(&first.id).and_then(|indices| {
                 indices.iter().copied().find(|&index| {
                     !old_used[index]
@@ -332,6 +348,13 @@ impl LayerTileManager {
             if let Some(index) = matched {
                 old_used[index] = true;
             }
+            let picture_bounds = picture_tiling_bounds(&layer.properties, layer.bounds);
+            let tile_size = cpu_tile_size(
+                picture_bounds,
+                config.raster_scale,
+                self.default_tile_size,
+                self.max_untiled_layer_size,
+            );
             // Select the retained grid before deriving tile indices. A changed
             // support minimum is not a new raster space. cc stabilizes partial
             // recorded origins for the same reason (ComputeTilingRect).
@@ -344,30 +367,32 @@ impl LayerTileManager {
                         .then(|| {
                             old.tilings
                                 .iter()
-                                .find(|tiling| tiling.scale == config.raster_scale)
+                                .find(|tiling| {
+                                    tiling.scale == config.raster_scale
+                                        && tiling.tile_size == tile_size
+                                })
                                 .map(|tiling| tiling.origin)
                         })
                         .flatten()
                 })
                 .unwrap_or_else(|| {
-                    raster_origin(layer.bounds, config.raster_scale, layer.complete)
+                    raster_origin(picture_bounds, config.raster_scale, layer.complete)
                 });
-            if !finite(layer.bounds)
-                || !pixel_aligned(origin.0, config.raster_scale)
-                || !pixel_aligned(origin.1, config.raster_scale)
-            {
-                plan.unsupported = Some(UnsupportedReason::FractionalPixelPlacement);
+            // A cc tile grid is expressed in layer space.  Its device-space
+            // origin is allowed to carry a subpixel phase: non-integral DPR,
+            // page zoom and retained raster origins routinely produce one.
+            // The compositor's draw transform and texture sampler preserve
+            // that phase; rejecting it here turns valid CSS geometry into a
+            // whole-frame fallback.
+            if !finite(layer.bounds) || !origin.0.is_finite() || !origin.1.is_finite() {
+                plan.unsupported = Some(UnsupportedReason::InvalidFrameGeometry);
                 return plan;
             }
-            let visible_root =
-                root_clip.map_or(config.viewport, |clip| intersection(config.viewport, clip));
-            let mut visible = shifted(visible_root, (-translation.0, -translation.1));
-            // Fractional placement samples across tile edges. Allocate the
-            // neighboring source pixel as well; composition still clips to
-            // the original viewport/clip and never clamps an internal seam.
+            let mut visible =
+                local_visible_rect(&transform, root_clip, config.viewport, config.raster_scale)
+                    .unwrap_or(picture_bounds);
             if !visible.is_empty()
-                && (!pixel_aligned(translation.0, config.raster_scale)
-                    || !pixel_aligned(translation.1, config.raster_scale))
+                && affine_sampling_needs_footprint(&transform, config.raster_scale)
             {
                 let footprint = 1.0 / config.raster_scale;
                 visible = PaintRect {
@@ -410,14 +435,13 @@ impl LayerTileManager {
             if !ordinary_effect_is_drawn(&layer.properties) {
                 visible = PaintRect::default();
             }
-            let visible_grid =
-                match grid_range(visible, origin, self.tile_size, config.raster_scale) {
-                    Some(g) => g,
-                    None => {
-                        plan.unsupported = Some(UnsupportedReason::TileBudgetExceeded);
-                        return plan;
-                    }
-                };
+            let visible_grid = match grid_range(visible, origin, tile_size, config.raster_scale) {
+                Some(g) => g,
+                None => {
+                    plan.unsupported = Some(UnsupportedReason::TileBudgetExceeded);
+                    return plan;
+                }
+            };
             let count = grid_tile_count(visible_grid);
             layer_tile_counts.push(count);
             visible_count = match count.and_then(|n| visible_count.checked_add(n)) {
@@ -468,9 +492,8 @@ impl LayerTileManager {
             }) {
                 activation_interest.union(target);
                 interest.union(target);
-                activation_target_grid =
-                    grid_range(target, origin, self.tile_size, config.raster_scale)
-                        .unwrap_or(visible_grid);
+                activation_target_grid = grid_range(target, origin, tile_size, config.raster_scale)
+                    .unwrap_or(visible_grid);
             }
             let mut predicted_grid = visible_grid;
             // Chromium's skewport changes tile priority without changing the
@@ -486,22 +509,17 @@ impl LayerTileManager {
                     config.raster_scale,
                 )
             }) {
-                predicted_grid = grid_range(predicted, origin, self.tile_size, config.raster_scale)
+                predicted_grid = grid_range(predicted, origin, tile_size, config.raster_scale)
                     .unwrap_or(visible_grid);
                 interest.union(predicted);
             }
-            let activation_grid = grid_range(
-                activation_interest,
-                origin,
-                self.tile_size,
-                config.raster_scale,
-            )
-            .unwrap_or(visible_grid);
-            let interest_grid =
-                match grid_range(interest, origin, self.tile_size, config.raster_scale) {
-                    Some(g) => g,
-                    None => visible_grid,
-                };
+            let activation_grid =
+                grid_range(activation_interest, origin, tile_size, config.raster_scale)
+                    .unwrap_or(visible_grid);
+            let interest_grid = match grid_range(interest, origin, tile_size, config.raster_scale) {
+                Some(g) => g,
+                None => visible_grid,
+            };
             let candidate_interest_count = grid_tile_count(interest_grid);
             interest_count = candidate_interest_count
                 .and_then(|n| interest_count.checked_add(n))
@@ -520,6 +538,7 @@ impl LayerTileManager {
                 predicted_grid,
                 matched,
                 raster_content_bounds,
+                tile_size,
             ));
         }
         // Required visible coverage owns the budget. Under pressure discard
@@ -550,6 +569,15 @@ impl LayerTileManager {
             list.resources.as_deref(),
             &list.image_dependencies,
         );
+        // ViewPainter omits Chromium's opaque base canvas for printing. Keep
+        // that document-level choice on the immutable resource boundary so the
+        // first raster layer does not silently reintroduce a white backing.
+        // Legacy/test artifacts without a resource snapshot retain the screen
+        // default.
+        let paints_opaque_base_background = list
+            .resources
+            .as_ref()
+            .is_none_or(|resources| resources.paints_opaque_base_background);
         let old_layers = std::mem::take(&mut self.layers);
         let mut old_layers: Vec<Option<LayerState>> = old_layers.into_iter().map(Some).collect();
         let mut soon_tasks = Vec::new();
@@ -568,6 +596,7 @@ impl LayerTileManager {
                     predicted_grid,
                     matched,
                     raster_content_bounds,
+                    tile_size,
                 ),
             ),
         ) in pending.into_iter().zip(geometry).enumerate()
@@ -593,8 +622,9 @@ impl LayerTileManager {
                     mask_parents.contains(&(Arc::as_ptr(&node.lifecycle.identity) as usize));
                 effect = node.parent.as_ref();
             }
-            let requires_transparent_backing =
-                in_masked_group || needs_transparent_backing(&pending.properties);
+            let requires_transparent_backing = (is_first_layer && !paints_opaque_base_background)
+                || in_masked_group
+                || needs_transparent_backing(&pending.properties);
             let mut state = previous.unwrap_or_else(|| {
                 let id = LayerId(self.next_layer_id);
                 self.next_layer_id += 1;
@@ -698,7 +728,12 @@ impl LayerTileManager {
                 .raster_transform
                 .lifecycle
                 .same_node(&pending.properties.transform.lifecycle);
-            let origin_changed = raster_space_changed && !state.tilings.is_empty();
+            let tile_grid_changed = state
+                .tilings
+                .iter()
+                .any(|tiling| tiling.scale == config.raster_scale && tiling.tile_size != tile_size);
+            let origin_changed =
+                (raster_space_changed || tile_grid_changed) && !state.tilings.is_empty();
             let (all_dirty, damage, first_change) = record_damage(
                 &state.records,
                 &records,
@@ -706,12 +741,36 @@ impl LayerTileManager {
                 &resources,
                 diagnostics,
             );
-            let side = self.tile_size as f64 / config.raster_scale;
-            let visible_tile_rect = PaintRect {
-                x: origin.0 + grid.0 as f64 * side,
-                y: origin.1 + grid.1 as f64 * side,
-                width: (grid.2 - grid.0) as f64 * side,
-                height: (grid.3 - grid.1) as f64 * side,
+            let tiling_bounds = pending
+                .complete
+                .then(|| picture_tiling_bounds(&pending.properties, pending.bounds));
+            let visible_tile_rect = if grid.0 < grid.2 && grid.1 < grid.3 {
+                let first = tile_geometry(
+                    origin,
+                    (grid.0, grid.1),
+                    tile_size,
+                    config.raster_scale,
+                    tiling_bounds,
+                )
+                .map(|tile| tile.visible)
+                .unwrap_or_default();
+                let last = tile_geometry(
+                    origin,
+                    (grid.2 - 1, grid.3 - 1),
+                    tile_size,
+                    config.raster_scale,
+                    tiling_bounds,
+                )
+                .map(|tile| tile.visible)
+                .unwrap_or(first);
+                PaintRect {
+                    x: first.x,
+                    y: first.y,
+                    width: (last.x + last.width - first.x).max(0.0),
+                    height: (last.y + last.height - first.y).max(0.0),
+                }
+            } else {
+                PaintRect::default()
             };
             if diagnostics
                 && (all_dirty
@@ -726,7 +785,7 @@ impl LayerTileManager {
             // Each scale keeps its own resident grid anchor. Bounds/culling
             // changes only change live tile ranges. A real raster-space owner
             // change makes the old tiling coordinates incompatible.
-            if raster_space_changed {
+            if raster_space_changed || tile_grid_changed {
                 for tiling in state.tilings.drain(..) {
                     plan.retired_tiles
                         .extend(tiling.tiles.values().map(|t| t.id));
@@ -737,9 +796,17 @@ impl LayerTileManager {
             // visiting every grid slot merely to test an empty damage list.
             if all_dirty || !damage.is_empty() {
                 for tiling in &mut state.tilings {
-                    let side = self.tile_size as f64 / tiling.scale;
                     for (&index, tile) in &mut tiling.tiles {
-                        let rect = tile_rect(tiling.origin, index, side);
+                        let Some(rect) = tile_geometry(
+                            tiling.origin,
+                            index,
+                            tiling.tile_size,
+                            tiling.scale,
+                            tiling_bounds,
+                        )
+                        .map(|tile| tile.visible) else {
+                            continue;
+                        };
                         if all_dirty || damage.iter().any(|r| intersects(rect, *r)) {
                             let previous_id = tile.id;
                             plan.retired_tiles.push(previous_id);
@@ -755,10 +822,11 @@ impl LayerTileManager {
             let tiling_index = state
                 .tilings
                 .iter()
-                .position(|t| t.scale == config.raster_scale)
+                .position(|t| t.scale == config.raster_scale && t.tile_size == tile_size)
                 .unwrap_or_else(|| {
                     state.tilings.push(TilingState {
                         scale: config.raster_scale,
+                        tile_size,
                         origin,
                         last_used: self.frame_id,
                         tiles: BTreeMap::new(),
@@ -767,14 +835,19 @@ impl LayerTileManager {
                 });
             let tiling = &mut state.tilings[tiling_index];
             tiling.last_used = self.frame_id;
-            let side = self.tile_size as f64 / config.raster_scale;
             let mut placements = Vec::new();
             // NOW: visible resources are required for this frame and always
             // precede prepaint work in the task stream.
             for j in grid.1..grid.3 {
                 for i in grid.0..grid.2 {
                     let index = (i, j);
-                    let rect = tile_rect(origin, index, side);
+                    let Some(geometry) =
+                        tile_geometry(origin, index, tile_size, config.raster_scale, tiling_bounds)
+                    else {
+                        continue;
+                    };
+                    let rect = geometry.visible;
+                    let geometry_key = TileGeometryKey::from(geometry);
                     let tile = tiling.tiles.entry(index).or_insert_with(|| {
                         let id = TileId(self.next_tile_id);
                         self.next_tile_id += 1;
@@ -784,8 +857,15 @@ impl LayerTileManager {
                             generation: 1,
                             ready: false,
                             last_used: self.frame_id,
+                            geometry: geometry_key,
                         }
                     });
+                    update_tile_geometry(
+                        tile,
+                        geometry_key,
+                        &mut self.next_tile_id,
+                        &mut plan.retired_tiles,
+                    );
                     tile.last_used = self.frame_id;
                     let normalized = shifted(rect, (-origin.0, -origin.1));
                     placements.push(TilePlacement {
@@ -795,7 +875,7 @@ impl LayerTileManager {
                         tiling_rect: normalized,
                         tile_rect: rect,
                         raster_scale: config.raster_scale,
-                        pixel_size: (self.tile_size, self.tile_size),
+                        pixel_size: geometry.visible_pixels,
                         ready: tile.ready,
                     });
                     if !tile.ready {
@@ -806,7 +886,7 @@ impl LayerTileManager {
                                 (r.draws_content
                                     && (!r.complete
                                         || intersects(
-                                            rect,
+                                            geometry.raster,
                                             outset(r.rect, r.raster_effect_outset),
                                         )))
                                 .then_some(index)
@@ -820,8 +900,11 @@ impl LayerTileManager {
                             tile_index: index,
                             tiling_rect: normalized,
                             tile_rect: rect,
+                            raster_rect: geometry.raster,
                             raster_scale: config.raster_scale,
-                            pixel_size: (self.tile_size, self.tile_size),
+                            pixel_size: geometry.visible_pixels,
+                            raster_pixel_size: geometry.raster_pixels,
+                            content_offset: geometry.content_offset,
                             required_for_activation: false,
                             record_indices: selected,
                         });
@@ -840,7 +923,13 @@ impl LayerTileManager {
                         continue;
                     }
                     let index = (i, j);
-                    let rect = tile_rect(origin, index, side);
+                    let Some(geometry) =
+                        tile_geometry(origin, index, tile_size, config.raster_scale, tiling_bounds)
+                    else {
+                        continue;
+                    };
+                    let rect = geometry.visible;
+                    let geometry_key = TileGeometryKey::from(geometry);
                     let tile = tiling.tiles.entry(index).or_insert_with(|| {
                         let id = TileId(self.next_tile_id);
                         self.next_tile_id += 1;
@@ -850,8 +939,15 @@ impl LayerTileManager {
                             generation: 1,
                             ready: false,
                             last_used: self.frame_id,
+                            geometry: geometry_key,
                         }
                     });
+                    update_tile_geometry(
+                        tile,
+                        geometry_key,
+                        &mut self.next_tile_id,
+                        &mut plan.retired_tiles,
+                    );
                     tile.last_used = self.frame_id;
                     let normalized = shifted(rect, (-origin.0, -origin.1));
                     interest_placements.push(TilePlacement {
@@ -861,7 +957,7 @@ impl LayerTileManager {
                         tiling_rect: normalized,
                         tile_rect: rect,
                         raster_scale: config.raster_scale,
-                        pixel_size: (self.tile_size, self.tile_size),
+                        pixel_size: geometry.visible_pixels,
                         ready: tile.ready,
                     });
                     if !tile.ready {
@@ -872,7 +968,7 @@ impl LayerTileManager {
                                 (r.draws_content
                                     && (!r.complete
                                         || intersects(
-                                            rect,
+                                            geometry.raster,
                                             outset(r.rect, r.raster_effect_outset),
                                         )))
                                 .then_some(record_index)
@@ -909,8 +1005,11 @@ impl LayerTileManager {
                                 tile_index: index,
                                 tiling_rect: normalized,
                                 tile_rect: rect,
+                                raster_rect: geometry.raster,
                                 raster_scale: config.raster_scale,
-                                pixel_size: (self.tile_size, self.tile_size),
+                                pixel_size: geometry.visible_pixels,
+                                raster_pixel_size: geometry.raster_pixels,
+                                content_offset: geometry.content_offset,
                                 required_for_activation,
                                 record_indices: selected,
                             },
@@ -1138,6 +1237,8 @@ fn opacity_zero_skips_raster_but_preserves_hidden_damage_and_mask_semantics() {
     let config = FrameConfig {
         viewport: rect,
         raster_scale: 1.0,
+        device_scale_factor: 1.0,
+        layout_zoom_factor: 1.0,
         activation_scroll: None,
         frame_time: None,
     };
@@ -1873,6 +1974,119 @@ fn record_change_diagnostic(
             a.node_id!=b.node_id,a.fragment_instance_id!=b.fragment_instance_id,a.phase!=b.phase)))
 }
 
+fn local_visible_rect(
+    device_transform: &TransformMatrix,
+    device_clip: Option<PaintRect>,
+    viewport: PaintRect,
+    raster_scale: f64,
+) -> Option<PaintRect> {
+    if !raster_scale.is_finite() || raster_scale <= 0.0 {
+        return None;
+    }
+    let clip = device_clip.map(|clip| PaintRect {
+        x: clip.x / raster_scale,
+        y: clip.y / raster_scale,
+        width: clip.width / raster_scale,
+        height: clip.height / raster_scale,
+    });
+    let root = clip.map_or(viewport, |clip| intersection(viewport, clip));
+    if root.is_empty() {
+        return Some(root);
+    }
+    let m = &device_transform.values;
+    let (a, b, c, d, e, f, g, h, i) = (
+        m[0] / raster_scale,
+        m[4] / raster_scale,
+        m[12] / raster_scale,
+        m[1] / raster_scale,
+        m[5] / raster_scale,
+        m[13] / raster_scale,
+        m[3],
+        m[7],
+        m[15],
+    );
+    let determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if !determinant.is_finite() || determinant == 0.0 {
+        return None;
+    }
+    let inverse = [
+        (e * i - f * h) / determinant,
+        (c * h - b * i) / determinant,
+        (b * f - c * e) / determinant,
+        (f * g - d * i) / determinant,
+        (a * i - c * g) / determinant,
+        (c * d - a * f) / determinant,
+        (d * h - e * g) / determinant,
+        (b * g - a * h) / determinant,
+        (a * e - b * d) / determinant,
+    ];
+    let homogeneous = [
+        (root.x, root.y),
+        (root.x + root.width, root.y),
+        (root.x, root.y + root.height),
+        (root.x + root.width, root.y + root.height),
+    ]
+    .map(|(x, y)| {
+        (
+            inverse[0] * x + inverse[1] * y + inverse[2],
+            inverse[3] * x + inverse[4] * y + inverse[5],
+            inverse[6] * x + inverse[7] * y + inverse[8],
+        )
+    });
+    let min_w = homogeneous
+        .iter()
+        .map(|point| point.2)
+        .fold(f64::INFINITY, f64::min);
+    let max_w = homogeneous
+        .iter()
+        .map(|point| point.2)
+        .fold(f64::NEG_INFINITY, f64::max);
+    if !min_w.is_finite() || !max_w.is_finite() {
+        return None;
+    }
+    if max_w < -1.0e-12 {
+        return Some(PaintRect::default());
+    }
+    if min_w <= 1.0e-12 {
+        // The inverse horizon crosses the viewport, so corner inversion is
+        // not a conservative finite bound. The caller schedules the complete
+        // picture support and lets renderer clip at the near plane.
+        return None;
+    }
+    let points = homogeneous.map(|point| (point.0 / point.2, point.1 / point.2));
+    let left = points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+    let top = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+    let right = points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+    let bottom = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+    let rect = PaintRect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    };
+    finite(rect).then_some(rect)
+}
+
+fn affine_sampling_needs_footprint(transform: &TransformMatrix, raster_scale: f64) -> bool {
+    let m = &transform.values;
+    m[0] != raster_scale
+        || m[5] != raster_scale
+        || m[1] != 0.0
+        || m[4] != 0.0
+        || m[2] != 0.0
+        || m[3] != 0.0
+        || m[6] != 0.0
+        || m[7] != 0.0
+        || m[8] != 0.0
+        || m[9] != 0.0
+        || m[10] != 1.0
+        || m[11] != 0.0
+        || m[14] != 0.0
+        || m[15] != 1.0
+        || !pixel_aligned(m[12] / raster_scale, raster_scale)
+        || !pixel_aligned(m[13] / raster_scale, raster_scale)
+}
+
 fn scroll_target_rect(
     properties: &PropertyTreeState,
     scroll: CompositorScrollOffset,
@@ -1887,26 +2101,13 @@ fn scroll_target_rect(
     // whose local transform descends from the scroll node moves with its
     // content. Reusing the committed clip here could produce an empty target
     // while activation, correctly using the updated clip, required pixels.
-    let (device_translation, device_clip) =
-        resolved_compositor_properties_with_scroll(properties, raster_scale, Some(scroll)).ok()?;
-    let target_translation = (
-        device_translation.0 / raster_scale,
-        device_translation.1 / raster_scale,
-    );
-    let target_clip = device_clip.map(|clip| PaintRect {
-        x: clip.x / raster_scale,
-        y: clip.y / raster_scale,
-        width: clip.width / raster_scale,
-        height: clip.height / raster_scale,
-    });
-    let visible_root = target_clip.map_or(viewport, |clip| intersection(viewport, clip));
-    let mut target = shifted(visible_root, (-target_translation.0, -target_translation.1));
+    let (device_transform, device_clip) =
+        resolved_compositor_transform_with_scroll(properties, raster_scale, Some(scroll)).ok()?;
+    let mut target = local_visible_rect(&device_transform, device_clip, viewport, raster_scale)
+        .or(raster_content_bounds)?;
     // Bilinear sampling may read the neighboring source pixel. Use the same
     // footprint for draw, activation and skewport targets.
-    if !target.is_empty()
-        && (!pixel_aligned(target_translation.0, raster_scale)
-            || !pixel_aligned(target_translation.1, raster_scale))
-    {
+    if !target.is_empty() && affine_sampling_needs_footprint(&device_transform, raster_scale) {
         let footprint = 1.0 / raster_scale;
         target = PaintRect {
             x: target.x - footprint,
@@ -1945,6 +2146,198 @@ fn tile_rect(origin: (f64, f64), index: (i32, i32), side: f64) -> PaintRect {
     }
 }
 
+const TILE_BORDER_TEXELS: u32 = 1;
+
+#[derive(Clone, Copy)]
+struct TileGeometry {
+    visible: PaintRect,
+    raster: PaintRect,
+    visible_pixels: (u32, u32),
+    raster_pixels: (u32, u32),
+    content_offset: (u32, u32),
+}
+
+impl From<TileGeometry> for TileGeometryKey {
+    fn from(value: TileGeometry) -> Self {
+        Self {
+            visible_pixels: value.visible_pixels,
+            raster_pixels: value.raster_pixels,
+            content_offset: value.content_offset,
+        }
+    }
+}
+
+fn update_tile_geometry(
+    tile: &mut TileState,
+    geometry: TileGeometryKey,
+    next_tile_id: &mut u64,
+    retired_tiles: &mut Vec<TileId>,
+) {
+    if tile.geometry == geometry {
+        return;
+    }
+    let previous_id = tile.id;
+    retired_tiles.push(previous_id);
+    tile.id = TileId(*next_tile_id);
+    *next_tile_id += 1;
+    tile.previous_id = Some(previous_id);
+    tile.generation += 1;
+    tile.ready = false;
+    tile.geometry = geometry;
+}
+
+#[derive(Clone, Copy)]
+struct TileAxisGeometry {
+    visible_start: i64,
+    visible_size: u32,
+    raster_start: i64,
+    raster_size: u32,
+    content_offset: u32,
+}
+
+// cpp: cc/layers/tile_size_calculator.cc:218-263
+// CPU raster starts with the configured tile size, grows the perpendicular
+// axis for a narrow layer, and keeps a small layer in one rounded allocation.
+// Content bounds are in the picture layer's content space, just as they are
+// when PictureLayerImpl asks TileSizeCalculator for its grid dimensions.
+fn cpu_tile_size(
+    content_bounds: PaintRect,
+    contents_scale: f64,
+    default_tile_size: u32,
+    max_untiled_layer_size: u32,
+) -> (u32, u32) {
+    const TILE_ROUND_UP: u32 = 64;
+    const TILE_MINIMAL_ALIGNMENT: u32 = 4;
+
+    // PictureLayerImpl passes raster-content bounds, after applying the
+    // contents scale, to TileSizeCalculator.
+    let content_width = (content_bounds.width.max(0.0) * contents_scale).ceil() as u32;
+    let content_height = (content_bounds.height.max(0.0) * contents_scale).ceil() as u32;
+    let mut default_width = default_tile_size;
+    let mut default_height = default_tile_size;
+    if content_width < default_width {
+        default_height = max_untiled_layer_size;
+    }
+    if content_height < default_height {
+        default_width = max_untiled_layer_size;
+    }
+    if content_width < max_untiled_layer_size && content_height < max_untiled_layer_size {
+        default_width = max_untiled_layer_size;
+        default_height = max_untiled_layer_size;
+    }
+
+    let round_up = |value: u32, alignment: u32| {
+        value
+            .saturating_add(alignment - 1)
+            .checked_div(alignment)
+            .unwrap_or(0)
+            .saturating_mul(alignment)
+    };
+    let mut width = default_width;
+    let mut height = default_height;
+    if content_width < default_width {
+        width = round_up(content_width, TILE_ROUND_UP).min(default_width);
+    }
+    if content_height < default_height {
+        height = round_up(content_height, TILE_ROUND_UP).min(default_height);
+    }
+    (
+        round_up(width, TILE_MINIMAL_ALIGNMENT),
+        round_up(height, TILE_MINIMAL_ALIGNMENT),
+    )
+}
+
+// cpp: cc/base/tiling_data.cc:180-235,285-326
+// `tile_size` is the maximum backing dimension. Adjacent backing rectangles
+// overlap by two border texels, while compositor rectangles partition content
+// without overlap. The first tile has no leading border; the last tile absorbs
+// the remaining trailing content.
+fn tile_axis_geometry(index: i32, tile_size: u32, total: Option<u32>) -> Option<TileAxisGeometry> {
+    let border = TILE_BORDER_TEXELS;
+    let inner = tile_size.checked_sub(border * 2)?;
+    if inner == 0 {
+        return None;
+    }
+    let i = i64::from(index);
+    let inner_i = i64::from(inner);
+    let (mut raster_start, mut visible_start, content_offset) = if index < 0 {
+        (inner_i * i - i64::from(border), inner_i * i, border)
+    } else if index == 0 {
+        (0, 0, 0)
+    } else {
+        (inner_i * i, inner_i * i + i64::from(border), border)
+    };
+    let mut raster_size = tile_size;
+    let mut visible_size = if index == 0 {
+        tile_size - border
+    } else {
+        inner
+    };
+    if let Some(total) = total {
+        if index < 0 || raster_start >= i64::from(total) {
+            return None;
+        }
+        raster_start = raster_start.max(0);
+        let raster_end = (raster_start + i64::from(tile_size)).min(i64::from(total));
+        raster_size = u32::try_from(raster_end - raster_start).ok()?;
+        visible_start = visible_start.max(0);
+        let visible_end = (visible_start + i64::from(visible_size)).min(i64::from(total));
+        visible_size = u32::try_from(visible_end - visible_start).ok()?;
+        if raster_size == 0 || visible_size == 0 {
+            return None;
+        }
+    }
+    Some(TileAxisGeometry {
+        visible_start,
+        visible_size,
+        raster_start,
+        raster_size,
+        content_offset,
+    })
+}
+
+fn tile_geometry(
+    origin: (f64, f64),
+    index: (i32, i32),
+    tile_size: (u32, u32),
+    scale: f64,
+    content_bounds: Option<PaintRect>,
+) -> Option<TileGeometry> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let totals = content_bounds.map(|bounds| {
+        (
+            ((bounds.x + bounds.width - origin.0) * scale)
+                .ceil()
+                .max(0.0) as u32,
+            ((bounds.y + bounds.height - origin.1) * scale)
+                .ceil()
+                .max(0.0) as u32,
+        )
+    });
+    let x = tile_axis_geometry(index.0, tile_size.0, totals.map(|v| v.0))?;
+    let y = tile_axis_geometry(index.1, tile_size.1, totals.map(|v| v.1))?;
+    let to_rect = |left: i64, top: i64, width: u32, height: u32| PaintRect {
+        x: origin.0 + left as f64 / scale,
+        y: origin.1 + top as f64 / scale,
+        width: width as f64 / scale,
+        height: height as f64 / scale,
+    };
+    Some(TileGeometry {
+        visible: to_rect(
+            x.visible_start,
+            y.visible_start,
+            x.visible_size,
+            y.visible_size,
+        ),
+        raster: to_rect(x.raster_start, y.raster_start, x.raster_size, y.raster_size),
+        visible_pixels: (x.visible_size, y.visible_size),
+        raster_pixels: (x.raster_size, y.raster_size),
+        content_offset: (x.content_offset, y.content_offset),
+    })
+}
+
 fn raster_origin(bounds: PaintRect, scale: f64, complete: bool) -> (f64, f64) {
     // cc PictureLayerTiling::ComputeTilingRect snaps recorded-subset bounds to
     // limit origin changes (picture_layer_tiling.cc:891); an origin change
@@ -1962,24 +2355,68 @@ fn raster_origin(bounds: PaintRect, scale: f64, complete: bool) -> (f64, f64) {
     )
 }
 
+/// A composited scrolling contents layer owns the scroll node's complete
+/// contents space, even when recorded ink begins farther inside it. Blink's
+/// PendingLayer/cc::PictureLayer therefore keeps its tiling origin at the
+/// scrolling contents origin. Anchoring at the first ink instead changes tile
+/// identity and Skia device-coordinate dithering as content appears.
+fn picture_tiling_bounds(properties: &PropertyTreeState, ink: PaintRect) -> PaintRect {
+    let root = PropertyTreeState::default();
+    let Some(scroll) = properties.transform.scroll.as_ref().filter(|scroll| {
+        root.transform
+            .scroll
+            .as_ref()
+            .is_none_or(|root_scroll| !scroll.lifecycle.same_node(&root_scroll.lifecycle))
+            && (scroll.user_scrollable_horizontal || scroll.user_scrollable_vertical)
+    }) else {
+        return ink;
+    };
+    let mut bounds = scroll.contents_rect;
+    // The paint artifact remains authoritative if an intermediate lifecycle
+    // has not yet expanded ScrollPaintPropertyNode::contents_rect.
+    bounds.union(ink);
+    bounds
+}
+
 fn grid_range(
     rect: PaintRect,
     origin: (f64, f64),
-    tile_size: u32,
+    tile_size: (u32, u32),
     scale: f64,
 ) -> Option<(i32, i32, i32, i32)> {
     if rect.is_empty() {
         return Some((0, 0, 0, 0));
     }
-    let side = tile_size as f64 / scale;
-    if !side.is_finite() || side <= 0.0 {
+    let inner = (
+        tile_size.0.saturating_sub(TILE_BORDER_TEXELS * 2),
+        tile_size.1.saturating_sub(TILE_BORDER_TEXELS * 2),
+    );
+    if inner.0 == 0 || inner.1 == 0 || !scale.is_finite() || scale <= 0.0 {
         return None;
     }
+    let index_at = |coordinate: f64, tile_size: u32, inner: u32| {
+        let p = (coordinate * scale).floor();
+        let first_end = f64::from(tile_size - TILE_BORDER_TEXELS);
+        if p < 0.0 {
+            (p / f64::from(inner)).floor()
+        } else if p < first_end {
+            0.0
+        } else {
+            1.0 + ((p - first_end) / f64::from(inner)).floor()
+        }
+    };
+    let left = rect.x - origin.0;
+    let top = rect.y - origin.1;
+    let right = rect.x + rect.width - origin.0;
+    let bottom = rect.y + rect.height - origin.1;
+    // `right`/`bottom` are exclusive. A tiny device-space predecessor keeps a
+    // boundary exactly on the next tile from selecting an empty extra tile.
+    let previous = 1e-7 / scale;
     let values = [
-        ((rect.x - origin.0) / side).floor(),
-        ((rect.y - origin.1) / side).floor(),
-        ((rect.x + rect.width - origin.0) / side).ceil(),
-        ((rect.y + rect.height - origin.1) / side).ceil(),
+        index_at(left, tile_size.0, inner.0),
+        index_at(top, tile_size.1, inner.1),
+        index_at(right - previous, tile_size.0, inner.0) + 1.0,
+        index_at(bottom - previous, tile_size.1, inner.1) + 1.0,
     ];
     if values
         .iter()

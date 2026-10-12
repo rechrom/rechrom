@@ -9,8 +9,8 @@ use crate::css_property_value::CSSPropertyValueBackend;
 use crate::css_value::*;
 use crate::css_value_keywords::GetCSSValueName;
 use foundation::{
-    AddFloatToHash, AddIntToHash, CSSPropertyID, CSSValueID, Color, HashInt, HashInts, Length,
-    LengthType, String,
+    AddFloatToHash, AddIntToHash, CSSPropertyID, CSSValueID, Color, ColorSpace, HashInt, HashInts,
+    HueInterpolationMethod, Length, LengthType, String,
 };
 use std::rc::Rc;
 
@@ -28,6 +28,66 @@ pub use font_style_value::CSSFontStyleRangeValue;
 pub struct ProductionCSSValueDispatch;
 pub type Value = CSSValue<ProductionCSSValueDispatch>;
 pub type PropertyValue = crate::css_property_value::CSSPropertyValue<ProductionCSSValueDispatch>;
+
+/// KURL-shaped parser input owned by the production stylesheet adapter.
+/// `Null` is distinct from an explicitly empty URL, matching Blink's KURL
+/// contract. A concrete value is canonicalized by the host URL parser when
+/// possible and remains a string only at this package boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProductionURL {
+    Null,
+    Value(String),
+}
+
+impl ProductionURL {
+    pub fn FromString(value: &str) -> Self {
+        Self::Value(String::FromUtf8(value.as_bytes()))
+    }
+
+    pub fn AsString(&self) -> Option<&String> {
+        match self {
+            Self::Null => None,
+            Self::Value(value) => Some(value),
+        }
+    }
+}
+
+// css_url_data.h:45-110; css_url_data.cc:56-83. Request modifiers and
+// dangling-markup state remain pending, but relative and absolute identity are
+// retained separately so serialization and resource lookup use Blink's owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CSSUrlData {
+    pub unresolved_url: String,
+    pub resolved_url: String,
+}
+
+impl CSSUrlData {
+    pub fn new(unresolved_url: String, resolved_url: ProductionURL) -> Self {
+        let resolved_url = resolved_url
+            .AsString()
+            .cloned()
+            .unwrap_or_else(|| unresolved_url.clone());
+        Self {
+            unresolved_url,
+            resolved_url,
+        }
+    }
+
+    pub fn unresolved(url: String) -> Self {
+        Self {
+            resolved_url: url.clone(),
+            unresolved_url: url,
+        }
+    }
+
+    pub fn ValueForSerialization(&self) -> &String {
+        if self.unresolved_url.Utf8().starts_with('#') || self.resolved_url.empty() {
+            &self.unresolved_url
+        } else {
+            &self.resolved_url
+        }
+    }
+}
 
 // cpp: css_identifier_value.h:43-57; css_identifier_value.cc:30-42
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,13 +129,67 @@ impl CSSValueCustomHash for CSSNumericLiteralValue {
 pub struct CSSColor(pub Color);
 impl CSSValueSubclass for CSSColor {
     fn CustomCSSText(&self) -> String {
-        let r = (self.0.Param0()).round() as u8;
-        let g = (self.0.Param1()).round() as u8;
-        let b = (self.0.Param2()).round() as u8;
-        let text = if self.0.IsOpaque() {
-            format!("rgb({r}, {g}, {b})")
+        let component = |value: f32, none: bool| {
+            if none {
+                "none".to_owned()
+            } else {
+                format!("{value}")
+            }
+        };
+        let p0 = component(self.0.Param0(), self.0.Param0IsNone());
+        let p1 = component(self.0.Param1(), self.0.Param1IsNone());
+        let p2 = component(self.0.Param2(), self.0.Param2IsNone());
+        let percent1 = if self.0.Param1IsNone() {
+            "none".to_owned()
         } else {
-            format!("rgba({r}, {g}, {b}, {})", self.0.Alpha())
+            format!("{}%", self.0.Param1() * 100.0)
+        };
+        let percent2 = if self.0.Param2IsNone() {
+            "none".to_owned()
+        } else {
+            format!("{}%", self.0.Param2() * 100.0)
+        };
+        let alpha = if self.0.AlphaIsNone() {
+            " / none".to_owned()
+        } else if self.0.IsOpaque() {
+            std::string::String::new()
+        } else {
+            format!(" / {}", self.0.Alpha())
+        };
+        let text = match self.0.GetColorSpace() {
+            ColorSpace::kSRGBLegacy => {
+                let r = self.0.Param0().round() as u8;
+                let g = self.0.Param1().round() as u8;
+                let b = self.0.Param2().round() as u8;
+                if self.0.IsOpaque() {
+                    format!("rgb({r}, {g}, {b})")
+                } else {
+                    format!("rgba({r}, {g}, {b}, {})", self.0.Alpha())
+                }
+            }
+            ColorSpace::kHSL => format!("hsl({p0} {percent1} {percent2}{alpha})"),
+            ColorSpace::kHWB => format!("hwb({p0} {percent1} {percent2}{alpha})"),
+            ColorSpace::kLab => format!("lab({p0} {p1} {p2}{alpha})"),
+            ColorSpace::kLch => format!("lch({p0} {p1} {p2}{alpha})"),
+            ColorSpace::kOklab => format!("oklab({p0} {p1} {p2}{alpha})"),
+            ColorSpace::kOklch => format!("oklch({p0} {p1} {p2}{alpha})"),
+            space => {
+                let name = match space {
+                    ColorSpace::kSRGB => "srgb",
+                    ColorSpace::kSRGBLinear => "srgb-linear",
+                    ColorSpace::kDisplayP3 => "display-p3",
+                    ColorSpace::kDisplayP3Linear => "display-p3-linear",
+                    ColorSpace::kA98RGB => "a98-rgb",
+                    ColorSpace::kProPhotoRGB => "prophoto-rgb",
+                    ColorSpace::kRec2020 => "rec2020",
+                    ColorSpace::kRec2100Linear => "rec2100-linear",
+                    ColorSpace::kXYZD50 => "xyz-d50",
+                    ColorSpace::kXYZD65 => "xyz-d65",
+                    ColorSpace::kNone => "srgb",
+                    _ => unreachable!(),
+                };
+                format!("color({name} {p0} {p1} {p2}{alpha})")
+            }
         };
         String::from(text.as_str())
     }
@@ -110,6 +224,177 @@ pub struct CSSValuePair {
     pub first: Rc<Value>,
     pub second: Rc<Value>,
     pub drop_identical: bool,
+}
+
+// cpp: css_light_dark_value_pair.h:16-31;
+// css_light_dark_value_pair.cc:12-19. The pair deliberately remains a
+// distinct CSSValue class even though its storage is CSSValuePair: resolver
+// state must choose a branch from the element's used color scheme before
+// ordinary color conversion.
+pub struct CSSLightDarkValuePair {
+    pair: CSSValuePair,
+}
+
+// cpp: css_color_mix_value.h:20-78; css_color_mix_value.cc:14-67.
+// Percentages remain typed CSS values so normalization happens at computed
+// value time. The production parser currently admits the default Oklab family
+// used by html.css; explicit interpolation spaces remain an honest parser
+// boundary until their native Color conversions are retained.
+pub struct CSSColorMixValue {
+    pub color1: Rc<Value>,
+    pub color2: Rc<Value>,
+    pub percentage1: Option<Rc<Value>>,
+    pub percentage2: Option<Rc<Value>>,
+    pub color_interpolation_space: ColorSpace,
+    pub hue_interpolation_method: HueInterpolationMethod,
+}
+
+impl CSSColorMixValue {
+    fn Percentage(value: Option<&Rc<Value>>) -> Option<f64> {
+        let CSSValuePayload::kNumericLiteralClass(value) = value?.Payload() else {
+            return None;
+        };
+        (value.GetType() == UnitType::kPercentage).then(|| value.DoubleValue())
+    }
+
+    // cpp: CSSColorMixValue::NormalizePercentages. Parser-owned percentages in
+    // this family are literals, so the length resolver is not needed here.
+    pub fn NormalizePercentages(&self) -> Option<(f64, f64)> {
+        let first = Self::Percentage(self.percentage1.as_ref());
+        let second = Self::Percentage(self.percentage2.as_ref());
+        let mut p1 = first.unwrap_or(50.0).clamp(0.0, 100.0) / 100.0;
+        let mut p2 = second.unwrap_or(50.0).clamp(0.0, 100.0) / 100.0;
+        if first.is_some() && second.is_none() {
+            p2 = 1.0 - p1;
+        } else if first.is_none() && second.is_some() {
+            p1 = 1.0 - p2;
+        }
+        if p1 == 0.0 && p2 == 0.0 {
+            return None;
+        }
+        let scale = p1 + p2;
+        p1 /= scale;
+        p2 /= scale;
+        Some((if p1 == 0.0 { 1.0 } else { p2 }, scale.min(1.0)))
+    }
+
+    // cpp: CSSColorMixValue::PercentageValuesForSerialization.
+    fn PercentageValuesForSerialization(&self) -> (Option<Rc<Value>>, Option<Rc<Value>>) {
+        let first = Self::Percentage(self.percentage1.as_ref());
+        let second = Self::Percentage(self.percentage2.as_ref());
+        if first == Some(50.0) && (second.is_none() || second == Some(50.0)) {
+            return (None, None);
+        }
+        if let (Some(first), None) = (first, second) {
+            return (
+                self.percentage1.clone(),
+                Some(numeric(100.0 - first, UnitType::kPercentage)),
+            );
+        }
+        if let (None, Some(second)) = (first, second) {
+            if second == 50.0 {
+                return (None, None);
+            }
+            return (
+                Some(numeric(100.0 - second, UnitType::kPercentage)),
+                self.percentage2.clone(),
+            );
+        }
+        (self.percentage1.clone(), self.percentage2.clone())
+    }
+}
+
+impl CSSValueSubclass for CSSColorMixValue {
+    fn CustomCSSText(&self) -> String {
+        let (percentage1, percentage2) = self.PercentageValuesForSerialization();
+        let mut text = String::from("color-mix(");
+        text.push_str(&self.color1.CssText().Utf8());
+        if let Some(value) = percentage1 {
+            text.push_str(" ");
+            text.push_str(&value.CssText().Utf8());
+        }
+        text.push_str(", ");
+        text.push_str(&self.color2.CssText().Utf8());
+        if let Some(value) = percentage2 {
+            text.push_str(" ");
+            text.push_str(&value.CssText().Utf8());
+        }
+        text.push_str(")");
+        text
+    }
+    fn Equals(&self, other: &Self) -> bool {
+        self.color1.as_ref() == other.color1.as_ref()
+            && self.color2.as_ref() == other.color2.as_ref()
+            && self.percentage1.as_deref() == other.percentage1.as_deref()
+            && self.percentage2.as_deref() == other.percentage2.as_deref()
+            && self.color_interpolation_space == other.color_interpolation_space
+            && self.hue_interpolation_method == other.hue_interpolation_method
+    }
+}
+
+impl CSSValueRandom for CSSColorMixValue {
+    fn HasRandomFunctions(&self) -> bool {
+        self.color1.HasRandomFunctions()
+            || self.color2.HasRandomFunctions()
+            || self
+                .percentage1
+                .as_ref()
+                .is_some_and(|value| value.HasRandomFunctions())
+            || self
+                .percentage2
+                .as_ref()
+                .is_some_and(|value| value.HasRandomFunctions())
+    }
+}
+
+pub fn color_mix(
+    color1: Rc<Value>,
+    color2: Rc<Value>,
+    percentage1: Option<Rc<Value>>,
+    percentage2: Option<Rc<Value>>,
+) -> Rc<Value> {
+    Rc::new(Value::new(CSSValuePayload::kColorMixClass(
+        CSSColorMixValue {
+            color1,
+            color2,
+            percentage1,
+            percentage2,
+            color_interpolation_space: ColorSpace::kOklab,
+            hue_interpolation_method: HueInterpolationMethod::kShorter,
+        },
+    )))
+}
+
+impl CSSValueSubclass for CSSLightDarkValuePair {
+    fn CustomCSSText(&self) -> String {
+        let mut text = String::from("light-dark(");
+        text.push_str(&self.pair.first.CssText().Utf8());
+        text.push_str(", ");
+        text.push_str(&self.pair.second.CssText().Utf8());
+        text.push_str(")");
+        text
+    }
+    fn Equals(&self, other: &Self) -> bool {
+        self.pair.Equals(&other.pair)
+    }
+}
+
+impl CSSValuePairSubclass<ProductionCSSValueDispatch> for CSSLightDarkValuePair {
+    fn AsValuePair(&self) -> &CSSValuePair {
+        &self.pair
+    }
+}
+
+pub fn light_dark(first: Rc<Value>, second: Rc<Value>) -> Rc<Value> {
+    Rc::new(Value::new(CSSValuePayload::kLightDarkValuePairClass(
+        CSSLightDarkValuePair {
+            pair: CSSValuePair {
+                first,
+                second,
+                drop_identical: false,
+            },
+        },
+    )))
 }
 // cpp: css_ratio_value.h:23-51; css_ratio_value.cc:14-36.
 pub struct CSSRatioValue {
@@ -336,16 +621,19 @@ pub fn counter_content(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CSSImageValue {
     pub url: String,
+    pub url_data: CSSUrlData,
 }
 impl CSSValueSubclass for CSSImageValue {
     fn CustomCSSText(&self) -> String {
         let mut text = String::from("url(");
-        text.push_string(&crate::css_markup::SerializeString(&self.url));
+        text.push_string(&crate::css_markup::SerializeString(
+            self.url_data.ValueForSerialization(),
+        ));
         text.push_str(")");
         text
     }
     fn Equals(&self, other: &Self) -> bool {
-        self.url == other.url
+        self.url_data == other.url_data
     }
 }
 impl CSSValueSubresources for CSSImageValue {
@@ -359,25 +647,92 @@ impl CSSValueUrl<()> for CSSImageValue {
     }
 }
 pub fn image(url: String) -> Rc<Value> {
+    image_from_url_data(CSSUrlData::unresolved(url))
+}
+pub fn image_from_url_data(url_data: CSSUrlData) -> Rc<Value> {
     Rc::new(Value::new(CSSValuePayload::kImageClass(CSSImageValue {
-        url,
+        url: url_data.resolved_url.clone(),
+        url_data,
     })))
+}
+
+// cpp: css_image_set_option_value.h / css_image_set_value.h. Keep the
+// authored candidates immutable; computed-style application selects one for
+// the current device scale and carries its resolution on StyleFetchedImage.
+pub struct CSSImageSetOptionValue {
+    pub image: Rc<Value>,
+    pub resolution: f32,
+}
+impl CSSValueSubclass for CSSImageSetOptionValue {
+    fn CustomCSSText(&self) -> String {
+        String::from(format!("{} {}x", self.image.CssText().Utf8(), self.resolution).as_str())
+    }
+    fn Equals(&self, other: &Self) -> bool {
+        self.image == other.image && self.resolution.to_bits() == other.resolution.to_bits()
+    }
+}
+impl CSSValueRandom for CSSImageSetOptionValue {
+    fn HasRandomFunctions(&self) -> bool {
+        self.image.HasRandomFunctions()
+    }
+}
+
+pub struct CSSImageSetValue {
+    pub list: CSSValueList,
+}
+impl CSSValueSubclass for CSSImageSetValue {
+    fn CustomCSSText(&self) -> String {
+        String::from(format!("image-set({})", self.list.CustomCSSText().Utf8()).as_str())
+    }
+    fn Equals(&self, other: &Self) -> bool {
+        self.list.Equals(&other.list)
+    }
+}
+impl CSSValueRandom for CSSImageSetValue {
+    fn HasRandomFunctions(&self) -> bool {
+        self.list.HasRandomFunctions()
+    }
+}
+impl CSSValueSubresources for CSSImageSetValue {
+    fn HasFailedOrCanceledSubresources(&self) -> bool {
+        self.list.HasFailedOrCanceledSubresources()
+    }
+}
+impl CSSValueListSubclass<ProductionCSSValueDispatch> for CSSImageSetValue {
+    fn AsValueList(&self) -> &CSSValueList {
+        &self.list
+    }
+}
+pub fn image_set_option(image: Rc<Value>, resolution: f32) -> Rc<Value> {
+    Rc::new(Value::new(CSSValuePayload::kImageSetOptionClass(
+        CSSImageSetOptionValue { image, resolution },
+    )))
+}
+pub fn image_set(options: Vec<Rc<Value>>) -> Rc<Value> {
+    Rc::new(Value::new(CSSValuePayload::kImageSetClass(
+        CSSImageSetValue {
+            list: CSSValueList::new(options, ListSeparator::Comma),
+        },
+    )))
 }
 // cpp: css_uri_value.h:23-60. This URL retains parsed identity until the
 // document supplies its real SVG resource binding.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CSSURIValue {
     pub url: String,
+    pub url_data: CSSUrlData,
 }
 impl CSSValueSubclass for CSSURIValue {
     fn CustomCSSText(&self) -> String {
         let mut text = String::from("url(");
-        text.push_string(&crate::css_markup::SerializeString(&self.url));
+        text.push_string(&crate::css_markup::SerializeString(
+            self.url_data.ValueForSerialization(),
+        ));
         text.push_str(")");
         text
     }
     fn Equals(&self, other: &Self) -> bool {
-        self.url == other.url
+        self.url_data == other.url_data
     }
 }
 impl CSSValueUrl<()> for CSSURIValue {
@@ -386,7 +741,13 @@ impl CSSValueUrl<()> for CSSURIValue {
     }
 }
 pub fn uri(url: String) -> Rc<Value> {
-    Rc::new(Value::new(CSSValuePayload::kURIClass(CSSURIValue { url })))
+    uri_from_url_data(CSSUrlData::unresolved(url))
+}
+pub fn uri_from_url_data(url_data: CSSUrlData) -> Rc<Value> {
+    Rc::new(Value::new(CSSValuePayload::kURIClass(CSSURIValue {
+        url: url_data.resolved_url.clone(),
+        url_data,
+    })))
 }
 // cpp: css_gradient_value.h CSSGradientColorStop, CSSLinearGradientValue;
 // css_gradient_value.cc:1192-1276,1649-1669 (unprefixed branches).
@@ -400,6 +761,8 @@ pub struct CSSLinearGradientValue {
     pub end_x: Option<CSSValueID>,
     pub end_y: Option<CSSValueID>,
     pub repeating: bool,
+    pub color_interpolation_space: ColorSpace,
+    pub hue_interpolation_method: HueInterpolationMethod,
     pub stops: Vec<CSSGradientColorStop>,
 }
 impl CSSLinearGradientValue {
@@ -433,6 +796,20 @@ impl CSSValueSubclass for CSSLinearGradientValue {
             }
             items.push(direction.join(" "));
         }
+        let mut interpolation = Vec::new();
+        AppendGradientInterpolationMethod(
+            &mut interpolation,
+            self.color_interpolation_space,
+            self.hue_interpolation_method,
+        );
+        if let Some(interpolation) = interpolation.pop() {
+            if let Some(geometry) = items.last_mut() {
+                geometry.push(' ');
+                geometry.push_str(&interpolation);
+            } else {
+                items.push(interpolation);
+            }
+        }
         for stop in &self.stops {
             let mut pieces = Vec::new();
             if let Some(color) = &stop.color {
@@ -457,6 +834,8 @@ impl CSSValueSubclass for CSSLinearGradientValue {
             && self.end_x == other.end_x
             && self.end_y == other.end_y
             && self.repeating == other.repeating
+            && self.color_interpolation_space == other.color_interpolation_space
+            && self.hue_interpolation_method == other.hue_interpolation_method
             && self.stops == other.stops
     }
 }
@@ -470,6 +849,221 @@ impl CSSValueRandom for CSSLinearGradientValue {
                     .any(|v| v.HasRandomFunctions())
             })
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CSSRadialGradientShape {
+    Circle,
+    Ellipse,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CSSRadialGradientExtent {
+    ClosestSide,
+    ClosestCorner,
+    FarthestSide,
+    FarthestCorner,
+}
+
+pub struct CSSRadialGradientValue {
+    pub shape: Option<CSSRadialGradientShape>,
+    pub extent: Option<CSSRadialGradientExtent>,
+    pub size_x: Option<Rc<Value>>,
+    pub size_y: Option<Rc<Value>>,
+    pub position_x: Rc<Value>,
+    pub position_y: Rc<Value>,
+    pub repeating: bool,
+    pub color_interpolation_space: ColorSpace,
+    pub hue_interpolation_method: HueInterpolationMethod,
+    pub stops: Vec<CSSGradientColorStop>,
+}
+impl CSSValueSubclass for CSSRadialGradientValue {
+    fn CustomCSSText(&self) -> String {
+        let mut prefix = Vec::new();
+        if let Some(shape) = self.shape {
+            prefix.push(match shape {
+                CSSRadialGradientShape::Circle => "circle".to_owned(),
+                CSSRadialGradientShape::Ellipse => "ellipse".to_owned(),
+            });
+        }
+        if let Some(extent) = self.extent {
+            prefix.push(
+                match extent {
+                    CSSRadialGradientExtent::ClosestSide => "closest-side",
+                    CSSRadialGradientExtent::ClosestCorner => "closest-corner",
+                    CSSRadialGradientExtent::FarthestSide => "farthest-side",
+                    CSSRadialGradientExtent::FarthestCorner => "farthest-corner",
+                }
+                .to_owned(),
+            );
+        } else {
+            for size in [&self.size_x, &self.size_y].into_iter().flatten() {
+                prefix.push(size.CssText().Utf8());
+            }
+        }
+        prefix.push(format!(
+            "at {} {}",
+            self.position_x.CssText().Utf8(),
+            self.position_y.CssText().Utf8()
+        ));
+        AppendGradientInterpolationMethod(
+            &mut prefix,
+            self.color_interpolation_space,
+            self.hue_interpolation_method,
+        );
+        let mut items = vec![prefix.join(" ")];
+        AppendGradientStops(&mut items, &self.stops);
+        String::from(
+            format!(
+                "{}radial-gradient({})",
+                if self.repeating { "repeating-" } else { "" },
+                items.join(", ")
+            )
+            .as_str(),
+        )
+    }
+    fn Equals(&self, other: &Self) -> bool {
+        self.shape == other.shape
+            && self.extent == other.extent
+            && self.size_x == other.size_x
+            && self.size_y == other.size_y
+            && self.position_x == other.position_x
+            && self.position_y == other.position_y
+            && self.repeating == other.repeating
+            && self.color_interpolation_space == other.color_interpolation_space
+            && self.hue_interpolation_method == other.hue_interpolation_method
+            && self.stops == other.stops
+    }
+}
+impl CSSValueRandom for CSSRadialGradientValue {
+    fn HasRandomFunctions(&self) -> bool {
+        [&self.size_x, &self.size_y]
+            .into_iter()
+            .flatten()
+            .any(|value| value.HasRandomFunctions())
+            || self.position_x.HasRandomFunctions()
+            || self.position_y.HasRandomFunctions()
+            || GradientStopsHaveRandom(&self.stops)
+    }
+}
+
+pub struct CSSConicGradientValue {
+    pub angle: Option<Rc<Value>>,
+    pub position_x: Rc<Value>,
+    pub position_y: Rc<Value>,
+    pub repeating: bool,
+    pub color_interpolation_space: ColorSpace,
+    pub hue_interpolation_method: HueInterpolationMethod,
+    pub stops: Vec<CSSGradientColorStop>,
+}
+impl CSSValueSubclass for CSSConicGradientValue {
+    fn CustomCSSText(&self) -> String {
+        let mut prefix = Vec::new();
+        if let Some(angle) = &self.angle {
+            prefix.push(format!("from {}", angle.CssText().Utf8()));
+        }
+        prefix.push(format!(
+            "at {} {}",
+            self.position_x.CssText().Utf8(),
+            self.position_y.CssText().Utf8()
+        ));
+        AppendGradientInterpolationMethod(
+            &mut prefix,
+            self.color_interpolation_space,
+            self.hue_interpolation_method,
+        );
+        let mut items = vec![prefix.join(" ")];
+        AppendGradientStops(&mut items, &self.stops);
+        String::from(
+            format!(
+                "{}conic-gradient({})",
+                if self.repeating { "repeating-" } else { "" },
+                items.join(", ")
+            )
+            .as_str(),
+        )
+    }
+    fn Equals(&self, other: &Self) -> bool {
+        self.angle == other.angle
+            && self.position_x == other.position_x
+            && self.position_y == other.position_y
+            && self.repeating == other.repeating
+            && self.color_interpolation_space == other.color_interpolation_space
+            && self.hue_interpolation_method == other.hue_interpolation_method
+            && self.stops == other.stops
+    }
+}
+impl CSSValueRandom for CSSConicGradientValue {
+    fn HasRandomFunctions(&self) -> bool {
+        self.angle
+            .as_ref()
+            .is_some_and(|value| value.HasRandomFunctions())
+            || self.position_x.HasRandomFunctions()
+            || self.position_y.HasRandomFunctions()
+            || GradientStopsHaveRandom(&self.stops)
+    }
+}
+
+fn AppendGradientStops(items: &mut Vec<std::string::String>, stops: &[CSSGradientColorStop]) {
+    for stop in stops {
+        let mut pieces = Vec::new();
+        if let Some(color) = &stop.color {
+            pieces.push(color.CssText().Utf8());
+        }
+        if let Some(offset) = &stop.offset {
+            pieces.push(offset.CssText().Utf8());
+        }
+        items.push(pieces.join(" "));
+    }
+}
+
+fn AppendGradientInterpolationMethod(
+    items: &mut Vec<std::string::String>,
+    space: ColorSpace,
+    hue: HueInterpolationMethod,
+) {
+    if space == ColorSpace::kNone {
+        return;
+    }
+    let mut text = format!(
+        "in {}",
+        match space {
+            ColorSpace::kSRGB => "srgb",
+            ColorSpace::kSRGBLinear => "srgb-linear",
+            ColorSpace::kDisplayP3 => "display-p3",
+            ColorSpace::kHSL => "hsl",
+            ColorSpace::kHWB => "hwb",
+            ColorSpace::kA98RGB => "a98-rgb",
+            ColorSpace::kProPhotoRGB => "prophoto-rgb",
+            ColorSpace::kRec2020 => "rec2020",
+            ColorSpace::kLab => "lab",
+            ColorSpace::kLch => "lch",
+            ColorSpace::kOklab => "oklab",
+            ColorSpace::kOklch => "oklch",
+            ColorSpace::kXYZD50 => "xyz-d50",
+            ColorSpace::kXYZD65 => "xyz-d65",
+            _ => return,
+        }
+    );
+    if Color::ColorSpaceHasHue(space) && hue != HueInterpolationMethod::kShorter {
+        text.push(' ');
+        text.push_str(match hue {
+            HueInterpolationMethod::kShorter => "shorter hue",
+            HueInterpolationMethod::kLonger => "longer hue",
+            HueInterpolationMethod::kIncreasing => "increasing hue",
+            HueInterpolationMethod::kDecreasing => "decreasing hue",
+        });
+    }
+    items.push(text);
+}
+
+fn GradientStopsHaveRandom(stops: &[CSSGradientColorStop]) -> bool {
+    stops.iter().any(|stop| {
+        [&stop.color, &stop.offset]
+            .into_iter()
+            .flatten()
+            .any(|value| value.HasRandomFunctions())
+    })
 }
 // cpp: css_font_feature_value.h:42-65; .cc:40-69.
 pub struct CSSFontFeatureValue {
@@ -778,7 +1372,7 @@ impl CSSValueSubclass for CSSFontFamilyValue {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FontFaceResource {
     Local(String),
-    Url(String),
+    Url(CSSUrlData),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CSSFontFaceSrcValue {
@@ -790,7 +1384,7 @@ impl CSSValueSubclass for CSSFontFaceSrcValue {
     fn CustomCSSText(&self) -> String {
         let (function, resource) = match &self.resource {
             FontFaceResource::Local(name) => ("local", name),
-            FontFaceResource::Url(url) => ("url", url),
+            FontFaceResource::Url(url) => ("url", url.ValueForSerialization()),
         };
         let mut text = format!(
             "{function}({})",
@@ -868,6 +1462,38 @@ wide_keyword!(CSSUnsetValue, "unset");
 wide_keyword!(CSSRevertValue, "revert");
 wide_keyword!(CSSRevertLayerValue, "revert-layer");
 wide_keyword!(CSSRevertRuleValue, "revert-rule");
+
+// cpp: css_initial_color_value.h:17-36;
+// css_initial_color_value.cc:12-18. This internal value is inserted into the
+// document element's MatchResult at the lowest UA priority. It is distinct
+// from the CSS-wide `initial` keyword because Color::ApplyValue resolves it
+// only after color-scheme has established the builder's used scheme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CSSInitialColorValue;
+impl CSSValueSubclass for CSSInitialColorValue {
+    fn CustomCSSText(&self) -> String {
+        String::default()
+    }
+    fn Equals(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+// cpp: css_pending_system_font_value.h:26-50; .cc:14-36. The font shorthand
+// expands one retained marker to every font longhand, deferring the platform
+// family/size lookup until the document resolver applies each property.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CSSPendingSystemFontValue {
+    pub system_font_id: CSSValueID,
+}
+impl CSSValueSubclass for CSSPendingSystemFontValue {
+    fn CustomCSSText(&self) -> String {
+        String::default()
+    }
+    fn Equals(&self, other: &Self) -> bool {
+        self.system_font_id == other.system_font_id
+    }
+}
 
 // cpp: css_variable_data.h:31-169; css_variable_data.cc:24-117,158-164.
 // Retained tokenizer output is the Rust ownership equivalent of OriginalText:
@@ -990,6 +1616,7 @@ impl CSSVariableData {
 pub struct CSSUnparsedDeclarationValue {
     pub data: Rc<CSSVariableData>,
     pub mode: crate::parser::css_parser_mode::CSSParserMode,
+    pub base_url: ProductionURL,
 }
 impl CSSValueSubclass for CSSUnparsedDeclarationValue {
     fn CustomCSSText(&self) -> String {
@@ -1039,10 +1666,18 @@ pub fn unparsed(
     data: CSSVariableData,
     mode: crate::parser::css_parser_mode::CSSParserMode,
 ) -> Rc<Value> {
+    unparsed_with_base(data, mode, ProductionURL::Null)
+}
+pub fn unparsed_with_base(
+    data: CSSVariableData,
+    mode: crate::parser::css_parser_mode::CSSParserMode,
+    base_url: ProductionURL,
+) -> Rc<Value> {
     Rc::new(Value::new(CSSValuePayload::kUnparsedDeclarationClass(
         CSSUnparsedDeclarationValue {
             data: Rc::new(data),
             mode,
+            base_url,
         },
     )))
 }
@@ -1112,7 +1747,7 @@ impl CSSValueDispatch for ProductionCSSValueDispatch {
     type CSSScopedKeywordValue = CSSScopedKeywordValue;
     type CSSColor = CSSColor;
     type CSSUnresolvedColorValue = UnavailableCSSValue;
-    type CSSColorMixValue = UnavailableCSSValue;
+    type CSSColorMixValue = CSSColorMixValue;
     type CSSAlphaColorValue = UnavailableCSSValue;
     type CSSContrastColorValue = UnavailableCSSValue;
     type CSSCounterValue = CSSCounterValue;
@@ -1123,27 +1758,27 @@ impl CSSValueDispatch for ProductionCSSValueDispatch {
     type CSSURIValue = CSSURIValue;
     type CSSURLPatternValue = UnavailableCSSValue;
     type CSSValuePair = CSSValuePair;
-    type CSSLightDarkValuePair = UnavailableCSSValue;
+    type CSSLightDarkValuePair = CSSLightDarkValuePair;
     type CSSParamValuePair = UnavailableCSSValue;
     type CSSScrollValue = UnavailableCSSValue;
     type CSSViewValue = UnavailableCSSValue;
     type CSSRatioValue = CSSRatioValue;
     type CSSRelativeColorValue = UnavailableCSSValue;
-    type CSSBasicShapeCircleValue = UnavailableCSSValue;
-    type CSSBasicShapeEllipseValue = UnavailableCSSValue;
+    type CSSBasicShapeCircleValue = crate::production_effects_value::CSSBasicShapeCircleValue;
+    type CSSBasicShapeEllipseValue = crate::production_effects_value::CSSBasicShapeEllipseValue;
     type CSSBasicShapePolygonValue = crate::production_effects_value::CSSBasicShapePolygonValue;
-    type CSSBasicShapeInsetValue = UnavailableCSSValue;
+    type CSSBasicShapeInsetValue = crate::production_effects_value::CSSBasicShapeInsetValue;
     type CSSBasicShapeRectValue = UnavailableCSSValue;
     type CSSBasicShapeXYWHValue = UnavailableCSSValue;
-    type CSSPathValue = UnavailableCSSValue;
+    type CSSPathValue = crate::production_effects_value::CSSPathValue;
     type CSSShapeValue = UnavailableCSSValue;
     type CSSImageValue = CSSImageValue;
     type CSSCursorImageValue = UnavailableCSSValue;
     type CSSCrossfadeValue = UnavailableCSSValue;
     type CSSPaintValue = UnavailableCSSValue;
     type CSSLinearGradientValue = CSSLinearGradientValue;
-    type CSSRadialGradientValue = UnavailableCSSValue;
-    type CSSConicGradientValue = UnavailableCSSValue;
+    type CSSRadialGradientValue = CSSRadialGradientValue;
+    type CSSConicGradientValue = CSSConicGradientValue;
     type CSSConstantGradientValue = UnavailableCSSValue;
     type CSSColorImageValue = UnavailableCSSValue;
     type CSSLinearTimingFunctionValue = CSSLinearTimingFunctionValue;
@@ -1173,15 +1808,15 @@ impl CSSValueDispatch for ProductionCSSValueDispatch {
     type CSSRayValue = crate::production_motion_value::CSSRayValue;
     type CSSUnparsedDeclarationValue = CSSUnparsedDeclarationValue;
     type CSSPendingSubstitutionValue = CSSPendingSubstitutionValue;
-    type CSSPendingSystemFontValue = UnavailableCSSValue;
+    type CSSPendingSystemFontValue = CSSPendingSystemFontValue;
     type CSSInvalidVariableValue = UnavailableCSSValue;
     type CSSCyclicVariableValue = UnavailableCSSValue;
     type CSSFlipRevertValue = UnavailableCSSValue;
     type CSSLayoutFunctionValue = UnavailableCSSValue;
     type CSSContentDistributionValue = CSSContentDistributionValue;
     type CSSKeyframeShorthandValue = UnavailableCSSValue;
-    type CSSInitialColorValue = UnavailableCSSValue;
-    type CSSImageSetOptionValue = UnavailableCSSValue;
+    type CSSInitialColorValue = CSSInitialColorValue;
+    type CSSImageSetOptionValue = CSSImageSetOptionValue;
     type CSSImageSetTypeValue = UnavailableCSSValue;
     type CSSRepeatStyleValue = CSSRepeatStyleValue;
     type CSSSuperellipseValue = crate::production_corner_value::CSSSuperellipseValue;
@@ -1190,8 +1825,8 @@ impl CSSValueDispatch for ProductionCSSValueDispatch {
     type CSSRepeatValue = UnavailableCSSValue;
     type CSSValueList = CSSValueList;
     type CSSFunctionValue = CSSFunctionValue;
-    type CSSImageSetValue = UnavailableCSSValue;
-    type CSSBracketedValueList = UnavailableCSSValue;
+    type CSSImageSetValue = CSSImageSetValue;
+    type CSSBracketedValueList = CSSBracketedValueList;
     type CSSGridAutoRepeatValue = UnavailableCSSValue;
     type CSSGridIntegerRepeatValue = UnavailableCSSValue;
     type CSSAxisValue = CSSAxisValue;
@@ -1297,6 +1932,16 @@ pub fn numeric(number: f64, unit: UnitType) -> Rc<Value> {
 pub fn color(color: Color) -> Rc<Value> {
     Rc::new(Value::new(CSSValuePayload::kColorClass(CSSColor(color))))
 }
+pub fn initial_color() -> Rc<Value> {
+    Rc::new(Value::new(CSSValuePayload::kInitialColorValueClass(
+        CSSInitialColorValue,
+    )))
+}
+pub fn pending_system_font(system_font_id: CSSValueID) -> Rc<Value> {
+    Rc::new(Value::new(CSSValuePayload::kPendingSystemFontValueClass(
+        CSSPendingSystemFontValue { system_font_id },
+    )))
+}
 pub fn wide(id: CSSValueID) -> Option<Rc<Value>> {
     let payload = match id {
         CSSValueID::kInherit => CSSValuePayload::kInheritedClass(CSSInheritedValue),
@@ -1377,6 +2022,33 @@ impl CSSValueListUrls for CSSValueList {
     fn MayContainUrl(&self) -> bool {
         self.values.iter().any(|value| value.MayContainUrl())
     }
+}
+
+// cpp: css_bracketed_value_list.h:13-28. Grid line names are a distinct
+// CSSValue subclass even though their children use the ordinary space-list
+// storage and iteration contract.
+pub struct CSSBracketedValueList {
+    pub list: CSSValueList,
+}
+impl CSSValueSubclass for CSSBracketedValueList {
+    fn CustomCSSText(&self) -> String {
+        String::from(format!("[{}]", self.list.CustomCSSText().Utf8()).as_str())
+    }
+    fn Equals(&self, other: &Self) -> bool {
+        self.list.Equals(&other.list)
+    }
+}
+impl CSSValueListSubclass<ProductionCSSValueDispatch> for CSSBracketedValueList {
+    fn AsValueList(&self) -> &CSSValueList {
+        &self.list
+    }
+}
+pub fn grid_line_names(values: Vec<Rc<Value>>) -> Rc<Value> {
+    Rc::new(Value::new(CSSValuePayload::kGridLineNamesClass(
+        CSSBracketedValueList {
+            list: CSSValueList::new(values, ListSeparator::Space),
+        },
+    )))
 }
 impl CSSValueUrl<()> for CSSValueList {
     fn ReResolveUrl(&self, document: &()) {

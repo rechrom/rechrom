@@ -16,6 +16,7 @@ font_engine = { path = "../font_engine", optional = true }
 [features]
 default = []
 text = []
-source_replay = ["dep:font_engine"]
+font_backend = ["dep:font_engine"]
+source_replay = ["font_backend"]
 pure_replay = []
 profiling = ["pure_replay", "skia/profiling"]

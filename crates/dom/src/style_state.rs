@@ -43,6 +43,9 @@ pub enum StyleChange {
     /// A narrowly admitted attribute without HTML presentation effects. The
     /// resolver must prove absence of selector and attr() readers before skip.
     Attribute(usize, SelectorOnlyAttribute),
+    /// The retained exportparts NamesMap changed. ::part invalidation starts
+    /// at this host's attached ShadowRoot and reaches all exposed descendants.
+    ExportParts(usize),
     Children(usize),
     Animation(usize),
     /// Resolved image payload changed; DOM and selector inputs are unchanged.

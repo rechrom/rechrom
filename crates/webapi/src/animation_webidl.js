@@ -50,7 +50,9 @@ function normalize(input) {
   return frames;
 }
 class KeyframeEffect {
-  constructor(target,keyframes,options={}){this.target=target;this.pseudoElement=null;this._animation=null;this.setKeyframes(keyframes);this._timing={delay:0,endDelay:0,fill:'auto',iterationStart:0,iterations:1,duration:'auto',direction:'normal',easing:'linear'};this.updateTiming(typeof options==='number'?{duration:options}:options);}
+  constructor(target,keyframes,options={}){this._target=target;this.pseudoElement=null;this._animation=null;this.setKeyframes(keyframes);this._timing={delay:0,endDelay:0,fill:'auto',iterationStart:0,iterations:1,duration:'auto',direction:'normal',easing:'linear'};this.updateTiming(typeof options==='number'?{duration:options}:options);}
+  get target(){return this._target;}
+  set target(target){if(target===this._target)return;const old=this._target;this._target=target;this._animation?._effectTargetChanged(old,target);}
   setKeyframes(keyframes){this._frames=normalize(keyframes);this._animation?._sample();}
   getKeyframes(){return this._frames.map(frame=>({...frame}));}
   getTiming(){return {...this._timing};}
@@ -75,7 +77,11 @@ class KeyframeEffect {
 }
 function schedule(){if(scheduled||!running.size)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;for(const a of [...running])a._sample();schedule();});}
 class Animation extends EventTarget {
-  constructor(effect=null,timeline=document.timeline){super();this.id='';this.effect=effect;this.timeline=timeline;this._effectId=nextId++;this._rate=1;this._start=null;this._hold=null;this._state='idle';this._finishedPromise=null;this._lastCSS=null;if(effect)effect._animation=this;all.add(this);}
+  constructor(effect=null,timeline=document.timeline){super();this.id='';this._effect=null;this.timeline=timeline;this._effectId=nextId++;this._rate=1;this._start=null;this._hold=null;this._state='idle';this._finishedPromise=null;this._lastCSS=null;this.effect=effect;all.add(this);}
+  get effect(){return this._effect;}
+  set effect(effect){if(effect===this._effect)return;const old=this._effect;if(old){this._clearTarget(old.target);if(old._animation===this)old._animation=null;}
+    if(effect?._animation&&effect._animation!==this)effect._animation.effect=null;
+    this._effect=effect??null;if(this._effect)this._effect._animation=this;this._lastCSS=null;if(this._state!=='idle')this._sample();}
   get playbackRate(){return this._rate;}set playbackRate(rate){const current=this.currentTime;this._rate=Number(rate);if(current!==null){this._hold=current;this._start=performance.now();}this._sample();}
   get startTime(){return this._start;}set startTime(time){this._start=time==null?null:Number(time);this._hold=0;this._sample();}
   get currentTime(){if(this._hold===null)return null;return this._state==='running'&&this._start!==null?this._hold+(performance.now()-this._start)*this._rate:this._hold;}
@@ -94,7 +100,9 @@ class Animation extends EventTarget {
   persist(){}
   commitStyles(){const css=this._css();for(const [name,value]of Object.entries(css))this.effect.target.style.setProperty(name,value);}
   _complete(){if(this._state==='finished')return;this._hold=this._rate<0?0:this.effect.getComputedTiming().endTime;this._start=null;this._state='finished';running.delete(this);this._resolve?.(this);setTimeout(()=>this.dispatchEvent(new Event('finish')),0);}
-  _clear(){if(this.effect?.target && this._lastCSS!==''){__domInvoke(this.effect.target,'animationSample',this._effectId,performance.now(),'');this._lastCSS='';}}
+  _clearTarget(target){if(target&&this._lastCSS){__domInvoke(target,'animationSample',this._effectId,performance.now(),'');}this._lastCSS='';}
+  _clear(){this._clearTarget(this.effect?.target);}
+  _effectTargetChanged(old,target){this._clearTarget(old);this._lastCSS=null;if(target&&this._state!=='idle')this._sample();}
   _css(){if(this._state==='idle'||!this.effect?.target)return {};const progress=this.effect.getComputedTiming().progress;if(progress===null)return {};
     const result={},properties=new Set(this.effect._frames.flatMap(frame=>Object.keys(frame).filter(k=>!metadata.has(k))));
     for(const property of properties){const frames=this.effect._frames.filter(frame=>property in frame).map(frame=>({offset:frame.computedOffset,value:frame[property],easing:frame.easing}));
@@ -114,6 +122,6 @@ class Animation extends EventTarget {
 Object.assign(globalThis,{Animation,KeyframeEffect});
 const timelines=new WeakMap();Object.defineProperty(Document.prototype,'timeline',{get(){if(!timelines.has(this))timelines.set(this,{get currentTime(){return performance.now();}});return timelines.get(this);}});
 Element.prototype.animate=function(frames,options={}){const animation=new Animation(new KeyframeEffect(this,frames,options),this.ownerDocument.timeline);if(options.id!==undefined)animation.id=String(options.id);animation.play();return animation;};
-Element.prototype.getAnimations=function(options={}){return [...all].filter(a=>a.playState!=='idle'&&(a.effect.target===this||(options.subtree&&this.contains(a.effect.target))));};
+Element.prototype.getAnimations=function(options={}){return [...all].filter(a=>{const target=a.effect?.target;return a.playState!=='idle'&&target&&(target===this||(options.subtree&&this.contains(target)));});};
 Document.prototype.getAnimations=function(){return [...all].filter(a=>a.playState!=='idle'&&a.effect.target?.ownerDocument===this&&a.effect.target.isConnected);};
 })()

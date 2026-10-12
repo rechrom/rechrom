@@ -103,6 +103,40 @@ fn path_gap(path: &Path, top: f32, bottom: f32) -> Option<(f32, f32)> {
 use crate::cpu::hvgl::HvglTable;
 use crate::cpu::image_sampling::{build_mip_image, draw_image_bitmap_opaque, mip_level_for_size};
 
+fn orient_image(image: &Pixmap, orientation: ImageOrientation) -> Pixmap {
+    debug_assert_ne!(orientation, ImageOrientation::kDefault);
+    let (width, height) = (image.width(), image.height());
+    let (oriented_width, oriented_height) = if orientation.uses_width_as_height() {
+        (height, width)
+    } else {
+        (width, height)
+    };
+    let mut pixels = vec![0; oriented_width as usize * oriented_height as usize * 4];
+    let source = image.data();
+    for y in 0..height {
+        for x in 0..width {
+            let (oriented_x, oriented_y) = match orientation {
+                ImageOrientation::kDefault => (x, y),
+                ImageOrientation::kFlipHorizontal => (width - 1 - x, y),
+                ImageOrientation::kRotate180 => (width - 1 - x, height - 1 - y),
+                ImageOrientation::kFlipVertical => (x, height - 1 - y),
+                ImageOrientation::kTranspose => (y, x),
+                ImageOrientation::kRotate90 => (height - 1 - y, x),
+                ImageOrientation::kTransverse => (height - 1 - y, width - 1 - x),
+                ImageOrientation::kRotate270 => (y, width - 1 - x),
+            };
+            let from = (y as usize * width as usize + x as usize) * 4;
+            let to = (oriented_y as usize * oriented_width as usize + oriented_x as usize) * 4;
+            pixels[to..to + 4].copy_from_slice(&source[from..from + 4]);
+        }
+    }
+    Pixmap::from_vec(
+        pixels,
+        IntSize::from_wh(oriented_width, oriented_height).unwrap(),
+    )
+    .unwrap()
+}
+
 #[derive(Clone)]
 pub(crate) struct MCRec {
     pub(crate) transform: Transform,
@@ -142,6 +176,7 @@ pub struct RasterImageCacheStats {
 /// are cached. IDs and input addresses alone never authenticate a new catalog.
 pub struct RasterImageCache {
     images: HashMap<u64, Pixmap>,
+    oriented_images: HashMap<(u64, ImageOrientation), Pixmap>,
     mip_images: HashMap<(u64, u32, i32, i32, u32, u32), Pixmap>,
     sources: HashMap<u64, ImageSourceSnapshot>,
     pixel_byte_limit: usize,
@@ -157,6 +192,7 @@ impl RasterImageCache {
     pub fn with_pixel_byte_limit(pixel_byte_limit: usize) -> Self {
         Self {
             images: HashMap::new(),
+            oriented_images: HashMap::new(),
             mip_images: HashMap::new(),
             sources: HashMap::new(),
             pixel_byte_limit,
@@ -172,6 +208,7 @@ impl RasterImageCache {
             .values()
             .map(|s| s.rgba.len())
             .chain(self.images.values().map(|p| p.data().len()))
+            .chain(self.oriented_images.values().map(|p| p.data().len()))
             .chain(self.mip_images.values().map(|p| p.data().len()))
             .fold(0usize, usize::saturating_add)
     }
@@ -182,6 +219,7 @@ impl RasterImageCache {
             };
             self.sources.remove(&id);
             self.images.remove(&id);
+            self.oriented_images.retain(|key, _| key.0 != id);
             self.mip_images.retain(|key, _| key.0 != id);
         }
     }
@@ -258,6 +296,7 @@ pub struct SkCanvas {
     // invalidate it and retain the measured alpha-reduction readback.
     pub(crate) known_opaque: bool,
     pub(crate) images: HashMap<u64, Pixmap>,
+    pub(crate) oriented_images: HashMap<(u64, ImageOrientation), Pixmap>,
     pub(crate) mip_images: HashMap<(u64, u32, i32, i32, u32, u32), Pixmap>,
     image_cache_enabled: bool,
     image_sources: HashMap<u64, ImageSourceSnapshot>,
@@ -276,9 +315,10 @@ pub struct SkCanvas {
 pub(crate) struct SavedFrame {
     pub(crate) state: MCRec,
     pub(crate) layer: Option<(Pixmap, f32, Option<crate::cpu::f16_surface::Surface>)>,
-    pub(crate) filters: Vec<(f32, f32)>,
+    pub(crate) filters: Vec<crate::cpu::layer_filters::RenderSurfaceFilter>,
     pub(crate) layer_origin: (i32, i32),
     pub(crate) parent_opaque: bool,
+    pub(crate) blend_mode: PaintBlendMode,
     // PaintChunksToCcLayer masks restore with SkBlendMode::kDstIn.
     pub(crate) dst_in: bool,
 }
@@ -467,10 +507,11 @@ impl SkCanvas {
     /// sampling, clip, blend and layer operations remain unchanged.
     pub fn install_image_cache(&mut self, cache: RasterImageCache) {
         assert!(
-            self.images.is_empty() && self.mip_images.is_empty(),
+            self.images.is_empty() && self.oriented_images.is_empty() && self.mip_images.is_empty(),
             "image cache must be installed before image draws"
         );
         self.images = cache.images;
+        self.oriented_images = cache.oriented_images;
         self.mip_images = cache.mip_images;
         self.image_sources = cache.sources;
         self.image_cache_pixel_byte_limit = cache.pixel_byte_limit;
@@ -487,6 +528,7 @@ impl SkCanvas {
         }
         let mut cache = RasterImageCache {
             images: std::mem::take(&mut self.images),
+            oriented_images: std::mem::take(&mut self.oriented_images),
             mip_images: std::mem::take(&mut self.mip_images),
             sources: std::mem::take(&mut self.image_sources),
             pixel_byte_limit: self.image_cache_pixel_byte_limit,
@@ -526,6 +568,7 @@ impl SkCanvas {
             }
             // Clear every subset/level, including recycled pointer addresses.
             self.images.remove(&resource.id);
+            self.oriented_images.retain(|key, _| key.0 != resource.id);
             self.mip_images.retain(|key, _| key.0 != resource.id);
             self.image_sources.insert(
                 resource.id,
@@ -542,7 +585,7 @@ impl SkCanvas {
         }
     }
 
-    fn with_pixmap(list: &ResourceContext, pixmap: Pixmap) -> Self {
+    pub(crate) fn with_pixmap(list: &ResourceContext, pixmap: Pixmap) -> Self {
         let images = HashMap::new();
         if let Some(resources) = &list.resources {
             let mut ids = std::collections::HashSet::new();
@@ -564,6 +607,7 @@ impl SkCanvas {
             pixmap,
             known_opaque: true,
             images,
+            oriented_images: HashMap::new(),
             mip_images: HashMap::new(),
             image_cache_enabled: false,
             image_sources: HashMap::new(),
@@ -607,6 +651,7 @@ impl SkCanvas {
             filters: Vec::new(),
             layer_origin: (0, 0),
             parent_opaque: self.known_opaque,
+            blend_mode: PaintBlendMode::kNormal,
             dst_in: false,
         });
     }
@@ -623,18 +668,130 @@ impl SkCanvas {
         let filters = item
             .filters
             .iter()
-            .filter(|f| f.r#type == PaintFilterType::kBlur && f.amount > 0.0)
-            .map(|f| {
-                (
-                    (f.amount as f32) * tr.sx.hypot(tr.kx),
-                    (f.amount as f32) * tr.ky.hypot(tr.sy),
-                )
+            .filter_map(|f| {
+                let sx = tr.sx.hypot(tr.kx);
+                let sy = tr.ky.hypot(tr.sy);
+                Some(match f.r#type {
+                    PaintFilterType::kBlur => {
+                        crate::cpu::layer_filters::RenderSurfaceFilter::Blur {
+                            sigma_x: f.amount as f32 * sx,
+                            sigma_y: f.amount as f32 * sy,
+                        }
+                    }
+                    PaintFilterType::kDropShadow => {
+                        let x = f.offset.x as f32;
+                        let y = f.offset.y as f32;
+                        crate::cpu::layer_filters::RenderSurfaceFilter::DropShadow {
+                            sigma_x: f.blur_radius as f32 * sx,
+                            sigma_y: f.blur_radius as f32 * sy,
+                            offset_x: tr.sx * x + tr.kx * y,
+                            offset_y: tr.ky * x + tr.sy * y,
+                            color: [f.color.red, f.color.green, f.color.blue, f.color.alpha],
+                        }
+                    }
+                    PaintFilterType::kBoxReflect => {
+                        let local = match f.reflection_direction {
+                            PaintReflectionDirection::kAbove | PaintReflectionDirection::kBelow => {
+                                [1.0, 0.0, 0.0, -1.0, 0.0, f.reflection_offset as f32]
+                            }
+                            PaintReflectionDirection::kLeft | PaintReflectionDirection::kRight => {
+                                [-1.0, 0.0, 0.0, 1.0, f.reflection_offset as f32, 0.0]
+                            }
+                        };
+                        let affine = |a: [f32; 6], b: [f32; 6]| {
+                            [
+                                a[0] * b[0] + a[2] * b[1],
+                                a[1] * b[0] + a[3] * b[1],
+                                a[0] * b[2] + a[2] * b[3],
+                                a[1] * b[2] + a[3] * b[3],
+                                a[0] * b[4] + a[2] * b[5] + a[4],
+                                a[1] * b[4] + a[3] * b[5] + a[5],
+                            ]
+                        };
+                        let device = [tr.sx, tr.ky, tr.kx, tr.sy, tr.tx, tr.ty];
+                        let determinant = tr.sx * tr.sy - tr.kx * tr.ky;
+                        if determinant.abs() <= f32::EPSILON {
+                            return None;
+                        }
+                        let inverse = [
+                            tr.sy / determinant,
+                            -tr.ky / determinant,
+                            -tr.kx / determinant,
+                            tr.sx / determinant,
+                            (tr.kx * tr.ty - tr.sy * tr.tx) / determinant,
+                            (tr.ky * tr.tx - tr.sx * tr.ty) / determinant,
+                        ];
+                        let mut mask = f.reflection_mask.clone();
+                        if let Some(mask) = &mut mask {
+                            mask.local_to_device = device;
+                        }
+                        crate::cpu::layer_filters::RenderSurfaceFilter::BoxReflect {
+                            matrix: affine(affine(device, local), inverse),
+                            mask,
+                        }
+                    }
+                    kind => {
+                        let kind = match kind {
+                            PaintFilterType::kReference => unreachable!(
+                                "reference filters execute on renderer effect surfaces"
+                            ),
+                            PaintFilterType::kGrayscale => {
+                                crate::cpu::layer_filters::ColorMatrixKind::Grayscale
+                            }
+                            PaintFilterType::kSepia => {
+                                crate::cpu::layer_filters::ColorMatrixKind::Sepia
+                            }
+                            PaintFilterType::kSaturate => {
+                                crate::cpu::layer_filters::ColorMatrixKind::Saturate
+                            }
+                            PaintFilterType::kHueRotate => {
+                                crate::cpu::layer_filters::ColorMatrixKind::HueRotate
+                            }
+                            PaintFilterType::kInvert => {
+                                crate::cpu::layer_filters::ColorMatrixKind::Invert
+                            }
+                            PaintFilterType::kOpacity => {
+                                crate::cpu::layer_filters::ColorMatrixKind::Opacity
+                            }
+                            PaintFilterType::kBrightness => {
+                                crate::cpu::layer_filters::ColorMatrixKind::Brightness
+                            }
+                            PaintFilterType::kContrast => {
+                                crate::cpu::layer_filters::ColorMatrixKind::Contrast
+                            }
+                            PaintFilterType::kBlur
+                            | PaintFilterType::kDropShadow
+                            | PaintFilterType::kBoxReflect => unreachable!(),
+                        };
+                        crate::cpu::layer_filters::RenderSurfaceFilter::ColorMatrix(
+                            crate::cpu::layer_filters::css_color_matrix(kind, f.amount as f32),
+                        )
+                    }
+                })
             })
             .collect();
         self.save_layer_device(&DrawCommand::default(), false, filters);
     }
 
-    fn save_layer_device(&mut self, item: &DrawCommand, use_f16: bool, filters: Vec<(f32, f32)>) {
+    pub(crate) fn save_layer_svg_filter(
+        &mut self,
+        graph: crate::cpu::layer_filters::RenderSvgFilterGraph,
+    ) {
+        self.save_layer_device(
+            &DrawCommand::default(),
+            false,
+            vec![crate::cpu::layer_filters::RenderSurfaceFilter::SvgGraph(
+                graph,
+            )],
+        );
+    }
+
+    fn save_layer_device(
+        &mut self,
+        item: &DrawCommand,
+        use_f16: bool,
+        mut filters: Vec<crate::cpu::layer_filters::RenderSurfaceFilter>,
+    ) {
         use crate::src::core::SkRasterClip::SkRasterClip;
         if !filters.is_empty() {
             self.ensure_clip_mask();
@@ -666,21 +823,40 @@ impl SkCanvas {
         }
         // Pixmap has no zero-size device. A one-pixel empty clip represents
         // Skia's no-pixels save layer and still participates in save/restore.
-        let filtered = !filters.is_empty();
-        if filtered {
+        let pixel_moving_filter = filters.iter().any(|filter| {
+            matches!(
+                filter,
+                crate::cpu::layer_filters::RenderSurfaceFilter::Blur { .. }
+                    | crate::cpu::layer_filters::RenderSurfaceFilter::DropShadow { .. }
+                    | crate::cpu::layer_filters::RenderSurfaceFilter::SvgGraph(_)
+                    | crate::cpu::layer_filters::RenderSurfaceFilter::AffineSvgGraph { .. }
+                    | crate::cpu::layer_filters::RenderSurfaceFilter::BoxReflect { .. }
+            )
+        });
+        if pixel_moving_filter {
             // getInputBounds: blur needs input beyond the output clip. Each
             // filter expands its input; the extra transparent pixel matches
             // internalSaveLayer's decal-sampling padding.
-            let bx = filters
-                .iter()
-                .map(|(x, _)| (x * 3.0).ceil() as i32)
-                .sum::<i32>()
-                + 1;
-            let by = filters
-                .iter()
-                .map(|(_, y)| (y * 3.0).ceil() as i32)
-                .sum::<i32>()
-                + 1;
+            let (bx, by) = filters.iter().fold((1, 1), |(x, y), filter| match filter {
+                crate::cpu::layer_filters::RenderSurfaceFilter::ColorMatrix(_) => (x, y),
+                crate::cpu::layer_filters::RenderSurfaceFilter::SvgGraph(_) => (x, y),
+                crate::cpu::layer_filters::RenderSurfaceFilter::AffineSvgGraph { .. } => (x, y),
+                crate::cpu::layer_filters::RenderSurfaceFilter::BoxReflect { .. } => (x, y),
+                crate::cpu::layer_filters::RenderSurfaceFilter::Blur { sigma_x, sigma_y } => (
+                    x + (sigma_x * 3.0).ceil() as i32,
+                    y + (sigma_y * 3.0).ceil() as i32,
+                ),
+                crate::cpu::layer_filters::RenderSurfaceFilter::DropShadow {
+                    sigma_x,
+                    sigma_y,
+                    offset_x,
+                    offset_y,
+                    ..
+                } => (
+                    x + (sigma_x * 3.0 + offset_x.abs()).ceil() as i32,
+                    y + (sigma_y * 3.0 + offset_y.abs()).ceil() as i32,
+                ),
+            });
             bounds = bounds.and_then(|b| {
                 crate::raster::IntRect::from_ltrb(
                     b.left() - bx,
@@ -692,6 +868,35 @@ impl SkCanvas {
         }
         let (left, top, width, height) =
             bounds.map_or((0, 0, 1, 1), |b| (b.left(), b.top(), b.width(), b.height()));
+        // SVG filter regions are expressed in the owning device space while
+        // the isolated saveLayer stores pixels relative to its allocation.
+        // Translate every graph region by the actual layer origin before the
+        // CPU graph executor clips its intermediate surfaces.
+        for filter in &mut filters {
+            if let crate::cpu::layer_filters::RenderSurfaceFilter::SvgGraph(graph) = filter {
+                graph.region[0] -= left as f32;
+                graph.region[1] -= top as f32;
+                for primitive in &mut graph.primitives {
+                    primitive.region[0] -= left as f32;
+                    primitive.region[1] -= top as f32;
+                }
+            } else if let crate::cpu::layer_filters::RenderSurfaceFilter::BoxReflect {
+                matrix,
+                mask,
+            } = filter
+            {
+                // The filter matrix was built in parent-device coordinates;
+                // saveLayer storage is translated to its allocation origin.
+                let ox = left as f32;
+                let oy = top as f32;
+                matrix[4] += matrix[0] * ox + matrix[2] * oy - ox;
+                matrix[5] += matrix[1] * ox + matrix[3] * oy - oy;
+                if let Some(mask) = mask {
+                    mask.local_to_device[4] -= ox;
+                    mask.local_to_device[5] -= oy;
+                }
+            }
+        }
         let child = cleared_layer_pixmap(width, height);
         let parent = std::mem::replace(&mut self.pixmap, child);
         let previous = self.f16_surface.take();
@@ -706,6 +911,7 @@ impl SkCanvas {
             filters,
             layer_origin: (left, top),
             parent_opaque: self.known_opaque,
+            blend_mode: item.blend_mode,
             dst_in: false,
         });
         self.known_opaque = false;
@@ -713,14 +919,14 @@ impl SkCanvas {
         self.state.transform.ty -= top as f32;
         let mut clip_summary = SkRasterClip::default();
         let child_clip = bounds.and_then(|_| {
-            if filtered {
+            if pixel_moving_filter {
                 crate::raster::IntRect::from_xywh(1, 1, width - 2, height - 2)
             } else {
                 crate::raster::IntRect::from_xywh(0, 0, width, height)
             }
         });
         clip_summary.setRect(child_clip);
-        self.state.clip = if filtered || bounds.is_none() {
+        self.state.clip = if pixel_moving_filter || bounds.is_none() {
             let mut mask = Mask::new(width, height).unwrap();
             if let Some(b) = child_clip {
                 for y in b.top() as usize..b.bottom() as usize {
@@ -779,8 +985,16 @@ impl SkCanvas {
                     self.pixmap.height(),
                     frame.filters.len(),
                 );
-                for (sigma_x, sigma_y) in frame.filters {
-                    crate::cpu::layer_filters::blur(&mut self.pixmap, sigma_x, sigma_y);
+                for filter in &frame.filters {
+                    let width = self.pixmap.width();
+                    let height = self.pixmap.height();
+                    let ok = crate::cpu::layer_filters::apply_rgba(
+                        self.pixmap.data_mut(),
+                        width,
+                        height,
+                        filter,
+                    );
+                    debug_assert!(ok);
                 }
                 #[cfg(feature = "profiling")]
                 let blur_elapsed = layer_started.map(|started| started.elapsed());
@@ -849,6 +1063,35 @@ impl SkCanvas {
                             [parent_start * 4..(parent_start + right - left) * 4];
                         if previous.is_none() {
                             let source = &src_row[left * 4..right * 4];
+                            if frame.blend_mode != PaintBlendMode::kNormal {
+                                let coverage = frame.state.clip.as_deref().map(|mask| {
+                                    mask.row_range(
+                                        y as u32,
+                                        (parent_start % parent_width) as u32,
+                                        (parent_start % parent_width + right - left) as u32,
+                                    )
+                                });
+                                let mut destination = dst_row
+                                    .chunks_exact(4)
+                                    .map(|pixel| u32::from_ne_bytes(pixel.try_into().unwrap()))
+                                    .collect::<Vec<_>>();
+                                let source = source
+                                    .chunks_exact(4)
+                                    .map(|pixel| u32::from_ne_bytes(pixel.try_into().unwrap()))
+                                    .collect::<Vec<_>>();
+                                crate::cpu::effect_composite::blend_effect_row(
+                                    &mut destination,
+                                    &source,
+                                    format,
+                                    frame.blend_mode,
+                                    opacity,
+                                    coverage,
+                                );
+                                for (pixel, word) in dst_row.chunks_exact_mut(4).zip(destination) {
+                                    pixel.copy_from_slice(&word.to_ne_bytes());
+                                }
+                                continue;
+                            }
                             let source = if let Some(table) = &opacity_table {
                                 for (out, &value) in
                                     scaled_row[..source.len()].iter_mut().zip(source)
@@ -1829,10 +2072,6 @@ impl SkCanvas {
     // cpp: skia_renderer/skia_renderer.cc:1147-1156
     pub(crate) fn stroke_path(&mut self, path: &Path, item: &DrawCommand) {
         assert_eq!(item.blend_mode, PaintBlendMode::kNormal);
-        assert!(
-            item.paint_shader.is_none(),
-            "SVG stroke shader is not installed in pure Rust replay"
-        );
         let mut stroke = Stroke {
             width: item.stroke_width as f32,
             miter_limit: item.miter_limit as f32,
@@ -1863,6 +2102,7 @@ impl SkCanvas {
             && item.stroke_width > 1.0
             && item.blur_radius == 0.0
             && item.dash_intervals.is_empty()
+            && item.paint_shader.is_none()
         {
             let t = self.state.transform;
             {
@@ -1906,14 +2146,64 @@ impl SkCanvas {
             }
         }
         self.ensure_clip_mask();
-        let paint = solid_paint(item.color, item.antialias);
-        self.pixmap.stroke_path(
-            path,
-            &paint,
-            &stroke,
-            self.state.transform,
-            self.state.clip.as_deref(),
-        );
+        if let Some(shader) = item.paint_shader.as_ref() {
+            let transform = self.state.transform;
+            let clip = self.state.clip.as_deref();
+            crate::compat::canvas::with_paint_for_shader(
+                shader,
+                item.antialias,
+                (0.0, 0.0),
+                (0.0, 0.0),
+                transform,
+                |paint| {
+                    self.pixmap
+                        .stroke_path(path, paint, &stroke, transform, clip)
+                },
+            );
+        } else {
+            let paint = solid_paint(item.color, item.antialias);
+            self.pixmap.stroke_path(
+                path,
+                &paint,
+                &stroke,
+                self.state.transform,
+                self.state.clip.as_deref(),
+            );
+        }
+    }
+
+    // core/paint/graphics_context.cc ComputeInterpolationQuality() and
+    // ComputeFilterQuality(). ResourceCatalog bitmaps are complete frames.
+    fn effective_image_interpolation_quality(
+        requested: ImageInterpolationQuality,
+        source: PaintRect,
+        destination: PaintRect,
+    ) -> ImageInterpolationQuality {
+        if requested == ImageInterpolationQuality::kNone {
+            return ImageInterpolationQuality::kNone;
+        }
+        let src_w = source.width as f32;
+        let src_h = source.height as f32;
+        let dst_w = destination.width as f32;
+        let dst_h = destination.height as f32;
+        let diff_w = (dst_w - src_w).abs();
+        let diff_h = (dst_h - src_h).abs();
+        let width_equal = diff_w < f32::EPSILON;
+        let height_equal = diff_h < f32::EPSILON;
+        let small = src_w <= 8.0 || src_h <= 8.0 || dst_w <= 8.0 || dst_h <= 8.0;
+        let large_stretch = src_h * 3.0 <= dst_h || src_w * 3.0 <= dst_w;
+        let fractional_change = diff_w / src_w < 0.025 && diff_h / src_h < 0.025;
+        let computed =
+            if (width_equal && height_equal) || small || large_stretch || fractional_change {
+                ImageInterpolationQuality::kLow
+            } else {
+                ImageInterpolationQuality::kMedium
+            };
+        if (requested as i32) < (computed as i32) {
+            requested
+        } else {
+            computed
+        }
     }
 
     // cpp: skia_renderer/skia_renderer.cc:628-689
@@ -1938,6 +2228,11 @@ impl SkCanvas {
         if source.width <= 0.0 || source.height <= 0.0 {
             return;
         }
+        let interpolation_quality = Self::effective_image_interpolation_quality(
+            item.image_interpolation_quality,
+            source,
+            destination,
+        );
         // SkCanvas::onDrawImageRect2 rejects against the device clip before
         // the bitmap device creates a subset/mipmap. Admit only our positive
         // scale+translation path here; other matrices retain normal replay.
@@ -1982,7 +2277,7 @@ impl SkCanvas {
             .is_some_and(|image| image.opaque);
         let stats = &mut self.image_cache_stats;
         let cache_enabled = self.image_cache_enabled;
-        let image = self.images.entry(resource.id).or_insert_with(|| {
+        self.images.entry(resource.id).or_insert_with(|| {
             if cache_enabled {
                 stats.source_conversions += 1;
             }
@@ -2000,6 +2295,16 @@ impl SkCanvas {
             )
             .unwrap()
         });
+        let image = if item.image_orientation == ImageOrientation::kDefault {
+            self.images.get(&resource.id).unwrap()
+        } else {
+            let key = (resource.id, item.image_orientation);
+            if !self.oriented_images.contains_key(&key) {
+                let oriented = orient_image(self.images.get(&resource.id).unwrap(), key.1);
+                self.oriented_images.insert(key, oriented);
+            }
+            self.oriented_images.get(&key).unwrap()
+        };
         let uses_full_source = source.x == 0.0
             && source.y == 0.0
             && source.width == f64::from(image.width())
@@ -2023,9 +2328,15 @@ impl SkCanvas {
                 .ceil()
                 .min(image.height() as f32) as i32,
         );
-        let level = subset_bounds.map_or(0, |bounds| {
-            mip_level_for_size(bounds.width(), bounds.height(), target_width, target_height)
-        });
+        let level = if item.image_orientation == ImageOrientation::kDefault
+            && interpolation_quality == ImageInterpolationQuality::kMedium
+        {
+            subset_bounds.map_or(0, |bounds| {
+                mip_level_for_size(bounds.width(), bounds.height(), target_width, target_height)
+            })
+        } else {
+            0
+        };
         let image = if level > 0 && uses_full_source {
             let image = self
                 .mip_images
@@ -2077,19 +2388,21 @@ impl SkCanvas {
         } else {
             image
         };
-        if draw_image_bitmap_opaque(
-            &mut self.pixmap,
-            self.state.clip.as_deref(),
-            self.state.transform,
-            image,
-            destination,
-            source,
-            self.state.device_origin,
-            self.state.tile_origin,
-            self.state.clip_runs.as_deref().map(|v| v.as_slice()),
-            self.state.clip_summary.as_ref(),
-            known_opaque,
-        ) {
+        if interpolation_quality != ImageInterpolationQuality::kNone
+            && draw_image_bitmap_opaque(
+                &mut self.pixmap,
+                self.state.clip.as_deref(),
+                self.state.transform,
+                image,
+                destination,
+                source,
+                self.state.device_origin,
+                self.state.tile_origin,
+                self.state.clip_runs.as_deref().map(|v| v.as_slice()),
+                self.state.clip_summary.as_ref(),
+                known_opaque,
+            )
+        {
             return;
         }
         let fallback_clip = if self.state.clip.is_none() {
@@ -2122,7 +2435,11 @@ impl SkCanvas {
         paint.shader = Pattern::new(
             image.as_ref(),
             SpreadMode::Pad,
-            FilterQuality::Bilinear,
+            if interpolation_quality == ImageInterpolationQuality::kNone {
+                FilterQuality::Nearest
+            } else {
+                FilterQuality::Bilinear
+            },
             1.0,
             transform,
         );
@@ -2212,10 +2529,13 @@ impl SkCanvas {
                                     );
                                 }
                                 let optical_size = Tag::from_bytes(b"opsz");
-                                if face
-                                    .variation_axes()
-                                    .into_iter()
-                                    .any(|axis| axis.tag == optical_size)
+                                if !variations
+                                    .iter()
+                                    .any(|axis| axis.tag == u32::from_be_bytes(*b"opsz"))
+                                    && face
+                                        .variation_axes()
+                                        .into_iter()
+                                        .any(|axis| axis.tag == optical_size)
                                 {
                                     let _ = face.set_variation(optical_size, item.font_size as f32);
                                 }
@@ -2318,12 +2638,29 @@ impl SkCanvas {
                     item.font_smoothing,
                 );
                 crate::cpu::scaler_context_mac_ct::with_glyph_images(&prepared, &paint, |strike| {
-                    for glyph in &item.glyphs {
+                    for (glyph_index, glyph) in item.glyphs.iter().enumerate() {
                         let position = crate::cpu::glyph_position::mask_position_transform(
                             self.state.transform,
                             item.text_blob_origin.x as f32 + glyph.offset.x as f32,
                             item.text_blob_origin.y as f32 + glyph.offset.y as f32,
                         );
+                        if glyph_index == 0
+                            && std::env::var_os("RECHROM_TRACE_GLYPH_POSITION").is_some()
+                        {
+                            eprintln!(
+                                "glyph-position origin={:.4},{:.4} transform={:.4},{:.4},{:.4},{:.4},{:.4},{:.4} position={:.4},{:.4}",
+                                item.text_blob_origin.x,
+                                item.text_blob_origin.y,
+                                self.state.transform.sx,
+                                self.state.transform.ky,
+                                self.state.transform.kx,
+                                self.state.transform.sy,
+                                self.state.transform.tx,
+                                self.state.transform.ty,
+                                position.tx,
+                                position.ty,
+                            );
+                        }
                         crate::cpu::scaler_context_mac_ct::SkScalerContextMac::draw_with_clip_kind(
                             &mut self.pixmap,
                             strike,
@@ -2462,10 +2799,13 @@ impl SkCanvas {
                                     );
                                 }
                                 let optical_size = Tag::from_bytes(b"opsz");
-                                if face
-                                    .variation_axes()
-                                    .into_iter()
-                                    .any(|axis| axis.tag == optical_size)
+                                if !variations
+                                    .iter()
+                                    .any(|axis| axis.tag == u32::from_be_bytes(*b"opsz"))
+                                    && face
+                                        .variation_axes()
+                                        .into_iter()
+                                        .any(|axis| axis.tag == optical_size)
                                 {
                                     let _ = face.set_variation(optical_size, item.font_size as f32);
                                 }
@@ -4116,6 +4456,7 @@ mod color_layout_tests {
                             .map(|i| PaintColorStop {
                                 offset: i as f64 / (stops - 1) as f64,
                                 offset_length: 0.0,
+                                is_hint: false,
                                 color: if i == 0 {
                                     color(alpha)
                                 } else {
@@ -4126,6 +4467,7 @@ mod color_layout_tests {
                                         alpha,
                                     }
                                 },
+                                ..Default::default()
                             })
                             .collect(),
                         ..PaintShader::default()

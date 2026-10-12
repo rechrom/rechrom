@@ -63,24 +63,24 @@ impl ConnectedResourceDiscovery {
         let resources = self.resources.borrow().clone();
         let mut style_sheet_changed = false;
         if let Some(resources) = &resources {
+            if image_request {
+                resources.UpdateResponsiveImageSelection(node);
+            }
             let image = {
                 let owner = self.document.borrow();
                 let tree = owner.GetDocument();
                 let current = tree.Node(node);
                 if image_request && current.IsHTMLElement("img") {
-                    current
-                        .FindAttribute("src")
-                        .filter(|attribute| !attribute.value.is_empty())
-                        .map(|attribute| {
-                            (
-                                current.Id(),
-                                attribute.value.clone(),
-                                tree.ImageResourceFor(&attribute.value).is_some(),
-                                !current.FindAttribute("loading").is_some_and(|loading| {
-                                    loading.value.eq_ignore_ascii_case("lazy")
-                                }),
-                            )
-                        })
+                    tree.CurrentImageSource(node).map(|source| {
+                        (
+                            current.Id(),
+                            source.to_owned(),
+                            tree.ImageResourceFor(source).is_some(),
+                            !current
+                                .FindAttribute("loading")
+                                .is_some_and(|loading| loading.value.eq_ignore_ascii_case("lazy")),
+                        )
+                    })
                 } else {
                     None
                 }
@@ -120,9 +120,10 @@ impl ConnectedResourceDiscovery {
                     })
             };
             if let Some((owner_node_id, css)) = style {
-                let mut sheet = style::ParseCSS(&css);
+                let base = resources.BaseURL();
+                let mut sheet = style::ParseCSSWithBase(&css, &base);
                 sheet.owner_node_id = owner_node_id;
-                resources.AddParsedStyleSheet(sheet, &resources.BaseURL())?;
+                resources.AddParsedStyleSheet(sheet, &base)?;
                 style_sheet_changed = true;
             }
         }

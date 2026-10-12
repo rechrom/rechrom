@@ -3,17 +3,22 @@ use std::sync::OnceLock;
 use font_engine::Hyphenation;
 use foundation::{
     gfx, AtomicString, CSSPropertyID, Color, EInsideLink, EPosition, ETextTransform,
-    ETransformStyle3D, Hyphens, MakeGarbageCollected, Member, String, TextOffsetMap,
+    ETransformStyle3D, FloatValueForLength, Hyphens, MakeGarbageCollected, Member, PointAndTangent,
+    PointForLengthPoint, String, TextOffsetMap,
 };
 
 use super::applied_text_decoration::{AppliedTextDecoration, AppliedTextDecorationVector};
+use super::basic_shapes::ShapeType;
 use super::computed_style::ComputedStyle;
 use super::computed_style_base::ComputedStyleBase;
-use super::computed_style_constants::{EFillAttachment, EFillBox, PseudoId};
+use super::computed_style_constants::{EFillAttachment, EFillBox, OffsetRotationType, PseudoId};
 use super::fill_layer::FillLayer;
 use super::forward::Element;
 use super::gap_data_list::GapDataList;
+use super::offset_path_operation::{OperationType, ShapeOffsetPathOperation};
 use super::style_cached_data::StyleCachedData;
+use super::style_ray::StyleRay;
+use super::style_transform::MotionPathBox;
 use crate::css::style_color::StyleColor;
 use crate::text_transform_services::CurrentNativeTextTransformResolver;
 
@@ -164,13 +169,18 @@ impl ComputedStyle {
     }
 
     // cpp: layoutng_style/style/computed_style.h:2398
-    // cpp: layoutng_style/style/computed_style_layout.cc:133-140
+    // cpp: core/style/computed_style.cc:2499-2520
     pub fn HasBackground(&self) -> bool {
-        assert!(!self.HasBackgroundImage());
-        !self
+        if !self
             .BackgroundColor()
             .Resolve(self.GetCurrentColor(None), self.UsedColorScheme(), None)
             .IsFullyTransparent()
+        {
+            return true;
+        }
+        // Composite background-color animation state is not represented yet;
+        // the ordinary native image predicate is the final Chromium branch.
+        self.HasBackgroundImage()
     }
 
     // cpp: layoutng_style/style/computed_style.h:722
@@ -306,15 +316,197 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:2766-2770
     // cpp: layoutng_style/style/computed_style_layout.cc:220-228
-    pub fn ApplyMotionPathTransform<B>(
+    pub fn ApplyMotionPathTransform<B: MotionPathBox>(
         &self,
-        _origin_x: f32,
-        _origin_y: f32,
-        _box: Option<&B>,
-        _rect: &gfx::RectF,
-        _transform: &mut gfx::Transform,
+        origin_x: f32,
+        origin_y: f32,
+        box_: Option<&B>,
+        bounding_box: &gfx::RectF,
+        transform: &mut gfx::Transform,
     ) {
-        assert!(self.OffsetPath().GetNonNull().is_none());
+        let Some(offset_path) = self.OffsetPath().GetNonNull() else {
+            return;
+        };
+        let offset_path = unsafe { offset_path.as_ref() };
+        let Some(box_) = box_ else {
+            return;
+        };
+
+        let reference_box = box_.MotionPathReferenceBox(offset_path.GetCoordBox());
+        let offset_from_containing_block = box_.MotionPathOffsetFromContainingBlock();
+        let offset_from_reference_box = gfx::PointF::new(
+            offset_from_containing_block.x() - reference_box.x(),
+            offset_from_containing_block.y() - reference_box.y(),
+        );
+        let reference_size = reference_box.size();
+
+        let starting_point = |position: &foundation::LengthPoint| {
+            if position.X().IsAuto() {
+                offset_from_reference_box
+            } else if position.X().IsNone() {
+                gfx::PointF::new(reference_size.width() / 2.0, reference_size.height() / 2.0)
+            } else {
+                PointForLengthPoint(position, &reference_size)
+            }
+        };
+
+        let mut path_position = match offset_path.GetType() {
+            OperationType::kShape => {
+                let shape_operation = unsafe {
+                    &*(offset_path as *const dyn super::offset_path_operation::OffsetPathOperation
+                        as *const ShapeOffsetPathOperation)
+                };
+                let shape = shape_operation.GetBasicShape();
+                match shape.GetType() {
+                    ShapeType::kStyleRayType => {
+                        let ray = unsafe {
+                            &*(shape as *const dyn super::basic_shapes::BasicShape
+                                as *const StyleRay)
+                        };
+                        let start = if ray.HasExplicitCenter() || self.OffsetPosition().X().IsNone()
+                        {
+                            PointForLengthPoint(ray.Center(), &reference_size)
+                        } else {
+                            starting_point(self.OffsetPosition())
+                        };
+                        let mut ray_length = ray.CalculateRayPathLength(&start, &reference_size);
+                        if ray.Contain() {
+                            let element_size = box_.MotionPathBorderBoxSize();
+                            ray_length = (ray_length
+                                - element_size.width().max(element_size.height()) / 2.0)
+                                .max(0.0);
+                        }
+                        let distance = FloatValueForLength(self.OffsetDistance(), ray_length);
+                        ray.PointAndNormalAtLength(&start, distance)
+                    }
+                    ShapeType::kStylePathType => {
+                        let mut position = box_
+                            .MotionPathPointAndTangent(
+                                shape,
+                                &gfx::PointF::default(),
+                                &reference_size,
+                                self.OffsetDistance(),
+                                self.EffectiveZoom(),
+                            )
+                            .unwrap_or(PointAndTangent {
+                                point: gfx::PointF::default(),
+                                tangent_in_degrees: 0.0,
+                            });
+                        // Unlike reference-box basic shapes, path() coordinates
+                        // are local to the transformed element.  Compensate the
+                        // common containing-block conversion below.
+                        position.point = gfx::PointF::new(
+                            position.point.x() + offset_from_reference_box.x(),
+                            position.point.y() + offset_from_reference_box.y(),
+                        );
+                        position
+                    }
+                    ShapeType::kBasicShapeCircleType
+                    | ShapeType::kBasicShapeEllipseType
+                    | ShapeType::kBasicShapeInsetType
+                    | ShapeType::kBasicShapePolygonType
+                    | ShapeType::kStyleShapeType => {
+                        let start = starting_point(self.OffsetPosition());
+                        box_.MotionPathPointAndTangent(
+                            shape,
+                            &start,
+                            &reference_size,
+                            self.OffsetDistance(),
+                            self.EffectiveZoom(),
+                        )
+                        .unwrap_or(PointAndTangent {
+                            point: gfx::PointF::default(),
+                            tangent_in_degrees: 0.0,
+                        })
+                    }
+                }
+            }
+            OperationType::kCoordBox => {
+                if !box_.MotionPathHasContainingBlock() {
+                    return;
+                }
+                box_.MotionPathCoordBoxPointAndTangent(&reference_size, self.OffsetDistance())
+                    .unwrap_or_else(|| {
+                        PointAndTangentOnRect(&reference_size, self.OffsetDistance())
+                    })
+            }
+            // URL paths remain rejected by the production parser, so no live
+            // ReferenceOffsetPathOperation can currently reach this boundary.
+            OperationType::kReference => return,
+        };
+
+        // The point produced above is relative to the containing block's
+        // reference box.  Chromium converts it back to the transformed box.
+        path_position.point = gfx::PointF::new(
+            path_position.point.x() - offset_from_reference_box.x(),
+            path_position.point.y() - offset_from_reference_box.y(),
+        );
+        if self.OffsetRotate().r#type == OffsetRotationType::kFixed {
+            path_position.tangent_in_degrees = 0.0;
+        }
+
+        transform.Translate3d(
+            path_position.point.x() - origin_x,
+            path_position.point.y() - origin_y,
+            0.0,
+        );
+        transform.Rotate(f64::from(
+            path_position.tangent_in_degrees + self.OffsetRotate().angle,
+        ));
+
+        let anchor = self.OffsetAnchor();
+        if !anchor.X().IsAuto() {
+            let mut anchor_point = PointForLengthPoint(anchor, &bounding_box.size());
+            anchor_point = gfx::PointF::new(
+                anchor_point.x() + bounding_box.x(),
+                anchor_point.y() + bounding_box.y(),
+            );
+            transform.Translate3d(
+                origin_x - anchor_point.x(),
+                origin_y - anchor_point.y(),
+                0.0,
+            );
+        }
+    }
+}
+
+/// PointAndNormalAtLength for the zero-radius inset generated by a coordinate
+/// box offset-path.  Path::MakeRoundedRect uses this clockwise contour order
+/// when the containing block has the common zero border-radius case.
+fn PointAndTangentOnRect(size: &gfx::SizeF, distance: &foundation::Length) -> PointAndTangent {
+    let width = size.width().max(0.0);
+    let height = size.height().max(0.0);
+    let path_length = 2.0 * (width + height);
+    if path_length <= 0.0 {
+        return PointAndTangent {
+            point: gfx::PointF::default(),
+            tangent_in_degrees: 0.0,
+        };
+    }
+    let mut offset = FloatValueForLength(distance, path_length) % path_length;
+    if offset < 0.0 {
+        offset += path_length;
+    }
+    if offset <= width {
+        PointAndTangent {
+            point: gfx::PointF::new(offset, 0.0),
+            tangent_in_degrees: 0.0,
+        }
+    } else if offset <= width + height {
+        PointAndTangent {
+            point: gfx::PointF::new(width, offset - width),
+            tangent_in_degrees: 90.0,
+        }
+    } else if offset <= 2.0 * width + height {
+        PointAndTangent {
+            point: gfx::PointF::new(2.0 * width + height - offset, height),
+            tangent_in_degrees: 180.0,
+        }
+    } else {
+        PointAndTangent {
+            point: gfx::PointF::new(0.0, path_length - offset),
+            tangent_in_degrees: -90.0,
+        }
     }
 }
 

@@ -23,6 +23,7 @@ pub enum WebApiMutation {
     SetURL(String),
     SetViewport { width: f64, height: f64, scale: f64 },
     SetPreferredColorScheme(style::PreferredColorScheme),
+    SetForcedColors(style::media_queries::forced_colors::ForcedColors),
     SetBeginFrameSource(Option<Arc<dyn BeginFrameSource>>),
     SetDocumentReadyState(String),
 }
@@ -112,6 +113,9 @@ impl WebApiEngine {
             } => self.window.borrow_mut().SetViewport(width, height, scale),
             WebApiMutation::SetPreferredColorScheme(preference) => {
                 self.window.borrow_mut().SetPreferredColorScheme(preference)
+            }
+            WebApiMutation::SetForcedColors(forced_colors) => {
+                self.window.borrow_mut().SetForcedColors(forced_colors)
             }
             WebApiMutation::SetBeginFrameSource(source) => {
                 self.window.borrow_mut().SetBeginFrameSource(source)

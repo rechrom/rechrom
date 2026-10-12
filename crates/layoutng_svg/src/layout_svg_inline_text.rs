@@ -167,7 +167,8 @@ impl LayoutSVGInlineText {
             extra.font_weight,
             extra.font_italic,
             description.Orientation(),
-        );
+        )
+        .WithBaseDescription(description);
         unsafe { &mut *CurrentNativeFontResolver() }.Resolve(&request) as *const Font
     }
 

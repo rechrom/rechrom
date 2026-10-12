@@ -154,11 +154,8 @@ fn ConsumeTrackSize<T: TokenStreamTokenizer>(
     stream: &mut Stream<T>,
     mode: CSSParserMode,
 ) -> Result<Option<Rc<Value>>, PropertyParseError> {
-    if stream.Peek().GetType() == kLeftBracketToken || stream.Peek().Id() == CSSValueID::kSubgrid {
-        return Err(unsupported(
-            id,
-            "ConsumeGridTrackList CSSBracketedValueList / subgrid",
-        ));
+    if stream.Peek().Id() == CSSValueID::kSubgrid {
+        return Err(unsupported(id, "ConsumeGridTrackList subgrid"));
     }
     if matches!(
         stream.Peek().FunctionId(),
@@ -199,6 +196,41 @@ fn ConsumeTrackSize<T: TokenStreamTokenizer>(
     )
     .map(Some)
 }
+
+// cpp: css_parsing_utils.cc:6925-6948 ConsumeGridLineNames. The bracketed
+// subclass is retained because its position among track sizes is the native
+// grid line index.
+fn ConsumeLineNames<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+) -> Result<Rc<Value>, PropertyParseError> {
+    let names = {
+        let mut args = BlockGuard::new(stream);
+        args.ConsumeWhitespace();
+        let mut names = Vec::new();
+        while !args.AtEnd() {
+            let token = args.Peek().clone();
+            if token.FunctionId() == Some(CSSValueID::kIdent) {
+                return Err(unsupported(
+                    id,
+                    "ConsumeCustomIdent ident() TreeScope binding",
+                ));
+            }
+            if token.GetType() != kIdentToken
+                || token.Id() == CSSValueID::kDefault
+                || values::wide(token.Id()).is_some()
+            {
+                return Err(invalid(id));
+            }
+            let name = token.Value().ToString();
+            args.ConsumeIncludingWhitespace();
+            names.push(values::custom_ident(&name, CSSPropertyID::kInvalid));
+        }
+        names
+    };
+    stream.ConsumeWhitespace();
+    Ok(values::grid_line_names(names))
+}
 pub(super) fn ConsumeTracks<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
@@ -234,6 +266,13 @@ pub(super) fn ConsumeTracksWithGridLanes<T: TokenStreamTokenizer>(
         }
         if no_repeat && stream.Peek().FunctionId() == Some(CSSValueID::kRepeat) {
             return Err(invalid(id));
+        }
+        if stream.Peek().GetType() == kLeftBracketToken {
+            if !template {
+                return Err(invalid(id));
+            }
+            tracks.push(ConsumeLineNames(id, stream)?);
+            continue;
         }
         tracks.push(ConsumeTrackSize(id, stream, mode)?.ok_or_else(|| invalid(id))?);
     }

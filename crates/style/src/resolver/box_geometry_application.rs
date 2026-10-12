@@ -84,7 +84,21 @@ pub(super) fn Apply(
             _ => return Err(LonghandApplicationError::InvalidValue(id)),
         }
     } else {
-        text_application::ConvertLength(id, b, v, root, media)?
+        let mut length = text_application::ConvertLength(id, b, v, root, media)?;
+        // cpp: style_builder_converter.cc ConvertQuirkyLength and
+        // css_properties.json5 margin-top/right/bottom/left converter.
+        // The UA-only __qem unit computes like em, while its independent bit
+        // remains observable by margin collapsing.
+        if matches!(id, kMarginTop | kMarginRight | kMarginBottom | kMarginLeft)
+            && matches!(
+                v.Payload(),
+                CSSValuePayload::kNumericLiteralClass(value)
+                    if value.GetType() == UnitType::kQuirkyEms
+            )
+        {
+            length.SetQuirk(true);
+        }
+        length
     };
     ApplyConvertedLength(id, b, &length)?;
     if inherit {

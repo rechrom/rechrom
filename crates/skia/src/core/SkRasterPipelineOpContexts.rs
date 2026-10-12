@@ -24,7 +24,7 @@ pub mod SkRasterPipelineContexts {
 
     // A gradient color is an unpremultiplied RGBA not in a 0..1 range.
     // It basically can have any float value.
-    #[derive(Copy, Clone, Default, Debug)]
+    #[derive(Copy, Clone, Default, Debug, PartialEq)]
     pub struct GradientColor {
         pub r: f32,
         pub g: f32,

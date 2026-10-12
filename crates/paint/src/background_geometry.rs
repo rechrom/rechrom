@@ -54,6 +54,8 @@ fn ResolveAxis(
     tile_size: f64,
     position: f64,
     position_offset: f64,
+    calculation: Option<&std::sync::Arc<foundation::CalculationValue>>,
+    from_far_edge: bool,
     rule: BackgroundRepeatRule,
 ) -> AxisGeometry {
     if tile_size <= 0.0 {
@@ -63,8 +65,18 @@ fn ResolveAxis(
             repeats: false,
         };
     }
+    let available = area_size - tile_size;
+    let resolved_position = calculation.map_or(available * position + position_offset, |value| {
+        let edge_relative =
+            value.Evaluate(available as f32, &foundation::EvaluationInput::default()) as f64;
+        if from_far_edge {
+            available - edge_relative
+        } else {
+            edge_relative
+        }
+    });
     let mut result = AxisGeometry {
-        origin: area_origin + (area_size - tile_size) * position + position_offset,
+        origin: area_origin + resolved_position,
         spacing: 0.0,
         repeats: false,
     };
@@ -94,6 +106,7 @@ pub fn ResolveBackgroundTileSize(
     layer: &BackgroundImageLayer,
     positioning_area: &PaintRect,
     image: Option<&PaintImage>,
+    effective_zoom: f64,
 ) -> Size {
     if !positioning_area.width.is_finite()
         || !positioning_area.height.is_finite()
@@ -102,46 +115,73 @@ pub fn ResolveBackgroundTileSize(
     {
         panic!("background positioning area is invalid");
     }
-    if layer
-        .width
-        .is_some_and(|value| !value.is_finite() || value < 0.0)
-        || layer
-            .height
-            .is_some_and(|value| !value.is_finite() || value < 0.0)
-        || layer
-            .width_percentage
-            .is_some_and(|value| !value.is_finite() || value < 0.0)
+    if layer.width.is_some_and(|value| {
+        !value.is_finite() || (value < 0.0 && layer.width_percentage.is_none())
+    }) || layer.height.is_some_and(|value| {
+        !value.is_finite() || (value < 0.0 && layer.height_percentage.is_none())
+    }) || layer
+        .width_percentage
+        .is_some_and(|value| !value.is_finite() || (value < 0.0 && layer.width.is_none()))
         || layer
             .height_percentage
-            .is_some_and(|value| !value.is_finite() || value < 0.0)
-        || (layer.width.is_some() && layer.width_percentage.is_some())
-        || (layer.height.is_some() && layer.height_percentage.is_some())
+            .is_some_and(|value| !value.is_finite() || (value < 0.0 && layer.height.is_none()))
     {
         panic!("explicit background size must be finite and non-negative");
     }
 
     let mut width = positioning_area.width;
     let mut height = positioning_area.height;
-    let specified_width = layer.width.or_else(|| {
-        layer
-            .width_percentage
-            .map(|value| value * positioning_area.width)
-    });
-    let specified_height = layer.height.or_else(|| {
-        layer
-            .height_percentage
-            .map(|value| value * positioning_area.height)
-    });
+    // Fixed and percentage components are additive for calculated lengths.
+    // Plain fixed/percentage inputs continue to have just one populated term.
+    let specified_width = layer.width_calculation.as_ref().map_or_else(
+        || {
+            (layer.width.is_some() || layer.width_percentage.is_some()).then(|| {
+                layer.width.unwrap_or(0.0)
+                    + layer.width_percentage.unwrap_or(0.0) * positioning_area.width
+            })
+        },
+        |value| {
+            Some(value.Evaluate(
+                positioning_area.width as f32,
+                &foundation::EvaluationInput::default(),
+            ) as f64)
+        },
+    );
+    let specified_height = layer.height_calculation.as_ref().map_or_else(
+        || {
+            (layer.height.is_some() || layer.height_percentage.is_some()).then(|| {
+                layer.height.unwrap_or(0.0)
+                    + layer.height_percentage.unwrap_or(0.0) * positioning_area.height
+            })
+        },
+        |value| {
+            Some(value.Evaluate(
+                positioning_area.height as f32,
+                &foundation::EvaluationInput::default(),
+            ) as f64)
+        },
+    );
+    if !effective_zoom.is_finite() || effective_zoom <= 0.0 {
+        panic!("background image effective zoom must be finite and positive");
+    }
     if let Some(image) = image {
         if image.width == 0
             || image.height == 0
-            || !image.resolution_scale.is_finite()
-            || image.resolution_scale <= 0.0
+            || !layer.image_resolution_scale.is_finite()
+            || layer.image_resolution_scale <= 0.0
         {
             panic!("background image dimensions are invalid");
         }
-        let intrinsic_width = f64::from(image.width) / image.resolution_scale;
-        let intrinsic_height = f64::from(image.height) / image.resolution_scale;
+        // Background geometry is recorded in LayoutNG's zoomed coordinate
+        // space. Blink asks StyleImage::ImageSize(style.EffectiveZoom(), ...)
+        // before resolving auto/round/space geometry. Keep the decoded pixel
+        // density separate: resolution_scale converts resource pixels to CSS
+        // pixels, then effective_zoom converts those CSS pixels to this
+        // artifact's coordinates.
+        let intrinsic_width =
+            f64::from(image.width) / layer.image_resolution_scale * effective_zoom;
+        let intrinsic_height =
+            f64::from(image.height) / layer.image_resolution_scale * effective_zoom;
         width = intrinsic_width;
         height = intrinsic_height;
         if matches!(
@@ -221,11 +261,13 @@ pub fn ResolveBackgroundTile(
     let auto_width = layer.size_mode == BackgroundSizeMode::kAuto
         || (layer.size_mode == BackgroundSizeMode::kExplicit
             && layer.width.is_none()
-            && layer.width_percentage.is_none());
+            && layer.width_percentage.is_none()
+            && layer.width_calculation.is_none());
     let auto_height = layer.size_mode == BackgroundSizeMode::kAuto
         || (layer.size_mode == BackgroundSizeMode::kExplicit
             && layer.height.is_none()
-            && layer.height_percentage.is_none());
+            && layer.height_percentage.is_none()
+            && layer.height_calculation.is_none());
     if rule_x == BackgroundRepeatRule::kRound
         && positioning_area.width > 0.0
         && tile_size.width > 0.0
@@ -263,6 +305,8 @@ pub fn ResolveBackgroundTile(
         tile_size.width,
         layer.position.x,
         layer.position_offset.x,
+        layer.position_x_calculation.as_ref(),
+        layer.position_x_from_right,
         rule_x,
     );
     let y = ResolveAxis(
@@ -271,6 +315,8 @@ pub fn ResolveBackgroundTile(
         tile_size.height,
         layer.position.y,
         layer.position_offset.y,
+        layer.position_y_calculation.as_ref(),
+        layer.position_y_from_bottom,
         rule_y,
     );
     ResolvedBackgroundTile {

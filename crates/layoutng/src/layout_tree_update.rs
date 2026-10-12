@@ -83,6 +83,18 @@ impl<'a> LayoutTreeUpdate<'a> {
             .AddReplaced(parent, id, style, element, debug_name, kind)
     }
 
+    pub fn AddGeneratedReplaced(
+        &mut self,
+        parent: &mut LayoutObject,
+        id: u64,
+        style: &ComputedStyle,
+        element: ElementData,
+        debug_name: String,
+    ) -> &mut LayoutObject {
+        self.tree
+            .AddGeneratedReplaced(parent, id, style, element, debug_name)
+    }
+
     pub fn AddText(
         &mut self,
         parent: &mut LayoutObject,

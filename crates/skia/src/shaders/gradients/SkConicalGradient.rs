@@ -15,9 +15,12 @@ use crate::path::Scalar;
 
 use crate::raster::{ColorSpace, GradientStop, Point, Shader, SpreadMode, Transform};
 
+use crate::compat::gradient_interpolation::{GradientHueMethod, GradientInterpolationSpace};
 use crate::raster::pipeline;
 use crate::raster::pipeline::RasterPipelineBuilder;
-use crate::raster::shaders::gradient::{Gradient, DEGENERATE_THRESHOLD};
+use crate::raster::shaders::gradient::{
+    average_gradient_color_in_space, Gradient, DEGENERATE_THRESHOLD,
+};
 use crate::raster::wide::u32x8;
 
 #[cfg(all(not(feature = "std"), feature = "no-std-float"))]
@@ -131,6 +134,32 @@ impl SkConicalGradient {
         mode: SpreadMode,
         transform: Transform,
     ) -> Option<Shader<'static>> {
+        Self::new_with_interpolation(
+            start_point,
+            start_radius,
+            end_point,
+            end_radius,
+            stops,
+            mode,
+            transform,
+            GradientInterpolationSpace::None,
+            GradientHueMethod::Shorter,
+            false,
+        )
+    }
+
+    pub(crate) fn new_with_interpolation(
+        start_point: Point,
+        start_radius: f32,
+        end_point: Point,
+        end_radius: f32,
+        stops: Vec<GradientStop>,
+        mode: SpreadMode,
+        transform: Transform,
+        interpolation_space: GradientInterpolationSpace,
+        hue_method: GradientHueMethod,
+        interpolate_premultiplied: bool,
+    ) -> Option<Shader<'static>> {
         if start_radius < 0.0 || end_radius < 0.0 {
             return None;
         }
@@ -177,10 +206,22 @@ impl SkConicalGradient {
                         new_stops,
                         mode,
                         transform,
+                        interpolation_space,
+                        hue_method,
+                        interpolate_premultiplied,
                     );
                 }
-                // TODO: Consider making a degenerate gradient
-                return None;
+                return match mode {
+                    SpreadMode::Repeat | SpreadMode::Reflect => {
+                        Some(Shader::SolidColor(average_gradient_color_in_space(
+                            &stops,
+                            interpolation_space,
+                            hue_method,
+                            interpolate_premultiplied,
+                        )))
+                    }
+                    SpreadMode::Pad => None,
+                };
             }
 
             if start_radius.is_nearly_zero_within_tolerance(DEGENERATE_THRESHOLD) {
@@ -190,11 +231,20 @@ impl SkConicalGradient {
                 // or it is fully degenerate (startRadius == endRadius).
                 // We can treat this gradient as a simple radial, which is faster. If we got here,
                 // we know that endRadius is not equal to 0, so this produces a meaningful gradient.
-                return Self::new_radial_unchecked(start_point, end_radius, stops, mode, transform);
+                return Self::new_radial_unchecked(
+                    start_point,
+                    end_radius,
+                    stops,
+                    mode,
+                    transform,
+                    interpolation_space,
+                    hue_method,
+                    interpolate_premultiplied,
+                );
             }
         }
 
-        create(
+        let mut shader = create(
             start_point,
             start_radius,
             end_point,
@@ -202,7 +252,13 @@ impl SkConicalGradient {
             stops,
             mode,
             transform,
-        )
+        )?;
+        shader.set_gradient_interpolation(
+            interpolation_space,
+            hue_method,
+            interpolate_premultiplied,
+        );
+        Some(shader)
     }
 
     /// Creates a simple radial gradient shader without validation.
@@ -223,17 +279,26 @@ impl SkConicalGradient {
         stops: Vec<GradientStop>,
         mode: SpreadMode,
         transform: Transform,
+        interpolation_space: GradientInterpolationSpace,
+        hue_method: GradientHueMethod,
+        interpolate_premultiplied: bool,
     ) -> Option<Shader<'static>> {
         let inv = radius.invert();
         let points_to_unit = Transform::from_translate(-center.x, -center.y).post_scale(inv, inv);
 
-        Some(Shader::RadialGradient(SkConicalGradient {
+        let mut shader = Shader::RadialGradient(SkConicalGradient {
             base: Gradient::new(stops, mode, transform, points_to_unit),
             gradient_type: Type::Radial {
                 radius1: 0.0,
                 radius2: radius,
             },
-        }))
+        });
+        shader.set_gradient_interpolation(
+            interpolation_space,
+            hue_method,
+            interpolate_premultiplied,
+        );
+        Some(shader)
     }
 
     pub(crate) fn appendStages(&self, cs: ColorSpace, p: &mut RasterPipelineBuilder) -> bool {

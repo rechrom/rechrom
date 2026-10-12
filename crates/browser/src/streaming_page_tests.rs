@@ -99,6 +99,32 @@ fn has_id(page: &Page, id: &str) -> bool {
     let owner = page.Document();
     visit(owner.GetDocument(), owner.GetDocument().Root(), id)
 }
+fn fragment_has_id(page: &Page, id: &str) -> bool {
+    fn visit(fragment: &layoutng_assembly::fragment_tree::FragmentNode, id: u64) -> bool {
+        fragment.node_id == id || fragment.children.iter().any(|child| visit(child, id))
+    }
+    fn find_node_id(document: &dom::Document, index: usize, id: &str) -> Option<u64> {
+        let node = document.Node(index);
+        if node
+            .FindAttribute("id")
+            .is_some_and(|value| value.value == id)
+        {
+            return Some(node.Id());
+        }
+        node.Children()
+            .iter()
+            .find_map(|&child| find_node_id(document, child, id))
+    }
+    let node_id = {
+        let owner = page.Document();
+        let document = owner.GetDocument();
+        find_node_id(document, document.Root(), id)
+    };
+    node_id.is_some_and(|id| {
+        page.CurrentFrame()
+            .is_some_and(|frame| visit(&frame.fragments, id))
+    })
+}
 fn finish(page: &mut Page) {
     for _ in 0..1000 {
         page.RunTask().unwrap();
@@ -426,6 +452,89 @@ fn first_frame() {
     assert_eq!(finished.get(), 1);
     assert_eq!(page.Document().GetDocument().RootHandle(), root);
 }
+
+#[test]
+fn streamed_dom_batches_request_and_publish_distinct_begin_frames() {
+    crate::native_test_thread::run(|| {
+        use foundation::begin_frame::{BeginFrameArgs, BeginFrameSource};
+        use std::{
+            sync::{
+                atomic::{AtomicUsize, Ordering},
+                Arc,
+            },
+            time::{Duration, Instant},
+        };
+
+        struct Source(AtomicUsize);
+        impl BeginFrameSource for Source {
+            fn request_begin_frame(&self) {
+                self.0.fetch_add(1, Ordering::Release);
+            }
+        }
+
+        let (mut page, body, _, _) = create(false);
+        let source = Arc::new(Source(AtomicUsize::new(0)));
+        page.SetBeginFrameSource(Some(source.clone()));
+        body.borrow_mut().extend([
+            response(),
+            URLLoadEvent::Data(b"<body><p id=early>Early</p>".to_vec()),
+        ]);
+        page.Open("https://stream.test/", 4096, 4096).unwrap();
+        for _ in 0..8 {
+            page.RunTask().unwrap();
+            if has_id(&page, "early") && source.0.load(Ordering::Acquire) != 0 {
+                break;
+            }
+        }
+        assert!(has_id(&page, "early"));
+        assert!(page.CurrentFrame().is_none());
+        assert_eq!(source.0.load(Ordering::Acquire), 1);
+
+        let now = Instant::now();
+        let args = BeginFrameArgs {
+            source_id: 41,
+            sequence_number: 1,
+            frame_time: now,
+            deadline: now + Duration::from_millis(16),
+            interval: Duration::from_millis(16),
+        };
+        page.UpdateRendering(args).unwrap();
+        assert!(fragment_has_id(&page, "early"));
+        let first = page.CurrentFrame().unwrap().sequence;
+
+        body.borrow_mut().extend([
+            URLLoadEvent::Data(b"<p id=late>Late</p></body>".to_vec()),
+            URLLoadEvent::Finished,
+        ]);
+        for _ in 0..8 {
+            page.RunTask().unwrap();
+            if has_id(&page, "late") && source.0.load(Ordering::Acquire) >= 2 {
+                break;
+            }
+        }
+        assert!(has_id(&page, "late"));
+        assert_eq!(page.CurrentFrame().unwrap().sequence, first);
+        assert!(!fragment_has_id(&page, "late"));
+        assert_eq!(source.0.load(Ordering::Acquire), 2);
+
+        // A duplicate/stale callback can race the compositor route after this
+        // new parser batch requested its frame. It must re-arm the dirty Page,
+        // rather than consuming the only request and freezing the first paint.
+        page.UpdateRendering(args).unwrap();
+        assert_eq!(page.CurrentFrame().unwrap().sequence, first);
+        assert_eq!(source.0.load(Ordering::Acquire), 3);
+
+        page.UpdateRendering(BeginFrameArgs {
+            sequence_number: 2,
+            frame_time: now + Duration::from_millis(16),
+            deadline: now + Duration::from_millis(32),
+            ..args
+        })
+        .unwrap();
+        assert!(fragment_has_id(&page, "late"));
+        assert!(page.CurrentFrame().unwrap().sequence > first);
+    });
+}
 #[test]
 fn parser_blocking_script_yields_to_page_and_document_write_resumes_in_order() {
     crate::native_test_thread::run(blocking_script);
@@ -621,6 +730,41 @@ fn post_body_stylesheets_do_not_freeze_typing_or_caret() {
             assert_eq!(finished.get(), 1);
             assert!(page.Caret().is_some());
         }
+    });
+}
+
+#[test]
+fn body_stylesheet_discovered_before_first_paint_is_render_blocking() {
+    crate::native_test_thread::run(|| {
+        let (mut page, body, resources, finished) = create(false);
+        body.borrow_mut().extend([
+            response(),
+            URLLoadEvent::Data(
+                b"<body><main id=content>Content</main><link rel=stylesheet href=component.css>"
+                    .to_vec(),
+            ),
+            URLLoadEvent::Finished,
+        ]);
+        page.Open("https://stream.test/", 4096, 4096).unwrap();
+        for _ in 0..8 {
+            page.RunTask().unwrap();
+        }
+        assert!(has_id(&page, "content"));
+        assert!(!page.IsRenderingReady());
+        assert!(page.CurrentFrame().is_none());
+
+        *resources
+            .borrow()
+            .get("https://stream.test/component.css")
+            .unwrap()
+            .borrow_mut() = Some(URLResponse {
+            body: b"#content { color: green }".to_vec(),
+            ..Default::default()
+        });
+        finish(&mut page);
+        assert!(page.IsRenderingReady());
+        assert!(page.CurrentFrame().is_some());
+        assert_eq!(finished.get(), 1);
     });
 }
 
@@ -1026,7 +1170,10 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
         assert_eq!(first.images.len(), 1);
         assert!(first.images[0].IsDocumentImage());
         let first_record = match &first.images[0].content {
-            image_resource::PaintImageContent::Document(record) => record.clone(),
+            image_resource::PaintImageContent::Document(content) => content
+                .record_for(first.images[0].document_container_key.as_ref().unwrap())
+                .unwrap()
+                .clone(),
             image_resource::PaintImageContent::Bitmap(_) => unreachable!(),
         };
         eprintln!("fixture-resource-record document_record_shared=true source_rgba_bytes=0");
@@ -1046,7 +1193,9 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
             "new lifecycle exports a new resource catalog"
         );
         let second_record = match &second.images[0].content {
-            image_resource::PaintImageContent::Document(record) => record,
+            image_resource::PaintImageContent::Document(content) => content
+                .record_for(second.images[0].document_container_key.as_ref().unwrap())
+                .unwrap(),
             image_resource::PaintImageContent::Bitmap(_) => unreachable!(),
         };
         assert!(std::sync::Arc::ptr_eq(&first_record, second_record));

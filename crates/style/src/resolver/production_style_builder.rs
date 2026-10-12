@@ -10,7 +10,7 @@ use crate::{
     properties::{css_property::CSSProperty, longhand_dispatch::*},
 };
 use font_engine::FontSelectionValue;
-use foundation::{CSSPropertyID, CSSValueID, Length, LengthType};
+use foundation::{CSSPropertyID, CSSValueID, Color, Length, LengthType};
 use layoutng_style::{
     css::style_color::StyleColor,
     style::{
@@ -112,6 +112,12 @@ mod timeline_trigger_application;
 mod view_transition_application;
 pub use color_ui_application::ColorSchemeSettings;
 
+#[derive(Clone, Copy, Default)]
+pub(super) struct PropertyConversionContext {
+    pub root_line_height: Option<f32>,
+    pub document_text_color: Option<Color>,
+}
+
 pub fn ApplyWithColorSchemeSettings(
     id: CSSPropertyID,
     b: &mut ComputedStyleBuilder,
@@ -127,12 +133,41 @@ pub fn ApplyWithColorSchemeSettings(
     Apply(id, b, parent, v, root, media)
 }
 
+pub(crate) fn ApplyWithColorSchemeSettingsAndRootStyle(
+    id: CSSPropertyID,
+    b: &mut ComputedStyleBuilder,
+    parent: Option<&ComputedStyle>,
+    v: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+    settings: ColorSchemeSettings,
+    root_style: Option<&ComputedStyle>,
+    document_text_color: Option<Color>,
+) -> Result {
+    if color_ui_application::IsColorUIProperty(id) {
+        return color_ui_application::Apply(id, b, parent, v, media, settings);
+    }
+    ApplyWithPropertyContext(
+        id,
+        b,
+        parent,
+        v,
+        root,
+        media,
+        PropertyConversionContext {
+            root_line_height: root_style
+                .map(|style| style.ComputedLineHeight() / style.EffectiveZoom()),
+            document_text_color,
+        },
+    )
+}
+
 type Result = std::result::Result<(), LonghandApplicationError>;
 
 /// A fetched image keeps the resource owner's existing identity and its real
 /// native StyleImage. Only the resource owner may supply this binding.
 pub struct FetchedImageBinding {
-    resource_id: std::num::NonZeroU64,
+    resource_id: Option<std::num::NonZeroU64>,
     image: std::ptr::NonNull<layoutng_style::style::style_image::StyleImage>,
 }
 impl FetchedImageBinding {
@@ -151,9 +186,28 @@ impl FetchedImageBinding {
                 CSSPropertyID::kBackgroundImage,
             ));
         }
-        Ok(Self { resource_id, image })
+        Ok(Self {
+            resource_id: Some(resource_id),
+            image,
+        })
     }
-    pub fn ResourceId(&self) -> std::num::NonZeroU64 {
+    /// Bind an admitted URL whose resource request has not completed yet.
+    /// The concrete image still has fetched-image semantics and carries the
+    /// URL used by the resource owner; only its published resource id is absent.
+    pub unsafe fn FromPending(
+        image: std::ptr::NonNull<layoutng_style::style::style_image::StyleImage>,
+    ) -> std::result::Result<Self, LonghandApplicationError> {
+        if !unsafe { image.as_ref() }.IsImageResource() {
+            return Err(LonghandApplicationError::InvalidValue(
+                CSSPropertyID::kBackgroundImage,
+            ));
+        }
+        Ok(Self {
+            resource_id: None,
+            image,
+        })
+    }
+    pub fn ResourceId(&self) -> Option<std::num::NonZeroU64> {
         self.resource_id
     }
     pub fn Image(&self) -> std::ptr::NonNull<layoutng_style::style::style_image::StyleImage> {
@@ -165,6 +219,14 @@ pub trait URLImageResolver {
         &self,
         value: &crate::production_css_value::CSSImageValue,
     ) -> std::result::Result<FetchedImageBinding, LonghandApplicationError>;
+
+    fn ResolveImageWithResolution(
+        &self,
+        value: &crate::production_css_value::CSSImageValue,
+        _resolution: f32,
+    ) -> std::result::Result<FetchedImageBinding, LonghandApplicationError> {
+        self.ResolveImage(value)
+    }
 }
 // css_to_style_map.cc:119-131, StyleResolverState::GetStyleImage. The calling
 // document/resource service installs genuine fetched objects through this
@@ -188,116 +250,445 @@ pub fn ApplyWithImageResolver(
         id,
         CSSPropertyID::kBackgroundImage | CSSPropertyID::kMaskImage
     ) {
-        return ApplyLayerImages(id, b, parent, v, Some(images));
+        return ApplyLayerImages(id, b, parent, v, root, media, Some(images));
     }
     if id == CSSPropertyID::kListStyleImage {
         return list_counter_application::Apply(id, b, parent, v, root, media, Some(images));
     }
     if id == CSSPropertyID::kContent {
-        return content_application::Apply(b, parent, v, Some(images));
+        return content_application::Apply(b, parent, v, root, media, Some(images));
+    }
+    if id == CSSPropertyID::kShapeOutside {
+        return effects_application::Apply(id, b, parent, v, root, media, Some(images));
     }
     Apply(id, b, parent, v, root, media)
 }
 
-// cpp: css_gradient_value.cc:698-789,1282-1324,1371-1465; AddStops,
-// EndPointsFromAngle axis branches, CSSLinearGradientValue::CreateGradient.
-// The current native generated-image subtype stores resolved axis endpoints
-// and percentage stops; target-dependent geometry stays an explicit dependency.
+pub fn ApplyWithImageResolverAndColorSchemeSettings(
+    id: CSSPropertyID,
+    b: &mut ComputedStyleBuilder,
+    parent: Option<&ComputedStyle>,
+    v: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+    images: &dyn URLImageResolver,
+    settings: ColorSchemeSettings,
+) -> Result {
+    if color_ui_application::IsColorUIProperty(id) {
+        return color_ui_application::Apply(id, b, parent, v, media, settings);
+    }
+    ApplyWithImageResolver(id, b, parent, v, root, media, images)
+}
+
+pub(crate) fn ApplyWithImageResolverColorSchemeAndRootStyle(
+    id: CSSPropertyID,
+    b: &mut ComputedStyleBuilder,
+    parent: Option<&ComputedStyle>,
+    v: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+    images: &dyn URLImageResolver,
+    settings: ColorSchemeSettings,
+    root_style: Option<&ComputedStyle>,
+    document_text_color: Option<Color>,
+) -> Result {
+    if color_ui_application::IsColorUIProperty(id) {
+        return color_ui_application::Apply(id, b, parent, v, media, settings);
+    }
+    let length_context = PropertyConversionContext {
+        root_line_height: root_style
+            .map(|style| style.ComputedLineHeight() / style.EffectiveZoom()),
+        document_text_color,
+    };
+    // Resource-bearing properties keep their existing image owner. Some of
+    // those properties also contain lengths (for example border-image widths
+    // and -webkit-box-reflect offsets), so install the same document-root
+    // line-height owner that the ordinary property route receives.
+    if matches!(
+        id,
+        CSSPropertyID::kWebkitBoxReflect
+            | CSSPropertyID::kBackgroundImage
+            | CSSPropertyID::kMaskImage
+            | CSSPropertyID::kListStyleImage
+            | CSSPropertyID::kContent
+            | CSSPropertyID::kShapeOutside
+    ) || border_image_application::IsBorderImageProperty(id)
+    {
+        let uses_lh = UsesLineHeightUnit(v, UnitType::kLhs);
+        let uses_rlh = UsesLineHeightUnit(v, UnitType::kRlhs);
+        let result = if let Some(root_line_height) = length_context.root_line_height {
+            let mut scoped_media = media.clone();
+            scoped_media.style_root_line_height = Some(root_line_height);
+            ApplyWithImageResolver(id, b, parent, v, root, &scoped_media, images)
+        } else {
+            ApplyWithImageResolver(id, b, parent, v, root, media, images)
+        };
+        MarkLineHeightUnitDependencies(b, result.is_ok(), uses_lh, uses_rlh);
+        return result;
+    }
+    ApplyWithPropertyContext(id, b, parent, v, root, media, length_context)
+}
+
+// cpp: css_gradient_value.cc AddStops and the three CreateGradient methods.
+// Keep target-size-dependent geometry and stop positions symbolic here; Paint
+// owns their final normalization against the generated image tile.
+fn GradientLengthParts(value: &foundation::Length) -> Option<(f64, f64)> {
+    if value.IsFixed() {
+        return Some((0.0, value.Pixels() as f64));
+    }
+    if value.IsPercent() {
+        return Some((value.PercentValue() as f64 / 100.0, 0.0));
+    }
+    if value.IsCalculated() {
+        let calculation = value.GetCalculationValue();
+        if !calculation.IsExpression() {
+            let pair = calculation.GetPixelsAndPercent();
+            return Some((
+                if pair.has_explicit_percent {
+                    pair.percent as f64 / 100.0
+                } else {
+                    0.0
+                },
+                if pair.has_explicit_pixels {
+                    pair.pixels as f64
+                } else {
+                    0.0
+                },
+            ));
+        }
+    }
+    None
+}
+
+fn ResolveGradientLength(
+    id: CSSPropertyID,
+    b: &ComputedStyleBuilder,
+    value: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+) -> std::result::Result<
+    layoutng_style::style::generated_gradient_image::GradientLength,
+    LonghandApplicationError,
+> {
+    use layoutng_style::style::generated_gradient_image::GradientLength;
+    let length = text_application::ConvertLength(id, b, value, root, media)?;
+    let (percent, pixels) =
+        GradientLengthParts(&length).ok_or(LonghandApplicationError::Unsupported(id))?;
+    Ok(GradientLength { percent, pixels })
+}
+
+fn ResolveGradientPosition(
+    id: CSSPropertyID,
+    b: &ComputedStyleBuilder,
+    value: &Value,
+    horizontal: bool,
+    root: f32,
+    media: &MediaValuesCachedData,
+) -> std::result::Result<
+    layoutng_style::style::generated_gradient_image::GradientLength,
+    LonghandApplicationError,
+> {
+    use layoutng_style::style::generated_gradient_image::GradientLength;
+    if let CSSValuePayload::kIdentifierClass(keyword) = value.Payload() {
+        return Ok(GradientLength {
+            percent: match keyword.0 {
+                CSSValueID::kLeft | CSSValueID::kTop => 0.0,
+                CSSValueID::kRight | CSSValueID::kBottom => 1.0,
+                CSSValueID::kCenter => 0.5,
+                _ => return Err(LonghandApplicationError::InvalidValue(id)),
+            },
+            pixels: 0.0,
+        });
+    }
+    if let CSSValuePayload::kValuePairClass(pair) = value.Payload() {
+        let CSSValuePayload::kIdentifierClass(edge) = pair.first.Payload() else {
+            return Err(LonghandApplicationError::InvalidValue(id));
+        };
+        let mut offset = ResolveGradientLength(id, b, &pair.second, root, media)?;
+        let far = if horizontal {
+            edge.0 == CSSValueID::kRight
+        } else {
+            edge.0 == CSSValueID::kBottom
+        };
+        if far {
+            offset.percent = 1.0 - offset.percent;
+            offset.pixels = -offset.pixels;
+        }
+        return Ok(offset);
+    }
+    ResolveGradientLength(id, b, value, root, media)
+}
+
+#[derive(Clone, Copy)]
+enum GradientStopUnit {
+    Length,
+    Angle,
+}
+
+fn ResolveGradientAngle(
+    id: CSSPropertyID,
+    b: &ComputedStyleBuilder,
+    value: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+) -> std::result::Result<f64, LonghandApplicationError> {
+    if let CSSValuePayload::kNumericLiteralClass(number) = value.Payload() {
+        return Ok(number.DoubleValue()
+            * match number.GetType() {
+                UnitType::kDegrees => 1.0,
+                UnitType::kRadians => 180.0 / std::f64::consts::PI,
+                UnitType::kGradians => 0.9,
+                UnitType::kTurns => 360.0,
+                UnitType::kPercentage => 3.6,
+                _ if number.DoubleValue() == 0.0 => 1.0,
+                _ => return Err(LonghandApplicationError::InvalidValue(id)),
+            });
+    }
+    let CSSValuePayload::kMathFunctionClass(math) = value.Payload() else {
+        return Err(LonghandApplicationError::InvalidValue(id));
+    };
+    let mut resolver = MathLengthResolver(
+        id,
+        b.GetFontDescription().ComputedSize(),
+        root,
+        b.EffectiveZoom(),
+        media,
+        Some(CurrentComputedLineHeight(b)),
+        None,
+    );
+    math.ComputeValue(&mut resolver, None)
+        .map_err(|_| LonghandApplicationError::Unsupported(id))
+}
+
+fn ResolveGradientStops(
+    id: CSSPropertyID,
+    b: &ComputedStyleBuilder,
+    stops: &[crate::production_css_value::CSSGradientColorStop],
+    unit: GradientStopUnit,
+    root: f32,
+    media: &MediaValuesCachedData,
+) -> std::result::Result<
+    Vec<layoutng_style::style::generated_gradient_image::GradientStop>,
+    LonghandApplicationError,
+> {
+    use layoutng_style::style::generated_gradient_image::{GradientLength, GradientStop};
+    if stops.is_empty() {
+        return Err(LonghandApplicationError::InvalidValue(id));
+    }
+    let mut positions = Vec::with_capacity(stops.len());
+    for stop in stops {
+        let position = if let Some(value) = &stop.offset {
+            match unit {
+                GradientStopUnit::Length => ResolveGradientLength(id, b, value, root, media)?,
+                GradientStopUnit::Angle => GradientLength {
+                    percent: ResolveGradientAngle(id, b, value, root, media)? / 360.0,
+                    pixels: 0.0,
+                },
+            }
+        } else {
+            GradientLength {
+                percent: f64::NAN,
+                pixels: f64::NAN,
+            }
+        };
+        positions.push(position);
+    }
+    if positions[0].percent.is_nan() {
+        positions[0] = GradientLength::default();
+    }
+    if positions
+        .last()
+        .is_some_and(|position| position.percent.is_nan())
+    {
+        *positions.last_mut().unwrap() = GradientLength {
+            percent: 1.0,
+            pixels: 0.0,
+        };
+    }
+    let mut left = 0;
+    while left + 1 < positions.len() {
+        let right = (left + 1..positions.len())
+            .find(|&index| !positions[index].percent.is_nan())
+            .unwrap();
+        let count = (right - left) as f64;
+        let percent_delta = (positions[right].percent - positions[left].percent) / count;
+        let pixel_delta = (positions[right].pixels - positions[left].pixels) / count;
+        for index in left + 1..right {
+            let step = (index - left) as f64;
+            positions[index] = GradientLength {
+                percent: positions[left].percent + percent_delta * step,
+                pixels: positions[left].pixels + pixel_delta * step,
+            };
+        }
+        left = right;
+    }
+    positions
+        .into_iter()
+        .zip(stops)
+        .map(|(position, stop)| {
+            let is_hint = stop.color.is_none();
+            let color = if let Some(value) = &stop.color {
+                color_ui_application::ConvertStyleColorValue(id, value)?
+            } else {
+                layoutng_style::css::style_color::StyleColor::from_color(Color::kTransparent)
+            };
+            Ok(GradientStop {
+                offset: position.percent,
+                offset_length: position.pixels,
+                color,
+                is_hint,
+            })
+        })
+        .collect()
+}
+
 fn ResolveLinearGradient(
+    id: CSSPropertyID,
+    b: &ComputedStyleBuilder,
     value: &crate::production_css_value::CSSLinearGradientValue,
+    root: f32,
+    media: &MediaValuesCachedData,
 ) -> std::result::Result<
     layoutng_style::style::generated_gradient_image::LinearGradientData,
     LonghandApplicationError,
 > {
-    use layoutng_style::style::generated_gradient_image::{GradientStop, LinearGradientData};
-    let unsupported = || LonghandApplicationError::Unsupported(CSSPropertyID::kBackgroundImage);
-    if value.repeating || value.stops.len() < 2 || value.end_x.is_some() && value.end_y.is_some() {
-        return Err(unsupported());
-    }
-    let degrees = if value.angle.is_some() {
-        (value.Degrees().ok_or_else(unsupported)? as f32).rem_euclid(360.0)
+    use layoutng_style::style::generated_gradient_image::LinearGradientData;
+    let (start, end, angle_degrees, corner) = if let Some(angle) = &value.angle {
+        (
+            [0.0, 0.0],
+            [0.0, 1.0],
+            Some(ResolveGradientAngle(id, b, angle, root, media)?),
+            None,
+        )
+    } else if value.end_x.is_some() && value.end_y.is_some() {
+        let x = if value.end_x == Some(CSSValueID::kRight) {
+            1
+        } else {
+            -1
+        };
+        let y = if value.end_y == Some(CSSValueID::kBottom) {
+            1
+        } else {
+            -1
+        };
+        ([0.0, 0.0], [0.0, 1.0], None, Some([x, y]))
     } else {
-        match value.end_x.or(value.end_y) {
+        let degrees = match value.end_x.or(value.end_y) {
             Some(CSSValueID::kTop) => 0.0,
             Some(CSSValueID::kRight) => 90.0,
             Some(CSSValueID::kLeft) => 270.0,
             _ => 180.0,
+        };
+        match degrees as i32 {
+            0 => ([0.0, 1.0], [0.0, 0.0], None, None),
+            90 => ([0.0, 0.0], [1.0, 0.0], None, None),
+            270 => ([1.0, 0.0], [0.0, 0.0], None, None),
+            _ => ([0.0, 0.0], [0.0, 1.0], None, None),
         }
     };
-    let (start, end) = match degrees {
-        0.0 => ([0.0, 1.0], [0.0, 0.0]),
-        90.0 => ([0.0, 0.0], [1.0, 0.0]),
-        180.0 => ([0.0, 0.0], [0.0, 1.0]),
-        270.0 => ([1.0, 0.0], [0.0, 0.0]),
-        _ => return Err(unsupported()),
-    };
-    let mut offsets = Vec::new();
-    let mut colors = Vec::new();
-    let mut previous = 0.0f32;
-    for (i, stop) in value.stops.iter().enumerate() {
-        let color = match stop.color.as_deref().map(Value::Payload) {
-            Some(CSSValuePayload::kColorClass(color)) => color.0,
-            Some(CSSValuePayload::kIdentifierClass(color)) => {
-                crate::production_css_value::NamedColor(color.0).ok_or_else(unsupported)?
-            }
-            _ => return Err(unsupported()),
-        };
-        colors.push(color);
-        let offset = if let Some(offset) = &stop.offset {
-            let CSSValuePayload::kNumericLiteralClass(offset) = offset.Payload() else {
-                return Err(unsupported());
-            };
-            let offset = match offset.GetType() {
-                UnitType::kPercentage => offset.DoubleValue() as f32 / 100.0,
-                _ if offset.DoubleValue() == 0.0 => 0.0,
-                _ => return Err(unsupported()),
-            };
-            if !(0.0..=1.0).contains(&offset) {
-                return Err(unsupported());
-            }
-            Some(offset.max(previous))
-        } else if i == 0 {
-            Some(0.0)
-        } else if i + 1 == value.stops.len() {
-            Some(1.0f32.max(previous))
-        } else {
-            None
-        };
-        if let Some(offset) = offset {
-            previous = offset;
-        }
-        offsets.push(offset);
-    }
-    let mut left = 0;
-    while left + 1 < offsets.len() {
-        let right = (left + 1..offsets.len())
-            .find(|&i| offsets[i].is_some())
-            .unwrap();
-        let a = offsets[left].unwrap();
-        let delta = (offsets[right].unwrap() - a) / (right - left) as f32;
-        for i in left + 1..right {
-            offsets[i] = Some(a + (i - left) as f32 * delta);
-        }
-        left = right;
-    }
     Ok(LinearGradientData {
         start,
         end,
-        stops: offsets
-            .into_iter()
-            .zip(colors)
-            .map(|(offset, color)| GradientStop {
-                offset: offset.unwrap() as f64,
-                color,
-            })
-            .collect(),
+        angle_degrees,
+        corner,
+        repeating: value.repeating,
+        color_interpolation_space: value.color_interpolation_space,
+        hue_interpolation_method: value.hue_interpolation_method,
+        stops: ResolveGradientStops(id, b, &value.stops, GradientStopUnit::Length, root, media)?,
+    })
+}
+
+fn ResolveRadialGradient(
+    id: CSSPropertyID,
+    b: &ComputedStyleBuilder,
+    value: &crate::production_css_value::CSSRadialGradientValue,
+    root: f32,
+    media: &MediaValuesCachedData,
+) -> std::result::Result<
+    layoutng_style::style::generated_gradient_image::RadialGradientData,
+    LonghandApplicationError,
+> {
+    use crate::production_css_value::{CSSRadialGradientExtent as E, CSSRadialGradientShape as S};
+    use layoutng_style::style::generated_gradient_image::{
+        GradientLength, RadialGradientData, RadialGradientExtent as RE, RadialGradientShape as RS,
+    };
+    let shape = match value.shape.unwrap_or(S::Ellipse) {
+        S::Circle => RS::Circle,
+        S::Ellipse => RS::Ellipse,
+    };
+    let extent = match value.extent.unwrap_or(E::FarthestCorner) {
+        E::ClosestSide => RE::ClosestSide,
+        E::ClosestCorner => RE::ClosestCorner,
+        E::FarthestSide => RE::FarthestSide,
+        E::FarthestCorner => RE::FarthestCorner,
+    };
+    let explicit = value.size_x.is_some();
+    let radius_x = value
+        .size_x
+        .as_ref()
+        .map(|size| ResolveGradientLength(id, b, size, root, media))
+        .transpose()?
+        .unwrap_or_default();
+    let radius_y = value
+        .size_y
+        .as_ref()
+        .map(|size| ResolveGradientLength(id, b, size, root, media))
+        .transpose()?
+        .unwrap_or_else(|| {
+            if shape == RS::Circle {
+                radius_x
+            } else {
+                GradientLength::default()
+            }
+        });
+    Ok(RadialGradientData {
+        center_x: ResolveGradientPosition(id, b, &value.position_x, true, root, media)?,
+        center_y: ResolveGradientPosition(id, b, &value.position_y, false, root, media)?,
+        radius_x,
+        radius_y,
+        shape,
+        extent: if explicit { RE::Explicit } else { extent },
+        repeating: value.repeating,
+        color_interpolation_space: value.color_interpolation_space,
+        hue_interpolation_method: value.hue_interpolation_method,
+        stops: ResolveGradientStops(id, b, &value.stops, GradientStopUnit::Length, root, media)?,
+    })
+}
+
+fn ResolveConicGradient(
+    id: CSSPropertyID,
+    b: &ComputedStyleBuilder,
+    value: &crate::production_css_value::CSSConicGradientValue,
+    root: f32,
+    media: &MediaValuesCachedData,
+) -> std::result::Result<
+    layoutng_style::style::generated_gradient_image::ConicGradientData,
+    LonghandApplicationError,
+> {
+    use layoutng_style::style::generated_gradient_image::ConicGradientData;
+    Ok(ConicGradientData {
+        center_x: ResolveGradientPosition(id, b, &value.position_x, true, root, media)?,
+        center_y: ResolveGradientPosition(id, b, &value.position_y, false, root, media)?,
+        angle_degrees: value
+            .angle
+            .as_ref()
+            .map(|angle| ResolveGradientAngle(id, b, angle, root, media))
+            .transpose()?
+            .unwrap_or(0.0),
+        repeating: value.repeating,
+        color_interpolation_space: value.color_interpolation_space,
+        hue_interpolation_method: value.hue_interpolation_method,
+        stops: ResolveGradientStops(id, b, &value.stops, GradientStopUnit::Angle, root, media)?,
     })
 }
 
 // cpp: css_to_style_map.cc:119-131. Shared typed image boundary for native fields.
 fn ResolveStyleImage(
     id: CSSPropertyID,
+    b: &ComputedStyleBuilder,
     value: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
     images: Option<&dyn URLImageResolver>,
 ) -> std::result::Result<
     *mut layoutng_style::style::style_image::StyleImage,
@@ -313,24 +704,73 @@ fn ResolveStyleImage(
         CSSValuePayload::kIdentifierClass(keyword) if keyword.0 == CSSValueID::kNone => {
             std::ptr::null_mut()
         }
-        CSSValuePayload::kImageClass(url) => images
-            .ok_or(LonghandApplicationError::Unsupported(id))?
-            .ResolveImage(url)
-            .map_err(|error| match error {
-                LonghandApplicationError::Unsupported(_) => {
-                    LonghandApplicationError::Unsupported(id)
+        CSSValuePayload::kImageClass(url) => ResolveFetchedImage(id, images, url, None)?,
+        CSSValuePayload::kImageSetClass(set) => {
+            let mut options = set
+                .list
+                .values
+                .iter()
+                .filter_map(|value| match value.Payload() {
+                    CSSValuePayload::kImageSetOptionClass(option)
+                        if option.resolution.is_finite() && option.resolution > 0.0 =>
+                    {
+                        Some(option)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            options.sort_by(|left, right| left.resolution.total_cmp(&right.resolution));
+            // StyleImageSet::SelectImage uses the effective device scale for
+            // the current style environment. Page zoom participates in that
+            // scale, so a zoom-only lifecycle must be able to reselect a
+            // denser candidate just like a host-DPR change.
+            let device_scale =
+                if media.device_pixel_ratio.is_finite() && media.device_pixel_ratio > 0.0 {
+                    media.device_pixel_ratio
+                } else {
+                    1.0
+                };
+            let target = device_scale;
+            let option = options
+                .iter()
+                .copied()
+                .find(|option| option.resolution >= target)
+                .or_else(|| options.last().copied())
+                .ok_or(LonghandApplicationError::InvalidValue(id))?;
+            match option.image.Payload() {
+                CSSValuePayload::kImageClass(url) => {
+                    ResolveFetchedImage(id, images, url, Some(option.resolution))?
                 }
-                LonghandApplicationError::InvalidValue(_) => {
-                    LonghandApplicationError::InvalidValue(id)
-                }
-            })?
-            .image
-            .as_ptr(),
+                _ => ResolveStyleImage(id, b, &option.image, root, media, images)?,
+            }
+        }
         CSSValuePayload::kLinearGradientClass(gradient) => {
-            let data = ResolveLinearGradient(gradient)
+            let data = ResolveLinearGradient(id, b, gradient, root, media)
                 .map_err(|_| LonghandApplicationError::Unsupported(id))?;
             let generator =
                 foundation::MakeGarbageCollected(CSSLinearGradientValue::FromResolved(data));
+            foundation::MakeGarbageCollected(StyleGeneratedImage::new(
+                generator.cast::<CSSImageGeneratorValue>(),
+            ))
+            .cast::<StyleImage>()
+        }
+        CSSValuePayload::kRadialGradientClass(gradient) => {
+            use layoutng_style::style::generated_gradient_image::CSSRadialGradientValue;
+            let data = ResolveRadialGradient(id, b, gradient, root, media)
+                .map_err(|_| LonghandApplicationError::Unsupported(id))?;
+            let generator =
+                foundation::MakeGarbageCollected(CSSRadialGradientValue::FromRadial(data));
+            foundation::MakeGarbageCollected(StyleGeneratedImage::new(
+                generator.cast::<CSSImageGeneratorValue>(),
+            ))
+            .cast::<StyleImage>()
+        }
+        CSSValuePayload::kConicGradientClass(gradient) => {
+            use layoutng_style::style::generated_gradient_image::CSSConicGradientValue;
+            let data = ResolveConicGradient(id, b, gradient, root, media)
+                .map_err(|_| LonghandApplicationError::Unsupported(id))?;
+            let generator =
+                foundation::MakeGarbageCollected(CSSConicGradientValue::FromConic(data));
             foundation::MakeGarbageCollected(StyleGeneratedImage::new(
                 generator.cast::<CSSImageGeneratorValue>(),
             ))
@@ -343,6 +783,27 @@ fn ResolveStyleImage(
     Ok(image)
 }
 
+fn ResolveFetchedImage(
+    id: CSSPropertyID,
+    images: Option<&dyn URLImageResolver>,
+    url: &crate::production_css_value::CSSImageValue,
+    resolution: Option<f32>,
+) -> std::result::Result<
+    *mut layoutng_style::style::style_image::StyleImage,
+    LonghandApplicationError,
+> {
+    let resolver = images.ok_or(LonghandApplicationError::Unsupported(id))?;
+    let binding = match resolution {
+        Some(resolution) => resolver.ResolveImageWithResolution(url, resolution),
+        None => resolver.ResolveImage(url),
+    }
+    .map_err(|error| match error {
+        LonghandApplicationError::Unsupported(_) => LonghandApplicationError::Unsupported(id),
+        LonghandApplicationError::InvalidValue(_) => LonghandApplicationError::InvalidValue(id),
+    })?;
+    Ok(binding.image.as_ptr())
+}
+
 // cpp: generated longhands.cc:3286-3340,10761-10810;
 // shared BackgroundImage/MaskImage FillLayer::SetImage/ClearImage loops.
 fn ApplyLayerImages(
@@ -350,6 +811,8 @@ fn ApplyLayerImages(
     b: &mut ComputedStyleBuilder,
     parent: Option<&ComputedStyle>,
     v: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
     images: Option<&dyn URLImageResolver>,
 ) -> Result {
     use layoutng_style::style::fill_layer::FillLayer;
@@ -380,10 +843,10 @@ fn ApplyLayerImages(
                 return Err(LonghandApplicationError::InvalidValue(id));
             }
             for value in &list.values {
-                values.push(ResolveStyleImage(id, value, images)?);
+                values.push(ResolveStyleImage(id, b, value, root, media, images)?);
             }
         } else {
-            values.push(ResolveStyleImage(id, v, images)?);
+            values.push(ResolveStyleImage(id, b, v, root, media, images)?);
         }
     }
     let mut current = if mask {
@@ -462,6 +925,7 @@ fn ConvertShadow(
     value: &crate::production_css_value::CSSShadowValue,
     root: f32,
     media: &MediaValuesCachedData,
+    root_line_height: Option<f32>,
 ) -> std::result::Result<layoutng_style::style::shadow_data::ShadowData, LonghandApplicationError> {
     use layoutng_style::style::shadow_data::{ShadowData, ShadowStyle};
     let length = |value: &Value| {
@@ -478,6 +942,8 @@ fn ConvertShadow(
                         root,
                         b.EffectiveZoom(),
                         media,
+                        Some(CurrentComputedLineHeight(b)),
+                        root_line_height,
                     ),
                     None,
                 )
@@ -490,17 +956,22 @@ fn ConvertShadow(
         let CSSValuePayload::kNumericLiteralClass(number) = value.Payload() else {
             return Err(LonghandApplicationError::Unsupported(id));
         };
-        if b.EffectiveZoom() != 1.0 {
-            return Err(LonghandApplicationError::Unsupported(id));
-        }
-        let pixels = Pixels(
+        let unit = number.GetType();
+        let mut pixels = Pixels(
             id,
             number.DoubleValue(),
-            number.GetType(),
+            unit,
             b.GetFontDescription().ComputedSize(),
             root,
             media,
         )?;
+        // cpp: CSSLengthResolver::ZoomedComputedPixels. Current-font metrics
+        // already carry their effective zoom. The root
+        // font input is Blink's specified size, so rem follows
+        // FontSizes::Rem(zoom) and still acquires the target zoom here.
+        if !matches!(unit, UnitType::kEms | UnitType::kQuirkyEms) {
+            pixels *= b.EffectiveZoom() as f64;
+        }
         // css_primitive_value.cc:355-360 ComputeLength<float>: ClampLength,
         // then ClampTo<float>; keep extreme literals finite in native storage.
         let pixels = crate::css_value_clamping_utils::CSSValueClampingUtils::ClampLength(pixels);
@@ -560,6 +1031,7 @@ fn ApplyShadow(
     media: &MediaValuesCachedData,
     inherit: bool,
     initial: bool,
+    length_context: PropertyConversionContext,
 ) -> Result {
     use foundation::{MakeGarbageCollected, Member};
     use layoutng_style::style::shadow_list::{ShadowDataVector, ShadowList};
@@ -594,7 +1066,7 @@ fn ApplyShadow(
                 let CSSValuePayload::kShadowClass(shadow) = value.Payload() else {
                     return Err(LonghandApplicationError::InvalidValue(id));
                 };
-                ConvertShadow(id, b, shadow, root, media)
+                ConvertShadow(id, b, shadow, root, media, length_context.root_line_height)
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Member::from_ptr(MakeGarbageCollected(ShadowList::new(
@@ -947,21 +1419,76 @@ pub(super) fn MathLengthResolver<'a>(
     root: f32,
     zoom: f32,
     media: &'a MediaValuesCachedData,
+    line_height: Option<f32>,
+    root_line_height: Option<f32>,
 ) -> impl crate::css_math_expression_node::CSSMathLengthResolver + 'a {
     move |value, unit| {
+        if unit == UnitType::kLhs {
+            // css_length_resolver.cc:295-297 and
+            // css_to_length_conversion_data.cc:208-217. Computed line height
+            // is already zoomed for this target style, just like
+            // LineHeightSize::Lh(target_zoom).
+            return line_height
+                .map(|line_height| value * line_height as f64)
+                .ok_or(crate::css_math_expression_node::MathError::MissingLengthContext);
+        }
+        if unit == UnitType::kRlhs {
+            return root_line_height
+                .or(media.style_root_line_height)
+                .map(|line_height| value * line_height as f64 * zoom as f64)
+                .ok_or(crate::css_math_expression_node::MathError::MissingLengthContext);
+        }
         let pixels = Pixels(id, value, unit, font, root, media)
             .map_err(|_| crate::css_math_expression_node::MathError::MissingLengthContext)?;
-        Ok(
-            if matches!(
-                unit,
-                UnitType::kEms | UnitType::kQuirkyEms | UnitType::kRems
-            ) {
-                pixels
-            } else {
-                pixels * zoom as f64
-            },
-        )
+        Ok(if matches!(unit, UnitType::kEms | UnitType::kQuirkyEms) {
+            pixels
+        } else {
+            pixels * zoom as f64
+        })
     }
+}
+
+fn UsesLineHeightUnit(value: &Value, unit: UnitType) -> bool {
+    match value.Payload() {
+        CSSValuePayload::kNumericLiteralClass(value) => value.GetType() == unit,
+        CSSValuePayload::kMathFunctionClass(value) => value.expression.UsesUnit(unit),
+        CSSValuePayload::kValueListClass(value) => value
+            .values
+            .iter()
+            .any(|value| UsesLineHeightUnit(value, unit)),
+        CSSValuePayload::kValuePairClass(value) => {
+            UsesLineHeightUnit(&value.first, unit) || UsesLineHeightUnit(&value.second, unit)
+        }
+        _ => false,
+    }
+}
+
+fn MarkLineHeightUnitDependencies(
+    b: &mut ComputedStyleBuilder,
+    applied: bool,
+    uses_lh: bool,
+    uses_rlh: bool,
+) {
+    if applied && uses_lh {
+        b.SetHasGlyphRelativeUnits();
+        b.SetHasLineHeightRelativeUnits();
+    }
+    if applied && uses_rlh {
+        b.SetHasGlyphRelativeUnits();
+        b.SetHasLineHeightRelativeUnits();
+        b.SetHasRootRelativeUnits();
+    }
+}
+
+// css_to_length_conversion_data.cc:208-217 LineHeightSize::Lh. The builder's
+// font and line-height are the live StyleResolverState owner after the
+// high-priority font/line-height cascade pass.
+pub(super) fn CurrentComputedLineHeight(builder: &ComputedStyleBuilder) -> f32 {
+    let font = builder.GetFont();
+    if font.is_null() {
+        return 0.0;
+    }
+    ComputedStyle::ComputedLineHeightFromLength(builder.LineHeight(), unsafe { &*font })
 }
 fn ResolveNumericMathList(
     id: CSSPropertyID,
@@ -1007,7 +1534,11 @@ fn ResolveNumericMathList(
         _ => Ok(None),
     }
 }
-// cpp: style_builder.cc:ApplyPhysicalProperty, generated longhands.cc Apply*.
+// StyleResolverState::UpdateLengthConversionData installs the current
+// FontSizeStyle's LineHeightSize before a winning declaration is converted.
+// Reconstruct that owner for the production native builder and preserve
+// Blink's dependency bits only after successful application. This is
+// value-generic: no UA selector or control type participates in conversion.
 pub fn Apply(
     id: CSSPropertyID,
     b: &mut ComputedStyleBuilder,
@@ -1015,6 +1546,72 @@ pub fn Apply(
     v: &Value,
     root: f32,
     media: &MediaValuesCachedData,
+) -> Result {
+    ApplyWithPropertyContext(
+        id,
+        b,
+        parent,
+        v,
+        root,
+        media,
+        PropertyConversionContext::default(),
+    )
+}
+
+fn ApplyWithPropertyContext(
+    id: CSSPropertyID,
+    b: &mut ComputedStyleBuilder,
+    parent: Option<&ComputedStyle>,
+    v: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+    length_context: PropertyConversionContext,
+) -> Result {
+    let uses_lh = UsesLineHeightUnit(v, UnitType::kLhs);
+    let uses_rlh = UsesLineHeightUnit(v, UnitType::kRlhs);
+    let scoped_media;
+    let media = if let Some(root_line_height) = length_context.root_line_height {
+        scoped_media = {
+            let mut media = media.clone();
+            media.style_root_line_height = Some(root_line_height);
+            media
+        };
+        &scoped_media
+    } else {
+        media
+    };
+    let resolved_line_height_value = match v.Payload() {
+        CSSValuePayload::kNumericLiteralClass(value) if value.GetType() == UnitType::kLhs => {
+            Some(crate::production_css_value::numeric(
+                value.DoubleValue() * CurrentComputedLineHeight(b) as f64,
+                UnitType::kPixels,
+            ))
+        }
+        CSSValuePayload::kNumericLiteralClass(value) if value.GetType() == UnitType::kRlhs => {
+            length_context.root_line_height.map(|line_height| {
+                crate::production_css_value::numeric(
+                    value.DoubleValue() * line_height as f64 * b.EffectiveZoom() as f64,
+                    UnitType::kPixels,
+                )
+            })
+        }
+        _ => None,
+    };
+    let value = resolved_line_height_value.as_deref().unwrap_or(v);
+    let result = ApplyResolved(id, b, parent, value, root, media, length_context);
+    MarkLineHeightUnitDependencies(b, result.is_ok(), uses_lh, uses_rlh);
+    result
+}
+
+// cpp: style_builder.cc:ApplyPhysicalProperty, generated longhands.cc Apply*.
+fn ApplyResolved(
+    id: CSSPropertyID,
+    b: &mut ComputedStyleBuilder,
+    parent: Option<&ComputedStyle>,
+    v: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+    length_context: PropertyConversionContext,
 ) -> Result {
     if !crate::production_corner_features::IsExposed(id) {
         return Err(LonghandApplicationError::Unsupported(id));
@@ -1053,7 +1650,7 @@ pub fn Apply(
         return interaction_application::Apply(id, b, parent, v);
     }
     if color_application::IsProperty(id) {
-        return color_application::Apply(id, b, parent, v);
+        return color_application::Apply(id, b, parent, v, length_context.document_text_color);
     }
     if color_ui_application::IsColorUIProperty(id) {
         return color_ui_application::Apply(
@@ -1066,7 +1663,7 @@ pub fn Apply(
         );
     }
     if effects_application::IsEffectsProperty(id) {
-        return effects_application::Apply(id, b, parent, v, root, media);
+        return effects_application::Apply(id, b, parent, v, root, media, None);
     }
     if matches!(
         id,
@@ -1146,7 +1743,7 @@ pub fn Apply(
         id,
         CSSPropertyID::kBackgroundImage | CSSPropertyID::kMaskImage
     ) {
-        return ApplyLayerImages(id, b, parent, v, None);
+        return ApplyLayerImages(id, b, parent, v, root, media, None);
     }
     // Font longhands own their conversion because spacing and size changes
     // must update the staged FontDescription without constructing a platform
@@ -1182,6 +1779,8 @@ pub fn Apply(
                 b.EffectiveZoom()
             },
             media,
+            Some(CurrentComputedLineHeight(b)),
+            length_context.root_line_height,
         );
         if id == CSSPropertyID::kFontSize && math.Category() == C::LengthFunction {
             let number = math
@@ -1269,7 +1868,17 @@ pub fn Apply(
         return font_variant_application::Apply(id, b, parent, v, inherit, initial);
     }
     if matches!(id, CSSPropertyID::kBoxShadow | CSSPropertyID::kTextShadow) {
-        return ApplyShadow(id, b, parent, v, root, media, inherit, initial);
+        return ApplyShadow(
+            id,
+            b,
+            parent,
+            v,
+            root,
+            media,
+            inherit,
+            initial,
+            length_context,
+        );
     }
     if matches!(
         id,
@@ -1281,7 +1890,7 @@ pub fn Apply(
         return ApplyOverflowOutline(id, b, parent, v, root, media, inherit, initial);
     }
     if id == CSSPropertyID::kContent {
-        return content_application::Apply(b, parent, v, None);
+        return content_application::Apply(b, parent, v, root, media, None);
     }
     if IsTimingStorageProperty(id) {
         if inherit && !initial && v.IsInheritedValue() {
@@ -2042,6 +2651,28 @@ pub fn StageFontDescription(
 }
 
 #[cfg(test)]
+mod length_zoom_contract_tests {
+    use super::*;
+    use crate::css_math_expression_node::CSSMathLengthResolver;
+
+    #[test]
+    fn root_font_relative_lengths_apply_target_zoom_once() {
+        let media = MediaValuesCachedData::default();
+        // The current font is already the computed/zoomed size. The root font
+        // is retained as Blink's specified size and acquires the target zoom
+        // when a rem value is converted.
+        let mut resolver =
+            MathLengthResolver(CSSPropertyID::kWidth, 32.0, 16.0, 2.0, &media, None, None);
+        assert_eq!(resolver.ComputeLength(1.0, UnitType::kEms).unwrap(), 32.0);
+        assert_eq!(resolver.ComputeLength(1.0, UnitType::kRems).unwrap(), 32.0);
+        assert_eq!(
+            resolver.ComputeLength(8.0, UnitType::kPixels).unwrap(),
+            16.0
+        );
+    }
+}
+
+#[cfg(test)]
 mod content_remaining_tests {
     use super::*;
     use layoutng_style::style::content_data::{
@@ -2132,7 +2763,14 @@ mod content_remaining_tests {
         )
         .unwrap();
         assert_eq!(
-            content_application::Apply(&mut builder, None, image[0].Value(), None),
+            content_application::Apply(
+                &mut builder,
+                None,
+                image[0].Value(),
+                16.0,
+                &MediaValuesCachedData::default(),
+                None,
+            ),
             Err(LonghandApplicationError::Unsupported(
                 CSSPropertyID::kContent
             ))
@@ -2165,8 +2803,10 @@ mod background_linear_image_production_tests {
         )
     }
     #[test]
-    fn background_linear_image_properties_reach_native_layers_and_preserve_dependency_errors() {
-        use layoutng_style::style::generated_gradient_image::CSSLinearGradientValue;
+    fn generated_gradient_properties_reach_native_layers_and_preserve_dependency_errors() {
+        use layoutng_style::style::generated_gradient_image::{
+            CSSLinearGradientValue, GeneratedGradientData,
+        };
         let heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
         let mut b = ComputedStyleBuilder::from_style(initial);
@@ -2181,8 +2821,11 @@ mod background_linear_image_production_tests {
         assert!(image.IsGeneratedImage());
         assert!(image.CanRender() && image.IsLoaded());
         let value = unsafe { &*(image.CssValue() as *const CSSLinearGradientValue) };
-        assert_eq!(value.Data().start, [0.0, 0.0]);
-        assert_eq!(value.Data().end, [1.0, 0.0]);
+        let GeneratedGradientData::Linear(linear) = value.Data() else {
+            panic!("linear gradient payload")
+        };
+        assert_eq!(linear.start, [0.0, 0.0]);
+        assert_eq!(linear.end, [1.0, 0.0]);
         // A generated subtype cannot be supplied as a fetched URL resource.
         assert!(matches!(
             unsafe {
@@ -2196,13 +2839,8 @@ mod background_linear_image_production_tests {
             ))
         ));
         assert_eq!(
-            value
-                .Data()
-                .stops
-                .iter()
-                .map(|s| s.offset)
-                .collect::<Vec<_>>(),
-            vec![0.2f32 as f64, 0.5, 0.8f32 as f64]
+            linear.stops.iter().map(|s| s.offset).collect::<Vec<_>>(),
+            vec![0.2, 0.5, 0.8]
         );
         let second = unsafe { &*(*first).Next() };
         assert!(second.IsImageSet() && second.GetImage().is_null());
@@ -2228,15 +2866,60 @@ mod background_linear_image_production_tests {
             2.0
         );
         assert_eq!(b.AccessBackgroundLayers().GetImage(), previous);
-        for css in [
-            "url(icon.svg)",
-            "linear-gradient(45deg, red, blue)",
-            "linear-gradient(red 2px, blue)",
-            "linear-gradient(red calc(10% + 1px), blue)",
-            "linear-gradient(red, 50%, blue)",
-            "repeating-linear-gradient(red,blue)",
-            "linear-gradient(currentcolor,blue)",
+        let mut angled_builder = ComputedStyleBuilder::from_style(initial);
+        apply(
+            &mut angled_builder,
+            None,
+            "linear-gradient(45deg, rgba(0,0,0,0), rgba(0,0,0,.03))",
+        )
+        .unwrap();
+        let angled = unsafe { &*(*angled_builder.AccessBackgroundLayers()).GetImage() };
+        let angled = unsafe { &*(angled.CssValue() as *const CSSLinearGradientValue) };
+        let GeneratedGradientData::Linear(angled) = angled.Data() else {
+            panic!("linear gradient payload")
+        };
+        assert_eq!(angled.angle_degrees, Some(45.0));
+
+        for (css, expected) in [
+            (
+                "linear-gradient(to bottom right, currentcolor calc(10% + 1px) 30%, 55%, blue)",
+                "linear",
+            ),
+            (
+                "repeating-radial-gradient(ellipse closest-side at right 10px bottom 20%, red 2px, blue 50%)",
+                "radial",
+            ),
+            (
+                "conic-gradient(from 45deg at 25% 75%, red 0deg 30deg, 60%, blue 75%)",
+                "conic",
+            ),
         ] {
+            let mut gradient_builder = ComputedStyleBuilder::from_style(initial);
+            apply(&mut gradient_builder, None, css).unwrap();
+            let image = unsafe { &*(*gradient_builder.AccessBackgroundLayers()).GetImage() };
+            let value = unsafe { &*(image.CssValue() as *const CSSLinearGradientValue) };
+            match (expected, value.Data()) {
+                ("linear", GeneratedGradientData::Linear(data)) => {
+                    assert_eq!(data.corner, Some([1, 1]));
+                    assert_eq!(data.stops.len(), 4);
+                    assert!(data.stops[2].is_hint);
+                    assert!(image.DependsOnCurrentColor());
+                }
+                ("radial", GeneratedGradientData::Radial(data)) => {
+                    assert!(data.repeating);
+                    assert_eq!(data.center_x.percent, 1.0);
+                    assert_eq!(data.center_x.pixels, -10.0);
+                    assert!(!image.DependsOnCurrentColor());
+                }
+                ("conic", GeneratedGradientData::Conic(data)) => {
+                    assert_eq!(data.angle_degrees, 45.0);
+                    assert_eq!(data.stops.len(), 4);
+                    assert!(data.stops[2].is_hint);
+                }
+                _ => panic!("unexpected generated gradient kind"),
+            }
+        }
+        for css in ["url(icon.svg)"] {
             assert_eq!(
                 apply(&mut b, None, css),
                 Err(LonghandApplicationError::Unsupported(
@@ -2266,14 +2949,14 @@ mod background_linear_image_production_tests {
         .unwrap();
         let image = unsafe { &*(*child.AccessBackgroundLayers()).GetImage() };
         let value = unsafe { &*(image.CssValue() as *const CSSLinearGradientValue) };
+        let GeneratedGradientData::Linear(value) = value.Data() else {
+            panic!("linear gradient payload")
+        };
         assert_eq!(
-            value
-                .Data()
-                .stops
-                .iter()
-                .map(|s| s.offset)
-                .collect::<Vec<_>>(),
-            vec![0.8f32 as f64, 0.8f32 as f64, 1.0]
+            value.stops.iter().map(|s| s.offset).collect::<Vec<_>>(),
+            // Monotonic clamping is target-size dependent for mixed
+            // length-percentage stops and therefore belongs to Paint.
+            vec![0.8, 0.2, 1.0]
         );
         assert!(!unsafe { &*(*child.AccessBackgroundLayers()).Next() }.IsImageSet());
         apply(&mut child, Some(p), "initial").unwrap();

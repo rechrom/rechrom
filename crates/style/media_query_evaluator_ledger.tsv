@@ -677,7 +677,7 @@ media_query_evaluator.cc	1910	1910	1	mapped	media_query_evaluator.rs / media_que
 media_query_evaluator.cc	1911	1912	0	scaffolding	Comments blanks preprocessor namespaces or delimiter-only lines
 media_query_evaluator.cc	1913	1914	2	mapped	media_query_evaluator.rs / media_query_backend.rs / media_query_container.rs typed evaluator control flow
 media_query_evaluator.cc	1915	1916	0	scaffolding	Comments blanks preprocessor namespaces or delimiter-only lines
-media_query_evaluator.cc	1917	1921	5	pending	Concrete document registered-property syntax/initial/inheritance owner (required RegisteredContainerPropertyResolver reads supplied; no registration owner yet)
+media_query_evaluator.cc	1917	1921	5	mapped	property_registry.rs RegisteredContainerPropertyResolver: document registration syntax/initial value computation and computed registered-value storage
 media_query_evaluator.cc	1922	1923	2	mapped	media_query_evaluator.rs / media_query_backend.rs / media_query_container.rs typed evaluator control flow
 media_query_evaluator.cc	1924	1924	0	scaffolding	Comments blanks preprocessor namespaces or delimiter-only lines
 media_query_evaluator.cc	1925	1925	1	mapped	media_query_evaluator.rs / media_query_backend.rs / media_query_container.rs typed evaluator control flow

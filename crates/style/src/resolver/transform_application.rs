@@ -60,6 +60,8 @@ pub(super) fn Scalar(
         root,
         b.EffectiveZoom(),
         media,
+        Some(super::CurrentComputedLineHeight(b)),
+        None,
     );
     let number = match v.Payload() {
         CSSValuePayload::kMathFunctionClass(math) => {

@@ -21,6 +21,11 @@ pub enum SVGPaintType {
 pub struct SVGPaint {
     pub color: StyleColor,
     pub resource: Member<StyleSVGResource>,
+    // Production documents retain the parsed IRI even when the embedding does
+    // not expose Blink's in-process SVGResource object.  Chromium keeps the
+    // same identity on StyleSVGResource; this neutral owner lets the canonical
+    // ComputedStyle cross Rechrom's package boundary without a DOM side table.
+    pub url: AtomicString,
     pub paint_type: SVGPaintType,
     pub is_initial_value: bool,
 }
@@ -32,6 +37,7 @@ impl Default for SVGPaint {
         Self {
             color: StyleColor::default(),
             resource: Member::default(),
+            url: AtomicString::default(),
             paint_type: SVGPaintType::kNone,
             is_initial_value: false,
         }
@@ -107,7 +113,11 @@ impl SVGPaint {
         &self.color
     }
     pub fn GetUrl(&self) -> &AtomicString {
-        unsafe { (&*self.Resource()).Url() }
+        if self.Resource().is_null() {
+            &self.url
+        } else {
+            unsafe { (&*self.Resource()).Url() }
+        }
     }
 }
 
@@ -117,6 +127,7 @@ impl PartialEq for SVGPaint {
     fn eq(&self, other: &Self) -> bool {
         self.paint_type == other.paint_type
             && self.color == other.color
+            && self.url == other.url
             && foundation::ValuesEquivalent(&self.resource, &other.resource)
     }
 }

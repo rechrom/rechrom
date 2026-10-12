@@ -127,6 +127,7 @@ impl From<Color> for NativeColor {
 
 unsafe extern "C" {
     fn LayoutngCanvasSaveLayerDstIn(canvas: *mut c_void);
+    fn LayoutngCanvasSaveLayerMask(canvas: *mut c_void, mode: i32, composite: i32, bottom: bool);
     fn LayoutngCanvasSaveLayerBlurFilters(canvas: *mut c_void, sigmas: *const f32, count: usize);
     fn LayoutngCanvasClipPath(
         canvas: *mut c_void,
@@ -172,6 +173,7 @@ unsafe extern "C" {
     fn LayoutngCanvasDestroy(canvas: *mut c_void);
     fn LayoutngCanvasSave(canvas: *mut c_void);
     fn LayoutngCanvasTranslate(canvas: *mut c_void, x: f32, y: f32);
+    fn LayoutngCanvasScale(canvas: *mut c_void, scale: f32);
     fn LayoutngCanvasConcat(canvas: *mut c_void, matrix: *const f32);
     fn LayoutngCanvasRestore(canvas: *mut c_void);
     fn LayoutngCanvasSaveCount(canvas: *mut c_void) -> i32;
@@ -238,6 +240,7 @@ unsafe extern "C" {
         canvas: *mut c_void,
         rect: NativeRect,
         radii: NativeRadii,
+        inner_radii: NativeRadii,
         color: NativeColor,
         offset_x: f64,
         offset_y: f64,
@@ -272,6 +275,8 @@ unsafe extern "C" {
         canvas: *mut c_void,
         id: u64,
         mip_level: i32,
+        interpolation_quality: i32,
+        image_orientation: i32,
         source: NativeRect,
         destination: NativeRect,
     );
@@ -394,6 +399,13 @@ fn ItemColor(item: &DisplayItem) -> NativeColor {
         PaintBlendMode::kNormal,
         "blend-mode replay is pending"
     );
+    if let Some(shader) = &item.paint_shader {
+        assert_eq!(
+            shader.color_interpolation_space,
+            layoutng_assembly::internal::paint_input::PaintColorInterpolationSpace::kNone,
+            "native C++ source replay does not implement explicit CSS gradient interpolation; use the production Rust Skia replay"
+        );
+    }
     assert!(item.paint_shader.is_none(), "shader replay is pending");
     assert_eq!(item.blur_radius, 0.0, "blurred paint replay is pending");
     item.color.into()
@@ -538,6 +550,43 @@ fn MipLevelForSize(
     }
 }
 
+// core/paint/graphics_context.cc ComputeInterpolationQuality() followed by
+// GraphicsContext::ComputeFilterQuality(). Decoded PaintImage resources are
+// complete, so the incomplete-frame branch does not apply here.
+fn EffectiveImageInterpolationQuality(
+    requested: layoutng_assembly::internal::paint_input::InterpolationQuality,
+    source: PaintRect,
+    destination: PaintRect,
+) -> layoutng_assembly::internal::paint_input::InterpolationQuality {
+    use layoutng_assembly::internal::paint_input::InterpolationQuality as Q;
+    if requested == Q::kInterpolationNone {
+        return Q::kInterpolationNone;
+    }
+    let src_w = source.width as f32;
+    let src_h = source.height as f32;
+    let dst_w = destination.width as f32;
+    let dst_h = destination.height as f32;
+    let diff_w = (dst_w - src_w).abs();
+    let diff_h = (dst_h - src_h).abs();
+    let width_equal = diff_w < f32::EPSILON;
+    let height_equal = diff_h < f32::EPSILON;
+    let small = src_w <= 8.0 || src_h <= 8.0 || dst_w <= 8.0 || dst_h <= 8.0;
+    let large_stretch = src_h * 3.0 <= dst_h || src_w * 3.0 <= dst_w;
+    let fractional_change = diff_w / src_w < 0.025 && diff_h / src_h < 0.025;
+    // ComputeInterpolationQuality can return none for these cases, but
+    // ComputeFilterQuality intentionally upgrades that result to low.
+    let computed = if (width_equal && height_equal) || small || large_stretch || fractional_change {
+        Q::kInterpolationLow
+    } else {
+        Q::kInterpolationMedium
+    };
+    if (requested as i32) < (computed as i32) {
+        requested
+    } else {
+        computed
+    }
+}
+
 // cpp: skia_renderer/skia_renderer.cc:628-684
 fn DrawImage(canvas: &Canvas, item: &DisplayItem, destination: PaintRect) {
     assert_eq!(
@@ -552,6 +601,8 @@ fn DrawImage(canvas: &Canvas, item: &DisplayItem, destination: PaintRect) {
         return;
     }
     let mut source = item.source_rect;
+    let interpolation_quality =
+        EffectiveImageInterpolationQuality(item.image_interpolation_quality, source, destination);
     let uses_full_source = source.x == 0.0
         && source.y == 0.0
         && source.width == f64::from(width)
@@ -566,7 +617,11 @@ fn DrawImage(canvas: &Canvas, item: &DisplayItem, destination: PaintRect) {
             &mut target_height,
         );
     }
-    let mip_level = if uses_full_source {
+    let mip_level = if item.image_orientation == image_resource::ImageOrientation::kDefault
+        && interpolation_quality
+        == layoutng_assembly::internal::paint_input::InterpolationQuality::kInterpolationMedium
+        && uses_full_source
+    {
         MipLevelForSize(width, height, target_width, target_height)
     } else {
         0
@@ -589,6 +644,8 @@ fn DrawImage(canvas: &Canvas, item: &DisplayItem, destination: PaintRect) {
             canvas.0,
             item.resource_id,
             draw_mip_level,
+            interpolation_quality as i32,
+            item.image_orientation.exif() as i32,
             source.into(),
             destination.into(),
         );
@@ -597,21 +654,35 @@ fn DrawImage(canvas: &Canvas, item: &DisplayItem, destination: PaintRect) {
 
 // cpp: skia_renderer/skia_renderer.cc:756-778
 fn DrawTiledImage(canvas: &Canvas, item: &DisplayItem) {
-    let step_x = item.tile_rect.width + item.tile_spacing.width;
-    let step_y = item.tile_rect.height + item.tile_spacing.height;
+    let tile_rect = if item.tile_rect.width > 0.0 && item.tile_rect.height > 0.0 {
+        item.tile_rect
+    } else {
+        PaintRect {
+            x: item.source_rect.x * item.tile_scale.x + item.tile_phase.x,
+            y: item.source_rect.y * item.tile_scale.y + item.tile_phase.y,
+            width: item.source_rect.width * item.tile_scale.x,
+            height: item.source_rect.height * item.tile_scale.y,
+        }
+    };
+    let step_x = tile_rect.width + item.tile_spacing.width;
+    let step_y = tile_rect.height + item.tile_spacing.height;
     if step_x <= 0.0 || step_y <= 0.0 {
         return;
     }
     let first_x = if item.repeat_x {
-        item.tile_rect.x - ((item.tile_rect.x - item.rect.x) / step_x).ceil() * step_x
+        tile_rect.x - ((tile_rect.x - item.rect.x) / step_x).ceil() * step_x
     } else {
-        item.tile_rect.x
+        tile_rect.x
     };
     let first_y = if item.repeat_y {
-        item.tile_rect.y - ((item.tile_rect.y - item.rect.y) / step_y).ceil() * step_y
+        tile_rect.y - ((tile_rect.y - item.rect.y) / step_y).ceil() * step_y
     } else {
-        item.tile_rect.y
+        tile_rect.y
     };
+    unsafe {
+        LayoutngCanvasSave(canvas.0);
+        LayoutngCanvasClipRect(canvas.0, item.rect.into(), false);
+    }
     let mut y = first_y;
     let mut rows = 0;
     while y < item.rect.y + item.rect.height && rows < 10_000 {
@@ -626,8 +697,8 @@ fn DrawTiledImage(canvas: &Canvas, item: &DisplayItem) {
                 PaintRect {
                     x,
                     y,
-                    width: item.tile_rect.width,
-                    height: item.tile_rect.height,
+                    width: tile_rect.width,
+                    height: tile_rect.height,
                 },
             );
             x += if item.repeat_x {
@@ -642,6 +713,7 @@ fn DrawTiledImage(canvas: &Canvas, item: &DisplayItem) {
             item.rect.height + step_y
         };
     }
+    unsafe { LayoutngCanvasRestore(canvas.0) };
 }
 
 // cpp: skia_renderer/skia_renderer.cc:779-826
@@ -761,7 +833,95 @@ fn DrawShader(canvas: &Canvas, item: &DisplayItem) {
 // cpp: skia_renderer/skia_renderer.cc:983-1091
 // cpp: skia_renderer/skia_renderer.cc:1140-1203
 // cpp: skia_renderer/skia_renderer.cc:1358-1360
+fn DrawMaskLayers(canvas: &Canvas, layers: &[paint::paint_engine::DisplayMaskLayer]) {
+    for (reverse_index, layer) in layers.iter().rev().enumerate() {
+        unsafe {
+            LayoutngCanvasSaveLayerMask(
+                canvas.0,
+                layer.mode as i32,
+                layer.composite as i32,
+                reverse_index == 0,
+            );
+            LayoutngCanvasSave(canvas.0);
+            if layer.clip_radii.HasRadius() {
+                LayoutngCanvasClipRRect(
+                    canvas.0,
+                    layer.clip_rect.into(),
+                    layer.clip_radii.into(),
+                    true,
+                );
+            } else {
+                LayoutngCanvasClipRect(canvas.0, layer.clip_rect.into(), false);
+            }
+        }
+        if let Some(shader) = &layer.paint_shader {
+            DrawShader(
+                canvas,
+                &DisplayItem {
+                    r#type: DisplayItemType::kDrawTiledGradient,
+                    rect: layer.clip_rect,
+                    tile_rect: layer.tile_rect,
+                    repeat_x: layer.repeat_x,
+                    repeat_y: layer.repeat_y,
+                    tile_spacing: layer.tile_spacing,
+                    paint_shader: Some(shader.clone()),
+                    ..Default::default()
+                },
+            );
+        } else if layer.resource_id != 0 {
+            DrawTiledImage(
+                canvas,
+                &DisplayItem {
+                    r#type: DisplayItemType::kDrawTiledImage,
+                    rect: layer.clip_rect,
+                    source_rect: layer.source_rect,
+                    tile_rect: layer.tile_rect,
+                    resource_id: layer.resource_id,
+                    image_interpolation_quality: layer.image_interpolation_quality,
+                    repeat_x: layer.repeat_x,
+                    repeat_y: layer.repeat_y,
+                    tile_scale: layer.tile_scale,
+                    tile_spacing: layer.tile_spacing,
+                    ..Default::default()
+                },
+            );
+        }
+        unsafe {
+            LayoutngCanvasRestore(canvas.0);
+            LayoutngCanvasRestore(canvas.0);
+        }
+    }
+}
+
 fn ReplayItem(canvas: &Canvas, item: &DisplayItem, glyph_runs: &[&DisplayItem]) {
+    if item.is_text_decoration
+        && (item.shadow_offset != Offset::default() || item.blur_radius > 0.0)
+    {
+        let blurred = item.blur_radius > 0.0;
+        if blurred {
+            let sigma = (item.blur_radius * 0.5) as f32;
+            unsafe { LayoutngCanvasSaveLayerBlurFilters(canvas.0, &sigma, 1) };
+        }
+        unsafe {
+            LayoutngCanvasSave(canvas.0);
+            LayoutngCanvasTranslate(
+                canvas.0,
+                item.shadow_offset.x as f32,
+                item.shadow_offset.y as f32,
+            );
+        }
+        let mut source = item.clone();
+        source.shadow_offset = Offset::default();
+        source.blur_radius = 0.0;
+        ReplayItem(canvas, &source, glyph_runs);
+        unsafe {
+            LayoutngCanvasRestore(canvas.0);
+            if blurred {
+                LayoutngCanvasRestore(canvas.0);
+            }
+        }
+        return;
+    }
     let rect = item.rect.into();
     match item.r#type {
         DisplayItemType::kSave => unsafe { LayoutngCanvasSave(canvas.0) },
@@ -783,6 +943,8 @@ fn ReplayItem(canvas: &Canvas, item: &DisplayItem, glyph_runs: &[&DisplayItem]) 
             LayoutngCanvasClipOutRRect(canvas.0, rect, item.corner_radii.into(), item.antialias)
         },
         DisplayItemType::kSaveLayer => unsafe { LayoutngCanvasSaveLayer(canvas.0, rect) },
+        DisplayItemType::kSaveLayerDstIn => unsafe { LayoutngCanvasSaveLayerDstIn(canvas.0) },
+        DisplayItemType::kDrawMask => DrawMaskLayers(canvas, &item.mask_layers),
         DisplayItemType::kSaveLayerBlend => unsafe {
             LayoutngCanvasSaveLayerBlend(canvas.0, rect, item.blend_mode as i32, item.opacity)
         },
@@ -901,6 +1063,7 @@ fn ReplayItem(canvas: &Canvas, item: &DisplayItem, glyph_runs: &[&DisplayItem]) 
                 canvas.0,
                 rect,
                 item.corner_radii.into(),
+                item.inner_corner_radii.into(),
                 item.color.into(),
                 item.shadow_offset.x,
                 item.shadow_offset.y,
@@ -1062,6 +1225,11 @@ fn Replay(canvas: &Canvas, list: &PaintArtifact) {
                     }
                     if let Some(shader) = &layer.paint_shader {
                         assert_eq!(shader.kind, PaintShaderKind::kLinearGradient);
+                        assert_eq!(
+                            shader.color_interpolation_space,
+                            layoutng_assembly::internal::paint_input::PaintColorInterpolationSpace::kNone,
+                            "native C++ mask source replay does not implement explicit CSS gradient interpolation"
+                        );
                         let matrix = shader.transform.values.map(|x| x as f32);
                         let stops: Vec<_> = shader
                             .stops
@@ -1136,12 +1304,13 @@ struct RasterTile {
     trailing_border: u32,
 }
 
-fn tiles_for_axis(extent: u32) -> Vec<RasterTile> {
+fn tiles_for_axis(extent: u32, tile_size: u32) -> Vec<RasterTile> {
+    assert!(tile_size > 2);
     let mut tiles = Vec::new();
     let mut origin = 0;
     while origin < extent {
         let leading_border = u32::from(origin != 0);
-        let length = (256 - leading_border - 1).min(extent - origin);
+        let length = (tile_size - leading_border - 1).min(extent - origin);
         let trailing_border = u32::from(origin + length < extent);
         tiles.push(RasterTile {
             origin,
@@ -1156,13 +1325,36 @@ fn tiles_for_axis(extent: u32) -> Vec<RasterTile> {
 
 // cpp: skia_renderer/skia_renderer.cc:1474-1551
 pub fn RasterizeSourceDisplayItemList(list: &PaintArtifact, width: u32, height: u32) -> Vec<u8> {
+    RasterizeSourceDisplayItemListWithScale(list, width, height, 1.0)
+}
+
+/// Test oracle that applies the same device scale before replay as the pure
+/// raster path. This keeps DPR comparisons against native Skia meaningful.
+pub fn RasterizeSourceDisplayItemListWithScale(
+    list: &PaintArtifact,
+    width: u32,
+    height: u32,
+    scale: f64,
+) -> Vec<u8> {
+    RasterizeSourceDisplayItemListWithScaleAndTileSize(list, width, height, scale, 256)
+}
+
+#[doc(hidden)]
+pub fn RasterizeSourceDisplayItemListWithScaleAndTileSize(
+    list: &PaintArtifact,
+    width: u32,
+    height: u32,
+    scale: f64,
+    tile_size: u32,
+) -> Vec<u8> {
+    assert!(scale.is_finite() && scale > 0.0);
     let length = (width as usize)
         .checked_mul(height as usize)
         .and_then(|n| n.checked_mul(4))
         .expect("raster dimensions overflow");
     let mut output = vec![255; length];
-    for y_tile in tiles_for_axis(height) {
-        for x_tile in tiles_for_axis(width) {
+    for y_tile in tiles_for_axis(height, tile_size) {
+        for x_tile in tiles_for_axis(width, tile_size) {
             let tile_width = x_tile.leading_border + x_tile.length + x_tile.trailing_border;
             let tile_height = y_tile.leading_border + y_tile.length + y_tile.trailing_border;
             let canvas = Canvas::new(tile_width, tile_height);
@@ -1172,6 +1364,7 @@ pub fn RasterizeSourceDisplayItemList(list: &PaintArtifact, width: u32, height: 
                     (x_tile.leading_border as i32 - x_tile.origin as i32) as f32,
                     (y_tile.leading_border as i32 - y_tile.origin as i32) as f32,
                 );
+                LayoutngCanvasScale(canvas.0, scale as f32);
             }
             Replay(&canvas, list);
             let mut tile_rgba = vec![0; tile_width as usize * tile_height as usize * 4];

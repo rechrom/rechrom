@@ -379,6 +379,8 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         paint_layer_client_is_cacheable,
         paint_layer_client_is_just_created,
         paint_layer_is_self_painting,
+        paint_layer_is_stacking_context,
+        paint_layer_stacking_level,
         display_item_client_is_cacheable,
         display_item_client_is_just_created,
         display_item_fragment,
@@ -393,6 +395,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         source_kind,
         effective_zoom,
         style,
+        margin,
         border,
         border_sides,
         border_styles,
@@ -406,6 +409,8 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         sticky_offset,
         overflow_x,
         overflow_y,
+        overscroll_behavior_x,
+        overscroll_behavior_y,
         css_clip,
         overflow_clip_margin_outsets,
         scroll_offset,
@@ -415,6 +420,9 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         direction,
         first_baseline,
         text_line_top_offset,
+        text_line_height,
+        text_combine,
+        text_combine_inline_offset,
         replaced_content,
         resources: _,
         glyph_runs,
@@ -437,6 +445,11 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         svg_view_box,
         svg_text,
         table_cell_column,
+        sticky_constraint,
+        background_transfers_to_view,
+        canvas_background,
+        background_paint_location,
+        can_composite_background_attachment_fixed,
     } = a;
     self_ink_overflow == &b.self_ink_overflow
         && contents_ink_overflow == &b.contents_ink_overflow
@@ -450,6 +463,8 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && paint_layer_client_is_cacheable == &b.paint_layer_client_is_cacheable
         && paint_layer_client_is_just_created == &b.paint_layer_client_is_just_created
         && paint_layer_is_self_painting == &b.paint_layer_is_self_painting
+        && paint_layer_is_stacking_context == &b.paint_layer_is_stacking_context
+        && paint_layer_stacking_level == &b.paint_layer_stacking_level
         && display_item_client_is_cacheable == &b.display_item_client_is_cacheable
         && display_item_client_is_just_created == &b.display_item_client_is_just_created
         && display_item_fragment == &b.display_item_fragment
@@ -464,6 +479,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && source_kind == &b.source_kind
         && effective_zoom == &b.effective_zoom
         && style == &b.style
+        && margin == &b.margin
         && border == &b.border
         && border_sides == &b.border_sides
         && border_styles == &b.border_styles
@@ -477,6 +493,8 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && sticky_offset == &b.sticky_offset
         && overflow_x == &b.overflow_x
         && overflow_y == &b.overflow_y
+        && overscroll_behavior_x == &b.overscroll_behavior_x
+        && overscroll_behavior_y == &b.overscroll_behavior_y
         && css_clip == &b.css_clip
         && overflow_clip_margin_outsets == &b.overflow_clip_margin_outsets
         && scroll_offset == &b.scroll_offset
@@ -486,6 +504,9 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && direction == &b.direction
         && first_baseline == &b.first_baseline
         && text_line_top_offset == &b.text_line_top_offset
+        && text_line_height == &b.text_line_height
+        && text_combine == &b.text_combine
+        && text_combine_inline_offset == &b.text_combine_inline_offset
         && replaced_content == &b.replaced_content
         && glyph_runs == &b.glyph_runs
         && text_caret_positions == &b.text_caret_positions
@@ -507,6 +528,12 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && svg_view_box == &b.svg_view_box
         && svg_text == &b.svg_text
         && table_cell_column == &b.table_cell_column
+        && sticky_constraint == &b.sticky_constraint
+        && background_transfers_to_view == &b.background_transfers_to_view
+        && canvas_background == &b.canvas_background
+        && background_paint_location == &b.background_paint_location
+        && can_composite_background_attachment_fixed
+            == &b.can_composite_background_attachment_fixed
 }
 
 fn self_equal(a: &FragmentNode, b: &FragmentNode) -> bool {
@@ -559,9 +586,13 @@ fn resources_equal(
             fonts,
             images,
             device_pixel_ratio,
+            layout_zoom_factor,
+            paints_opaque_base_background,
             viewport,
         } = &**a;
         *device_pixel_ratio == b.device_pixel_ratio
+            && *layout_zoom_factor == b.layout_zoom_factor
+            && *paints_opaque_base_background == b.paints_opaque_base_background
             && *viewport == b.viewport
             && fonts.len() == b.fonts.len()
             && images.len() == b.images.len()

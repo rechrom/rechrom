@@ -11,6 +11,7 @@ use parser::segmented_string::SegmentedString;
 pub mod html_parser;
 pub mod html_parser_host;
 pub(crate) mod html_tag_names;
+pub mod link_style;
 pub mod parser;
 pub use html_parser_host::{HTMLParserHost, ParserElementEvent, ParserElementPhase};
 
@@ -329,22 +330,23 @@ pub fn Parse(source: &str) -> Document {
             }
             "link" => {
                 // cpp: browser/browser.cc:864-868
-                if attribute(tag, "rel").is_some_and(|tokens| {
-                    let mut alternate = false;
-                    let mut stylesheet = false;
-                    for token in tokens.split_ascii_whitespace() {
-                        alternate |= token.eq_ignore_ascii_case("alternate");
-                        stylesheet |= token.eq_ignore_ascii_case("stylesheet");
-                    }
-                    stylesheet && !alternate
-                }) && attribute(tag, "media").is_none_or(|media| {
-                    media.split(',').any(|query| {
-                        let query = query.trim();
-                        query.eq_ignore_ascii_case("all")
-                            || query.eq_ignore_ascii_case("screen")
-                            || query.to_ascii_lowercase().starts_with("screen ")
+                let disposition = link_style::ClassifyStyleSheetLink(
+                    attribute(tag, "rel").unwrap_or(""),
+                    attribute(tag, "type").unwrap_or(""),
+                    attribute(tag, "disabled").is_some(),
+                );
+                if disposition.is_style_sheet
+                    && !disposition.alternate
+                    && !disposition.disabled
+                    && attribute(tag, "media").is_none_or(|media| {
+                        media.split(',').any(|query| {
+                            let query = query.trim();
+                            query.eq_ignore_ascii_case("all")
+                                || query.eq_ignore_ascii_case("screen")
+                                || query.to_ascii_lowercase().starts_with("screen ")
+                        })
                     })
-                }) {
+                {
                     if let Some(href) =
                         decoded_attribute(tag, "href").filter(|href| !href.is_empty())
                     {

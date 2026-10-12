@@ -9,7 +9,7 @@ use foundation::{
     g_null_atom, AtomicString, BlendMode, CSSBitset, CSSPropertyID, Color, EAspectRatioType,
     EBorderCollapse, EBorderStyle, EBoxDirection, EBoxOrient, EBoxSizing, EClear,
     EContentVisibility, EContinue, EDisplay, EFlexDirection, EFloat, EForcedColorAdjust,
-    EFrameSizing, EGridLanesPack, EInsideLink, EInternalOverscrollContainer,
+    EFrameSizing, EGridLanesPack, EImageRendering, EInsideLink, EInternalOverscrollContainer,
     EInternalOverscrollPosition, EInternalUnbounded, EIsolation, EOverflow, EOverflowWrap,
     EOverlay, EOverscrollContainerType, EPageMarginSafety, EPointerEvents, EPosition, EResize,
     EScrollTargetGroup, EScrollbarWidth, ETableLayout, ETextBoxTrim, ETextCombine,
@@ -34,9 +34,9 @@ use super::color_scheme::mojom;
 use super::computed_grid_track_list::ComputedGridTrackList;
 use super::computed_style_base::{ComputedStyleBase, ComputedStyleBuilderBase};
 use super::computed_style_constants::{
-    Containment, EContainerType, EFillBox, EVerticalAlign, FlexWrapMode, GridAutoFlow,
-    InternalGridAutoFlowAlgorithm, InternalGridAutoFlowDirection, ItemPosition, PositionVisibility,
-    PseudoId, PseudoIdFlags, ScrollbarGutter, ViewportUnitFlag,
+    Containment, EContainerType, EFillBox, EFillLayerType, EVerticalAlign, FlexWrapMode,
+    GridAutoFlow, InternalGridAutoFlowAlgorithm, InternalGridAutoFlowDirection, ItemPosition,
+    PositionVisibility, PseudoId, PseudoIdFlags, ScrollbarGutter, ViewportUnitFlag,
 };
 use super::computed_style_initial_values::ComputedStyleInitialValues;
 use super::content_data::ContentData;
@@ -349,7 +349,17 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:2455
     pub fn GetInterpolationQuality(&self) -> foundation::InterpolationQuality {
-        unsafe { ComputedStyleGetInterpolationQuality(self) }
+        // computed_style.cc:1370-1381. This crate currently has no runtime
+        // UseLowQualityInterpolation switch, so Chromium's default is medium.
+        match self.ImageRendering() {
+            EImageRendering::kPixelated | EImageRendering::kCrispEdges => {
+                foundation::InterpolationQuality::kInterpolationNone
+            }
+            EImageRendering::kWebkitOptimizeContrast => {
+                foundation::InterpolationQuality::kInterpolationLow
+            }
+            EImageRendering::kAuto => foundation::InterpolationQuality::kInterpolationMedium,
+        }
     }
 
     // cpp: layoutng_style/style/computed_style.h:2846-2848
@@ -2331,7 +2341,21 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:2068-2072
     pub fn Has3DTransformOperation(&self) -> bool {
-        unsafe { ComputedStyleHas3DTransformOperation(self) }
+        if self.Transform().HasNonPerspective3DOperation() {
+            return true;
+        }
+        unsafe {
+            let translate = self.Translate();
+            if !translate.is_null() && (*translate).Z() != 0.0 {
+                return true;
+            }
+            let rotate = self.Rotate();
+            if !rotate.is_null() && ((*rotate).X() != 0.0 || (*rotate).Y() != 0.0) {
+                return true;
+            }
+            let scale = self.Scale();
+            !scale.is_null() && (*scale).Z() != 1.0
+        }
     }
 
     // cpp: layoutng_style/style/computed_style.h:1231-1233
@@ -2699,7 +2723,44 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:2410-2412
     pub fn VisitedDependentGapColor(&self, gap_color: &StyleColor, is_column_rule: bool) -> Color {
-        unsafe { ComputedStyleVisitedDependentGapColor(self, gap_color, is_column_rule) }
+        let unvisited = if self.ShouldForceColor(gap_color) {
+            if self.Color().IsSystemColorIncludingDeprecated() {
+                self.GetCurrentColor(None)
+            } else {
+                self.InternalForcedColor()
+                    .Resolve(Color::default(), self.UsedColorScheme(), None)
+            }
+        } else {
+            gap_color.Resolve(self.GetCurrentColor(None), self.UsedColorScheme(), None)
+        };
+        if !is_column_rule || self.InsideLink() != EInsideLink::kInsideVisitedLink {
+            return unvisited;
+        }
+        let visited_style = self.InternalVisitedColumnRuleColor().GetLegacyValue();
+        let visited = if self.ShouldForceColor(&visited_style) {
+            if self
+                .InternalVisitedColor()
+                .IsSystemColorIncludingDeprecated()
+            {
+                self.InternalVisitedColor()
+                    .Resolve(Color::default(), self.UsedColorScheme(), None)
+            } else {
+                self.InternalForcedVisitedColor().Resolve(
+                    Color::default(),
+                    self.UsedColorScheme(),
+                    None,
+                )
+            }
+        } else {
+            visited_style.Resolve(self.GetCurrentColor(None), self.UsedColorScheme(), None)
+        };
+        Color::FromColorSpace(
+            visited.GetColorSpace(),
+            Some(visited.Param0()),
+            Some(visited.Param1()),
+            Some(visited.Param2()),
+            Some(unvisited.Alpha()),
+        )
     }
 
     // cpp: layoutng_style/style/computed_style.h:2414-2417
@@ -3688,8 +3749,17 @@ impl ComputedStyleBuilder {
     }
 
     // cpp: layoutng_style/style/computed_style.h:2990
+    // cpp: layoutng_style/style/computed_style.cc:3083-3091
     pub fn ClearBackgroundImage(&mut self) {
-        unsafe { ComputedStyleBuilderClearBackgroundImage(self) }
+        let mut layer = self.AccessBackgroundLayers() as *mut FillLayer;
+        unsafe {
+            (*layer).SetImage(FillLayer::InitialFillImage(EFillLayerType::kBackground));
+            layer = (*layer).NextMut();
+            while let Some(current) = layer.as_mut() {
+                current.ClearImage();
+                layer = current.NextMut();
+            }
+        }
     }
 
     // cpp: layoutng_style/style/computed_style.h:3544-3545
@@ -4597,10 +4667,6 @@ impl ComputedStyleBuilder {
 
 unsafe extern "Rust" {
     // cpp: layoutng_style/style/computed_style.h:2846-2848
-    // cpp: layoutng_style/style/computed_style.h:2455
-    fn ComputedStyleGetInterpolationQuality(
-        style: &ComputedStyle,
-    ) -> foundation::InterpolationQuality;
     // cpp: layoutng_style/style/computed_style.h:2802-2803
     fn ComputedStyleGetInternalForcedCurrentColor(
         style: &ComputedStyle,
@@ -4747,9 +4813,6 @@ unsafe extern "Rust" {
     fn ComputedStyleHasAnimationTrigger(style: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2609
     fn ComputedStyleHasBaseEffectiveAppearance(style: &ComputedStyle) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:2957-2958
-    // cpp: layoutng_style/style/computed_style.h:2990
-    fn ComputedStyleBuilderClearBackgroundImage(builder: &mut ComputedStyleBuilder);
     // cpp: layoutng_style/style/computed_style.h:3544-3545
     fn ComputedStyleBuilderAddPaintImage(
         builder: &mut ComputedStyleBuilder,

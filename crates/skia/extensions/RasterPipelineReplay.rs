@@ -3,7 +3,7 @@
 
 // Selected SkRasterPipeline stages used by the software screenshot profile.
 use crate::compat::commands::PaintRect;
-use crate::compat::commands::{PaintShader, PaintSpreadMethod};
+use crate::compat::commands::{PaintColorInterpolationSpace, PaintShader, PaintSpreadMethod};
 use crate::raster::{Mask, Pixmap, Transform};
 
 // Screenshot replay uses 256px raster tiles with one-pixel gutters. Skia's
@@ -16,15 +16,14 @@ pub(crate) fn tile_shift(position: u32) -> u32 {
     }
 }
 
-// A bounded layer's child device retains the enclosing screenshot's tile
-// origin. Translate the outer 255px schedule into child coordinates, then clip
-// it to this child's own device origin, just like seed_shader's raster bounds.
+// PictureLayerTiling supplies a real 256px backing for each raster task.  Its
+// one-pixel border and 254px content stride are represented by the task's
+// raster rectangle, so seed_shader starts only at this actual device (or a
+// saveLayer child device) origin.  Re-applying the outer tiling schedule here
+// would split a single Skia device twice and change gradient FMA/dither seeds.
 #[inline]
-fn gradient_tile_shift(position: u32, origin: i32, device_origin: u32) -> u32 {
-    let global = (position as i64 + origin as i64).clamp(0, u32::MAX as i64) as u32;
-    (tile_shift(global) as i64 - origin as i64)
-        .max(device_origin as i64)
-        .clamp(0, u32::MAX as i64) as u32
+fn gradient_tile_shift(_position: u32, _origin: i32, device_origin: u32) -> u32 {
+    device_origin
 }
 
 // SkRasterPipeline_opts.h::dither: the 8x8 ordered matrix, in fcebda order.
@@ -164,6 +163,7 @@ fn draw_linear_gradient_output(
         || matrix[15] != 1.0
         || shader.spread != PaintSpreadMethod::kPad
         || shader.stops.len() < 2
+        || shader.color_interpolation_space != PaintColorInterpolationSpace::kNone
         || shader.stops.iter().any(|s| {
             [s.color.red, s.color.green, s.color.blue, s.color.alpha]
                 .iter()

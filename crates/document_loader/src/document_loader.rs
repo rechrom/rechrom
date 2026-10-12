@@ -46,6 +46,10 @@ impl From<usize> for DocumentLoadBudget {
 pub struct DocumentLoadProgress {
     pub body_finished: bool,
     pub made_progress: bool,
+    /// The parser still has buffered tokens, or the byte budget was exhausted
+    /// while the stream remained readable. The embedder can run another
+    /// parser task before spending a rendering opportunity on the partial DOM.
+    pub immediate_work_pending: bool,
     pub parser: HTMLParserResult,
 }
 /// One main-document byte stream and its resident parser. Page owns the DOM,
@@ -188,6 +192,7 @@ impl DocumentLoader {
             return Ok(DocumentLoadProgress {
                 body_finished: self.body_finished,
                 made_progress: false,
+                immediate_work_pending: false,
                 parser: HTMLParserResult {
                     status: HTMLParserStatus::kFinished,
                     script: None,
@@ -196,6 +201,7 @@ impl DocumentLoader {
         }
         self.Parser()?;
         let mut made_progress = !self.needs_input && !self.parser.as_ref().unwrap().IsPaused();
+        let mut body_budget_exhausted = false;
         // Do not read ahead while the tokenizer still has work or a script is
         // blocking it. This bounds decoded parser input independently of IO.
         if self.needs_input && !self.body_finished && self.stream.is_some() {
@@ -237,6 +243,7 @@ impl DocumentLoader {
                     }
                 }
             }
+            body_budget_exhausted = remaining == 0 && self.stream.is_some();
         }
         let result = self
             .parser
@@ -257,6 +264,8 @@ impl DocumentLoader {
         Ok(DocumentLoadProgress {
             body_finished: self.body_finished,
             made_progress,
+            immediate_work_pending: result.status == HTMLParserStatus::kYielded
+                || (self.needs_input && body_budget_exhausted),
             parser: result,
         })
     }

@@ -4,15 +4,16 @@ use crate::internal::{
     layout_input::{ComputedStyle, TransformMatrix},
     paint_input::{
         BackgroundBox, BackgroundImageLayer, BackgroundRepeat, BackgroundRepeatRule,
-        BackgroundSizeMode, PaintMaskComposite, PaintMaskMode, PaintShaderKind, PaintSpreadMethod,
+        BackgroundSizeMode, PaintColorInterpolationSpace, PaintHueInterpolationMethod,
+        PaintMaskComposite, PaintMaskMode, PaintShaderKind, PaintSpreadMethod,
     },
 };
 use foundation::{Color, Length, LengthSize, MakeGarbageCollected};
 use layoutng_style::style::{
     computed_style::ComputedStyleBuilder,
     computed_style_constants::{
-        CompositingOperator, EFillAttachment, EFillBox, EFillLayerType, EFillMaskMode, EFillRepeat,
-        EFillSizeType,
+        BackgroundEdgeOrigin, CompositingOperator, EFillAttachment, EFillBox, EFillLayerType,
+        EFillMaskMode, EFillRepeat, EFillSizeType,
     },
     fill_layer::{FillLayer, FillRepeat, FillSize},
     generated_gradient_image::{
@@ -28,15 +29,21 @@ fn gradient(layer: &BackgroundImageLayer) -> Option<LinearGradientData> {
     // require their real subtype/geometry resolver before they can be admitted.
     if layer.resource_id != 0 || shader.kind != PaintShaderKind::kLinearGradient
         || shader.spread != PaintSpreadMethod::kPad || !shader.unit_coordinates
-        || shader.object_bounding_box_coordinates || shader.linear_angle.is_some()
+        || shader.object_bounding_box_coordinates
         || shader.transform != TransformMatrix::default()
+        || shader.linear_corner.is_some()
         || !shader.interpolate_premultiplied || shader.stops.len() < 2
         || shader.stops.iter().any(|stop| !stop.offset.is_finite() || stop.offset_length != 0.0
             || stop.offset < 0.0 || stop.offset > 1.0)
         || shader.stops.windows(2).any(|pair| pair[0].offset > pair[1].offset)
         || [shader.start.x, shader.start.y, shader.end.x, shader.end.y].iter().any(|v| !v.is_finite())
-        // Diagonal CSS gradients require the source magic-corner resolver.
-        || (shader.start.x != shader.end.x && shader.start.y != shader.end.y)
+        // Explicit diagonal endpoints are not a CSS bearing. Arbitrary CSS
+        // angles use `linear_angle` and are resolved against the concrete
+        // generated-image size by CSSImageGeneratorValue::GetImage, matching
+        // CSSLinearGradientValue::EndPointsFromAngle.
+        || (shader.linear_angle.is_none()
+            && shader.start.x != shader.end.x
+            && shader.start.y != shader.end.y)
         || shader.start == shader.end
     {
         return None;
@@ -44,17 +51,103 @@ fn gradient(layer: &BackgroundImageLayer) -> Option<LinearGradientData> {
     Some(LinearGradientData {
         start: [shader.start.x, shader.start.y],
         end: [shader.end.x, shader.end.y],
+        angle_degrees: shader.linear_angle,
+        corner: shader.linear_corner,
+        repeating: shader.spread == PaintSpreadMethod::kRepeat,
+        color_interpolation_space: match shader.color_interpolation_space {
+            PaintColorInterpolationSpace::kNone => foundation::ColorSpace::kNone,
+            PaintColorInterpolationSpace::kSRGB => foundation::ColorSpace::kSRGB,
+            PaintColorInterpolationSpace::kSRGBLegacy => foundation::ColorSpace::kSRGBLegacy,
+            PaintColorInterpolationSpace::kSRGBLinear => foundation::ColorSpace::kSRGBLinear,
+            PaintColorInterpolationSpace::kDisplayP3 => foundation::ColorSpace::kDisplayP3,
+            PaintColorInterpolationSpace::kDisplayP3Linear => {
+                foundation::ColorSpace::kDisplayP3Linear
+            }
+            PaintColorInterpolationSpace::kHSL => foundation::ColorSpace::kHSL,
+            PaintColorInterpolationSpace::kHWB => foundation::ColorSpace::kHWB,
+            PaintColorInterpolationSpace::kA98RGB => foundation::ColorSpace::kA98RGB,
+            PaintColorInterpolationSpace::kProPhotoRGB => foundation::ColorSpace::kProPhotoRGB,
+            PaintColorInterpolationSpace::kRec2020 => foundation::ColorSpace::kRec2020,
+            PaintColorInterpolationSpace::kRec2100Linear => foundation::ColorSpace::kRec2100Linear,
+            PaintColorInterpolationSpace::kLab => foundation::ColorSpace::kLab,
+            PaintColorInterpolationSpace::kLch => foundation::ColorSpace::kLch,
+            PaintColorInterpolationSpace::kOklab => foundation::ColorSpace::kOklab,
+            PaintColorInterpolationSpace::kOklch => foundation::ColorSpace::kOklch,
+            PaintColorInterpolationSpace::kXYZD50 => foundation::ColorSpace::kXYZD50,
+            PaintColorInterpolationSpace::kXYZD65 => foundation::ColorSpace::kXYZD65,
+        },
+        hue_interpolation_method: match shader.hue_interpolation_method {
+            PaintHueInterpolationMethod::kShorter => foundation::HueInterpolationMethod::kShorter,
+            PaintHueInterpolationMethod::kLonger => foundation::HueInterpolationMethod::kLonger,
+            PaintHueInterpolationMethod::kIncreasing => {
+                foundation::HueInterpolationMethod::kIncreasing
+            }
+            PaintHueInterpolationMethod::kDecreasing => {
+                foundation::HueInterpolationMethod::kDecreasing
+            }
+        },
         stops: shader
             .stops
             .iter()
-            .map(|stop| GradientStop {
-                offset: stop.offset,
-                color: Color::FromRGBAFloat(
-                    stop.color.red,
-                    stop.color.green,
-                    stop.color.blue,
-                    stop.color.alpha,
-                ),
+            .map(|stop| {
+                let color = if stop.source_color_space == PaintColorInterpolationSpace::kNone {
+                    Color::FromRGBAFloat(
+                        stop.color.red,
+                        stop.color.green,
+                        stop.color.blue,
+                        stop.color.alpha,
+                    )
+                } else {
+                    let space = match stop.source_color_space {
+                        PaintColorInterpolationSpace::kNone => unreachable!(),
+                        PaintColorInterpolationSpace::kSRGB => foundation::ColorSpace::kSRGB,
+                        PaintColorInterpolationSpace::kSRGBLegacy => {
+                            foundation::ColorSpace::kSRGBLegacy
+                        }
+                        PaintColorInterpolationSpace::kSRGBLinear => {
+                            foundation::ColorSpace::kSRGBLinear
+                        }
+                        PaintColorInterpolationSpace::kDisplayP3 => {
+                            foundation::ColorSpace::kDisplayP3
+                        }
+                        PaintColorInterpolationSpace::kDisplayP3Linear => {
+                            foundation::ColorSpace::kDisplayP3Linear
+                        }
+                        PaintColorInterpolationSpace::kHSL => foundation::ColorSpace::kHSL,
+                        PaintColorInterpolationSpace::kHWB => foundation::ColorSpace::kHWB,
+                        PaintColorInterpolationSpace::kA98RGB => foundation::ColorSpace::kA98RGB,
+                        PaintColorInterpolationSpace::kProPhotoRGB => {
+                            foundation::ColorSpace::kProPhotoRGB
+                        }
+                        PaintColorInterpolationSpace::kRec2020 => foundation::ColorSpace::kRec2020,
+                        PaintColorInterpolationSpace::kRec2100Linear => {
+                            foundation::ColorSpace::kRec2100Linear
+                        }
+                        PaintColorInterpolationSpace::kLab => foundation::ColorSpace::kLab,
+                        PaintColorInterpolationSpace::kLch => foundation::ColorSpace::kLch,
+                        PaintColorInterpolationSpace::kOklab => foundation::ColorSpace::kOklab,
+                        PaintColorInterpolationSpace::kOklch => foundation::ColorSpace::kOklch,
+                        PaintColorInterpolationSpace::kXYZD50 => foundation::ColorSpace::kXYZD50,
+                        PaintColorInterpolationSpace::kXYZD65 => foundation::ColorSpace::kXYZD65,
+                    };
+                    let component = |index: usize| {
+                        (stop.missing_components & (1 << index) == 0)
+                            .then_some(stop.source_components[index])
+                    };
+                    Color::FromColorSpace(
+                        space,
+                        component(0),
+                        component(1),
+                        component(2),
+                        component(3),
+                    )
+                };
+                GradientStop {
+                    offset: stop.offset,
+                    color: layoutng_style::css::style_color::StyleColor::from_color(color),
+                    offset_length: stop.offset_length,
+                    is_hint: stop.is_hint,
+                }
             })
             .collect(),
     })
@@ -64,6 +157,9 @@ fn fill_box(value: BackgroundBox) -> EFillBox {
         BackgroundBox::kBorderBox => EFillBox::kBorder,
         BackgroundBox::kPaddingBox => EFillBox::kPadding,
         BackgroundBox::kContentBox => EFillBox::kContent,
+        BackgroundBox::kText => EFillBox::kText,
+        BackgroundBox::kBorderArea => EFillBox::kBorderArea,
+        BackgroundBox::kBorderAreaText => EFillBox::kBorderAreaText,
     }
 }
 fn repeat(value: BackgroundRepeatRule) -> EFillRepeat {
@@ -74,12 +170,22 @@ fn repeat(value: BackgroundRepeatRule) -> EFillRepeat {
         BackgroundRepeatRule::kSpace => EFillRepeat::kSpaceFill,
     }
 }
-fn size_length(px: Option<f64>, percent: Option<f64>, zoom: f64) -> Length {
+fn size_length(
+    px: Option<f64>,
+    percent: Option<f64>,
+    calculation: Option<&std::sync::Arc<foundation::CalculationValue>>,
+    zoom: f64,
+) -> Length {
+    if let Some(calculation) = calculation {
+        return Length::from_calculation_value(calculation.Zoom(zoom));
+    }
     match (px, percent) {
         (None, None) => Length::Auto().clone(),
         (Some(px), None) => Length::Fixed(px * zoom),
-        (None, Some(percent)) => Length::Percent(percent),
-        (Some(px), Some(percent)) => super::LengthPercentage(px * zoom, percent, "mask size"),
+        (None, Some(percent)) => Length::Percent(percent * 100.0),
+        (Some(px), Some(percent)) => {
+            super::LengthPercentage(px * zoom, percent * 100.0, "mask size")
+        }
     }
 }
 
@@ -121,16 +227,34 @@ pub(super) fn ApplyNativeMaskImages(builder: &mut ComputedStyleBuilder, input: &
         layer.SetAttachment(EFillAttachment::kScroll);
         layer.SetClip(fill_box(image.clip));
         layer.SetOrigin(fill_box(image.origin));
-        layer.SetPositionX(&super::PositionLength(
-            image.position.x,
-            image.position_offset.x * zoom,
-            "mask position x",
-        ));
-        layer.SetPositionY(&super::PositionLength(
-            image.position.y,
-            image.position_offset.y * zoom,
-            "mask position y",
-        ));
+        let position_x = image.position_x_calculation.as_ref().map_or_else(
+            || {
+                super::PositionLength(
+                    image.position.x,
+                    image.position_offset.x * zoom,
+                    "mask position x",
+                )
+            },
+            |calculation| Length::from_calculation_value(calculation.Zoom(zoom)),
+        );
+        let position_y = image.position_y_calculation.as_ref().map_or_else(
+            || {
+                super::PositionLength(
+                    image.position.y,
+                    image.position_offset.y * zoom,
+                    "mask position y",
+                )
+            },
+            |calculation| Length::from_calculation_value(calculation.Zoom(zoom)),
+        );
+        layer.SetPositionX(&position_x);
+        layer.SetPositionY(&position_y);
+        if image.position_x_from_right {
+            layer.SetBackgroundXOrigin(BackgroundEdgeOrigin::kRight);
+        }
+        if image.position_y_from_bottom {
+            layer.SetBackgroundYOrigin(BackgroundEdgeOrigin::kBottom);
+        }
         let fallback_x = if matches!(
             image.repeat,
             BackgroundRepeat::kRepeat | BackgroundRepeat::kRepeatX
@@ -167,8 +291,18 @@ pub(super) fn ApplyNativeMaskImages(builder: &mut ComputedStyleBuilder, input: &
             BackgroundSizeMode::kAuto | BackgroundSizeMode::kExplicit => EFillSizeType::kSizeLength,
         };
         let size = LengthSize::new(
-            &size_length(image.width, image.width_percentage, zoom),
-            &size_length(image.height, image.height_percentage, zoom),
+            &size_length(
+                image.width,
+                image.width_percentage,
+                image.width_calculation.as_ref(),
+                zoom,
+            ),
+            &size_length(
+                image.height,
+                image.height_percentage,
+                image.height_calculation.as_ref(),
+                zoom,
+            ),
         );
         layer.SetSize(&FillSize::new(type_, &size));
     }

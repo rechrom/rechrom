@@ -28,7 +28,14 @@ pub struct LayerTreeId(pub u64);
 pub struct FrameConfig {
     /// Visible root property-tree space; never used as a layer's bounds/origin.
     pub viewport: PaintRect,
+    /// Retained artifact units to target device pixels. A Blink-style artifact
+    /// painted in LayoutZoomFactor coordinates uses 1 here.
     pub raster_scale: f64,
+    /// CSS pixels to target device pixels, retained as display metadata.
+    pub device_scale_factor: f64,
+    /// CSS pixels to retained artifact units. This is independent from raster
+    /// scale so painted-device-scale frames do not apply DPR twice.
+    pub layout_zoom_factor: f64,
     /// Current pending-tree viewport. Tiles in this target are foreground
     /// work required before activation.
     pub activation_scroll: Option<CompositorScrollOffset>,
@@ -40,7 +47,9 @@ pub struct FrameConfig {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CompositorScrollOffset {
     pub scroll_node_id: u64,
-    /// Additional CSS-pixel translation relative to the committed property.
+    /// Additional translation relative to the committed property, expressed in
+    /// the PaintArtifact's LayoutZoomFactor coordinate space.
+    pub translation_x: f64,
     pub translation_y: f64,
 }
 
@@ -51,6 +60,7 @@ pub enum UnsupportedReason {
     InvalidChunkRange,
     InvalidRecordRange,
     NonTranslationTransform,
+    Preserve3dContext,
     FractionalPixelPlacement,
     UnsupportedClip,
     OpacityEffect,
@@ -235,9 +245,19 @@ pub struct RasterTask {
     pub generation: u64,
     pub tile_index: (i32, i32),
     pub tiling_rect: PaintRect,
+    /// Non-overlapping content rectangle published to the compositor.
     pub tile_rect: PaintRect,
+    /// Chromium-style raster rectangle including overlapping border texels.
+    /// Raster replays this rectangle and crops `content_offset`/`pixel_size`
+    /// before publishing the resident tile resource.
+    pub raster_rect: PaintRect,
     pub raster_scale: f64,
+    /// Cropped, non-overlapping compositor resource size.
     pub pixel_size: (u32, u32),
+    /// Full backing size used during PaintRecord playback.
+    pub raster_pixel_size: (u32, u32),
+    /// Top-left of the compositor resource inside the raster backing.
+    pub content_offset: (u32, u32),
     /// Pending-tree viewport work. Chromium does not notify ready for
     /// activation until these tiles are ready; generic SOON work remains
     /// asynchronous.

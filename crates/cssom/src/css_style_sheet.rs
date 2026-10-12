@@ -1,5 +1,12 @@
 #![allow(non_snake_case)]
 
+use std::{
+    any::Any,
+    fmt,
+    rc::Rc,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
 #[cfg(test)]
 use css_parser::css_parser_token::{BlockType, CSSParserTokenType};
 #[cfg(test)]
@@ -57,8 +64,35 @@ pub struct CSSKeyframesRule {
     pub layer_name: String,
 }
 
+/// Browser-owned user-agent stylesheet role. Blink keeps these as distinct
+/// `CSSDefaultStyleSheets` owners and `StyleResolver::MatchUARules` selects one
+/// from the element namespace. The role lives on the CSSOM owner so the
+/// existing `StyleEngine::Update(..., &[CSSStyleSheet])` package boundary can
+/// carry that distinction without exposing Style's RuleSet type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CSSUserAgentStyleSheetRole {
+    kHTML,
+    /// Supplemental HTML rules selected only for quirks-mode documents.
+    /// Chromium owns these in `default_html_quirks_style_` rather than
+    /// merging them into the ordinary HTML RuleSet.
+    kHTMLQuirks,
+    /// Supplemental theme rules selected when the document media environment
+    /// is in forced-colors mode.
+    kForcedColors,
+    /// Default rules for generated `::marker` pseudos. Chromium loads this as
+    /// its own `CSSDefaultStyleSheets::marker_style_sheet_` on first marker
+    /// request; keeping the role on the CSSOM owner preserves that RuleSet
+    /// boundary across `StyleEngine::Update`.
+    kMarker,
+    /// Supplemental rules selected while the document retains at least one
+    /// element with the Fullscreen API fullscreen flag.
+    kFullscreen,
+    kSVG,
+    kMathML,
+}
+
 // cpp: cssom/css_style_sheet.h:33-41
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default)]
 pub struct CSSStyleSheet {
     pub rules: Vec<CSSStyleRule>,
     pub font_faces: Vec<CSSFontFaceRule>,
@@ -67,6 +101,196 @@ pub struct CSSStyleSheet {
     pub property_rules: Vec<crate::CSSPropertyRule>,
     pub layer_order: Vec<String>,
     pub owner_node_id: u64,
+    /// Link-owned sheet state. Inline and constructed sheets retain the
+    /// defaults. The owner document keeps inactive alternate sheets in CSSOM,
+    /// while Style only consumes the active subset.
+    pub disabled: bool,
+    pub alternate: bool,
+    pub title: String,
+    /// Media attached to the owning `<link>`. Nested `@media` conditions stay
+    /// on individual rules; this outer list is prepended when the sheet is
+    /// attached so the existing media evaluator sees both levels.
+    pub owner_media_conditions: Vec<String>,
+    // The projection stays independent of Style's concrete parser types.  The
+    // erased owner is only a transfer slot: StyleEngine downcasts it into its
+    // private typed-sheet sidecar, while CSSOM observes identity, revision and
+    // exact source only.
+    provenance: CSSStyleSheetProvenance,
+}
+
+#[derive(Clone, Default)]
+struct CSSStyleSheetProvenance {
+    identity: u64,
+    revision: u64,
+    source_text: String,
+    source_is_current: bool,
+    parsed_backing: Option<Rc<dyn Any>>,
+    user_agent_role: Option<CSSUserAgentStyleSheetRole>,
+}
+
+static NEXT_STYLE_SHEET_IDENTITY: AtomicU64 = AtomicU64::new(1);
+
+impl fmt::Debug for CSSStyleSheet {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CSSStyleSheet")
+            .field("rules", &self.rules)
+            .field("font_faces", &self.font_faces)
+            .field("keyframes", &self.keyframes)
+            .field("scopes", &self.scopes)
+            .field("property_rules", &self.property_rules)
+            .field("layer_order", &self.layer_order)
+            .field("owner_node_id", &self.owner_node_id)
+            .field("disabled", &self.disabled)
+            .field("alternate", &self.alternate)
+            .field("title", &self.title)
+            .field("owner_media_conditions", &self.owner_media_conditions)
+            .field("identity", &self.provenance.identity)
+            .field("revision", &self.provenance.revision)
+            .field("source_text", &self.provenance.source_text)
+            .field("source_is_current", &self.provenance.source_is_current)
+            .field("user_agent_role", &self.provenance.user_agent_role)
+            .finish()
+    }
+}
+
+impl PartialEq for CSSStyleSheet {
+    fn eq(&self, other: &Self) -> bool {
+        self.rules == other.rules
+            && self.font_faces == other.font_faces
+            && self.keyframes == other.keyframes
+            && self.scopes == other.scopes
+            && self.property_rules == other.property_rules
+            && self.layer_order == other.layer_order
+            && self.owner_node_id == other.owner_node_id
+            && self.disabled == other.disabled
+            && self.alternate == other.alternate
+            && self.title == other.title
+            && self.owner_media_conditions == other.owner_media_conditions
+            && self.provenance.source_text == other.provenance.source_text
+            && self.provenance.user_agent_role == other.provenance.user_agent_role
+    }
+}
+
+impl Eq for CSSStyleSheet {}
+
+impl CSSStyleSheet {
+    /// Attach the typed result which produced this CSSOM projection. CSSOM
+    /// deliberately erases its type so the dependency remains Style -> CSSOM.
+    pub fn AttachParsedBacking<T: Any>(&mut self, source_text: &str, parsed: Rc<T>) {
+        if self.provenance.identity == 0 {
+            self.provenance.identity = NEXT_STYLE_SHEET_IDENTITY.fetch_add(1, Ordering::Relaxed);
+            assert_ne!(self.provenance.identity, 0, "stylesheet identity exhausted");
+        }
+        if self.provenance.revision == 0 {
+            self.provenance.revision = 1;
+        }
+        self.provenance.source_text.clear();
+        self.provenance.source_text.push_str(source_text);
+        self.provenance.source_is_current = true;
+        self.provenance.parsed_backing = Some(parsed);
+    }
+
+    pub fn Identity(&self) -> u64 {
+        self.provenance.identity
+    }
+
+    pub fn Revision(&self) -> u64 {
+        self.provenance.revision
+    }
+
+    pub fn SourceText(&self) -> &str {
+        &self.provenance.source_text
+    }
+
+    pub fn HasCurrentSource(&self) -> bool {
+        self.provenance.source_is_current
+    }
+
+    pub fn ParsedBacking<T: Any>(&self) -> Option<Rc<T>> {
+        self.provenance
+            .parsed_backing
+            .as_ref()
+            .cloned()
+            .and_then(|owner| owner.downcast::<T>().ok())
+    }
+
+    pub fn SetUserAgentStyleSheetRole(&mut self, role: CSSUserAgentStyleSheetRole) {
+        self.provenance.user_agent_role = Some(role);
+    }
+
+    pub fn UserAgentStyleSheetRole(&self) -> Option<CSSUserAgentStyleSheetRole> {
+        self.provenance.user_agent_role
+    }
+
+    pub(crate) fn PrepareOwnerReplacement(&mut self, previous: &Self) {
+        let replacement_has_fresh_owner = self.provenance.identity != previous.provenance.identity
+            || self.provenance.revision > previous.provenance.revision;
+        let contents_changed = self.rules != previous.rules
+            || self.font_faces != previous.font_faces
+            || self.keyframes != previous.keyframes
+            || self.scopes != previous.scopes
+            || self.property_rules != previous.property_rules
+            || self.layer_order != previous.layer_order
+            || self.provenance.source_text != previous.provenance.source_text;
+        self.provenance.identity = previous.provenance.identity;
+        self.provenance.user_agent_role = previous.provenance.user_agent_role;
+        self.provenance.revision = previous
+            .provenance
+            .revision
+            .checked_add(1)
+            .expect("stylesheet revision exhausted");
+        if contents_changed && !replacement_has_fresh_owner {
+            // A caller edited a cloned CSSOM projection directly. Never expose
+            // the old typed owner under the new revision; StyleEngine can
+            // recover once from exact source when one is available.
+            self.provenance.parsed_backing = None;
+            self.provenance.source_is_current = false;
+        }
+    }
+
+    // cpp: CSSStyleSheet::SetMediaQueries; LinkStyle::NotifyFinished.
+    pub fn SetLinkMetadata(
+        &mut self,
+        owner_node_id: u64,
+        alternate: bool,
+        disabled: bool,
+        title: String,
+        media: String,
+    ) {
+        self.owner_node_id = owner_node_id;
+        self.alternate = alternate;
+        self.disabled = disabled;
+        self.title = title;
+        let media = media.trim();
+        if media.is_empty() || media.eq_ignore_ascii_case("all") {
+            return;
+        }
+        let media = media.to_owned();
+        self.owner_media_conditions.push(media.clone());
+        for rule in &mut self.rules {
+            rule.media_conditions.insert(0, media.clone());
+        }
+        for face in &mut self.font_faces {
+            face.media_conditions.insert(0, media.clone());
+        }
+        for keyframes in &mut self.keyframes {
+            keyframes.media_conditions.insert(0, media.clone());
+        }
+        for property in &mut self.property_rules {
+            property.media_conditions.insert(0, media.clone());
+        }
+    }
+
+    // cpp: CSSStyleSheet::CanBeActivated. A title identifies a stylesheet
+    // set. Persistent untitled sheets are always active; titled sheets are
+    // active only when their title is the document's preferred set. An
+    // alternate sheet without a title is never activatable.
+    pub fn CanBeActivated(&self, preferred_set_name: &str) -> bool {
+        !self.disabled
+            && (self.title.is_empty() || self.title == preferred_set_name)
+            && (!self.alternate || !self.title.is_empty())
+    }
 }
 
 // cpp: cssom/css_style_sheet.cc:16-37

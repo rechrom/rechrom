@@ -9,7 +9,9 @@ use foundation::{
 };
 use layoutng_fragment_tree::fragment_items::FragmentItems;
 use layoutng_style::style::computed_style::ComputedStyle;
-use layoutng_style::style::computed_style_constants::{ContentDistributionType, ContentPosition};
+use layoutng_style::style::computed_style_constants::{
+    ContentDistributionType, ContentPosition, PseudoId,
+};
 use layoutng_style::style::outline_type::OutlineType;
 use layoutng_style::style::style_difference::StyleDifference;
 
@@ -20,7 +22,7 @@ use super::layout_block::LayoutBlock;
 use super::layout_box::LayoutBox;
 use super::layout_box_model_object::LayoutBoxModelObject;
 use super::layout_invalidation_reason;
-use super::layout_node_metadata::{ContainerNode, Node};
+use super::layout_node_metadata::{ContainerNode, Element, ElementType, Node};
 use super::layout_object::{LayoutObject, StyleChangeContext};
 use super::layout_pass_scope::LayoutObjectFactoryScope;
 use super::outline_info::LayoutOutlineInfo;
@@ -133,7 +135,6 @@ unsafe extern "Rust" {
     fn DispatchLayoutBlockFlowIsFragmentationContextRoot(flow: *const LayoutBlockFlow) -> bool;
     fn DispatchLayoutBlockFlowWillCollectInlines(flow: *mut LayoutBlockFlow);
 
-    fn LayoutBlockFlowUpdateForMulticolFromMulticol(flow: *mut LayoutBlockFlow);
     fn LayoutBlockFlowShouldTruncateOverflowingTextFromInline(flow: *const LayoutBlockFlow)
         -> bool;
 
@@ -696,21 +697,16 @@ impl LayoutBlockFlow {
         self.CheckIsNotDestroyed();
         self.block_
             .StyleDidChange(diff, old_style, new_style, style_change_context);
-        let factories = LayoutObjectFactoryScope::Objects();
-        let update_multicol = if factories.is_null() {
-            None
-        } else {
-            unsafe { &*factories }.update_multicol
-        };
-        if let Some(update_multicol) = update_multicol {
-            update_multicol(self, &diff, old_style, new_style);
-        } else if (diff.NeedsFullLayout() || old_style.is_null())
-            && self.StyleRef().SpecifiesColumns()
-        {
-            std::panic::panic_any(UnsupportedLayout::new(
-                "multicol layout module is not installed",
-            ));
+        if diff.NeedsFullLayout() || old_style.is_null() {
+            self.UpdateForMulticol();
         }
+        if !old_style.is_null()
+            && unsafe { &*old_style }.CanGeneratePseudoElement(PseudoId::kPseudoIdColumn)
+                != new_style.CanGeneratePseudoElement(PseudoId::kPseudoIdColumn)
+        {
+            self.SetNeedsLayout(&raw const layout_invalidation_reason::kStyleChange);
+        }
+        let factories = LayoutObjectFactoryScope::Objects();
         if diff.needs_reshape() && !factories.is_null() {
             if let Some(update_inline_style) = unsafe { &*factories }.update_inline_style {
                 update_inline_style(self, old_style, new_style);
@@ -770,9 +766,40 @@ impl LayoutBlockFlow {
     }
 
     // cpp: layoutng/internal/layout_block_flow.h:97-99
+    // cpp: layoutng/internal/layout_block_flow.cc:650-707
     pub fn UpdateForMulticol(&mut self) {
         self.CheckIsNotDestroyed();
-        unsafe { LayoutBlockFlowUpdateForMulticolFromMulticol(self) };
+        let mut should_be_multicol = self.StyleRef().SpecifiesColumns() && self.AllowsColumns();
+        if should_be_multicol && self.IsFieldset() {
+            should_be_multicol = false;
+        }
+        if should_be_multicol {
+            let element = DynamicTo::<Element>(self.GetNode());
+            if !element.is_null()
+                && unsafe { &*element }.IsFormControlElement()
+                && unsafe { &*element }.GetElementType() != ElementType::kHTMLButtonElement
+            {
+                should_be_multicol = false;
+            }
+        }
+        if should_be_multicol == self.IsMulticolContainer() {
+            return;
+        }
+
+        self.SetIsMulticolContainer(should_be_multicol);
+
+        let inside_multicol = should_be_multicol || self.IsInsideMulticol();
+        let mut child = self.FirstChild();
+        while !child.is_null() {
+            unsafe { &mut *child }.SetIsInsideMulticolIncludingDescendants(inside_multicol);
+            child = unsafe { &*child }.NextSibling();
+        }
+
+        if should_be_multicol {
+            self.MakeChildrenNonInlineDefault();
+        } else {
+            self.MakeChildrenInlineIfPossible();
+        }
     }
 
     // cpp: layoutng/internal/layout_block_flow.h:112-112

@@ -7,6 +7,9 @@ use layer_tile::recording::{
 };
 use layer_tile::{FramePlan, LayerId, RasterTask};
 use paint::paint_engine::{DisplayItem, DisplayItemType as Kind, PaintRect};
+use paint::paint_property_tree::{
+    ClipPaintPropertyNode, EffectPaintPropertyNode, PropertyTreeState,
+};
 use skia::compat::commands::{DrawCommand, ResourceContext};
 use skia::src::core::SkCanvas::RasterImageCache;
 use skia::RasterClipProductCache;
@@ -80,13 +83,13 @@ pub(crate) struct RasterLayerState {
 }
 pub struct LayerReplay<'a> {
     resources: ResourceContext<'a>,
-    documents: BTreeMap<u64, Arc<dyn image_resource::DocumentPaintRecord>>,
+    documents: BTreeMap<u64, Arc<image_resource::DocumentPaintContent>>,
     layers: BTreeMap<LayerId, Arc<PreparedLayer>>,
     scratch: Vec<u8>,
 }
 pub(crate) fn document_records(
     artifact: &paint::paint_engine::PaintArtifact,
-) -> BTreeMap<u64, Arc<dyn image_resource::DocumentPaintRecord>> {
+) -> BTreeMap<u64, Arc<image_resource::DocumentPaintContent>> {
     artifact
         .resources
         .iter()
@@ -96,6 +99,255 @@ pub(crate) fn document_records(
             image_resource::PaintImageContent::Bitmap(_) => None,
         })
         .collect()
+}
+
+fn hydrate_bitmap_pattern_shader(
+    shader: &mut skia::compat::commands::PaintShader,
+    resources: &layoutng_assembly::fragment_tree::PaintResources,
+) {
+    let Some(pattern) = shader.pattern.as_mut() else {
+        return;
+    };
+    for command in &mut Arc::make_mut(pattern).commands {
+        match command {
+            skia::compat::commands::SvgPatternCommand::DrawImage(image) => {
+                let Some(resource) = resources
+                    .images
+                    .iter()
+                    .find(|resource| resource.id == image.resource_id)
+                else {
+                    continue;
+                };
+                let Some(pixels) = resource.BitmapPixels() else {
+                    continue;
+                };
+                image.raster_width = resource.width;
+                image.raster_height = resource.height;
+                image.rgba8 = Arc::clone(pixels);
+            }
+            skia::compat::commands::SvgPatternCommand::DrawShape(shape)
+            | skia::compat::commands::SvgPatternCommand::DrawGlyph(shape) => {
+                if let Some(shader) = shape.fill_server.as_mut() {
+                    hydrate_bitmap_pattern_shader(shader, resources);
+                }
+                if let Some(shader) = shape.stroke_server.as_mut() {
+                    hydrate_bitmap_pattern_shader(shader, resources);
+                }
+            }
+            skia::compat::commands::SvgPatternCommand::SaveLayerMask(mask) => {
+                let nested = skia::compat::commands::PaintShader {
+                    pattern: Some(Arc::new(skia::compat::commands::SvgPatternData {
+                        commands: Arc::make_mut(mask).commands.clone(),
+                        content_transform: Arc::make_mut(mask).content_transform,
+                        opacity: 1.0,
+                    })),
+                    ..Default::default()
+                };
+                let mut nested = nested;
+                hydrate_bitmap_pattern_shader(&mut nested, resources);
+                Arc::make_mut(mask).commands = nested.pattern.unwrap().commands.clone();
+            }
+            _ => {}
+        }
+    }
+}
+
+fn hydrate_bitmap_patterns(
+    command: &mut DrawCommand,
+    resources: Option<&layoutng_assembly::fragment_tree::PaintResources>,
+) {
+    let Some(resources) = resources else { return };
+    if let Some(shader) = command.paint_shader.as_mut() {
+        hydrate_bitmap_pattern_shader(shader, resources);
+    }
+    for mask in &mut command.mask_layers {
+        if let Some(shader) = mask.paint_shader.as_mut() {
+            hydrate_bitmap_pattern_shader(shader, resources);
+        }
+    }
+}
+
+pub(crate) fn rasterize_pattern_document_record(
+    record: &paint::paint_engine::DocumentPaintArtifactRecord,
+    depth: usize,
+) -> Option<(u32, u32, Vec<u8>)> {
+    if depth >= 8 || record.record_size.width == 0 || record.record_size.height == 0 {
+        return None;
+    }
+    // record_size is the unzoomed CSS viewport selected by
+    // SVGImageForContainer. The outer Paint artifact already maps that
+    // viewport through effective zoom, and pattern-tile replay subsequently
+    // maps its logical tile to device pixels. Rasterizing this intermediate
+    // document image at zoom * DPR would therefore apply zoom twice. Blink's
+    // container scale leaves only the device-pixel density here.
+    let scale = record.container_key.device_pixel_ratio();
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let width = (f64::from(record.record_size.width) * scale)
+        .ceil()
+        .max(1.0) as u32;
+    let height = (f64::from(record.record_size.height) * scale)
+        .ceil()
+        .max(1.0) as u32;
+    let byte_count = usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?
+        .checked_mul(4)?;
+    if width > 8192 || height > 8192 || byte_count > 256 * 1024 * 1024 {
+        return None;
+    }
+    let documents = document_records(&record.artifact);
+    if record
+        .artifact
+        .DocumentImageContainerRequirements()
+        .iter()
+        .any(|(id, key)| {
+            documents
+                .get(id)
+                .and_then(|content| content.exact_record_for(key))
+                .is_none()
+        })
+    {
+        return None;
+    }
+    let empty = ResourceContext::default();
+    let mut canvas = skia::cpu::canvas::Canvas::new(&empty, width, height);
+    canvas.clear_transparent();
+    let mut transform = DisplayItem {
+        r#type: Kind::kConcat,
+        ..Default::default()
+    };
+    transform.transform.values[0] = f64::from(width) / f64::from(record.record_size.width);
+    transform.transform.values[5] = f64::from(height) / f64::from(record.record_size.height);
+    canvas.replay_item(&transform.to_skia(), &empty);
+    replay_document_artifact(&mut canvas, &record.artifact, depth + 1);
+    Some((width, height, canvas.finish()))
+}
+
+fn hydrate_document_pattern_shader(
+    target: &mut skia::compat::commands::PaintShader,
+    source: &layoutng_assembly::internal::paint_input::PaintShader,
+    documents: &BTreeMap<u64, Arc<image_resource::DocumentPaintContent>>,
+    depth: usize,
+) {
+    let (Some(target_pattern), Some(source_pattern)) =
+        (target.pattern.as_mut(), source.pattern.as_ref())
+    else {
+        return;
+    };
+    for (target, source) in Arc::make_mut(target_pattern)
+        .commands
+        .iter_mut()
+        .zip(&source_pattern.commands)
+    {
+        match (target, source) {
+            (
+                skia::compat::commands::SvgPatternCommand::DrawImage(target),
+                layoutng_assembly::internal::paint_input::SvgPatternCommand::DrawImage(source),
+            ) => {
+                let Some(key) = source.document_container_key.as_ref() else {
+                    continue;
+                };
+                let Some(record) = documents
+                    .get(&source.resource_id)
+                    .and_then(|content| content.exact_record_for(key))
+                    .and_then(|record| {
+                        record
+                            .as_any()
+                            .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
+                    })
+                else {
+                    continue;
+                };
+                let Some((width, height, pixels)) =
+                    rasterize_pattern_document_record(record, depth)
+                else {
+                    continue;
+                };
+                if record.intrinsic_size.width == 0 || record.intrinsic_size.height == 0 {
+                    continue;
+                }
+                let sx = f64::from(width) / f64::from(record.intrinsic_size.width);
+                let sy = f64::from(height) / f64::from(record.intrinsic_size.height);
+                target.source.x *= sx;
+                target.source.y *= sy;
+                target.source.width *= sx;
+                target.source.height *= sy;
+                target.raster_width = width;
+                target.raster_height = height;
+                target.rgba8 = Arc::new(pixels);
+            }
+            (
+                skia::compat::commands::SvgPatternCommand::DrawShape(target)
+                | skia::compat::commands::SvgPatternCommand::DrawGlyph(target),
+                layoutng_assembly::internal::paint_input::SvgPatternCommand::DrawShape(source)
+                | layoutng_assembly::internal::paint_input::SvgPatternCommand::DrawGlyph(source),
+            ) => {
+                if let (Some(target), Some(source)) =
+                    (target.fill_server.as_mut(), source.fill_server.as_ref())
+                {
+                    hydrate_document_pattern_shader(target, source, documents, depth);
+                }
+                if let (Some(target), Some(source)) =
+                    (target.stroke_server.as_mut(), source.stroke_server.as_ref())
+                {
+                    hydrate_document_pattern_shader(target, source, documents, depth);
+                }
+            }
+            (
+                skia::compat::commands::SvgPatternCommand::SaveLayerMask(target),
+                layoutng_assembly::internal::paint_input::SvgPatternCommand::SaveLayerMask(source),
+            ) => {
+                let target = Arc::make_mut(target);
+                let mut target_shader = skia::compat::commands::PaintShader {
+                    pattern: Some(Arc::new(skia::compat::commands::SvgPatternData {
+                        commands: target.commands.clone(),
+                        content_transform: target.content_transform,
+                        opacity: 1.0,
+                    })),
+                    ..Default::default()
+                };
+                let source_shader = layoutng_assembly::internal::paint_input::PaintShader {
+                    pattern: Some(Arc::new(
+                        layoutng_assembly::internal::paint_input::SvgPatternData {
+                            commands: source.commands.clone(),
+                            ..Default::default()
+                        },
+                    )),
+                    ..Default::default()
+                };
+                hydrate_document_pattern_shader(
+                    &mut target_shader,
+                    &source_shader,
+                    documents,
+                    depth,
+                );
+                target.commands = target_shader.pattern.unwrap().commands.clone();
+            }
+            _ => {}
+        }
+    }
+}
+
+fn hydrate_document_patterns(
+    target: &mut DrawCommand,
+    source: &DisplayItem,
+    documents: &BTreeMap<u64, Arc<image_resource::DocumentPaintContent>>,
+    depth: usize,
+) {
+    if let (Some(target), Some(source)) =
+        (target.paint_shader.as_mut(), source.paint_shader.as_ref())
+    {
+        hydrate_document_pattern_shader(target, source, documents, depth);
+    }
+    for (target, source) in target.mask_layers.iter_mut().zip(&source.mask_layers) {
+        if let (Some(target), Some(source)) =
+            (target.paint_shader.as_mut(), source.paint_shader.as_ref())
+        {
+            hydrate_document_pattern_shader(target, source, documents, depth);
+        }
+    }
 }
 
 fn replay_document_image(
@@ -129,6 +381,21 @@ fn replay_document_image(
     }
     if source.width <= 0.0 || source.height <= 0.0 {
         return false;
+    }
+    if std::env::var_os("BROWSER_TRACE_STYLE_IMAGES").is_some() {
+        eprintln!(
+            "document-image-replay resource_id={} destination={:?} source={:?} intrinsic={}x{} record={}x{} items={} display_items={} chunks={}",
+            image.resource_id,
+            image.rect,
+            source,
+            record.intrinsic_size.width,
+            record.intrinsic_size.height,
+            record.record_size.width,
+            record.record_size.height,
+            record.artifact.items.len(),
+            record.artifact.display_items.len(),
+            record.artifact.chunks.len(),
+        );
     }
     let empty_resources = ResourceContext::default();
     let save_kind = if image.opacity < 1.0 {
@@ -179,6 +446,502 @@ fn replay_document_image(
     true
 }
 
+// Mirrors source_replay::DrawTiledImage, but each tile replays the selected
+// SVG document record instead of asking the bitmap ResourceContext for pixels.
+// Background and table-background producers provide tile_rect in destination
+// coordinates, so this path has the same placement and repeat bounds as the
+// ordinary bitmap implementation.
+fn replay_tiled_document_image(
+    canvas: &mut skia::cpu::canvas::Canvas,
+    image: &DisplayItem,
+    record: Option<&paint::paint_engine::DocumentPaintArtifactRecord>,
+    depth: usize,
+) -> bool {
+    let Some(record) = record else { return false };
+    let tile_rect = if image.tile_rect.width > 0.0 && image.tile_rect.height > 0.0 {
+        image.tile_rect
+    } else {
+        PaintRect {
+            x: image.source_rect.x * image.tile_scale.x + image.tile_phase.x,
+            y: image.source_rect.y * image.tile_scale.y + image.tile_phase.y,
+            width: image.source_rect.width * image.tile_scale.x,
+            height: image.source_rect.height * image.tile_scale.y,
+        }
+    };
+    let step_x = tile_rect.width + image.tile_spacing.width;
+    let step_y = tile_rect.height + image.tile_spacing.height;
+    if step_x <= 0.0 || step_y <= 0.0 {
+        return false;
+    }
+    let first_x = if image.repeat_x {
+        tile_rect.x - ((tile_rect.x - image.rect.x) / step_x).ceil() * step_x
+    } else {
+        tile_rect.x
+    };
+    let first_y = if image.repeat_y {
+        tile_rect.y - ((tile_rect.y - image.rect.y) / step_y).ceil() * step_y
+    } else {
+        tile_rect.y
+    };
+    let empty_resources = ResourceContext::default();
+    canvas.replay_item(
+        &DisplayItem {
+            r#type: Kind::kSave,
+            ..Default::default()
+        }
+        .to_skia(),
+        &empty_resources,
+    );
+    canvas.replay_item(
+        &DisplayItem {
+            r#type: Kind::kClipRect,
+            rect: image.rect,
+            ..Default::default()
+        }
+        .to_skia(),
+        &empty_resources,
+    );
+    let mut tile = image.clone();
+    tile.r#type = Kind::kDrawImageRect;
+    let mut y = first_y;
+    let mut rows = 0;
+    while y < image.rect.y + image.rect.height && rows < 10_000 {
+        rows += 1;
+        let mut x = first_x;
+        let mut columns = 0;
+        while x < image.rect.x + image.rect.width && columns < 10_000 {
+            columns += 1;
+            tile.rect = PaintRect {
+                x,
+                y,
+                width: tile_rect.width,
+                height: tile_rect.height,
+            };
+            replay_document_image(canvas, &tile, Some(record), depth);
+            x += if image.repeat_x {
+                step_x
+            } else {
+                image.rect.width + step_x
+            };
+        }
+        y += if image.repeat_y {
+            step_y
+        } else {
+            image.rect.height + step_y
+        };
+    }
+    canvas.replay_item(
+        &DisplayItem {
+            r#type: Kind::kRestore,
+            ..Default::default()
+        }
+        .to_skia(),
+        &empty_resources,
+    );
+    true
+}
+
+fn replay_mask_layers(
+    canvas: &mut skia::cpu::canvas::Canvas,
+    item: &DisplayItem,
+    resources: &ResourceContext,
+    documents: &BTreeMap<u64, Arc<image_resource::DocumentPaintContent>>,
+    depth: usize,
+) -> bool {
+    if item.r#type != Kind::kDrawMask {
+        return false;
+    }
+    let command = item.to_skia();
+    debug_assert_eq!(command.mask_layers.len(), item.mask_layers.len());
+    canvas.draw_mask_layers_with(&command.mask_layers, resources, |canvas, index, _| {
+        let Some(layer) = item.mask_layers.get(index) else {
+            return false;
+        };
+        let Some(key) = layer.document_image_container_key.as_ref() else {
+            return false;
+        };
+        let Some(record) = documents
+            .get(&layer.resource_id)
+            .and_then(|content| content.record_for(key))
+            .and_then(|record| {
+                record
+                    .as_any()
+                    .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
+            })
+        else {
+            return false;
+        };
+        replay_tiled_document_image(
+            canvas,
+            &DisplayItem {
+                r#type: Kind::kDrawTiledImage,
+                rect: layer.clip_rect,
+                source_rect: layer.source_rect,
+                tile_rect: layer.tile_rect,
+                resource_id: layer.resource_id,
+                image_interpolation_quality: layer.image_interpolation_quality,
+                document_image_container_key: Some(key.clone()),
+                repeat_x: layer.repeat_x,
+                repeat_y: layer.repeat_y,
+                tile_scale: layer.tile_scale,
+                tile_spacing: layer.tile_spacing,
+                ..Default::default()
+            },
+            Some(record),
+            depth,
+        )
+    });
+    true
+}
+
+#[derive(Clone)]
+enum DocumentPropertyScope {
+    Clip(Arc<ClipPaintPropertyNode>),
+    Effect(Arc<EffectPaintPropertyNode>, bool),
+}
+
+impl DocumentPropertyScope {
+    fn same_node(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Clip(left), Self::Clip(right)) => left.lifecycle.same_node(&right.lifecycle),
+            (Self::Effect(left, _), Self::Effect(right, _)) => {
+                left.lifecycle.same_node(&right.lifecycle)
+            }
+            _ => false,
+        }
+    }
+}
+
+fn document_clip_chain(
+    leaf: &Arc<ClipPaintPropertyNode>,
+    scopes: &mut Vec<DocumentPropertyScope>,
+    seen: &mut Vec<Arc<ClipPaintPropertyNode>>,
+) {
+    let mut chain = Vec::new();
+    let mut current = Some(leaf.clone());
+    while let Some(clip) = current {
+        current = clip.parent.clone();
+        chain.push(clip);
+    }
+    for clip in chain.into_iter().rev() {
+        if (clip.rect.is_some() || !clip.clip_path.is_empty())
+            && !seen
+                .iter()
+                .any(|old| old.lifecycle.same_node(&clip.lifecycle))
+        {
+            scopes.push(DocumentPropertyScope::Clip(clip.clone()));
+            seen.push(clip);
+        }
+    }
+}
+
+fn document_effect_is_real(
+    effect: &EffectPaintPropertyNode,
+    masked_parents: &[Arc<EffectPaintPropertyNode>],
+) -> bool {
+    effect.is_mask
+        || effect.opacity != 1.0
+        || !effect.filters.is_empty()
+        || effect.blend_mode != layoutng_assembly::internal::paint_input::PaintBlendMode::kNormal
+        || effect.isolates_blending
+        || masked_parents
+            .iter()
+            .any(|parent| parent.lifecycle.same_node(&effect.lifecycle))
+}
+
+// PaintChunksToCcLayer switches Effect, Clip and Transform in that order. The
+// effect chain is shared across consecutive chunks and is closed only to the
+// lifecycle-identity LCA. In particular, two chunks under opacity:.5 must be
+// drawn into one surface and have alpha applied once after both are complete.
+fn document_property_scopes(
+    state: &PropertyTreeState,
+    masked_parents: &[Arc<EffectPaintPropertyNode>],
+) -> Vec<DocumentPropertyScope> {
+    let mut scopes = Vec::new();
+    let mut seen_clips = Vec::new();
+    let mut effects = Vec::new();
+    let mut current = Some(state.effect.clone());
+    while let Some(effect) = current {
+        current = effect.parent.clone();
+        effects.push(effect);
+    }
+    for effect in effects.into_iter().rev() {
+        if document_effect_is_real(&effect, masked_parents) {
+            let force_isolation = masked_parents
+                .iter()
+                .any(|parent| parent.lifecycle.same_node(&effect.lifecycle));
+            if effect.is_mask {
+                scopes.push(DocumentPropertyScope::Effect(
+                    effect.clone(),
+                    force_isolation,
+                ));
+                if let Some(output_clip) = &effect.output_clip {
+                    document_clip_chain(output_clip, &mut scopes, &mut seen_clips);
+                }
+            } else {
+                if let Some(output_clip) = &effect.output_clip {
+                    document_clip_chain(output_clip, &mut scopes, &mut seen_clips);
+                }
+                scopes.push(DocumentPropertyScope::Effect(effect, force_isolation));
+            }
+        }
+    }
+    document_clip_chain(&state.clip, &mut scopes, &mut seen_clips);
+    scopes
+}
+
+fn inverse_affine(
+    matrix: &layoutng_assembly::internal::layout_input::TransformMatrix,
+) -> Option<layoutng_assembly::internal::layout_input::TransformMatrix> {
+    let values = matrix.values;
+    let determinant = values[0] * values[5] - values[4] * values[1];
+    if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
+        return None;
+    }
+    let mut inverse = layoutng_assembly::internal::layout_input::TransformMatrix::default();
+    inverse.values[0] = values[5] / determinant;
+    inverse.values[1] = -values[1] / determinant;
+    inverse.values[4] = -values[4] / determinant;
+    inverse.values[5] = values[0] / determinant;
+    inverse.values[12] = -(inverse.values[0] * values[12] + inverse.values[4] * values[13]);
+    inverse.values[13] = -(inverse.values[1] * values[12] + inverse.values[5] * values[13]);
+    inverse
+        .values
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(inverse)
+}
+
+fn replay_concat(
+    canvas: &mut skia::cpu::canvas::Canvas,
+    matrix: layoutng_assembly::internal::layout_input::TransformMatrix,
+    resources: &ResourceContext,
+) {
+    if matrix != Default::default() {
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kConcat,
+                transform: matrix,
+                ..Default::default()
+            }
+            .to_skia(),
+            resources,
+        );
+    }
+}
+
+fn replay_document_clip_open(
+    canvas: &mut skia::cpu::canvas::Canvas,
+    clip: &ClipPaintPropertyNode,
+    resources: &ResourceContext,
+) {
+    canvas.replay_item(
+        &DisplayItem {
+            r#type: Kind::kSave,
+            ..Default::default()
+        }
+        .to_skia(),
+        resources,
+    );
+    let Ok(matrix) = layer_tile::compositor_transform(&clip.local_transform_space, 1.0) else {
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kClipRect,
+                rect: PaintRect::default(),
+                ..Default::default()
+            }
+            .to_skia(),
+            resources,
+        );
+        return;
+    };
+    let Some(inverse) = inverse_affine(&matrix) else {
+        // A singular local space has no drawable projection. Keep the canvas
+        // in the document root coordinate space for following sibling scopes.
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kClipRect,
+                rect: PaintRect::default(),
+                ..Default::default()
+            }
+            .to_skia(),
+            resources,
+        );
+        return;
+    };
+    replay_concat(canvas, matrix, resources);
+    // A path node's rect is its conservative scheduling bound, not an
+    // additional clip. Applying both would multiply antialiased edge coverage.
+    if let Some(rect) = clip.rect.filter(|_| clip.clip_path.is_empty()) {
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: if clip.radii == Default::default() {
+                    Kind::kClipRect
+                } else {
+                    Kind::kClipRoundedRect
+                },
+                rect,
+                corner_radii: clip.radii,
+                antialias: true,
+                ..Default::default()
+            }
+            .to_skia(),
+            resources,
+        );
+    }
+    if !clip.clip_path.is_empty() {
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kClipPath,
+                path: clip.clip_path.clone(),
+                even_odd: clip.clip_path_even_odd,
+                antialias: true,
+                ..Default::default()
+            }
+            .to_skia(),
+            resources,
+        );
+    }
+    // SkCanvas materializes the clip in device space. Returning the CTM to
+    // the document root keeps later effect and chunk transforms independent.
+    replay_concat(canvas, inverse, resources);
+}
+
+fn replay_document_effect_open(
+    canvas: &mut skia::cpu::canvas::Canvas,
+    effect: &EffectPaintPropertyNode,
+    force_isolation: bool,
+    resources: &ResourceContext,
+) {
+    if effect.is_mask {
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kSaveLayerDstIn,
+                ..Default::default()
+            }
+            .to_skia(),
+            resources,
+        );
+        return;
+    }
+    let blend_surface = force_isolation
+        || effect.isolates_blending
+        || effect.blend_mode != layoutng_assembly::internal::paint_input::PaintBlendMode::kNormal;
+    if blend_surface {
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kSaveLayerBlend,
+                blend_mode: effect.blend_mode,
+                opacity: effect.opacity,
+                ..Default::default()
+            }
+            .to_skia(),
+            resources,
+        );
+    } else if effect.opacity != 1.0 {
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kSaveLayerAlpha,
+                opacity: effect.opacity,
+                ..Default::default()
+            }
+            .to_skia(),
+            resources,
+        );
+    }
+    if !effect.filters.is_empty() {
+        let filter_transform = layer_tile::compositor_transform(&effect.local_transform_space, 1.0)
+            .ok()
+            .and_then(|matrix| inverse_affine(&matrix).map(|inverse| (matrix, inverse)));
+        // SaveLayerFilter samples its CTM when the surface is opened. Restore
+        // document-root coordinates inside the surface, then undo the sampled
+        // CTM after the matching restore in replay_document_effect_close.
+        if let Some((matrix, _)) = filter_transform {
+            replay_concat(canvas, matrix, resources);
+        }
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kSaveLayerFilter,
+                filters: effect.filters.clone(),
+                ..Default::default()
+            }
+            .to_skia(),
+            resources,
+        );
+        if let Some((_, inverse)) = filter_transform {
+            replay_concat(canvas, inverse, resources);
+        }
+    }
+}
+
+fn replay_document_effect_close(
+    canvas: &mut skia::cpu::canvas::Canvas,
+    effect: &EffectPaintPropertyNode,
+    force_isolation: bool,
+    resources: &ResourceContext,
+) {
+    if effect.is_mask {
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kRestore,
+                ..Default::default()
+            }
+            .to_skia(),
+            resources,
+        );
+        return;
+    }
+    if !effect.filters.is_empty() {
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kRestore,
+                ..Default::default()
+            }
+            .to_skia(),
+            resources,
+        );
+        if let Some(inverse) = layer_tile::compositor_transform(&effect.local_transform_space, 1.0)
+            .ok()
+            .and_then(|matrix| inverse_affine(&matrix))
+        {
+            replay_concat(canvas, inverse, resources);
+        }
+    }
+    let blend_surface = force_isolation
+        || effect.isolates_blending
+        || effect.blend_mode != layoutng_assembly::internal::paint_input::PaintBlendMode::kNormal;
+    if blend_surface || effect.opacity != 1.0 {
+        canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kRestore,
+                ..Default::default()
+            }
+            .to_skia(),
+            resources,
+        );
+    }
+}
+
+fn replay_document_scope_close(
+    canvas: &mut skia::cpu::canvas::Canvas,
+    scope: &DocumentPropertyScope,
+    resources: &ResourceContext,
+) {
+    match scope {
+        DocumentPropertyScope::Clip(_) => canvas.replay_item(
+            &DisplayItem {
+                r#type: Kind::kRestore,
+                ..Default::default()
+            }
+            .to_skia(),
+            resources,
+        ),
+        DocumentPropertyScope::Effect(effect, force_isolation) => {
+            replay_document_effect_close(canvas, effect, *force_isolation, resources)
+        }
+    }
+}
+
 fn replay_document_artifact(
     canvas: &mut skia::cpu::canvas::Canvas,
     artifact: &paint::paint_engine::PaintArtifact,
@@ -187,37 +950,92 @@ fn replay_document_artifact(
     let nested_resources = resources(artifact);
     let nested_documents = document_records(artifact);
     let empty_resources = ResourceContext::default();
-    let replay_range = |canvas: &mut skia::cpu::canvas::Canvas,
-                        range: std::ops::Range<usize>| {
+    let replay_range = |canvas: &mut skia::cpu::canvas::Canvas, range: std::ops::Range<usize>| {
         for nested in &artifact.items[range] {
             let nested_record = nested_documents
                 .get(&nested.resource_id)
+                .and_then(|content| {
+                    content.record_for(nested.document_image_container_key.as_ref()?)
+                })
                 .and_then(|record| {
                     record
                         .as_any()
                         .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
                 });
-            if nested.r#type != Kind::kDrawImageRect
-                || !replay_document_image(canvas, nested, nested_record, depth)
-            {
-                canvas.replay_item(&nested.to_skia(), &nested_resources);
+            let replayed_document = match nested.r#type {
+                Kind::kDrawImageRect => replay_document_image(canvas, nested, nested_record, depth),
+                Kind::kDrawTiledImage => {
+                    replay_tiled_document_image(canvas, nested, nested_record, depth)
+                }
+                Kind::kDrawMask => {
+                    replay_mask_layers(canvas, nested, &nested_resources, &nested_documents, depth)
+                }
+                _ => false,
+            };
+            if !replayed_document {
+                let mut command = nested.to_skia();
+                hydrate_bitmap_patterns(&mut command, artifact.resources.as_deref());
+                hydrate_document_patterns(&mut command, nested, &nested_documents, depth);
+                canvas.replay_item(&command, &nested_resources);
             }
         }
     };
 
     // PaintArtifact drawing operations are recorded in each PaintChunk's
     // property-tree coordinate space. Replaying only the flat PaintRecord
-    // loses transforms such as an SVG <g transform=...>; Chromium applies the
-    // PaintChunk properties before rasterizing the record as well.
+    // loses transforms, clips and effects such as an SVG <g opacity=...>.
+    // Match PaintChunksToCcLayer: switch shared Effect/Clip scopes to their
+    // lifecycle LCA, then apply the individual chunk Transform to its record.
     if artifact.display_items.is_empty() || artifact.chunks.is_empty() {
         replay_range(canvas, 0..artifact.items.len());
         return;
     }
+    let mut masked_parents = Vec::new();
+    for chunk in &artifact.chunks {
+        let mut current = Some(chunk.properties.effect.clone());
+        while let Some(effect) = current {
+            current = effect.parent.clone();
+            if effect.is_mask {
+                if let Some(parent) = &effect.parent {
+                    if !masked_parents
+                        .iter()
+                        .any(|old: &Arc<EffectPaintPropertyNode>| {
+                            old.lifecycle.same_node(&parent.lifecycle)
+                        })
+                    {
+                        masked_parents.push(parent.clone());
+                    }
+                }
+            }
+        }
+    }
+    let mut active_scopes: Vec<DocumentPropertyScope> = Vec::new();
     for chunk in &artifact.chunks {
         let begin = chunk.begin_index as usize;
         let end = chunk.end_index as usize;
         if begin > end || end > artifact.display_items.len() {
             continue;
+        }
+        let scopes = document_property_scopes(&chunk.properties, &masked_parents);
+        let common = active_scopes
+            .iter()
+            .zip(&scopes)
+            .take_while(|(active, wanted)| active.same_node(wanted))
+            .count();
+        while active_scopes.len() > common {
+            let scope = active_scopes.pop().expect("active document scope");
+            replay_document_scope_close(canvas, &scope, &empty_resources);
+        }
+        for scope in scopes.into_iter().skip(common) {
+            match &scope {
+                DocumentPropertyScope::Clip(clip) => {
+                    replay_document_clip_open(canvas, clip, &empty_resources)
+                }
+                DocumentPropertyScope::Effect(effect, force_isolation) => {
+                    replay_document_effect_open(canvas, effect, *force_isolation, &empty_resources)
+                }
+            }
+            active_scopes.push(scope);
         }
         canvas.replay_item(
             &DisplayItem {
@@ -227,24 +1045,8 @@ fn replay_document_artifact(
             .to_skia(),
             &empty_resources,
         );
-        let mut transforms = Vec::new();
-        let mut current = Some(&chunk.properties.transform);
-        while let Some(node) = current {
-            transforms.push(node.matrix);
-            current = node.parent.as_ref();
-        }
-        for matrix in transforms.into_iter().rev() {
-            if matrix != Default::default() {
-                canvas.replay_item(
-                    &DisplayItem {
-                        r#type: Kind::kConcat,
-                        transform: matrix,
-                        ..Default::default()
-                    }
-                    .to_skia(),
-                    &empty_resources,
-                );
-            }
+        if let Ok(matrix) = layer_tile::compositor_transform(&chunk.properties.transform, 1.0) {
+            replay_concat(canvas, matrix, &empty_resources);
         }
         for record in &artifact.display_items[begin..end] {
             if record.record_begin <= record.record_end && record.record_end <= artifact.items.len()
@@ -261,14 +1063,18 @@ fn replay_document_artifact(
             &empty_resources,
         );
     }
+    while let Some(scope) = active_scopes.pop() {
+        replay_document_scope_close(canvas, &scope, &empty_resources);
+    }
 }
 impl<'a> LayerReplay<'a> {
     fn document_record(
         &self,
-        id: u64,
+        item: &DisplayItem,
     ) -> Option<&paint::paint_engine::DocumentPaintArtifactRecord> {
         self.documents
-            .get(&id)?
+            .get(&item.resource_id)?
+            .record_for(item.document_image_container_key.as_ref()?)?
             .as_any()
             .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
     }
@@ -316,7 +1122,7 @@ impl<'a> LayerReplay<'a> {
     }
     pub(crate) fn for_worker(
         resources: ResourceContext<'a>,
-        documents: BTreeMap<u64, Arc<dyn image_resource::DocumentPaintRecord>>,
+        documents: BTreeMap<u64, Arc<image_resource::DocumentPaintContent>>,
         layers: BTreeMap<LayerId, Arc<PreparedLayer>>,
         scratch: Vec<u8>,
     ) -> Self {
@@ -330,6 +1136,18 @@ impl<'a> LayerReplay<'a> {
     pub fn new(plan: &'a FramePlan, tasks: &[RasterTask]) -> Result<Self, ReplayUnsupported> {
         let list = plan.GetPaintArtifact();
         let documents = document_records(list);
+        if list
+            .DocumentImageContainerRequirements()
+            .iter()
+            .any(|(id, key)| {
+                documents
+                    .get(id)
+                    .and_then(|content| content.exact_record_for(key))
+                    .is_none()
+            })
+        {
+            return Err(ReplayUnsupported("missing-document-image-container"));
+        }
         let content = plan.GetRasterRecords();
         if plan.unsupported.is_some() {
             return Err(ReplayUnsupported("unsupported-layer-plan"));
@@ -367,10 +1185,10 @@ impl<'a> LayerReplay<'a> {
                 let mut saved = Vec::new();
                 let compile = needed.contains(&(layer.id, index));
                 let mut shadow_regions = Vec::new();
-                let raster_guard = match list.display_items[index].raster_effect_outset {
-                    paint::paint_engine::RasterEffectOutset::kWholePixel => 2,
-                    _ => 1,
-                };
+                // PictureLayerTiling's overlapping border texel is the normal
+                // AA/effect guard. Do not wrap every tile in another private
+                // surface gutter; that changes Skia's device-coordinate seeds.
+                let raster_guard = 0;
                 let mut commands = if compile {
                     Vec::with_capacity(source.items.len() + 2)
                 } else {
@@ -500,6 +1318,7 @@ impl<'a> LayerReplay<'a> {
                             shadow_regions.push(shadow_support(item, record_transform, scale));
                         }
                         let mut command = item.to_skia();
+                        hydrate_bitmap_patterns(&mut command, list.resources.as_deref());
                         // Keep the CSS/platform FontSmoothingMode attached to
                         // the run. Chromium lets Skia downgrade LCD coverage
                         // when the raster target has unknown pixel geometry;
@@ -623,11 +1442,19 @@ impl<'a> LayerReplay<'a> {
             .get(&task.layer_id)
             .ok_or_else(|| bad("unknown raster layer"))?;
         let (width, height) = task.pixel_size;
+        let (raster_width, raster_height) = task.raster_pixel_size;
         if width == 0
             || height == 0
+            || raster_width == 0
+            || raster_height == 0
             || !aligned_rect(task.tile_rect, task.raster_scale)
+            || !aligned_rect(task.raster_rect, task.raster_scale)
             || (task.tile_rect.width * task.raster_scale) != width as f64
             || (task.tile_rect.height * task.raster_scale) != height as f64
+            || (task.raster_rect.width * task.raster_scale) != raster_width as f64
+            || (task.raster_rect.height * task.raster_scale) != raster_height as f64
+            || task.content_offset.0 + width > raster_width
+            || task.content_offset.1 + height > raster_height
         {
             return Err(bad("invalid tile geometry"));
         }
@@ -635,7 +1462,9 @@ impl<'a> LayerReplay<'a> {
         // supplies full blur-kernel padding itself; enlarge the destination
         // guard for a relevant shadow fringe/RasterEffectOutset, never by the
         // largest shadow anywhere on the page.
-        let mut halo = 1u32;
+        // PictureLayer border texels are part of `raster_rect`; ordinary
+        // antialiasing therefore needs no second, private tile gutter.
+        let mut halo = 0u32;
         for index in &task.record_indices {
             let record = layer
                 .records
@@ -650,10 +1479,10 @@ impl<'a> LayerReplay<'a> {
                 halo = halo.max(2);
             }
         }
-        let target_width = width
+        let target_width = raster_width
             .checked_add(halo * 2)
             .ok_or_else(|| bad("tile width overflow"))?;
-        let target_height = height
+        let target_height = raster_height
             .checked_add(halo * 2)
             .ok_or_else(|| bad("tile height overflow"))?;
         let length = (target_width as usize)
@@ -687,12 +1516,9 @@ impl<'a> LayerReplay<'a> {
         if !layer.composition.white_backing {
             canvas.clear_transparent();
         }
-        // The gutter has a real layer-device origin. Gradient dithering and
-        // raster pipeline vector groups use that origin independently of CTM.
-        canvas.set_raster_origin((
-            (task.tile_rect.x * task.raster_scale) as i32 - halo as i32,
-            (task.tile_rect.y * task.raster_scale) as i32 - halo as i32,
-        ));
+        // This is a real per-tile Skia device. Playback's CTM below maps page
+        // coordinates into it; shader seeds and ordered dithering remain in
+        // tile-local device coordinates, matching RasterSource::PlaybackToCanvas.
         canvas.install_image_cache(std::mem::take(image_cache));
         canvas.install_clip_product_cache(std::mem::take(clip_cache));
         let mut transform = DisplayItem {
@@ -701,16 +1527,16 @@ impl<'a> LayerReplay<'a> {
         };
         transform.transform.values[0] = task.raster_scale;
         transform.transform.values[5] = task.raster_scale;
-        transform.transform.values[12] = halo as f64 - task.tile_rect.x * task.raster_scale;
-        transform.transform.values[13] = halo as f64 - task.tile_rect.y * task.raster_scale;
+        transform.transform.values[12] = halo as f64 - task.raster_rect.x * task.raster_scale;
+        transform.transform.values[13] = halo as f64 - task.raster_rect.y * task.raster_scale;
         canvas.replay_item(&transform.to_skia(), &self.resources);
         let initialized = profile.map(|start| start.elapsed());
         let gutter = halo as f64 / task.raster_scale;
         let target_rect = PaintRect {
-            x: task.tile_rect.x - gutter,
-            y: task.tile_rect.y - gutter,
-            width: task.tile_rect.width + 2.0 * gutter,
-            height: task.tile_rect.height + 2.0 * gutter,
+            x: task.raster_rect.x - gutter,
+            y: task.raster_rect.y - gutter,
+            width: task.raster_rect.width + 2.0 * gutter,
+            height: task.raster_rect.height + 2.0 * gutter,
         };
         let mut culled_draws = 0usize;
         for &record in &task.record_indices {
@@ -731,15 +1557,31 @@ impl<'a> LayerReplay<'a> {
                 }
                 let started = profile.map(|_| std::time::Instant::now());
                 let replayed_document = source_item.as_ref().is_some_and(|item| {
-                    item.r#type == Kind::kDrawImageRect
-                        && replay_document_image(
+                    let record = self.document_record(item);
+                    match item.r#type {
+                        Kind::kDrawImageRect => replay_document_image(&mut canvas, item, record, 0),
+                        Kind::kDrawTiledImage => {
+                            replay_tiled_document_image(&mut canvas, item, record, 0)
+                        }
+                        Kind::kDrawMask => replay_mask_layers(
                             &mut canvas,
                             item,
-                            self.document_record(item.resource_id),
+                            &self.resources,
+                            &self.documents,
                             0,
-                        )
+                        ),
+                        _ => false,
+                    }
                 });
                 if !replayed_document {
+                    let mut hydrated;
+                    let command = if let Some(source_item) = source_item.as_ref() {
+                        hydrated = command.clone();
+                        hydrate_document_patterns(&mut hydrated, source_item, &self.documents, 0);
+                        &hydrated
+                    } else {
+                        command
+                    };
                     if decoration_glyph_runs.is_empty() {
                         canvas.replay_item(command, &self.resources);
                     } else {
@@ -763,7 +1605,11 @@ impl<'a> LayerReplay<'a> {
         self.scratch = canvas.finish_direct().into_vec();
         reuse.resize(width as usize * height as usize * 4, 0);
         for row in 0..height as usize {
-            let start = ((row + halo as usize) * target_width as usize + halo as usize) * 4;
+            let start = ((row + halo as usize + task.content_offset.1 as usize)
+                * target_width as usize
+                + halo as usize
+                + task.content_offset.0 as usize)
+                * 4;
             let dest = row * width as usize * 4;
             reuse[dest..dest + width as usize * 4]
                 .copy_from_slice(&self.scratch[start..start + width as usize * 4]);
@@ -794,11 +1640,15 @@ mod tests {
     use super::*;
     use layoutng_assembly::internal::layout_input::TransformMatrix;
     use layoutng_assembly::internal::layout_input_types::Color;
+    use layoutng_assembly::internal::paint_input::{
+        PaintBlendMode, PaintFilterOperation, PaintFilterType,
+    };
     use paint::paint_engine::{
         PaintArtifact, PaintChunk, RecordedDisplayItem, RecordedDisplayItemKind,
     };
     use paint::paint_property_tree::{
-        PaintPropertyNodeLifecycle, PropertyTreeState, TransformPaintPropertyNode,
+        ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyNodeLifecycle,
+        PropertyTreeState, TransformPaintPropertyNode,
     };
 
     #[test]
@@ -812,7 +1662,11 @@ mod tests {
             parent: Some(root.transform.clone()),
             matrix,
             origin: [0.0; 3],
+            flattens_inherited_transform: false,
+            rendering_context_id: 0,
+            backface_visibility: Default::default(),
             scroll: None,
+            sticky_constraint: None,
             direct_compositing_reasons: Vec::new(),
         });
         let rect = PaintRect {
@@ -867,5 +1721,471 @@ mod tests {
         let pixel = |x: usize, y: usize| &pixels[(y * 40 + x) * 4..(y * 40 + x + 1) * 4];
         assert_eq!(pixel(2, 2), &[255, 255, 255, 255]);
         assert_eq!(pixel(22, 2), &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn document_artifact_keeps_shared_opacity_around_sibling_clips() {
+        let root = PropertyTreeState::default();
+        let effect = Arc::new(EffectPaintPropertyNode {
+            lifecycle: PaintPropertyNodeLifecycle::default(),
+            id: 1,
+            parent: Some(root.effect.clone()),
+            opacity: 0.5,
+            ..(*root.effect).clone()
+        });
+        let clip = |id, x| {
+            Arc::new(ClipPaintPropertyNode {
+                lifecycle: PaintPropertyNodeLifecycle::default(),
+                id,
+                parent: Some(root.clip.clone()),
+                local_transform_space: root.transform.clone(),
+                rect: Some(PaintRect {
+                    x,
+                    y: 0.0,
+                    width: 6.0,
+                    height: 8.0,
+                }),
+                ..(*root.clip).clone()
+            })
+        };
+        let left_clip = clip(2, 0.0);
+        let right_clip = clip(3, 4.0);
+        let red = |rect| DisplayItem {
+            r#type: Kind::kDrawRect,
+            rect,
+            color: Color {
+                red: 1.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 1.0,
+            },
+            antialias: false,
+            ..Default::default()
+        };
+        let left_rect = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: 8.0,
+            height: 8.0,
+        };
+        let right_rect = PaintRect {
+            x: 2.0,
+            y: 0.0,
+            width: 10.0,
+            height: 8.0,
+        };
+        let record = |index, rect| RecordedDisplayItem {
+            kind: RecordedDisplayItemKind::Drawing,
+            id: Default::default(),
+            visual_rect: rect,
+            visual_rect_is_accurate: true,
+            draws_content: true,
+            raster_effect_outset: paint::paint_engine::RasterEffectOutset::kNone,
+            record_begin: index,
+            record_end: index + 1,
+            scroll_translation: None,
+        };
+        let artifact = PaintArtifact {
+            items: vec![red(left_rect), red(right_rect)].into(),
+            display_items: vec![record(0, left_rect), record(1, right_rect)],
+            chunks: vec![
+                PaintChunk {
+                    begin_index: 0,
+                    end_index: 1,
+                    bounds: left_rect,
+                    drawable_bounds: left_rect,
+                    properties: PropertyTreeState {
+                        transform: root.transform.clone(),
+                        clip: left_clip,
+                        effect: effect.clone(),
+                    },
+                    ..Default::default()
+                },
+                PaintChunk {
+                    begin_index: 1,
+                    end_index: 2,
+                    bounds: right_rect,
+                    drawable_bounds: right_rect,
+                    properties: PropertyTreeState {
+                        transform: root.transform,
+                        clip: right_clip,
+                        effect,
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let resources = ResourceContext::default();
+        let mut canvas = skia::cpu::canvas::Canvas::new(&resources, 12, 8);
+        replay_document_artifact(&mut canvas, &artifact, 0);
+        let pixels = canvas.finish_direct().into_vec();
+        let pixel = |x: usize, y: usize| &pixels[(y * 12 + x) * 4..(y * 12 + x + 1) * 4];
+        // Both chunks overlap at x=4..6. Shared group opacity is restored once,
+        // so overlap and non-overlap pixels are byte-identical.
+        assert_eq!(pixel(2, 2), pixel(5, 2));
+        assert_eq!(pixel(5, 2), pixel(8, 2));
+        assert_eq!(pixel(11, 2), &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn document_artifact_nests_effect_surfaces() {
+        let root = PropertyTreeState::default();
+        let parent = Arc::new(EffectPaintPropertyNode {
+            lifecycle: PaintPropertyNodeLifecycle::default(),
+            id: 1,
+            parent: Some(root.effect.clone()),
+            opacity: 0.5,
+            ..(*root.effect).clone()
+        });
+        let child = Arc::new(EffectPaintPropertyNode {
+            lifecycle: PaintPropertyNodeLifecycle::default(),
+            id: 2,
+            parent: Some(parent),
+            opacity: 0.5,
+            ..(*root.effect).clone()
+        });
+        let rect = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: 4.0,
+            height: 4.0,
+        };
+        let artifact = PaintArtifact {
+            items: vec![DisplayItem {
+                r#type: Kind::kDrawRect,
+                rect,
+                color: Color {
+                    red: 1.0,
+                    green: 0.0,
+                    blue: 0.0,
+                    alpha: 1.0,
+                },
+                antialias: false,
+                ..Default::default()
+            }]
+            .into(),
+            display_items: vec![RecordedDisplayItem {
+                kind: RecordedDisplayItemKind::Drawing,
+                id: Default::default(),
+                visual_rect: rect,
+                visual_rect_is_accurate: true,
+                draws_content: true,
+                raster_effect_outset: paint::paint_engine::RasterEffectOutset::kNone,
+                record_begin: 0,
+                record_end: 1,
+                scroll_translation: None,
+            }],
+            chunks: vec![PaintChunk {
+                begin_index: 0,
+                end_index: 1,
+                bounds: rect,
+                drawable_bounds: rect,
+                properties: PropertyTreeState {
+                    transform: root.transform,
+                    clip: root.clip,
+                    effect: child,
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let resources = ResourceContext::default();
+        let mut canvas = skia::cpu::canvas::Canvas::new(&resources, 4, 4);
+        replay_document_artifact(&mut canvas, &artifact, 0);
+        let pixels = canvas.finish_direct().into_vec();
+        // Two nested 0.5 surfaces produce 0.25 red coverage over white.
+        assert_eq!(&pixels[..4], &[255, 191, 191, 255]);
+    }
+
+    #[test]
+    fn document_artifact_restores_non_normal_blend_equation() {
+        let root = PropertyTreeState::default();
+        let multiply = Arc::new(EffectPaintPropertyNode {
+            lifecycle: PaintPropertyNodeLifecycle::default(),
+            id: 1,
+            parent: Some(root.effect.clone()),
+            blend_mode: PaintBlendMode::kMultiply,
+            isolates_blending: true,
+            ..(*root.effect).clone()
+        });
+        let rect = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: 4.0,
+            height: 4.0,
+        };
+        let draw = |color| DisplayItem {
+            r#type: Kind::kDrawRect,
+            rect,
+            color,
+            antialias: false,
+            ..Default::default()
+        };
+        let record = |index| RecordedDisplayItem {
+            kind: RecordedDisplayItemKind::Drawing,
+            id: Default::default(),
+            visual_rect: rect,
+            visual_rect_is_accurate: true,
+            draws_content: true,
+            raster_effect_outset: paint::paint_engine::RasterEffectOutset::kNone,
+            record_begin: index,
+            record_end: index + 1,
+            scroll_translation: None,
+        };
+        let artifact = PaintArtifact {
+            items: vec![
+                draw(Color {
+                    red: 0.0,
+                    green: 0.0,
+                    blue: 1.0,
+                    alpha: 1.0,
+                }),
+                draw(Color {
+                    red: 1.0,
+                    green: 0.0,
+                    blue: 0.0,
+                    alpha: 1.0,
+                }),
+            ]
+            .into(),
+            display_items: vec![record(0), record(1)],
+            chunks: vec![
+                PaintChunk {
+                    begin_index: 0,
+                    end_index: 1,
+                    bounds: rect,
+                    drawable_bounds: rect,
+                    properties: root.clone(),
+                    ..Default::default()
+                },
+                PaintChunk {
+                    begin_index: 1,
+                    end_index: 2,
+                    bounds: rect,
+                    drawable_bounds: rect,
+                    properties: PropertyTreeState {
+                        transform: root.transform,
+                        clip: root.clip,
+                        effect: multiply,
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let resources = ResourceContext::default();
+        let mut canvas = skia::cpu::canvas::Canvas::new(&resources, 4, 4);
+        replay_document_artifact(&mut canvas, &artifact, 0);
+        let pixels = canvas.finish_direct().into_vec();
+        // Red multiplied by the blue backdrop is black. Isolation-only would
+        // incorrectly leave this pixel red.
+        assert_eq!(&pixels[..4], &[0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn document_artifact_applies_dst_in_mask_to_complete_parent_group() {
+        let root = PropertyTreeState::default();
+        let content = Arc::new(EffectPaintPropertyNode {
+            lifecycle: PaintPropertyNodeLifecycle::default(),
+            id: 1,
+            parent: Some(root.effect.clone()),
+            ..(*root.effect).clone()
+        });
+        let mask = Arc::new(EffectPaintPropertyNode {
+            lifecycle: PaintPropertyNodeLifecycle::default(),
+            id: 2,
+            parent: Some(content.clone()),
+            is_mask: true,
+            ..(*root.effect).clone()
+        });
+        let full = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: 8.0,
+            height: 4.0,
+        };
+        let left = PaintRect { width: 4.0, ..full };
+        let draw = |rect, color| DisplayItem {
+            r#type: Kind::kDrawRect,
+            rect,
+            color,
+            antialias: false,
+            ..Default::default()
+        };
+        let record = |index, rect| RecordedDisplayItem {
+            kind: RecordedDisplayItemKind::Drawing,
+            id: Default::default(),
+            visual_rect: rect,
+            visual_rect_is_accurate: true,
+            draws_content: true,
+            raster_effect_outset: paint::paint_engine::RasterEffectOutset::kNone,
+            record_begin: index,
+            record_end: index + 1,
+            scroll_translation: None,
+        };
+        let artifact = PaintArtifact {
+            items: vec![
+                draw(
+                    full,
+                    Color {
+                        red: 1.0,
+                        green: 0.0,
+                        blue: 0.0,
+                        alpha: 1.0,
+                    },
+                ),
+                draw(
+                    left,
+                    Color {
+                        red: 1.0,
+                        green: 1.0,
+                        blue: 1.0,
+                        alpha: 1.0,
+                    },
+                ),
+            ]
+            .into(),
+            display_items: vec![record(0, full), record(1, left)],
+            chunks: vec![
+                PaintChunk {
+                    begin_index: 0,
+                    end_index: 1,
+                    bounds: full,
+                    drawable_bounds: full,
+                    properties: PropertyTreeState {
+                        transform: root.transform.clone(),
+                        clip: root.clip.clone(),
+                        effect: content,
+                    },
+                    ..Default::default()
+                },
+                PaintChunk {
+                    begin_index: 1,
+                    end_index: 2,
+                    bounds: left,
+                    drawable_bounds: left,
+                    properties: PropertyTreeState {
+                        transform: root.transform,
+                        clip: root.clip,
+                        effect: mask,
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let resources = ResourceContext::default();
+        let mut canvas = skia::cpu::canvas::Canvas::new(&resources, 8, 4);
+        replay_document_artifact(&mut canvas, &artifact, 0);
+        let pixels = canvas.finish_direct().into_vec();
+        let pixel = |x: usize| &pixels[x * 4..(x + 1) * 4];
+        assert_eq!(pixel(2), &[255, 0, 0, 255]);
+        assert_eq!(pixel(6), &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn document_artifact_filters_shared_chunk_content_once() {
+        let root = PropertyTreeState::default();
+        let filter = Arc::new(EffectPaintPropertyNode {
+            lifecycle: PaintPropertyNodeLifecycle::default(),
+            id: 1,
+            parent: Some(root.effect.clone()),
+            filters: vec![PaintFilterOperation {
+                r#type: PaintFilterType::kBlur,
+                amount: 1.0,
+                ..Default::default()
+            }],
+            ..(*root.effect).clone()
+        });
+        let left = PaintRect {
+            x: 3.0,
+            y: 2.0,
+            width: 3.0,
+            height: 4.0,
+        };
+        let right = PaintRect {
+            x: 6.0,
+            width: 3.0,
+            ..left
+        };
+        let union = PaintRect { width: 6.0, ..left };
+        let draw = |rect| DisplayItem {
+            r#type: Kind::kDrawRect,
+            rect,
+            color: Color {
+                red: 1.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 1.0,
+            },
+            antialias: false,
+            ..Default::default()
+        };
+        let record = |index, rect| RecordedDisplayItem {
+            kind: RecordedDisplayItemKind::Drawing,
+            id: Default::default(),
+            visual_rect: rect,
+            visual_rect_is_accurate: true,
+            draws_content: true,
+            raster_effect_outset: paint::paint_engine::RasterEffectOutset::kNone,
+            record_begin: index,
+            record_end: index + 1,
+            scroll_translation: None,
+        };
+        let state = |effect| PropertyTreeState {
+            transform: root.transform.clone(),
+            clip: root.clip.clone(),
+            effect,
+        };
+        let split = PaintArtifact {
+            items: vec![draw(left), draw(right)].into(),
+            display_items: vec![record(0, left), record(1, right)],
+            chunks: vec![
+                PaintChunk {
+                    begin_index: 0,
+                    end_index: 1,
+                    bounds: left,
+                    drawable_bounds: left,
+                    properties: state(filter.clone()),
+                    ..Default::default()
+                },
+                PaintChunk {
+                    begin_index: 1,
+                    end_index: 2,
+                    bounds: right,
+                    drawable_bounds: right,
+                    properties: state(filter.clone()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let combined = PaintArtifact {
+            items: vec![draw(union)].into(),
+            display_items: vec![record(0, union)],
+            chunks: vec![PaintChunk {
+                begin_index: 0,
+                end_index: 1,
+                bounds: union,
+                drawable_bounds: union,
+                properties: state(filter),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let render = |artifact: &PaintArtifact| {
+            let resources = ResourceContext::default();
+            let mut canvas = skia::cpu::canvas::Canvas::new(&resources, 12, 8);
+            replay_document_artifact(&mut canvas, artifact, 0);
+            canvas.finish_direct().into_vec()
+        };
+        let split = render(&split);
+        let combined = render(&combined);
+        assert_eq!(split, combined);
+        assert_ne!(
+            &split[(4 * 12 + 2) * 4..(4 * 12 + 3) * 4],
+            &[255, 255, 255, 255]
+        );
     }
 }

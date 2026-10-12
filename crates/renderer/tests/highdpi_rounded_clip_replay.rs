@@ -3,6 +3,88 @@
 use layoutng_assembly::internal::layout_input_types::Color;
 use layoutng_assembly::internal::paint_input::{PaintCornerRadii, PaintCornerRadius};
 use paint::paint_engine::{DisplayItem, DisplayItemType as T, PaintArtifact, PaintRect};
+
+#[test]
+fn device_scaled_rounded_ring_clip_matches_native() {
+    let radius = PaintCornerRadius { x: 8.0, y: 8.0 };
+    let radii = PaintCornerRadii {
+        top_left: PaintCornerRadius::default(),
+        top_right: PaintCornerRadius::default(),
+        bottom_left: radius,
+        bottom_right: radius,
+    };
+    let inner_radii = PaintCornerRadii {
+        bottom_left: PaintCornerRadius { x: 7.0, y: 7.0 },
+        bottom_right: PaintCornerRadius { x: 7.0, y: 7.0 },
+        ..Default::default()
+    };
+    let outer = PaintRect {
+        x: 32.0,
+        y: 17.0,
+        width: 200.0,
+        height: 120.0,
+    };
+    let inner = PaintRect {
+        x: 33.0,
+        y: 17.0,
+        width: 198.0,
+        height: 119.0,
+    };
+    let list = PaintArtifact {
+        items: vec![
+            DisplayItem {
+                r#type: T::kSave,
+                ..Default::default()
+            },
+            DisplayItem {
+                r#type: T::kClipRoundedRect,
+                rect: outer,
+                corner_radii: radii,
+                antialias: true,
+                ..Default::default()
+            },
+            DisplayItem {
+                r#type: T::kClipOutRoundedRect,
+                rect: inner,
+                corner_radii: inner_radii,
+                antialias: true,
+                ..Default::default()
+            },
+            DisplayItem {
+                r#type: T::kDrawRect,
+                rect: outer,
+                color: Color {
+                    red: 209.0 / 255.0,
+                    green: 217.0 / 255.0,
+                    blue: 224.0 / 255.0,
+                    alpha: 1.0,
+                },
+                ..Default::default()
+            },
+            DisplayItem {
+                r#type: T::kRestore,
+                ..Default::default()
+            },
+        ]
+        .into(),
+        ..Default::default()
+    };
+    let native =
+        raster::source_replay::RasterizeSourceDisplayItemListWithScale(&list, 520, 360, 2.0);
+    let actual = raster::pure_replay::RasterizeSourceDisplayItemListWithScale(&list, 520, 360, 2.0);
+    let differences = actual
+        .chunks_exact(4)
+        .zip(native.chunks_exact(4))
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .collect::<Vec<_>>();
+    assert!(
+        differences.is_empty(),
+        "{} pixels differ; first {:?}",
+        differences.len(),
+        differences.first()
+    );
+}
 #[test]
 fn positive_axis_float_nested_and_cropped_rrect_clips_match_native() {
     let mut cases = 0;
@@ -104,7 +186,7 @@ fn positive_axis_float_nested_and_cropped_rrect_clips_match_native() {
                     });
                 }
                 let list = PaintArtifact {
-                    items,
+                    items: items.into(),
                     ..Default::default()
                 };
                 let native = raster::source_replay::RasterizeSourceDisplayItemList(&list, 520, 360);

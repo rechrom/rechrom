@@ -278,10 +278,12 @@ impl LayerTileEngine {
             let elapsed = frame_time.checked_duration_since(*old_time)?.as_secs_f64();
             (elapsed > 0.0).then(|| {
                 let limit = 2000.0 / config.raster_scale.max(f64::MIN_POSITIVE);
-                let extrapolated = (current.translation_y - old.translation_y) * (1.0 / elapsed);
+                let extrapolated_x = (current.translation_x - old.translation_x) * (1.0 / elapsed);
+                let extrapolated_y = (current.translation_y - old.translation_y) * (1.0 / elapsed);
                 CompositorScrollOffset {
                     scroll_node_id: current.scroll_node_id,
-                    translation_y: current.translation_y + extrapolated.clamp(-limit, limit),
+                    translation_x: current.translation_x + extrapolated_x.clamp(-limit, limit),
+                    translation_y: current.translation_y + extrapolated_y.clamp(-limit, limit),
                 }
             })
         });
@@ -332,8 +334,11 @@ mod tests {
                 height: 600.0,
             },
             raster_scale: 2.0,
+            device_scale_factor: 2.0,
+            layout_zoom_factor: 1.0,
             activation_scroll: Some(CompositorScrollOffset {
                 scroll_node_id: node,
+                translation_x: 0.0,
                 translation_y,
             }),
             frame_time: Some(frame_time),
@@ -348,6 +353,7 @@ mod tests {
             engine.predict_prepaint_scroll(config(start, 7, 0.0)),
             Some(CompositorScrollOffset {
                 scroll_node_id: 7,
+                translation_x: 0.0,
                 translation_y: 0.0,
             })
         );
@@ -362,6 +368,7 @@ mod tests {
             engine.predict_prepaint_scroll(config(start + Duration::from_millis(32), 9, -25.0,)),
             Some(CompositorScrollOffset {
                 scroll_node_id: 9,
+                translation_x: 0.0,
                 translation_y: -25.0,
             })
         );

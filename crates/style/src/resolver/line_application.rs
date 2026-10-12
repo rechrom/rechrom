@@ -50,6 +50,8 @@ fn Number(
                     root,
                     b.EffectiveZoom(),
                     media,
+                    Some(CurrentComputedLineHeight(b)),
+                    None,
                 ),
                 None,
             )
@@ -86,6 +88,8 @@ fn LengthValue(
         root,
         b.EffectiveZoom(),
         media,
+        Some(CurrentComputedLineHeight(b)),
+        None,
     );
     match v.Payload() {
         CSSValuePayload::kNumericLiteralClass(n)

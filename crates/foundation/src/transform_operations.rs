@@ -227,6 +227,14 @@ impl TranslateTransformOperation {
         self.z_
     }
 
+    pub fn XLength(&self) -> &Length {
+        &self.x_
+    }
+
+    pub fn YLength(&self) -> &Length {
+        &self.y_
+    }
+
     pub fn Apply(&self, transform: &mut gfx::Transform, size: &gfx::SizeF) {
         <Self as TransformOperation>::Apply(self, transform, size);
     }

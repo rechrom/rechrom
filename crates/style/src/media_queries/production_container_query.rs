@@ -1016,6 +1016,7 @@ fn EvaluateContainerFeature(
                     Rc::new(CSSUnparsedDeclarationValue {
                         data: Rc::new(RestoreContainerVariableData(reference)),
                         mode: crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
+                        base_url: crate::production_css_value::ProductionURL::Null,
                     }),
                     &bounds,
                     resolver.RangeQueriesEnabled(),

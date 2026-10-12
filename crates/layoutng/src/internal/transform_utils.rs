@@ -6,13 +6,106 @@ use foundation::{
 use layoutng_fragment_tree::physical_box_fragment::PhysicalBoxFragment;
 use layoutng_fragment_tree::physical_fragment::PhysicalFragment;
 use layoutng_geometry::geometry::physical_rect::PhysicalRectExt;
+use layoutng_style::style::computed_style_constants::CoordBox;
 use layoutng_style::style::style_transform::{
     ApplyIndependentTransformProperties, ApplyMotionPath, ApplyTransformOperations,
-    ApplyTransformOrigin, TransformBoxContext,
+    ApplyTransformOrigin, MotionPathBox, TransformBoxContext,
 };
 
 use super::layout_box::LayoutBox;
+use super::layout_box_model_object::LayoutBoxModelObject;
 use super::layout_object::LayoutObject;
+use super::map_coordinates_flags::MapCoordinatesMode;
+
+// cpp: layoutng_style/style/computed_style.cc:1506-1551
+// This is the narrow LayoutNG implementation of the geometry interface used
+// by ComputedStyle's translated motion-path algorithm.
+#[allow(non_snake_case)]
+impl MotionPathBox for LayoutBox {
+    fn MotionPathReferenceBox(&self, coord_box: CoordBox) -> gfx::RectF {
+        let containing = self.ContainingBlock();
+        if containing.is_null() {
+            return gfx::RectF::default();
+        }
+        let containing = unsafe { &*containing };
+        // The current SVG layout bridge does not yet expose
+        // SVGViewportResolver.  Its CSS box still provides the correct
+        // fallback used while native SVG geometry is unavailable.
+        let rect = match coord_box {
+            CoordBox::kFillBox | CoordBox::kContentBox => containing.PhysicalContentBoxRect(),
+            CoordBox::kPaddingBox => containing.PhysicalPaddingBoxRect(),
+            CoordBox::kViewBox | CoordBox::kStrokeBox | CoordBox::kBorderBox => {
+                containing.PhysicalBorderBoxRect()
+            }
+        };
+        gfx::RectF::new(
+            gfx::PointF::new(rect.offset.left.ToFloat(), rect.offset.top.ToFloat()),
+            gfx::SizeF::new(rect.size.width.ToFloat(), rect.size.height.ToFloat()),
+        )
+    }
+
+    fn MotionPathOffsetFromContainingBlock(&self) -> gfx::PointF {
+        let containing = self.ContainingBlock();
+        if containing.is_null() {
+            return gfx::PointF::default();
+        }
+        self.LocalToAncestorPoint(
+            &gfx::PointF::default(),
+            containing as *const LayoutBoxModelObject,
+            MapCoordinatesMode::kIgnoreTransforms.into(),
+        )
+    }
+
+    fn MotionPathBorderBoxSize(&self) -> gfx::SizeF {
+        let rect = self.PhysicalBorderBoxRect();
+        gfx::SizeF::new(rect.size.width.ToFloat(), rect.size.height.ToFloat())
+    }
+
+    fn MotionPathHasContainingBlock(&self) -> bool {
+        !self.ContainingBlock().is_null()
+    }
+
+    fn MotionPathPointAndTangent(
+        &self,
+        shape: &dyn layoutng_style::style::basic_shapes::BasicShape,
+        starting_point: &gfx::PointF,
+        reference_size: &gfx::SizeF,
+        distance: &foundation::Length,
+        effective_zoom: f32,
+    ) -> Option<foundation::PointAndTangent> {
+        super::motion_path_geometry::PointAndTangentForShape(
+            shape,
+            starting_point,
+            reference_size,
+            distance,
+            effective_zoom,
+        )
+    }
+
+    fn MotionPathCoordBoxPointAndTangent(
+        &self,
+        reference_size: &gfx::SizeF,
+        distance: &foundation::Length,
+    ) -> Option<foundation::PointAndTangent> {
+        let containing = self.ContainingBlock();
+        if containing.is_null() {
+            return None;
+        }
+        let style = unsafe { &*containing }.StyleRef();
+        let mut inset = layoutng_style::style::basic_shapes::BasicShapeInset::default();
+        inset.SetTopLeftRadius(style.BorderTopLeftRadius());
+        inset.SetTopRightRadius(style.BorderTopRightRadius());
+        inset.SetBottomRightRadius(style.BorderBottomRightRadius());
+        inset.SetBottomLeftRadius(style.BorderBottomLeftRadius());
+        super::motion_path_geometry::PointAndTangentForShape(
+            &inset,
+            &gfx::PointF::default(),
+            reference_size,
+            distance,
+            1.0,
+        )
+    }
+}
 
 // cpp: layoutng/internal/transform_utils.cc:17-34
 fn ComputeReferenceBoxInternal(

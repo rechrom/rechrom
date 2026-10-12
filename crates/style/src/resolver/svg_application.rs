@@ -17,6 +17,7 @@ pub(super) fn IsSVGProperty(id: CSSPropertyID) -> bool {
         kFill
             | kFillOpacity
             | kFloodOpacity
+            | kStopColor
             | kStopOpacity
             | kStrokeOpacity
             | kFillRule
@@ -120,10 +121,51 @@ fn ConvertPaint(
     id: CSSPropertyID,
     v: &Value,
 ) -> std::result::Result<SVGPaint, LonghandApplicationError> {
+    fn ConvertFallback(
+        id: CSSPropertyID,
+        v: &Value,
+    ) -> std::result::Result<(SVGPaintType, Option<StyleColor>), LonghandApplicationError> {
+        match v.Payload() {
+            CSSValuePayload::kIdentifierClass(keyword) => match keyword.0 {
+                CSSValueID::kNone => Ok((SVGPaintType::kUriNone, None)),
+                CSSValueID::kCurrentcolor => {
+                    Ok((SVGPaintType::kUriColor, Some(StyleColor::CurrentColor())))
+                }
+                color => Ok((
+                    SVGPaintType::kUriColor,
+                    Some(StyleColor::from_color(
+                        crate::production_css_value::NamedColor(color)
+                            .ok_or(LonghandApplicationError::Unsupported(id))?,
+                    )),
+                )),
+            },
+            CSSValuePayload::kColorClass(color) => Ok((
+                SVGPaintType::kUriColor,
+                Some(StyleColor::from_color(color.0)),
+            )),
+            _ => Err(LonghandApplicationError::InvalidValue(id)),
+        }
+    }
+
     let mut paint = SVGPaint::default();
     match v.Payload() {
-        CSSValuePayload::kURIClass(_) | CSSValuePayload::kValueListClass(_) => {
-            return Err(LonghandApplicationError::Unsupported(id))
+        CSSValuePayload::kURIClass(uri) => {
+            paint.paint_type = SVGPaintType::kUri;
+            paint.url = foundation::AtomicString::from_str(&uri.url);
+        }
+        CSSValuePayload::kValueListClass(list) => {
+            if list.values.len() != 2 {
+                return Err(LonghandApplicationError::InvalidValue(id));
+            }
+            let CSSValuePayload::kURIClass(uri) = list.values[0].Payload() else {
+                return Err(LonghandApplicationError::InvalidValue(id));
+            };
+            let (paint_type, color) = ConvertFallback(id, &list.values[1])?;
+            paint.paint_type = paint_type;
+            paint.url = foundation::AtomicString::from_str(&uri.url);
+            if let Some(color) = color {
+                paint.color = color;
+            }
         }
         CSSValuePayload::kIdentifierClass(keyword) => match keyword.0 {
             CSSValueID::kNone => paint.paint_type = SVGPaintType::kNone,
@@ -228,7 +270,16 @@ pub(super) fn Apply(
         b.SetHasExplicitInheritance();
         parent.unwrap().SetChildHasExplicitInheritance();
     }
-    if matches!(
+    if id == kStopColor {
+        let color = if initial {
+            ComputedStyleInitialValues::InitialStopColor()
+        } else if inherit {
+            parent.unwrap().StopColor().clone()
+        } else {
+            color_ui_application::ConvertStyleColorValue(id, v)?
+        };
+        b.SetStopColorOwned(color);
+    } else if matches!(
         id,
         kFillOpacity | kFloodOpacity | kStopOpacity | kStrokeOpacity | kFillRule | kClipRule
     ) {

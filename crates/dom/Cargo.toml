@@ -11,6 +11,7 @@ layoutng_assembly = { path = "../layoutng_assembly" }
 css_parser = { path = "../css_parser", features = ["tokenizer"] }
 font_engine = { path = "../font_engine" }
 foundation = { package = "layoutng_foundation", path = "../foundation" }
+image_resource = { path = "../image_resource" }
 layoutng_style = { path = "../layoutng_style" }
 
 [dev-dependencies]

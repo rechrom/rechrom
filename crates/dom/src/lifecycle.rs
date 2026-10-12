@@ -58,6 +58,16 @@ impl DOM {
             .SetAnimationStyle(node_id, effect_id, declarations);
     }
 
+    pub fn SetTransitionStyle(
+        &mut self,
+        node_id: u64,
+        effect_id: u64,
+        declarations: Vec<CSSDeclaration>,
+    ) {
+        self.GetDocumentMut()
+            .SetTransitionStyle(node_id, effect_id, declarations);
+    }
+
     pub fn NeedsStyleSheetParsing(&self, node_id: u64) -> bool {
         let state = self.GetDocument().StyleState();
         !state.parsed_style_elements.contains(&node_id)

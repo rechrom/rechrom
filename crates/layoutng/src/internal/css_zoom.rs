@@ -116,6 +116,9 @@ pub fn ZoomedStyle(style: &ComputedStyle) -> Cow<'_, ComputedStyle> {
             TracksScale(list, zoom);
         }
         e.shape_margin.pixels *= zoom;
+        if let Some(calculation) = &mut e.shape_margin.calculation {
+            *calculation = calculation.Zoom(zoom);
+        }
     }
     let paint: &mut super::paint_input::PaintStyleData = &mut output.paint;
     paint.border_radius *= zoom;
@@ -151,6 +154,18 @@ pub fn ZoomedStyle(style: &ComputedStyle) -> Cow<'_, ComputedStyle> {
         }
         if let Some(px) = &mut layer.height {
             *px *= zoom;
+        }
+        if let Some(calculation) = &mut layer.width_calculation {
+            *calculation = calculation.Zoom(zoom);
+        }
+        if let Some(calculation) = &mut layer.height_calculation {
+            *calculation = calculation.Zoom(zoom);
+        }
+        if let Some(calculation) = &mut layer.position_x_calculation {
+            *calculation = calculation.Zoom(zoom);
+        }
+        if let Some(calculation) = &mut layer.position_y_calculation {
+            *calculation = calculation.Zoom(zoom);
         }
     }
     Cow::Owned(output)

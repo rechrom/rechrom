@@ -23,6 +23,8 @@ use tokio::sync::{Notify, Semaphore};
 use tower_service::Service;
 use url::Url;
 
+use crate::HTTPWakeCallback;
+
 type BoxError = Box<dyn Error + Send + Sync>;
 struct HTTPClient {
     inner: Client<ConnectTimeout<EnvironmentConnector>, Full<Bytes>>,
@@ -62,6 +64,14 @@ pub struct HTTPRequestData {
     pub referrer: String,
     pub body: Vec<u8>,
     pub headers: Vec<(String, String)>,
+    pub priority: HTTPRequestPriority,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HTTPRequestPriority {
+    #[default]
+    Normal,
+    High,
 }
 
 // cpp: http_transport/http_request.h:20-25
@@ -76,6 +86,7 @@ pub struct HTTPResponseData {
 // cpp: http_transport/http_request.h:27-34
 pub trait HTTPRequestOperation {
     fn Poll(&mut self) -> io::Result<Option<HTTPResponseData>>;
+    fn SetWakeCallback(&mut self, _callback: crate::HTTPWakeCallback) {}
 }
 
 // A shared executor drives connections as well as requests. A runtime per
@@ -141,6 +152,7 @@ where
 pub(crate) struct Scheduler {
     pub(crate) options: HTTPTransportOptions,
     pub(crate) slots: Arc<Semaphore>,
+    priority_slots: Option<Arc<Semaphore>>,
     client: HTTPClient,
 }
 
@@ -159,8 +171,15 @@ impl Scheduler {
             rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         let timeout = (milliseconds > 0).then(|| Duration::from_millis(milliseconds));
         let client = build_client(roots, timeout)?;
+        // Chromium's ResourceLoadScheduler prevents render-blocking resources
+        // from sitting behind a large queue of deferred script/image requests.
+        // Reserve one quarter of transport admissions for high-priority work;
+        // high priority may also consume an ordinary free slot.
+        let reserved = options.max_parallel_requests / 4;
+        let ordinary = options.max_parallel_requests - reserved;
         Ok(Self {
-            slots: Arc::new(Semaphore::new(options.max_parallel_requests)),
+            slots: Arc::new(Semaphore::new(ordinary.max(1))),
+            priority_slots: (reserved != 0).then(|| Arc::new(Semaphore::new(reserved))),
             options,
             client,
         })
@@ -550,7 +569,20 @@ async fn transfer(
 }
 
 async fn execute(request: HTTPRequestData, state: Arc<State>) {
-    let Ok(_slot) = state.scheduler.slots.clone().acquire_owned().await else {
+    let _slot = if request.priority == HTTPRequestPriority::High {
+        if let Some(priority) = &state.scheduler.priority_slots {
+            tokio::select! {
+                biased;
+                permit = priority.clone().acquire_owned() => permit,
+                permit = state.scheduler.slots.clone().acquire_owned() => permit,
+            }
+        } else {
+            state.scheduler.slots.clone().acquire_owned().await
+        }
+    } else {
+        state.scheduler.slots.clone().acquire_owned().await
+    };
+    let Ok(_slot) = _slot else {
         return;
     };
     let options = &state.scheduler.options;
@@ -591,6 +623,7 @@ struct State {
     cancelled: AtomicBool,
     cancel: Notify,
     result: Mutex<WorkerResult>,
+    wake: Mutex<Option<HTTPWakeCallback>>,
     scheduler: Arc<Scheduler>,
 }
 
@@ -610,6 +643,7 @@ impl HTTPRequest {
             cancelled: AtomicBool::new(false),
             cancel: Notify::new(),
             result: Mutex::new(WorkerResult::default()),
+            wake: Mutex::new(None),
             scheduler,
         });
         let worker_state = state.clone();
@@ -617,7 +651,16 @@ impl HTTPRequest {
             tokio::select! {
                 biased;
                 _ = worker_state.cancel.notified() => {},
-                _ = execute(request, worker_state.clone()) => {},
+                _ = execute(request, worker_state.clone()) => {
+                    let callback = worker_state
+                        .wake
+                        .lock()
+                        .expect("HTTP wake poisoned")
+                        .clone();
+                    if let Some(callback) = callback {
+                        callback();
+                    }
+                },
             }
         });
         Ok(Self { state })
@@ -638,6 +681,17 @@ impl HTTPRequestOperation for HTTPRequest {
             return Err(io::Error::other(error.clone()));
         }
         Ok(result.response.take())
+    }
+
+    fn SetWakeCallback(&mut self, callback: HTTPWakeCallback) {
+        *self.state.wake.lock().expect("HTTP wake poisoned") = Some(callback.clone());
+        let ready = {
+            let result = self.state.result.lock().expect("HTTP state poisoned");
+            result.response.is_some() || result.error.is_some()
+        };
+        if ready {
+            callback();
+        }
     }
 }
 

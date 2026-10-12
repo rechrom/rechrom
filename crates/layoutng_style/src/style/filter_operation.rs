@@ -4,7 +4,7 @@
 #![allow(non_snake_case)]
 
 use super::shadow_data::ShadowData;
-use foundation::{Length, LengthPoint, Traceable, Visitor};
+use foundation::{Length, LengthPoint, String, Traceable, Visitor};
 use std::ops::Deref;
 
 // cpp: core/style/filter_operation.h:63-81
@@ -100,6 +100,10 @@ impl PartialEq for FilterOperation {
         }
         unsafe {
             match self.type_ {
+                OperationType::kReference => {
+                    (*(self as *const Self as *const ReferenceFilterOperation)).url_
+                        == (*(other as *const Self as *const ReferenceFilterOperation)).url_
+                }
                 OperationType::kGrayscale
                 | OperationType::kSepia
                 | OperationType::kSaturate
@@ -128,6 +132,25 @@ impl PartialEq for FilterOperation {
                 _ => unimplemented!("native equality for non-CSS filter class {:?}", self.type_),
             }
         }
+    }
+}
+
+// cpp: core/style/filter_operation.h:151-198. Resource ownership remains in
+// the document projection; computed style retains the immutable IRI identity.
+#[repr(C)]
+pub struct ReferenceFilterOperation {
+    base_: FilterOperation,
+    url_: String,
+}
+impl ReferenceFilterOperation {
+    pub fn new(url: String) -> Self {
+        Self {
+            base_: FilterOperation::new(OperationType::kReference),
+            url_: url,
+        }
+    }
+    pub fn Url(&self) -> &String {
+        &self.url_
     }
 }
 impl Traceable for FilterOperation {
@@ -234,11 +257,17 @@ macro_rules! base_first_css_filter {
     )+ };
 }
 base_first_css_filter!(
+    ReferenceFilterOperation,
     BasicColorMatrixFilterOperation,
     BasicComponentTransferFilterOperation,
     BlurFilterOperation,
     DropShadowFilterOperation
 );
+impl Traceable for ReferenceFilterOperation {
+    fn Trace(&self, visitor: &mut Visitor<'_>) {
+        self.base_.Trace(visitor);
+    }
+}
 
 impl Traceable for BasicColorMatrixFilterOperation {
     fn Trace(&self, visitor: &mut Visitor<'_>) {

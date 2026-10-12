@@ -6,12 +6,14 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "include/core/SkCanvas.h"
 #include "include/core/SkBlurTypes.h"
+#include "include/core/SkBlendMode.h"
 #include "include/core/SkColor.h"
 #include "include/core/SkColorFilter.h"
 #include "include/core/SkColorSpace.h"
@@ -25,6 +27,7 @@
 #include "include/core/SkGraphics.h"
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkM44.h"
+#include "include/core/SkMatrix.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkMaskFilter.h"
 #include "include/core/SkPaint.h"
@@ -43,6 +46,12 @@
 #if defined(__APPLE__)
 #include "include/ports/SkFontMgr_mac_ct.h"
 #endif
+
+// The packaged Skia archive exports this public factory, but its reduced
+// include bundle omits include/effects/SkLumaColorFilter.h.
+struct SkLumaColorFilter {
+  static sk_sp<SkColorFilter> Make();
+};
 
 namespace {
 struct NativeRect {
@@ -82,6 +91,7 @@ struct NativeCanvasState {
   sk_sp<SkSurface> surface;
   sk_sp<SkFontMgr> font_manager;
   std::unordered_map<uint64_t, sk_sp<SkImage>> images;
+  std::map<std::tuple<uint64_t, int, int>, sk_sp<SkImage>> oriented_images;
   std::map<std::pair<uint64_t, int>, sk_sp<SkImage>> mip_images;
   std::vector<sk_sp<SkTypeface>> typefaces;
   std::vector<std::vector<NativeVariation>> font_variations;
@@ -199,6 +209,7 @@ void LayoutngCanvasDrawLinearGradient(void* canvas, NativeRect destination,
   paint.setShader(SkShaders::LinearGradient(points, gradient, &local));
   state->surface->getCanvas()->drawRect(ToRect(destination), paint);
 }
+
 void* LayoutngFontBackendCreate(const uint8_t* bytes, size_t byte_count,
                                 uint32_t face_index,
                                 const NativeVariation* variations,
@@ -296,7 +307,7 @@ void* LayoutngCanvasCreate(int width, int height) {
   SkGraphics::Init();
   const SkImageInfo info =
       SkImageInfo::MakeN32(width, height, kOpaque_SkAlphaType);
-  const SkSurfaceProps props(0, kUnknown_SkPixelGeometry);
+  const SkSurfaceProps props(0, kRGB_H_SkPixelGeometry);
   auto surface = SkSurfaces::Raster(info, &props);
   if (!surface) return nullptr;
   surface->getCanvas()->clear(SK_ColorWHITE);
@@ -312,6 +323,10 @@ void LayoutngCanvasDestroy(void* canvas) { delete static_cast<NativeCanvasState*
 
 void LayoutngCanvasTranslate(void* canvas, float x, float y) {
   static_cast<NativeCanvasState*>(canvas)->surface->getCanvas()->translate(x, y);
+}
+
+void LayoutngCanvasScale(void* canvas, float scale) {
+  static_cast<NativeCanvasState*>(canvas)->surface->getCanvas()->scale(scale, scale);
 }
 
 void LayoutngCanvasConcat(void* canvas, const float* matrix) {
@@ -376,6 +391,22 @@ void LayoutngCanvasSaveLayerDstIn(void* canvas) {
   SkPaint paint;
   paint.setBlendMode(SkBlendMode::kDstIn);
   static_cast<NativeCanvasState*>(canvas)->surface->getCanvas()->saveLayer(nullptr, &paint);
+}
+
+// BoxPainterBase mask-mode/mask-composite source layer. CSS mask layers are
+// painted bottom-to-top; the bottom layer ignores its declared composite.
+void LayoutngCanvasSaveLayerMask(void* canvas, int mode, int composite,
+                                 bool bottom) {
+  static constexpr SkBlendMode composites[] = {
+      SkBlendMode::kSrcOver, SkBlendMode::kSrcOut, SkBlendMode::kSrcIn,
+      SkBlendMode::kXor};
+  SkPaint paint;
+  paint.setBlendMode(bottom ? SkBlendMode::kSrcOver : composites[composite]);
+  if (mode == 1) {
+    paint.setColorFilter(SkLumaColorFilter::Make());
+  }
+  static_cast<NativeCanvasState*>(canvas)->surface->getCanvas()->saveLayer(
+      nullptr, &paint);
 }
 
 // skia_renderer.cc:151-171,1035-1049. Keep the original normal/opaque
@@ -535,28 +566,29 @@ void LayoutngCanvasDrawDRRect(void* canvas, NativeRect outer, NativeRadii outer_
 }
 
 void LayoutngCanvasDrawBoxShadow(void* canvas, NativeRect box,
-                                 NativeRadii radii, NativeColor color,
+                                 NativeRadii radii, NativeRadii inner_radii,
+                                 NativeColor color,
                                  double offset_x, double offset_y,
                                  double blur_radius, double spread,
                                  bool inset, bool opaque_background,
                                  bool antialias) {
   SkCanvas* target = static_cast<NativeCanvasState*>(canvas)->surface->getCanvas();
-  SkPaint paint;
-  paint.setAntiAlias(antialias);
-  paint.setColor(SK_ColorBLACK);
+  SkPaint paint = ToPaint({0.0f, 0.0f, 0.0f, 1.0f}, antialias);
+  paint.setColorFilter(SkColorFilters::Blend(
+      {std::clamp(color.red, 0.0f, 1.0f),
+       std::clamp(color.green, 0.0f, 1.0f),
+       std::clamp(color.blue, 0.0f, 1.0f),
+       std::clamp(color.alpha, 0.0f, 1.0f)},
+      SkColorSpace::MakeSRGB(), SkBlendMode::kSrcIn));
   if (blur_radius > 0)
     paint.setMaskFilter(SkMaskFilter::MakeBlur(
         kNormal_SkBlurStyle, static_cast<float>(blur_radius * 0.5), true));
-  paint.setColorFilter(SkColorFilters::Blend(
-      {std::clamp(color.red, 0.0f, 1.0f), std::clamp(color.green, 0.0f, 1.0f),
-       std::clamp(color.blue, 0.0f, 1.0f), std::clamp(color.alpha, 0.0f, 1.0f)},
-      SkColorSpace::MakeSRGB(), SkBlendMode::kSrcIn));
   NativeRect shadow{box.x - spread, box.y - spread,
                     box.width + spread * 2, box.height + spread * 2};
   if (!inset) {
     target->save();
     NativeRect hole = box;
-    NativeRadii hole_radii = radii;
+    NativeRadii hole_radii = inner_radii;
     if (opaque_background) {
       hole.x += 1;
       hole.y += 1;
@@ -572,9 +604,39 @@ void LayoutngCanvasDrawBoxShadow(void* canvas, NativeRect box,
     target->restore();
     target->restore();
   } else {
-    shadow.x += offset_x;
-    shadow.y += offset_y;
-    target->drawRRect(ToRRect(shadow, radii), paint);
+    // Blink paints an inset shadow as the shadow cast by the area outside a
+    // hole, clipped to the pixel-snapped inner border shape.  Filling a
+    // shifted rounded rectangle instead reverses that geometry: it darkens
+    // the border/center and misses the inner edge that should cast the shadow.
+    const SkRRect clip = ToRRect(box, radii);
+    NativeRect hole{box.x + spread, box.y + spread,
+                    std::max(0.0, box.width - spread * 2),
+                    std::max(0.0, box.height - spread * 2)};
+    NativeRadii hole_radii = radii;
+    for (double& radius : hole_radii.values)
+      radius = std::max(0.0, radius - spread);
+
+    const double extent = std::ceil(1.5 * blur_radius) +
+                          std::max(0.0, -spread) + 2.0;
+    const double left = std::min(box.x, box.x - offset_x) - extent;
+    const double top = std::min(box.y, box.y - offset_y) - extent;
+    const double right =
+        std::max(box.x + box.width, box.x + box.width - offset_x) + extent;
+    const double bottom =
+        std::max(box.y + box.height, box.y + box.height - offset_y) + extent;
+
+    SkPathBuilder caster;
+    caster.setFillType(SkPathFillType::kEvenOdd);
+    caster.addRect(ToRect({left, top, right - left, bottom - top}));
+    if (hole.width > 0 && hole.height > 0)
+      caster.addRRect(ToRRect(hole, hole_radii));
+
+    target->save();
+    target->clipRRect(clip, SkClipOp::kIntersect, antialias);
+    target->translate(static_cast<float>(offset_x),
+                      static_cast<float>(offset_y));
+    target->drawPath(caster.detach(), paint);
+    target->restore();
   }
 }
 
@@ -660,7 +722,9 @@ int LayoutngCanvasBuildMipImage(void* canvas, uint64_t id, int level) {
 }
 
 void LayoutngCanvasDrawImageRect(void* canvas, uint64_t id, int mip_level,
-                                 NativeRect source, NativeRect destination) {
+                                 int interpolation_quality, int image_orientation,
+                                 NativeRect source,
+                                 NativeRect destination) {
   auto* state = static_cast<NativeCanvasState*>(canvas);
   sk_sp<SkImage> image;
   if (mip_level > 0) {
@@ -672,9 +736,63 @@ void LayoutngCanvasDrawImageRect(void* canvas, uint64_t id, int mip_level,
     if (found == state->images.end()) return;
     image = found->second;
   }
+  if (image_orientation >= 2 && image_orientation <= 8) {
+    const auto key = std::tuple(id, mip_level, image_orientation);
+    if (const auto found = state->oriented_images.find(key);
+        found != state->oriented_images.end()) {
+      image = found->second;
+    } else {
+      const int width = image->width();
+      const int height = image->height();
+      const bool swaps_axes = image_orientation >= 5;
+      const SkImageInfo info = SkImageInfo::MakeN32Premul(
+          swaps_axes ? height : width, swaps_axes ? width : height);
+      const SkSurfaceProps props(0, kUnknown_SkPixelGeometry);
+      auto oriented_surface = SkSurfaces::Raster(info, &props);
+      if (!oriented_surface) return;
+      SkCanvas* oriented_canvas = oriented_surface->getCanvas();
+      oriented_canvas->clear(SK_ColorTRANSPARENT);
+      SkMatrix matrix;
+      switch (image_orientation) {
+        case 2:
+          matrix.setAll(-1, 0, width, 0, 1, 0, 0, 0, 1);
+          break;
+        case 3:
+          matrix.setAll(-1, 0, width, 0, -1, height, 0, 0, 1);
+          break;
+        case 4:
+          matrix.setAll(1, 0, 0, 0, -1, height, 0, 0, 1);
+          break;
+        case 5:
+          matrix.setAll(0, 1, 0, 1, 0, 0, 0, 0, 1);
+          break;
+        case 6:
+          matrix.setAll(0, -1, height, 1, 0, 0, 0, 0, 1);
+          break;
+        case 7:
+          matrix.setAll(0, -1, height, -1, 0, width, 0, 0, 1);
+          break;
+        case 8:
+          matrix.setAll(0, 1, 0, -1, 0, width, 0, 0, 1);
+          break;
+      }
+      oriented_canvas->concat(matrix);
+      oriented_canvas->drawImage(image, 0, 0);
+      image = oriented_surface->makeImageSnapshot();
+      if (!image) return;
+      state->oriented_images.emplace(key, image);
+    }
+  }
+  // cc::PaintFlags::FilterQualityToSkSamplingOptions(kDefault):
+  // none = nearest/no mip, low = linear/no mip, medium = linear/nearest mip.
+  // Rechrom materializes the selected medium-quality mip above, so the final
+  // draw samples that level without another mip lookup.
+  const SkFilterMode filter = interpolation_quality == 0
+                                  ? SkFilterMode::kNearest
+                                  : SkFilterMode::kLinear;
   state->surface->getCanvas()->drawImageRect(
       image, ToRect(source), ToRect(destination),
-      SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNone), nullptr,
+      SkSamplingOptions(filter, SkMipmapMode::kNone), nullptr,
       SkCanvas::kStrict_SrcRectConstraint);
 }
 
@@ -737,17 +855,14 @@ void LayoutngCanvasDrawGlyphRun(void* canvas, size_t face_index,
     run_variations.assign(variations, variations + variation_count);
   if (run_variations.empty())
     run_variations = target->font_variations[face_index];
-  if (target->font_supports_optical_size[face_index]) {
-    constexpr uint32_t kOpsz = SkSetFourByteTag('o', 'p', 's', 'z');
-    auto optical = std::find_if(run_variations.begin(), run_variations.end(),
-                                [](const auto& axis) { return axis.tag == kOpsz; });
-    if (optical == run_variations.end())
-      run_variations.push_back({kOpsz, font_size});
-    else
-      optical->value = font_size;
-  }
+  // Font selection owns optical sizing. In particular, native system fonts
+  // can already carry the platform's optical instance while intentionally
+  // exposing no explicit `opsz` setting. Raster must replay that resolved
+  // typeface/variation state instead of deriving a new optical size from the
+  // zoomed paint font size.
   sk_sp<SkTypeface> typeface = CloneWithVariations(
       target->typefaces[face_index], target->font_face_indices[face_index], run_variations);
+  SkCanvas* sk_canvas = target->surface->getCanvas();
   SkFont font(typeface, font_size);
   font.setEdging(smoothing == 1 ? SkFont::Edging::kAlias
                  : smoothing == 2 ? SkFont::Edging::kAntiAlias
@@ -781,7 +896,10 @@ void LayoutngCanvasDrawGlyphRun(void* canvas, size_t face_index,
     paint.setStyle(SkPaint::kStroke_Style);
     paint.setStrokeWidth(stroke_width);
   }
-  target->surface->getCanvas()->drawTextBlob(blob, origin_x, origin_y, paint);
+  // Layout/Paint owns the baseline. SkCanvas applies the current transform to
+  // the supplied text origin; raster must not derive another baseline from
+  // device-space font metrics or line-box geometry.
+  sk_canvas->drawTextBlob(blob, origin_x, origin_y, paint);
 }
 
 void LayoutngCanvasClipOutGlyphRunIntercepts(
@@ -801,15 +919,6 @@ void LayoutngCanvasClipOutGlyphRunIntercepts(
     run_variations.assign(variations, variations + variation_count);
   if (run_variations.empty())
     run_variations = target->font_variations[face_index];
-  if (target->font_supports_optical_size[face_index]) {
-    constexpr uint32_t kOpsz = SkSetFourByteTag('o', 'p', 's', 'z');
-    auto optical = std::find_if(run_variations.begin(), run_variations.end(),
-                                [](const auto& axis) { return axis.tag == kOpsz; });
-    if (optical == run_variations.end())
-      run_variations.push_back({kOpsz, font_size});
-    else
-      optical->value = font_size;
-  }
   sk_sp<SkTypeface> typeface = CloneWithVariations(
       target->typefaces[face_index], target->font_face_indices[face_index],
       run_variations);

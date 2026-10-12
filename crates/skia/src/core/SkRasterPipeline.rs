@@ -175,6 +175,9 @@ pub struct Context {
     pub uniform_color: UniformColorCtx,
     pub evenly_spaced_2_stop_gradient: EvenlySpaced2StopGradientCtx,
     pub gradient: GradientCtx,
+    pub gradient_interpolation_space:
+        crate::compat::gradient_interpolation::GradientInterpolationSpace,
+    pub gradient_interpolate_premultiplied: bool,
     pub two_point_conical_gradient: TwoPointConicalGradientCtx,
     pub limit_x: TileCtx,
     pub limit_y: TileCtx,

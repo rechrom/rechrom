@@ -190,10 +190,37 @@ Element.prototype.attachShadow=function(init={}) {
   if(shadowRoots.has(this))throw new DOMException('Shadow root already attached','NotSupportedError');
   const mode=String(init.mode||'');
   if(mode!=='open'&&mode!=='closed')throw new TypeError('Shadow root mode must be open or closed');
-  const root=this.ownerDocument.createDocumentFragment();
+  const slotAssignment=init.slotAssignment===undefined?'named':String(init.slotAssignment);
+  if(slotAssignment!=='named'&&slotAssignment!=='manual')throw new TypeError('Shadow root slot assignment must be named or manual');
+  const root=invoke(this,'attachShadow',mode,slotAssignment);
   Object.setPrototypeOf(root,ShadowRoot.prototype);
-  Object.defineProperties(root,{host:{value:this},mode:{value:mode},delegatesFocus:{value:!!init.delegatesFocus},slotAssignment:{value:init.slotAssignment||'named'}});
+  Object.defineProperties(root,{host:{value:this},mode:{value:mode},delegatesFocus:{value:!!init.delegatesFocus},slotAssignment:{value:slotAssignment}});
   shadowRoots.set(this,root); return root;
+};
+HTMLDialogElement.prototype.showModal=function(){return invoke(this,'showModal');};
+HTMLDialogElement.prototype.close=function(){return invoke(this,'close');};
+HTMLElement.prototype.showPopover=function(){return invoke(this,'showPopover');};
+HTMLElement.prototype.hidePopover=function(){return invoke(this,'hidePopover');};
+Element.prototype.requestFullscreen=function(options={}) {
+  if(options!==null && typeof options!=='object')throw new TypeError('FullscreenOptions must be an object');
+  try {
+    invoke(this,'requestFullscreen');
+    this.ownerDocument.dispatchEvent(new Event('fullscreenchange'));
+    return Promise.resolve();
+  } catch(error) {
+    this.ownerDocument.dispatchEvent(new Event('fullscreenerror'));
+    return Promise.reject(error);
+  }
+};
+Document.prototype.exitFullscreen=function() {
+  try {
+    invoke(this,'exitFullscreen');
+    this.dispatchEvent(new Event('fullscreenchange'));
+    return Promise.resolve();
+  } catch(error) {
+    this.dispatchEvent(new Event('fullscreenerror'));
+    return Promise.reject(error);
+  }
 };
 Object.defineProperty(Element.prototype,'shadowRoot',{get(){const root=shadowRoots.get(this);return root?.mode==='open'?root:null;}});
 HTMLElement.prototype.attachInternals=function() {

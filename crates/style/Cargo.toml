@@ -11,6 +11,8 @@ font_engine = { path = "../font_engine" }
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }
 layoutng = { package = "layoutng_assembly", path = "../layoutng_assembly" }
+url = "2"
 
 [dev-dependencies]
 html = { path = "../html" }
+image_resource = { path = "../image_resource" }

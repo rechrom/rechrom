@@ -71,7 +71,7 @@ pub struct ScrollMutation {
     pub target_node_id: u64,
     pub offset: Offset,
 }
-pub use animation::{AnimationStyleSample, AnimationTick};
+pub use animation::{AnimationCascadeOrigin, AnimationStyleSample, AnimationTick};
 // cpp: page_mutation/page_mutation.h:76-82
 #[derive(Clone)]
 pub enum PageMutation {

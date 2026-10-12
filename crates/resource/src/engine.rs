@@ -5,12 +5,36 @@ use decode::{DecodeEffect, DecodeEngine, DecodedImageResource};
 use image_resource::{ContainerKey, DocumentImageMutation, ImageId};
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     io,
     rc::Rc,
     sync::Arc,
     time::Instant,
 };
-use url_loader::{URLLoader, URLRequest, URLStreamOperation};
+use url_loader::{URLLoader, URLRequest, URLStreamOperation, URLWakeCallback};
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ResourceRequestKey {
+    url: String,
+    referrer: String,
+    destination: u8,
+    method: String,
+    body: Vec<u8>,
+    headers: Vec<(String, String)>,
+}
+
+impl From<&URLRequest> for ResourceRequestKey {
+    fn from(request: &URLRequest) -> Self {
+        Self {
+            url: request.url.clone(),
+            referrer: request.referrer.clone(),
+            destination: request.destination as u8,
+            method: request.method.clone(),
+            body: request.body.clone(),
+            headers: request.headers.clone(),
+        }
+    }
+}
 
 /// One document/open operation's resource loader. The transport and decoders
 /// may be shared services, but URL/referrer, cancellation and resource identity
@@ -21,7 +45,11 @@ pub struct ResourceEngine {
     decode: Rc<DecodeEngine>,
     document_url: RefCell<String>,
     active: Cell<bool>,
+    wake_callback: RefCell<Option<URLWakeCallback>>,
     next_image_id: Cell<ImageId>,
+    loads: RefCell<
+        HashMap<ResourceRequestKey, Rc<RefCell<crate::resource_loader::SharedResourceLoad>>>,
+    >,
 }
 
 impl ResourceEngine {
@@ -31,7 +59,9 @@ impl ResourceEngine {
             decode: Rc::new(DecodeEngine::new()),
             document_url: RefCell::new(document_url),
             active: Cell::new(true),
+            wake_callback: RefCell::new(None),
             next_image_id: Cell::new(1),
+            loads: RefCell::new(HashMap::new()),
         }
     }
 
@@ -45,7 +75,9 @@ impl ResourceEngine {
             decode,
             document_url: RefCell::new(document_url),
             active: Cell::new(true),
+            wake_callback: RefCell::new(None),
             next_image_id: Cell::new(1),
+            loads: RefCell::new(HashMap::new()),
         }
     }
 
@@ -87,7 +119,46 @@ impl ResourceEngine {
         if request.referrer.is_empty() {
             request.referrer = self.DocumentURL();
         }
-        ResourceLoader::Start(&mut *self.loader.borrow_mut(), &request)
+        // Chromium's ResourceFetcher/MemoryCache coalesces identical in-flight
+        // subresource loads. Keep that ownership here at the document resource
+        // boundary: callers still receive independent handles, while one
+        // transport operation and one immutable terminal response are shared.
+        // Non-idempotent requests retain one operation per call.
+        if request.method.eq_ignore_ascii_case("GET") && request.body.is_empty() {
+            let key = ResourceRequestKey::from(&request);
+            if let Some(shared) = self.loads.borrow().get(&key).cloned() {
+                let mut resource = ResourceLoader::FromShared(shared);
+                if let Some(callback) = self.wake_callback.borrow().clone() {
+                    resource.SetWakeCallback(callback);
+                }
+                return resource;
+            }
+            let mut resource = ResourceLoader::Start(&mut *self.loader.borrow_mut(), &request);
+            if let Some(callback) = self.wake_callback.borrow().clone() {
+                resource.SetWakeCallback(callback);
+            }
+            self.loads.borrow_mut().insert(key, resource.Shared());
+            return resource;
+        }
+        let mut resource = ResourceLoader::Start(&mut *self.loader.borrow_mut(), &request);
+        if let Some(callback) = self.wake_callback.borrow().clone() {
+            resource.SetWakeCallback(callback);
+        }
+        resource
+    }
+
+    /// MemoryCache::ResourceForURL(...)->IsLoaded() equivalent for a request
+    /// owned by this document resource engine. This is intentionally a URL
+    /// request query rather than a DOM/source-string cache.
+    pub fn HasLoaded(&self, mut request: URLRequest) -> bool {
+        if request.referrer.is_empty() {
+            request.referrer = self.DocumentURL();
+        }
+        let key = ResourceRequestKey::from(&request);
+        self.loads.borrow().get(&key).is_some_and(|shared| {
+            ResourceLoader::FromShared(shared.clone()).Status()
+                == crate::resource_loader::ResourceLoadStatus::kComplete
+        })
     }
 
     pub fn StartStream(&self, mut request: URLRequest) -> io::Result<Box<dyn URLStreamOperation>> {
@@ -97,7 +168,19 @@ impl ResourceEngine {
         if request.referrer.is_empty() {
             request.referrer = self.DocumentURL();
         }
-        self.loader.borrow_mut().LoadStream(&request)
+        let mut stream = self.loader.borrow_mut().LoadStream(&request)?;
+        if let Some(callback) = self.wake_callback.borrow().clone() {
+            stream.SetWakeCallback(callback);
+        }
+        Ok(stream)
+    }
+
+    pub fn SetWakeCallback(&self, callback: URLWakeCallback) {
+        *self.wake_callback.borrow_mut() = Some(callback.clone());
+        let loads = self.loads.borrow().values().cloned().collect::<Vec<_>>();
+        for shared in loads {
+            ResourceLoader::FromShared(shared).SetWakeCallback(callback.clone());
+        }
     }
 
     pub fn DecodeImage(
@@ -143,6 +226,10 @@ impl ResourceEngine {
 
     pub fn Cancel(&self) {
         self.active.set(false);
+        for shared in self.loads.borrow().values() {
+            ResourceLoader::CancelShared(shared);
+        }
+        self.loads.borrow_mut().clear();
         self.decode.ClearDocumentImages();
     }
 
@@ -173,12 +260,33 @@ mod tests {
         }
     }
 
+    struct Ready(Option<URLResponse>);
+    impl URLLoadOperation for Ready {
+        fn Poll(&mut self) -> io::Result<Option<URLResponse>> {
+            Ok(self.0.take())
+        }
+    }
+
+    struct ReadyLoader(Rc<RefCell<Vec<URLRequest>>>);
+    impl URLLoader for ReadyLoader {
+        fn Load(&mut self, request: &URLRequest) -> io::Result<Box<dyn URLLoadOperation>> {
+            self.0.borrow_mut().push(request.clone());
+            Ok(Box::new(Ready(Some(URLResponse {
+                final_url: request.url.clone(),
+                status_code: 200,
+                body: b"shared".to_vec(),
+                ..Default::default()
+            }))))
+        }
+    }
+
     struct BitmapDecoder;
     impl ImageDecoder for BitmapDecoder {
         fn Decode(&mut self, _: &ImageDecodeInput<'_>) -> io::Result<DecodedImage> {
             Ok(DecodedImage {
                 width: 1,
                 height: 1,
+                orientation: Default::default(),
                 rgba8: vec![1, 2, 3, 4],
             })
         }
@@ -242,5 +350,27 @@ mod tests {
         assert!(engine
             .DecodeImage(Arc::from(&b"c"[..]), "image/png", &container)
             .is_err());
+    }
+
+    #[test]
+    fn identical_get_subresources_share_one_transport_operation() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let engine = ResourceEngine::new(
+            Rc::new(RefCell::new(ReadyLoader(requests.clone()))),
+            "https://example.test/page".into(),
+        );
+        let request = URLRequest {
+            url: "https://example.test/shared.css".into(),
+            destination: url_loader::RequestDestination::kStyleSheet,
+            ..Default::default()
+        };
+        let mut first = engine.Start(request.clone());
+        let mut second = engine.Start(request);
+
+        assert_eq!(requests.borrow().len(), 1);
+        assert!(first.Poll());
+        assert!(second.Poll());
+        assert_eq!(first.TakeResult().response.unwrap().body, b"shared");
+        assert_eq!(second.TakeResult().response.unwrap().body, b"shared");
     }
 }

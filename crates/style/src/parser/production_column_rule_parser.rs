@@ -41,7 +41,7 @@ fn Entry<T: TokenStreamTokenizer>(
         ));
     }
     match id {
-        kColumnRuleColor | kRowRuleColor => ConsumeColor(id, s),
+        kColumnRuleColor | kRowRuleColor => ConsumeColor(id, s, mode),
         kColumnRuleStyle | kRowRuleStyle => {
             if s.Peek().GetType() != kIdentToken {
                 return Err(invalid(id));

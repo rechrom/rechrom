@@ -746,6 +746,7 @@ dependencies = [
  "cssom",
  "font_engine",
  "html",
+ "image_resource",
  "layoutng_assembly",
  "layoutng_block",
  "layoutng_foundation",
@@ -975,6 +976,7 @@ dependencies = [
  "layoutng_foundation",
  "libc",
  "rustybuzz",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -1520,6 +1522,7 @@ name = "image_decoder"
 version = "0.0.1"
 dependencies = [
  "image",
+ "image_resource",
  "zune-jpeg",
 ]
 
@@ -1676,6 +1679,7 @@ dependencies = [
  "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
+ "skia",
 ]
 
 [[package]]
@@ -1692,6 +1696,7 @@ dependencies = [
  "layoutng_geometry",
  "layoutng_mathml",
  "layoutng_style",
+ "skia",
 ]
 
 [[package]]
@@ -1831,6 +1836,7 @@ name = "layoutng_style"
 version = "0.0.1"
 dependencies = [
  "font_engine",
+ "image_resource",
  "layoutng_foundation",
  "layoutng_geometry",
 ]
@@ -2455,6 +2461,7 @@ version = "0.0.1"
 dependencies = [
  "animation",
  "browser_tracing",
+ "font_engine",
  "image_resource",
  "layoutng_assembly",
  "layoutng_foundation",
@@ -3330,9 +3337,11 @@ dependencies = [
  "dom",
  "font_engine",
  "html",
+ "image_resource",
  "layoutng_assembly",
  "layoutng_foundation",
  "layoutng_style",
+ "url",
 ]
 
 [[package]]
@@ -3890,6 +3899,7 @@ dependencies = [
 name = "web_font"
 version = "0.0.1"
 dependencies = [
+ "ttf-parser",
  "wuff",
 ]
 

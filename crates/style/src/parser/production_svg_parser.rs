@@ -68,6 +68,7 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
 ) -> Result<Rc<Value>, PropertyParseError> {
     use CSSPropertyID::*;
     if matches!(id, kFillRule | kClipRule) {
@@ -84,22 +85,22 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
         ) {
             return Ok(values::identifier(stream.ConsumeIncludingWhitespace().Id()));
         }
-        if let Some(url) = ConsumeUrl(id, stream)? {
-            let url = values::uri(url);
+        if let Some(url) = ConsumeUrl(id, stream, context)? {
+            let url = values::uri_from_url_data(url);
             if at_value_end(stream) {
                 return Ok(url);
             }
             let fallback = if stream.Peek().Id() == CSSValueID::kNone {
                 values::identifier(stream.ConsumeIncludingWhitespace().Id())
             } else {
-                ConsumeColor(id, stream)?
+                ConsumeColor(id, stream, mode)?
             };
             return Ok(values::list(
                 vec![url, fallback],
                 values::ListSeparator::Space,
             ));
         }
-        return ConsumeColor(id, stream);
+        return ConsumeColor(id, stream, mode);
     }
     if id == kPaintOrder {
         // longhands_custom.cc:8167-8226. Canonical lists retain only the first

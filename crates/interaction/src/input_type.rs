@@ -338,8 +338,22 @@ fn SetChecked(c: &InputTypeContext<'_>, id: u64, checked: bool) {
         ..Default::default()
     })
 }
+fn SetIndeterminate(c: &InputTypeContext<'_>, id: u64, indeterminate: bool) {
+    (c.emit_mutation)(&DOMMutation {
+        mutation_type: DOMMutationType::kSetControlIndeterminate,
+        target_node_id: id,
+        bool_value: indeterminate,
+        ..Default::default()
+    })
+}
 fn Checked(c: &InputTypeContext<'_>, id: u64) -> bool {
     ReadNode(&c.document, id, |d, _, i| d.ControlChecked(i)).unwrap_or(false)
+}
+fn Indeterminate(c: &InputTypeContext<'_>, id: u64) -> bool {
+    ReadNode(&c.document, id, |d, _, i| d.ControlIndeterminate(i)).unwrap_or(false)
+}
+fn RadioGroup(c: &InputTypeContext<'_>, id: u64) -> Vec<u64> {
+    ReadNode(&c.document, id, |d, _, i| d.RadioGroupNodeIds(i)).unwrap_or_default()
 }
 fn Value(c: &InputTypeContext<'_>, id: u64) -> String {
     ReadNode(&c.document, id, |d, _, i| d.ControlValue(i)).unwrap_or_default()
@@ -439,6 +453,7 @@ fn ActivateButton(id: u64, event: &mut Event, c: &InputTypeContext<'_>) {
 // cpp: interaction/input_type.cc:197-202
 struct CheckableActivationState {
     previous_checked: Vec<(u64, bool)>,
+    previous_indeterminate: Option<bool>,
     checkedness_changed: bool,
 }
 impl ActivationState for CheckableActivationState {
@@ -460,28 +475,18 @@ impl<'a> InputType for CheckableInputType<'a> {
         let c = &self.c;
         let mut state = CheckableActivationState {
             previous_checked: Vec::new(),
+            previous_indeterminate: None,
             checkedness_changed: false,
         };
         let ty = LowerASCII(&AttributeValue(c, id, "type"));
         if ty == "radio" {
-            let name = AttributeValue(c, id, "name");
             let was_checked = Checked(c, id);
             state.checkedness_changed = !was_checked;
-            if name.is_empty() {
-                state.previous_checked.push((id, was_checked))
-            } else {
-                for candidate in AllElements(c) {
-                    if !Element(c, candidate, "input")
-                        || LowerASCII(&AttributeValue(c, candidate, "type")) != "radio"
-                        || AttributeValue(c, candidate, "name") != name
-                    {
-                        continue;
-                    }
-                    let checked = Checked(c, candidate);
-                    state.previous_checked.push((candidate, checked));
-                    if checked && candidate != id {
-                        SetChecked(c, candidate, false)
-                    }
+            for candidate in RadioGroup(c, id) {
+                let checked = Checked(c, candidate);
+                state.previous_checked.push((candidate, checked));
+                if checked && candidate != id {
+                    SetChecked(c, candidate, false)
                 }
             }
             if !was_checked {
@@ -489,9 +494,12 @@ impl<'a> InputType for CheckableInputType<'a> {
             }
         } else {
             let checked = Checked(c, id);
+            let indeterminate = Indeterminate(c, id);
             state.checkedness_changed = true;
             state.previous_checked.push((id, checked));
-            SetChecked(c, id, !checked)
+            state.previous_indeterminate = Some(indeterminate);
+            SetChecked(c, id, !checked);
+            SetIndeterminate(c, id, false)
         }
         Some(Box::new(state))
     }
@@ -503,6 +511,9 @@ impl<'a> InputType for CheckableInputType<'a> {
         if event.default_prevented || event.default_handled {
             for &(id, checked) in &state.previous_checked {
                 SetChecked(&self.c, id, checked)
+            }
+            if let Some(indeterminate) = state.previous_indeterminate {
+                SetIndeterminate(&self.c, self.node, indeterminate)
             }
         } else if state.checkedness_changed {
             DispatchInputAndChange(self.node, &self.c.dispatch_synthetic)
@@ -749,17 +760,27 @@ impl<'a> InputType for SelectInputType<'a> {
         }
         let c = &self.c;
         let id = self.node;
-        let options: Vec<_> = Descendants(c, id)
-            .into_iter()
-            .filter(|&n| Element(c, n, "option") && !HasAttribute(&c.document, n, "disabled"))
-            .collect();
+        // cpp: HTMLSelectElement::GetOptionList. DOM owns the option/select
+        // association (including optgroup and nested-option barriers), so the
+        // interaction package consumes node ids instead of reconstructing it.
+        let options = ReadNode(&c.document, id, |d, _, select| {
+            d.SelectOptionNodeIds(select)
+                .into_iter()
+                .filter(|option| !IsDisabledFormControl(&c.document, *option))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
         if options.is_empty() {
             return;
         }
         let current = Value(c, id);
-        let index = options
-            .iter()
-            .position(|&n| OptionValue(c, n) == current)
+        // cpp: ListBoxSelectType::active_selection_end_. Once control/meta
+        // starts non-contiguous navigation, subsequent arrows continue from
+        // that active end even though selectedness/value did not change.
+        let active = c.interaction_state.borrow().multi_select_focused_option_id;
+        let index = active
+            .and_then(|active| options.iter().position(|&option| option == active))
+            .or_else(|| options.iter().position(|&n| OptionValue(c, n) == current))
             .unwrap_or(0);
         let next = match event.key.as_str() {
             "ArrowDown" | "ArrowRight" => (index + 1).min(options.len() - 1),
@@ -768,7 +789,31 @@ impl<'a> InputType for SelectInputType<'a> {
             "End" => options.len() - 1,
             _ => return,
         };
-        if next != index {
+        let (multiple, uses_menu_list) = ReadNode(&c.document, id, |d, node, select| {
+            (
+                node.FindAttribute("multiple").is_some(),
+                d.SelectUsesMenuList(select),
+            )
+        })
+        .unwrap_or((false, true));
+        let control_key = if cfg!(target_os = "macos") {
+            event.modifiers.meta
+        } else {
+            event.modifiers.control
+        };
+        if multiple && !uses_menu_list && control_key {
+            // cpp: select_type.cc:1534-1559,1658-1669. Control/meta arrows
+            // move the active end without selecting it and therefore expose
+            // exactly one :-internal-multi-select-focus option.
+            c.interaction_state
+                .borrow_mut()
+                .multi_select_focused_option_id = Some(options[next]);
+        } else {
+            c.interaction_state
+                .borrow_mut()
+                .multi_select_focused_option_id = None;
+        }
+        if !(multiple && !uses_menu_list && control_key) && next != index {
             SetValue(c, id, OptionValue(c, options[next]));
             DispatchInputAndChange(id, &c.dispatch_synthetic)
         }

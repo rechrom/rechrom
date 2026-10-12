@@ -244,6 +244,7 @@ fn ApplyInteractionStateMutation(
             mutation.state.focus_visible_node_id,
             mutation.state.hovered_node_id,
             mutation.state.pressed_node_id,
+            mutation.state.multi_select_focused_option_id,
         ]
         .into_iter()
         .flatten()
@@ -260,8 +261,9 @@ fn ApplyInteractionStateMutation(
                 .borrow_mut()
                 .SetFocusedNode(mutation.state.focused_node_id);
         }
-        // Selector calculation does not consume UserInteractionState. Keep CSS
-        // records and let the frame owner refresh native control paint metadata.
+        // User-action selectors and native control paint both consume this
+        // snapshot. The next lifecycle republishes it to StyleEngine before
+        // resolving the dirty document.
         document
             .borrow_mut()
             .GetDocumentMut()
@@ -441,13 +443,14 @@ mod tests {
         assert_eq!(state.borrow().focused_node_id, Some(node));
         service.DidResolveStyles();
         service.DidPaint();
-        for field in 0..4 {
+        for field in 0..5 {
             let mut invalid = *state.borrow();
             match field {
                 0 => invalid.focused_node_id = Some(u64::MAX),
                 1 => invalid.focus_visible_node_id = Some(u64::MAX),
                 2 => invalid.hovered_node_id = Some(u64::MAX),
-                _ => invalid.pressed_node_id = Some(u64::MAX),
+                3 => invalid.pressed_node_id = Some(u64::MAX),
+                _ => invalid.multi_select_focused_option_id = Some(u64::MAX),
             }
             assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                 || service.ApplyStateMutation(InteractionStateMutation { state: invalid })

@@ -1,13 +1,18 @@
 use foundation::{CSSPropertyID, ECursor, String, WindRule};
 use layoutng_style::style::{
-    basic_shapes::{BasicShapePolygon, ShapeType},
+    basic_shapes::{
+        BasicShapeCircle, BasicShapeEllipse, BasicShapePolygon, BasicShapeWithCenterAndRadii,
+        RadiusType, ShapeType,
+    },
     clip_path_operation::OperationType as ClipType,
     computed_style::ComputedStyle,
     computed_style_constants::{GeometryBox, ShapeBox},
     filter_operation::*,
     geometry_box_clip_path_operation::GeometryBoxClipPathOperation,
+    reference_clip_path_operation::ReferenceClipPathOperation,
     shape_clip_path_operation::ShapeClipPathOperation,
     shape_value::ShapeValueType,
+    style_path::StylePath,
 };
 use style::{
     media_queries::MediaValuesCachedData,
@@ -23,6 +28,66 @@ fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
         .find(|&i| d.Node(i).FindAttribute("id").is_some_and(|a| a.value == id))
         .unwrap();
     unsafe { &*d.ResolvedStyleFor(node).unwrap().native_style.Get() }
+}
+
+#[test]
+fn circle_ellipse_and_path_reach_typed_native_shapes() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<div id=c style=\"clip-path:circle(farthest-side at right 10px bottom 20%) padding-box\"></div><div id=e style=\"clip-path:ellipse(20% closest-corner at 25% 75%) content-box\"></div><div id=p style=\"clip-path:path(evenodd, 'M1 2h3v4s5 6 7 8t9 10a15 16 20 0 1 17 18z') view-box\"></div>",
+    );
+    update(&mut owner);
+    let shape_operation = |style: &ComputedStyle| {
+        let operation = unsafe { &*style.ClipPath().unwrap() };
+        unsafe {
+            &*(operation as *const dyn layoutng_style::style::clip_path_operation::ClipPathOperation
+                as *const ShapeClipPathOperation)
+        }
+    };
+    let circle_operation = shape_operation(native(&owner, "c"));
+    assert_eq!(circle_operation.GetGeometryBox(), GeometryBox::kPaddingBox);
+    let circle = unsafe {
+        &*(circle_operation.GetBasicShape()
+            as *const dyn layoutng_style::style::basic_shapes::BasicShape
+            as *const BasicShapeCircle)
+    };
+    assert_eq!(circle.Radius().GetType(), RadiusType::kFarthestSide);
+    assert!(circle.HasExplicitCenter());
+
+    let ellipse_operation = shape_operation(native(&owner, "e"));
+    assert_eq!(ellipse_operation.GetGeometryBox(), GeometryBox::kContentBox);
+    let ellipse = unsafe {
+        &*(ellipse_operation.GetBasicShape()
+            as *const dyn layoutng_style::style::basic_shapes::BasicShape
+            as *const BasicShapeEllipse)
+    };
+    assert_eq!(ellipse.RadiusX().GetType(), RadiusType::kValue);
+    assert_eq!(ellipse.RadiusY().GetType(), RadiusType::kClosestCorner);
+
+    let path_operation = shape_operation(native(&owner, "p"));
+    assert_eq!(path_operation.GetGeometryBox(), GeometryBox::kViewBox);
+    let path = unsafe {
+        &*(path_operation.GetBasicShape()
+            as *const dyn layoutng_style::style::basic_shapes::BasicShape
+            as *const StylePath)
+    };
+    assert_eq!(path.GetWindRule(), WindRule::RULE_EVENODD);
+    assert!(!path.ByteStream().IsEmpty());
+}
+#[test]
+fn local_clip_path_url_reaches_typed_native_reference() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<svg><clipPath id=clip><rect width=10 height=10 /></clipPath></svg><div id=target style='clip-path:url(#clip)'></div>",
+    );
+    update(&mut owner);
+    let operation = unsafe { &*native(&owner, "target").ClipPath().unwrap() };
+    assert_eq!(operation.GetType(), ClipType::kReference);
+    let reference = unsafe {
+        &*(operation as *const dyn layoutng_style::style::clip_path_operation::ClipPathOperation
+            as *const ReferenceClipPathOperation)
+    };
+    assert_eq!(reference.Url().Utf8(), "#clip");
 }
 fn update(owner: &mut dom::DOM) {
     let mut engine = StyleEngine::new(owner);
@@ -204,9 +269,6 @@ fn invalid_supported_effect_values_and_missing_native_owners_are_typed() {
         assert_eq!(error.kind, PropertyParseErrorKind::Invalid, "{text}");
     }
     for (id, text) in [
-        (CSSPropertyID::kClipPath, "circle(10px)"),
-        (CSSPropertyID::kClipPath, "ellipse()"),
-        (CSSPropertyID::kClipPath, "inset(2px)"),
         (CSSPropertyID::kShapeOutside, "path('M0 0')"),
         (CSSPropertyID::kCursor, "url(cursor.png),pointer"),
     ] {
@@ -222,11 +284,7 @@ fn invalid_supported_effect_values_and_missing_native_owners_are_typed() {
     }
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
-    for (id, text) in [
-        (CSSPropertyID::kFilter, "url('#filter')"),
-        (CSSPropertyID::kClipPath, "url('#clip')"),
-        (CSSPropertyID::kShapeOutside, "url(shape.png)"),
-    ] {
+    for (id, text) in [(CSSPropertyID::kShapeOutside, "url(shape.png)")] {
         let mut builder =
             layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
         let property = ParseProperty(

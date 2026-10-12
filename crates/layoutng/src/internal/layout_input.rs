@@ -485,12 +485,15 @@ pub enum ShapeReferenceBox {
     kPaddingBox,
     kContentBox,
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShapeCoordinate {
     pub pixels: f64,
     pub percentage: f64,
+    /// Retains min/max/clamp and other computed length expressions which
+    /// cannot be represented by a single pixels-plus-percentage pair.
+    pub calculation: Option<std::sync::Arc<foundation::CalculationValue>>,
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShapePoint {
     pub x: ShapeCoordinate,
     pub y: ShapeCoordinate,
@@ -514,7 +517,7 @@ pub enum ShapeRadiusKind {
     kClosestCorner,
     kFarthestCorner,
 }
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ShapeRadius {
     pub kind: ShapeRadiusKind,
     pub value: ShapeCoordinate,
@@ -551,16 +554,18 @@ impl Default for ShapeOutsideGeometry {
                 x: ShapeCoordinate {
                     pixels: 0.0,
                     percentage: 50.0,
+                    calculation: None,
                 },
                 y: ShapeCoordinate {
                     pixels: 0.0,
                     percentage: 50.0,
+                    calculation: None,
                 },
             },
             radius_x: ShapeRadius::default(),
             radius_y: ShapeRadius::default(),
-            insets: [ShapeCoordinate::default(); 4],
-            corner_radii: [ShapePoint::default(); 4],
+            insets: std::array::from_fn(|_| ShapeCoordinate::default()),
+            corner_radii: std::array::from_fn(|_| ShapePoint::default()),
             resource_id: 0,
         }
     }
@@ -618,6 +623,20 @@ pub enum Overflow {
     kScroll,
     kAuto,
     kClip,
+}
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OverscrollBehavior {
+    #[default]
+    kAuto,
+    kContain,
+    kNone,
+    kChain,
+}
+impl OverscrollBehavior {
+    pub fn AllowsScrollChaining(self) -> bool {
+        matches!(self, Self::kAuto | Self::kChain)
+    }
 }
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -894,6 +913,19 @@ pub struct ContainIntrinsicLength {
     pub has_auto: bool,
     pub length: Option<f64>,
 }
+
+/// Immutable StyleImage projection used by the anonymous replaced child of a
+/// normal `::marker`.  The dimensions are unzoomed CSS pixels: StyleImage
+/// applies image-set density and effective zoom first, and the layout boundary
+/// removes that zoom so LayoutReplaced can apply it exactly once.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ListMarkerImage {
+    pub resource_id: u64,
+    pub shader: Option<std::sync::Arc<super::paint_input::PaintShader>>,
+    pub natural_width: f64,
+    pub natural_height: f64,
+    pub resolution_scale: f64,
+}
 // cpp: layoutng/internal/layout_input.h:425-618
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExtendedStyle {
@@ -1058,6 +1090,7 @@ pub struct ExtendedStyle {
     pub language: String,
     pub field_sizing: FieldSizing,
     pub box_sizing: BoxSizing,
+    pub list_style_image: Option<ListMarkerImage>,
     pub list_style_type: ListStyleType,
     pub list_style_position: ListStylePosition,
     pub empty_cells: EmptyCells,
@@ -1226,6 +1259,7 @@ impl Default for ExtendedStyle {
             language: String::new(),
             field_sizing: FieldSizing::kFixed,
             box_sizing: BoxSizing::kContentBox,
+            list_style_image: None,
             list_style_type: ListStyleType::kDisc,
             list_style_position: ListStylePosition::kOutside,
             empty_cells: EmptyCells::kShow,
@@ -1431,6 +1465,16 @@ impl Default for PaintPathCommand {
     }
 }
 
+/// One independently filled path in a synthesized clip.  SVG clipPath child
+/// graphics are combined by coverage union, while the clipPath as a whole is
+/// intersected with its ancestor clip chain.  Keeping the fill rule per child
+/// avoids the lossy "concatenate every contour and use one rule" shortcut.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PaintClipPathChild {
+    pub commands: Vec<PaintPathCommand>,
+    pub even_odd: bool,
+}
+
 // cpp: layoutng/internal/layout_input.h:704-718
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1476,6 +1520,10 @@ pub struct SvgViewBoxData {
     pub slice: bool,
     pub align_x: i8,
     pub align_y: i8,
+    // cpp: SVGViewSpec::Transform / SVGSVGElement::ViewBoxToViewTransform.
+    // This is distinct from the root element's authored CSS/SVG transform and
+    // is concatenated after the viewBox-to-viewport mapping.
+    pub view_transform: Option<TransformMatrix>,
 }
 
 // cpp: layoutng/internal/layout_input.h:734-754
@@ -1579,6 +1627,8 @@ pub struct ElementData {
     pub natural_width: Option<f64>,
     pub natural_height: Option<f64>,
     pub natural_aspect_ratio: Option<f64>,
+    /// Chromium LayoutImage::ImageDevicePixelRatio: CSS pixels per selected
+    /// resource pixel (the inverse of an image candidate's `2x` density).
     pub image_device_pixel_ratio: f64,
     pub replaced_respects_css_overflow: bool,
     pub row_span: u32,
@@ -1867,6 +1917,12 @@ impl ComputedStyle {
         if (self.paint.background_color.alpha > 0.0) != (other.paint.background_color.alpha > 0.0) {
             return false;
         }
+        // `image-orientation` swaps the intrinsic axes for EXIF orientations
+        // 5..8. DOM metadata and LayoutReplaced recompute natural sizing on
+        // this transition, so it cannot be normalized away as paint-only.
+        if self.paint.respect_image_orientation != other.paint.respect_image_orientation {
+            return false;
+        }
         // Blink treats ordinary transform changes, including adding/removing
         // the transform property node, as paint-property updates. LayoutBox
         // only escalates them to layout for anchor-positioning fragments whose
@@ -1878,7 +1934,10 @@ impl ComputedStyle {
         //
         // Filter presence still changes the native layer/containing-block
         // model represented by this translated layout tree.
-        if self.paint.filters.is_empty() != other.paint.filters.is_empty() {
+        if self.paint.filters.is_empty() != other.paint.filters.is_empty()
+            || self.paint.backdrop_filters.is_empty() != other.paint.backdrop_filters.is_empty()
+            || self.paint.backdrop_filter_has_reference != other.paint.backdrop_filter_has_reference
+        {
             return false;
         }
         let mut normalized = self.clone();
@@ -1998,6 +2057,7 @@ pub struct Size {
 }
 
 // cpp: layoutng/internal/layout_input.h:1018-1023
+pub use font_engine::FontFallbackRole;
 pub use font_engine::FontVariation;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FontUnicodeRange {
@@ -2026,6 +2086,11 @@ pub struct FontFace {
     pub face_index: u32,
     pub variations: Vec<FontVariation>,
     pub unicode_ranges: Vec<FontUnicodeRange>,
+    /// Platform-catalog classification consumed by FontEngine's fallback
+    /// iterator. This does not affect an explicitly requested family.
+    pub fallback_role: FontFallbackRole,
+    /// BCP-47 locales for which the platform catalog prefers this face.
+    pub fallback_locales: Vec<String>,
 }
 impl Default for FontFace {
     fn default() -> Self {
@@ -2039,6 +2104,8 @@ impl Default for FontFace {
             face_index: 0,
             variations: Vec::new(),
             unicode_ranges: Vec::new(),
+            fallback_role: FontFallbackRole::kFamilyOnly,
+            fallback_locales: Vec::new(),
         }
     }
 }
@@ -2051,6 +2118,12 @@ pub struct PaintImage {
     pub width: u32,
     pub height: u32,
     pub resolution_scale: f64,
+    /// Encoded bitmap orientation. Pixels remain in storage order; each CSS
+    /// use decides whether to respect it through `image-orientation`.
+    pub orientation: image_resource::ImageOrientation,
+    /// Concrete per-use environment of the currently published document
+    /// image recording. Bitmap resources leave this empty.
+    pub document_container_key: Option<image_resource::ContainerKey>,
     /// Immutable bitmap pixels or a renderer-neutral document recording.
     /// Layout reads only identity and intrinsic dimensions.
     pub content: image_resource::PaintImageContent,
@@ -2063,6 +2136,8 @@ impl Default for PaintImage {
             width: 0,
             height: 0,
             resolution_scale: 1.0,
+            orientation: Default::default(),
+            document_container_key: None,
             content: Default::default(),
         }
     }
@@ -2133,6 +2208,9 @@ pub struct ConstraintSpace {
     pub scrollbar_theme: Option<ScrollbarThemeMetrics>,
     pub minimum_font_physical_size: Option<f32>,
     pub device_pixel_ratio: f64,
+    /// Page/layout zoom in Blink's layout coordinate space. This is distinct
+    /// from the host device scale factor even when both happen to be 2.
+    pub layout_zoom_factor: f64,
     pub canvas_draw_element_enabled: bool,
     pub viewport: Option<ViewportGeometry>,
     pub control_theme: ControlThemeMetrics,
@@ -2155,6 +2233,7 @@ impl Default for ConstraintSpace {
             scrollbar_theme: None,
             minimum_font_physical_size: None,
             device_pixel_ratio: 1.0,
+            layout_zoom_factor: 1.0,
             canvas_draw_element_enabled: false,
             viewport: None,
             control_theme: ControlThemeMetrics::default(),

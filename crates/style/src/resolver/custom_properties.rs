@@ -7,14 +7,15 @@ use crate::{
     parser::{
         css_parser_token::CSSParserTokenType::*,
         production_property_parser::{
-            ParsePropertyTokens, PropertyParseError, PropertyParseErrorKind, VariableArguments,
-            VariableBlockEnd,
+            ParsePropertyTokens, ParsePropertyTokensWithBase, PropertyParseError,
+            PropertyParseErrorKind, VariableArguments, VariableBlockEnd,
         },
     },
     production_css_value::{self as values, CSSVariableData, PropertyValue, Value, VariableToken},
 };
 use foundation::{AtomicString, CSSPropertyID, CSSValueID};
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::{HashMap, HashSet},
     rc::Rc,
@@ -152,12 +153,12 @@ impl CustomProperties {
         let mut resolver = VariableResolver {
             registry,
             length,
-            parent_values,
+            parent_values: Cow::Owned(parent_values),
             initials,
-            registered_values,
+            registered_values: Cow::Owned(registered_values),
             context,
             attribute_stack: Vec::new(),
-            inherited,
+            inherited: Cow::Owned(inherited),
             specified: HashMap::new(),
             computed: HashMap::new(),
             stack: Vec::new(),
@@ -176,11 +177,11 @@ impl CustomProperties {
         for name in names {
             resolver.ResolveName(&name);
         }
-        let mut values = resolver.inherited;
+        let mut values = resolver.inherited.into_owned();
         values.extend(resolver.computed);
         Self {
             values,
-            registered_values: resolver.registered_values,
+            registered_values: resolver.registered_values.into_owned(),
             diagnostics: resolver.diagnostics,
             shorthand_cache: RefCell::default(),
         }
@@ -220,12 +221,16 @@ impl CustomProperties {
         let mut resolver = VariableResolver {
             registry: None,
             length: &|_, _| Err(VariableResolutionError::Invalid),
-            parent_values: self.values.clone(),
+            // Computed custom properties are immutable for the lifetime of a
+            // computed style. Chromium's StyleCascade reads the retained map
+            // while resolving ordinary declarations; it does not copy the
+            // whole map for every var() use.
+            parent_values: Cow::Borrowed(&self.values),
             initials: HashMap::new(),
-            registered_values: self.registered_values.clone(),
+            registered_values: Cow::Borrowed(&self.registered_values),
             context,
             attribute_stack: Vec::new(),
-            inherited: self.values.clone(),
+            inherited: Cow::Borrowed(&self.values),
             specified: HashMap::new(),
             computed: HashMap::new(),
             stack: Vec::new(),
@@ -242,12 +247,12 @@ struct VariableResolver<'env> {
         f64,
         crate::css_primitive_value::UnitType,
     ) -> Result<f64, VariableResolutionError>,
-    parent_values: HashMap<std::string::String, ComputedVariableValue>,
+    parent_values: Cow<'env, HashMap<std::string::String, ComputedVariableValue>>,
     initials: HashMap<std::string::String, ComputedVariableValue>,
-    registered_values: HashMap<std::string::String, Rc<Value>>,
+    registered_values: Cow<'env, HashMap<std::string::String, Rc<Value>>>,
     // Attribute cycle nodes record the property stack position on entry.
     attribute_stack: Vec<(AtomicString, usize)>,
-    inherited: HashMap<std::string::String, ComputedVariableValue>,
+    inherited: Cow<'env, HashMap<std::string::String, ComputedVariableValue>>,
     specified: HashMap<std::string::String, Rc<Value>>,
     computed: HashMap<std::string::String, ComputedVariableValue>,
     stack: Vec<std::string::String>,
@@ -385,7 +390,9 @@ impl VariableResolver<'_> {
                         Ok(typed) => {
                             let data =
                                 crate::property_registry::RegisteredVariableData(&typed, data);
-                            self.registered_values.insert(name.to_owned(), typed);
+                            self.registered_values
+                                .to_mut()
+                                .insert(name.to_owned(), typed);
                             ComputedVariableValue::Data(data)
                         }
                         Err(error) => {
@@ -405,7 +412,7 @@ impl VariableResolver<'_> {
                     .cloned()
                     .unwrap_or(ComputedVariableValue::Invalid),
                 _ => {
-                    self.registered_values.remove(name);
+                    self.registered_values.to_mut().remove(name);
                     value
                 }
             }
@@ -823,7 +830,12 @@ pub fn ResolvePropertyValueWithContext(
         }
         Err(_) => return Ok(unset()),
     };
-    match ParsePropertyTokens(parse_id, &data, declaration.mode) {
+    match ParsePropertyTokensWithBase(
+        parse_id,
+        &data,
+        declaration.mode,
+        declaration.base_url.clone(),
+    ) {
         Ok(properties) => {
             let resolved = properties
                 .iter()
@@ -1028,6 +1040,28 @@ mod tests {
                 expected
             );
         }
+    }
+    #[test]
+    fn pending_border_shorthand_preserves_style_with_variable_width() {
+        let custom = custom("--edge:max(1px, .0625rem);");
+        let properties = ParseProperty(
+            CSSPropertyID::kBorder,
+            &String::from("solid var(--edge) transparent"),
+            false,
+            CSSParserMode::kHTMLStandardMode,
+        )
+        .unwrap();
+        let top_style = properties
+            .iter()
+            .find(|property| property.PropertyID() == CSSPropertyID::kBorderTopStyle)
+            .unwrap();
+        assert_eq!(
+            ResolvePropertyValue(top_style.PropertyID(), &top_style.ValueRef(), &custom)
+                .unwrap()
+                .CssText()
+                .Utf8(),
+            "solid"
+        );
     }
     #[test]
     fn custom_css_wide_initial_inherit_unset() {

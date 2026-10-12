@@ -8,13 +8,105 @@ use paint::paint_engine::{DisplayItem, DisplayItemType, PaintArtifact, PaintRect
 
 fn render_pair(items: Vec<DisplayItem>, width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
     let list = PaintArtifact {
-        items,
+        items: items.into(),
         ..Default::default()
     };
     (
         raster::source_replay::RasterizeSourceDisplayItemList(&list, width, height),
         raster::pure_replay::RasterizeSourceDisplayItemList(&list, width, height),
     )
+}
+
+#[test]
+fn low_alpha_small_radius_shadows_match_skia_at_dpr_two() {
+    use layoutng_assembly::internal::layout_input::TransformMatrix;
+    let mut transform = TransformMatrix::default();
+    transform.values[0] = 2.0;
+    transform.values[5] = 2.0;
+    let radius = PaintCornerRadius { x: 6.0, y: 6.0 };
+    let rect = PaintRect {
+        x: 20.1484375,
+        y: 12.0,
+        width: 108.8515625,
+        height: 32.0,
+    };
+    let mut items = vec![
+        DisplayItem {
+            r#type: DisplayItemType::kDrawRect,
+            rect: PaintRect {
+                x: 0.0,
+                y: 0.0,
+                width: 160.0,
+                height: 60.0,
+            },
+            color: Color {
+                red: 1.0,
+                green: 1.0,
+                blue: 1.0,
+                alpha: 1.0,
+            },
+            ..Default::default()
+        },
+        DisplayItem {
+            r#type: DisplayItemType::kConcat,
+            transform,
+            ..Default::default()
+        },
+    ];
+    for (blur_radius, alpha) in [(2.0, 0.03), (1.0, 0.04)] {
+        items.push(DisplayItem {
+            r#type: DisplayItemType::kDrawBoxShadow,
+            rect,
+            corner_radii: PaintCornerRadii {
+                top_left: radius,
+                top_right: radius,
+                bottom_left: radius,
+                bottom_right: radius,
+            },
+            color: Color {
+                red: 31.0 / 255.0,
+                green: 35.0 / 255.0,
+                blue: 40.0 / 255.0,
+                alpha,
+            },
+            shadow_offset: Offset { x: 0.0, y: 1.0 },
+            blur_radius,
+            antialias: true,
+            shadow_has_opaque_background: true,
+            ..Default::default()
+        });
+    }
+    items.push(DisplayItem {
+        r#type: DisplayItemType::kDrawRoundedRect,
+        rect,
+        corner_radii: PaintCornerRadii {
+            top_left: radius,
+            top_right: radius,
+            bottom_left: radius,
+            bottom_right: radius,
+        },
+        color: Color {
+            red: 31.0 / 255.0,
+            green: 136.0 / 255.0,
+            blue: 61.0 / 255.0,
+            alpha: 1.0,
+        },
+        antialias: true,
+        ..Default::default()
+    });
+    let (source, rust) = render_pair(items, 320, 120);
+    let differences: Vec<_> = source
+        .chunks_exact(4)
+        .zip(rust.chunks_exact(4))
+        .enumerate()
+        .filter(|(_, (source, rust))| source != rust)
+        .collect();
+    assert!(
+        differences.is_empty(),
+        "{} pixels differ, first {:?}",
+        differences.len(),
+        differences.first()
+    );
 }
 
 #[test]

@@ -6,6 +6,7 @@ use foundation::blink_geometry::geometry::TextRunLayoutUnit;
 use foundation::gfx::PointF;
 use foundation::{IsLtr, MakeGarbageCollected, String, TextDirection};
 
+use super::font_features::{FontFeatureRange, FontFeatureTag};
 use super::glyph_data::{GlyphOffset, HarfBuzzRunGlyphData, SafeToBreak};
 use super::run_segmenter::RunSegmenter;
 use super::run_segmenter_types::RunSegmenterRange;
@@ -17,12 +18,17 @@ use crate::fonts::canvas_rotation_in_vertical::{
 };
 use crate::fonts::font::Font;
 use crate::fonts::font_description::FontDescription;
+use crate::fonts::font_fallback_priority::{FontFallbackPriority, HasVSFallbackPriority};
 use crate::fonts::font_orientation::{FontOrientation, IsVerticalAnyUpright};
+use crate::fonts::font_variant_emoji::FontVariantEmoji;
 use crate::fonts::glyph::Glyph;
 use crate::fonts::orientation_iterator_types::RenderOrientation;
+use crate::fonts::script_run_iterator::ScriptShortName;
 use crate::fonts::simple_font_data::SimpleFontData;
 use crate::text::native::layout_locale::LayoutLocale;
-use crate::text::native::rustybuzz_shaper::{shape_utf16_with_specified_size, Utf16Run};
+use crate::text::native::rustybuzz_shaper::{
+    shape_utf16_with_specified_size, shape_utf16_with_specified_size_and_features, Utf16Run,
+};
 use crate::text_shaper::TextDirection as ShapingDirection;
 
 const HB_DIRECTION_LTR: i32 = 4;
@@ -30,6 +36,83 @@ const HB_DIRECTION_TTB: i32 = 6;
 const USCRIPT_HAN: i32 = 17;
 const USCRIPT_SIMPLIFIED_HAN: i32 = 73;
 const USCRIPT_TRADITIONAL_HAN: i32 = 74;
+
+// cpp: font_engine/fonts/shaping/harfbuzz_shaper.cc:185-201
+fn ApplyFontVariantEmojiOnFallbackPriority(
+    priority: FontFallbackPriority,
+    variant: FontVariantEmoji,
+) -> FontFallbackPriority {
+    if !HasVSFallbackPriority(priority) {
+        if variant == FontVariantEmoji::kEmojiVariantEmoji {
+            return FontFallbackPriority::kEmojiEmoji;
+        }
+        if variant == FontVariantEmoji::kTextVariantEmoji {
+            return FontFallbackPriority::kText;
+        }
+    }
+    priority
+}
+
+fn DecodeCodepoint(units: &[u16], index: u32, end: u32) -> (u32, u32) {
+    let lead = u32::from(units[index as usize]);
+    if (0xd800..=0xdbff).contains(&lead) && index + 1 < end {
+        let trail = u32::from(units[index as usize + 1]);
+        if (0xdc00..=0xdfff).contains(&trail) {
+            return (
+                0x10000 + ((lead - 0xd800) << 10) + (trail - 0xdc00),
+                index + 2,
+            );
+        }
+    }
+    (lead, index + 1)
+}
+
+// FontFallbackIterator::ChooseHintIndex prefers a useful character from a
+// failed cluster. Here the family group is already known, so the first scalar
+// absent from every group face is the strongest equivalent hint. This avoids
+// letting leading punctuation choose the system face for a following script.
+fn ChooseFallbackHint(font: &Font, units: &[u16], start: u32, end: u32) -> u32 {
+    let mut index = start;
+    let mut first = 0;
+    let mut first_absent = 0;
+    while index < end {
+        let (character, next) = DecodeCodepoint(units, index, end);
+        if first == 0 {
+            first = character;
+        }
+        let absent_from_group = font.OrderedFontData()
+            [..font.FontGroupLength().min(font.OrderedFontData().len())]
+            .iter()
+            .all(|candidate| unsafe {
+                !(&*candidate.Get())
+                    .PlatformData()
+                    .FontContainsCharacter(character)
+            });
+        if absent_from_group
+            && !crate::text::native::character::Character::IsDefaultIgnorable(character as i32)
+        {
+            if first_absent == 0 {
+                first_absent = character;
+            }
+            // Mirrors ChooseHintIndex's preference for a scalar with an
+            // actual script over leading common-script punctuation.
+            if char::from_u32(character)
+                .is_some_and(|value| value.is_alphabetic() || value.is_numeric())
+                || crate::text::native::character::Character::IsCjkIdeographOrSymbol(
+                    character as i32,
+                )
+            {
+                return character;
+            }
+        }
+        index = next;
+    }
+    if first_absent != 0 {
+        first_absent
+    } else {
+        first
+    }
+}
 
 fn ShapingDirectionFromHarfBuzz(value: i32) -> ShapingDirection {
     match value {
@@ -143,10 +226,26 @@ impl HarfBuzzShaper {
         hb_direction: i32,
         range_start: u32,
         range_end: u32,
+        language: &str,
+        script: Option<&str>,
+        font_features: &[FontFeatureRange],
     ) -> Utf16Run {
         let font = data.PlatformData().RawFont();
+        // Chromium prepends face-resolved variant features, then appends the
+        // FontDescription features so explicit CSS settings retain priority.
+        let mut features =
+            Vec::with_capacity(data.PlatformData().ResolvedFeatures().len() + font_features.len());
+        features.extend(
+            data.PlatformData()
+                .ResolvedFeatures()
+                .iter()
+                .map(|feature| {
+                    FontFeatureRange::new(FontFeatureTag::new(feature.tag), feature.value)
+                }),
+        );
+        features.extend_from_slice(font_features);
 
-        shape_utf16_with_specified_size(
+        shape_utf16_with_specified_size_and_features(
             font.SourceBytes(),
             font.FaceIndex(),
             font.Size(),
@@ -156,8 +255,9 @@ impl HarfBuzzShaper {
             range_start,
             range_end,
             ShapingDirectionFromHarfBuzz(hb_direction),
-            None,
-            None,
+            Some(language),
+            script,
+            &features,
         )
     }
 
@@ -246,10 +346,22 @@ impl HarfBuzzShaper {
         units: &[u16],
         hb_direction: i32,
         canvas_rotation: CanvasRotationInVertical,
+        language: &str,
+        script: Option<&str>,
+        font_features: &[FontFeatureRange],
         result: *mut ShapeResult,
     ) {
         let data = unsafe { &*ordered_fonts[font_index].Get() };
-        let buffer = self.ShapeBuffer(data, units, hb_direction, range_start, range_end);
+        let buffer = self.ShapeBuffer(
+            data,
+            units,
+            hb_direction,
+            range_start,
+            range_end,
+            language,
+            script,
+            font_features,
+        );
         let count = buffer.glyphs.len();
         if font_index + 1 == ordered_fonts.len() || count == 0 {
             self.Commit(
@@ -320,6 +432,9 @@ impl HarfBuzzShaper {
                     units,
                     hb_direction,
                     canvas_rotation,
+                    language,
+                    script,
+                    font_features,
                     result,
                 );
             } else {
@@ -327,7 +442,16 @@ impl HarfBuzzShaper {
                     data,
                     segment_start,
                     segment_end,
-                    self.ShapeBuffer(data, units, hb_direction, segment_start, segment_end),
+                    self.ShapeBuffer(
+                        data,
+                        units,
+                        hb_direction,
+                        segment_start,
+                        segment_end,
+                        language,
+                        script,
+                        font_features,
+                    ),
                     hb_direction,
                     canvas_rotation,
                     result,
@@ -354,25 +478,36 @@ impl HarfBuzzShaper {
             return result;
         }
         let font_ref = unsafe { &*font };
-        let ordered_fonts = font_ref.OrderedFontData();
-        assert!(!ordered_fonts.is_empty());
         let description = font_ref.GetFontDescription();
+        let text = self.text_.clone();
+        let units = text.Span16().expect("non-null shape text");
+        let hint = ChooseFallbackHint(font_ref, units, start, end);
+        let fallback_priority = ApplyFontVariantEmojiOnFallbackPriority(
+            segment.font_fallback_priority,
+            description.VariantEmoji(),
+        );
+        let ordered_fonts = font_ref.FallbackOrderForHint(hint, fallback_priority);
+        assert!(!ordered_fonts.is_empty());
         let canvas_rotation = CanvasRotationForRun(
             description.Orientation(),
             segment.render_orientation,
             description,
         );
         let hb_direction = HarfBuzzDirection(description, direction, canvas_rotation);
-        let text = self.text_.clone();
-        let units = text.Span16().expect("non-null shape text");
+        let language = description.LocaleOrDefault().Ascii();
+        let script = ScriptShortName(segment.script);
+        let font_features = font_ref.GetFontFeatures();
         self.ShapeWithFallback(
-            ordered_fonts,
+            &ordered_fonts,
             0,
             start,
             end,
             units,
             hb_direction,
             canvas_rotation,
+            &language,
+            script,
+            &font_features,
             result,
         );
         result

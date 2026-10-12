@@ -8,7 +8,9 @@ use crate::{
 use cssom::{CSSFontFaceRule, CSSStyleSheet};
 use decode::DecodeEffect;
 use dom::{Document, DOM};
-use image_resource::{ContainerKey, PaintImageContent};
+use image_resource::{
+    ContainerKey, DocumentImageMutation, DocumentPaintContent, PaintImageContent,
+};
 use layoutng_assembly::internal::layout_input::{
     ComputedStyle, ConstraintSpace, FontFace, PaintImage,
 };
@@ -62,6 +64,18 @@ struct ImageEventSubtrees {
     ancestors: HashMap<String, HashSet<usize>>,
 }
 
+fn SVGImageViewSpecification(source: &str) -> &str {
+    source.rsplit_once('#').map_or("", |(_, fragment)| fragment)
+}
+
+pub type ResponsiveImageSelector =
+    dyn Fn(
+        &Document,
+        usize,
+        &ConstraintSpace,
+        &dyn Fn(&str) -> bool,
+    ) -> Option<dom::persistent_document::ResponsiveImageSelection>;
+
 // Rust separates the resource-owned fields of Page::Impl while retaining the
 // same document and constraint handles, not serialized/copied DOM data.
 // cpp: browser/browser.cc:1774-1798
@@ -77,6 +91,7 @@ pub struct ResourceFetcher {
     pending_images: RefCell<Vec<PendingImage>>,
     deferred_images: RefCell<Vec<DeferredImage>>,
     document_image_sources: RefCell<HashMap<u64, String>>,
+    responsive_image_selector: RefCell<Option<Rc<ResponsiveImageSelector>>>,
     loaded_font_urls: RefCell<HashSet<String>>,
     pending_fonts: RefCell<Vec<PendingFontFace>>,
 }
@@ -99,12 +114,55 @@ impl ResourceFetcher {
             pending_images: RefCell::new(Vec::new()),
             deferred_images: RefCell::new(Vec::new()),
             document_image_sources: RefCell::new(HashMap::new()),
+            responsive_image_selector: RefCell::new(None),
             loaded_font_urls: RefCell::new(HashSet::new()),
             pending_fonts: RefCell::new(Vec::new()),
         }
     }
     pub fn BaseURL(&self) -> String {
         self.base_url.borrow().clone()
+    }
+    fn IsLoadedImageSource(&self, source: &str) -> bool {
+        let Ok(url) = ResolveUrl(&self.base_url.borrow(), source) else {
+            return false;
+        };
+        self.engine.HasLoaded(URLRequest {
+            url,
+            destination: RequestDestination::kImage,
+            ..Default::default()
+        })
+    }
+    pub fn SetResponsiveImageSelector(&self, selector: Rc<ResponsiveImageSelector>) {
+        *self.responsive_image_selector.borrow_mut() = Some(selector);
+    }
+    /// Run HTMLImageElement's responsive selector for one connected element.
+    /// Parser/DOM mutation discovery calls this before starting the request so
+    /// `currentSrc` and the queued URL are never temporarily pinned to `src`.
+    pub fn UpdateResponsiveImageSelection(&self, node: usize) -> Option<String> {
+        let selector = self.responsive_image_selector.borrow().clone();
+        let selection = {
+            let owner = self.document.borrow();
+            if !owner.GetDocument().Node(node).IsHTMLElement("img") {
+                return None;
+            }
+            let constraints = self.constraints.borrow();
+            let is_loaded = |source: &str| {
+                owner.GetDocument().ImageResourceFor(source).is_some()
+                    || self.IsLoadedImageSource(source)
+            };
+            selector
+                .as_ref()
+                .and_then(|selector| selector(owner.GetDocument(), node, &constraints, &is_loaded))
+        };
+        let changed = self
+            .document
+            .borrow_mut()
+            .GetDocumentMut()
+            .SetResponsiveImageSelection(node, selection.clone());
+        if changed {
+            self.image_event_subtrees.borrow_mut().take();
+        }
+        selection.map(|selection| selection.source)
     }
     /// Page routes prepared rules through its resident CSSOM. The parser can
     /// lend its temporarily owned arena without re-borrowing the DOM facade.
@@ -165,6 +223,14 @@ impl ResourceFetcher {
         mut sheet: CSSStyleSheet,
         base: &str,
     ) -> io::Result<()> {
+        if std::env::var_os("BROWSER_TRACE_LOADING_STATE").is_some() {
+            eprintln!(
+                "stylesheet-resource base={base} active={} rules={} font_faces={}",
+                d.StyleSheetCanBeActivated(&sheet),
+                sheet.rules.len(),
+                sheet.font_faces.len(),
+            );
+        }
         let detached = d
             .FindNodeById(sheet.owner_node_id)
             .is_some_and(|i| d.Node(i).OwnerDocumentNode() != Some(d.RootHandle()));
@@ -172,8 +238,10 @@ impl ResourceFetcher {
             self.CommitStyleSheet(d, sheet);
             return Ok(());
         }
-        for rule in &sheet.font_faces {
-            self.QueueFontFace(rule, base)?;
+        if d.StyleSheetCanBeActivated(&sheet) {
+            for rule in &sheet.font_faces {
+                self.QueueFontFace(rule, base)?;
+            }
         }
         crate::ResolveCSSStyleSheetURLs(&mut sheet, base)?;
         self.CommitStyleSheet(d, sheet);
@@ -437,7 +505,7 @@ impl ResourceFetcher {
                 let profile =
                     std::env::var_os("BROWSER_PROFILE_INPUT").map(|_| std::time::Instant::now());
                 let constraints = self.constraints.borrow();
-                let container = ContainerKey::new(
+                let mut container = ContainerKey::new(
                     // The resource is decoded before any particular paint
                     // client has a resolved replaced-content box. Zero asks
                     // document_image to use the SVG intrinsic viewport;
@@ -448,6 +516,11 @@ impl ResourceFetcher {
                     1.0,
                     constraints.device_pixel_ratio,
                 );
+                // cpp: SVGImageForContainer::CreateViewInfo(KURL). The request
+                // URL may fetch the same bytes for several fragment uses, but
+                // the decoded frame and every later variant retain the exact
+                // fragment belonging to this source.
+                container.view_specification = SVGImageViewSpecification(&image.source).to_owned();
                 drop(constraints);
                 let decoded_resource = self.engine.DecodeImage(
                     Arc::from(response.body.clone()),
@@ -461,7 +534,13 @@ impl ResourceFetcher {
                             revision: frame.revision,
                             width: frame.intrinsic_size.width,
                             height: frame.intrinsic_size.height,
-                            content: PaintImageContent::Document(frame.record.clone()),
+                            document_container_key: Some(frame.container_key.clone()),
+                            content: PaintImageContent::Document(Arc::new(
+                                DocumentPaintContent::new(
+                                    frame.container_key.clone(),
+                                    frame.record.clone(),
+                                ),
+                            )),
                             ..Default::default()
                         };
                         (resource_id, paint_image, true)
@@ -476,6 +555,7 @@ impl ResourceFetcher {
                             revision: 1,
                             width: bitmap.width,
                             height: bitmap.height,
+                            orientation: bitmap.orientation,
                             content: PaintImageContent::Bitmap(bitmap.rgba8.into()),
                             ..Default::default()
                         },
@@ -568,9 +648,7 @@ impl ResourceFetcher {
             let owner = self.document.borrow();
             let d = owner.GetDocument();
             let Some(i) = d.FindNodeById(id) else { return };
-            d.Node(i)
-                .FindAttribute("src")
-                .map_or(String::new(), |a| a.value.clone())
+            d.CurrentImageSource(i).unwrap_or("").to_owned()
         };
         if source.is_empty() || self.image_event_sources.borrow().get(&id) == Some(&source) {
             return;
@@ -594,13 +672,10 @@ impl ResourceFetcher {
                 if !n.IsHTMLElement("img") {
                     continue;
                 }
-                let Some(attribute) = n.FindAttribute("src") else {
+                let Some(source) = d.CurrentImageSource(node) else {
                     continue;
                 };
-                if attribute.value.is_empty() {
-                    continue;
-                }
-                let nodes = ancestors.entry(attribute.value.clone()).or_default();
+                let nodes = ancestors.entry(source.to_owned()).or_default();
                 let mut ancestor = Some(node);
                 while let Some(a) = ancestor {
                     // An already indexed ancestor's entire path is present.
@@ -647,7 +722,8 @@ impl ResourceFetcher {
                 let d = owner.GetDocument();
                 let n = d.Node(i);
                 if n.IsHTMLElement("img")
-                    && n.FindAttribute("src").is_some_and(|a| a.value == source)
+                    && d.CurrentImageSource(i)
+                        .is_some_and(|current| current == source)
                 {
                     Some(n.Id())
                 } else {
@@ -673,21 +749,23 @@ impl ResourceFetcher {
     }
 
     // cpp: browser/browser.cc:1359-1393
-    pub fn QueueReferencedImages(&self) -> io::Result<()> {
+    pub fn QueueReferencedImages(&self) -> io::Result<bool> {
         let mut requests = Vec::new();
-        fn request<'a>(
-            source: &'a str,
+        let mut selections = Vec::new();
+        let selector = self.responsive_image_selector.borrow().clone();
+        fn request(
+            source: &str,
             resolve: bool,
             blocks_load: bool,
             admitted: &HashSet<String>,
-            seen: &mut HashSet<&'a str>,
+            seen: &mut HashSet<String>,
             requests: &mut Vec<(String, bool, bool)>,
         ) {
             // QueueImage uses this exact source key for admission. Keep the
             // first occurrence, without cloning/resolving every repeated owner.
             // CSS sources already carry their stylesheet base via ResolveCSSURLs;
             // distinct DOM/CSS source strings remain distinct requests.
-            if !admitted.contains(source) && seen.insert(source) {
+            if !admitted.contains(source) && seen.insert(source.to_owned()) {
                 requests.push((source.to_owned(), resolve, blocks_load));
             } else if blocks_load {
                 if let Some(request) = requests.iter_mut().find(|request| request.0 == source) {
@@ -695,67 +773,98 @@ impl ResourceFetcher {
                 }
             }
         }
-        fn style<'a>(
-            s: &'a ComputedStyle,
-            admitted: &HashSet<String>,
-            seen: &mut HashSet<&'a str>,
-            requests: &mut Vec<(String, bool, bool)>,
-        ) {
-            let mut layer =
-                |l: &'a layoutng_assembly::internal::paint_input::BackgroundImageLayer| {
-                    if l.shader.is_none() && l.resource_id == 0 && !l.source_url.is_empty() {
-                        request(&l.source_url, true, true, admitted, seen, requests);
-                    }
-                };
-            for l in &s.paint.background_images {
-                layer(l);
-            }
-            for m in &s.paint.mask_images {
-                layer(&m.image);
-            }
-        }
-        fn node<'a>(
-            d: &'a Document,
+        fn node(
+            d: &Document,
             i: usize,
+            constraints: &ConstraintSpace,
+            selector: Option<&ResponsiveImageSelector>,
+            is_loaded: &dyn Fn(&str) -> bool,
             admitted: &HashSet<String>,
-            seen: &mut HashSet<&'a str>,
+            seen: &mut HashSet<String>,
             requests: &mut Vec<(String, bool, bool)>,
+            selections: &mut Vec<(
+                usize,
+                Option<dom::persistent_document::ResponsiveImageSelection>,
+            )>,
         ) {
             let n = d.Node(i);
             if n.IsHTMLElement("img") {
-                if let Some(a) = n.FindAttribute("src") {
-                    if !a.value.is_empty() && d.ImageResourceFor(&a.value).is_none() {
+                let selection = if let Some(selector) = selector {
+                    selector(d, i, constraints, is_loaded)
+                } else {
+                    n.FindAttribute("src")
+                        .filter(|attribute| !attribute.value.is_empty())
+                        .map(
+                            |attribute| dom::persistent_document::ResponsiveImageSelection {
+                                source: attribute.value.clone(),
+                                density: None,
+                            },
+                        )
+                };
+                if let Some(selection) = selection.as_ref() {
+                    if d.ImageResourceFor(&selection.source).is_none() {
                         let lazy = n
                             .FindAttribute("loading")
                             .is_some_and(|loading| loading.value.eq_ignore_ascii_case("lazy"));
-                        request(&a.value, false, !lazy, admitted, seen, requests);
+                        request(&selection.source, false, !lazy, admitted, seen, requests);
                     }
                 }
+                selections.push((i, selection));
             }
             if let Some(r) = d.ResolvedStyleFor(i) {
-                if r.generates_box {
-                    style(&r.style, admitted, seen, requests);
-                }
-                for p in [&r.before, &r.after].into_iter().flatten() {
-                    if !p.display_contents {
-                        style(&p.style, admitted, seen, requests);
+                for source in r.ReferencedStyleImageSources() {
+                    if !source.is_empty() {
+                        request(&source, true, true, admitted, seen, requests);
                     }
-                }
-                if let Some(p) = &r.first_letter {
-                    style(&p.style, admitted, seen, requests);
                 }
             }
             for &c in n.Children() {
-                node(d, c, admitted, seen, requests);
+                node(
+                    d,
+                    c,
+                    constraints,
+                    selector,
+                    is_loaded,
+                    admitted,
+                    seen,
+                    requests,
+                    selections,
+                );
             }
         }
         {
             let owner = self.document.borrow();
             let d = owner.GetDocument();
             let admitted = self.loaded_image_sources.borrow();
+            let constraints = self.constraints.borrow();
             let mut seen = HashSet::new();
-            node(d, d.Root(), &admitted, &mut seen, &mut requests);
+            let is_loaded = |source: &str| {
+                d.ImageResourceFor(source).is_some() || self.IsLoadedImageSource(source)
+            };
+            node(
+                d,
+                d.Root(),
+                &constraints,
+                selector.as_deref(),
+                &is_loaded,
+                &admitted,
+                &mut seen,
+                &mut requests,
+                &mut selections,
+            );
         }
+        let selection_changed = {
+            let mut owner = self.document.borrow_mut();
+            let document = owner.GetDocumentMut();
+            let mut selection_changed = false;
+            for (node, selection) in selections {
+                selection_changed |= document.SetResponsiveImageSelection(node, selection);
+            }
+            if selection_changed {
+                self.image_event_subtrees.borrow_mut().take();
+            }
+            selection_changed
+        };
         for (source, resolve, blocks_load) in requests {
             let url = if resolve {
                 Some(ResolveUrl(&self.base_url.borrow(), &source)?)
@@ -764,7 +873,7 @@ impl ResourceFetcher {
             };
             self.QueueImageWithLoadBlocking(&source, url.as_deref(), blocks_load)?;
         }
-        Ok(())
+        Ok(selection_changed)
     }
     pub fn HasPendingImages(&self) -> bool {
         !self.pending_images.borrow().is_empty()
@@ -777,6 +886,68 @@ impl ResourceFetcher {
     }
     pub fn HasAnimatedImages(&self) -> bool {
         self.engine.HasAnimatedImages()
+    }
+    /// Publish the concrete environment for one SVG image use. Chromium's
+    /// SVGImageForContainer owns this value per paint client. Rechrom's
+    /// records each returned frame as a ContainerKey variant; callers may
+    /// therefore configure multiple simultaneous uses without overwriting an
+    /// earlier client's recording.
+    ///
+    pub fn ConfigureDocumentImageContainer(
+        &self,
+        resource_id: image_resource::ImageId,
+        mut container: ContainerKey,
+        preferred_color_scheme: u8,
+        client: &mut dyn ResourceFetcherClient,
+    ) -> io::Result<bool> {
+        let source = self
+            .document_image_sources
+            .borrow()
+            .get(&resource_id)
+            .cloned()
+            .ok_or_else(|| io::Error::other("document image source is missing"))?;
+        // The resource owner, rather than a paint caller's previous current
+        // frame, supplies the view. This prevents one use from inheriting a
+        // last-recorded fragment and keeps ContainerKey variant lookup exact.
+        container.view_specification = SVGImageViewSpecification(&source).to_owned();
+        if !container.preferred_color_scheme_is_explicit {
+            container.preferred_color_scheme = preferred_color_scheme;
+            container.preferred_color_scheme_is_explicit = true;
+        }
+        for effect in self.engine.MutateDocumentImage(
+            resource_id,
+            DocumentImageMutation::SetContainer { container },
+        )? {
+            match effect {
+                DecodeEffect::DocumentImageFrameChanged { frame } => client.ApplyResourceMutation(
+                    ResourceMutation::DocumentImageFrameChanged(DocumentImageFrameChanged {
+                        source: source.clone(),
+                        frame,
+                    }),
+                ),
+                DecodeEffect::DocumentImageIntrinsicSizeChanged {
+                    resource_id,
+                    revision,
+                    size,
+                } => client.ApplyResourceMutation(
+                    ResourceMutation::DocumentImageIntrinsicSizeChanged(
+                        DocumentImageIntrinsicSizeChanged {
+                            source: source.clone(),
+                            resource_id,
+                            revision,
+                            size,
+                        },
+                    ),
+                ),
+                DecodeEffect::RequestBeginFrame { .. } => {}
+                DecodeEffect::ImageReady(_) => {
+                    return Err(io::Error::other(
+                        "container mutation produced a non-container decode effect",
+                    ));
+                }
+            }
+        }
+        Ok(true)
     }
     /// Sample nested document-image timelines at the embedder's rendering
     /// opportunity.  This emits ordinary immutable image frames; Page and

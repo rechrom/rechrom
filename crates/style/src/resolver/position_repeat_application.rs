@@ -87,6 +87,10 @@ pub(super) fn ConvertLength(
         root,
         b.EffectiveZoom(),
         media,
+        Some(super::production_style_builder::CurrentComputedLineHeight(
+            b,
+        )),
+        None,
     );
     if let CSSValuePayload::kMathFunctionClass(math) = value.Payload() {
         return math
@@ -108,7 +112,7 @@ pub(super) fn ConvertLength(
     ))
 }
 // cpp: style_builder_converter.h:541-574 ConvertPositionLength.
-pub(super) fn ConvertPositionLength(
+pub(crate) fn ConvertPositionLength(
     id: CSSPropertyID,
     value: &Value,
     horizontal: bool,

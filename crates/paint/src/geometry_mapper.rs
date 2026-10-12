@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::internal::layout_input::{Offset, Size, TransformMatrix};
+use layoutng_assembly::internal::layout_input::{Edges, Offset, Size, TransformMatrix};
 use layoutng_assembly::internal::paint_input::{
-    PaintTransform, PaintTransformOperationKind, PaintTransformOrigin,
+    PaintTransform, PaintTransformOperationKind, PaintTransformOrigin, PaintTransformReferenceBox,
 };
 
 use crate::PaintRect;
@@ -225,6 +225,77 @@ pub fn ResolvePaintTransform(transform: &PaintTransform, fragment_size: Size) ->
     output
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TransformReferenceRect {
+    pub offset: Offset,
+    pub size: Size,
+}
+
+// cpp: layoutng/internal/transform_utils.cc:17-34
+// ComputeReferenceBoxInternal. The immutable fragment transport owns border
+// and padding, so Paint reconstructs the same per-fragment reference rect
+// without reaching back through the mutable Layout object graph.
+pub fn ResolveTransformReferenceRect(
+    reference_box: PaintTransformReferenceBox,
+    fragment_size: Size,
+    border: Edges,
+    padding: Edges,
+) -> TransformReferenceRect {
+    if !fragment_size.width.is_finite()
+        || !fragment_size.height.is_finite()
+        || !border.top.is_finite()
+        || !border.right.is_finite()
+        || !border.bottom.is_finite()
+        || !border.left.is_finite()
+        || !padding.top.is_finite()
+        || !padding.right.is_finite()
+        || !padding.bottom.is_finite()
+        || !padding.left.is_finite()
+    {
+        panic!("transform reference box geometry must be finite");
+    }
+    match reference_box {
+        PaintTransformReferenceBox::kBorderBox => TransformReferenceRect {
+            offset: Offset::default(),
+            size: fragment_size,
+        },
+        PaintTransformReferenceBox::kContentBox => {
+            let left = border.left + padding.left;
+            let right = border.right + padding.right;
+            let top = border.top + padding.top;
+            let bottom = border.bottom + padding.bottom;
+            TransformReferenceRect {
+                offset: Offset { x: left, y: top },
+                size: Size {
+                    width: (fragment_size.width - left - right).max(0.0),
+                    height: (fragment_size.height - top - bottom).max(0.0),
+                },
+            }
+        }
+    }
+}
+
+fn ResolveReferenceBoxOrigin(
+    reference_rect: TransformReferenceRect,
+    transform_origin: Option<&PaintTransformOrigin>,
+) -> Offset {
+    if let Some(origin) = transform_origin {
+        Offset {
+            x: reference_rect.offset.x
+                + origin.pixels.x
+                + reference_rect.size.width * origin.percentages.x / 100.0,
+            y: reference_rect.offset.y
+                + origin.pixels.y
+                + reference_rect.size.height * origin.percentages.y / 100.0,
+        }
+    } else {
+        Offset {
+            x: reference_rect.offset.x + reference_rect.size.width / 2.0,
+            y: reference_rect.offset.y + reference_rect.size.height / 2.0,
+        }
+    }
+}
+
 // cpp: paint/geometry_mapper.h:168-193
 pub fn ResolveTransformAroundOrigin(
     transform: &PaintTransform,
@@ -232,18 +303,25 @@ pub fn ResolveTransformAroundOrigin(
     fragment_size: Size,
     transform_origin: Option<&PaintTransformOrigin>,
 ) -> TransformMatrix {
-    let resolved_transform = ResolvePaintTransform(transform, fragment_size);
-    let local_origin = if let Some(origin) = transform_origin {
-        Offset {
-            x: origin.pixels.x + fragment_size.width * origin.percentages.x / 100.0,
-            y: origin.pixels.y + fragment_size.height * origin.percentages.y / 100.0,
-        }
-    } else {
-        Offset {
-            x: fragment_size.width / 2.0,
-            y: fragment_size.height / 2.0,
-        }
-    };
+    ResolveTransformAroundReferenceBox(
+        transform,
+        absolute_offset,
+        TransformReferenceRect {
+            offset: Offset::default(),
+            size: fragment_size,
+        },
+        transform_origin,
+    )
+}
+
+pub fn ResolveTransformAroundReferenceBox(
+    transform: &PaintTransform,
+    absolute_offset: Offset,
+    reference_rect: TransformReferenceRect,
+    transform_origin: Option<&PaintTransformOrigin>,
+) -> TransformMatrix {
+    let resolved_transform = ResolvePaintTransform(transform, reference_rect.size);
+    let local_origin = ResolveReferenceBoxOrigin(reference_rect, transform_origin);
     if !absolute_offset.x.is_finite()
         || !absolute_offset.y.is_finite()
         || !local_origin.x.is_finite()
@@ -271,18 +349,25 @@ pub fn ResolveLocalTransformAroundOrigin(
     fragment_size: Size,
     transform_origin: Option<&PaintTransformOrigin>,
 ) -> TransformMatrix {
-    let resolved_transform = ResolvePaintTransform(transform, fragment_size);
-    let local_origin = if let Some(origin) = transform_origin {
-        Offset {
-            x: origin.pixels.x + fragment_size.width * origin.percentages.x / 100.0,
-            y: origin.pixels.y + fragment_size.height * origin.percentages.y / 100.0,
-        }
-    } else {
-        Offset {
-            x: fragment_size.width / 2.0,
-            y: fragment_size.height / 2.0,
-        }
-    };
+    ResolveLocalTransformAroundReferenceBox(
+        transform,
+        parent_space_offset,
+        TransformReferenceRect {
+            offset: Offset::default(),
+            size: fragment_size,
+        },
+        transform_origin,
+    )
+}
+
+pub fn ResolveLocalTransformAroundReferenceBox(
+    transform: &PaintTransform,
+    parent_space_offset: Offset,
+    reference_rect: TransformReferenceRect,
+    transform_origin: Option<&PaintTransformOrigin>,
+) -> TransformMatrix {
+    let resolved_transform = ResolvePaintTransform(transform, reference_rect.size);
+    let local_origin = ResolveReferenceBoxOrigin(reference_rect, transform_origin);
     if !parent_space_offset.x.is_finite()
         || !parent_space_offset.y.is_finite()
         || !local_origin.x.is_finite()
@@ -290,14 +375,18 @@ pub fn ResolveLocalTransformAroundOrigin(
     {
         panic!("transform origin must be finite");
     }
-    let snapped_offset = Offset {
-        x: (parent_space_offset.x + 0.5).floor(),
-        y: (parent_space_offset.y + 0.5).floor(),
-    };
+    // cpp: paint/paint_property_tree_builder.cc
+    // FragmentPaintPropertyTreeBuilder::UpdateForPaintOffsetTranslation
+    //
+    // Blink puts the rounded portion in PaintOffsetTranslation and retains
+    // the residual as the Transform node's local paint offset. This flat
+    // replay matrix has no separate parent node, so use their exact sum here.
+    // Rounding again would discard subpixel accumulation (for example moving
+    // a transformed box at x=623.5 to x=624).
     MultiplyTransforms(
         &TranslationTransform(
-            snapped_offset.x + local_origin.x,
-            snapped_offset.y + local_origin.y,
+            parent_space_offset.x + local_origin.x,
+            parent_space_offset.y + local_origin.y,
         ),
         &MultiplyTransforms(
             &resolved_transform,

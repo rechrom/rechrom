@@ -54,7 +54,11 @@ fn check_gradient(style: &ComputedStyle) {
     assert_eq!(fill.stops.len(), 2);
     assert_eq!(fill.stops[0].offset, 0.7);
     assert_eq!(fill.stops[1].offset, 0.7);
-    assert!((fill.stops[0].color.alpha - 0.25).abs() < 1.0 / 255.0);
+    assert!(
+        (fill.stops[0].color.alpha - 0.25).abs() < 1.0 / 255.0,
+        "first stop alpha={}",
+        fill.stops[0].color.alpha
+    );
     assert_eq!(fill.stops[1].color.alpha, 0.5);
     assert_eq!(fill.stops[1].color.blue, 1.0);
     let stroke = style.paint.svg_stroke_server.as_ref().unwrap();
@@ -62,6 +66,7 @@ fn check_gradient(style: &ComputedStyle) {
     assert_eq!(stroke.spread, PaintSpreadMethod::kReflect);
     assert!(!stroke.unit_coordinates);
     assert_eq!(stroke.center, Offset { x: 100.0, y: 50.0 });
+    assert_eq!(stroke.focal, stroke.center);
     assert_eq!(stroke.transform.values[12], 2.0);
 }
 
@@ -69,24 +74,21 @@ fn sheet() -> cssom::CSSStyleSheet {
     style::ParseCSS("#first { stop-color:rgba(255,0,0,.5) } defs { stop-opacity:.1;stop-color:yellow } #first { stop-opacity:garbage }")
 }
 
-// These expectations remain visible while Chromium's SVG paint property
-// applicators are translated. They compile only against the new StyleEngine;
-// no compatibility resolver is retained.
 #[test]
-#[ignore = "pending Chromium SVG paint property applicators"]
 fn gradients_use_cascaded_stops_and_template_attributes() {
+    let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(MARKUP);
     owner.GetDocumentMut().AppendStyleSheet(sheet());
     let mut engine = style::StyleEngine::new(&owner);
     update(&mut engine, &mut owner);
     let ids = ids(owner.GetDocument());
-    check_gradient(
-        &owner
-            .GetDocument()
-            .ResolvedStyleFor(ids["shape"])
-            .unwrap()
-            .style,
-    );
+    let shape = owner.GetDocument().ResolvedStyleFor(ids["shape"]).unwrap();
+    let native = unsafe { &*shape.native_style.Get() };
+    assert!(native.FillPaint().HasUrl());
+    assert_eq!(native.FillPaint().GetUrl().Utf8(), "#MixedCase");
+    assert!(native.StrokePaint().HasUrl());
+    assert_eq!(native.StrokePaint().GetUrl().Utf8(), "#radial");
+    check_gradient(&shape.style);
     assert!(owner
         .GetDocument()
         .ResolvedStyleFor(ids["fallback"])
@@ -122,8 +124,8 @@ fn gradients_use_cascaded_stops_and_template_attributes() {
 }
 
 #[test]
-#[ignore = "pending Chromium SVG paint property applicators"]
 fn gradients_refresh_when_resource_stops_change() {
+    let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(MARKUP);
     owner.GetDocumentMut().AppendStyleSheet(sheet());
     let ids = ids(owner.GetDocument());

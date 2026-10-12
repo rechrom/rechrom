@@ -262,6 +262,9 @@ impl Display {
             viewport,
             drag_regions,
         } = prepared;
+        // Headless capture has no visible native presentation boundary.
+        // Submission activates this complete compositor frame; pending or
+        // failed candidates never replace the last published frame.
         if let Some(diagnostic) = &self.diagnostic_output {
             diagnostic.publish(output.readback_rgba(viewport)?);
         }

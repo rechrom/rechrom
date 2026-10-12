@@ -1,6 +1,7 @@
 #![allow(non_snake_case, non_upper_case_globals)]
 
 use std::collections::{HashMap, VecDeque};
+use std::ffi::CStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -25,6 +26,22 @@ const U_EA_WIDE: i32 = 5;
 const K_LEFT_CORNER_BRACKET: i32 = 0x300C;
 
 use icu_bidi::native as icu_api;
+
+// cpp: font_engine/fonts/shaping/harfbuzz_shaper.cc:273-281
+pub fn ScriptShortName(script: UScriptCode) -> Option<&'static str> {
+    if script == USCRIPT_INVALID_CODE {
+        return None;
+    }
+    let name = unsafe { icu_api::uscript_getShortName(script) };
+    if name.is_null() {
+        return None;
+    }
+    Some(
+        unsafe { CStr::from_ptr(name) }
+            .to_str()
+            .expect("ICU script short name is ASCII"),
+    )
+}
 
 // cpp: font_engine/fonts/script_run_iterator.cc:24-35
 fn GetScriptForOpenType(ch: i32, status: &mut i32) -> UScriptCode {

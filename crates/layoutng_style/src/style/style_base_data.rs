@@ -24,9 +24,11 @@ impl StyleBaseData {
     }
 
     // cpp: layoutng_style/style/style_base_data.h:27
-    // No definition exists in the supplied C++ tree.
     pub fn new(style: *const ComputedStyle, important_set: Option<Box<CSSBitset>>) -> Self {
-        unsafe { StyleBaseDataConstruct(style, important_set) }
+        Self {
+            computed_style_: Member::from_ptr(style.cast_mut()),
+            important_set_: important_set,
+        }
     }
 
     // cpp: layoutng_style/style/style_base_data.h:29-31
@@ -51,11 +53,4 @@ impl StyleBaseData {
 #[allow(non_upper_case_globals)]
 impl ThreadingTrait for StyleBaseData {
     const kAffinity: ThreadAffinity = ThreadAffinity::kMainThreadOnly;
-}
-
-unsafe extern "Rust" {
-    fn StyleBaseDataConstruct(
-        style: *const ComputedStyle,
-        important_set: Option<Box<CSSBitset>>,
-    ) -> StyleBaseData;
 }

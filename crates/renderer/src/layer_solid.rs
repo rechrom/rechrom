@@ -130,8 +130,11 @@ mod tests {
             tile_index: (0, 0),
             tiling_rect: rect,
             tile_rect: rect,
+            raster_rect: rect,
             raster_scale: 1.0,
             pixel_size: (17, 3),
+            raster_pixel_size: (17, 3),
+            content_offset: (0, 0),
             required_for_activation: false,
             record_indices: vec![0],
         };
@@ -163,7 +166,13 @@ mod tests {
         };
         let reuse = vec![0x79; 17 * 3 * 4 + 64];
         let composition = LayerComposition {
-            translation: (0.0, 0.0),
+            transform: viz::AffineTransform {
+                tx: 0.0,
+                ty: 0.0,
+                ..viz::AffineTransform::IDENTITY
+            },
+            projective: None,
+            rendering_context_id: 0,
             clip: None,
             content_bounds: None,
             opaque_bounds: None,

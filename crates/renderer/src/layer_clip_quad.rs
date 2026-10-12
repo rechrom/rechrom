@@ -374,7 +374,13 @@ mod test {
                 ((3.625, 2.6875), skia::PixelFormat::Bgrx8888),
             ] {
                 let composition = LayerComposition {
-                    translation,
+                    transform: viz::AffineTransform {
+                        tx: translation.0,
+                        ty: translation.1,
+                        ..viz::AffineTransform::IDENTITY
+                    },
+                    projective: None,
+                    rendering_context_id: 0,
                     clip: None,
                     content_bounds: None,
                     opaque_bounds: None,

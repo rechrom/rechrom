@@ -8,7 +8,11 @@ use crate::resolver::style_builder_converter::StyleBuilderConverter;
 use foundation::{MakeGarbageCollected, Member};
 use layoutng_style::style::{
     computed_grid_template_areas::ComputedGridTemplateAreas,
-    computed_style_constants::GridAutoFlow, grid_track_size::GridTrackSize,
+    computed_grid_track_list::ComputedGridTrackList,
+    computed_style_constants::GridAutoFlow,
+    grid_track_list::{AutoRepeatType, GridTrackList},
+    grid_track_size::GridTrackSize,
+    ordered_named_grid_lines::NamedGridLine,
 };
 
 pub(super) fn IsGridProperty(id: CSSPropertyID) -> bool {
@@ -127,6 +131,48 @@ fn Track(
     };
     Ok(GridTrackSize::from_length(&breadth))
 }
+
+// cpp: style_builder_converter.cc:1682-1833 ConvertGridTrackList, plain-track
+// branch plus bracketed line-name conversion. Repeat/subgrid retain their
+// separate typed collaborators; this path owns every non-repeat entry rather
+// than reconstructing names from CSS text.
+fn TemplateTracks(
+    id: CSSPropertyID,
+    b: &ComputedStyleBuilder,
+    v: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+) -> std::result::Result<ComputedGridTrackList, LonghandApplicationError> {
+    let mut result =
+        ComputedGridTrackList::new(&GridTrackList::default(), AutoRepeatType::kNoAutoRepeat);
+    let mut line = 0u32;
+    for value in List(id, v)? {
+        if let CSSValuePayload::kGridLineNamesClass(names) = value.Payload() {
+            for name in &names.list.values {
+                let CSSValuePayload::kCustomIdentClass(name) = name.Payload() else {
+                    return Err(LonghandApplicationError::InvalidValue(id));
+                };
+                let text =
+                    foundation::String::from_utf16(name.name.utf16_units().unwrap_or_default());
+                result
+                    .GetMutableNamedGridLines()
+                    .entry(text)
+                    .or_default()
+                    .push(line);
+                result
+                    .GetMutableOrderedNamedGridLines()
+                    .entry(line as usize)
+                    .or_default()
+                    .push(NamedGridLine::with_default_flags(&name.name));
+            }
+            continue;
+        }
+        let size = Track(id, b, value, root, media)?;
+        result.GetMutableTrackList().AddRepeaterDefault(&vec![size]);
+        line += 1;
+    }
+    Ok(result)
+}
 // cpp: style_builder_converter.cc:1490-1532. Typed first/second identifiers
 // retain the canonical dense-only row spelling used by the source parser.
 fn Flow(
@@ -231,13 +277,7 @@ pub(super) fn Apply(
             {
                 Member::default()
             } else {
-                let sizes = List(id, v)?
-                    .iter()
-                    .map(|v| Track(id, b, v, root, media))
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                Member::from_ptr(MakeGarbageCollected(
-                    StyleBuilderConverter::ConvertPlainGridTrackListFromSizes(&sizes),
-                ))
+                Member::from_ptr(MakeGarbageCollected(TemplateTracks(id, b, v, root, media)?))
             };
             if id == kGridTemplateRows {
                 b.SetGridTemplateRowsOwned(value);

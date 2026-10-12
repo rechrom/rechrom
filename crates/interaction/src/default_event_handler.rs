@@ -7,6 +7,7 @@ use crate::{
     },
     ownership::{IsElement, ReadNode},
 };
+use dom::dom_mutation::{DOMMutation, DOMMutationType};
 // cpp: interaction/default_event_handler.h:16-19
 #[derive(Default)]
 pub struct DefaultActivationState<'a> {
@@ -72,6 +73,14 @@ impl<'a> DefaultEventHandler<'a> {
     fn Element(&self, id: u64, name: &str) -> bool {
         ReadNode(&self.context.document, id, |_, n, _| IsElement(n, name)).unwrap_or(false)
     }
+    fn SearchCancelButtonHost(&self, id: u64) -> Option<u64> {
+        ReadNode(&self.context.document, id, |document, _, index| {
+            document
+                .SearchCancelButtonHost(index)
+                .map(|host| document.Node(host).Id())
+        })
+        .flatten()
+    }
     // cpp: interaction/default_event_handler.cc:74-78
     pub fn HasActivationBehavior(&self, node: u64) -> bool {
         if IsDisabledFormControl(&self.context.document, node) {
@@ -118,6 +127,42 @@ impl<'a> DefaultEventHandler<'a> {
     pub fn Handle(&self, node: u64, event: &mut Event) {
         if event.default_handled || event.default_prevented {
             return;
+        }
+        // cpp: SearchFieldCancelButtonElement::DefaultEventHandler. The real
+        // retained UA-shadow button clears its search host on a primary click,
+        // dispatches the SetValueForUser change event, then the search event.
+        if event.r#type == EventType::kClick
+            && event.target_node_id == node
+            && event.button == MouseButton::kPrimary
+        {
+            if let Some(host) = self.SearchCancelButtonHost(node) {
+                if IsDisabledFormControl(&self.context.document, host)
+                    || crate::ownership::HasAttribute(&self.context.document, host, "readonly")
+                {
+                    return;
+                }
+                let value_changed = ReadNode(&self.context.document, host, |document, _, index| {
+                    !document.ControlValue(index).is_empty()
+                })
+                .unwrap_or(false);
+                (self.context.emit_mutation)(&DOMMutation {
+                    mutation_type: DOMMutationType::kSetControlValue,
+                    target_node_id: host,
+                    value: String::new(),
+                    ..Default::default()
+                });
+                if value_changed {
+                    let mut change = MakeSyntheticEvent(EventType::kChange, host);
+                    (self.context.dispatch_synthetic)(&mut change, host);
+                }
+                let mut search = MakeSyntheticEvent(EventType::kCustom, host);
+                search.custom_type = "search".into();
+                search.cancelable = false;
+                search.composed = false;
+                (self.context.dispatch_synthetic)(&mut search, host);
+                event.default_handled = true;
+                return;
+            }
         }
         if self.Element(node, "label")
             && event.r#type == EventType::kClick

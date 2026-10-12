@@ -1,6 +1,8 @@
 #![allow(non_snake_case)]
 
-use std::io;
+use std::io::{self, Cursor};
+
+use image::ImageDecoder as _;
 
 use crate::image_decoder::{DecodedImage, ImageDecodeInput, ImageDecoder};
 
@@ -15,13 +17,40 @@ fn IsJpeg(input: &ImageDecodeInput<'_>) -> bool {
 
 // cpp: image_decoder/skia_image_decoder.cc:42-111
 // The decoder and its pixel buffers are owned by Rust; no native codec is linked.
-fn DecodeJpeg(input: &ImageDecodeInput<'_>) -> io::Result<DecodedImage> {
-    let decoded = image::load_from_memory_with_format(input.bytes, image::ImageFormat::Jpeg)
-        .map_err(|_| io::Error::other("JPEG image could not be decoded"))?;
-    IntoDecodedImage(decoded)
+fn DecodeImage(
+    input: &ImageDecodeInput<'_>,
+    format: Option<image::ImageFormat>,
+) -> io::Result<DecodedImage> {
+    let mut reader = image::ImageReader::new(Cursor::new(input.bytes));
+    if let Some(format) = format {
+        reader.set_format(format);
+    } else {
+        reader = reader.with_guessed_format().map_err(|error| {
+            io::Error::other(format!("image format could not be read: {error}"))
+        })?;
+    }
+    let mut decoder = reader.into_decoder().map_err(|error| {
+        io::Error::other(format!(
+            "image could not be decoded ({}): {error}",
+            if input.mime_type.is_empty() {
+                "unknown image format"
+            } else {
+                input.mime_type
+            }
+        ))
+    })?;
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let decoded = image::DynamicImage::from_decoder(decoder)
+        .map_err(|error| io::Error::other(format!("image pixels could not be decoded: {error}")))?;
+    IntoDecodedImage(decoded, orientation)
 }
 
-fn IntoDecodedImage(decoded: image::DynamicImage) -> io::Result<DecodedImage> {
+fn IntoDecodedImage(
+    decoded: image::DynamicImage,
+    orientation: image::metadata::Orientation,
+) -> io::Result<DecodedImage> {
     let (width, height) = (decoded.width(), decoded.height());
     if width == 0 || height == 0 {
         return Err(io::Error::other("decoded image has invalid dimensions"));
@@ -33,6 +62,7 @@ fn IntoDecodedImage(decoded: image::DynamicImage) -> io::Result<DecodedImage> {
     Ok(DecodedImage {
         width,
         height,
+        orientation: image_resource::ImageOrientation::from_exif(orientation.to_exif()),
         rgba8: decoded.into_rgba8().into_raw(),
     })
 }
@@ -47,19 +77,9 @@ impl ImageDecoder for SkiaImageDecoder {
             ));
         }
         if IsJpeg(input) {
-            return DecodeJpeg(input);
+            return DecodeImage(input, Some(image::ImageFormat::Jpeg));
         }
-        let decoded = image::load_from_memory(input.bytes).map_err(|error| {
-            io::Error::other(format!(
-                "image could not be decoded ({}): {error}",
-                if input.mime_type.is_empty() {
-                    "unknown image format"
-                } else {
-                    input.mime_type
-                }
-            ))
-        })?;
-        IntoDecodedImage(decoded)
+        DecodeImage(input, None)
     }
 }
 

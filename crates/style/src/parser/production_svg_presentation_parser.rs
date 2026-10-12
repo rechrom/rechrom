@@ -64,6 +64,7 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
 ) -> Result<Rc<Value>, PropertyParseError> {
     use CSSPropertyID::*;
     match id {
@@ -94,8 +95,8 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
                     "ConsumePathStringArg/SVGPathByteStream owner",
                 ));
             }
-            ConsumeUrl(id, stream)?
-                .map(values::uri)
+            ConsumeUrl(id, stream, context)?
+                .map(values::uri_from_url_data)
                 .ok_or_else(|| invalid(id))
         }
         // longhands_custom.cc:1242-1254, SVG user units even in CSS mode.
@@ -160,9 +161,10 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
 pub(super) fn ParseMarker<T: TokenStreamTokenizer>(
     stream: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
     out: &mut Vec<PropertyValue>,
 ) -> Result<(), PropertyParseError> {
-    let value = Consume(CSSPropertyID::kMarkerStart, stream, mode)?;
+    let value = Consume(CSSPropertyID::kMarkerStart, stream, mode, context)?;
     for &id in ShorthandFor(CSSPropertyID::kMarker) {
         out.push(make_expanded(
             id,

@@ -19,8 +19,11 @@ const ANIMATED_SVG: &[u8] = br#"
 fn document_image_timeline_publishes_immutable_changed_records_only() {
     crate::native_test_thread::run(|| {
         let assembly = crate::CreateLayoutAssembly();
-        let mut decoder = SVGImageDecoder::new(&assembly);
-        let container = ContainerKey::new(64, 32, 1.0, 1.0);
+        let mut host = crate::CreateBrowserConstraints(64, 32);
+        host.device_pixel_ratio = 2.0;
+        host.layout_zoom_factor = 2.0;
+        let mut decoder = SVGImageDecoder::new_with_constraints(&assembly, &host);
+        let container = ContainerKey::new(64, 32, 1.0, 2.0);
         let mut created = decoder
             .create(17, Arc::from(ANIMATED_SVG), "image/svg+xml", &container)
             .unwrap();
@@ -61,6 +64,9 @@ fn document_image_timeline_publishes_immutable_changed_records_only() {
             .as_any()
             .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
             .unwrap();
+        let resources = old.artifact.resources.as_ref().unwrap();
+        assert_eq!(resources.device_pixel_ratio, 2.0);
+        assert_eq!(resources.layout_zoom_factor, 1.0);
         let new = next
             .record
             .as_any()

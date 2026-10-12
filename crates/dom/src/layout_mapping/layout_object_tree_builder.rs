@@ -7,9 +7,9 @@ use foundation::{unicode, StringView};
 use layoutng_assembly::internal::form_control_types::FormControlType;
 use layoutng_assembly::internal::layout_input::{
     ComputedStyle, Display, DocumentRole, ElementData, ExtendedStyle, FrameDimension,
-    FrameDimensionType, ListStyleType, MathTokenKind, NodeKind, Offset, PaintPathCommand,
-    PaintPathVerb, SvgLengthAdjust, SvgShapeData, SvgShapeGeometry, SvgTextPathData,
-    SvgViewBoxData, TextAreaSizing, TextFieldSizing, WhiteSpace,
+    FrameDimensionType, ListMarkerImage, ListStyleType, MathTokenKind, NodeKind, Offset,
+    PaintPathCommand, PaintPathVerb, SvgLengthAdjust, SvgShapeData, SvgShapeGeometry,
+    SvgTextPathData, SvgViewBoxData, TextAreaSizing, TextFieldSizing, WhiteSpace,
 };
 use layoutng_assembly::internal::layout_object::LayoutObject;
 use layoutng_assembly::layout_engine::LayoutTreeUpdate;
@@ -132,9 +132,43 @@ pub(super) fn list_marker_style(item: &ComputedStyle) -> ComputedStyle {
         inherited.word_spacing = extra.word_spacing;
         inherited.white_space = WhiteSpace::kPre;
         inherited.language = extra.language.clone();
+        inherited.zoom = extra.zoom;
+        inherited.effective_zoom = extra.effective_zoom;
+        inherited.list_style_image = extra.list_style_image.clone();
+        inherited.list_style_type = extra.list_style_type;
+        inherited.list_style_position = extra.list_style_position;
         marker.extended = Some(inherited);
     }
     marker
+}
+
+/// LayoutListMarker's image child is a LayoutImage with the marker style. The
+/// Style boundary has already applied image-set density to these CSS-pixel
+/// dimensions, so ElementData must not apply HTML `<img>` density correction
+/// a second time.
+pub(super) fn append_list_marker_image(
+    tree: &mut LayoutTreeUpdate<'_>,
+    marker: *mut LayoutObject,
+    id: u64,
+    marker_style: &ComputedStyle,
+    image: &ListMarkerImage,
+    name: String,
+) {
+    let mut image_style = marker_style.clone();
+    image_style.paint.image_resource_id = (image.resource_id != 0).then_some(image.resource_id);
+    image_style.paint.replaced_image_shader = image.shader.clone();
+    tree.AddGeneratedReplaced(
+        unsafe { &mut *marker },
+        id,
+        &image_style,
+        ElementData {
+            natural_width: Some(image.natural_width),
+            natural_height: Some(image.natural_height),
+            natural_aspect_ratio: Some(image.natural_width / image.natural_height),
+            ..Default::default()
+        },
+        name,
+    );
 }
 
 // cpp: dom_to_layout/layout_object_tree_builder.cc:63-75
@@ -722,11 +756,24 @@ pub(super) fn element_metadata_svg(
     }
 }
 
+/// Returns the same geometry projection used when this SVG element enters the
+/// LayoutObject tree. Resource subtrees such as <pattern> do not themselves
+/// create ordinary layout descendants, but their graphics children must use
+/// identical path parsing and shape bounds.
+pub fn SVGShapeDataForResourceNode(
+    node: &crate::persistent_document::DOMNode,
+) -> Option<SvgShapeData> {
+    let mut data = ElementData::default();
+    element_metadata_svg(node, None, &mut data);
+    data.svg_shape
+}
+
 // cpp: dom_to_layout/layout_object_tree_builder.cc:376-504
 fn element_metadata(
     document: &Document,
     index: usize,
     interaction_state: &UserInteractionState,
+    style: &ComputedStyle,
 ) -> ElementData {
     let node = &document.elements[index];
     match node.namespace {
@@ -740,7 +787,7 @@ fn element_metadata(
             element_metadata_mathml(node, &mut data);
             data
         }
-        DOMNamespace::kHTML => element_metadata_html(document, index, interaction_state),
+        DOMNamespace::kHTML => element_metadata_html(document, index, interaction_state, style),
         DOMNamespace::kNone => ElementData::default(),
     }
 }
@@ -793,6 +840,7 @@ fn element_metadata_html(
     document: &Document,
     index: usize,
     interaction_state: &UserInteractionState,
+    style: &ComputedStyle,
 ) -> ElementData {
     let node = &document.elements[index];
     let mut data = ElementData::default();
@@ -821,16 +869,22 @@ fn element_metadata_html(
         // cpp: dom_to_layout/layout_object_tree_builder.cc:427-435
         if let Some(source) = attribute(node, "src") {
             if let Some(image) = document.ImageResourceFor(source) {
+                let (image_width, image_height) =
+                    image.NaturalSize(style.paint.respect_image_orientation);
                 if data.natural_width.is_none() {
-                    data.natural_width = Some(image.natural_width);
+                    data.natural_width = Some(image_width);
                 }
                 if data.natural_height.is_none() {
-                    data.natural_height = Some(image.natural_height);
+                    data.natural_height = Some(image_height);
                 }
-                if data.natural_aspect_ratio.is_none() && image.natural_height > 0.0 {
-                    data.natural_aspect_ratio = Some(image.natural_width / image.natural_height);
+                if data.natural_aspect_ratio.is_none() && image_height > 0.0 {
+                    data.natural_aspect_ratio = Some(image_width / image_height);
                 }
-                data.image_device_pixel_ratio = image.resolution_scale;
+                // Chromium's LayoutImage stores the inverse candidate density:
+                // one resource pixel expressed in CSS pixels.  NaturalWidth is
+                // already density-corrected above, while object-fit:scale-down
+                // divides by this value to recover the underlying source size.
+                data.image_device_pixel_ratio = 1.0 / image.resolution_scale;
             }
         }
     }
@@ -1128,21 +1182,37 @@ fn append_list_marker(
     style: &ComputedStyle,
     object: *mut LayoutObject,
 ) {
+    let marker_style = list_marker_style(style);
+    let marker_image = marker_style
+        .extended
+        .as_ref()
+        .and_then(|extra| extra.list_style_image.as_ref());
     let marker_text = default_list_marker_text(document, index, style);
-    if style.display != Display::kListItem || marker_text.is_empty() {
+    if style.display != Display::kListItem || (marker_image.is_none() && marker_text.is_empty()) {
         return;
     }
     let id = index as u64 + 1;
     let marker = tree.AddBox(
         unsafe { &mut *object },
         id | (1_u64 << 63),
-        &list_marker_style(style),
+        &marker_style,
         "::marker".to_owned(),
         None,
         NodeKind::kListMarker,
         true,
         std::ptr::null(),
     ) as *mut LayoutObject;
+    if let Some(image) = marker_image {
+        append_list_marker_image(
+            tree,
+            marker,
+            id | (1_u64 << 60),
+            &marker_style,
+            image,
+            "::marker-image".to_owned(),
+        );
+        return;
+    }
     let defaults = ExtendedStyle::default();
     let marker_type = style.extended.as_ref().unwrap_or(&defaults).list_style_type;
     let symbol = matches!(
@@ -1337,6 +1407,12 @@ fn append_pseudo_element(
     originating_id: u64,
     pseudo: Option<&PseudoElement>,
     before: bool,
+    svg_filter_graphs: &std::sync::Arc<
+        Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
+    >,
+    svg_clip_path_graphs: &std::sync::Arc<
+        Vec<layoutng_assembly::internal::paint_input::SvgClipPathGraph>,
+    >,
 ) {
     let Some(pseudo) = pseudo else { return };
     let box_bit = 1u64 << if before { 50 } else { 48 };
@@ -1356,10 +1432,13 @@ fn append_pseudo_element(
         }
         return;
     }
+    let mut style = pseudo.style.clone();
+    style.paint.svg_filter_graphs = std::sync::Arc::clone(svg_filter_graphs);
+    resolve_svg_clip_path(&mut style, svg_clip_path_graphs);
     let object = tree.AddBox(
         unsafe { &mut *parent },
         originating_id | box_bit,
-        &pseudo.style,
+        &style,
         name.to_owned(),
         None,
         NodeKind::kBox,
@@ -1386,6 +1465,12 @@ fn append_children(
     generation: Option<(&[bool], &[bool])>,
     pseudo: Option<(&[Option<PseudoElement>], &[Option<PseudoElement>])>,
     interaction_state: &UserInteractionState,
+    svg_filter_graphs: &std::sync::Arc<
+        Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
+    >,
+    svg_clip_path_graphs: &std::sync::Arc<
+        Vec<layoutng_assembly::internal::paint_input::SvgClipPathGraph>,
+    >,
     parent_index: usize,
     parent: *mut LayoutObject,
 ) {
@@ -1410,6 +1495,8 @@ fn append_children(
                                     index as u64 + 1,
                                     before[index].as_ref(),
                                     true,
+                                    svg_filter_graphs,
+                                    svg_clip_path_graphs,
                                 );
                             }
                             // cpp: dom_to_layout/layout_object_tree_builder.cc:1261-1271
@@ -1420,6 +1507,8 @@ fn append_children(
                                 generation,
                                 pseudo,
                                 interaction_state,
+                                svg_filter_graphs,
+                                svg_clip_path_graphs,
                                 index,
                                 parent,
                             );
@@ -1430,6 +1519,8 @@ fn append_children(
                                     index as u64 + 1,
                                     after[index].as_ref(),
                                     false,
+                                    svg_filter_graphs,
+                                    svg_clip_path_graphs,
                                 );
                             }
                         }
@@ -1437,8 +1528,10 @@ fn append_children(
                     }
                 }
                 // cpp: dom_to_layout/layout_object_tree_builder.cc:1279-1283
-                let element = element_metadata(document, index, interaction_state);
                 let mut style = styles[index].clone();
+                let element = element_metadata(document, index, interaction_state, &style);
+                style.paint.svg_filter_graphs = std::sync::Arc::clone(svg_filter_graphs);
+                resolve_svg_clip_path(&mut style, svg_clip_path_graphs);
                 // cpp: dom_to_layout/layout_object_tree_builder.cc:1278-1285
                 if document.elements[index].tag == "img" {
                     if let Some(source) = attribute(&document.elements[index], "src") {
@@ -1491,6 +1584,8 @@ fn append_children(
                             index as u64 + 1,
                             before[index].as_ref(),
                             true,
+                            svg_filter_graphs,
+                            svg_clip_path_graphs,
                         );
                     }
                 }
@@ -1501,6 +1596,8 @@ fn append_children(
                     generation,
                     pseudo,
                     interaction_state,
+                    svg_filter_graphs,
+                    svg_clip_path_graphs,
                     index,
                     child,
                 );
@@ -1512,6 +1609,8 @@ fn append_children(
                             index as u64 + 1,
                             after[index].as_ref(),
                             false,
+                            svg_filter_graphs,
+                            svg_clip_path_graphs,
                         );
                     }
                 }
@@ -1553,6 +1652,30 @@ fn append_children(
     }
 }
 
+pub(super) fn resolve_svg_clip_path(
+    style: &mut ComputedStyle,
+    graphs: &std::sync::Arc<Vec<layoutng_assembly::internal::paint_input::SvgClipPathGraph>>,
+) {
+    let Some(clip) = style.paint.clip_path.as_mut() else {
+        return;
+    };
+    let Some(url) = clip.reference_url.as_deref() else {
+        return;
+    };
+    let Some(id) = url.strip_prefix('#') else {
+        clip.reference_error = Some("external clip-path IRI".into());
+        return;
+    };
+    if let Some(graph) = graphs.iter().find(|graph| graph.id == id) {
+        if let Some(error) = &graph.unsupported {
+            clip.reference_error = Some(error.clone())
+        }
+        clip.reference_graph = Some(std::sync::Arc::new(graph.clone()));
+    } else {
+        clip.reference_error = Some("missing local clipPath resource".into())
+    }
+}
+
 #[allow(non_snake_case)]
 pub fn Build(
     tree: &mut LayoutTreeUpdate<'_>,
@@ -1561,14 +1684,20 @@ pub fn Build(
 ) -> *mut LayoutObject {
     assert_eq!(document.elements.len(), styles.len());
     let root_index = document.root.expect("missing HTML root");
+    let svg_filter_graphs = super::svg_filter_graph::build(document, styles);
+    let svg_clip_path_graphs = super::svg_clip_path_graph::build(document);
+    let mut root_style = styles[root_index].clone();
+    root_style.paint.svg_filter_graphs = std::sync::Arc::clone(&svg_filter_graphs);
+    resolve_svg_clip_path(&mut root_style, &svg_clip_path_graphs);
     let root = tree.CreateRoot(
         root_index as u64 + 1,
-        &styles[root_index],
+        &root_style,
         document.elements[root_index].tag.clone(),
         Some(element_metadata(
             document,
             root_index,
             &UserInteractionState::default(),
+            &root_style,
         )),
         std::ptr::null(),
     ) as *mut LayoutObject;
@@ -1579,6 +1708,8 @@ pub fn Build(
         None,
         None,
         &UserInteractionState::default(),
+        &svg_filter_graphs,
+        &svg_clip_path_graphs,
         root_index,
         root,
     );
@@ -1654,6 +1785,11 @@ pub fn BuildResolvedWithInteraction(
     assert_eq!(resolved.styles.len(), resolved.before.len());
     assert_eq!(resolved.styles.len(), resolved.after.len());
     let root_index = document.root.expect("missing HTML root");
+    let svg_filter_graphs = super::svg_filter_graph::build(document, &resolved.styles);
+    let svg_clip_path_graphs = super::svg_clip_path_graph::build(document);
+    let mut root_style = resolved.styles[root_index].clone();
+    root_style.paint.svg_filter_graphs = std::sync::Arc::clone(&svg_filter_graphs);
+    resolve_svg_clip_path(&mut root_style, &svg_clip_path_graphs);
     assert!(
         resolved.generates_box[root_index],
         "document root needs a box"
@@ -1661,9 +1797,14 @@ pub fn BuildResolvedWithInteraction(
     // cpp: dom_to_layout/layout_object_tree_builder.cc:1515-1518
     let root = tree.CreateRoot(
         root_index as u64 + 1,
-        &resolved.styles[root_index],
+        &root_style,
         document.elements[root_index].tag.clone(),
-        Some(element_metadata(document, root_index, interaction_state)),
+        Some(element_metadata(
+            document,
+            root_index,
+            interaction_state,
+            &root_style,
+        )),
         std::ptr::null(),
     ) as *mut LayoutObject;
     append_pseudo_element(
@@ -1672,6 +1813,8 @@ pub fn BuildResolvedWithInteraction(
         root_index as u64 + 1,
         resolved.before[root_index].as_ref(),
         true,
+        &svg_filter_graphs,
+        &svg_clip_path_graphs,
     );
     append_children(
         tree,
@@ -1680,6 +1823,8 @@ pub fn BuildResolvedWithInteraction(
         Some((&resolved.generates_box, &resolved.display_contents)),
         Some((&resolved.before, &resolved.after)),
         interaction_state,
+        &svg_filter_graphs,
+        &svg_clip_path_graphs,
         root_index,
         root,
     );
@@ -1689,6 +1834,8 @@ pub fn BuildResolvedWithInteraction(
         root_index as u64 + 1,
         resolved.after[root_index].as_ref(),
         false,
+        &svg_filter_graphs,
+        &svg_clip_path_graphs,
     );
     root
 }

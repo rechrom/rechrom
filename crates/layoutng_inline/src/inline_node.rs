@@ -152,7 +152,7 @@ impl<'a> ReusingTextShaper<'a> {
                 start_item.StartOffset(),
                 end_offset,
                 locale_string,
-                font.GetFontFeatures(),
+                &font.GetFontFeatures(),
                 start_item.Direction(),
             );
             let primary_font = font.PrimaryFont();

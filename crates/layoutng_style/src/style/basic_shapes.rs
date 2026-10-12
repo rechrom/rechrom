@@ -103,7 +103,7 @@ impl PartialEq for BasicShapeRadius {
 }
 
 // cpp: layoutng_style/style/basic_shapes.h:114-133
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct CenterAndRadiiFields {
     center_: LengthPoint,
     is_center_explicitly_set_: bool,
@@ -180,7 +180,8 @@ impl BasicShapeCircle {
 impl BasicShape for BasicShapeCircle {
     // cpp: layoutng_style/style/basic_shapes.h:154
     fn GetPath(&self, rect: &gfx::RectF, zoom: f32, scale: f32) -> Path {
-        unsafe { BasicShapeCircleGetPath(self, rect, zoom, scale) }
+        let _ = (rect, zoom, scale);
+        unimplemented!("BasicShapeCircle path construction belongs to the Paint boundary")
     }
     // cpp: layoutng_style/style/basic_shapes.h:159
     fn GetType(&self) -> ShapeType {
@@ -188,7 +189,9 @@ impl BasicShape for BasicShapeCircle {
     }
     // cpp: layoutng_style/style/basic_shapes.h:162
     fn IsEqualAssumingSameType(&self, other: &dyn BasicShape) -> bool {
-        unsafe { BasicShapeCircleIsEqualAssumingSameType(self, other) }
+        debug_assert!(self.IsSameType(other));
+        let other = unsafe { &*(other as *const dyn BasicShape as *const Self) };
+        self.center_data_ == other.center_data_ && self.radius_ == other.radius_
     }
 }
 
@@ -202,8 +205,13 @@ impl BasicShapeWithCenterAndRadii for BasicShapeCircle {
     }
     // cpp: layoutng_style/style/basic_shapes.h:155-157
     fn GetPathFromCenter(&self, center: &gfx::PointF, rect: &gfx::RectF, scale: f32) -> Path {
-        unsafe { BasicShapeCircleGetPathFromCenter(self, center, rect, scale) }
+        let _ = (center, rect, scale);
+        unimplemented!("BasicShapeCircle path construction belongs to the Paint boundary")
     }
+}
+
+impl foundation::Traceable for BasicShapeCircle {
+    fn Trace(&self, _visitor: &mut Visitor<'_>) {}
 }
 
 // cpp: layoutng_style/style/basic_shapes.h:175-204
@@ -261,7 +269,8 @@ impl BasicShapeEllipse {
 impl BasicShape for BasicShapeEllipse {
     // cpp: layoutng_style/style/basic_shapes.h:187
     fn GetPath(&self, rect: &gfx::RectF, zoom: f32, scale: f32) -> Path {
-        unsafe { BasicShapeEllipseGetPath(self, rect, zoom, scale) }
+        let _ = (rect, zoom, scale);
+        unimplemented!("BasicShapeEllipse path construction belongs to the Paint boundary")
     }
     // cpp: layoutng_style/style/basic_shapes.h:192
     fn GetType(&self) -> ShapeType {
@@ -269,7 +278,11 @@ impl BasicShape for BasicShapeEllipse {
     }
     // cpp: layoutng_style/style/basic_shapes.h:195
     fn IsEqualAssumingSameType(&self, other: &dyn BasicShape) -> bool {
-        unsafe { BasicShapeEllipseIsEqualAssumingSameType(self, other) }
+        debug_assert!(self.IsSameType(other));
+        let other = unsafe { &*(other as *const dyn BasicShape as *const Self) };
+        self.center_data_ == other.center_data_
+            && self.radius_x_ == other.radius_x_
+            && self.radius_y_ == other.radius_y_
     }
 }
 
@@ -283,8 +296,13 @@ impl BasicShapeWithCenterAndRadii for BasicShapeEllipse {
     }
     // cpp: layoutng_style/style/basic_shapes.h:188-190
     fn GetPathFromCenter(&self, center: &gfx::PointF, rect: &gfx::RectF, scale: f32) -> Path {
-        unsafe { BasicShapeEllipseGetPathFromCenter(self, center, rect, scale) }
+        let _ = (center, rect, scale);
+        unimplemented!("BasicShapeEllipse path construction belongs to the Paint boundary")
     }
+}
+
+impl foundation::Traceable for BasicShapeEllipse {
+    fn Trace(&self, _visitor: &mut Visitor<'_>) {}
 }
 
 // cpp: layoutng_style/style/basic_shapes.h:213-244
@@ -448,12 +466,26 @@ impl BasicShape for BasicShapeInset {
     }
     // cpp: layoutng_style/style/basic_shapes.h:258
     fn GetPath(&self, rect: &gfx::RectF, zoom: f32, scale: f32) -> Path {
-        unsafe { BasicShapeInsetGetPath(self, rect, zoom, scale) }
+        let _ = (rect, zoom, scale);
+        unimplemented!("BasicShapeInset::GetPath requires the owning vector Path package")
     }
     // cpp: layoutng_style/style/basic_shapes.h:288
     fn IsEqualAssumingSameType(&self, other: &dyn BasicShape) -> bool {
-        unsafe { BasicShapeInsetIsEqualAssumingSameType(self, other) }
+        debug_assert!(self.IsSameType(other));
+        let other = unsafe { &*(other as *const dyn BasicShape as *const Self) };
+        self.right_ == other.right_
+            && self.top_ == other.top_
+            && self.bottom_ == other.bottom_
+            && self.left_ == other.left_
+            && self.top_left_radius_ == other.top_left_radius_
+            && self.top_right_radius_ == other.top_right_radius_
+            && self.bottom_right_radius_ == other.bottom_right_radius_
+            && self.bottom_left_radius_ == other.bottom_left_radius_
     }
+}
+
+impl foundation::Traceable for BasicShapeInset {
+    fn Trace(&self, _visitor: &mut Visitor<'_>) {}
 }
 
 // The source declares these operations but supplies no definitions in the package.
@@ -463,22 +495,6 @@ unsafe extern "Rust" {
         center: &gfx::PointF,
         size: &gfx::SizeF,
     ) -> f32;
-    fn BasicShapeCircleGetPath(
-        value: &BasicShapeCircle,
-        rect: &gfx::RectF,
-        zoom: f32,
-        scale: f32,
-    ) -> Path;
-    fn BasicShapeCircleGetPathFromCenter(
-        value: &BasicShapeCircle,
-        center: &gfx::PointF,
-        rect: &gfx::RectF,
-        scale: f32,
-    ) -> Path;
-    fn BasicShapeCircleIsEqualAssumingSameType(
-        value: &BasicShapeCircle,
-        other: &dyn BasicShape,
-    ) -> bool;
     fn BasicShapeEllipseResolveRadii(
         value: &BasicShapeEllipse,
         center: &gfx::PointF,
@@ -490,22 +506,6 @@ unsafe extern "Rust" {
         center: f32,
         width_or_height: f32,
     ) -> f32;
-    fn BasicShapeEllipseGetPath(
-        value: &BasicShapeEllipse,
-        rect: &gfx::RectF,
-        zoom: f32,
-        scale: f32,
-    ) -> Path;
-    fn BasicShapeEllipseGetPathFromCenter(
-        value: &BasicShapeEllipse,
-        center: &gfx::PointF,
-        rect: &gfx::RectF,
-        scale: f32,
-    ) -> Path;
-    fn BasicShapeEllipseIsEqualAssumingSameType(
-        value: &BasicShapeEllipse,
-        other: &dyn BasicShape,
-    ) -> bool;
     fn BasicShapePolygonGetPath(
         value: &BasicShapePolygon,
         rect: &gfx::RectF,
@@ -514,16 +514,6 @@ unsafe extern "Rust" {
     ) -> Path;
     fn BasicShapePolygonIsEqualAssumingSameType(
         value: &BasicShapePolygon,
-        other: &dyn BasicShape,
-    ) -> bool;
-    fn BasicShapeInsetGetPath(
-        value: &BasicShapeInset,
-        rect: &gfx::RectF,
-        zoom: f32,
-        scale: f32,
-    ) -> Path;
-    fn BasicShapeInsetIsEqualAssumingSameType(
-        value: &BasicShapeInset,
         other: &dyn BasicShape,
     ) -> bool;
 }

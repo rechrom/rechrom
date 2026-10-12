@@ -59,14 +59,17 @@ impl PageScripts {
                     });
             }
             WebApiEffect::AnimationTick { monotonic_time_ms } => {
+                // End the read borrow before routing the tick back through the
+                // AnimationEngine. rAF dispatch is deliberately re-entrant at
+                // this boundary, while the engine itself remains single-owner.
+                let last_time = effect_state.animation_engine.borrow().LastTime();
                 effect_state.ApplyAnimationMutation(animation::AnimationMutation::Tick(
                     animation::AnimationTick {
                         // A delayed BeginFrame may predate an ordinary
                         // task's animation sample. Only empty-sample
                         // bookkeeping clamps; rAF timestamps and actual
                         // style samples remain exact.
-                        monotonic_time: (monotonic_time_ms / 1000.0)
-                            .max(effect_state.animation_engine.borrow().LastTime()),
+                        monotonic_time: (monotonic_time_ms / 1000.0).max(last_time),
                         ..Default::default()
                     },
                 ));
@@ -136,9 +139,13 @@ impl PageScripts {
             web_api.ApplyMutation(WebApiMutation::SetViewport {
                 width: c.available_size.width,
                 height: c.available_size.height,
-                scale: c.device_pixel_ratio,
+                scale: c.device_pixel_ratio * c.layout_zoom_factor.max(f64::MIN_POSITIVE),
             });
         }
+        web_api.ApplyMutation(WebApiMutation::SetPreferredColorScheme(
+            state.preferred_color_scheme.get(),
+        ));
+        web_api.ApplyMutation(WebApiMutation::SetForcedColors(state.forced_colors.get()));
         let mut script = ScriptEngine::new(runtime, web_api.WindowBindings().clone());
         web_api.BindRuntime(script.Realm());
         let bootstrap_sources = WebApiEngine::BootstrapSources();
@@ -183,11 +190,15 @@ impl PageScripts {
         self.web_api
             .ApplyMutation(WebApiMutation::SetPreferredColorScheme(preference));
     }
-    pub(super) fn ResizeViewport(&self, width: f64, height: f64, scale: f64) {
+    pub(super) fn SetForcedColors(&self, forced_colors: ForcedColors) {
+        self.web_api
+            .ApplyMutation(WebApiMutation::SetForcedColors(forced_colors));
+    }
+    pub(super) fn ResizeViewport(&self, width: f64, height: f64, effective_scale: f64) {
         self.web_api.ApplyMutation(WebApiMutation::SetViewport {
             width,
             height,
-            scale,
+            scale: effective_scale,
         });
     }
     pub(super) fn FinishLoad(

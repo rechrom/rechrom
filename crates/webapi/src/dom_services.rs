@@ -590,15 +590,14 @@ impl DOMJavaScriptBindings {
             if let Some(HostValue::Number(value)) = arguments.get(1) {
                 let mut value = if value.is_finite() { *value } else { 0.0 };
                 if let Some(read) = self.services.host.read_metric.as_mut() {
-                    let (scroll, client) = if axis == "x" {
-                        ("scrollWidth", "clientWidth")
+                    let (minimum, maximum) = if axis == "x" {
+                        ("minimumScrollLeft", "maximumScrollLeft")
                     } else {
-                        ("scrollHeight", "clientHeight")
+                        ("minimumScrollTop", "maximumScrollTop")
                     };
-                    value = value.clamp(
-                        0.0,
-                        (read(receiver, scroll) - read(receiver, client)).max(0.0),
-                    );
+                    let minimum = read(receiver, minimum);
+                    let maximum = read(receiver, maximum).max(minimum);
+                    value = value.clamp(minimum, maximum);
                 }
                 if axis == "x" {
                     offset.x = value * zoom

@@ -154,7 +154,10 @@ fn walk(node: &FragmentNode, parent: Offset, items: &mut Vec<DisplayItem>) {
             && style.border_radii.is_none()
             && style.transform.is_none()
             && style.mask_images.is_empty()
-            && style.filters.is_empty(),
+            && style.mask_box_image.is_none()
+            && style.filters.is_empty()
+            && style.backdrop_filters.is_empty()
+            && !style.backdrop_filter_has_reference,
         "advanced box paint is not installed"
     );
     assert_eq!(style.background_clip, BackgroundBox::kBorderBox);

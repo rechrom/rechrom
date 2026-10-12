@@ -17,7 +17,7 @@
 // Paths are under third_party/blink/renderer/core/css/.
 #![allow(non_snake_case)]
 
-use super::media_query_exp::{MediaQueryExp, MediaQueryExpSerialization};
+use super::media_query_exp::{MediaQueryExp, MediaQueryExpSerialization, MediaQueryExpUnitFlags};
 use crate::kleene_value::{KleeneAnd, KleeneNot, KleeneOr, KleeneValue};
 use foundation::{AtomicString, String};
 use std::rc::Rc;
@@ -107,6 +107,36 @@ impl<V, U> ConditionalExpNode<V, U> {
                     KleeneOr(result, right.Evaluate(visitor))
                 }
             }
+        }
+    }
+
+    // The Feature enum arm is the ownership translation of
+    // MediaQueryFeatureExpNode. These forwards map media_query_exp.cc:783-819.
+    pub fn IsViewportDependent(&self) -> bool {
+        matches!(self, Self::Feature(exp) if exp.IsViewportDependent())
+    }
+    pub fn IsDeviceDependent(&self) -> bool {
+        matches!(self, Self::Feature(exp) if exp.IsDeviceDependent())
+    }
+    pub fn IsWidthDependent(&self) -> bool {
+        matches!(self, Self::Feature(exp) if exp.IsWidthDependent())
+    }
+    pub fn IsHeightDependent(&self) -> bool {
+        matches!(self, Self::Feature(exp) if exp.IsHeightDependent())
+    }
+    pub fn IsInlineSizeDependent(&self) -> bool {
+        matches!(self, Self::Feature(exp) if exp.IsInlineSizeDependent())
+    }
+    pub fn IsBlockSizeDependent(&self) -> bool {
+        matches!(self, Self::Feature(exp) if exp.IsBlockSizeDependent())
+    }
+}
+
+impl<V: MediaQueryExpUnitFlags, U> ConditionalExpNode<V, U> {
+    pub fn GetUnitFlags(&self) -> u32 {
+        match self {
+            Self::Feature(exp) => exp.GetUnitFlags(),
+            _ => 0,
         }
     }
 }

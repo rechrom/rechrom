@@ -1,17 +1,527 @@
 //! Local replay adapters; these methods are not asserted as C++ SkCanvas API.
 use crate::compat::commands::*;
 use crate::compat::geometry::*;
+use crate::compat::gradient_interpolation::{GradientHueMethod, GradientInterpolationSpace};
 use crate::cpu::hvgl::HvglTable;
 use crate::cpu::image_sampling::{build_mip_image, draw_image_bitmap, mip_level_for_size};
 use crate::raster::{
     ColorU8, FillRule, FilterQuality, GradientStop, IntSize, LineCap, LineJoin, LinearGradient,
-    Mask, Paint, Path, PathBuilder, Pattern, Pixmap, Point, Rect, SpreadMode, Stroke, StrokeDash,
-    Transform,
+    Mask, Paint, Path, PathBuilder, Pattern, Pixmap, PixmapPaint, Point, RadialGradient, Rect,
+    SpreadMode, Stroke, StrokeDash, SweepGradient, Transform,
 };
 use crate::src::core::SkCanvas::{SavedFrame, SkCanvas};
 use crate::src::core::SkMaskBlurFilter::{blur_alpha_mask, blur_alpha_mask_with_bounds};
 use std::collections::HashMap;
 use ttf_parser::{Face, GlyphId, OutlineBuilder, Tag};
+
+fn gradient_interpolation_space(space: PaintColorInterpolationSpace) -> GradientInterpolationSpace {
+    match space {
+        PaintColorInterpolationSpace::kNone => GradientInterpolationSpace::None,
+        PaintColorInterpolationSpace::kSRGB => GradientInterpolationSpace::Srgb,
+        PaintColorInterpolationSpace::kSRGBLegacy => GradientInterpolationSpace::SrgbLegacy,
+        PaintColorInterpolationSpace::kSRGBLinear => GradientInterpolationSpace::SrgbLinear,
+        PaintColorInterpolationSpace::kDisplayP3 => GradientInterpolationSpace::DisplayP3,
+        PaintColorInterpolationSpace::kDisplayP3Linear => {
+            GradientInterpolationSpace::DisplayP3Linear
+        }
+        PaintColorInterpolationSpace::kHSL => GradientInterpolationSpace::Hsl,
+        PaintColorInterpolationSpace::kHWB => GradientInterpolationSpace::Hwb,
+        PaintColorInterpolationSpace::kA98RGB => GradientInterpolationSpace::A98Rgb,
+        PaintColorInterpolationSpace::kProPhotoRGB => GradientInterpolationSpace::ProPhotoRgb,
+        PaintColorInterpolationSpace::kRec2020 => GradientInterpolationSpace::Rec2020,
+        PaintColorInterpolationSpace::kRec2100Linear => GradientInterpolationSpace::Rec2100Linear,
+        PaintColorInterpolationSpace::kLab => GradientInterpolationSpace::Lab,
+        PaintColorInterpolationSpace::kLch => GradientInterpolationSpace::Lch,
+        PaintColorInterpolationSpace::kOklab => GradientInterpolationSpace::Oklab,
+        PaintColorInterpolationSpace::kOklch => GradientInterpolationSpace::Oklch,
+        PaintColorInterpolationSpace::kXYZD50 => GradientInterpolationSpace::XyzD50,
+        PaintColorInterpolationSpace::kXYZD65 => GradientInterpolationSpace::XyzD65,
+    }
+}
+
+fn gradient_stop(stop: &PaintColorStop) -> GradientStop {
+    let source_components = if stop.source_color_space == PaintColorInterpolationSpace::kNone {
+        [
+            stop.color.red,
+            stop.color.green,
+            stop.color.blue,
+            stop.color.alpha,
+        ]
+    } else {
+        stop.source_components
+    };
+    GradientStop::new_extended(
+        stop.offset as f32,
+        source_components,
+        color(stop.color),
+        gradient_interpolation_space(stop.source_color_space),
+        stop.missing_components,
+    )
+}
+
+pub(crate) fn paint_for_shader(
+    shader: &PaintShader,
+    antialias: bool,
+    coordinate_offset: (f64, f64),
+    transform_offset: (f64, f64),
+) -> Option<Paint<'static>> {
+    let mode = match shader.spread {
+        PaintSpreadMethod::kPad => SpreadMode::Pad,
+        PaintSpreadMethod::kReflect => SpreadMode::Reflect,
+        PaintSpreadMethod::kRepeat => SpreadMode::Repeat,
+    };
+    let mut transform = Transform::from_row(
+        shader.transform.values[0] as f32,
+        shader.transform.values[1] as f32,
+        shader.transform.values[4] as f32,
+        shader.transform.values[5] as f32,
+        (shader.transform.values[12] + transform_offset.0) as f32,
+        (shader.transform.values[13] + transform_offset.1) as f32,
+    );
+    let point = |value: Offset| {
+        Point::from_xy(
+            (value.x - coordinate_offset.0) as f32,
+            (value.y - coordinate_offset.1) as f32,
+        )
+    };
+    let interpolation_space = gradient_interpolation_space(shader.color_interpolation_space);
+    let hue = match shader.hue_interpolation_method {
+        PaintHueInterpolationMethod::kShorter => GradientHueMethod::Shorter,
+        PaintHueInterpolationMethod::kLonger => GradientHueMethod::Longer,
+        PaintHueInterpolationMethod::kIncreasing => GradientHueMethod::Increasing,
+        PaintHueInterpolationMethod::kDecreasing => GradientHueMethod::Decreasing,
+    };
+    let stops = shader.stops.iter().map(gradient_stop).collect();
+    let mut gradient = match shader.kind {
+        PaintShaderKind::kLinearGradient => LinearGradient::new_with_interpolation(
+            point(shader.start),
+            point(shader.end),
+            stops,
+            mode,
+            transform,
+            interpolation_space,
+            hue,
+            shader.interpolate_premultiplied,
+        )?,
+        PaintShaderKind::kRadialGradient => {
+            if let Some(radius_y) = shader.radius_y {
+                if shader.radius > 0.0 && (radius_y - shader.radius).abs() > 1e-9 {
+                    let center = point(shader.center);
+                    let ellipse = Transform::from_translate(center.x, center.y)
+                        .post_scale(1.0, (radius_y / shader.radius) as f32)
+                        .post_translate(-center.x, -center.y);
+                    transform = transform.post_concat(ellipse);
+                }
+            }
+            RadialGradient::new_with_interpolation(
+                point(shader.focal),
+                shader.focal_radius as f32,
+                point(shader.center),
+                shader.radius as f32,
+                stops,
+                mode,
+                transform,
+                interpolation_space,
+                hue,
+                shader.interpolate_premultiplied,
+            )?
+        }
+        PaintShaderKind::kConicGradient => SweepGradient::new(
+            point(shader.center),
+            (shader.start_angle + shader.rotation_angle - 90.0) as f32,
+            (shader.end_angle + shader.rotation_angle - 90.0) as f32,
+            stops,
+            mode,
+            transform,
+        )?,
+        _ => return None,
+    };
+    gradient.set_gradient_interpolation(interpolation_space, hue, shader.interpolate_premultiplied);
+    let mut paint = Paint::default();
+    paint.shader = gradient;
+    paint.anti_alias = antialias;
+    Some(paint)
+}
+
+fn affine(matrix: &TransformMatrix) -> Transform {
+    Transform::from_row(
+        matrix.values[0] as f32,
+        matrix.values[1] as f32,
+        matrix.values[4] as f32,
+        matrix.values[5] as f32,
+        matrix.values[12] as f32,
+        matrix.values[13] as f32,
+    )
+}
+
+fn compose(left: Transform, right: Transform) -> Transform {
+    Transform::from_row(
+        left.sx * right.sx + left.kx * right.ky,
+        left.ky * right.sx + left.sy * right.ky,
+        left.sx * right.kx + left.kx * right.sy,
+        left.ky * right.kx + left.sy * right.sy,
+        left.sx * right.tx + left.kx * right.ty + left.tx,
+        left.ky * right.tx + left.sy * right.ty + left.ty,
+    )
+}
+
+fn pattern_shape_path(primitive: &SvgPatternPrimitive) -> Option<Path> {
+    let rect = PaintRect {
+        x: primitive.bounds_offset.x,
+        y: primitive.bounds_offset.y,
+        width: primitive.bounds_width,
+        height: primitive.bounds_height,
+    };
+    let commands = match primitive.geometry {
+        SvgPatternGeometry::kPath => primitive.path.clone(),
+        SvgPatternGeometry::kEllipse => oval_commands(rect)?,
+        SvgPatternGeometry::kRectangle
+            if primitive.rectangle_radius_x > 0.0 && primitive.rectangle_radius_y > 0.0 =>
+        {
+            let radius = PaintCornerRadius {
+                x: primitive.rectangle_radius_x,
+                y: primitive.rectangle_radius_y,
+            };
+            rounded_rect_commands(
+                rect,
+                PaintCornerRadii {
+                    top_left: radius,
+                    top_right: radius,
+                    bottom_right: radius,
+                    bottom_left: radius,
+                },
+                6,
+            )?
+        }
+        SvgPatternGeometry::kRectangle => rect_commands(rect)?,
+    };
+    path_from_commands(&commands)
+}
+
+fn render_pattern_tile(shader: &PaintShader, device_transform: Transform) -> Option<Pixmap> {
+    let pattern = shader.pattern.as_ref()?;
+    if shader.tile_width <= 0.0 || shader.tile_height <= 0.0 {
+        return None;
+    }
+    // Picture-pattern tiles are rasterized at the current use's device scale,
+    // just as Chromium's paint worklet/image shader cache keys include scale.
+    // A document-global CSS-pixel bitmap would blur under zoom/DSF and would
+    // also be wrong when the same objectBoundingBox pattern has another size.
+    let device_basis = compose(device_transform, affine(&shader.transform));
+    let scale_x = device_basis.sx.hypot(device_basis.ky).max(f32::EPSILON) as f64;
+    let scale_y = device_basis.kx.hypot(device_basis.sy).max(f32::EPSILON) as f64;
+    let mut pixel_width = (shader.tile_width * scale_x).ceil().max(1.0);
+    let mut pixel_height = (shader.tile_height * scale_y).ceil().max(1.0);
+    let downscale = (pixel_width / 4096.0).max(pixel_height / 4096.0).max(1.0);
+    pixel_width = (pixel_width / downscale).ceil().max(1.0);
+    pixel_height = (pixel_height / downscale).ceil().max(1.0);
+    let pixmap = Pixmap::new(pixel_width as u32, pixel_height as u32)?;
+    let empty_resources = ResourceContext::default();
+    let mut canvas = SkCanvas::with_pixmap(&empty_resources, pixmap);
+    canvas.clear_transparent();
+    let logical_to_pixel = Transform::from_scale(
+        pixel_width as f32 / shader.tile_width as f32,
+        pixel_height as f32 / shader.tile_height as f32,
+    );
+    let content = compose(logical_to_pixel, affine(&pattern.content_transform));
+    // false is an ordinary saveLayer, true is an SVG mask whose restore must
+    // run the existing alpha/luminance mask compositor.
+    let mut layer_stack = Vec::new();
+    for command in &pattern.commands {
+        let primitive = match command {
+            SvgPatternCommand::SaveLayerOpacity(opacity) => {
+                canvas.replay_item(
+                    &DrawCommand {
+                        r#type: CommandKind::kSaveLayerAlpha,
+                        opacity: *opacity,
+                        ..DrawCommand::default()
+                    },
+                    &empty_resources,
+                );
+                layer_stack.push(false);
+                continue;
+            }
+            SvgPatternCommand::SaveLayerFilter(filters) => {
+                canvas.replay_item(
+                    &DrawCommand {
+                        r#type: CommandKind::kSaveLayerFilter,
+                        filters: filters.clone(),
+                        ..DrawCommand::default()
+                    },
+                    &empty_resources,
+                );
+                layer_stack.push(false);
+                continue;
+            }
+            SvgPatternCommand::SaveLayerReferenceFilter(graph) => {
+                let graph = crate::cpu::layer_filters::scale_svg_filter_graph(
+                    graph,
+                    logical_to_pixel.sx,
+                    logical_to_pixel.sy,
+                );
+                canvas.save_layer_svg_filter(graph);
+                layer_stack.push(false);
+                continue;
+            }
+            SvgPatternCommand::SaveLayerBlend(blend_mode) => {
+                canvas.replay_item(
+                    &DrawCommand {
+                        r#type: CommandKind::kSaveLayerBlend,
+                        blend_mode: *blend_mode,
+                        ..DrawCommand::default()
+                    },
+                    &empty_resources,
+                );
+                layer_stack.push(false);
+                continue;
+            }
+            SvgPatternCommand::SaveLayerMask(mask) => {
+                let mask_transform = compose(logical_to_pixel, affine(&mask.content_transform));
+                let mut content_transform = TransformMatrix::default();
+                content_transform.values[0] = mask_transform.sx as f64;
+                content_transform.values[1] = mask_transform.ky as f64;
+                content_transform.values[4] = mask_transform.kx as f64;
+                content_transform.values[5] = mask_transform.sy as f64;
+                content_transform.values[12] = mask_transform.tx as f64;
+                content_transform.values[13] = mask_transform.ty as f64;
+                let pixel_rect = PaintRect {
+                    x: mask.clip_rect.x * logical_to_pixel.sx as f64,
+                    y: mask.clip_rect.y * logical_to_pixel.sy as f64,
+                    width: mask.clip_rect.width * logical_to_pixel.sx as f64,
+                    height: mask.clip_rect.height * logical_to_pixel.sy as f64,
+                };
+                let mask_shader = PaintShader {
+                    kind: PaintShaderKind::kPattern,
+                    tile_width: pixel_width,
+                    tile_height: pixel_height,
+                    pattern: Some(std::sync::Arc::new(SvgPatternData {
+                        commands: mask.commands.clone(),
+                        content_transform,
+                        opacity: 1.0,
+                    })),
+                    ..PaintShader::default()
+                };
+                canvas.replay_item(
+                    &DrawCommand {
+                        r#type: CommandKind::kBeginMask,
+                        mask_layers: vec![MaskLayer {
+                            paint_shader: Some(mask_shader),
+                            clip_rect: pixel_rect,
+                            tile_rect: PaintRect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: pixel_width,
+                                height: pixel_height,
+                            },
+                            mode: mask.mode,
+                            composite: PaintMaskComposite::kAdd,
+                            ..MaskLayer::default()
+                        }],
+                        ..DrawCommand::default()
+                    },
+                    &empty_resources,
+                );
+                layer_stack.push(true);
+                continue;
+            }
+            SvgPatternCommand::Restore => {
+                let Some(mask) = layer_stack.pop() else {
+                    return None;
+                };
+                canvas.replay_item(
+                    &DrawCommand {
+                        r#type: if mask {
+                            CommandKind::kEndMask
+                        } else {
+                            CommandKind::kRestore
+                        },
+                        ..DrawCommand::default()
+                    },
+                    &empty_resources,
+                );
+                continue;
+            }
+            SvgPatternCommand::DrawImage(image) => {
+                if image.raster_width == 0
+                    || image.raster_height == 0
+                    || image.rgba8.len()
+                        != image.raster_width as usize * image.raster_height as usize * 4
+                {
+                    // A pattern image is an atomic retained dependency. An
+                    // unavailable exact document variant (or bitmap payload)
+                    // must reject this shader instead of changing it into a
+                    // transparent image and caching that approximation.
+                    return None;
+                }
+                let image_resources = ResourceContext {
+                    resources: Some(ResourceCatalog {
+                        images: vec![Image::borrowed(
+                            image.resource_id,
+                            image.raster_width,
+                            image.raster_height,
+                            &image.rgba8,
+                        )],
+                        ..ResourceCatalog::default()
+                    }),
+                };
+                let combined = compose(content, affine(&image.transform));
+                let mut transform = TransformMatrix::default();
+                transform.values[0] = combined.sx as f64;
+                transform.values[1] = combined.ky as f64;
+                transform.values[4] = combined.kx as f64;
+                transform.values[5] = combined.sy as f64;
+                transform.values[12] = combined.tx as f64;
+                transform.values[13] = combined.ty as f64;
+                for item in [
+                    DrawCommand {
+                        r#type: CommandKind::kSave,
+                        ..DrawCommand::default()
+                    },
+                    DrawCommand {
+                        r#type: CommandKind::kConcat,
+                        transform,
+                        ..DrawCommand::default()
+                    },
+                    DrawCommand {
+                        r#type: CommandKind::kDrawImageRect,
+                        rect: image.destination,
+                        source_rect: image.source,
+                        resource_id: image.resource_id,
+                        image_interpolation_quality: image.image_interpolation_quality,
+                        ..DrawCommand::default()
+                    },
+                    DrawCommand {
+                        r#type: CommandKind::kRestore,
+                        ..DrawCommand::default()
+                    },
+                ] {
+                    canvas.replay_item(&item, &image_resources);
+                }
+                continue;
+            }
+            SvgPatternCommand::DrawShape(primitive) | SvgPatternCommand::DrawGlyph(primitive) => {
+                primitive
+            }
+        };
+        let Some(path) = pattern_shape_path(primitive) else {
+            continue;
+        };
+        let transform = compose(content, affine(&primitive.transform));
+        if primitive.fill_server.is_some() || primitive.fill.is_some_and(|color| color.alpha > 0.0)
+        {
+            let rule = if primitive.fill_even_odd {
+                FillRule::EvenOdd
+            } else {
+                FillRule::Winding
+            };
+            if let Some(server) = &primitive.fill_server {
+                with_paint_for_shader(
+                    server,
+                    primitive.antialias,
+                    (0.0, 0.0),
+                    (0.0, 0.0),
+                    transform,
+                    |paint| {
+                        canvas.pixmap.fill_path(&path, paint, rule, transform, None);
+                    },
+                )?;
+            } else if let Some(fill) = primitive.fill {
+                let paint = solid_paint(fill, primitive.antialias);
+                canvas
+                    .pixmap
+                    .fill_path(&path, &paint, rule, transform, None);
+            }
+        }
+        if primitive.stroke_width > 0.0
+            && (primitive.stroke_server.is_some()
+                || primitive.stroke.is_some_and(|color| color.alpha > 0.0))
+        {
+            let mut stroke = Stroke {
+                width: primitive.stroke_width as f32,
+                line_cap: match primitive.stroke_line_cap {
+                    SvgStrokeLineCap::kButt => LineCap::Butt,
+                    SvgStrokeLineCap::kRound => LineCap::Round,
+                    SvgStrokeLineCap::kSquare => LineCap::Square,
+                },
+                line_join: match primitive.stroke_line_join {
+                    SvgStrokeLineJoin::kMiter => LineJoin::Miter,
+                    SvgStrokeLineJoin::kRound => LineJoin::Round,
+                    SvgStrokeLineJoin::kBevel => LineJoin::Bevel,
+                },
+                miter_limit: primitive.stroke_miter_limit as f32,
+                ..Stroke::default()
+            };
+            if !primitive.stroke_dash_array.is_empty() {
+                stroke.dash = StrokeDash::new(
+                    primitive
+                        .stroke_dash_array
+                        .iter()
+                        .map(|value| *value as f32)
+                        .collect(),
+                    primitive.stroke_dash_offset as f32,
+                );
+            }
+            if let Some(server) = &primitive.stroke_server {
+                with_paint_for_shader(
+                    server,
+                    primitive.antialias,
+                    (0.0, 0.0),
+                    (0.0, 0.0),
+                    transform,
+                    |paint| {
+                        canvas
+                            .pixmap
+                            .stroke_path(&path, paint, &stroke, transform, None);
+                    },
+                )?;
+            } else if let Some(color) = primitive.stroke {
+                let paint = solid_paint(color, primitive.antialias);
+                canvas
+                    .pixmap
+                    .stroke_path(&path, &paint, &stroke, transform, None);
+            }
+        }
+    }
+    if !layer_stack.is_empty() {
+        return None;
+    }
+    Some(canvas.pixmap)
+}
+
+pub(crate) fn with_paint_for_shader<R>(
+    shader: &PaintShader,
+    antialias: bool,
+    coordinate_offset: (f64, f64),
+    transform_offset: (f64, f64),
+    device_transform: Transform,
+    draw: impl FnOnce(&Paint<'_>) -> R,
+) -> Option<R> {
+    if shader.kind != PaintShaderKind::kPattern {
+        return paint_for_shader(shader, antialias, coordinate_offset, transform_offset)
+            .map(|paint| draw(&paint));
+    }
+    let pixmap = render_pattern_tile(shader, device_transform)?;
+    let scale = Transform::from_scale(
+        shader.tile_width as f32 / pixmap.width() as f32,
+        shader.tile_height as f32 / pixmap.height() as f32,
+    );
+    let mut placement = compose(affine(&shader.transform), scale);
+    placement.tx += transform_offset.0 as f32;
+    placement.ty += transform_offset.1 as f32;
+    let mut paint = Paint::default();
+    paint.shader = Pattern::new(
+        pixmap.as_ref(),
+        SpreadMode::Repeat,
+        FilterQuality::Bilinear,
+        shader
+            .pattern
+            .as_ref()
+            .map_or(1.0, |pattern| pattern.opacity),
+        placement,
+    );
+    paint.anti_alias = antialias;
+    Some(draw(&paint))
+}
 // Preserve the original scan converter's AA runs. A vertical shader on a
 // transparent device has one exact packed result per (device y, coverage) run.
 struct VerticalMaskGradientBlitter<'a, 'b: 'a> {
@@ -342,6 +852,50 @@ impl SkCanvas {
         }
     }
 
+    fn replay_text_decoration_shadow(
+        &mut self,
+        item: &DrawCommand,
+        list: &ResourceContext,
+        replay: impl FnOnce(&mut Self, &DrawCommand, &ResourceContext),
+    ) -> bool {
+        if !item.is_text_decoration
+            || (item.shadow_offset == Offset::default() && item.blur_radius <= 0.0)
+        {
+            return false;
+        }
+        let blurred = item.blur_radius > 0.0;
+        if blurred {
+            let mut layer = DrawCommand::default();
+            layer.filters.push(PaintFilterOperation {
+                r#type: PaintFilterType::kBlur,
+                amount: item.blur_radius * 0.5,
+                ..PaintFilterOperation::default()
+            });
+            self.save_layer_filter(&layer);
+        }
+        self.save();
+        let mut transform = TransformMatrix::default();
+        transform.values[12] = item.shadow_offset.x;
+        transform.values[13] = item.shadow_offset.y;
+        self.replay_item(
+            &DrawCommand {
+                r#type: CommandKind::kConcat,
+                transform,
+                ..DrawCommand::default()
+            },
+            list,
+        );
+        let mut source = item.clone();
+        source.shadow_offset = Offset::default();
+        source.blur_radius = 0.0;
+        replay(self, &source, list);
+        self.restore();
+        if blurred {
+            self.restore();
+        }
+        true
+    }
+
     pub fn replay_item(&mut self, item: &DrawCommand, list: &ResourceContext) {
         // SkCanvas::internalQuickReject and SkRasterClip::setEmpty: drawing
         // and intersect/difference clips cannot make an empty clip visible.
@@ -364,6 +918,11 @@ impl SkCanvas {
                     | CommandKind::kEndMask
             )
         {
+            return;
+        }
+        if self.replay_text_decoration_shadow(item, list, |canvas, source, resources| {
+            canvas.replay_item(source, resources)
+        }) {
             return;
         }
         // An intersecting rect/rrect whose conservative support misses the
@@ -487,9 +1046,8 @@ impl SkCanvas {
             }
             CommandKind::kSaveLayerBlend => {
                 // CSS isolation also emits a blend layer for normal SrcOver.
-                // It still needs a separate surface so descendants cannot
-                // blend directly with the page backdrop.
-                assert_eq!(item.blend_mode, PaintBlendMode::kNormal);
+                // Non-normal modes are retained on SavedFrame and restored by
+                // the shared effect-composite raster pipeline.
                 self.internalSaveLayer(item, false);
             }
             // cpp: skia_renderer/skia_renderer.cc:1050-1073
@@ -890,8 +1448,24 @@ impl SkCanvas {
             | CommandKind::kDrawScrollbarButton
             | CommandKind::kDrawScrollbarCorner => {
                 assert_eq!(item.blend_mode, PaintBlendMode::kNormal);
-                assert!(item.paint_shader.is_none());
-                self.drawRect(item.rect, item.color, item.antialias);
+                if let Some(shader) = item.paint_shader.as_ref() {
+                    let Some(bounds) = rect(item.rect) else {
+                        return;
+                    };
+                    self.ensure_clip_mask();
+                    let transform = self.state.transform;
+                    let clip = self.state.clip.as_deref();
+                    with_paint_for_shader(
+                        shader,
+                        item.antialias,
+                        (0.0, 0.0),
+                        (0.0, 0.0),
+                        transform,
+                        |paint| self.pixmap.fill_rect(bounds, paint, transform, clip),
+                    );
+                } else {
+                    self.drawRect(item.rect, item.color, item.antialias);
+                }
             }
             CommandKind::kDrawRoundedRect => self.drawRRect(item),
             CommandKind::kDrawDoubleRoundedRect => self.drawDRRect(item),
@@ -915,7 +1489,29 @@ impl SkCanvas {
                         }
                     }
                     if let Some(path) = path_from_commands(&commands) {
-                        self.drawPath(&path, item.color, item.antialias, FillRule::Winding);
+                        if let Some(shader) = item.paint_shader.as_ref() {
+                            self.ensure_clip_mask();
+                            let transform = self.state.transform;
+                            let clip = self.state.clip.as_deref();
+                            with_paint_for_shader(
+                                shader,
+                                item.antialias,
+                                (0.0, 0.0),
+                                (0.0, 0.0),
+                                transform,
+                                |paint| {
+                                    self.pixmap.fill_path(
+                                        &path,
+                                        paint,
+                                        FillRule::Winding,
+                                        transform,
+                                        clip,
+                                    )
+                                },
+                            );
+                        } else {
+                            self.drawPath(&path, item.color, item.antialias, FillRule::Winding);
+                        }
                     }
                 }
             }
@@ -1027,16 +1623,26 @@ impl SkCanvas {
                     }
                 }
                 if let Some(path) = path_from_commands(&item.path) {
-                    self.drawPath(
-                        &path,
-                        item.color,
-                        item.antialias,
-                        if item.even_odd {
-                            FillRule::EvenOdd
-                        } else {
-                            FillRule::Winding
-                        },
-                    );
+                    let rule = if item.even_odd {
+                        FillRule::EvenOdd
+                    } else {
+                        FillRule::Winding
+                    };
+                    if let Some(shader) = item.paint_shader.as_ref() {
+                        self.ensure_clip_mask();
+                        let transform = self.state.transform;
+                        let clip = self.state.clip.as_deref();
+                        with_paint_for_shader(
+                            shader,
+                            item.antialias,
+                            (0.0, 0.0),
+                            (0.0, 0.0),
+                            transform,
+                            |paint| self.pixmap.fill_path(&path, paint, rule, transform, clip),
+                        );
+                    } else {
+                        self.drawPath(&path, item.color, item.antialias, rule);
+                    }
                 }
             }
             CommandKind::kStrokePath => {
@@ -1098,6 +1704,11 @@ impl SkCanvas {
         glyph_runs: &[DrawCommand],
         list: &ResourceContext,
     ) {
+        if self.replay_text_decoration_shadow(item, list, |canvas, source, resources| {
+            canvas.replay_text_decoration_with_skip_ink(source, glyph_runs, resources)
+        }) {
+            return;
+        }
         if item.r#type != CommandKind::kStrokeLine
             || !item.is_text_decoration
             || item.rect.height != 0.0
@@ -1169,6 +1780,7 @@ impl SkCanvas {
             offset: Offset::default(),
             blur_radius: 0.0,
             color: Color::default(),
+            ..PaintFilterOperation::default()
         });
         self.save_layer_filter(&layer);
         let mut glyphs = item.clone();
@@ -1207,7 +1819,28 @@ impl SkCanvas {
     // BoxPainterBase::PaintMaskImages draws the mask source into its own
     // PaintRecord. The owning effect supplies DstIn separately at restore.
     fn draw_mask_layers(&mut self, layers: &[MaskLayer], list: &ResourceContext) {
-        for layer in layers.iter().cloned() {
+        self.draw_mask_layers_with(layers, list, |_, _, _| false);
+    }
+
+    /// Compose CSS mask layers into the current mask surface. The callback is
+    /// the document-image hook owned by raster; returning false uses the
+    /// ordinary bitmap/gradient ResourceContext path.
+    pub fn draw_mask_layers_with(
+        &mut self,
+        layers: &[MaskLayer],
+        list: &ResourceContext,
+        mut draw_override: impl FnMut(&mut Self, usize, &MaskLayer) -> bool,
+    ) {
+        let width = self.pixmap.width() as usize;
+        let height = self.pixmap.height() as usize;
+        let mut combined = vec![0_u8; width * height];
+        let mut has_layer = false;
+        // CSS lists are front-to-back. Build the isolated mask from the
+        // bottom layer upward so each upper layer's mask-composite operator
+        // combines source with the already accumulated destination.
+        for index in (0..layers.len()).rev() {
+            let layer = &layers[index];
+            self.internalSaveLayer(&DrawCommand::default(), false);
             self.save();
             self.replay_item(
                 &DrawCommand {
@@ -1223,34 +1856,117 @@ impl SkCanvas {
                 },
                 list,
             );
-            if let Some(shader) = layer.paint_shader {
-                // CSS mask images use the same positioned/repeating image
-                // geometry as backgrounds. Preserve the tile phase instead
-                // of stretching one gradient across the whole mask clip.
-                self.draw_gradient(&DrawCommand {
-                    r#type: CommandKind::kDrawTiledGradient,
-                    rect: layer.clip_rect,
-                    tile_rect: layer.tile_rect,
-                    repeat_x: layer.repeat_x,
-                    repeat_y: layer.repeat_y,
-                    tile_spacing: layer.tile_spacing,
-                    paint_shader: Some(shader),
-                    ..Default::default()
-                });
-            } else {
-                self.drawRect(
-                    layer.clip_rect,
-                    Color {
-                        red: 1.0,
-                        green: 1.0,
-                        blue: 1.0,
-                        alpha: 1.0,
-                    },
-                    false,
-                );
+            let handled = draw_override(self, index, layer);
+            if !handled {
+                if let Some(shader) = layer.paint_shader.clone() {
+                    // CSS mask images use the same positioned/repeating image
+                    // geometry as backgrounds. Preserve the tile phase instead
+                    // of stretching one gradient across the whole mask clip.
+                    self.draw_gradient(&DrawCommand {
+                        r#type: CommandKind::kDrawTiledGradient,
+                        rect: layer.clip_rect,
+                        tile_rect: layer.tile_rect,
+                        repeat_x: layer.repeat_x,
+                        repeat_y: layer.repeat_y,
+                        tile_spacing: layer.tile_spacing,
+                        paint_shader: Some(shader),
+                        ..Default::default()
+                    });
+                } else if layer.resource_id != 0 {
+                    self.draw_tiled_image(
+                        &DrawCommand {
+                            r#type: CommandKind::kDrawTiledImage,
+                            rect: layer.clip_rect,
+                            source_rect: layer.source_rect,
+                            tile_rect: layer.tile_rect,
+                            resource_id: layer.resource_id,
+                            image_interpolation_quality: layer.image_interpolation_quality,
+                            repeat_x: layer.repeat_x,
+                            repeat_y: layer.repeat_y,
+                            tile_scale: layer.tile_scale,
+                            tile_spacing: layer.tile_spacing,
+                            ..Default::default()
+                        },
+                        list,
+                    );
+                }
             }
             self.restore();
+
+            // Detach the isolated source without SrcOver-restoring it. Mask
+            // composition uses Porter-Duff alpha equations below instead.
+            let frame = self.stack.pop().expect("mask layer source save");
+            let (parent, _, previous) = frame.layer.expect("mask layer source surface");
+            debug_assert!(previous.is_none());
+            let child = std::mem::replace(&mut self.pixmap, parent);
+            self.f16_surface = previous;
+            self.state = frame.state;
+            self.known_opaque = frame.parent_opaque;
+
+            let mut source = vec![0_u8; width * height];
+            let child_width = child.width() as usize;
+            for (y, row) in child.data().chunks_exact(child_width * 4).enumerate() {
+                let target_y = frame.layer_origin.1 + y as i32;
+                if target_y < 0 || target_y >= height as i32 {
+                    continue;
+                }
+                for (x, pixel) in row.chunks_exact(4).enumerate() {
+                    let target_x = frame.layer_origin.0 + x as i32;
+                    if target_x < 0 || target_x >= width as i32 {
+                        continue;
+                    }
+                    let rgba = child
+                        .format
+                        .decode(pixel.try_into().expect("RGBA mask pixel"));
+                    let alpha = match layer.mode {
+                        PaintMaskMode::kAlpha => rgba[3],
+                        // The stored RGB channels are premultiplied, so
+                        // luminance(unpremul(rgb)) * alpha reduces to this
+                        // weighted sum directly.
+                        PaintMaskMode::kLuminance => (0.2126 * f32::from(rgba[0])
+                            + 0.7152 * f32::from(rgba[1])
+                            + 0.0722 * f32::from(rgba[2]))
+                        .ceil()
+                        .clamp(0.0, 255.0)
+                            as u8,
+                    };
+                    source[target_y as usize * width + target_x as usize] = alpha;
+                }
+            }
+            if !has_layer {
+                combined = source;
+                has_layer = true;
+                continue;
+            }
+            for (destination, source) in combined.iter_mut().zip(source) {
+                let s = source;
+                let d = *destination;
+                let mul = crate::cpu::mask_blitter::mul_div_255_round;
+                *destination = match layer.composite {
+                    PaintMaskComposite::kAdd => s.saturating_add(mul(d, 255 - s)),
+                    PaintMaskComposite::kSubtract => mul(s, 255 - d),
+                    PaintMaskComposite::kIntersect => mul(s, d),
+                    PaintMaskComposite::kExclude => mul(s, 255 - d).saturating_add(mul(d, 255 - s)),
+                };
+            }
         }
+        if !has_layer {
+            return;
+        }
+        let format = self.pixmap.format;
+        for (pixel, source_alpha) in self.pixmap.data_mut().chunks_exact_mut(4).zip(combined) {
+            let destination = format.decode(pixel.try_into().expect("RGBA mask destination"));
+            let inverse = 255 - source_alpha;
+            let mul = crate::cpu::mask_blitter::mul_div_255_round;
+            let output = [
+                source_alpha.saturating_add(mul(destination[0], inverse)),
+                source_alpha.saturating_add(mul(destination[1], inverse)),
+                source_alpha.saturating_add(mul(destination[2], inverse)),
+                source_alpha.saturating_add(mul(destination[3], inverse)),
+            ];
+            pixel.copy_from_slice(&format.encode(output));
+        }
+        self.known_opaque = false;
     }
 
     pub(crate) fn restore_mask_layer(&mut self, fast_mask: bool) {
@@ -1635,12 +2351,39 @@ impl SkCanvas {
             .paint_shader
             .as_ref()
             .expect("gradient item requires a paint shader");
-        assert_eq!(shader.kind, PaintShaderKind::kLinearGradient);
         assert_eq!(item.blend_mode, PaintBlendMode::kNormal);
         let Some(destination_rect) = rect(destination) else {
             return;
         };
         let tr = self.state.transform;
+        if shader.kind != PaintShaderKind::kLinearGradient {
+            let coordinate_offset = if direct {
+                (0.0, 0.0)
+            } else {
+                (item.tile_rect.x, item.tile_rect.y)
+            };
+            let transform_offset = if direct {
+                (0.0, 0.0)
+            } else {
+                (destination.x, destination.y)
+            };
+            self.ensure_clip_mask();
+            let transform = self.state.transform;
+            let clip = self.state.clip.as_deref();
+            with_paint_for_shader(
+                shader,
+                item.antialias,
+                coordinate_offset,
+                transform_offset,
+                transform,
+                |paint| {
+                    self.pixmap
+                        .fill_rect(destination_rect, paint, transform, clip)
+                },
+            );
+            return;
+        }
+        assert_eq!(shader.kind, PaintShaderKind::kLinearGradient);
         // Repeated mask tiles can lie entirely outside the clipped device.
         // Use the existing conservative analytic/path support union before
         // constructing their shader, stops, scan path and pipeline blitter.
@@ -1699,15 +2442,32 @@ impl SkCanvas {
             (shader.end.x - if direct { 0.0 } else { item.tile_rect.x }) as f32,
             (shader.end.y - if direct { 0.0 } else { item.tile_rect.y }) as f32,
         );
-        let stops = shader
-            .stops
-            .iter()
-            .map(|stop| GradientStop::new(stop.offset as f32, color(stop.color)))
-            .collect();
+        let stops = shader.stops.iter().map(gradient_stop).collect();
+        let interpolation_space = gradient_interpolation_space(shader.color_interpolation_space);
+        let hue = match shader.hue_interpolation_method {
+            PaintHueInterpolationMethod::kShorter => GradientHueMethod::Shorter,
+            PaintHueInterpolationMethod::kLonger => GradientHueMethod::Longer,
+            PaintHueInterpolationMethod::kIncreasing => GradientHueMethod::Increasing,
+            PaintHueInterpolationMethod::kDecreasing => GradientHueMethod::Decreasing,
+        };
         let mut paint = Paint::default();
-        let Some(gradient) = LinearGradient::new(start, end, stops, mode, transform) else {
+        let Some(mut gradient) = LinearGradient::new_with_interpolation(
+            start,
+            end,
+            stops,
+            mode,
+            transform,
+            interpolation_space,
+            hue,
+            shader.interpolate_premultiplied,
+        ) else {
             return;
         };
+        gradient.set_gradient_interpolation(
+            interpolation_space,
+            hue,
+            shader.interpolate_premultiplied,
+        );
         paint.shader = gradient;
         paint.anti_alias = item.antialias;
         let uniform_run_drawn = mask_surface
@@ -1917,21 +2677,42 @@ impl SkCanvas {
     }
 
     fn draw_tiled_image(&mut self, item: &DrawCommand, list: &ResourceContext) {
-        let step_x = item.tile_rect.width + item.tile_spacing.width;
-        let step_y = item.tile_rect.height + item.tile_spacing.height;
+        let tile_rect = if item.tile_rect.width > 0.0 && item.tile_rect.height > 0.0 {
+            item.tile_rect
+        } else {
+            // NinePieceImagePainter records its source-to-destination mapping
+            // as scale + phase. Backgrounds already carry a resolved tile.
+            PaintRect {
+                x: item.source_rect.x * item.tile_scale.x + item.tile_phase.x,
+                y: item.source_rect.y * item.tile_scale.y + item.tile_phase.y,
+                width: item.source_rect.width * item.tile_scale.x,
+                height: item.source_rect.height * item.tile_scale.y,
+            }
+        };
+        let step_x = tile_rect.width + item.tile_spacing.width;
+        let step_y = tile_rect.height + item.tile_spacing.height;
         if step_x <= 0.0 || step_y <= 0.0 {
             return;
         }
         let first_x = if item.repeat_x {
-            item.tile_rect.x - ((item.tile_rect.x - item.rect.x) / step_x).ceil() * step_x
+            tile_rect.x - ((tile_rect.x - item.rect.x) / step_x).ceil() * step_x
         } else {
-            item.tile_rect.x
+            tile_rect.x
         };
         let first_y = if item.repeat_y {
-            item.tile_rect.y - ((item.tile_rect.y - item.rect.y) / step_y).ceil() * step_y
+            tile_rect.y - ((tile_rect.y - item.rect.y) / step_y).ceil() * step_y
         } else {
-            item.tile_rect.y
+            tile_rect.y
         };
+        self.save();
+        self.replay_item(
+            &DrawCommand {
+                r#type: CommandKind::kClipRect,
+                rect: item.rect,
+                ..Default::default()
+            },
+            list,
+        );
         let mut y = first_y;
         let mut rows = 0;
         while y < item.rect.y + item.rect.height && rows < 10_000 {
@@ -1945,8 +2726,8 @@ impl SkCanvas {
                     PaintRect {
                         x,
                         y,
-                        width: item.tile_rect.width,
-                        height: item.tile_rect.height,
+                        width: tile_rect.width,
+                        height: tile_rect.height,
                     },
                     list,
                 );
@@ -1962,6 +2743,7 @@ impl SkCanvas {
                 item.rect.height + step_y
             };
         }
+        self.restore();
     }
 
     fn draw_box_shadow(&mut self, item: &DrawCommand) {
@@ -2043,6 +2825,14 @@ impl SkCanvas {
         transform.ty += padding as f32;
         let width = self.pixmap.width() + padding * 2;
         let height = self.pixmap.height() + padding * 2;
+        if item.blur_radius > 0.0
+            && item.corner_radii.HasRadius()
+            && self.draw_nine_patch_shadow(
+                item, shadow_box, transform, sigma, padding, width, height, support,
+            )
+        {
+            return;
+        }
         if (item.antialias || item.blur_radius > 0.0)
             && item.corner_radii.HasRadius()
             && self.draw_analytic_shadow_region(
@@ -2098,7 +2888,7 @@ impl SkCanvas {
         }
         if !item.inset {
             let mut hole = item.rect;
-            let mut radii = item.corner_radii;
+            let mut radii = item.inner_corner_radii;
             if item.shadow_has_opaque_background {
                 hole.x += 1.0;
                 hole.y += 1.0;
@@ -2147,6 +2937,183 @@ impl SkCanvas {
         // rounding path, particularly when several translucent shadows overlap.
         let premultiplied = skia_shadow_premultiplied_color(item.color);
         self.blit_shadow_mask(&mut mask, premultiplied, support);
+    }
+
+    // SkBitmapDevice::drawBlurredRRect first asks SkBlurMaskFilterImpl for a
+    // cached nine-patch.  The cached rounded rectangle is intentionally
+    // rasterized at an integer origin, blurred once, then stretched into the
+    // device-space rounded-rect bounds.  Replaying a full fractional rrect is
+    // geometrically plausible but differs at AA/blur quantization boundaries.
+    fn draw_nine_patch_shadow(
+        &mut self,
+        item: &DrawCommand,
+        shadow_box: PaintRect,
+        transform: Transform,
+        sigma: f32,
+        padding: u32,
+        width: u32,
+        height: u32,
+        support: crate::raster::IntRect,
+    ) -> bool {
+        if transform.kx != 0.0
+            || transform.ky != 0.0
+            || transform.sx <= 0.0
+            || transform.sy <= 0.0
+            || (transform.sx - transform.sy).abs() > f32::EPSILON
+        {
+            return false;
+        }
+        let Some(device_rect) = rect(shadow_box).and_then(|r| r.transform(transform)) else {
+            return false;
+        };
+        let margin = crate::src::core::SkMaskBlurFilter::blur_alpha_mask_margin(sigma) as i32;
+        let scale = transform.sx;
+        let scaled = |radius: PaintCornerRadius| PaintCornerRadius {
+            x: radius.x * f64::from(scale),
+            y: radius.y * f64::from(scale),
+        };
+        let radii = PaintCornerRadii {
+            top_left: scaled(item.corner_radii.top_left),
+            top_right: scaled(item.corner_radii.top_right),
+            bottom_right: scaled(item.corner_radii.bottom_right),
+            bottom_left: scaled(item.corner_radii.bottom_left),
+        };
+        let left = radii.top_left.x.max(radii.bottom_left.x).ceil() as i32 + margin;
+        let right = radii.top_right.x.max(radii.bottom_right.x).ceil() as i32 + margin;
+        let top = radii.top_left.y.max(radii.top_right.y).ceil() as i32 + margin;
+        let bottom = radii.bottom_left.y.max(radii.bottom_right.y).ceil() as i32 + margin;
+        let small_width = left + right + 1;
+        let small_height = top + bottom + 1;
+        if small_width as f32 >= device_rect.width() || small_height as f32 >= device_rect.height()
+        {
+            return false;
+        }
+
+        let source_rect = PaintRect {
+            x: margin as f64,
+            y: margin as f64,
+            width: small_width as f64,
+            height: small_height as f64,
+        };
+        let cached_width = (small_width + 2 * margin) as u32;
+        let cached_height = (small_height + 2 * margin) as u32;
+        let Some(mut cached) = crate::cpu::analytic_aa::rounded_rect_alpha_mask(
+            source_rect,
+            radii,
+            Transform::identity(),
+            cached_width,
+            cached_height,
+            false,
+        ) else {
+            return false;
+        };
+        blur_alpha_mask_with_bounds(
+            &mut cached,
+            sigma,
+            crate::raster::IntRect::from_xywh(
+                margin,
+                margin,
+                small_width as u32,
+                small_height as u32,
+            ),
+        );
+
+        let outer = crate::raster::IntRect::from_ltrb(
+            device_rect.left().floor() as i32 - margin - padding as i32,
+            device_rect.top().floor() as i32 - margin - padding as i32,
+            device_rect.right().ceil() as i32 + margin - padding as i32,
+            device_rect.bottom().ceil() as i32 + margin - padding as i32,
+        );
+        let Some(device) =
+            crate::raster::IntRect::from_xywh(0, 0, self.pixmap.width(), self.pixmap.height())
+        else {
+            return false;
+        };
+        let Some(bounds) = outer
+            .and_then(|r| r.intersect(&device))
+            .and_then(|r| r.intersect(&support))
+        else {
+            return true;
+        };
+        let mut mask =
+            Mask::new(bounds.width(), bounds.height()).expect("valid nine-patch shadow mask");
+        let center_x = margin + left;
+        let center_y = margin + top;
+        let outer_width = outer.unwrap().width() as i32;
+        let outer_height = outer.unwrap().height() as i32;
+        let inner_right = outer_width + center_x + 1 - cached_width as i32;
+        let inner_bottom = outer_height + center_y + 1 - cached_height as i32;
+        let cached_stride = cached.width() as usize;
+        let mask_stride = mask.width() as usize;
+        let outer = outer.unwrap();
+        for y in bounds.top()..bounds.bottom() {
+            let dy = y - outer.top();
+            let sy = if dy < center_y {
+                dy
+            } else if dy >= inner_bottom {
+                center_y + 1 + dy - inner_bottom
+            } else {
+                center_y
+            };
+            for x in bounds.left()..bounds.right() {
+                let dx = x - outer.left();
+                let sx = if dx < center_x {
+                    dx
+                } else if dx >= inner_right {
+                    center_x + 1 + dx - inner_right
+                } else {
+                    center_x
+                };
+                let alpha =
+                    if dx >= center_x && dx < inner_right && dy >= center_y && dy < inner_bottom {
+                        255
+                    } else {
+                        cached.data()[sy as usize * cached_stride + sx as usize]
+                    };
+                mask.data_mut()
+                    [(y - bounds.top()) as usize * mask_stride + (x - bounds.left()) as usize] =
+                    alpha;
+            }
+        }
+
+        let mut hole = item.rect;
+        let mut hole_radii = item.corner_radii;
+        if item.shadow_has_opaque_background {
+            hole.x += 1.0;
+            hole.y += 1.0;
+            hole.width = (hole.width - 2.0).max(0.0);
+            hole.height = (hole.height - 2.0).max(0.0);
+            for radius in [
+                &mut hole_radii.top_left,
+                &mut hole_radii.top_right,
+                &mut hole_radii.bottom_right,
+                &mut hole_radii.bottom_left,
+            ] {
+                radius.x = (radius.x - 1.0).max(0.0);
+                radius.y = (radius.y - 1.0).max(0.0);
+            }
+        }
+        if rounded_rect_path(hole, hole_radii).is_some() {
+            let Some(hole_mask) = crate::cpu::analytic_aa::rounded_rect_alpha_mask_region(
+                hole,
+                hole_radii,
+                self.state.transform,
+                self.pixmap.width(),
+                self.pixmap.height(),
+                true,
+                bounds,
+            ) else {
+                return false;
+            };
+            intersect_alpha_row(mask.data_mut(), hole_mask.data(), true);
+        }
+        self.blit_shadow_mask_at(
+            &mut mask,
+            skia_shadow_premultiplied_color(item.color),
+            bounds,
+            (bounds.left(), bounds.top()),
+        );
+        true
     }
 
     // SkDraw::DrawToMask stores the mask's finite bounds independently from
@@ -2785,6 +3752,177 @@ pub fn ProfileRoundedRectAttempt(
 #[cfg(feature = "profiling")]
 pub fn outline_scan_cache_profile() -> (usize, usize, u64, u64, u64) {
     crate::compat::glyph_rasters::profile_stats()
+}
+
+/// Rasterize the private alpha-only PaintRecord used by box reflection into
+/// the tight effect surface. The NinePiece geometry remains in property
+/// coordinates, so install the sampled compositor affine minus the cropped
+/// surface origin before replaying its pieces.
+pub fn rasterize_reflection_mask_alpha(
+    mask: &crate::compat::layer_filters::RenderReflectionMask,
+    width: u32,
+    height: u32,
+    surface_origin: (i32, i32),
+) -> Vec<u8> {
+    let images: Vec<Image<'_>> = mask
+        .layers
+        .iter()
+        .filter(|layer| layer.resource_id != 0 && !layer.image_rgba.is_empty())
+        .map(|layer| {
+            Image::shared(
+                layer.resource_id,
+                layer.image_width,
+                layer.image_height,
+                &layer.image_rgba,
+            )
+        })
+        .collect();
+    let resources = ResourceContext {
+        resources: Some(ResourceCatalog {
+            fonts: Vec::new(),
+            images,
+        }),
+    };
+    let mut canvas = SkCanvas::new(&resources, width, height);
+    canvas.clear_transparent();
+    let [sx, ky, kx, sy, tx, ty] = mask.local_to_device;
+    let mut transform = TransformMatrix::default();
+    transform.values[0] = f64::from(sx);
+    transform.values[1] = f64::from(ky);
+    transform.values[4] = f64::from(kx);
+    transform.values[5] = f64::from(sy);
+    transform.values[12] = f64::from(tx) - surface_origin.0 as f64;
+    transform.values[13] = f64::from(ty) - surface_origin.1 as f64;
+    canvas.replay_item(
+        &DrawCommand {
+            r#type: CommandKind::kConcat,
+            transform,
+            ..Default::default()
+        },
+        &resources,
+    );
+    for layer in &mask.layers {
+        let step_x = layer.tile_rect.width + layer.tile_spacing.width;
+        let step_y = layer.tile_rect.height + layer.tile_spacing.height;
+        if step_x <= 0.0 || step_y <= 0.0 {
+            continue;
+        }
+        let first_x = if layer.repeat_x {
+            layer.tile_rect.x - ((layer.tile_rect.x - layer.clip_rect.x) / step_x).ceil() * step_x
+        } else {
+            layer.tile_rect.x
+        };
+        let first_y = if layer.repeat_y {
+            layer.tile_rect.y - ((layer.tile_rect.y - layer.clip_rect.y) / step_y).ceil() * step_y
+        } else {
+            layer.tile_rect.y
+        };
+        canvas.replay_item(
+            &DrawCommand {
+                r#type: CommandKind::kSave,
+                ..Default::default()
+            },
+            &resources,
+        );
+        canvas.replay_item(
+            &DrawCommand {
+                r#type: CommandKind::kClipRect,
+                rect: layer.clip_rect,
+                antialias: false,
+                ..Default::default()
+            },
+            &resources,
+        );
+        let mut y = first_y;
+        let mut tiles = 0_usize;
+        while y < layer.clip_rect.y + layer.clip_rect.height && tiles < 10_000 {
+            let mut x = first_x;
+            while x < layer.clip_rect.x + layer.clip_rect.width && tiles < 10_000 {
+                let destination = PaintRect {
+                    x,
+                    y,
+                    width: layer.tile_rect.width,
+                    height: layer.tile_rect.height,
+                };
+                if let Some(shader) = &layer.paint_shader {
+                    if layer.source_rect.width > 0.0 && layer.source_rect.height > 0.0 {
+                        canvas.replay_item(
+                            &DrawCommand {
+                                r#type: CommandKind::kSave,
+                                ..Default::default()
+                            },
+                            &resources,
+                        );
+                        let mut piece = TransformMatrix::default();
+                        piece.values[0] = destination.width / layer.source_rect.width;
+                        piece.values[5] = destination.height / layer.source_rect.height;
+                        piece.values[12] = destination.x - layer.source_rect.x * piece.values[0];
+                        piece.values[13] = destination.y - layer.source_rect.y * piece.values[5];
+                        canvas.replay_item(
+                            &DrawCommand {
+                                r#type: CommandKind::kConcat,
+                                transform: piece,
+                                ..Default::default()
+                            },
+                            &resources,
+                        );
+                        canvas.replay_item(
+                            &DrawCommand {
+                                r#type: CommandKind::kDrawGradientRect,
+                                rect: layer.source_rect,
+                                tile_rect: layer.source_rect,
+                                paint_shader: Some(shader.clone()),
+                                ..Default::default()
+                            },
+                            &resources,
+                        );
+                        canvas.replay_item(
+                            &DrawCommand {
+                                r#type: CommandKind::kRestore,
+                                ..Default::default()
+                            },
+                            &resources,
+                        );
+                    }
+                } else if layer.resource_id != 0 {
+                    canvas.replay_item(
+                        &DrawCommand {
+                            r#type: CommandKind::kDrawImageRect,
+                            rect: destination,
+                            source_rect: layer.source_rect,
+                            resource_id: layer.resource_id,
+                            image_interpolation_quality: layer.image_interpolation_quality,
+                            ..Default::default()
+                        },
+                        &resources,
+                    );
+                }
+                tiles += 1;
+                x += if layer.repeat_x {
+                    step_x
+                } else {
+                    layer.clip_rect.width + step_x
+                };
+            }
+            y += if layer.repeat_y {
+                step_y
+            } else {
+                layer.clip_rect.height + step_y
+            };
+        }
+        canvas.replay_item(
+            &DrawCommand {
+                r#type: CommandKind::kRestore,
+                ..Default::default()
+            },
+            &resources,
+        );
+    }
+    canvas
+        .finish()
+        .chunks_exact(4)
+        .map(|pixel| pixel[3])
+        .collect()
 }
 
 #[cfg(test)]
@@ -3676,6 +4814,60 @@ mod bilibili_mask_tests {
     }
 
     #[test]
+    fn explicit_oklab_gradient_reaches_high_precision_shader_pipeline() {
+        let resources = ResourceContext::default();
+        let render = |space| {
+            let mut shader = PaintShader::default();
+            shader.kind = PaintShaderKind::kLinearGradient;
+            shader.start = Offset { x: 0.0, y: 0.0 };
+            shader.end = Offset { x: 9.0, y: 0.0 };
+            shader.color_interpolation_space = space;
+            shader.stops = vec![
+                PaintColorStop {
+                    offset: 0.0,
+                    color: Color {
+                        red: 1.0,
+                        alpha: 1.0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                PaintColorStop {
+                    offset: 1.0,
+                    color: Color {
+                        blue: 1.0,
+                        alpha: 1.0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ];
+            let rect = PaintRect {
+                x: 0.0,
+                y: 0.0,
+                width: 9.0,
+                height: 1.0,
+            };
+            let command = DrawCommand {
+                r#type: CommandKind::kDrawGradientRect,
+                rect,
+                paint_shader: Some(shader),
+                ..Default::default()
+            };
+            let mut canvas = SkCanvas::new(&resources, 9, 1);
+            canvas.draw_gradient_tile_impl(&command, rect, true, false);
+            canvas.pixmap.data()[4 * 4..4 * 4 + 4].to_vec()
+        };
+        let srgb = render(PaintColorInterpolationSpace::kNone);
+        let oklab = render(PaintColorInterpolationSpace::kOklab);
+        assert_ne!(oklab, srgb);
+        assert!(
+            oklab[0] > srgb[0] && oklab[1] > srgb[1],
+            "srgb={srgb:?} oklab={oklab:?}"
+        );
+    }
+
+    #[test]
     fn complete_masks_match_original_with_layers_crops_and_aa_parent_clips() {
         let resources = ResourceContext::default();
         for scale in [0.75, 1.0, 2.0] {
@@ -4242,6 +5434,271 @@ mod integer_inset_shadow_oracle_tests {
                 eprintln!("integer-inset-header ABBA format={format:?} scale={scale} old_ns={old_ns:?} candidate_ns={candidate_ns:?} old_median_ns={} candidate_median_ns={} complete_frame_checks={}",
                 old_ns[old_ns.len()/2],candidate_ns[candidate_ns.len()/2],old_ns.len()+candidate_ns.len());
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod svg_pattern_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn vector_tile_repeats_without_a_bitmap_resource() {
+        let primitive = SvgPatternPrimitive {
+            geometry: SvgPatternGeometry::kRectangle,
+            bounds_offset: Offset::default(),
+            bounds_width: 5.0,
+            bounds_height: 10.0,
+            rectangle_radius_x: 0.0,
+            rectangle_radius_y: 0.0,
+            path: Vec::new(),
+            fill: Some(Color {
+                red: 1.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 1.0,
+            }),
+            stroke: None,
+            fill_server: None,
+            stroke_server: None,
+            stroke_width: 0.0,
+            stroke_dash_array: Vec::new(),
+            stroke_dash_offset: 0.0,
+            stroke_line_cap: SvgStrokeLineCap::kButt,
+            stroke_line_join: SvgStrokeLineJoin::kMiter,
+            stroke_miter_limit: 4.0,
+            fill_even_odd: false,
+            non_scaling_stroke: false,
+            antialias: false,
+            transform: TransformMatrix::default(),
+        };
+        let shader = PaintShader {
+            kind: PaintShaderKind::kPattern,
+            tile_width: 10.0,
+            tile_height: 10.0,
+            pattern: Some(Arc::new(SvgPatternData {
+                commands: vec![SvgPatternCommand::DrawShape(primitive)],
+                content_transform: TransformMatrix::default(),
+                opacity: 1.0,
+            })),
+            ..PaintShader::default()
+        };
+        let mut pixmap = Pixmap::new(30, 10).unwrap();
+        let bounds = Rect::from_xywh(0.0, 0.0, 30.0, 10.0).unwrap();
+        with_paint_for_shader(
+            &shader,
+            false,
+            (0.0, 0.0),
+            (0.0, 0.0),
+            Transform::identity(),
+            |paint| pixmap.fill_rect(bounds, paint, Transform::identity(), None),
+        )
+        .unwrap();
+        let alpha = |x: usize| pixmap.data()[x * 4 + 3];
+        assert_eq!(alpha(2), 255);
+        assert_eq!(alpha(7), 0);
+        assert_eq!(alpha(12), 255);
+        assert_eq!(alpha(17), 0);
+        assert_eq!(alpha(22), 255);
+    }
+
+    #[test]
+    fn pattern_image_executes_inside_a_filter_layer() {
+        let shader = PaintShader {
+            kind: PaintShaderKind::kPattern,
+            tile_width: 2.0,
+            tile_height: 1.0,
+            pattern: Some(Arc::new(SvgPatternData {
+                commands: vec![
+                    SvgPatternCommand::SaveLayerBlend(PaintBlendMode::kNormal),
+                    SvgPatternCommand::SaveLayerFilter(vec![PaintFilterOperation {
+                        r#type: PaintFilterType::kOpacity,
+                        amount: 0.5,
+                        ..PaintFilterOperation::default()
+                    }]),
+                    SvgPatternCommand::DrawImage(SvgPatternImage {
+                        resource_id: 7,
+                        image_interpolation_quality: ImageInterpolationQuality::kMedium,
+                        destination: PaintRect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 2.0,
+                            height: 1.0,
+                        },
+                        source: PaintRect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 1.0,
+                            height: 1.0,
+                        },
+                        transform: TransformMatrix::default(),
+                        raster_width: 1,
+                        raster_height: 1,
+                        rgba8: Arc::new(vec![255, 0, 0, 255]),
+                    }),
+                    SvgPatternCommand::Restore,
+                    SvgPatternCommand::Restore,
+                ],
+                content_transform: TransformMatrix::default(),
+                opacity: 1.0,
+            })),
+            ..PaintShader::default()
+        };
+        let mut pixmap = Pixmap::new(2, 1).unwrap();
+        with_paint_for_shader(
+            &shader,
+            false,
+            (0.0, 0.0),
+            (0.0, 0.0),
+            Transform::identity(),
+            |paint| {
+                pixmap.fill_rect(
+                    Rect::from_xywh(0.0, 0.0, 2.0, 1.0).unwrap(),
+                    paint,
+                    Transform::identity(),
+                    None,
+                )
+            },
+        )
+        .unwrap();
+        for pixel in pixmap.data().chunks_exact(4) {
+            assert_eq!(pixel[0], 128);
+            assert_eq!(pixel[1], 0);
+            assert_eq!(pixel[2], 0);
+            assert_eq!(pixel[3], 128);
+        }
+    }
+
+    #[test]
+    fn pattern_mask_uses_luminance_composite_on_restore() {
+        let rectangle = |width, color| SvgPatternPrimitive {
+            geometry: SvgPatternGeometry::kRectangle,
+            bounds_offset: Offset::default(),
+            bounds_width: width,
+            bounds_height: 10.0,
+            rectangle_radius_x: 0.0,
+            rectangle_radius_y: 0.0,
+            path: Vec::new(),
+            fill: Some(color),
+            stroke: None,
+            fill_server: None,
+            stroke_server: None,
+            stroke_width: 0.0,
+            stroke_dash_array: Vec::new(),
+            stroke_dash_offset: 0.0,
+            stroke_line_cap: SvgStrokeLineCap::kButt,
+            stroke_line_join: SvgStrokeLineJoin::kMiter,
+            stroke_miter_limit: 4.0,
+            fill_even_odd: false,
+            non_scaling_stroke: false,
+            antialias: false,
+            transform: TransformMatrix::default(),
+        };
+        let shader = PaintShader {
+            kind: PaintShaderKind::kPattern,
+            tile_width: 10.0,
+            tile_height: 10.0,
+            pattern: Some(Arc::new(SvgPatternData {
+                commands: vec![
+                    SvgPatternCommand::SaveLayerMask(Arc::new(SvgPatternMask {
+                        commands: vec![SvgPatternCommand::DrawShape(rectangle(
+                            5.0,
+                            Color {
+                                red: 1.0,
+                                green: 1.0,
+                                blue: 1.0,
+                                alpha: 1.0,
+                            },
+                        ))],
+                        content_transform: TransformMatrix::default(),
+                        clip_rect: PaintRect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 10.0,
+                            height: 10.0,
+                        },
+                        mode: PaintMaskMode::kLuminance,
+                    })),
+                    SvgPatternCommand::DrawShape(rectangle(
+                        10.0,
+                        Color {
+                            red: 1.0,
+                            green: 0.0,
+                            blue: 0.0,
+                            alpha: 1.0,
+                        },
+                    )),
+                    SvgPatternCommand::Restore,
+                ],
+                content_transform: TransformMatrix::default(),
+                opacity: 1.0,
+            })),
+            ..PaintShader::default()
+        };
+        let pixmap = render_pattern_tile(&shader, Transform::identity()).unwrap();
+        let alpha = |x: usize| pixmap.data()[x * 4 + 3];
+        assert_eq!(alpha(2), 255);
+        assert_eq!(alpha(7), 0);
+    }
+
+    #[test]
+    fn pattern_reference_filter_executes_on_its_surface() {
+        use crate::cpu::layer_filters::{
+            css_color_matrix, ColorMatrixKind, RenderSvgFilterGraph, RenderSvgFilterKind,
+            RenderSvgFilterPrimitive,
+        };
+        let shader = PaintShader {
+            kind: PaintShaderKind::kPattern,
+            tile_width: 2.0,
+            tile_height: 1.0,
+            pattern: Some(Arc::new(SvgPatternData {
+                commands: vec![
+                    SvgPatternCommand::SaveLayerReferenceFilter(Arc::new(RenderSvgFilterGraph {
+                        primitives: vec![RenderSvgFilterPrimitive {
+                            input: "SourceGraphic".into(),
+                            result: "half".into(),
+                            region: [0.0, 0.0, 2.0, 1.0],
+                            linear_rgb: false,
+                            kind: RenderSvgFilterKind::ColorMatrix(css_color_matrix(
+                                ColorMatrixKind::Opacity,
+                                0.5,
+                            )),
+                        }],
+                        region: [0.0, 0.0, 2.0, 1.0],
+                        fill_paint: None,
+                        stroke_paint: None,
+                    })),
+                    SvgPatternCommand::DrawImage(SvgPatternImage {
+                        resource_id: 9,
+                        image_interpolation_quality: ImageInterpolationQuality::kMedium,
+                        destination: PaintRect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 2.0,
+                            height: 1.0,
+                        },
+                        source: PaintRect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 1.0,
+                            height: 1.0,
+                        },
+                        transform: TransformMatrix::default(),
+                        raster_width: 1,
+                        raster_height: 1,
+                        rgba8: Arc::new(vec![255, 0, 0, 255]),
+                    }),
+                    SvgPatternCommand::Restore,
+                ],
+                content_transform: TransformMatrix::default(),
+                opacity: 1.0,
+            })),
+            ..PaintShader::default()
+        };
+        let pixmap = render_pattern_tile(&shader, Transform::identity()).unwrap();
+        for pixel in pixmap.data().chunks_exact(4) {
+            assert_eq!(pixel, [128, 0, 0, 128]);
         }
     }
 }

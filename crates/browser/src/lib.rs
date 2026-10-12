@@ -114,7 +114,7 @@ pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
     space.text_transform = Some(std::sync::Arc::new(
         text_transform::BrowserTextTransformProvider,
     ));
-    #[cfg(feature = "source_png")]
+    #[cfg(any(feature = "source_png", feature = "pure_source_png"))]
     {
         space.font_backend_factory = Some(std::sync::Arc::new(
             raster::font_backend::SkiaFontBackendFactory,

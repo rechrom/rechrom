@@ -1,7 +1,6 @@
 #![allow(non_snake_case)]
 use crate::user_agent_styles::UserAgentStyleSheets;
-use dom::UserInteractionState;
-use dom::DOM;
+use dom::{Document, UserInteractionState, DOM};
 use layoutng_assembly::{
     fragment_tree::{FragmentKind, FragmentNode},
     internal::layout_input::ConstraintSpace,
@@ -10,9 +9,10 @@ use std::{cell::RefCell, rc::Rc};
 use style::media_queries::{media_values_cached::MediaValuesCachedData, scripting::Scripting};
 use webapi::dom_bindings::DOMBindingsHost;
 
-fn MediaValuesForLayout(
+pub(crate) fn MediaValuesForLayout(
     constraints: &ConstraintSpace,
     preferred_color_scheme: style::PreferredColorScheme,
+    forced_colors: style::media_queries::forced_colors::ForcedColors,
 ) -> MediaValuesCachedData {
     let width = constraints.available_size.width;
     let height = constraints.available_size.height;
@@ -27,13 +27,185 @@ fn MediaValuesForLayout(
         dynamic_viewport_height: height,
         device_width: width.round() as i32,
         device_height: height.round() as i32,
-        device_pixel_ratio: 1.0,
+        // LocalFrame::DevicePixelRatio is inspector/host DSF multiplied by
+        // LayoutZoomFactor. Media resolution and image selection consume this
+        // effective value once from the shared immutable environment.
+        device_pixel_ratio: (constraints.device_pixel_ratio
+            * constraints.layout_zoom_factor.max(f64::MIN_POSITIVE))
+            as f32,
+        layout_zoom_factor: constraints.layout_zoom_factor as f32,
         em_size: 16.0,
         media_type: foundation::String::from("screen"),
         preferred_color_scheme,
+        forced_colors,
         scripting: Scripting::kEnabled,
         ..Default::default()
     }
+}
+
+fn ResponsiveMediaMatches(query: &str, values: &style::media_queries::MediaValuesCached) -> bool {
+    if query.trim().is_empty() {
+        return true;
+    }
+    let set = style::media_queries::media_query_backend::ParseMediaQuerySet(query);
+    style::media_queries::media_query_evaluator::MediaQueryEvaluator::<
+        style::media_queries::media_query_backend::MediaQueryValueBackend<'_>,
+    >::ForMediaValues(values)
+    .Eval(&set)
+}
+
+fn SupportedResponsiveImageType(value: Option<&str>) -> bool {
+    // ContentType(type).GetType(): MIME parameters do not participate in the
+    // supported-image registry lookup.
+    let Some(value) = value
+        .map(|value| value.split_once(';').map_or(value, |(mime, _)| mime))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return true;
+    };
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "image/avif"
+            | "image/bmp"
+            | "image/gif"
+            | "image/jpeg"
+            | "image/jpg"
+            | "image/pjpeg"
+            | "image/png"
+            | "image/apng"
+            | "image/svg+xml"
+            | "image/vnd.microsoft.icon"
+            | "image/webp"
+            | "image/x-icon"
+            | "image/x-png"
+            | "image/x-xbitmap"
+    )
+}
+
+// cpp: html_image_element.cc SelectSourceURL/ImageSourceURL and
+// html_srcset_parser.cc BestFitSourceForImageAttributes. Browser is the
+// composition root: HTML owns source-list parsing, Style owns CSS media and
+// length evaluation, and ResourceFetcher receives only the selected URL/DPR.
+pub(crate) fn SelectResponsiveImage(
+    document: &Document,
+    index: usize,
+    constraints: &ConstraintSpace,
+    preferred_color_scheme: style::PreferredColorScheme,
+    forced_colors: style::media_queries::forced_colors::ForcedColors,
+    is_loaded: &dyn Fn(&str) -> bool,
+) -> Option<dom::persistent_document::ResponsiveImageSelection> {
+    use style::media_queries::MediaValues;
+
+    let media = MediaValuesForLayout(constraints, preferred_color_scheme, forced_colors);
+    let values = style::media_queries::MediaValuesCached::new(&media);
+    let image = document.Node(index);
+    let fallback = image
+        .FindAttribute("src")
+        .map(|attribute| attribute.value.as_str());
+    let image_sizes = image
+        .FindAttribute("sizes")
+        .map(|attribute| attribute.value.as_str());
+    let allows_auto_sizes = document.AllowsResponsiveImageAutoSizes(index);
+    // SizesAttributeParser::EffectiveSize uses the last rendered content-box
+    // width after absolute-zoom adjustment. The first pre-layout selection has
+    // no stored width and therefore evaluates the explicit fallback/100vw.
+    let auto_size = allows_auto_sizes
+        .then(|| document.ResponsiveImageAutoSize(index))
+        .flatten();
+    let source_size = |sizes: Option<&str>| {
+        html::parser::sizes_attribute_parser::ParseSizesAttribute(
+            sizes,
+            values.Width().unwrap_or(media.viewport_width),
+            auto_size,
+            |component| {
+                use html::parser::sizes_attribute_parser::SizesComponent;
+                match style::responsive_image::EvaluateSizesComponent(component, &values) {
+                    style::responsive_image::SizesEvaluation::Auto => SizesComponent::Auto,
+                    style::responsive_image::SizesEvaluation::Length(length) => {
+                        SizesComponent::Length(length)
+                    }
+                    style::responsive_image::SizesEvaluation::Invalid => SizesComponent::Invalid,
+                    style::responsive_image::SizesEvaluation::FatalInvalid => {
+                        SizesComponent::FatalInvalid
+                    }
+                }
+            },
+        )
+    };
+    if let Some(parent) = image
+        .Parent()
+        .filter(|parent| document.Node(*parent).IsHTMLElement("picture"))
+    {
+        for &child in document.Node(parent).Children() {
+            if child == index {
+                break;
+            }
+            let source = document.Node(child);
+            if !source.IsHTMLElement("source") {
+                continue;
+            }
+            if !ResponsiveMediaMatches(
+                source
+                    .FindAttribute("media")
+                    .map_or("", |attribute| &attribute.value),
+                &values,
+            ) || !SupportedResponsiveImageType(
+                source
+                    .FindAttribute("type")
+                    .map(|attribute| attribute.value.as_str()),
+            ) {
+                continue;
+            }
+            let Some(srcset) = source
+                .FindAttribute("srcset")
+                .filter(|attribute| !attribute.value.is_empty())
+            else {
+                continue;
+            };
+            let sizes = source
+                .FindAttribute("sizes")
+                .map(|attribute| attribute.value.as_str());
+            let sizes = if sizes.is_none() && allows_auto_sizes {
+                Some("auto")
+            } else {
+                sizes
+            };
+            if let Some(candidate) =
+                html::parser::html_srcset_parser::BestFitSourceForImageAttributesWithCache(
+                    values.DevicePixelRatio() as f64,
+                    source_size(sizes),
+                    None,
+                    Some(&srcset.value),
+                    is_loaded,
+                )
+            {
+                return Some(dom::persistent_document::ResponsiveImageSelection {
+                    source: candidate.source,
+                    density: Some(candidate.density),
+                });
+            }
+        }
+    }
+    let Some(srcset) = image.FindAttribute("srcset") else {
+        return fallback.filter(|source| !source.is_empty()).map(|source| {
+            dom::persistent_document::ResponsiveImageSelection {
+                source: source.to_owned(),
+                density: None,
+            }
+        });
+    };
+    let candidate = html::parser::html_srcset_parser::BestFitSourceForImageAttributesWithCache(
+        values.DevicePixelRatio() as f64,
+        source_size(image_sizes),
+        fallback,
+        Some(&srcset.value),
+        is_loaded,
+    )?;
+    Some(dom::persistent_document::ResponsiveImageSelection {
+        source: candidate.source,
+        density: Some(candidate.density),
+    })
 }
 
 // cpp: browser/browser.cc:649-671
@@ -80,6 +252,23 @@ pub(crate) fn FragmentMetric(root: &FragmentNode, id: u64, name: &str) -> f64 {
         "clientTop" => unzoom(p.border.top).round(),
         "scrollWidth" => unzoom(p.scroll_size.width).round(),
         "scrollHeight" => unzoom(p.scroll_size.height).round(),
+        // Internal CSSOM View adapter metrics. ScrollableArea's range is not
+        // necessarily 0..(scroll-size - client-size): RTL and vertical writing
+        // modes can put the logical start at a negative physical offset.
+        "minimumScrollLeft" => p
+            .scroll_container
+            .map_or(0.0, |scroll| unzoom(scroll.minimum_scroll_offset.x)),
+        "maximumScrollLeft" => p.scroll_container.map_or_else(
+            || unzoom((p.scroll_size.width - fragment.size.width).max(0.0)),
+            |scroll| unzoom(scroll.maximum_scroll_offset.x),
+        ),
+        "minimumScrollTop" => p
+            .scroll_container
+            .map_or(0.0, |scroll| unzoom(scroll.minimum_scroll_offset.y)),
+        "maximumScrollTop" => p.scroll_container.map_or_else(
+            || unzoom((p.scroll_size.height - fragment.size.height).max(0.0)),
+            |scroll| unzoom(scroll.maximum_scroll_offset.y),
+        ),
         _ => 0.0,
     }
 }
@@ -146,13 +335,29 @@ pub(crate) fn ResolveLayoutStylesWithEngine(
     constraints: &ConstraintSpace,
     preferred_color_scheme: style::PreferredColorScheme,
 ) {
+    ResolveLayoutStylesWithEngineAndForcedColors(
+        engine,
+        owner,
+        constraints,
+        preferred_color_scheme,
+        style::media_queries::forced_colors::ForcedColors::kNone,
+    )
+}
+
+pub(crate) fn ResolveLayoutStylesWithEngineAndForcedColors(
+    engine: &mut style::StyleEngine,
+    owner: &mut DOM,
+    constraints: &ConstraintSpace,
+    preferred_color_scheme: style::PreferredColorScheme,
+    forced_colors: style::media_queries::forced_colors::ForcedColors,
+) {
     // Blink style resolution allocates ComputedStyle and its rare-data on the
     // document's cppgc heap before Layout begins. Keep that owner-thread heap
     // boundary in the browser assembly layer; StyleEngine itself remains
     // independent of the host event loop and thread placement.
     let mut heap_scope = foundation::LayoutHeapScope::new();
     let user_agent = UserAgentStyleSheets::new();
-    let environment = MediaValuesForLayout(constraints, preferred_color_scheme);
+    let environment = MediaValuesForLayout(constraints, preferred_color_scheme, forced_colors);
     let sheets = user_agent.ForDocument(owner.GetDocument());
     engine
         .Update(owner, &environment, sheets)
@@ -215,6 +420,39 @@ mod tests {
         javascript_runtime::JavaScriptRuntime, quickjs_javascript_runtime::QuickJsJavaScriptRuntime,
     };
     use webapi::dom_bindings::DOMJavaScriptBindings;
+
+    #[test]
+    fn responsive_picture_uses_css_media_sizes_and_effective_dpr() {
+        let owner = html::html_parser::ParseHTML(
+            "<picture><source media='(min-width:600px)' sizes='50vw' \
+             srcset='bad.png 1.x, wide-1.png 400w, wide-2.png 800w'>\
+             <img src='fallback.png' sizes='100vw' \
+             srcset='narrow-1.png 400w, narrow-2.png 800w'></picture>",
+        );
+        let document = owner.GetDocument();
+        let image = (0..document.NodeCount())
+            .find(|&node| document.Node(node).IsHTMLElement("img"))
+            .unwrap();
+        let mut constraints = ConstraintSpace::default();
+        constraints.available_size.width = 800.0;
+        constraints.available_size.height = 600.0;
+        constraints.device_pixel_ratio = 1.0;
+        constraints.layout_zoom_factor = 2.0;
+        assert_eq!(
+            SelectResponsiveImage(
+                document,
+                image,
+                &constraints,
+                style::PreferredColorScheme::kLight,
+                style::media_queries::forced_colors::ForcedColors::kNone,
+                &|_| false,
+            )
+            .unwrap()
+            .source,
+            "wide-2.png"
+        );
+    }
+
     #[test]
     fn javascript_computed_style_reads_real_cascade_and_live_mutations() {
         let document = Rc::new(RefCell::new(html::html_parser::ParseHTML("<html><body><style>.old{font-size:20px;padding-left:3px}.new{font-size:30px;padding-left:7px}input:placeholder-shown{font-weight:600}input:not(:placeholder-shown){font-weight:800}</style><div id=box class=old></div><input id=search placeholder=search></body></html>")));

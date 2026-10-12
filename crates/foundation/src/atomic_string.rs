@@ -227,6 +227,32 @@ impl AtomicString {
         String::from_utf16_lossy(self.utf16_units().unwrap_or_default())
     }
 
+    /// Compare with UTF-8 storage without allocating a temporary String.
+    /// Blink normally compares interned StringImpl/StringView values here;
+    /// DOM adapters that still expose Rust `str` use this equivalent bridge.
+    pub fn EqualsUtf8(&self, value: &str) -> bool {
+        let Some(units) = self.utf16_units() else {
+            return value.is_empty();
+        };
+        units.iter().copied().eq(value.encode_utf16())
+    }
+
+    pub fn EqualsUtf8IgnoringAsciiCase(&self, value: &str) -> bool {
+        let Some(units) = self.utf16_units() else {
+            return value.is_empty();
+        };
+        units
+            .iter()
+            .map(|unit| match *unit {
+                value if value >= b'A' as u16 && value <= b'Z' as u16 => value + 0x20,
+                value => value,
+            })
+            .eq(value.encode_utf16().map(|unit| match unit {
+                value if value >= b'A' as u16 && value <= b'Z' as u16 => value + 0x20,
+                value => value,
+            }))
+    }
+
     // cpp: foundation/blink_base/wtf/text/atomic_string.h:143
     pub fn Hash(&self) -> u32 {
         match self.0.as_ref() {

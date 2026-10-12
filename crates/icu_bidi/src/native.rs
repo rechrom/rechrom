@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use std::ffi::c_char;
+
 // ICU exports a version suffix in its C ABI. build.rs discovers that suffix
 // from icu-uc.pc, while these declarations preserve the vendor header's
 // function signatures used by the translated font and bidi modules.
@@ -37,6 +39,8 @@ unsafe extern "C" {
         capacity: i32,
         status: *mut i32,
     ) -> i32;
+    #[link_name = concat!("uscript_getShortName_", env!("ICU_MAJOR"))]
+    pub fn uscript_getShortName(script: i32) -> *const c_char;
     #[link_name = concat!("u_getBidiPairedBracket_", env!("ICU_MAJOR"))]
     pub fn u_getBidiPairedBracket(ch: i32) -> i32;
     #[link_name = concat!("u_getIntPropertyValue_", env!("ICU_MAJOR"))]

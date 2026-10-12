@@ -9,19 +9,24 @@ struct ActiveScope {
     run: usize,
 }
 
-fn close_scope(active: &mut Vec<ActiveScope>) -> io::Result<ActiveScope> {
+fn close_scope(
+    active: &mut Vec<ActiveScope>,
+    root_owner: Option<&Arc<EffectPaintPropertyNode>>,
+) -> io::Result<ActiveScope> {
     let group = active.pop().expect("active preflight scope");
     if !group.direct_dst_in && !group.direct_clip {
         if let Scope::DstIn(effect) = &group.scope {
-            let parent = active
-                .last()
-                .ok_or_else(|| io::Error::other("mask DstIn has no isolated content surface"))?;
             let expected = effect
                 .parent
                 .as_ref()
                 .ok_or_else(|| io::Error::other("mask effect has no content parent"))?;
-            if !matches!(&parent.scope, Scope::Effect(actual)
-                if actual.lifecycle.same_node(&expected.lifecycle))
+            let root_matches =
+                root_owner.is_some_and(|owner| owner.lifecycle.same_node(&expected.lifecycle));
+            if !root_matches
+                && !active.last().is_some_and(|parent| {
+                    matches!(&parent.scope, Scope::Effect(actual)
+                    if actual.lifecycle.same_node(&expected.lifecycle))
+                })
             {
                 return Err(io::Error::other(
                     "mask DstIn destination differs from its content effect",
@@ -34,6 +39,9 @@ fn close_scope(active: &mut Vec<ActiveScope>) -> io::Result<ActiveScope> {
 
 pub(super) struct PreparedComposition {
     pub coverage: Vec<Option<Arc<MaskCoverage>>>,
+    /// Last layer index contributing to each allocation run. Renderer uses
+    /// this to suspend a non-contiguous effect surface without restoring it.
+    pub run_last_use: Vec<usize>,
     pub clip_time: std::time::Duration,
 }
 
@@ -58,18 +66,23 @@ pub(super) fn prepare(
     }
     let mut prepared = PreparedComposition {
         coverage: vec![None; bounds.len()],
+        run_last_use: vec![0; bounds.len()],
         clip_time: std::time::Duration::ZERO,
     };
     let mut active: Vec<ActiveScope> = Vec::new();
-    let mut closed_effects: Vec<Arc<EffectPaintPropertyNode>> = Vec::new();
-    for (((layer, effect), direct_clip), visible) in plan
+    let mut suspended: HashMap<usize, ActiveScope> = HashMap::new();
+    for (layer_index, (((layer, effect), direct_clip), visible)) in plan
         .layers
         .iter()
         .zip(effects)
         .zip(direct_clips)
         .zip(visible)
+        .enumerate()
     {
-        if layer.tiles.is_empty() && !layer.properties.effect.is_mask {
+        if !layer.has_drawable_content()
+            && !layer.properties.effect.is_mask
+            && !effect.has_backdrop()
+        {
             continue;
         }
         let common = active
@@ -97,13 +110,24 @@ pub(super) fn prepare(
         if effect.chain.len() - common != effect.opened_runs.len() {
             return Err(io::Error::other("effect allocation scope run changed"));
         }
+        if effect.scope_output_clips.len() != effect.chain.len() {
+            return Err(io::Error::other("effect output clip plan extent changed"));
+        }
         while active.len() > common {
-            let group = close_scope(&mut active)?;
-            if let Scope::Effect(effect) | Scope::DstIn(effect) = group.scope {
-                closed_effects.push(effect);
+            let group = close_scope(&mut active, plan.owner_effect.as_ref())?;
+            if suspended.insert(group.run, group).is_some() {
+                return Err(io::Error::other(
+                    "composition run suspended more than once without resume",
+                ));
             }
         }
-        for (scope, &run) in effect.chain.iter().skip(common).zip(&effect.opened_runs) {
+        for ((scope, output_clips), &run) in effect
+            .chain
+            .iter()
+            .zip(&effect.scope_output_clips)
+            .skip(common)
+            .zip(&effect.opened_runs)
+        {
             let bounds = bounds
                 .get(run)
                 .ok_or_else(|| io::Error::other("effect allocation opening run changed"))?
@@ -124,17 +148,7 @@ pub(super) fn prepare(
                 return Err(io::Error::other("invalid effect surface dimensions"));
             }
             match scope {
-                Scope::Effect(effect) | Scope::DstIn(effect) => {
-                    if closed_effects
-                        .iter()
-                        .any(|old| old.lifecycle.same_node(&effect.lifecycle))
-                    {
-                        return Err(io::Error::new(
-                            io::ErrorKind::Unsupported,
-                            "non-contiguous-opacity-effect-group",
-                        ));
-                    }
-                }
+                Scope::Effect(_) | Scope::DstIn(_) => {}
                 Scope::Clip(clip) if bounds.left < bounds.right && bounds.top < bounds.bottom => {
                     let started = timing.then(std::time::Instant::now);
                     let coverage = clips.coverage(
@@ -158,12 +172,47 @@ pub(super) fn prepare(
                 }
                 Scope::Clip(_) => {}
             }
-            active.push(ActiveScope {
-                scope: scope.clone(),
-                run,
-                direct_dst_in: effect.direct_mask.is_some() && matches!(scope, Scope::DstIn(_)),
-                direct_clip: direct_clip.is_some_and(|candidate| candidate.opening_run == run),
-            });
+            if !output_clips.is_empty() && bounds.left < bounds.right && bounds.top < bounds.bottom
+            {
+                if !matches!(scope, Scope::Effect(_)) {
+                    return Err(io::Error::other(
+                        "output clip coverage has no owning effect surface",
+                    ));
+                }
+                let started = timing.then(std::time::Instant::now);
+                let coverage =
+                    clips.coverage(output_clips, width, height, scale, layer.compositor_scroll)?;
+                if coverage
+                    .stride
+                    .checked_mul(coverage.rows.len())
+                    .is_none_or(|len| len != coverage.pixels.len())
+                {
+                    return Err(io::Error::other("invalid effect output clip extent"));
+                }
+                if let Some(started) = started {
+                    prepared.clip_time += started.elapsed();
+                }
+                prepared.coverage[run] = Some(coverage);
+            }
+            let direct_dst_in = effect.direct_mask.is_some() && matches!(scope, Scope::DstIn(_));
+            let direct_clip = direct_clip.is_some_and(|candidate| candidate.opening_run == run);
+            if let Some(resumed) = suspended.remove(&run) {
+                if !resumed.scope.same_node(scope)
+                    || !resumed.scope.same_values(scope)
+                    || resumed.direct_dst_in != direct_dst_in
+                    || resumed.direct_clip != direct_clip
+                {
+                    return Err(io::Error::other("resumed composition scope changed values"));
+                }
+                active.push(resumed);
+            } else {
+                active.push(ActiveScope {
+                    scope: scope.clone(),
+                    run,
+                    direct_dst_in,
+                    direct_clip,
+                });
+            }
         }
         if let Some(candidate) = direct_clip {
             if candidate.scope_index + 1 != active.len()
@@ -194,6 +243,9 @@ pub(super) fn prepare(
         }
         if visible.len() != layer.tiles.len() {
             return Err(io::Error::other("composition tile plan extent changed"));
+        }
+        for scope in &active {
+            prepared.run_last_use[scope.run] = layer_index;
         }
         let composition = layer.composition;
         for (tile, visible) in layer.tiles.iter().zip(visible) {
@@ -230,7 +282,8 @@ pub(super) fn prepare(
         }
     }
     while !active.is_empty() {
-        close_scope(&mut active)?;
+        let group = close_scope(&mut active, plan.owner_effect.as_ref())?;
+        suspended.insert(group.run, group);
     }
     Ok(prepared)
 }

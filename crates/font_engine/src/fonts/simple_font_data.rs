@@ -239,6 +239,9 @@ impl SimpleFontData {
             }
         }
         if !(subpixel_ascent_descent && (ascent < 3.0 || ascent + descent < 2.0)) {
+            // FontPlatformData and SkFont metrics are in Blink layout/CSS
+            // pixels. Device scale is applied by raster and must not change
+            // line metrics or baseline geometry.
             ascent = ascent.round();
             descent = descent.round();
         }

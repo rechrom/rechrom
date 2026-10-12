@@ -21,8 +21,10 @@ pub mod recording;
 
 pub use engine::LayerTileEngine;
 pub use geometry::{
-    compositor_transform, compositor_transform_with_scroll, needs_transparent_backing,
-    raster_properties, resolved_compositor_properties, resolved_compositor_properties_with_scroll,
+    compositor_context_transform_3d_with_scroll, compositor_transform,
+    compositor_transform_3d_with_scroll, compositor_transform_with_scroll,
+    needs_transparent_backing, raster_properties, resolved_compositor_properties,
+    resolved_compositor_properties_with_scroll, resolved_compositor_transform_with_scroll,
     resolved_raster_properties, resolved_record_clip_bounds,
 };
 pub use plan::*;

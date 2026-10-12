@@ -6,11 +6,12 @@
 //! an [`AggregatedFrame`] for `renderer`. This crate owns neither pixels nor a
 //! clock, thread, native window, Skia context, or presentation API.
 
-use compositor::{CompositorFrame, ResourceId};
 pub use compositor::{
-    DeviceRect, DrawQuad, LayerComposition, PaintRect, SharedQuadState, SolidColorDrawQuad,
+    AffineTransform, DeviceRect, DrawQuad, LayerComposition, PaintRect, ProjectiveTransform,
+    RenderPassDrawQuad, RenderPassId, SharedQuadState, SolidColorDrawQuad, TargetPolygon,
     TransferableResource,
 };
+use compositor::{CompositorFrame, CompositorRenderPass, EffectPaintPropertyNode, ResourceId};
 use std::{
     collections::{BTreeSet, HashMap},
     fmt,
@@ -128,15 +129,19 @@ pub struct SurfacePlacement {
     pub destination: DeviceRect,
 }
 
-/// One surface root pass after Viz has consumed the submitted
-/// `CompositorFrame`. The renderer sees render-pass protocol and a resource
-/// namespace, never the original surface submission or its scheduling state.
+/// One namespaced pass after Viz has consumed a submitted `CompositorFrame`.
+/// Child effect passes precede their root pass and retain their local pass id;
+/// the renderer never sees surface scheduling state.
 #[derive(Clone, Debug)]
 pub struct AggregatedRenderPass {
     surface_id: SurfaceId,
+    render_pass_id: RenderPassId,
+    is_root: bool,
+    owner_effect: Option<Arc<EffectPaintPropertyNode>>,
     destination: DeviceRect,
     source_frame_id: u64,
     device_scale_factor: f64,
+    raster_scale_factor: f64,
     logical_viewport: PaintRect,
     viewport: DeviceRect,
     damage_rect: DeviceRect,
@@ -151,6 +156,18 @@ impl AggregatedRenderPass {
         self.surface_id
     }
 
+    pub fn RenderPassId(&self) -> RenderPassId {
+        self.render_pass_id
+    }
+
+    pub fn IsRoot(&self) -> bool {
+        self.is_root
+    }
+
+    pub fn OwnerEffect(&self) -> Option<&Arc<EffectPaintPropertyNode>> {
+        self.owner_effect.as_ref()
+    }
+
     pub fn Destination(&self) -> DeviceRect {
         self.destination
     }
@@ -161,6 +178,10 @@ impl AggregatedRenderPass {
 
     pub fn DeviceScaleFactor(&self) -> f64 {
         self.device_scale_factor
+    }
+
+    pub fn RasterScaleFactor(&self) -> f64 {
+        self.raster_scale_factor
     }
 
     pub fn LogicalViewport(&self) -> PaintRect {
@@ -195,10 +216,9 @@ impl AggregatedRenderPass {
 /// Immutable renderer input produced by resolving the active display surfaces.
 ///
 /// Chromium's SurfaceAggregator can recursively resolve SurfaceDrawQuads. The
-/// current Rechrom compositor emits root tile surfaces only, so aggregation
-/// resolves those roots into one ordered display frame. Surface identity stays
-/// on each resolved pass solely as a resource namespace and retained-renderer
-/// key; surface scheduling state does not cross this boundary.
+/// Aggregation preserves each surface's topologically ordered effect-pass DAG.
+/// Surface identity namespaces local pass ids and raster resources; scheduling
+/// state does not cross this boundary.
 #[derive(Clone, Debug)]
 pub struct AggregatedFrame {
     output_rect: DeviceRect,
@@ -224,13 +244,13 @@ impl AggregatedFrame {
 struct SurfaceState {
     source_frame_id: u64,
     device_scale_factor: f64,
+    raster_scale_factor: f64,
     logical_viewport: PaintRect,
     viewport: DeviceRect,
     damage_rect: DeviceRect,
     raster_task_count: usize,
     resource_list: Arc<[TransferableResource]>,
-    shared_quad_state_list: Arc<[SharedQuadState]>,
-    quad_list: Arc<[DrawQuad]>,
+    render_pass_list: Arc<[CompositorRenderPass]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -279,19 +299,42 @@ fn ValidateFrame(frame: &CompositorFrame) -> Result<(), VizError> {
         .iter()
         .map(|resource| resource.id)
         .collect();
-    for quad in &root.quad_list {
-        if let DrawQuad::Tile(tile) = quad {
-            if root
-                .shared_quad_state_list
-                .get(tile.shared_quad_state_index)
-                .is_none()
-            {
-                return Err(VizError::MissingSharedQuadState);
-            }
-            if !resources.contains(&tile.resource_id) {
-                return Err(VizError::MissingResource);
+    let pass_ids: BTreeSet<_> = frame.render_pass_list.iter().map(|pass| pass.id).collect();
+    if pass_ids.len() != frame.render_pass_list.len() {
+        return Err(VizError::UnsupportedRenderPassGraph);
+    }
+    let mut available = BTreeSet::new();
+    for pass in &frame.render_pass_list {
+        for quad in &pass.quad_list {
+            match quad {
+                DrawQuad::Tile(tile) => {
+                    if pass
+                        .shared_quad_state_list
+                        .get(tile.shared_quad_state_index)
+                        .is_none()
+                    {
+                        return Err(VizError::MissingSharedQuadState);
+                    }
+                    if !resources.contains(&tile.resource_id) {
+                        return Err(VizError::MissingResource);
+                    }
+                }
+                DrawQuad::RenderPass(surface) => {
+                    if pass
+                        .shared_quad_state_list
+                        .get(surface.shared_quad_state_index)
+                        .is_none()
+                    {
+                        return Err(VizError::MissingSharedQuadState);
+                    }
+                    if !available.contains(&surface.render_pass_id) {
+                        return Err(VizError::UnsupportedRenderPassGraph);
+                    }
+                }
+                DrawQuad::SolidColor(_) => {}
             }
         }
+        available.insert(pass.id);
     }
     Ok(())
 }
@@ -328,29 +371,23 @@ impl VizEngine {
         frame: CompositorFrame,
     ) -> Result<(), VizError> {
         ValidateFrame(&frame)?;
-        if frame.render_pass_list.len() != 1 {
-            return Err(VizError::UnsupportedRenderPassGraph);
-        }
         let CompositorFrame {
             metadata,
             resource_list,
-            mut render_pass_list,
+            render_pass_list,
         } = frame;
-        let root = render_pass_list
-            .pop()
-            .ok_or(VizError::EmptyRenderPassList)?;
         self.surfaces.insert(
             surface_id,
             SurfaceState {
                 source_frame_id: metadata.source_frame_id,
                 device_scale_factor: metadata.device_scale_factor,
+                raster_scale_factor: metadata.raster_scale_factor,
                 logical_viewport: metadata.logical_viewport,
                 viewport: metadata.viewport,
                 damage_rect: metadata.root_damage_rect,
                 raster_task_count: metadata.raster_task_count,
                 resource_list: resource_list.into(),
-                shared_quad_state_list: root.shared_quad_state_list.into(),
-                quad_list: root.quad_list.into(),
+                render_pass_list: render_pass_list.into(),
             },
         );
         Ok(())
@@ -385,19 +422,26 @@ impl VizEngine {
                     placement.destination.y,
                 )?,
             );
-            render_passes.push(AggregatedRenderPass {
-                surface_id: placement.surface_id,
-                destination: placement.destination,
-                source_frame_id: surface.source_frame_id,
-                device_scale_factor: surface.device_scale_factor,
-                logical_viewport: surface.logical_viewport,
-                viewport: surface.viewport,
-                damage_rect: surface.damage_rect,
-                raster_task_count: surface.raster_task_count,
-                resource_list: surface.resource_list.clone(),
-                shared_quad_state_list: surface.shared_quad_state_list.clone(),
-                quad_list: surface.quad_list.clone(),
-            });
+            for (index, pass) in surface.render_pass_list.iter().enumerate() {
+                let is_root = index + 1 == surface.render_pass_list.len();
+                render_passes.push(AggregatedRenderPass {
+                    surface_id: placement.surface_id,
+                    render_pass_id: pass.id,
+                    is_root,
+                    owner_effect: pass.owner_effect.clone(),
+                    destination: placement.destination,
+                    source_frame_id: surface.source_frame_id,
+                    device_scale_factor: surface.device_scale_factor,
+                    raster_scale_factor: surface.raster_scale_factor,
+                    logical_viewport: surface.logical_viewport,
+                    viewport: pass.output_rect,
+                    damage_rect: pass.damage_rect,
+                    raster_task_count: surface.raster_task_count,
+                    resource_list: surface.resource_list.clone(),
+                    shared_quad_state_list: pass.shared_quad_state_list.clone().into(),
+                    quad_list: pass.quad_list.clone().into(),
+                });
+            }
         }
         Ok(AggregatedFrame {
             output_rect,
@@ -516,6 +560,7 @@ mod tests {
             resource_list: Vec::new(),
             render_pass_list: vec![CompositorRenderPass {
                 id: RenderPassId(1),
+                owner_effect: None,
                 output_rect: viewport,
                 damage_rect: viewport,
                 shared_quad_state_list: Vec::new(),

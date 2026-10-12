@@ -1,9 +1,13 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
+pub mod clip_text_outline;
 pub mod font_family_names;
 pub mod fonts;
 pub mod minimal_font;
 pub mod shared_font_bytes;
+pub use clip_text_outline::{
+    ClipTextFace, ClipTextRequest, OutlineCommand, OutlineVerb, OutlinedGlyph, ShapeClipText,
+};
 pub use shared_font_bytes::SharedFontBytes;
 pub mod text;
 pub mod text_shaper;
@@ -27,6 +31,7 @@ pub use fonts::font_backend::{
 pub use fonts::font_baseline::FontBaseline;
 pub use fonts::font_data::FontData;
 pub use fonts::font_description::FontDescription;
+pub use fonts::font_fallback_metadata::{FontFallbackMetadata, FontFallbackRole};
 pub use fonts::font_fallback_priority::FontFallbackPriority;
 pub use fonts::font_family::{FontFamily, FontFamilyType, SharedFontFamily};
 pub use fonts::font_height::FontHeight;

@@ -410,6 +410,13 @@ impl DOMJavaScriptBindings {
                         HostValue::Null(JavaScriptNull)
                     })
                 }
+                "fullscreenEnabled" => return Self::value(HostValue::Boolean(true)),
+                "fullscreen" => {
+                    return Self::value(HostValue::Boolean(document.HasFullscreenElements()))
+                }
+                "fullscreenElement" => {
+                    return Self::node_reference(document, document.FullscreenElement())
+                }
                 "documentElement" | "scrollingElement" | "head" | "body" => {
                     let root = node
                         .Children()
@@ -439,29 +446,34 @@ impl DOMJavaScriptBindings {
         }
         // cpp: webapi/dom_bindings.cc:391-411
         if node.IsHTMLElement("img") {
-            let source = node.FindAttribute("src");
-            let image = source.and_then(|source| document.ImageResourceFor(&source.value));
+            let source = document.CurrentImageSource(index);
+            let selection = document.ResponsiveImageSelectionFor(index);
+            let image = source.and_then(|source| document.ImageResourceFor(source));
             match member {
                 "complete" => {
-                    return Self::value(HostValue::Boolean(
-                        source.is_none_or(|source| source.value.is_empty()) || image.is_some(),
-                    ))
+                    return Self::value(HostValue::Boolean(source.is_none() || image.is_some()))
                 }
                 "naturalWidth" => {
-                    return Self::value(HostValue::Number(
-                        image.map_or(0.0, |image| image.natural_width),
-                    ))
+                    return Self::value(HostValue::Number(image.map_or(0.0, |image| {
+                        image
+                            .NaturalSizeForCandidate(
+                                true,
+                                selection.and_then(|selection| selection.density),
+                            )
+                            .0
+                    })))
                 }
                 "naturalHeight" => {
-                    return Self::value(HostValue::Number(
-                        image.map_or(0.0, |image| image.natural_height),
-                    ))
+                    return Self::value(HostValue::Number(image.map_or(0.0, |image| {
+                        image
+                            .NaturalSizeForCandidate(
+                                true,
+                                selection.and_then(|selection| selection.density),
+                            )
+                            .1
+                    })))
                 }
-                "currentSrc" => {
-                    return Self::value(HostValue::String(
-                        source.map_or("", |source| &source.value).into(),
-                    ))
-                }
+                "currentSrc" => return Self::value(HostValue::String(source.unwrap_or("").into())),
                 _ => {}
             }
         }
@@ -573,6 +585,9 @@ impl DOMJavaScriptBindings {
             "checked" if node.IsHTMLElement("input") => {
                 Self::value(HostValue::Boolean(document.ControlChecked(index)))
             }
+            "indeterminate" if node.IsHTMLElement("input") => {
+                Self::value(HostValue::Boolean(document.ControlIndeterminate(index)))
+            }
             _ => Self::unhandled(),
         }
     }
@@ -642,6 +657,23 @@ impl DOMJavaScriptBindings {
             drop(owner);
             (self.emit_mutation)(&DOMMutation {
                 mutation_type: DOMMutationType::kSetControlChecked,
+                target_node_id: receiver,
+                bool_value: value,
+                ..Default::default()
+            });
+            return Self::value(HostValue::Boolean(value));
+        }
+        if member == "indeterminate" {
+            if !node.IsHTMLElement("input") {
+                return Self::type_error("indeterminate is only writable on input elements");
+            }
+            let Some(HostValue::Boolean(value)) = arguments.first() else {
+                return Self::type_error("indeterminate requires a boolean");
+            };
+            let value = *value;
+            drop(owner);
+            (self.emit_mutation)(&DOMMutation {
+                mutation_type: DOMMutationType::kSetControlIndeterminate,
                 target_node_id: receiver,
                 bool_value: value,
                 ..Default::default()
@@ -1246,6 +1278,34 @@ impl DOMJavaScriptBindings {
                 Self::value(HostValue::Object(HostObjectRef { id }))
             }
             "hasFocus" => Self::value(HostValue::Boolean(true)),
+            // cpp: element.cc:7768-7888. The DOM owner allocates the
+            // ShadowRoot so style/tree-scope identity is not confined to the
+            // JavaScript wrapper's WeakMap.
+            "attachShadow" => {
+                let (Some(HostValue::String(mode)), Some(HostValue::String(slot_assignment))) =
+                    (arguments.first(), arguments.get(1))
+                else {
+                    return Self::type_error("shadow root mode is required");
+                };
+                if !matches!(mode.as_str(), "open" | "closed") {
+                    return Self::type_error("shadow root mode must be open or closed");
+                }
+                if !matches!(slot_assignment.as_str(), "named" | "manual") {
+                    return Self::type_error("shadow root slot assignment must be named or manual");
+                }
+                let mutation = DOMMutation {
+                    mutation_type: DOMMutationType::kAttachShadowRoot,
+                    target_node_id: receiver,
+                    child_node_id: document.NextNodeId(),
+                    name: slot_assignment.clone(),
+                    value: mode.clone(),
+                    ..Default::default()
+                };
+                let id = mutation.child_node_id;
+                drop(owner);
+                (self.emit_mutation)(&mutation);
+                Self::value(HostValue::Object(HostObjectRef { id }))
+            }
             // cpp: webapi/dom_bindings.cc:861-883
             "createElement"
             | "createElementNS"
@@ -1456,6 +1516,67 @@ impl DOMJavaScriptBindings {
                         }))
                     },
                 )
+            }
+            // cpp: html_dialog_element.cc:148-224,552-616;
+            //      html_element.cc:1927-1935, Show/HidePopoverInternal.
+            "showModal" | "close" | "showPopover" | "hidePopover" => {
+                if matches!(member, "showModal" | "close") && !node.IsHTMLElement("dialog") {
+                    return Self::type_error("dialog method requires a dialog receiver");
+                }
+                if matches!(member, "showPopover" | "hidePopover") && !document.IsPopover(index) {
+                    return Self::type_error("popover method requires a popover receiver");
+                }
+                let mutation = DOMMutation {
+                    mutation_type: if matches!(member, "showModal" | "close") {
+                        DOMMutationType::kSetDialogModal
+                    } else {
+                        DOMMutationType::kSetPopoverOpen
+                    },
+                    target_node_id: receiver,
+                    bool_value: matches!(member, "showModal" | "showPopover"),
+                    ..Default::default()
+                };
+                drop(owner);
+                if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    (self.emit_mutation)(&mutation)
+                })) {
+                    if let Some(error) = payload.downcast_ref::<dom::error::DOMException>() {
+                        return Self::type_error(error.message);
+                    }
+                    std::panic::resume_unwind(payload);
+                }
+                HostResult::default()
+            }
+            // cpp: fullscreen/element_fullscreen.idl;
+            //      fullscreen/document_fullscreen.idl. The DOM host owns the
+            // document fullscreen stack; platform/window presentation stays
+            // outside this platform-neutral lifecycle.
+            "requestFullscreen" | "exitFullscreen" => {
+                if member == "requestFullscreen" && node.Type() != DOMNodeType::kElement {
+                    return Self::type_error("requestFullscreen requires an element receiver");
+                }
+                if member == "exitFullscreen" && node.Type() != DOMNodeType::kDocument {
+                    return Self::type_error("exitFullscreen requires a document receiver");
+                }
+                let mutation = DOMMutation {
+                    mutation_type: if member == "requestFullscreen" {
+                        DOMMutationType::kRequestFullscreen
+                    } else {
+                        DOMMutationType::kExitFullscreen
+                    },
+                    target_node_id: receiver,
+                    ..Default::default()
+                };
+                drop(owner);
+                if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    (self.emit_mutation)(&mutation)
+                })) {
+                    if let Some(error) = payload.downcast_ref::<dom::error::DOMException>() {
+                        return Self::type_error(error.message);
+                    }
+                    std::panic::resume_unwind(payload);
+                }
+                HostResult::default()
             }
             // cpp: webapi/dom_bindings.cc:950-962
             "getElementById" => {
@@ -1668,12 +1789,19 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                     | "createTextNode"
                     | "createComment"
                     | "createDocumentFragment"
+                    | "attachShadow"
                     | "appendChild"
                     | "insertBefore"
                     | "removeChild"
                     | "setStyle"
                     | "setAttribute"
                     | "removeAttribute"
+                    | "showModal"
+                    | "close"
+                    | "showPopover"
+                    | "hidePopover"
+                    | "requestFullscreen"
+                    | "exitFullscreen"
             ),
             _ => false,
         };
@@ -1700,7 +1828,15 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         self.emit_mutation = original;
         let result = result.unwrap_or_else(|error| std::panic::resume_unwind(error));
         let mutation = mutation.borrow_mut().take();
-        let catches_errors = matches!(member, "appendChild" | "insertBefore" | "removeChild");
+        let catches_errors = matches!(
+            member,
+            "attachShadow"
+                | "appendChild"
+                | "insertBefore"
+                | "removeChild"
+                | "requestFullscreen"
+                | "exitFullscreen"
+        );
         Some(Box::new(move |runtime| {
             if let Some(mutation) = mutation {
                 let emitted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1846,6 +1982,12 @@ fn is_method(node_type: DOMNodeType, member: &str) -> bool {
     if member == "getElementById" {
         return node_type == DOMNodeType::kDocument;
     }
+    if member == "requestFullscreen" {
+        return node_type == DOMNodeType::kElement;
+    }
+    if member == "exitFullscreen" {
+        return node_type == DOMNodeType::kDocument;
+    }
     if matches!(
         member,
         "getAttribute" | "hasAttribute" | "setAttribute" | "removeAttribute"
@@ -1876,6 +2018,8 @@ fn is_event_handler(name: &str) -> bool {
             | "onmouseup"
             | "onmousemove"
             | "onreadystatechange"
+            | "onfullscreenchange"
+            | "onfullscreenerror"
     )
 }
 
@@ -2227,9 +2371,105 @@ mod tests {
     use super::*;
     use crate::DOMBootstrapSource;
     use dom::dom_mutation::ApplyDOMMutations;
-    use dom::persistent_document::DOMAttribute;
+    use dom::persistent_document::{DOMAttribute, DOMSlotAssignmentMode};
     use javascript::javascript_runtime::JavaScriptRuntime;
     use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
+
+    #[test]
+    fn attach_shadow_publishes_tree_scope_and_slot_assignment_to_retained_dom() {
+        let document = Rc::new(RefCell::new(html::html_parser::ParseHTML(
+            "<html><body><x-host id='host'><span id='light'></span></x-host>\
+             <x-host id='manual-host'><span id='manual-light' slot='named'></span></x-host>\
+             </body></html>",
+        )));
+        let emit_document = document.clone();
+        let bindings = Rc::new(RefCell::new(DOMJavaScriptBindings::new(
+            document.clone(),
+            Box::new(move |mutation| {
+                ApplyDOMMutations(
+                    emit_document.borrow_mut().GetDocumentMut(),
+                    std::slice::from_ref(mutation),
+                )
+            }),
+        )));
+        let mut runtime = QuickJsJavaScriptRuntime::new();
+        let realm = runtime.CreateRealm(bindings);
+        assert!(runtime
+            .Evaluate(&realm, DOMBootstrapSource(), "browser:dom-webidl")
+            .Succeeded());
+        let script = runtime.Evaluate(
+            &realm,
+            r#"
+                    function check(value) { if (!value) throw new Error('shadow owner'); }
+                    const host = document.getElementById('host');
+                    const light = document.getElementById('light');
+                    const root = host.attachShadow({mode:'open'});
+                    const slot = document.createElement('slot');
+                    slot.setAttribute('name','named');
+                    root.appendChild(slot);
+                    light.setAttribute('slot','named');
+                    check(host.shadowRoot === root && root.host === host);
+                    check(root.parentNode === null && root.querySelector('slot') === slot);
+
+                    const manualHost = document.getElementById('manual-host');
+                    const manualRoot = manualHost.attachShadow({mode:'open',slotAssignment:'manual'});
+                    const manualSlot = document.createElement('slot');
+                    manualSlot.setAttribute('name','named');
+                    manualRoot.appendChild(manualSlot);
+                    check(manualRoot.slotAssignment === 'manual');
+                "#,
+            "attach-shadow.js",
+        );
+        assert!(script.Succeeded(), "{:?}", script.exception);
+
+        let owner = document.borrow();
+        let tree = owner.GetDocument();
+        let host = (0..tree.NodeCount())
+            .find(|&index| {
+                tree.Node(index)
+                    .FindAttribute("id")
+                    .is_some_and(|attribute| attribute.value == "host")
+            })
+            .unwrap();
+        let light = (0..tree.NodeCount())
+            .find(|&index| {
+                tree.Node(index)
+                    .FindAttribute("id")
+                    .is_some_and(|attribute| attribute.value == "light")
+            })
+            .unwrap();
+        let root = tree.ShadowRoot(host).expect("native shadow root owner");
+        assert_eq!(tree.ShadowHost(root), Some(host));
+        assert_eq!(
+            tree.OwnerShadowHost(tree.Node(root).Children()[0]),
+            Some(host)
+        );
+        assert_eq!(
+            tree.AssignedSlot(light),
+            tree.Node(root).Children().first().copied()
+        );
+
+        let manual_host = (0..tree.NodeCount())
+            .find(|&index| {
+                tree.Node(index)
+                    .FindAttribute("id")
+                    .is_some_and(|attribute| attribute.value == "manual-host")
+            })
+            .unwrap();
+        let manual_light = (0..tree.NodeCount())
+            .find(|&index| {
+                tree.Node(index)
+                    .FindAttribute("id")
+                    .is_some_and(|attribute| attribute.value == "manual-light")
+            })
+            .unwrap();
+        let manual_root = tree.ShadowRoot(manual_host).unwrap();
+        assert_eq!(
+            tree.ShadowRootSlotAssignment(manual_root),
+            Some(DOMSlotAssignmentMode::kManual)
+        );
+        assert_eq!(tree.AssignedSlot(manual_light), None);
+    }
 
     #[test]
     fn blocking_listener_targets_report_only_live_non_passive_registrations() {
@@ -2688,13 +2928,13 @@ mod tests {
             const root=document.querySelector('#root'), a=root.querySelector('p.one'), b=root.querySelector('#b');
             check(root === document.getElementById('root') && root.querySelector('#root') === null,'query excludes receiver');
             check(a.matches('main > p.one.two:first-child') && b.matches('p + p:nth-child(2)') && b.closest('main') === root,'combinators');
-            check(root.matches(':has(> section)') && !root.matches(':has(> section .leaf)') && !root.matches(':has(> .leaf)') && root.matches(':has(.leaf)'),'has source traversal');
+            check(root.matches(':has(> section)') && root.matches(':has(> section .leaf)') && !root.matches(':has(> .leaf)') && root.matches(':has(.leaf)'),'has source traversal');
             check(a.matches(':is(#a,.absent):not(.absent):where(p)') && !a.matches('p::before'),'selector lists and pseudo');
             check(document.querySelector(':root') === document.documentElement,'document root');
-            const detached=document.createElement('div');check(!detached.matches(':root') && detached.matches(':first-child') && !detached.matches(':last-child'),'detached source semantics');
-            const field=document.getElementById('field');field.value='live';check(field.matches(':placeholder-shown'),'source public matcher reads attribute');field.setAttribute('value','attribute');check(!field.matches(':placeholder-shown'),'placeholder attribute');
-            const svg=document.querySelector('svg');check(svg.matches('[viewBox]') && !svg.matches('[viewbox]'),'SVG attribute case');
-            check(document.querySelector('linearGradient').id === 'gradient' && document.querySelector('lineargradient') === null,'SVG type case');
+            const detached=document.createElement('div');check(!detached.matches(':root') && detached.matches(':first-child') && detached.matches(':last-child'),'detached source semantics');
+            const field=document.getElementById('field');field.value='live';check(!field.matches(':placeholder-shown'),'placeholder reads live control value');field.setAttribute('value','attribute');check(!field.matches(':placeholder-shown'),'placeholder attribute');
+            const svg=document.querySelector('svg');check(svg.matches('[viewBox]') && svg.matches('[viewbox]'),'SVG attribute selectors normalize in HTML documents');
+            check(document.querySelector('linearGradient').id === 'gradient' && document.querySelector('lineargradient').id === 'gradient','SVG type selectors normalize in HTML documents');
             const live=root.children, childNodes=root.childNodes;
             check(live instanceof HTMLCollection && childNodes instanceof NodeList && root.children === live && root.childNodes === childNodes,'live identity and prototypes');
             check(live.length === 5 && childNodes.length === 6 && childNodes[1].nodeType === 8,'children node kinds');
@@ -2727,7 +2967,7 @@ mod tests {
             let invalid=false;try{root.appendChild(root)}catch(e){invalid=e instanceof TypeError}check(invalid && root.parentNode !== null,'invalid cycle');
             a.style.setProperty('color','red');a.style.setProperty('color','blue','important');check(a.getAttribute('style') === 'color: blue !important;' && a.style.getPropertyValue('color') === 'blue','inline style');
             const separate=document.implementation.createHTMLDocument('title');check(separate.defaultView === null && separate.head.firstChild.textContent === 'title' && separate.hasFocus(),'detached document');
-            a.className='one\u000btwo';check(a.matches('.one.two[class~=two]') && root.getElementsByClassName('one\u000btwo').length >= 1 && !a.matches('\u00a0p'),'source C-locale whitespace');
+            a.className='one\u000btwo';check(!a.matches('.one.two[class~=two]') && root.getElementsByClassName('one\u000btwo').length >= 1 && !a.matches('\u00a0p'),'source CSS and HTML whitespace sets');
             true
         "#,"collections.js");
         assert!(result.Succeeded(), "{:?}", result.exception);

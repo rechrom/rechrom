@@ -60,6 +60,7 @@ pub enum SkRasterPipelineOp {
     repeat_x_1,
     gradient,
     evenly_spaced_2_stop_gradient,
+    gradient_color_to_srgb,
     xy_to_unit_angle,
     xy_to_radius,
     xy_to_2pt_conical_focal_on_circle,
@@ -143,6 +144,7 @@ impl SkRasterPipelineOp {
     pub const RepeatX1: Self = Self::repeat_x_1;
     pub const Gradient: Self = Self::gradient;
     pub const EvenlySpaced2StopGradient: Self = Self::evenly_spaced_2_stop_gradient;
+    pub const GradientColorToSrgb: Self = Self::gradient_color_to_srgb;
     pub const XYToUnitAngle: Self = Self::xy_to_unit_angle;
     pub const XYToRadius: Self = Self::xy_to_radius;
     pub const XYTo2PtConicalFocalOnCircle: Self = Self::xy_to_2pt_conical_focal_on_circle;

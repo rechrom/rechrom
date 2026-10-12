@@ -10,6 +10,7 @@ use std::{collections::HashSet, rc::Rc};
 
 use crate::editing_state::LayoutEditingState;
 use crate::internal::layout_object_builder::LayoutObjectTree;
+use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
 
 use crate::internal::block_node::BlockNode;
 use crate::internal::boundary::layout_boundary::ScrollPaintPropertyIndex;
@@ -58,7 +59,8 @@ pub enum LayoutMutation<'a> {
     TreeUpdate(&'a mut dyn FnMut(&mut LayoutTreeUpdate<'_>)),
     PaintStyle {
         node_id: u64,
-        style: &'a crate::internal::layout_input::ComputedStyle,
+        style: &'a NativeComputedStyle,
+        projected: &'a crate::internal::paint_input::PaintStyleData,
     },
     ReplaceTree(LayoutObjectTree),
     ScrollOffset {
@@ -160,18 +162,27 @@ impl LayoutEngine {
                 trace.set("removed", stats.removed as f64);
                 true
             }
-            LayoutMutation::PaintStyle { node_id, style } => {
-                let applied = self
+            LayoutMutation::PaintStyle {
+                node_id,
+                style,
+                projected,
+            } => {
+                let binding = self
                     .tree_
                     .as_mut()
-                    .is_some_and(|tree| tree.UpdatePaintStyle(node_id, style));
-                if applied {
+                    .and_then(|tree| tree.UpdatePaintStyle(node_id, style));
+                if let Some(binding) = binding {
                     if let Some(fragments) = &mut self.fragments {
                         let mut found = false;
+                        let paint_style = crate::internal::boundary::native_paint_style::ExportStyleWithProjectedSvg(
+                                style,
+                                binding.image_resource_id,
+                                projected,
+                            );
                         UpdateFragmentPaintStyle(
                             Rc::make_mut(fragments),
                             node_id,
-                            &style.paint,
+                            &paint_style,
                             &mut found,
                         );
                         if !found {
@@ -180,7 +191,7 @@ impl LayoutEngine {
                         }
                     }
                 }
-                applied
+                binding.is_some()
             }
             LayoutMutation::ReplaceTree(tree) => {
                 self.fragments = None;
@@ -232,6 +243,10 @@ impl LayoutEngine {
         let Some(tree) = self.tree_.as_ref() else {
             return Vec::new();
         };
+        // This traversal uses LayoutObject's translated virtual child dispatch
+        // through NextInPreOrder(). Keep the same installed object factories
+        // available here as during Layout(), including SVG root children.
+        let _object_factory_scope = LayoutObjectFactoryScope::new(&self.objects_);
         let root = tree.Root() as *const LayoutObject;
         let mut current = root as *mut LayoutObject;
         let mut result = Vec::new();

@@ -1,23 +1,64 @@
 // Copyright The Chromium Authors. BSD-style license; see Chromium LICENSE.
 //! Concrete numeric literal payload used by the media-query value consumer.
 //! Source: css_numeric_literal_value.h:22-38,61-75; .cc:111-140,191-220,222-323.
-//! Only the number/length/resolution literal branches are mapped here.
-//! Allocation caches, math functions and unrelated numeric categories remain pending.
-use crate::css_primitive_value::{UnitType, UnitTypeToString};
+//! Number/length/resolution literals and media-query math payload ownership are
+//! mapped here. Allocation caches and unrelated numeric categories remain out of scope.
 use crate::media_queries::media_query_exp::MediaQueryExpSerialization;
+use crate::{
+    css_math_expression_node::{CSSMathExpressionNode, CalculationResultCategory, MathError},
+    css_math_function_value::{CSSMathFunctionValue, ValueRange},
+    css_primitive_value::{UnitType, UnitTypeToString},
+};
 use foundation::String;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CSSNumericLiteralValue {
     num_: f64,
     unit_: UnitType,
+    math_: Option<Box<CSSMathFunctionValue>>,
 }
 impl CSSNumericLiteralValue {
     pub fn Create(value: f64, unit: UnitType) -> Self {
         Self {
             num_: value,
             unit_: unit,
+            math_: None,
         }
+    }
+    pub fn CreateMath(expression: CSSMathExpressionNode, range: ValueRange) -> Self {
+        let unit = expression.CanonicalUnit().unwrap_or(UnitType::kUnknown);
+        Self {
+            num_: expression.GetValueIfKnown().unwrap_or(f64::NAN),
+            unit_: unit,
+            math_: Some(Box::new(CSSMathFunctionValue::Create(expression, range))),
+        }
+    }
+    pub fn MathValue(&self) -> Option<&CSSMathFunctionValue> {
+        self.math_.as_deref()
+    }
+    pub fn WithValueRange(mut self, range: ValueRange) -> Self {
+        if let Some(math) = &mut self.math_ {
+            math.range = range;
+        }
+        self
+    }
+    pub fn GetValueIfKnown(&self) -> Option<f64> {
+        self.math_.as_ref().map_or(Some(self.num_), |value| {
+            value
+                .expression
+                .GetValueIfKnown()
+                .map(|number| value.ClampToPermittedRange(number))
+        })
+    }
+    pub fn Resolve(
+        &self,
+        resolver: &mut impl crate::css_math_expression_node::CSSMathLengthResolver,
+    ) -> Result<Self, MathError> {
+        let Some(math) = &self.math_ else {
+            return Ok(self.clone());
+        };
+        let unit = math.expression.CanonicalUnit().ok_or(MathError::Invalid)?;
+        Ok(Self::Create(math.ComputeValue(resolver, None)?, unit))
     }
     pub fn DoubleValue(&self) -> f64 {
         self.num_
@@ -26,21 +67,38 @@ impl CSSNumericLiteralValue {
         self.unit_
     }
     pub fn IsNumber(&self) -> bool {
-        matches!(self.unit_, UnitType::kNumber | UnitType::kInteger)
+        self.math_.as_ref().map_or(
+            matches!(self.unit_, UnitType::kNumber | UnitType::kInteger),
+            |value| value.Category() == CalculationResultCategory::Number,
+        )
     }
     pub fn IsInteger(&self) -> bool {
-        self.unit_ == UnitType::kInteger
+        self.math_
+            .as_ref()
+            .map_or(self.unit_ == UnitType::kInteger, |value| {
+                matches!(
+                    value.range,
+                    ValueRange::Integer
+                        | ValueRange::NonNegativeInteger
+                        | ValueRange::PositiveInteger
+                )
+            })
     }
     pub fn IsLength(&self) -> bool {
-        IsLength(self.unit_)
+        self.math_.as_ref().map_or(IsLength(self.unit_), |value| {
+            value.Category() == CalculationResultCategory::Length
+        })
     }
     pub fn IsResolution(&self) -> bool {
-        matches!(
-            self.unit_,
-            UnitType::kDotsPerPixel
-                | UnitType::kX
-                | UnitType::kDotsPerInch
-                | UnitType::kDotsPerCentimeter
+        self.math_.as_ref().map_or(
+            matches!(
+                self.unit_,
+                UnitType::kDotsPerPixel
+                    | UnitType::kX
+                    | UnitType::kDotsPerInch
+                    | UnitType::kDotsPerCentimeter
+            ),
+            |value| value.Category() == CalculationResultCategory::Resolution,
         )
     }
     pub fn ComputeDotsPerPixel(&self) -> f64 {
@@ -109,6 +167,9 @@ pub fn IsLength(unit: UnitType) -> bool {
 }
 impl MediaQueryExpSerialization for CSSNumericLiteralValue {
     fn CssText(&self) -> String {
+        if let Some(math) = &self.math_ {
+            return crate::css_value::CSSValueSubclass::CustomCSSText(math.as_ref());
+        }
         let suffix = UnitTypeToString(self.unit_).expect("numeric literal unit");
         if self.IsInteger() {
             return String::Number(self.num_ as i32);

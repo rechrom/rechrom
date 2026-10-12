@@ -29,7 +29,7 @@ pub fn ClassifyFragmentPaintLayer(
     let positioned_z_index = style.is_some_and(|style| {
         style.z_index.is_some() && (position != Position::kStatic || is_flex_or_grid_item)
     });
-    let stacking_level = if positioned_z_index {
+    let mut stacking_level = if positioned_z_index {
         style.unwrap().z_index.unwrap()
     } else {
         0
@@ -44,10 +44,13 @@ pub fn ClassifyFragmentPaintLayer(
                     || style.will_change_transform
                     || style.opacity != 1.0
                     || !style.filters.is_empty()
+                    || !style.backdrop_filters.is_empty()
+                    || style.backdrop_filter_has_reference
                     || style.blend_mode != PaintBlendMode::kNormal
                     || style.isolate_blending
                     || style.clip_path.is_some()
                     || !style.mask_images.is_empty()
+                    || style.mask_box_image.is_some()
             }));
     // A native PaintLayer is authoritative when the bridge exported one.
     // Borrowed line/text fragments never become independent layer owners.
@@ -56,7 +59,7 @@ pub fn ClassifyFragmentPaintLayer(
             && establishes
             && fragment.paint.paint_layer_is_self_painting;
     }
-    let is_stacking_context = is_root
+    let mut is_stacking_context = is_root
         || (establishes
             && style.is_some_and(|style| {
                 positioned_z_index
@@ -66,11 +69,18 @@ pub fn ClassifyFragmentPaintLayer(
                     || style.will_change_transform
                     || style.opacity != 1.0
                     || !style.filters.is_empty()
+                    || !style.backdrop_filters.is_empty()
+                    || style.backdrop_filter_has_reference
                     || style.blend_mode != PaintBlendMode::kNormal
                     || style.isolate_blending
                     || style.clip_path.is_some()
                     || !style.mask_images.is_empty()
+                    || style.mask_box_image.is_some()
             }));
+    if fragment.paint.paint_layer_client_id != 0 && is_paint_layer {
+        is_stacking_context = is_root || fragment.paint.paint_layer_is_stacking_context;
+        stacking_level = fragment.paint.paint_layer_stacking_level;
+    }
     PaintLayerClassification {
         is_paint_layer,
         is_stacking_context,

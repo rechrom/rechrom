@@ -79,8 +79,8 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
             if stream.Peek().Id() == kAuto {
                 return Ok(values::identifier(stream.ConsumeIncludingWhitespace().Id()));
             }
-            let thumb = ConsumeColor(id, stream)?;
-            let track = ConsumeColor(id, stream)?;
+            let thumb = ConsumeColor(id, stream, mode)?;
+            let track = ConsumeColor(id, stream, mode)?;
             Ok(values::list(
                 vec![thumb, track],
                 values::ListSeparator::Space,

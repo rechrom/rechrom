@@ -21,6 +21,7 @@
  */
 
 // cpp: third_party/blink/renderer/core/css/resolver/style_resolver.h:187-194,397-408
+// Source ledger, Chromium commit 6c1d401fcca5e1b0030563a90c2f2bba168e0c15.
 // Complete StyleResolver production control flow, preserving source ownership.
 // External operations are mandatory, typed backend requirements.
 //
@@ -930,10 +931,13 @@ impl<'a, B: StyleResolverRuleMatchingBackend> StyleResolver<'a, B> {
         }
         let units = shadow_pseudo_id.utf16_units().unwrap_or(&[]);
         let begins_with_dash = units.starts_with(&[45]);
-        debug_assert!(shadow_pseudo_id.empty() || !begins_with_dash
-            || units.starts_with(&[45, 119, 101, 98, 107, 105, 116, 45])
-            || units.starts_with(&[45, 105, 110, 116, 101, 114, 110, 97, 108, 45]),
-            "shadow pseudo IDs should either begin with -webkit- or -internal- or not begin with a -");
+        debug_assert!(
+            shadow_pseudo_id.empty()
+                || !begins_with_dash
+                || units.starts_with(&[45, 119, 101, 98, 107, 105, 116, 45])
+                || units.starts_with(&[45, 105, 110, 116, 101, 114, 110, 97, 108, 45]),
+            "shadow pseudo IDs should either begin with -webkit- or -internal- or not begin with a -"
+        );
         UAShadowPseudoResult {
             use_parent_resolver: true,
             cascade_style_attribute_in_parent_scope: begins_with_dash,
@@ -1575,6 +1579,18 @@ impl<'a, B: StyleResolverRuleMatchingBackend> StyleResolver<'a, B> {
                 );
             }
         }
+    }
+
+    /// Package-private production entry while `ResolveStyle`'s larger
+    /// animation/cache state backend is connected. This executes the exact
+    /// source `MatchAllRules` body; adapters supply only its external owners.
+    pub(crate) fn MatchAllRulesForProduction(
+        &mut self,
+        state: &B::StyleResolverState,
+        collector: &mut B::ElementRuleCollector,
+        include_smil_properties: bool,
+    ) {
+        self.MatchAllRules(state, collector, include_smil_properties)
     }
 
     // cpp: style_resolver.cc:1315-1332; h:145
@@ -2566,19 +2582,31 @@ impl<'a, B: StyleResolverBaseStyleBackend> StyleResolver<'a, B> {
             b.NewStyleResolverState(self.GetDocument(), element, Some(context), request);
         let mut cascade = b.NewStyleCascade(&mut state);
         self.ApplyBaseStyle(element, context, request, &mut state, &mut cascade);
+        self.FinishResolveStyle(element, context, request, &mut state, &mut cascade)
+    }
+
+    fn FinishResolveStyle(
+        &mut self,
+        element: &B::Element,
+        context: &B::StyleRecalcContext,
+        request: &B::StyleRequest,
+        state: &mut B::StyleResolverState,
+        cascade: &mut B::StyleCascade,
+    ) -> Option<Rc<B::ComputedStyle>> {
+        let b = self.backend;
         if b.RecalcFlag(context, ResolverRecalcFlag::EnsuringStyle) {
             b.SetBuilderFlag(
-                b.StateStyleBuilderMut(&mut state),
+                b.StateStyleBuilderMut(state),
                 ResolverStyleFlag::EnsuredInDisplayNone,
                 true,
             );
         }
-        if self.IsForPseudoElement(element, request) && b.StateHadNoMatchedProperties(&state) {
-            return Some(b.StateTakeStyle(&mut state));
+        if self.IsForPseudoElement(element, request) && b.StateHadNoMatchedProperties(state) {
+            return Some(b.StateTakeStyle(state));
         }
-        if self.ApplyAnimatedStyle(&mut state, &mut cascade, context) {
+        if self.ApplyAnimatedStyle(state, cascade, context) {
             b.AdjustComputedStyle(
-                &mut state,
+                state,
                 if self.IsForPseudoElement(element, request) {
                     None
                 } else {
@@ -2586,54 +2614,54 @@ impl<'a, B: StyleResolverBaseStyleBackend> StyleResolver<'a, B> {
                 },
             );
             self.RunUncacheableAdjustment(
-                &mut state,
+                state,
                 element,
                 self.IsForPseudoElement(element, request),
             );
         }
-        self.ApplyAnchorData(&mut state);
-        self.ApplyInertness(&mut state);
+        self.ApplyAnchorData(state);
+        self.ApplyInertness(state);
         if !self.IsForPseudoElement(element, request) {
             if b.IsBodyElement(element) {
                 b.SetTextLinkTextColor(
                     self.GetDocument(),
-                    b.BuilderCurrentColor(b.StateStyleBuilder(&state)),
+                    b.BuilderCurrentColor(b.StateStyleBuilder(state)),
                 );
             }
             if b.IsMathMLElement(element) {
-                self.ApplyMathMLCustomStyleProperties(element, &mut state);
+                self.ApplyMathMLCustomStyleProperties(element, state);
             }
         }
-        if let Some(animating) = b.StateAnimatingElement(&state) {
-            self.SetAnimationUpdateIfNeeded(context, &state, &animating);
+        if let Some(animating) = b.StateAnimatingElement(state) {
+            self.SetAnimationUpdateIfNeeded(context, state, &animating);
         }
         b.AddViewportUnitFlags(
             self.GetDocument(),
-            b.BuilderViewportUnitFlags(b.StateStyleBuilder(&state)),
+            b.BuilderViewportUnitFlags(b.StateStyleBuilder(state)),
         );
         if b.BuilderFlag(
-            b.StateStyleBuilder(&state),
+            b.StateStyleBuilder(state),
             ResolverStyleFlag::RootRelativeUnits,
         ) {
             b.SetUsesRootRelativeUnits(b.GetStyleEngine(self.GetDocument()), true);
         }
         if b.BuilderFlag(
-            b.StateStyleBuilder(&state),
+            b.StateStyleBuilder(state),
             ResolverStyleFlag::GlyphRelativeUnits,
         ) {
             b.SetUsesGlyphRelativeUnits(b.GetStyleEngine(self.GetDocument()), true);
         }
         if b.BuilderFlag(
-            b.StateStyleBuilder(&state),
+            b.StateStyleBuilder(state),
             ResolverStyleFlag::LineHeightRelativeUnits,
         ) {
             b.SetUsesLineHeightUnits(b.GetStyleEngine(self.GetDocument()), true);
         }
         if b.BuilderFlag(
-            b.StateStyleBuilder(&state),
+            b.StateStyleBuilder(state),
             ResolverStyleFlag::SiblingFunctions,
         ) {
-            let tree_counting_element = b.StateElement(&state);
+            let tree_counting_element = b.StateElement(state);
             let tree_counting_element =
                 self.UltimateOriginatingElementOrSelf(&tree_counting_element);
             if let Some(parent) = b.ParentElementOrDocumentFragment(tree_counting_element) {
@@ -2642,8 +2670,22 @@ impl<'a, B: StyleResolverBaseStyleBackend> StyleResolver<'a, B> {
                 b.SetUsesTreeCountingFunctions(b.GetStyleEngine(self.GetDocument()));
             }
         }
-        b.StateLoadPendingResources(&mut state);
-        Some(b.StateTakeStyle(&mut state))
+        b.StateLoadPendingResources(state);
+        Some(b.StateTakeStyle(state))
+    }
+
+    /// Package-private entry for adapters that retain the source state but
+    /// must supply a precomputed flat-tree parent across their public boundary.
+    pub(crate) fn ResolveStyleForProduction(
+        &mut self,
+        element: &B::Element,
+        context: &B::StyleRecalcContext,
+        request: &B::StyleRequest,
+        state: &mut B::StyleResolverState,
+        cascade: &mut B::StyleCascade,
+    ) -> Option<Rc<B::ComputedStyle>> {
+        self.ApplyBaseStyle(element, context, request, state, cascade);
+        self.FinishResolveStyle(element, context, request, state, cascade)
     }
 
     // cpp: style_resolver.cc:1507-1521; h:83-87
@@ -3026,6 +3068,34 @@ impl<'a, B: StyleResolverBaseStyleBackend> StyleResolver<'a, B> {
             self.ApplyDocumentRulesSelectors(state, Some(&b.ElementTreeRoot(element)));
         }
         self.ApplyAnchorData(state);
+    }
+
+    /// Package-private production entry for the exact source
+    /// `ApplyBaseStyleNoCache` body. The production adapter owns eligibility
+    /// and typed fallback reporting while this method retains source ordering.
+    pub(crate) fn ApplyBaseStyleNoCacheForProduction(
+        &mut self,
+        element: &B::Element,
+        context: &B::StyleRecalcContext,
+        request: &B::StyleRequest,
+        state: &mut B::StyleResolverState,
+        cascade: &mut B::StyleCascade,
+    ) {
+        self.ApplyBaseStyleNoCache(element, context, request, state, cascade)
+    }
+
+    /// Package-private production entry for Chromium's cache-aware
+    /// `ApplyBaseStyle` lifecycle. The adapter retains the cache owner behind
+    /// StyleEngine and supplies the same state/cascade objects used here.
+    pub(crate) fn ApplyBaseStyleForProduction(
+        &mut self,
+        element: &B::Element,
+        context: &B::StyleRecalcContext,
+        request: &B::StyleRequest,
+        state: &mut B::StyleResolverState,
+        cascade: &mut B::StyleCascade,
+    ) {
+        self.ApplyBaseStyle(element, context, request, state, cascade)
     }
 
     // cpp: style_resolver.cc:1958-2095; h:317-321

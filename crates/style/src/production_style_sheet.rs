@@ -3,6 +3,11 @@
 //! Source ranges come from CSSParserImplRuleObserver, never a brace walker.
 #![allow(non_snake_case, unused_variables)]
 use crate::{
+    active_style_sheets::ActiveStyleSheet, cascade_layer_map::CascadeLayerMap,
+    cascade_layered::CascadeLayered, invalidation::selector_pre_match::SelectorPreMatch,
+    style_rule_keyframe::KeyframeOffset,
+};
+use crate::{
     css_property_value::CSSPropertyValue,
     css_property_value_set::*,
     css_selector::{CSSSelector, CSSSelectorComplex, MatchType, PseudoType, QualifiedName},
@@ -10,7 +15,10 @@ use crate::{
     css_value::{CSSValue, CSSValuePayload},
     media_queries::{
         media_query_backend::MediaQueryFeatureFlags,
+        media_query_backend::MediaQueryValueBackend,
+        media_query_evaluator::MediaQueryEvaluator,
         media_query_set::MediaQuerySet as ConcreteQuerySet,
+        media_values_cached::{MediaValuesCached, MediaValuesCachedData},
     },
     parser::{
         allowed_rules::AllowedRules,
@@ -26,29 +34,28 @@ use crate::{
         css_selector_parser::{CSSSelectorParser, SelectorParserContext, SelectorParserOptions},
         media_query_parser::MediaQueryParser,
     },
-    production_css_value::{self as values, CSSVariableData, ProductionCSSValueDispatch},
+    production_css_value::{
+        self as values, CSSVariableData, ProductionCSSValueDispatch, PropertyValue,
+    },
     resolver::media_query_result::{MediaQueryResultFlags, MediaQuerySetResult},
     rule_set::*,
     style_rule::*,
     style_sheet_contents::*,
 };
-use crate::{
-    invalidation::selector_pre_match::SelectorPreMatch, style_rule_keyframe::KeyframeOffset,
-};
 use foundation::{AtomicString, CSSPropertyID, CSSValueID, Member, String, StringView};
 use layoutng_style::style::computed_style_constants::PseudoId;
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 pub type ContainerSet = crate::production_container_parser::ContainerSet;
 pub type ContainerCondition = crate::production_container_parser::ContainerCondition;
 pub type QuerySet = ConcreteQuerySet<crate::css_numeric_literal_value::CSSNumericLiteralValue>;
-impl crate::resolver::media_query_result::MediaQuerySet for QuerySet {}
+impl crate::resolver::media_query_result::MediaQuerySet for QuerySet {
+    fn AsAny(&self) -> &dyn std::any::Any {
+        self
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Unavailable {}
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SourceURL {
-    Null,
-    Empty,
-}
+pub type SourceURL = values::ProductionURL;
 #[derive(Clone, Copy)]
 pub enum Feature {
     Rule,
@@ -58,6 +65,138 @@ pub enum Feature {
     ContainerStyleQuery,
 }
 pub struct Backend;
+
+/// Owned media environment used while building a production RuleSet.  Keeping
+/// the cached values here makes the RuleSet API independent of evaluator
+/// lifetimes while still running Blink's translated media evaluator.
+#[derive(Clone)]
+pub struct ProductionMediaQueryEvaluator {
+    values: MediaValuesCached,
+    media_type_override: Option<String>,
+}
+impl ProductionMediaQueryEvaluator {
+    pub fn FromCachedData(data: &MediaValuesCachedData) -> Self {
+        Self {
+            values: MediaValuesCached::new(data),
+            media_type_override: None,
+        }
+    }
+    /// CSSDefaultStyleSheets builds supplemental UA RuleSets with a dedicated
+    /// media-type evaluator (for example `ua-forced-colors`) while retaining
+    /// the same parsed stylesheet owner.
+    pub fn ForMediaType(media_type: &str, data: &MediaValuesCachedData) -> Self {
+        Self {
+            values: MediaValuesCached::new(data),
+            media_type_override: Some(String::from(media_type)),
+        }
+    }
+    pub fn Screen(viewport_width: f64, viewport_height: f64) -> Self {
+        let mut data = MediaValuesCachedData::default();
+        data.media_type = String::from("screen");
+        data.viewport_width = viewport_width;
+        data.viewport_height = viewport_height;
+        data.small_viewport_width = viewport_width;
+        data.small_viewport_height = viewport_height;
+        data.large_viewport_width = viewport_width;
+        data.large_viewport_height = viewport_height;
+        data.dynamic_viewport_width = viewport_width;
+        data.dynamic_viewport_height = viewport_height;
+        data.device_width = viewport_width as i32;
+        data.device_height = viewport_height as i32;
+        Self::FromCachedData(&data)
+    }
+    fn evaluator(&self) -> MediaQueryEvaluator<'_, MediaQueryValueBackend<'_>> {
+        self.media_type_override.as_ref().map_or_else(
+            || MediaQueryEvaluator::ForMediaValues(&self.values),
+            |media_type| MediaQueryEvaluator::ForMediaType(media_type.clone(), &self.values),
+        )
+    }
+}
+impl Default for ProductionMediaQueryEvaluator {
+    fn default() -> Self {
+        Self::Screen(0.0, 0.0)
+    }
+}
+
+pub struct ProductionRuleBucketTable(HashMap<AtomicString, Extent>);
+impl RuleBucketTable for ProductionRuleBucketTable {
+    fn New(initial_capacity: usize) -> Self {
+        Self(HashMap::with_capacity(initial_capacity))
+    }
+    fn Find(&self, key: &AtomicString) -> Option<&Extent> {
+        self.0.get(key)
+    }
+    fn FindMut(&mut self, key: &AtomicString) -> Option<&mut Extent> {
+        self.0.get_mut(key)
+    }
+    fn Insert(&mut self, key: &AtomicString) -> Option<&mut Extent> {
+        Some(self.0.entry(key.clone()).or_default())
+    }
+    fn Entries(&self) -> Vec<(AtomicString, Extent)> {
+        self.0
+            .iter()
+            .map(|(key, value)| (key.clone(), *value))
+            .collect()
+    }
+}
+
+#[derive(Default)]
+pub struct ProductionRuleFeatureSet {
+    media_query_result_flags: MediaQueryResultFlags,
+}
+
+pub struct ProductionSubstringSetMatcher(Vec<RuleSetSubstringPattern>);
+
+pub struct ProductionMixinParameterBindings {
+    bindings: HashMap<String, RuleSetMixinBinding<Backend>>,
+    locals: RuleSetMixinLocals<Backend>,
+    conditional_locals: RuleSetConditionalLocals<Backend>,
+    parent: Option<Rc<Self>>,
+}
+
+impl ProductionMixinParameterBindings {
+    pub(crate) fn Bindings(&self) -> &HashMap<String, RuleSetMixinBinding<Backend>> {
+        &self.bindings
+    }
+
+    pub(crate) fn BaseLocals(&self) -> &RuleSetMixinLocals<Backend> {
+        &self.locals
+    }
+
+    pub(crate) fn ConditionalLocals(&self) -> &RuleSetConditionalLocals<Backend> {
+        &self.conditional_locals
+    }
+
+    pub(crate) fn Parent(&self) -> Option<Rc<Self>> {
+        self.parent.clone()
+    }
+}
+
+impl crate::resolver::match_result::MixinParameterBindings for ProductionMixinParameterBindings {
+    fn AsAny(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn Equals(&self, other: &dyn crate::resolver::match_result::MixinParameterBindings) -> bool {
+        other
+            .AsAny()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| std::ptr::eq(self, other))
+    }
+
+    fn GetHash(&self) -> u32 {
+        let address = self as *const Self as usize;
+        (address as u32) ^ ((address >> 32) as u32)
+    }
+}
+
+pub struct ProductionRuleSetDiff {
+    pub old: RuleSetHandle<Backend>,
+    pub changed_rules: Vec<Rc<StyleRuleBase<Backend>>>,
+    pub new_rules: Option<RuleSetHandle<Backend>>,
+    pub cleared: bool,
+    pub unrepresentable: bool,
+}
 type ParserSyntax<B>=<<B as CSSParserImplRuleBackend>::RuleDependencies as StyleRuleDependencies>::CSSSyntaxDefinition;
 type ParserVariableData<B> =
     <<B as CSSParserImplRuleBackend>::RuleDependencies as StyleRuleDependencies>::CSSVariableData;
@@ -106,6 +245,25 @@ fn ConsumeOriginalComponentValue<T: TokenStreamTokenizer>(
 ) -> String {
     let start = stream.LookAheadOffset();
     stream.SkipUntilPeekedTypeIs(&[]);
+    let end = stream.LookAheadOffset();
+    stream.StringRangeAt(start, end - start).ToString()
+}
+
+// css_variable_parser.cc:687-734. The token stream owns component-block
+// traversal, so a comma boundary here only observes top-level commas. This
+// keeps the parser's original text and token boundaries instead of serializing
+// the consumed tokens back to CSS.
+fn ConsumeOriginalVariableValue<T: TokenStreamTokenizer>(
+    stream: &mut CSSParserTokenStream<'_, T>,
+    comma_ends_declaration: bool,
+) -> String {
+    stream.ConsumeWhitespace();
+    let start = stream.LookAheadOffset();
+    if comma_ends_declaration {
+        stream.SkipUntilPeekedTypeIs(&[kCommaToken]);
+    } else {
+        stream.SkipUntilPeekedTypeIs(&[]);
+    }
     let end = stream.LookAheadOffset();
     stream.StringRangeAt(start, end - start).ToString()
 }
@@ -162,6 +320,7 @@ impl CSSParserImplObserver for SourceObserver {
                     | CSSAtRuleID::kCSSAtRuleContainer
                     | CSSAtRuleID::kCSSAtRuleProperty
                     | CSSAtRuleID::kCSSAtRuleScope
+                    | CSSAtRuleID::kCSSAtRuleStartingStyle
                     | CSSAtRuleID::kCSSAtRuleSupports
                     | CSSAtRuleID::kCSSAtRuleImport
                     | CSSAtRuleID::kCSSAtRuleNamespace
@@ -371,8 +530,225 @@ pub struct ProductionStyleSheet {
     pub property_registration_effects:
         Vec<crate::property_registration::PropertyRegistrationEffect>,
     pub keyframes: Vec<ProductionKeyframesRule>,
+    pub functions: Vec<ProductionFunctionRule>,
+    pub mixins: Vec<ProductionMixinRule>,
     pub selector_ranges: Vec<std::ops::Range<u32>>,
     pub diagnostics: Vec<Diagnostic>,
+    projected_rule_declarations: Vec<ProjectedRuleDeclaration>,
+    projected_rule_indices: HashMap<usize, usize>,
+}
+
+struct ProjectedRuleDeclaration {
+    retained: Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>,
+    properties: Rc<Vec<PropertyValue>>,
+    source_range: SourceRange,
+}
+
+/// Result of looking up the declaration vector for one projected CSSOM rule.
+///
+/// `RequiresLegacyFallback` means that the production parser reported an
+/// unsupported operation inside that rule's source range. Callers that still
+/// surface the legacy `DocumentStyleError` property/operation details must use
+/// their legacy declaration path for that rule.
+#[derive(Clone)]
+pub enum ProjectedRuleDeclarations {
+    Typed(Rc<Vec<PropertyValue>>),
+    RequiresLegacyFallback,
+}
+
+pub(crate) enum ProductionProjectionRule<'a> {
+    Style(&'a ProductionStyleRule),
+    NestedDeclarations(&'a ProductionNestedDeclarationsRule),
+}
+
+impl ProductionProjectionRule<'_> {
+    pub(crate) fn SourceOrder(&self) -> u32 {
+        match self {
+            Self::Style(rule) => rule.source_order,
+            Self::NestedDeclarations(rule) => rule.source_order,
+        }
+    }
+
+    fn SourceRange(&self) -> &SourceRange {
+        match self {
+            Self::Style(rule) => &rule.source_range,
+            Self::NestedDeclarations(rule) => &rule.source_range,
+        }
+    }
+
+    fn Properties(&self) -> Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>> {
+        match self {
+            Self::Style(rule) => rule.rule.Properties(),
+            Self::NestedDeclarations(rule) => rule.rule.Properties(),
+        }
+    }
+}
+
+impl ProductionStyleSheet {
+    /// Builds the translated RuleSet directly from the retained typed sheet.
+    /// Callers do not need to walk projected CSSOM rules or reconstruct media,
+    /// layer, container, or scope context.
+    pub fn BuildRuleSet(&self, medium: &ProductionMediaQueryEvaluator) -> RuleSet<Backend> {
+        let mixins = self.contents.ExtractMixins(medium);
+        self.contents.CreateUnconnectedRuleSet(medium, &mixins)
+    }
+
+    /// Returns the sheet-owned cached RuleSet, rebuilding it when media or
+    /// mixin dependencies have changed.
+    pub fn EnsureRuleSet(&self, medium: &ProductionMediaQueryEvaluator) -> RuleSetHandle<Backend> {
+        let mixins = self.contents.ExtractMixins(medium);
+        self.contents.EnsureRuleSet(medium, &mixins)
+    }
+
+    /// Returns the stylesheet-owned mixin selected by Chromium's cached
+    /// `StyleSheetContents::ExtractMixins` traversal for the current medium.
+    /// The returned handle retains the parser-created StyleRuleBase allocation.
+    pub fn MixinForName(
+        &self,
+        medium: &ProductionMediaQueryEvaluator,
+        name: &AtomicString,
+    ) -> Option<Rc<StyleRuleBase<Backend>>> {
+        self.contents
+            .ExtractMixins(medium)
+            .mixins
+            .get(name)
+            .cloned()
+    }
+
+    /// Creates the document-level function registry for this sheet. The
+    /// multi-sheet constructor below is the same owner boundary used when a
+    /// Document has more than one active author sheet.
+    pub fn FunctionRegistry(
+        &self,
+        medium: &ProductionMediaQueryEvaluator,
+    ) -> ProductionFunctionRegistry {
+        ProductionFunctionRegistry::FromStyleSheets(&[self], medium)
+    }
+
+    /// Returns the retained typed declarations at the same `rule_index` used
+    /// by `ProjectStyleSheet`. Repeated successful lookups return the same
+    /// `Rc<Vec<_>>`; values are cloned from the parser's typed property store
+    /// once, without serializing or parsing CSS again.
+    ///
+    /// The values retain the parser mode used to create this sheet. In
+    /// particular, this helper does not reinterpret author declarations as UA
+    /// declarations; callers needing UA semantics must parse the sheet with
+    /// `CSSParserMode::kUASheetMode` at the original parse boundary.
+    pub fn TypedDeclarationsForProjectedRule(
+        &self,
+        rule_index: usize,
+    ) -> Option<Rc<Vec<PropertyValue>>> {
+        match self.ProjectedRuleDeclarationsAt(rule_index)? {
+            ProjectedRuleDeclarations::Typed(properties) => Some(properties),
+            ProjectedRuleDeclarations::RequiresLegacyFallback => None,
+        }
+    }
+
+    /// Returns the parser-owned declaration set for the projected rule.
+    ///
+    /// This is the ownership form consumed by MatchResult and StyleCascade in
+    /// Chromium.  Keep the flattened vector accessor above while the final
+    /// property application adapter is being removed, but do not make the
+    /// production cascade reconstruct declaration ownership from that vector.
+    pub(crate) fn RetainedDeclarationsForProjectedRule(
+        &self,
+        rule_index: usize,
+    ) -> Option<Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>> {
+        let entry = self.projected_rule_declarations.get(rule_index)?;
+        if self.diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind == DiagnosticKind::Unsupported
+                && diagnostic.offset >= entry.source_range.header_start
+                && diagnostic.offset <= entry.source_range.body_end
+        }) {
+            return None;
+        }
+        Some(entry.retained.clone())
+    }
+
+    /// Distinguishes an out-of-range index from a rule that must temporarily
+    /// use the legacy declaration path because its source range contains an
+    /// unsupported production-parser diagnostic.
+    pub fn ProjectedRuleDeclarationsAt(
+        &self,
+        rule_index: usize,
+    ) -> Option<ProjectedRuleDeclarations> {
+        let entry = self.projected_rule_declarations.get(rule_index)?;
+        if self.diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind == DiagnosticKind::Unsupported
+                && diagnostic.offset >= entry.source_range.header_start
+                && diagnostic.offset <= entry.source_range.body_end
+        }) {
+            return Some(ProjectedRuleDeclarations::RequiresLegacyFallback);
+        }
+        Some(ProjectedRuleDeclarations::Typed(entry.properties.clone()))
+    }
+
+    /// Maps translated RuleSet ownership back to the CSSOM projection without
+    /// serializing or reparsing selector text. Ordinary StyleRule ingestion
+    /// retains this exact `Rc`; synthesized nested-declaration and mixin rules
+    /// deliberately return `None` and stay on the compatibility collector.
+    pub(crate) fn ProjectedRuleIndexForRetainedStyleRule(
+        &self,
+        retained: &Rc<StyleRule<Backend>>,
+    ) -> Option<usize> {
+        self.projected_rule_indices
+            .get(&(Rc::as_ptr(retained) as usize))
+            .copied()
+    }
+
+    pub(crate) fn ProjectionRulesInSourceOrder(&self) -> Vec<ProductionProjectionRule<'_>> {
+        let mut rules = self
+            .rules
+            .iter()
+            .map(ProductionProjectionRule::Style)
+            .chain(
+                self.nested_declarations
+                    .iter()
+                    .map(ProductionProjectionRule::NestedDeclarations),
+            )
+            .collect::<Vec<_>>();
+        rules.sort_by_key(ProductionProjectionRule::SourceOrder);
+        rules
+    }
+
+    fn BuildProjectedRuleDeclarations(&mut self) {
+        let projected = self
+            .ProjectionRulesInSourceOrder()
+            .into_iter()
+            .enumerate()
+            .map(|(index, rule)| {
+                let properties = rule.Properties();
+                let identity = match rule {
+                    ProductionProjectionRule::Style(rule) => Some(Rc::as_ptr(&rule.rule) as usize),
+                    ProductionProjectionRule::NestedDeclarations(_) => None,
+                };
+                (
+                    identity,
+                    index,
+                    ProjectedRuleDeclaration {
+                        retained: properties.clone(),
+                        properties: Rc::new(match properties.as_ref() {
+                            CSSPropertyValueSetRuleHandle::Immutable(set) => {
+                                set.Properties().to_vec()
+                            }
+                            CSSPropertyValueSetRuleHandle::Mutable(set) => {
+                                set.borrow().Properties().to_vec()
+                            }
+                        }),
+                        source_range: rule.SourceRange().clone(),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        self.projected_rule_indices = projected
+            .iter()
+            .filter_map(|(identity, index, _)| identity.map(|identity| (identity, *index)))
+            .collect();
+        self.projected_rule_declarations = projected
+            .into_iter()
+            .map(|(_, _, declaration)| declaration)
+            .collect();
+    }
 }
 pub struct ProductionStyleRule {
     pub rule: Rc<StyleRule<Backend>>,
@@ -385,6 +761,84 @@ pub struct ProductionStyleRule {
     pub source_order: u32,
     pub source_range: SourceRange,
     pub parent_rule_for_nesting: Option<Rc<StyleRule<Backend>>>,
+}
+pub type ProductionFunctionHandle = TypedRuleRef<Backend, FunctionRuleKind>;
+
+/// Parser/source projection for one retained @function definition. Runtime
+/// lookup uses ProductionFunctionRegistry, which applies media and layer order
+/// through the translated RuleSet owner.
+pub struct ProductionFunctionRule {
+    pub rule: Rc<StyleRuleBase<Backend>>,
+    pub media: Vec<Rc<QuerySet>>,
+    pub layers: Vec<LayerSegment>,
+    pub source_order: u32,
+    pub source_range: SourceRange,
+}
+
+/// Parser/source projection for one retained @mixin definition. Active lookup
+/// remains owned by StyleSheetContents::ExtractMixins, including its media
+/// dependency cache.
+pub struct ProductionMixinRule {
+    pub rule: Rc<StyleRuleBase<Backend>>,
+    pub media: Vec<Rc<QuerySet>>,
+    pub source_order: u32,
+    pub source_range: SourceRange,
+}
+
+/// Document-level @function owner corresponding to ScopedStyleResolver's
+/// FunctionRuleMap. Values retain the parser-created base rule through
+/// TypedRuleRef; no function declaration is copied or reparsed.
+pub struct ProductionFunctionRegistry {
+    functions: HashMap<AtomicString, CascadeLayered<ProductionFunctionHandle>>,
+}
+
+impl ProductionFunctionRegistry {
+    // resolver/style_resolver_utils.h:37-57 and scoped_style_resolver.cc:137-154.
+    pub fn FromStyleSheets(
+        sheets: &[&ProductionStyleSheet],
+        medium: &ProductionMediaQueryEvaluator,
+    ) -> Self {
+        let rule_sets = sheets
+            .iter()
+            .map(|sheet| Rc::new(sheet.BuildRuleSet(medium)))
+            .collect::<Vec<_>>();
+        let active = rule_sets
+            .iter()
+            .map(|rules| ActiveStyleSheet::new(Rc::new(()), Some(rules.clone())))
+            .collect::<Vec<_>>();
+        let layers = CascadeLayerMap::new(&active);
+        let mut functions: HashMap<AtomicString, CascadeLayered<ProductionFunctionHandle>> =
+            HashMap::new();
+        for rules in &rule_sets {
+            for rule in rules.FunctionRules() {
+                let name = rule.value.Name().clone();
+                let replace = functions.get(&name).is_none_or(|old| {
+                    let order = if old.layer == rule.layer {
+                        std::cmp::Ordering::Equal
+                    } else {
+                        layers.CompareLayerOrder(old.layer.as_ref(), rule.layer.as_ref())
+                    };
+                    order != std::cmp::Ordering::Greater
+                });
+                if replace {
+                    functions.insert(name, rule.clone());
+                }
+            }
+        }
+        Self { functions }
+    }
+
+    pub fn FunctionForName(&self, name: &AtomicString) -> Option<ProductionFunctionHandle> {
+        self.functions.get(name).map(|rule| rule.value.clone())
+    }
+
+    pub fn len(&self) -> usize {
+        self.functions.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.functions.is_empty()
+    }
 }
 pub type ImportMetadata = crate::style_rule_import::ParsedStyleRuleImport<
     Backend,
@@ -475,11 +929,37 @@ pub struct LayerStatement {
     pub source_order: u32,
 }
 pub fn ParseStyleSheet(text: &String, mode: CSSParserMode) -> ProductionStyleSheet {
+    ParseStyleSheetWithURL(text, mode, SourceURL::Null)
+}
+
+/// Parses a stylesheet with the response/document URL installed on the same
+/// CSSParserContext that owns its typed declarations. URL-bearing values then
+/// retain both author spelling and resolved resource identity.
+pub fn ParseStyleSheetWithBase(
+    text: &String,
+    mode: CSSParserMode,
+    base_url: &str,
+) -> ProductionStyleSheet {
+    ParseStyleSheetWithURL(text, mode, SourceURL::FromString(base_url))
+}
+
+fn ParseStyleSheetWithURL(
+    text: &String,
+    mode: CSSParserMode,
+    base_url: SourceURL,
+) -> ProductionStyleSheet {
     let _edges = MediaEdges::new();
-    let context = Rc::new(CSSParserContext::<Backend>::FromMode(
+    let context = Rc::new(CSSParserContext::<Backend>::new(
+        base_url,
+        true,
+        None,
         mode,
+        String::from(""),
+        false,
         SecureContextMode::kInsecureContext,
         None,
+        None,
+        crate::css_resource_fetch_restriction::ResourceFetchRestriction::kNone,
     ));
     let mut contents = StyleSheetContents::<Backend>::new(context.clone(), String::default(), None);
     let mut observer = SourceObserver {
@@ -510,8 +990,12 @@ pub fn ParseStyleSheet(text: &String, mode: CSSParserMode) -> ProductionStyleShe
         scopes: Vec::new(),
         property_registration_effects: Vec::new(),
         keyframes: Vec::new(),
+        functions: Vec::new(),
+        mixins: Vec::new(),
         selector_ranges: observer.selector_ranges,
         diagnostics: observer.diagnostics,
+        projected_rule_declarations: Vec::new(),
+        projected_rule_indices: HashMap::new(),
     };
     let mut ranges = observer.ranges;
     let mut order = 0;
@@ -530,6 +1014,7 @@ pub fn ParseStyleSheet(text: &String, mode: CSSParserMode) -> ProductionStyleShe
             true,
         );
     }
+    output.BuildProjectedRuleDeclarations();
     output
 }
 fn TakeRange(ranges: &mut Vec<SourceRange>, rule_type: RuleType) -> Option<SourceRange> {
@@ -792,6 +1277,24 @@ fn Flatten(
                 );
             }
         }
+        StyleRuleBase::StartingStyle(starting_style_rule) => {
+            TakeRange(ranges, RuleType::kStartingStyle);
+            for child in starting_style_rule.ChildRules() {
+                Flatten(
+                    child,
+                    source,
+                    output,
+                    ranges,
+                    media,
+                    containers,
+                    scopes,
+                    layers,
+                    order,
+                    parent.clone(),
+                    active,
+                );
+            }
+        }
         StyleRuleBase::Import(rule) => {
             if let Some(range) = TakeRange(ranges, RuleType::kImport) {
                 output.imports.push(ProductionImportRule {
@@ -893,6 +1396,39 @@ fn Flatten(
                 source_order: position,
             });
         }
+        StyleRuleBase::Function(_) => {
+            if let Some(range) = TakeRange(ranges, RuleType::kFunction) {
+                if active {
+                    output.functions.push(ProductionFunctionRule {
+                        rule: rule.clone(),
+                        media: media.to_vec(),
+                        layers: layers.to_vec(),
+                        source_order: position,
+                        source_range: range,
+                    });
+                }
+            }
+        }
+        StyleRuleBase::Mixin(_) => {
+            if let Some(range) = TakeRange(ranges, RuleType::kMixin) {
+                if active {
+                    output.mixins.push(ProductionMixinRule {
+                        rule: rule.clone(),
+                        media: media.to_vec(),
+                        source_order: position,
+                        source_range: range,
+                    });
+                }
+            }
+        }
+        StyleRuleBase::ApplyMixin(_)
+        | StyleRuleBase::Contents(_)
+        | StyleRuleBase::Result(_)
+        | StyleRuleBase::FunctionDeclarations(_) => {
+            // These rules are retained below @function/@mixin/style owners and
+            // consumed by RuleSet expansion. They do not independently project
+            // into the flat CSSOM style-rule view.
+        }
         _ => output.diagnostics.push(Diagnostic {
             kind: DiagnosticKind::Unsupported,
             offset: 0,
@@ -911,7 +1447,11 @@ impl CSSParserImplBackend for Backend {
     type StyleRule = StyleRule<Backend>;
     type StyleRuleBase = StyleRuleBase<Backend>;
     fn AtRuleFeatures() -> AtRuleRuntimeFeatures {
-        AtRuleRuntimeFeatures::default()
+        AtRuleRuntimeFeatures {
+            css_mixins: true,
+            css_functions: true,
+            ..AtRuleRuntimeFeatures::default()
+        }
     }
     fn ConsumeAtRuleContents<T: TokenStreamTokenizer>(
         parser: &mut CSSParserImpl<'_, Self>,
@@ -942,6 +1482,9 @@ impl CSSParserImplBackend for Backend {
             CSSAtRuleID::kCSSAtRuleSupports => {
                 parser.ConsumeSupportsRule(stream, nesting_type, parent_rule_for_nesting)
             }
+            CSSAtRuleID::kCSSAtRuleStartingStyle => {
+                parser.ConsumeStartingStyleRule(stream, nesting_type, parent_rule_for_nesting)
+            }
             CSSAtRuleID::kCSSAtRuleImport => {
                 let modifiers = <Backend as CSSParserImplRuleBackend>::NewUrlRequestModifiers();
                 let uri = ConsumeStringOrURI::<_, Backend, _>(stream, parser.GetContext()?, None);
@@ -951,6 +1494,11 @@ impl CSSParserImplBackend for Backend {
             CSSAtRuleID::kCSSAtRuleFontFace => parser.ConsumeFontFaceRule(stream),
             CSSAtRuleID::kCSSAtRuleKeyframes => parser.ConsumeKeyframesRule(false, stream),
             CSSAtRuleID::kCSSAtRuleWebkitKeyframes => parser.ConsumeKeyframesRule(true, stream),
+            CSSAtRuleID::kCSSAtRuleFunction => parser.ConsumeFunctionRule(stream),
+            CSSAtRuleID::kCSSAtRuleMixin => parser.ConsumeMixinRule(stream),
+            CSSAtRuleID::kCSSAtRuleApplyMixin => parser.ConsumeApplyMixinRule(stream),
+            CSSAtRuleID::kCSSAtRuleContents => parser.ConsumeContentsRule(stream),
+            CSSAtRuleID::kCSSAtRuleResult => parser.ConsumeResultRule(stream),
             _ => {
                 parser.ConsumeErroneousAtRule(stream, id);
                 None
@@ -1043,6 +1591,7 @@ fn ConsumeFamilyName<T: TokenStreamTokenizer>(
 }
 fn ConsumeFontSource<T: TokenStreamTokenizer>(
     stream: &mut CSSParserTokenStream<'_, T>,
+    context: &CSSParserContext<Backend>,
 ) -> Result<values::CSSFontFaceSrcValue, DiagnosticKind> {
     use values::FontFaceResource;
     let resource = if stream.Peek().FunctionId() == Some(CSSValueID::kLocal) {
@@ -1054,7 +1603,11 @@ fn ConsumeFontSource<T: TokenStreamTokenizer>(
         }
         FontFaceResource::Local(name)
     } else if stream.Peek().GetType() == kUrlToken {
-        FontFaceResource::Url(stream.ConsumeIncludingWhitespace().Value().ToString())
+        let url = stream.ConsumeIncludingWhitespace().Value().ToString();
+        FontFaceResource::Url(values::CSSUrlData::new(
+            url.clone(),
+            context.CompleteNonEmptyURL(&url),
+        ))
     } else if stream.Peek().FunctionId() == Some(CSSValueID::kUrl) {
         let mut guard = BlockGuard::new(stream);
         guard.ConsumeWhitespace();
@@ -1065,7 +1618,10 @@ fn ConsumeFontSource<T: TokenStreamTokenizer>(
         if !guard.AtEnd() {
             return Err(DiagnosticKind::Invalid);
         }
-        FontFaceResource::Url(url)
+        FontFaceResource::Url(values::CSSUrlData::new(
+            url.clone(),
+            context.CompleteNonEmptyURL(&url),
+        ))
     } else {
         return Err(DiagnosticKind::Invalid);
     };
@@ -1143,6 +1699,7 @@ fn ParseFontFaceDescriptor(
     id: crate::parser::at_rule_descriptors::AtRuleDescriptorID,
     text: &String,
     source_offset: u32,
+    context: &CSSParserContext<Backend>,
 ) -> DescriptorResult {
     use crate::css_primitive_value::UnitType;
     use crate::parser::at_rule_descriptors::AtRuleDescriptorID as D;
@@ -1161,7 +1718,7 @@ fn ParseFontFaceDescriptor(
             let mut sources = Vec::new();
             loop {
                 let offset = source_offset + stream.LookAheadOffset();
-                match ConsumeFontSource(&mut stream) {
+                match ConsumeFontSource(&mut stream, context) {
                     Ok(value) => sources.push(Rc::new(values::Value::new(
                         CSSValuePayload::kFontFaceSrcClass(value),
                     ))),
@@ -1277,11 +1834,11 @@ fn ParseFontFaceDescriptor(
             values::identifier(keyword)
         }
         D::FontStretch => {
-            let parsed = crate::parser::production_property_parser::ParseProperty(
+            let parsed = crate::parser::production_property_parser::ParsePropertyWithContext(
                 CSSPropertyID::kFontStretch,
                 text,
                 false,
-                CSSParserMode::kCSSFontFaceRuleMode,
+                context,
             )
             .map_err(|error| match error.kind {
                 crate::parser::production_property_parser::PropertyParseErrorKind::Unsupported => {
@@ -1344,7 +1901,7 @@ fn ParseFontFaceDescriptor(
             values::list(variants, values::ListSeparator::Comma)
         }
         D::FontFeatureSettings | D::FontVariationSettings => {
-            return Err(DiagnosticKind::Unsupported)
+            return Err(DiagnosticKind::Unsupported);
         }
         _ => return Err(DiagnosticKind::Invalid),
     };
@@ -1434,6 +1991,47 @@ impl CSSParserImplValueBackend for Backend {
         properties: &mut Vec<CSSPropertyValue<Self::ValueBackend>>,
     ) {
         let start = stream.LookAheadOffset();
+        if matches!(rule, RuleType::kFunction | RuleType::kMixin) {
+            use crate::parser::at_rule_descriptors::AtRuleDescriptorID;
+            if !matches!(
+                id,
+                AtRuleDescriptorID::Result | AtRuleDescriptorID::Variable
+            ) || id == AtRuleDescriptorID::Result && rule == RuleType::kMixin
+            {
+                stream.SkipUntilPeekedTypeIs(&[]);
+                return;
+            }
+            let text = ConsumeOriginalVariableValue(stream, false);
+            let parsed = crate::parser::production_property_parser::ParseCustomPropertyWithContext(
+                "--function-descriptor",
+                &text,
+                false,
+                context,
+            );
+            if let Ok(parsed) = parsed {
+                let name = if id == AtRuleDescriptorID::Variable {
+                    crate::css_property_name::CSSPropertyName::custom(variable.clone())
+                } else {
+                    crate::css_property_name::CSSPropertyName::new(CSSPropertyID::kResult)
+                };
+                properties.push(CSSPropertyValue::new(
+                    &name,
+                    parsed.ValueRef(),
+                    false,
+                    false,
+                    -1,
+                    false,
+                ));
+            } else {
+                ValueDiagnostic(
+                    DiagnosticKind::Invalid,
+                    start,
+                    "AtRuleDescriptorParser::ParseAtFunctionOrMixinDescriptor",
+                    577,
+                );
+            }
+            return;
+        }
         if rule == RuleType::kProperty {
             if let Some(value) =
                 crate::property_registration::ParseAtPropertyDescriptor(id, stream, context)
@@ -1459,7 +2057,7 @@ impl CSSParserImplValueBackend for Backend {
             return;
         }
         let text = ConsumeOriginalComponentValue(stream);
-        match ParseFontFaceDescriptor(id, &text, start) {
+        match ParseFontFaceDescriptor(id, &text, start, context) {
             Ok(value) if rule == RuleType::kFontFace => properties.push(CSSPropertyValue::new(
                 &crate::css_property_name::CSSPropertyName::new(
                     crate::parser::at_rule_descriptors::AtRuleDescriptorIDAsCSSPropertyID(id),
@@ -1488,7 +2086,7 @@ impl CSSParserImplValueBackend for Backend {
         rule: RuleType,
     ) {
         let text = ConsumeOriginalComponentValue(stream);
-        match crate::parser::production_property_parser::ParseProperty(property, &text, false, context.unwrap().Mode()) {
+        match crate::parser::production_property_parser::ParsePropertyWithContext(property, &text, false, context.unwrap()) {
             Ok(parsed) if allow_important || parsed.iter().all(|value| !value.IsImportant()) => properties.extend(parsed),
             Ok(_) => {},
             Err(error) if error.kind == crate::parser::production_property_parser::PropertyParseErrorKind::Unsupported => ValueDiagnostic(DiagnosticKind::Unsupported, stream.LookAheadOffset().saturating_sub(text.length()), error.operation, error.source_line),
@@ -1503,11 +2101,8 @@ impl CSSParserImplValueBackend for Backend {
     ) -> Option<Rc<crate::css_value::CSSValue<Self::ValueBackend>>> {
         let saved = stream.Save();
         let text = ConsumeOriginalComponentValue(stream);
-        let result = crate::parser::production_property_parser::ParseCustomProperty(
-            "--wide",
-            &text,
-            false,
-            context.Mode(),
+        let result = crate::parser::production_property_parser::ParseCustomPropertyWithContext(
+            "--wide", &text, false, context,
         )
         .ok();
         if let Some(property) = result {
@@ -1532,11 +2127,11 @@ impl CSSParserImplValueBackend for Backend {
         context: &CSSParserContext<Self::Platform>,
     ) -> Option<Rc<Self::CSSVariableData>> {
         let text = ConsumeOriginalComponentValue(stream);
-        let property = crate::parser::production_property_parser::ParseCustomProperty(
+        let property = crate::parser::production_property_parser::ParseCustomPropertyWithContext(
             "--unparsed",
             &text,
             false,
-            context.Mode(),
+            context,
         )
         .ok()?;
         if property.IsImportant() && !allow_important {
@@ -1562,6 +2157,7 @@ impl CSSParserImplValueBackend for Backend {
             CSSValuePayload::kUnparsedDeclarationClass(values::CSSUnparsedDeclarationValue {
                 data,
                 mode: context.Mode(),
+                base_url: context.BaseURL().clone(),
             }),
         ))
     }
@@ -1604,7 +2200,10 @@ impl crate::parser::css_supports_parser::CSSSupportsBackend for Backend {
             }),
             parent_rule_for_nesting: None,
             features: Default::default(),
-            ua_sheet_mode: false,
+            // CSSSupportsParser::SelectorFn uses the same selector grammar as
+            // the containing sheet. Built-in sheets may name UA shadow pseudo
+            // elements and may continue a selector past such an element.
+            ua_sheet_mode: parser.GetMode() == CSSParserMode::kUASheetMode,
             runtime_context: None,
             usage_context: None,
             ident_integer_parser: None,
@@ -1621,13 +2220,46 @@ impl crate::parser::css_supports_parser::CSSSupportsBackend for Backend {
         id == CSSValueID::kAnchorPositionFollowsTransforms
     }
     fn IsBlinkFeatureEnabled(name: &String) -> bool {
-        ValueDiagnostic(
-            DiagnosticKind::Unsupported,
-            0,
-            "RuntimeEnabledFeatures::IsFeatureEnabledFromString",
-            309,
-        );
-        false
+        // Chromium's built-in html.css is parsed in UA sheet mode and uses
+        // blink-feature() to select between the enabled and disabled forms of
+        // a rule.  Keep that decision in the parser's runtime-feature backend;
+        // projecting the sheet first and treating every feature as disabled
+        // silently activates obsolete fallback rules in the production
+        // cascade.  This is the complete feature set referenced by html.css at
+        // the pinned Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15.
+        match name.Utf8().as_str() {
+            // Runtime registry entries with stable status at the pinned
+            // revision.  These are enabled in a normal renderer process.
+            "AutofillPreviewGenericFontFamily"
+            | "AutofillPreviewIgnoreAuthorFont"
+            | "HTMLAreaElementDisplayNone"
+            | "HTMLInputElementDropWebkitClearButton"
+            | "OverlayGlobalRuleRemoval"
+            | "OverlayProperty"
+            | "RemovePositionAnchorUAStyle"
+            | "TableDefaultBorderColorCurrentColor" => true,
+
+            // Keep shared Layout feature ownership where it already exists.
+            "AppearanceBase" => foundation::RuntimeEnabledFeatures::AppearanceBaseEnabled(),
+            "UnboundedElement" => foundation::RuntimeEnabledFeatures::UnboundedElementEnabled(),
+
+            // Experimental features are disabled unless an embedding supplies
+            // a runtime override.  Rechrom's current RuntimeEnabledFeatures
+            // owner has no override surface for these entries.
+            "CustomizableCombobox"
+            | "CustomizableSelectMultiplePopup"
+            | "FilterableSelect"
+            | "MenuElements" => false,
+            _ => {
+                ValueDiagnostic(
+                    DiagnosticKind::Unsupported,
+                    0,
+                    "RuntimeEnabledFeatures::IsFeatureEnabledFromString",
+                    309,
+                );
+                false
+            }
+        }
     }
 }
 impl CSSParserImplPageBackend for Backend {
@@ -1922,16 +2554,22 @@ fn NewNestedDeclarationsRule(nesting: CSSNestingType, inner: crate::style_rule::
     }
 fn NewFunctionDeclarationsRule(properties: Rc<CSSPropertyValueSet<Self::ValueBackend>>)
     -> Rc<<Self::RuleDependencies as crate::style_rule::StyleRuleDependencies>::StyleRuleFunctionDeclarations>{
-        unavailable("CSSParserImplRuleBackend::NewFunctionDeclarationsRule")
+        Rc::new(
+            crate::style_rule_function_declarations::StyleRuleFunctionDeclarations::new(
+                CSSPropertyValueSetRuleHandle::FromImmutable(properties),
+            ),
+        )
     }
     fn ConsumeMixinRuleListOrNestedDeclarationList<T: TokenStreamTokenizer>(
         parser: &mut CSSParserImpl<'_, Self>,
         stream: &mut CSSParserTokenStream<'_, T>,
         nesting: CSSNestingType,
-        parent: Rc<std::cell::RefCell<Self::StyleRule>>,
+        parent: Rc<Self::StyleRule>,
         rules: &mut Vec<Rc<Self::StyleRuleBase>>,
     ) {
-        unavailable("CSSParserImplRuleBackend::ConsumeMixinRuleListOrNestedDeclarationList")
+        // css_parser_impl.cc:2696-2731. The fake parent allocation must remain
+        // alive because copied nested selectors retain its identity.
+        parser.ConsumeRuleListOrNestedDeclarationList(stream, nesting, Some(parent), rules)
     }
     fn ConsumeFontFamily<T: TokenStreamTokenizer>(
         stream: &mut CSSParserTokenStream<'_, T>,
@@ -1958,12 +2596,22 @@ fn NewFunctionDeclarationsRule(properties: Rc<CSSPropertyValueSet<Self::ValueBac
     fn StartsCustomPropertyDeclaration<T: TokenStreamTokenizer>(
         stream: &mut CSSParserTokenStream<'_, T>,
     ) -> bool {
-        let save = stream.Save();
         let token = stream.Peek().clone();
-        let dashed =
-            token.GetType() == kIdentToken && token.Value().ToString().Utf8().starts_with("--");
+        // cpp: css_variable_parser.cc:34-52. Only a valid custom-property
+        // identifier may be consumed speculatively. In particular, a style
+        // rule can begin with a block-start token while recovering from a
+        // nested rule; consuming that token through Consume() violates the
+        // token stream's block guard contract.
+        if token.GetType() != kIdentToken {
+            return false;
+        }
+        let name = token.Value().ToString().Utf8();
+        if name.len() < 3 || !name.starts_with("--") {
+            return false;
+        }
+        let save = stream.Save();
         stream.ConsumeIncludingWhitespace();
-        let result = dashed && stream.Peek().GetType() == kColonToken;
+        let result = stream.Peek().GetType() == kColonToken;
         stream.Restore(save);
         result
     }
@@ -1979,6 +2627,8 @@ fn NewFunctionDeclarationsRule(properties: Rc<CSSPropertyValueSet<Self::ValueBac
         has_visited_pseudo: &mut bool,
     ) -> std::ops::Range<usize> {
         let start = arena.len();
+        let ua_sheet_mode =
+            context.is_some_and(|context| context.Mode() == CSSParserMode::kUASheetMode);
         let context = SelectorParserContext {
             html: true,
             quirks: context.is_some_and(|c| c.Mode() == CSSParserMode::kHTMLQuirksMode),
@@ -1991,7 +2641,13 @@ fn NewFunctionDeclarationsRule(properties: Rc<CSSPropertyValueSet<Self::ValueBac
             parent_rule_for_nesting: parent
                 .map(|parent| parent as Rc<dyn crate::css_selector::CSSSelectorParentRule>),
             features: Default::default(),
-            ua_sheet_mode: false,
+            // cpp: css_parser_impl.cc ConsumeStyleRule passes the parser
+            // context through to CSSSelectorParser. UA mode is semantic: it
+            // admits Blink's internal/custom pseudo-element selector grammar
+            // used throughout html.css. Keeping this false parsed the exact UA
+            // resource with author-sheet restrictions and silently dropped
+            // otherwise valid built-in rules.
+            ua_sheet_mode,
             runtime_context: None,
             usage_context: None,
             ident_integer_parser: None,
@@ -2150,21 +2806,32 @@ fn NewViewTransitionRule(properties: Rc<CSSPropertyValueSet<Self::ValueBackend>>
         syntax.IsUniversal()
     }
     fn VariableDataNeedsVariableResolution(data: &ParserVariableData<Self>) -> bool {
-        unavailable("CSSParserImplRuleBackend::VariableDataNeedsVariableResolution")
+        data.NeedsVariableResolution()
     }
     fn ParseSyntaxDefaultValue(
         syntax: &ParserSyntax<Self>,
         data: &ParserVariableData<Self>,
         context: &CSSParserContext<Self::Platform>,
     ) -> bool {
-        unavailable("CSSParserImplRuleBackend::ParseSyntaxDefaultValue")
+        syntax.ParseTokens(data).is_ok()
     }
     fn ConsumeUnparsedDeclaration<T: TokenStreamTokenizer>(
         stream: &mut CSSParserTokenStream<'_, T>,
         context: &CSSParserContext<Self::Platform>,
         comma_ends_declaration: bool,
     ) -> Option<Rc<ParserVariableData<Self>>> {
-        unavailable("CSSParserImplRuleBackend::ConsumeUnparsedDeclaration")
+        let text = ConsumeOriginalVariableValue(stream, comma_ends_declaration);
+        let property = crate::parser::production_property_parser::ParseCustomPropertyWithContext(
+            "--function-value",
+            &text,
+            false,
+            context,
+        )
+        .ok()?;
+        let CSSValuePayload::kUnparsedDeclarationClass(value) = property.Value().Payload() else {
+            return None;
+        };
+        Some(value.data.clone())
     }
     fn NewPrivateVariable(
         name: AtomicString,
@@ -2180,7 +2847,43 @@ fn NewViewTransitionRule(properties: Rc<CSSPropertyValueSet<Self::ValueBackend>>
         context: &CSSParserContext<Self::Platform>,
         arguments: &mut Vec<Option<Rc<ParserVariableData<Self>>>>,
     ) -> bool {
-        unavailable("CSSParserImplRuleBackend::ConsumeMixinArguments")
+        // css_variable_parser.cc:421-489. Keep this in lockstep with custom
+        // function argument grammar: top-level commas split arguments, while
+        // an outer {} block admits commas as part of one argument.
+        let mut guard = BlockGuard::new(stream);
+        guard.ConsumeWhitespace();
+        while !guard.AtEnd() {
+            let value = if guard.Peek().GetType() == kLeftBraceToken {
+                let mut brace = BlockGuard::new(&mut guard);
+                brace.ConsumeWhitespace();
+                if brace.AtEnd() {
+                    return false;
+                }
+                let value = Self::ConsumeUnparsedDeclaration(&mut brace, context, false);
+                if value.is_none() || !brace.AtEnd() {
+                    return false;
+                }
+                value
+            } else {
+                if Self::StartsCustomPropertyDeclaration(&mut guard) {
+                    return false;
+                }
+                Self::ConsumeUnparsedDeclaration(&mut guard, context, true)
+            };
+            let Some(value) = value else {
+                return false;
+            };
+            arguments.push(Some(value));
+            if guard.Peek().GetType() == kCommaToken {
+                guard.ConsumeIncludingWhitespace();
+                if guard.AtEnd() || guard.Peek().GetType() == kCommaToken {
+                    return false;
+                }
+            } else if !guard.AtEnd() {
+                return false;
+            }
+        }
+        true
     }
     fn ParseCustomMediaDefinition<T: TokenStreamTokenizer>(
         stream: &mut CSSParserTokenStream<'_, T>,
@@ -2203,7 +2906,7 @@ impl CSSParserContextPlatform for Backend {
         SourceURL::Null
     }
     fn EmptyURL() -> Self::URL {
-        SourceURL::Empty
+        SourceURL::Value(String::from(""))
     }
     fn EmptyTextEncoding() -> Self::TextEncoding {
         None
@@ -2218,14 +2921,25 @@ impl CSSParserContextPlatform for Backend {
         referrer
     }
     fn StrippedForUseAsReferrer(url: &Self::URL) -> String {
-        unavailable("CSSParserContextPlatform::StrippedForUseAsReferrer")
+        url.AsString().cloned().unwrap_or_default()
     }
     fn ResolveURL(
         base: &Self::URL,
-        url: &String,
-        encoding: Option<&Self::TextEncoding>,
+        input: &String,
+        _encoding: Option<&Self::TextEncoding>,
     ) -> Self::URL {
-        unavailable("CSSParserContextPlatform::ResolveURL")
+        if input.empty() {
+            return SourceURL::Value(String::from(""));
+        }
+        let input_utf8 = input.Utf8();
+        let resolved = base
+            .AsString()
+            .and_then(|base| url::Url::parse(&base.Utf8()).ok())
+            .and_then(|base| base.join(&input_utf8).ok())
+            .or_else(|| url::Url::parse(&input_utf8).ok())
+            .map(|url| url.to_string())
+            .unwrap_or(input_utf8);
+        SourceURL::Value(String::FromUtf8(resolved.as_bytes()))
     }
     fn CSSParserIgnoreCharsetForURLsEnabled() -> bool {
         true
@@ -2239,7 +2953,7 @@ impl StyleRuleDependencies for Backend {
     type SelectorList = CSSSelectorList;
     type CSSPropertyValueSet = CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>;
     type CSSLazyParsingState = Unavailable;
-    type MixinParameterBindings = Unavailable;
+    type MixinParameterBindings = ProductionMixinParameterBindings;
     type StyleScope = crate::style_scope::StyleScope;
     type MediaQuerySet = QuerySet;
     type ContainerQuerySet = ContainerSet;
@@ -2260,7 +2974,10 @@ impl StyleRuleDependencies for Backend {
     type StyleRuleKeyframe = ConcreteKeyframe;
     type StyleRuleNestedDeclarations =
         crate::style_rule_nested_declarations::StyleRuleNestedDeclarations<Backend>;
-    type StyleRuleFunctionDeclarations = Unavailable;
+    type StyleRuleFunctionDeclarations =
+        crate::style_rule_function_declarations::StyleRuleFunctionDeclarations<
+            ProductionCSSValueDispatch,
+        >;
     type StyleRuleNamespace = crate::style_rule_namespace::StyleRuleNamespace;
     type StyleRuleCounterStyle = Unavailable;
     type StyleRuleViewTransition = Unavailable;
@@ -2329,7 +3046,7 @@ impl StyleSheetContentsBackend for Backend {
     type Node = Unavailable;
     type TreeScope = Unavailable;
     type Resource = Unavailable;
-    type RuleSetDiff = Unavailable;
+    type RuleSetDiff = ProductionRuleSetDiff;
     fn ImportMediaQueries(rule: &Self::StyleRuleImport) -> Option<Rc<Self::MediaQuerySet>> {
         Some(rule.metadata.MediaQueries())
     }
@@ -2439,7 +3156,7 @@ impl StyleSheetContentsBackend for Backend {
         unavailable("StyleSheetContentsBackend::ResourceDeprecatedSourceMapHeader")
     }
     fn MediaEvaluatorDocument(medium: &Self::MediaQueryEvaluator) -> Option<&Self::Document> {
-        unavailable("StyleSheetContentsBackend::MediaEvaluatorDocument")
+        None
     }
     fn AddRulesFromSheet(
         rule_set: &mut RuleSet<Self>,
@@ -2447,43 +3164,307 @@ impl StyleSheetContentsBackend for Backend {
         medium: &Self::MediaQueryEvaluator,
         mixins: &MixinMap<Self>,
     ) {
-        unavailable("StyleSheetContentsBackend::AddRulesFromSheet")
+        rule_set.AddRulesFromSheet(sheet, medium, mixins, None, None)
     }
     fn CompactRulesIfNeeded(rule_set: &mut RuleSet<Self>) {
-        unavailable("StyleSheetContentsBackend::CompactRulesIfNeeded")
+        rule_set.CompactRulesIfNeeded()
     }
     fn NewRuleSetDiff(old: RuleSetHandle<Self>) -> Self::RuleSetDiff {
-        unavailable("StyleSheetContentsBackend::NewRuleSetDiff")
+        ProductionRuleSetDiff {
+            old,
+            changed_rules: Vec::new(),
+            new_rules: None,
+            cleared: false,
+            unrepresentable: false,
+        }
     }
     fn AddRuleDiff(diff: &mut Self::RuleSetDiff, rule: Rc<StyleRuleBase<Self>>) {
-        unavailable("StyleSheetContentsBackend::AddRuleDiff")
+        diff.changed_rules.push(rule)
     }
     fn MarkDiffUnrepresentable(diff: &mut Self::RuleSetDiff) {
-        unavailable("StyleSheetContentsBackend::MarkDiffUnrepresentable")
+        diff.unrepresentable = true
     }
     fn NewRuleSetCleared(diff: &mut Self::RuleSetDiff) {
-        unavailable("StyleSheetContentsBackend::NewRuleSetCleared")
+        diff.cleared = true
     }
     fn NewRuleSetCreated(diff: &mut Self::RuleSetDiff, rules: RuleSetHandle<Self>) {
-        unavailable("StyleSheetContentsBackend::NewRuleSetCreated")
+        diff.new_rules = Some(rules)
     }
 }
 
+impl RuleSetIngestionBackend for Backend {
+    fn CloneRule(
+        rule: &StyleRuleBase<Self>,
+        parent: Option<Rc<StyleRule<Self>>>,
+        bindings: Option<Rc<Self::MixinParameterBindings>>,
+    ) -> Rc<StyleRuleBase<Self>> {
+        fn clone_child(
+            child: &StyleRuleBase<Backend>,
+            parent: Option<Rc<StyleRule<Backend>>>,
+            bindings: Option<Rc<ProductionMixinParameterBindings>>,
+        ) -> Rc<StyleRuleBase<Backend>> {
+            let clone_children = |children: &[Rc<StyleRuleBase<Backend>>]| {
+                children
+                    .iter()
+                    .map(|child| clone_child(child, parent.clone(), bindings.clone()))
+                    .collect::<Vec<_>>()
+            };
+            match child {
+                StyleRuleBase::Style(style) => {
+                    let parent_for_selector = parent
+                        .clone()
+                        .map(|parent| parent as Rc<dyn crate::css_selector::CSSSelectorParentRule>);
+                    let selectors = style.Selectors().Copy().Renest(parent_for_selector);
+                    let cloned = Rc::new(StyleRule::Create(
+                        selectors.as_ref().clone(),
+                        style.Properties().ImmutableCopyIfNeeded(),
+                        bindings.clone(),
+                    ));
+                    if let Some(children) = style.ChildRules() {
+                        for child in children.iter() {
+                            cloned.AddChildRule(clone_child(
+                                child,
+                                Some(cloned.clone()),
+                                bindings.clone(),
+                            ));
+                        }
+                    }
+                    Rc::new(StyleRuleBase::Style(cloned))
+                }
+                StyleRuleBase::NestedDeclarations(nested) => {
+                    let inner = nested.InnerStyleRule();
+                    let parent_for_selector = parent
+                        .map(|parent| parent as Rc<dyn crate::css_selector::CSSSelectorParentRule>);
+                    let selectors = inner.Selectors().Copy().Renest(parent_for_selector);
+                    let cloned = StyleRule::Create(
+                        selectors.as_ref().clone(),
+                        inner.Properties().ImmutableCopyIfNeeded(),
+                        bindings,
+                    );
+                    Rc::new(StyleRuleBase::NestedDeclarations(Rc::new(
+                        crate::style_rule_nested_declarations::StyleRuleNestedDeclarations::new(
+                            nested.NestingType(),
+                            cloned,
+                        ),
+                    )))
+                }
+                StyleRuleBase::Result(group) => Rc::new(StyleRuleBase::Result(
+                    crate::style_rule::StyleRuleResult::CopyWithRules(
+                        group,
+                        clone_children(group.ChildRules()),
+                    ),
+                )),
+                StyleRuleBase::ApplyMixin(group) => Rc::new(StyleRuleBase::ApplyMixin(
+                    crate::style_rule::StyleRuleApplyMixin::CopyWithRules(
+                        group,
+                        clone_children(group.ChildRules()),
+                    ),
+                )),
+                StyleRuleBase::Contents(group) => Rc::new(StyleRuleBase::Contents(
+                    crate::style_rule::StyleRuleContentsStatement::CopyWithRules(
+                        group,
+                        clone_children(group.ChildRules()),
+                    ),
+                )),
+                StyleRuleBase::Media(group) => Rc::new(StyleRuleBase::Media(
+                    crate::style_rule::StyleRuleMedia::CopyWithRules(
+                        group,
+                        clone_children(group.ChildRules()),
+                    ),
+                )),
+                StyleRuleBase::Supports(group) => Rc::new(StyleRuleBase::Supports(
+                    crate::style_rule::StyleRuleSupports::CopyWithRules(
+                        group,
+                        clone_children(group.ChildRules()),
+                    ),
+                )),
+                StyleRuleBase::Container(group) => Rc::new(StyleRuleBase::Container(
+                    crate::style_rule::StyleRuleContainer::CopyWithRules(
+                        group,
+                        clone_children(group.ChildRules()),
+                    ),
+                )),
+                _ => panic!("unsupported rule inside @mixin expansion"),
+            }
+        }
+
+        // cpp: style_rule.cc:604-624,642-821. RuleSet invokes this only for
+        // @apply/@contents/@result group clones; their children must be
+        // re-nested and carry the exact binding owner into MatchResult.
+        match rule {
+            StyleRuleBase::ApplyMixin(rule) => Rc::new(StyleRuleBase::ApplyMixin(
+                crate::style_rule::StyleRuleApplyMixin::CopyWithRules(
+                    rule,
+                    rule.ChildRules()
+                        .iter()
+                        .map(|child| clone_child(child, parent.clone(), bindings.clone()))
+                        .collect(),
+                ),
+            )),
+            StyleRuleBase::Contents(rule) => Rc::new(StyleRuleBase::Contents(
+                crate::style_rule::StyleRuleContentsStatement::CopyWithRules(
+                    rule,
+                    rule.ChildRules()
+                        .iter()
+                        .map(|child| clone_child(child, parent.clone(), bindings.clone()))
+                        .collect(),
+                ),
+            )),
+            StyleRuleBase::Result(rule) => Rc::new(StyleRuleBase::Result(
+                crate::style_rule::StyleRuleResult::CopyWithRules(
+                    rule,
+                    rule.ChildRules()
+                        .iter()
+                        .map(|child| clone_child(child, parent.clone(), bindings.clone()))
+                        .collect(),
+                ),
+            )),
+            _ => unreachable!("RuleSet only clones @apply/@contents/@result during ingestion"),
+        }
+    }
+    fn MediaRuleQueries(rule: &StyleRuleMedia<Self>) -> Option<Rc<Self::MediaQuerySet>> {
+        rule.MediaQueries().map(|queries| Rc::new(queries.clone()))
+    }
+    fn ContainerRuleQueries(
+        rule: &crate::style_rule::StyleRuleContainer<Self>,
+    ) -> Rc<Self::ContainerQuerySet> {
+        Rc::new(rule.GetContainerQuerySet().clone())
+    }
+    fn ScopeRuleScope(rule: &crate::style_rule::StyleRuleScope<Self>) -> Rc<Self::StyleScope> {
+        rule.StyleScopeHandle()
+    }
+    fn CopyContainerQueriesWithParent(
+        queries: &Self::ContainerQuerySet,
+        parent: Rc<Self::ContainerQuerySet>,
+    ) -> Rc<Self::ContainerQuerySet> {
+        queries.CopyWithParent(Some(parent))
+    }
+    fn CopyStyleScopeWithParent(
+        scope: &Self::StyleScope,
+        parent: Rc<Self::StyleScope>,
+    ) -> Rc<Self::StyleScope> {
+        scope.CopyWithParent(Some(parent))
+    }
+    fn NestedDeclarationsInnerStyleRule(
+        rule: &Self::StyleRuleNestedDeclarations,
+    ) -> Rc<StyleRule<Self>> {
+        let inner = rule.InnerStyleRule();
+        Rc::new(StyleRule::Create(
+            inner.Selectors().clone(),
+            inner.Properties(),
+            inner.GetMixinParameterBindings().cloned(),
+        ))
+    }
+    fn FunctionDeclarationValues(
+        rule: &Self::StyleRuleFunctionDeclarations,
+    ) -> Vec<(String, Rc<Self::CSSVariableData>)> {
+        let properties = rule.Properties();
+        let collect = |values: &[CSSPropertyValue<ProductionCSSValueDispatch>]| {
+            values
+                .iter()
+                .filter_map(|property| {
+                    if property.PropertyID() != CSSPropertyID::kVariable {
+                        return None;
+                    }
+                    let CSSValuePayload::kUnparsedDeclarationClass(value) =
+                        property.Value().Payload()
+                    else {
+                        return None;
+                    };
+                    Some((
+                        String::from_utf16(
+                            property
+                                .CustomPropertyName()
+                                .utf16_units()
+                                .unwrap_or_default(),
+                        ),
+                        value.data.clone(),
+                    ))
+                })
+                .collect()
+        };
+        match properties.as_ref() {
+            CSSPropertyValueSetRuleHandle::Immutable(set) => collect(set.Properties()),
+            CSSPropertyValueSetRuleHandle::Mutable(set) => collect(set.borrow().Properties()),
+        }
+    }
+    fn NewMixinParameterBindings(
+        bindings: HashMap<String, RuleSetMixinBinding<Self>>,
+        locals: RuleSetMixinLocals<Self>,
+        conditional_locals: RuleSetConditionalLocals<Self>,
+        parent: Option<Rc<Self::MixinParameterBindings>>,
+    ) -> Rc<Self::MixinParameterBindings> {
+        Rc::new(ProductionMixinParameterBindings {
+            bindings,
+            locals,
+            conditional_locals,
+            parent,
+        })
+    }
+    fn IngestionDocument(_medium: &Self::MediaQueryEvaluator) -> Option<&Self::Document> {
+        None
+    }
+    fn CreateRouteIfNeeded(rule: &Self::StyleRuleLocation, _document: Option<&Self::Document>) {
+        match *rule {}
+    }
+    fn EvaluateNavigationQuery(
+        query: &Self::NavigationQuery,
+        _document: Option<&Self::Document>,
+    ) -> bool {
+        match *query {}
+    }
+    fn IngestionImportIsSupported(rule: &Self::StyleRuleImport) -> bool {
+        rule.metadata.IsSupported()
+    }
+    fn IngestionImportMediaQueries(
+        rule: &Self::StyleRuleImport,
+    ) -> Option<Rc<Self::MediaQuerySet>> {
+        Some(rule.metadata.MediaQueries())
+    }
+    fn ImportIsLayered(rule: &Self::StyleRuleImport) -> bool {
+        !rule.metadata.GetLayerName().is_empty()
+    }
+    fn ImportLayerName(rule: &Self::StyleRuleImport) -> &[AtomicString] {
+        rule.metadata.GetLayerName()
+    }
+    fn ImportScope(rule: &Self::StyleRuleImport) -> Option<Rc<Self::StyleScope>> {
+        rule.metadata.scope.clone()
+    }
+    fn IngestionImportStyleSheet(
+        _rule: &Self::StyleRuleImport,
+    ) -> Option<Rc<dyn RuleSetSheetView<Self>>> {
+        // Detached parser output publishes an ImportLoad.  Once its loader
+        // supplies child contents this hook can return that retained sheet.
+        None
+    }
+    fn CopyNavigationState(_state: &Self::NavigationState) -> Rc<Self::NavigationState> {
+        Rc::new(())
+    }
+    fn BeginStyleSheetContents(_sheet: &dyn RuleSetSheetView<Self>) {}
+    fn EndStyleSheetContents() {}
+}
+
 impl RuleSetBackend for Backend {
-    type BucketTable = Unavailable;
-    type RuleFeatureSet = Unavailable;
-    type MediaQueryEvaluator = Unavailable;
-    type NavigationState = Unavailable;
-    type Document = Unavailable;
-    type SubstringSetMatcher = Unavailable;
+    type BucketTable = ProductionRuleBucketTable;
+    type RuleFeatureSet = ProductionRuleFeatureSet;
+    type MediaQueryEvaluator = ProductionMediaQueryEvaluator;
+    type NavigationState = ();
+    type Document = ();
+    type SubstringSetMatcher = ProductionSubstringSetMatcher;
     fn CueShadowPseudoId() -> AtomicString {
-        unavailable("RuleSetBackend::CueShadowPseudoId")
+        AtomicString::from_str("-internal-media-track-cue")
     }
     fn StringForUAShadowPseudoId(pseudo_id: PseudoId) -> AtomicString {
-        unavailable("RuleSetBackend::StringForUAShadowPseudoId")
+        match pseudo_id {
+            PseudoId::kPseudoIdPlaceholder => AtomicString::from_str("-webkit-input-placeholder"),
+            // Unknown UA-shadow pseudo ids remain in the universal bucket.
+            // This is conservative: it can cost a selector check but cannot
+            // drop a rule.
+            _ => AtomicString::default(),
+        }
     }
-    fn SelectorIsEasy(selector: CSSSelectorComplex<'_>) -> bool {
-        unavailable("RuleSetBackend::SelectorIsEasy")
+    fn SelectorIsEasy(_selector: CSSSelectorComplex<'_>) -> bool {
+        false
     }
     fn CollectIdentifierHashes(
         selector: CSSSelectorComplex<'_>,
@@ -2491,58 +3472,70 @@ impl RuleSetBackend for Backend {
         backing: &mut Vec<u16>,
         subject_filter: &mut u32,
     ) {
-        unavailable("RuleSetBackend::CollectIdentifierHashes")
+        // An empty bloom filter disables the rejection optimization and keeps
+        // matching conservative until the production invalidation feature set
+        // is connected.
     }
-    fn BeginSelector(rule: &Rc<StyleRule<Self>>, selector_index: u32) {
-        unavailable("RuleSetBackend::BeginSelector")
-    }
-    fn EndSelector() {
-        unavailable("RuleSetBackend::EndSelector")
-    }
+    fn BeginSelector(_rule: &Rc<StyleRule<Self>>, _selector_index: u32) {}
+    fn EndSelector() {}
     fn CollectFeaturesFromSelector(
         features: &mut Self::RuleFeatureSet,
         selector: CSSSelectorComplex<'_>,
         scope: Option<&Self::StyleScope>,
     ) -> SelectorPreMatch {
-        unavailable("RuleSetBackend::CollectFeaturesFromSelector")
+        SelectorPreMatch::kMayMatch
     }
     fn NewFeatures() -> Self::RuleFeatureSet {
-        unavailable("RuleSetBackend::NewFeatures")
+        ProductionRuleFeatureSet::default()
     }
     fn MutableMediaQueryResultFlags(
         features: &mut Self::RuleFeatureSet,
     ) -> &mut MediaQueryResultFlags {
-        unavailable("RuleSetBackend::MutableMediaQueryResultFlags")
+        &mut features.media_query_result_flags
     }
     fn EvalMedia(
         evaluator: &Self::MediaQueryEvaluator,
         queries: &Self::MediaQuerySet,
         flags: &mut MediaQueryResultFlags,
     ) -> bool {
-        unavailable("RuleSetBackend::EvalMedia")
+        evaluator.evaluator().EvalSet(queries, Some(flags), None)
     }
     fn DidResultsChange(
         evaluator: &Self::MediaQueryEvaluator,
         results: &[MediaQuerySetResult],
     ) -> bool {
-        unavailable("RuleSetBackend::DidResultsChange")
+        evaluator
+            .evaluator()
+            .DidResultsChange(results.iter().filter_map(|result| {
+                result
+                    .MediaQueries()
+                    .AsAny()
+                    .downcast_ref::<QuerySet>()
+                    .map(|queries| (queries, result.Result()))
+            }))
     }
     fn NavigationStateForDocument(
         document: Option<&Self::Document>,
     ) -> Option<&Self::NavigationState> {
-        unavailable("RuleSetBackend::NavigationStateForDocument")
+        None
     }
     fn NewSubstringSetMatcher() -> Self::SubstringSetMatcher {
-        unavailable("RuleSetBackend::NewSubstringSetMatcher")
+        ProductionSubstringSetMatcher(Vec::new())
     }
     fn BuildSubstringSetMatcher(
         matcher: &mut Self::SubstringSetMatcher,
         patterns: &[RuleSetSubstringPattern],
     ) -> bool {
-        unavailable("RuleSetBackend::BuildSubstringSetMatcher")
+        matcher.0 = patterns.to_vec();
+        true
     }
     fn SubstringAnyMatch(matcher: &Self::SubstringSetMatcher, value: &[u8]) -> bool {
-        unavailable("RuleSetBackend::SubstringAnyMatch")
+        matcher.0.iter().any(|pattern| {
+            !pattern.pattern.is_empty()
+                && value
+                    .windows(pattern.pattern.len())
+                    .any(|candidate| candidate == pattern.pattern.as_bytes())
+        })
     }
 }
 
@@ -2599,7 +3592,9 @@ mod tests {
     }
     #[test]
     fn native_rule_selector_and_value_allocations_preserve_original_ranges() {
-        let sheet=parse("/*leading*/ a\\+b[data-v='a}b']/**/ { color : red ; width: 12px; --x:var(--y, 2px); } /*tail*/");
+        let sheet = parse(
+            "/*leading*/ a\\+b[data-v='a}b']/**/ { color : red ; width: 12px; --x:var(--y, 2px); } /*tail*/",
+        );
         assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
         assert_eq!(sheet.rules.len(), 1);
         assert_eq!(
@@ -2623,8 +3618,29 @@ mod tests {
         assert_eq!(sheet.contents.RuleCount(), 1);
     }
     #[test]
+    fn starting_style_retains_its_child_for_projection_and_rule_set_ingestion() {
+        let sheet = parse("@starting-style{.hit{font-size:31px}}.hit{width:7px}");
+        assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
+        assert_eq!(sheet.contents.RuleCount(), 2);
+        assert!(matches!(
+            sheet.contents.RuleAt(0).as_ref(),
+            StyleRuleBase::StartingStyle(_)
+        ));
+        assert_eq!(sheet.rules.len(), 2);
+
+        let set = sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::default());
+        let rules = set.ClassRules(&AtomicString::from_str("hit"));
+        assert_eq!(rules.len(), 2);
+        assert_eq!(
+            rules.iter().filter(|rule| rule.IsStartingStyle()).count(),
+            1
+        );
+    }
+    #[test]
     fn nested_media_and_layers_keep_source_order_and_typed_queries() {
-        let sheet=parse("@layer reset, theme; @media screen { @layer theme { a {width:12px} @media(min-width:700px){b{height:23px}} } } @layer {c{opacity:.5}} d{width:5px}");
+        let sheet = parse(
+            "@layer reset, theme; @media screen { @layer theme { a {width:12px} @media(min-width:700px){b{height:23px}} } } @layer {c{opacity:.5}} d{width:5px}",
+        );
         assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
         assert_eq!(sheet.layer_statements.len(), 1);
         assert_eq!(sheet.layer_statements[0].source_order, 0);
@@ -2649,7 +3665,9 @@ mod tests {
     }
     #[test]
     fn translated_recovery_handles_bad_selectors_and_unsupported_rules() {
-        let sheet=parse("!bad{width:99px}@counter-style bad{ignored{}} @font-face{font-family:missing;src:url('a}b')} @media screen; good{width:7px}");
+        let sheet = parse(
+            "!bad{width:99px}@counter-style bad{ignored{}} @font-face{font-family:missing;src:url('a}b')} @media screen; good{width:7px}",
+        );
         assert_eq!(sheet.rules.len(), 1);
         assert_eq!(sheet.rules[0].selector_source.Utf8(), "good");
         assert!(sheet
@@ -2662,8 +3680,19 @@ mod tests {
             .any(|d| d.kind == DiagnosticKind::Invalid));
     }
     #[test]
+    fn block_start_during_qualified_rule_recovery_is_not_consumed_as_an_ident() {
+        // css-syntax recovery may ask ConsumeStyleRule to inspect a stray
+        // block-start token. Chromium's StartsCustomPropertyDeclaration exits
+        // before speculative consumption unless the token is a valid --name.
+        let sheet = parse("{} good{width:7px}");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sheet.rules[0].selector_source.Utf8(), "good");
+    }
+    #[test]
     fn declarations_accept_comments_nested_blocks_and_eof_recovery() {
-        let sheet=parse("a{--payload:[a;{b:'}'}];width:var(--size,17px);color:red!important;color:blue; height:21px");
+        let sheet = parse(
+            "a{--payload:[a;{b:'}'}];width:var(--size,17px);color:red!important;color:blue; height:21px",
+        );
         assert_eq!(sheet.rules.len(), 1);
         let properties = sheet.rules[0].rule.Properties();
         assert!(StyleRulePropertySet::GetPropertyCSSValue(
@@ -2689,7 +3718,9 @@ mod tests {
     }
     #[test]
     fn nesting_and_native_context_pseudos_recover_without_panics() {
-        let sheet=parse("@media screen{!bad{} :playing{width:98px} :open{width:99px} good{width:7px}} outer{width:3px;& child{height:99px} @media screen{width:88px}} tail{height:5px}");
+        let sheet = parse(
+            "@media screen{!bad{} :playing{width:98px} :open{width:99px} good{width:7px}} outer{width:3px;& child{height:99px} @media screen{width:88px}} tail{height:5px}",
+        );
         assert_eq!(sheet.rules.len(), 5);
         let names: Vec<_> = sheet
             .rules
@@ -2698,14 +3729,12 @@ mod tests {
             .collect();
         assert_eq!(names, [":open", "good", "outer", "& child", "tail"]);
         assert!(!sheet.selector_ranges.is_empty());
-        assert!(sheet.selector_ranges.iter().any(|range| SourceSlice(
-            &sheet.source,
-            range.start,
-            range.end
-        )
-        .Utf8()
-        .trim()
-            == ":open"));
+        assert!(sheet.selector_ranges.iter().any(|range| {
+            SourceSlice(&sheet.source, range.start, range.end)
+                .Utf8()
+                .trim()
+                == ":open"
+        }));
     }
     fn property(
         properties: &CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>,
@@ -2789,7 +3818,9 @@ mod tests {
     }
     #[test]
     fn keyframe_consumers_recover_and_retain_names_offsets_and_declarations() {
-        let sheet = parse("@layer motion{@media screen{@-webkit-keyframes f\\61 de { from, 50% {opacity:0;--x:var(--y);width:8px!important;} 120%{opacity:.9} unknown{width:0} to {opacity:1} } @keyframes fade{entry -20%{height:4px}}}} tail{width:1px}");
+        let sheet = parse(
+            "@layer motion{@media screen{@-webkit-keyframes f\\61 de { from, 50% {opacity:0;--x:var(--y);width:8px!important;} 120%{opacity:.9} unknown{width:0} to {opacity:1} } @keyframes fade{entry -20%{height:4px}}}} tail{width:1px}",
+        );
         assert_eq!(sheet.keyframes.len(), 2);
         let first = &sheet.keyframes[0];
         assert_eq!(first.rule.name.Utf8(), "fade");
@@ -2836,7 +3867,9 @@ mod tests {
     }
     #[test]
     fn unsupported_descriptors_invalid_preludes_and_eof_are_recoverable() {
-        let sheet = parse("@font-face extra{src:url(no)} @keyframes none{from{width:99px}} @font-face{font-family:serif;src:url(a) tech(incremental),local('Demo');font-weight:bolder;font-display:swap!important;unicode-range:U+110000; font-feature-settings:'liga';font-style:oblique 20deg;size-adjust:calc(50%);font-family:'Valid'} @keyframes 'Quoted😀'{from{opacity:0!important}to{opacity:1");
+        let sheet = parse(
+            "@font-face extra{src:url(no)} @keyframes none{from{width:99px}} @font-face{font-family:serif;src:url(a) tech(incremental),local('Demo');font-weight:bolder;font-display:swap!important;unicode-range:U+110000; font-feature-settings:'liga';font-style:oblique 20deg;size-adjust:calc(50%);font-family:'Valid'} @keyframes 'Quoted😀'{from{opacity:0!important}to{opacity:1",
+        );
         assert_eq!(sheet.font_faces.len(), 1);
         let properties = sheet.font_faces[0].rule.Properties();
         assert_eq!(
@@ -2873,7 +3906,9 @@ mod tests {
     }
     #[test]
     fn supports_boolean_grammar_selector_features_and_inactive_ranges() {
-        let sheet = parse("@supports (unknown-prop:x){hidden{width:1px}} @supports not (unknown-prop:x){visible{width:2px}} @supports (width:1px) and selector(.a > .b){typed{height:3px}} @supports (width:1px) or (height:1px) and (color:red){invalid{}} @supports font-format(woff2){font{}} @supports font-tech(incremental){future{}} tail{width:4px}");
+        let sheet = parse(
+            "@supports (unknown-prop:x){hidden{width:1px}} @supports not (unknown-prop:x){visible{width:2px}} @supports (width:1px) and selector(.a > .b){typed{height:3px}} @supports (width:1px) or (height:1px) and (color:red){invalid{}} @supports font-format(woff2){font{}} @supports font-tech(incremental){future{}} tail{width:4px}",
+        );
         assert_eq!(
             sheet
                 .rules
@@ -2888,13 +3923,17 @@ mod tests {
             .diagnostics
             .iter()
             .any(|d| d.kind == DiagnosticKind::Invalid));
-        let nested = parse("@supports ((width:1px) and (height:2px)){nested{width:5px}} @supports not not (width:1px){bad{}} good{}");
+        let nested = parse(
+            "@supports ((width:1px) and (height:2px)){nested{width:5px}} @supports not not (width:1px){bad{}} good{}",
+        );
         assert_eq!(nested.rules.len(), 2);
         assert_eq!(nested.rules[0].selector_source.Utf8(), "nested");
     }
     #[test]
     fn import_effects_namespace_selectors_and_late_rule_recovery() {
-        let sheet = parse("@layer reset; @import url('theme.css') layer(theme) supports(display:grid) screen; @import 'unused.css' supports((unknown:value)); @namespace svg 'http://www.w3.org/2000/svg'; svg|rect{width:1px} @import 'late.css'; @namespace late 'urn:late'; tail{height:2px}");
+        let sheet = parse(
+            "@layer reset; @import url('theme.css') layer(theme) supports(display:grid) screen; @import 'unused.css' supports((unknown:value)); @namespace svg 'http://www.w3.org/2000/svg'; svg|rect{width:1px} @import 'late.css'; @namespace late 'urn:late'; tail{height:2px}",
+        );
         assert_eq!(sheet.imports.len(), 2);
         assert_eq!(sheet.import_loads.len(), 2);
         let import = &sheet.imports[0].rule;
@@ -2928,7 +3967,9 @@ mod tests {
     }
     #[test]
     fn nested_rules_and_bare_declarations_preserve_typed_parent_and_source_order() {
-        let sheet = parse(".outer{width:1px;&>.child{width:2px}width:3px;@media screen{height:4px;&>.inner{height:5px}height:6px}height:7px}tail{}");
+        let sheet = parse(
+            ".outer{width:1px;&>.child{width:2px}width:3px;@media screen{height:4px;&>.inner{height:5px}height:6px}height:7px}tail{}",
+        );
         assert_eq!(sheet.rules.len(), 4);
         assert!(Rc::ptr_eq(
             sheet.rules[1].parent_rule_for_nesting.as_ref().unwrap(),
@@ -2958,6 +3999,70 @@ mod tests {
             .any(|d| d.kind == DiagnosticKind::Unsupported));
     }
     #[test]
+    fn projected_rule_typed_declarations_share_cssom_order_and_identity() {
+        let mut sheet = parse(".outer{width:1px;&>.child{height:2px}color:red}tail{opacity:.5}");
+        let projected = crate::production_style_sheet_projection::ProjectStyleSheet(&sheet);
+        assert_eq!(projected.rules.len(), 4);
+
+        let expected = projected
+            .rules
+            .iter()
+            .map(|rule| {
+                rule.declarations
+                    .iter()
+                    .map(|declaration| declaration.value.clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let typed = (0..projected.rules.len())
+            .map(|index| {
+                sheet
+                    .TypedDeclarationsForProjectedRule(index)
+                    .expect("typed projected declarations")
+            })
+            .collect::<Vec<_>>();
+        let actual = typed
+            .iter()
+            .map(|properties| {
+                properties
+                    .iter()
+                    .map(|property| property.Value().CssText().Utf8())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual,
+            vec![vec!["1px"], vec!["2px"], vec!["red"], vec!["0.5"]]
+        );
+        assert!(Rc::ptr_eq(
+            &typed[2],
+            &sheet.TypedDeclarationsForProjectedRule(2).unwrap()
+        ));
+        assert!(Rc::ptr_eq(
+            &sheet.RetainedDeclarationsForProjectedRule(0).unwrap(),
+            &sheet.rules[0].rule.Properties()
+        ));
+        assert!(!Rc::ptr_eq(&typed[1], &typed[2]));
+        assert!(sheet
+            .TypedDeclarationsForProjectedRule(projected.rules.len())
+            .is_none());
+
+        let nested_range = sheet.nested_declarations[0].source_range.clone();
+        sheet.diagnostics.push(Diagnostic {
+            kind: DiagnosticKind::Unsupported,
+            offset: nested_range.body_start,
+            operation: "test unsupported translated operation",
+            source_line: line!(),
+        });
+        assert!(matches!(
+            sheet.ProjectedRuleDeclarationsAt(2),
+            Some(ProjectedRuleDeclarations::RequiresLegacyFallback)
+        ));
+        assert!(sheet.TypedDeclarationsForProjectedRule(2).is_none());
+        assert!(sheet.TypedDeclarationsForProjectedRule(1).is_some());
+    }
+    #[test]
     fn source_ranges_are_utf16_and_duplicate_media_retains_same_query_owner() {
         let sheet = parse("é😀{width:1px} @media screen{a{width:2px}}@media screen{b{width:3px}}");
         assert_eq!(sheet.rules[0].selector_source.Utf8(), "é😀");
@@ -2970,7 +4075,9 @@ mod tests {
     }
     #[test]
     fn container_rule_projects_typed_chain_and_exact_declarations() {
-        let sheet=parse("@container Card (100px < width <= 600px), style(--Theme: RED!important){@container scroll-state(stuck: top){.item{width : 17px ;--x:var(--a, [2px]);}}}");
+        let sheet = parse(
+            "@container Card (100px < width <= 600px), style(--Theme: RED!important){@container scroll-state(stuck: top){.item{width : 17px ;--x:var(--a, [2px]);}}}",
+        );
         assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
         assert_eq!(sheet.rules.len(), 1);
         assert_eq!(sheet.rules[0].container_conditions.len(), 2);
@@ -2999,8 +4106,24 @@ mod tests {
         );
     }
     #[test]
+    fn container_rule_keeps_media_math_as_typed_css_value() {
+        let sheet = parse(
+            "@container (width >= calc(10em + 640px)){.item{width:17px}}@container anchored(fallback: --card flip-block){.fallback{height:3px}}",
+        );
+        assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
+        assert_eq!(sheet.rules.len(), 2);
+        let condition = &sheet.rules[0].container_conditions[0];
+        assert_eq!(condition.ToString().Utf8(), "(width >= calc(10em + 640px))");
+        assert_eq!(
+            sheet.rules[1].container_conditions[0].ToString().Utf8(),
+            "anchored(fallback: --card flip-block)"
+        );
+    }
+    #[test]
     fn container_style_range_tokens_roundtrip_and_bad_prelude_recovers() {
-        let sheet=parse("@container style(1px < var(--Limit, calc(3px > 2px)) < 8px){a{color:red}}@container none{bad{}}tail{width:2px}");
+        let sheet = parse(
+            "@container style(1px < var(--Limit, calc(3px > 2px)) < 8px){a{color:red}}@container none{bad{}}tail{width:2px}",
+        );
         assert_eq!(sheet.rules.len(), 2);
         assert!(sheet.rules[1].container_conditions.is_empty());
         let css = crate::production_style_sheet_projection::ProjectStyleSheet(&sheet);
@@ -3030,7 +4153,9 @@ mod tests {
     }
     #[test]
     fn scopes_keep_native_boundaries_and_nested_scope_chains() {
-        let sheet=parse("@scope (.root, #other) to (.stop){.item{width:1px}@scope to (.limit){.deep{height:2px}}}@scope{.implicit{color:red}}@scope (a::before){bad{}}tail{width:3px}");
+        let sheet = parse(
+            "@scope (.root, #other) to (.stop){.item{width:1px}@scope to (.limit){.deep{height:2px}}}@scope{.implicit{color:red}}@scope (a::before){bad{}}tail{width:3px}",
+        );
         assert_eq!(sheet.scopes.len(), 3);
         assert_eq!(sheet.rules.len(), 4);
         assert_eq!(sheet.rules[1].scope_conditions.len(), 2);
@@ -3073,7 +4198,9 @@ mod tests {
     #[test]
     fn property_registrations_validate_schema_initial_and_keep_descriptor_source() {
         let body = "syntax: '<length>+ | auto'; inherits: false; initial-value: 001px 2vw;";
-        let sheet=parse(&format!("@media screen{{@layer settings{{@property --size{{{body}}}}}}}@property --any{{syntax:'*';inherits:true}}@property --bad{{syntax:'<length>';inherits:false;initial-value:1em}}@property --vars{{syntax:'*';inherits:true;initial-value:var(--x)}}@property --wide{{syntax:'*';inherits:true;initial-value:initial}}@property --missing{{syntax:'<integer>';inherits:false}}tail{{width:3px}}"));
+        let sheet = parse(&format!(
+            "@media screen{{@layer settings{{@property --size{{{body}}}}}}}@property --any{{syntax:'*';inherits:true}}@property --bad{{syntax:'<length>';inherits:false;initial-value:1em}}@property --vars{{syntax:'*';inherits:true;initial-value:var(--x)}}@property --wide{{syntax:'*';inherits:true;initial-value:initial}}@property --missing{{syntax:'<integer>';inherits:false}}tail{{width:3px}}"
+        ));
         assert_eq!(sheet.property_registration_effects.len(), 2);
         assert_eq!(sheet.rules.len(), 1);
         let effect = &sheet.property_registration_effects[0];
@@ -3102,7 +4229,9 @@ mod tests {
     }
     #[test]
     fn property_descriptor_syntax_and_unsupported_initial_recover() {
-        let sheet=parse("@property --bad{syntax:'<length> +';inherits:true;initial-value:1px}@property --important{syntax:'*';inherits:false!important;initial-value:x}@property --math{syntax:'<number>';inherits:false;initial-value:calc(1 + 2)}@property --good{syntax:'<color>';inherits:false;initial-value:#1234}a{height:4px}");
+        let sheet = parse(
+            "@property --bad{syntax:'<length> +';inherits:true;initial-value:1px}@property --important{syntax:'*';inherits:false!important;initial-value:x}@property --math{syntax:'<number>';inherits:false;initial-value:calc(1 + 2)}@property --good{syntax:'<color>';inherits:false;initial-value:#1234}a{height:4px}",
+        );
         assert_eq!(sheet.property_registration_effects.len(), 1);
         assert_eq!(sheet.property_registration_effects[0].name.Utf8(), "--good");
         assert_eq!(sheet.rules.len(), 1);
@@ -3115,5 +4244,224 @@ mod tests {
             projected.property_rules[0].initial_value,
             Some(::cssom::CSSRegisteredPropertyValue::Color { .. })
         ));
+    }
+    #[test]
+    fn production_rule_set_ingests_buckets_media_layers_and_scopes() {
+        let sheet = parse(
+            "@layer reset,theme;\
+             #plain{width:1px}\
+             @media screen and (min-width:600px){@layer theme{.wide{height:2px}}}\
+             @media print{.print-only{height:3px}}\
+             @scope (.root) to (.stop){article{padding-left:4px}}",
+        );
+        let medium = ProductionMediaQueryEvaluator::Screen(800.0, 600.0);
+        let set = sheet.BuildRuleSet(&medium);
+
+        // RuleCount also includes the @scope boundary selectors retained for
+        // source-ordered scope bucketing.
+        assert_eq!(set.RuleCount(), 5);
+        assert_eq!(set.IdRules(&AtomicString::from_str("plain")).len(), 1);
+        assert_eq!(set.ClassRules(&AtomicString::from_str("wide")).len(), 1);
+        assert!(set
+            .ClassRules(&AtomicString::from_str("print-only"))
+            .is_empty());
+        assert_eq!(set.TagRules(&AtomicString::from_str("article")).len(), 1);
+
+        let theme_rule = &set.ClassRules(&AtomicString::from_str("wide"))[0];
+        let theme = set
+            .CascadeLayers()
+            .GetOrAddSubLayer(&[AtomicString::from_str("theme")]);
+        assert_eq!(set.LayerForRule(theme_rule), Some(&theme));
+
+        let article = &set.TagRules(&AtomicString::from_str("article"))[0];
+        let scope = set.ScopeForRule(article).expect("scope interval");
+        assert!(scope.From().is_some());
+        assert!(scope.To().is_some());
+    }
+    #[test]
+    fn production_rule_set_rebuilds_when_media_results_change() {
+        let sheet = parse("@media (min-width:600px){.wide{width:1px}} .always{width:2px}");
+        let narrow = ProductionMediaQueryEvaluator::Screen(500.0, 600.0);
+        let wide = ProductionMediaQueryEvaluator::Screen(800.0, 600.0);
+        let first = sheet.EnsureRuleSet(&narrow);
+        assert!(first
+            .borrow()
+            .ClassRules(&AtomicString::from_str("wide"))
+            .is_empty());
+        let second = sheet.EnsureRuleSet(&wide);
+        assert!(!Rc::ptr_eq(&first, &second));
+        assert_eq!(
+            second
+                .borrow()
+                .ClassRules(&AtomicString::from_str("wide"))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn function_parser_retains_declarations_and_registry_identity() {
+        let sheet = parse(
+            "@function --size(--base type(<length>): 4px) returns type(<length>) {\
+                 --local: 7px; result: var(--base);\
+             }",
+        );
+        assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
+        assert_eq!(sheet.functions.len(), 1);
+        let base = sheet.functions[0].rule.clone();
+        let StyleRuleBase::Function(function) = base.as_ref() else {
+            panic!("retained rule must be @function")
+        };
+        assert_eq!(function.Name().Utf8(), "--size");
+        assert_eq!(function.GetParameters().len(), 1);
+        assert_eq!(function.GetParameters()[0].name.Utf8(), "--base");
+        assert_eq!(
+            function.GetParameters()[0]
+                .default_value
+                .as_ref()
+                .unwrap()
+                .original_text
+                .Utf8(),
+            "4px"
+        );
+        assert_eq!(function.GetReturnType().ToString().Utf8(), "<length>");
+        let children = function.ChildRules();
+        let declarations = children
+            .iter()
+            .find_map(|rule| match rule.as_ref() {
+                StyleRuleBase::FunctionDeclarations(declarations) => Some(declarations.clone()),
+                _ => None,
+            })
+            .expect("function declaration block");
+        let locals = <Backend as RuleSetIngestionBackend>::FunctionDeclarationValues(&declarations);
+        assert!(locals.iter().any(|(name, value)| {
+            name.Utf8() == "--local" && value.original_text.Utf8() == "7px"
+        }));
+
+        let registry = sheet.FunctionRegistry(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0));
+        let retained = registry
+            .FunctionForName(&AtomicString::from_str("--size"))
+            .expect("registered function");
+        assert!(Rc::ptr_eq(retained.Base(), &base));
+    }
+
+    #[test]
+    fn stylesheet_mixin_registry_retains_parser_rule_and_respects_media() {
+        let sheet = parse(
+            "@media (min-width:600px) { @mixin --card(--edge: 3px) {\
+                 --local: 9px; color: red;\
+             } }",
+        );
+        assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
+        assert_eq!(sheet.mixins.len(), 1);
+        let name = AtomicString::from_str("--card");
+        assert!(sheet
+            .MixinForName(&ProductionMediaQueryEvaluator::Screen(500.0, 600.0), &name)
+            .is_none());
+        let active = sheet
+            .MixinForName(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0), &name)
+            .expect("active mixin");
+        assert!(Rc::ptr_eq(&active, &sheet.mixins[0].rule));
+        let StyleRuleBase::Mixin(mixin) = active.as_ref() else {
+            panic!("retained rule must be @mixin")
+        };
+        assert_eq!(mixin.GetParameters().len(), 1);
+        assert_eq!(
+            mixin.GetParameters()[0]
+                .default_value
+                .as_ref()
+                .unwrap()
+                .original_text
+                .Utf8(),
+            "3px"
+        );
+        assert!(mixin
+            .ChildRules()
+            .iter()
+            .any(|rule| { matches!(rule.as_ref(), StyleRuleBase::FunctionDeclarations(_)) }));
+    }
+
+    #[test]
+    fn document_function_registry_applies_sheet_and_layer_order() {
+        let early = parse("@function --pick() { result: 1px; }");
+        let later_layered = parse("@layer theme { @function --pick() { result: 2px; } }");
+        let later_unlayered = parse("@function --pick() { result: 3px; }");
+        let medium = ProductionMediaQueryEvaluator::Screen(800.0, 600.0);
+        let registry = ProductionFunctionRegistry::FromStyleSheets(
+            &[&early, &later_layered, &later_unlayered],
+            &medium,
+        );
+        let selected = registry
+            .FunctionForName(&AtomicString::from_str("--pick"))
+            .expect("document function");
+        assert!(Rc::ptr_eq(
+            selected.Base(),
+            &later_unlayered.functions[0].rule
+        ));
+    }
+
+    #[test]
+    fn apply_mixin_arguments_and_contents_keep_typed_fake_parent_owner() {
+        let sheet = parse(
+            "@mixin --box(--a, --b) {\
+                 @result { width: var(--a); @contents; }\
+             }\
+             .target { @apply --box(4px, 5px){ color: red; } }",
+        );
+        assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
+        let target = sheet
+            .contents
+            .ChildRules()
+            .iter()
+            .find_map(|rule| match rule.as_ref() {
+                StyleRuleBase::Style(style) if style.SelectorsText().Utf8().contains(".target") => {
+                    Some(style.clone())
+                }
+                _ => None,
+            })
+            .expect("target style rule");
+        let children = target.ChildRules().expect("nested @apply");
+        let apply = children
+            .iter()
+            .find_map(|rule| match rule.as_ref() {
+                StyleRuleBase::ApplyMixin(apply) => Some(apply),
+                _ => None,
+            })
+            .expect("typed @apply rule");
+        assert!(apply.HasContentsBlock());
+        assert_eq!(apply.GetArguments().len(), 2);
+        assert_eq!(
+            apply.GetArguments()[0]
+                .as_ref()
+                .unwrap()
+                .original_text
+                .Utf8(),
+            "4px"
+        );
+        assert_eq!(
+            apply.GetArguments()[1]
+                .as_ref()
+                .unwrap()
+                .original_text
+                .Utf8(),
+            "5px"
+        );
+        assert!(!apply.ChildRules().is_empty());
+
+        let medium = ProductionMediaQueryEvaluator::Screen(800.0, 600.0);
+        let set = sheet.BuildRuleSet(&medium);
+        // cpp: style_rule.cc:604-624,642-821. The invoking rule plus the
+        // recursively cloned @result/@contents declarations retain the
+        // .target selector; every expansion clone carries the exact binding
+        // owner into MatchResult.
+        let target_rules = set.ClassRules(&AtomicString::from_str("target"));
+        assert_eq!(target_rules.len(), 5);
+        assert_eq!(
+            target_rules
+                .iter()
+                .filter(|data| data.Rule().GetMixinParameterBindings().is_some())
+                .count(),
+            3
+        );
     }
 }

@@ -154,6 +154,27 @@ impl MediaQueryExpSerialization for values::CSSUnparsedDeclarationValue {
         self.CustomCSSText()
     }
 }
+impl crate::media_queries::media_query_exp::MediaQueryExpUnitFlags for values::Value {
+    fn GetUnitFlags(&self) -> u32 {
+        use crate::css_value::CSSValuePayload;
+        use crate::media_queries::media_query_exp::MediaQueryExpUnitFlags;
+        match self.Payload() {
+            CSSValuePayload::kNumericLiteralClass(value) => value.GetUnitFlags(),
+            CSSValuePayload::kMathFunctionClass(value) => value.GetUnitFlags(),
+            _ => 0,
+        }
+    }
+}
+
+fn ProductionMediaValue(
+    value: &crate::css_numeric_literal_value::CSSNumericLiteralValue,
+) -> Rc<values::Value> {
+    if let Some(math) = value.MathValue() {
+        values::math(math.expression.clone(), math.range)
+    } else {
+        values::numeric(value.DoubleValue(), value.GetType())
+    }
+}
 impl MediaQueryRuntimeFeatures for ProductionContainerBackend<'_> {
     fn CSSCustomMediaEnabled(&self) -> bool {
         self.flags.CSSCustomMediaEnabled()
@@ -200,16 +221,21 @@ impl MediaQueryParserBackend for ProductionContainerBackend<'_> {
                 .ConsumeUnparsed(s, true, false)
                 .map(MediaQueryExpValue::FromValue);
         }
+        if feature == "fallback" {
+            return crate::parser::production_property_parser::ConsumeAnchoredFallbackQueryValue(
+                s,
+                self.context.Mode(),
+            )
+            .map(MediaQueryExpValue::FromValue);
+        }
         let value = self.flags.ConsumeValue(feature, s, element)?;
         Some(match value {
             MediaQueryExpValue::Invalid => MediaQueryExpValue::Invalid,
             MediaQueryExpValue::Id(id) => MediaQueryExpValue::Id(id),
-            MediaQueryExpValue::Value(v) => {
-                MediaQueryExpValue::Value(values::numeric(v.DoubleValue(), v.GetType()))
-            }
+            MediaQueryExpValue::Value(v) => MediaQueryExpValue::Value(ProductionMediaValue(&v)),
             MediaQueryExpValue::Ratio(v) => MediaQueryExpValue::FromRatio(
-                values::numeric(v.0.DoubleValue(), v.0.GetType()),
-                values::numeric(v.1.DoubleValue(), v.1.GetType()),
+                ProductionMediaValue(&v.0),
+                ProductionMediaValue(&v.1),
             ),
         })
     }

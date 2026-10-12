@@ -4,8 +4,9 @@ use std::process::Command;
 
 fn main() {
     let text = env::var_os("CARGO_FEATURE_TEXT").is_some();
+    let font_backend = env::var_os("CARGO_FEATURE_FONT_BACKEND").is_some();
     let source_replay = env::var_os("CARGO_FEATURE_SOURCE_REPLAY").is_some();
-    if !text && !source_replay {
+    if !text && !font_backend && !source_replay {
         return;
     }
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
@@ -17,7 +18,11 @@ fn main() {
     let static_lib = output.join("liblayoutng_text_replay.a");
     for (enabled, source, object_name) in [
         (text, "src/text_replay.cc", "text_replay.o"),
-        (source_replay, "src/native_canvas.cc", "native_canvas.o"),
+        (
+            font_backend || source_replay,
+            "src/native_canvas.cc",
+            "native_canvas.o",
+        ),
     ] {
         if !enabled {
             continue;

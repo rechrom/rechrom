@@ -3,6 +3,7 @@ pub mod at_rule_descriptors;
 pub mod at_rule_names;
 pub mod conditional_parser;
 pub mod css_at_rule_id;
+pub mod css_if_parser;
 pub mod css_nesting_type;
 pub mod css_parser;
 pub mod css_parser_context;

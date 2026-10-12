@@ -276,6 +276,42 @@ fn create_page(
 }
 
 #[test]
+fn native_computed_style_background_decorations_reach_paint_artifact() {
+    crate::native_test_thread::run(|| {
+        let root =
+            std::env::temp_dir().join(format!("rechrom-native-style-paint-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("page.html"),
+            r#"<!doctype html><style>
+            html,body{margin:0}.probe{width:40px;height:40px;border-radius:50%;
+            box-shadow:4px 4px 3px rgba(255,0,0,.7);
+            background:linear-gradient(to right,rgb(0,180,255),rgb(255,220,0))}
+            </style><div class=probe></div>"#,
+        )
+        .unwrap();
+        let trace = Rc::new(RefCell::new(Vec::new()));
+        let frames = Rc::new(RefCell::new(Vec::new()));
+        let mut page = create_page(&root, &trace, &frames);
+        page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
+            .unwrap();
+        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let gradient = artifact.items.iter().find(|item| {
+            matches!(
+                item.r#type,
+                paint::paint_engine::DisplayItemType::kDrawGradientRect
+                    | paint::paint_engine::DisplayItemType::kDrawTiledGradient
+            )
+        });
+        assert!(
+            gradient.is_some(),
+            "native background gradient was dropped before PaintArtifact"
+        );
+        assert!(gradient.unwrap().paint_shader.is_some());
+    });
+}
+
+#[test]
 fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
     crate::native_test_thread::run(|| {
         use crate::page::PreferredColorScheme;
@@ -1221,12 +1257,14 @@ fn decode_image_fixture(
         b"short" => Ok(DecodedImage {
             width: 2,
             height: 2,
+            orientation: Default::default(),
             rgba8: vec![255, 0, 0, 255],
         }),
         b"failure" => Err(io::Error::other("fixture decoder failed")),
         b"good" => Ok(DecodedImage {
             width: 2,
             height: 1,
+            orientation: Default::default(),
             rgba8: vec![255, 0, 0, 255, 0, 255, 0, 255],
         }),
         _ => Err(io::Error::other("unexpected image bytes")),

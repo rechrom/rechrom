@@ -16,7 +16,7 @@ use crate::display_item_id::DisplayItemIdType;
 use crate::drawing_recorder::DrawingRecorder;
 use crate::geometry_mapper::MapRectToRoot;
 use crate::paint_context::PaintContext;
-use crate::paint_engine::{DisplayItem, DisplayItemType};
+use crate::paint_engine::{DisplayItem, DisplayItemType, ResolveDocumentImageContainerKey};
 use crate::paint_info::PaintInfo;
 use crate::paint_shader_resolver::ResolvePaintShader;
 use crate::pre_paint_tree_walk::PaintTreeNode;
@@ -540,12 +540,21 @@ fn PaintColumnStyle(
         if layer.shader.is_none() && layer.resource_id == 0 {
             continue;
         }
+        let table_fragment = table_node
+            .fragment
+            .as_deref()
+            .expect("table background requires a fragment");
         let image = if layer.shader.is_some() {
             None
         } else {
             Some(FindImage(table_node, layer.resource_id))
         };
-        let tile_size = ResolveBackgroundTileSize(layer, positioning, image);
+        let tile_size = ResolveBackgroundTileSize(
+            layer,
+            positioning,
+            image,
+            f64::from(table_fragment.paint.effective_zoom),
+        );
         let resolved = ResolveBackgroundTile(layer, positioning, tile_size);
         let tile = resolved.tile_rect;
         let repeat_x = resolved.repeat_x;
@@ -558,6 +567,22 @@ fn PaintColumnStyle(
         } else {
             resolved.tile_scale
         };
+        let document_image_container_key = image.and_then(|image| {
+            ResolveDocumentImageContainerKey(
+                image,
+                Size {
+                    width: tile.width,
+                    height: tile.height,
+                },
+                f64::from(table_fragment.paint.effective_zoom),
+                table_fragment
+                    .paint
+                    .resources
+                    .as_ref()
+                    .map_or(1.0, |resources| resources.device_pixel_ratio),
+                style,
+            )
+        });
         if let Some(shader) = layer.shader.as_ref() {
             let mut item = DisplayItem {
                 r#type: if repeat_x || repeat_y {
@@ -617,6 +642,8 @@ fn PaintColumnStyle(
                     },
                     tile_rect: tile,
                     resource_id: image.id,
+                    image_interpolation_quality: style.image_interpolation_quality,
+                    document_image_container_key: document_image_container_key.clone(),
                     repeat_x,
                     repeat_y,
                     background_repeat_x: resolved.rule_x,
@@ -643,6 +670,8 @@ fn PaintColumnStyle(
                         height: image.height as f64,
                     },
                     resource_id: image.id,
+                    image_interpolation_quality: style.image_interpolation_quality,
+                    document_image_container_key,
                     background_repeat_x: resolved.rule_x,
                     background_repeat_y: resolved.rule_y,
                     blend_mode: layer.blend_mode,

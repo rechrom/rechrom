@@ -20378,25 +20378,27 @@ impl ComputedStyleBuilderBase {
     }
 }
 
-// cpp: layoutng_style/style/computed_style_base.h:18939
-// The supplied source tree declares this operation but contains no definition.
-unsafe extern "Rust" {
-    fn ComputedStyleBuilderBaseCopyHighlightPropertiesFrom(
-        builder: *mut ComputedStyleBuilderBase,
-        originating_element_style: *const ComputedStyleBase,
-    );
-}
-
 #[allow(non_snake_case)]
 impl ComputedStyleBuilderBase {
-    // cpp: layoutng_style/style/computed_style_base.h:18939
-    pub(crate) fn CopyHighlightPropertiesFrom(
-        &mut self,
-        originating_element_style: &ComputedStyleBase,
-    ) {
-        unsafe {
-            ComputedStyleBuilderBaseCopyHighlightPropertiesFrom(self, originating_element_style)
-        }
+    // cpp: out/Min/gen/third_party/blink/renderer/core/style/
+    //      computed_style_base.cc:10582-10594
+    //
+    // Highlight inheritance is deliberately different from ordinary CSS
+    // inheritance. StyleResolver first clones the highlight parent, then this
+    // generated operation restores the eight fields which come from the
+    // originating element. Keep this list in source order so the Rust builder
+    // has the same copy-on-write behavior as ComputedStyleBuilderBase.
+    pub fn CopyHighlightPropertiesFrom(&mut self, originating_element_style: &ComputedStyleBase) {
+        self.SetForcedColorAdjust(originating_element_style.ForcedColorAdjust());
+        self.SetNonInheritedVariablesInternal(
+            originating_element_style.NonInheritedVariablesInternal(),
+        );
+        self.SetFont(Member::from_ptr(originating_element_style.GetFont()));
+        self.SetInheritedVariablesInternal(originating_element_style.InheritedVariablesInternal());
+        self.SetLineHeight(originating_element_style.LineHeight());
+        self.SetInForcedColorsMode(originating_element_style.InForcedColorsMode());
+        self.SetWritingMode(originating_element_style.GetWritingMode());
+        self.SetDarkColorScheme(originating_element_style.DarkColorScheme());
     }
 }
 
@@ -25004,14 +25006,8 @@ impl ComputedStyleBase {
                 std::mem::size_of::<ComputedStyleBaseData>(),
             )
         };
-        unsafe { rapidhash(bytes.as_ptr(), bytes.len()) as u32 }
+        foundation::rapidhash::rapidhash(bytes) as u32
     }
-}
-
-// cpp: foundation/blink_base/wtf/text/rapidhash.h:334
-// Pending foundation hash implementation.
-unsafe extern "Rust" {
-    fn rapidhash(key: *const u8, len: usize) -> u64;
 }
 
 // These generated read-only accessors are used by the derived ComputedStyle.

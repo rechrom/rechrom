@@ -136,7 +136,7 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
                 stream.ConsumeIncludingWhitespace();
                 Ok(values::identifier(kAuto))
             } else {
-                ConsumeColor(id, stream)
+                ConsumeColor(id, stream, mode)
             }
         }
         // cpp: longhands_custom.cc:5870-5876 delegates OutlineColor:7464-7473.
@@ -145,7 +145,7 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
                 stream.ConsumeIncludingWhitespace();
                 Ok(values::identifier(kWebkitFocusRingColor))
             } else {
-                ConsumeColor(id, stream)
+                ConsumeColor(id, stream, mode)
             }
         }
         kColorScheme => ColorScheme(id, stream),

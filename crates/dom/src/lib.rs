@@ -24,7 +24,7 @@ pub mod persistent_document;
 pub mod resolved_styles;
 pub mod style_state;
 pub mod svg_path_parser;
-pub use persistent_document::{PersistentDocument as Document, DOM};
+pub use persistent_document::{DOMAutofillState, PersistentDocument as Document, DOM};
 pub use resolved_styles::ResolvedStyles;
 
 use std::collections::HashMap;
@@ -36,6 +36,7 @@ pub struct ImageResourceMetadata {
     pub natural_width: f64,
     pub natural_height: f64,
     pub resolution_scale: f64,
+    pub orientation: ::image_resource::ImageOrientation,
 }
 
 impl Default for ImageResourceMetadata {
@@ -45,7 +46,35 @@ impl Default for ImageResourceMetadata {
             natural_width: 0.0,
             natural_height: 0.0,
             resolution_scale: 1.0,
+            orientation: Default::default(),
         }
+    }
+}
+
+impl ImageResourceMetadata {
+    pub fn NaturalSize(&self, respect_orientation: bool) -> (f64, f64) {
+        if respect_orientation {
+            self.orientation
+                .oriented_size(self.natural_width, self.natural_height)
+        } else {
+            (self.natural_width, self.natural_height)
+        }
+    }
+
+    /// CSS intrinsic size for one HTML responsive-image use. Candidate
+    /// density is element-owned; resource resolution remains the fallback for
+    /// ordinary `src` and CSS image consumers.
+    pub fn NaturalSizeForCandidate(
+        &self,
+        respect_orientation: bool,
+        candidate_density: Option<f64>,
+    ) -> (f64, f64) {
+        let size = self.NaturalSize(respect_orientation);
+        let density = candidate_density
+            .filter(|density| density.is_finite() && *density > 0.0)
+            .unwrap_or(self.resolution_scale);
+        let scale = self.resolution_scale / density;
+        (size.0 * scale, size.1 * scale)
     }
 }
 

@@ -1,8 +1,63 @@
 use foundation::{
-    gfx, ETransformBox, EVectorEffect, FloatValueForLength, PhysicalRect, TransformOperationType,
+    gfx, ETransformBox, EVectorEffect, FloatValueForLength, Length, PhysicalRect, PointAndTangent,
+    TransformOperationType,
 };
 
+use super::basic_shapes::BasicShape;
+
 use super::computed_style::ComputedStyle;
+use super::computed_style_constants::CoordBox;
+
+/// Geometry which motion-path needs from the owning layout box.
+///
+/// Chromium's ComputedStyle algorithm receives a LayoutBox directly.  Keep
+/// layoutng_style independent of LayoutNG by carrying only the three immutable
+/// geometry queries used by that algorithm across the package boundary.
+pub trait MotionPathBox {
+    fn MotionPathReferenceBox(&self, _coord_box: CoordBox) -> gfx::RectF {
+        gfx::RectF::default()
+    }
+
+    fn MotionPathOffsetFromContainingBlock(&self) -> gfx::PointF {
+        gfx::PointF::default()
+    }
+
+    fn MotionPathBorderBoxSize(&self) -> gfx::SizeF {
+        gfx::SizeF::default()
+    }
+
+    fn MotionPathHasContainingBlock(&self) -> bool {
+        false
+    }
+
+    /// The concrete vector-path package lives on the Layout side of this
+    /// boundary.  Style keeps the canonical typed shape and asks Layout to
+    /// measure it only when a transform is materialized.
+    fn MotionPathPointAndTangent(
+        &self,
+        _shape: &dyn BasicShape,
+        _starting_point: &gfx::PointF,
+        _reference_size: &gfx::SizeF,
+        _distance: &Length,
+        _effective_zoom: f32,
+    ) -> Option<PointAndTangent> {
+        None
+    }
+
+    /// Resolves the inset synthesized by a bare `<coord-box>`, including the
+    /// containing block's border radii.
+    fn MotionPathCoordBoxPointAndTangent(
+        &self,
+        _reference_size: &gfx::SizeF,
+        _distance: &Length,
+    ) -> Option<PointAndTangent> {
+        None
+    }
+}
+
+// Callers which explicitly exclude motion-path do not own a LayoutBox (for
+// example standalone SVG clip-path transform projection).
+impl MotionPathBox for () {}
 
 // cpp: layoutng_style/style/computed_style.h:2098-2102
 #[allow(non_camel_case_types)]
@@ -104,7 +159,7 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:2111-2118
     // cpp: layoutng_style/style/style_transform.cc:107-119
-    pub fn ApplyTransformPhysicalRect<B>(
+    pub fn ApplyTransformPhysicalRect<B: MotionPathBox>(
         &self,
         result: &mut gfx::Transform,
         box_: Option<&B>,
@@ -137,7 +192,7 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:2119-2125
     // cpp: layoutng_style/style/style_transform.cc:121-183
-    pub fn ApplyTransformRectF<B>(
+    pub fn ApplyTransformRectF<B: MotionPathBox>(
         &self,
         result: &mut gfx::Transform,
         box_: Option<&B>,

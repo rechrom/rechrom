@@ -1,5 +1,6 @@
 //! Compatibility entry points for browser-independent CPU rendering.
 pub use crate::compat::analytic_masks as analytic_aa;
+pub use crate::compat::effect_composite;
 pub use crate::compat::f16 as f16_surface;
 pub use crate::compat::glyph_position;
 pub use crate::compat::hairline;

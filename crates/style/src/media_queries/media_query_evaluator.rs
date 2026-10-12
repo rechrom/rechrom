@@ -40,7 +40,7 @@ use foundation::{CSSValueID, LayoutUnit};
 // Ledger uses C++ physical / effective / mapped / omitted / pending lines.
 // Effective excludes comments, blanks, preprocessor/includes, namespaces and
 // lines consisting only of braces/parentheses/semicolons.
-// media_query_evaluator.cc: 1964 / 1257 / 1200 / 46 / 11 (cumulative).
+// media_query_evaluator.cc: 1964 / 1257 / 1211 / 46 / 0 (complete).
 // media_query_evaluator.h: 154 / 61 / 43 / 18 / 0.
 // Exact contiguous source ranges are in media_query_evaluator_ledger.tsv.
 // Production document/ancestor owners, computed variable reads, unparsed typed
@@ -48,12 +48,10 @@ use foundation::{CSSValueID, LayoutUnit};
 // fallback conversion/matching adapters live in production_container_query.rs
 // and document_style_engine.rs. Layout/scroll/anchor snapshots are explicitly
 // published by their owner and invalidate query matches; absent state is Unknown.
-// Pending .cc:1810-1811,1824-1825,1842-1843 (full numeric math coercion)
-// and 1917-1921 (concrete registered-property registration/computation owner).
-// Literal/variable numeric coercion is implemented, but no CSSMathFunctionValue
-// replacement is invented and unsupported math reports Unknown plus diagnostics.
-// RegisteredContainerPropertyResolver is a required typed owner interface;
-// the missing production registration owner is not credited as mapped.
+// Numeric math coercion is implemented by ContainerNumericContext through the
+// shared CSSMathExpressionNode parser and records its conversion flags.
+// PropertyRegistry implements RegisteredContainerPropertyResolver with the
+// document's real syntax, initial value and computed registered-value storage.
 // Omitted .cc:109,120-124 and UseCounter statements (42 effective lines):
 // global table storage, GC and telemetry only, never observable matching.
 use super::conditional_exp_node::{ConditionalExpNode, ConditionalExpNodeVisitor};

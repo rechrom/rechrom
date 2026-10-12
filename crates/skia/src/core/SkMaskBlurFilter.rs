@@ -204,6 +204,19 @@ pub(crate) fn blur_alpha_mask(mask: &mut Mask, sigma: f32) {
     );
 }
 
+/// Device-space expansion used by `SkMaskBuilder::PrepareDestination`.
+/// Rounded-rect mask filters use this value to construct their cached
+/// nine-patch before any source pixels are allocated.
+pub(crate) fn blur_alpha_mask_margin(sigma: f32) -> usize {
+    if sigma <= 0.0 || !sigma.is_finite() || sigma < 1.0 / 3.0 {
+        0
+    } else if sigma < 2.0 {
+        skia_small_gauss_factors(sigma).len() - 1
+    } else {
+        PlanGauss::new(sigma.min(135.0)).border
+    }
+}
+
 /// Source support is a known nonzero superset; None is a known empty mask.
 /// Padding offsets belong to the caller's mask coordinates, not the canvas.
 /// Thresholds, Gaussian factors, three-box plan and integer rounding retain

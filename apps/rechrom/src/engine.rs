@@ -66,6 +66,17 @@ impl ::compositor::CompositorViewport for Viewport {
     fn Scale(self) -> f64 {
         self.scale
     }
+
+    fn RasterTileSize(self) -> u32 {
+        // cpp: blink/renderer/platform/widget/compositing/
+        // layer_tree_settings.cc:245-274. macOS uses 512px tiles on high-DPI
+        // displays; the platform-neutral compositor receives only the result.
+        if cfg!(target_os = "macos") && self.scale >= 2.0 {
+            512
+        } else {
+            256
+        }
+    }
 }
 pub struct WindowFrame {
     pub viewport: Viewport,
@@ -214,15 +225,58 @@ fn set_page_thread_presentation_priority() {
 
 struct PageBeginFrameSource {
     native: Arc<dyn BeginFrameSource>,
-    requested: Arc<AtomicBool>,
+    demand: Arc<Mutex<PageFrameDemand>>,
 }
 impl BeginFrameSource for PageBeginFrameSource {
     fn request_begin_frame(&self) {
-        self.requested.store(true, Ordering::Release);
+        self.demand.lock().unwrap().Request();
         self.native.request_begin_frame();
     }
     fn set_display(&self, display_id: u32) {
         self.native.set_display(display_id);
+    }
+}
+
+/// Demand shared by Page and the two host delivery routes. A boolean loses the
+/// distinction between a request made for the next native pulse and an older
+/// pulse which is still travelling through Compositor: either delivery route
+/// could clear the bit and strand Page's own `requested` state forever.
+///
+/// Chromium's BeginFrame plumbing acknowledges a concrete frame against the
+/// current observer demand. Keep the same rule here: one native frame may
+/// acknowledge the generations visible when it is selected, while a request
+/// arriving after that selection remains pending for a later frame. The frame
+/// identity also makes the direct-host and compositor callbacks idempotent.
+#[derive(Default)]
+struct PageFrameDemand {
+    requested_generation: u64,
+    acknowledged_generation: u64,
+    last_delivered: Option<(u64, u64)>,
+}
+
+impl PageFrameDemand {
+    fn InitiallyRequested() -> Self {
+        Self {
+            requested_generation: 1,
+            ..Self::default()
+        }
+    }
+
+    fn Request(&mut self) {
+        self.requested_generation = self.requested_generation.wrapping_add(1);
+    }
+
+    fn TakeFor(&mut self, frame: NativeBeginFrame) -> bool {
+        let identity = (frame.source_id, frame.sequence_number);
+        if self.last_delivered.is_some_and(|(source, sequence)| {
+            source == frame.source_id && sequence >= frame.sequence_number
+        }) || self.requested_generation == self.acknowledged_generation
+        {
+            return false;
+        }
+        self.acknowledged_generation = self.requested_generation;
+        self.last_delivered = Some(identity);
+        true
     }
 }
 
@@ -236,21 +290,21 @@ pub fn spawn(
     presentation_config: crate::presentation_runtime::Config,
 ) -> io::Result<mpsc::Sender<Command>> {
     let (sender, receiver) = mpsc::channel();
-    let page_frame_requested = Arc::new(AtomicBool::new(true));
+    let page_frame_demand = Arc::new(Mutex::new(PageFrameDemand::InitiallyRequested()));
     let frame_source = crate::begin_frame_source::create(fallback_interval, display_id)?;
     let input_frames = frame_source.GetFrameSource(0)?;
     let compositor_frames = frame_source.GetFrameSource(1)?;
     let display_frames = frame_source.GetFrameSource(2)?;
     let page_frame_source: Arc<dyn BeginFrameSource> = Arc::new(PageBeginFrameSource {
         native: frame_source.clone(),
-        requested: page_frame_requested.clone(),
+        demand: page_frame_demand.clone(),
     });
     let (page_sender, page_receiver) = mpsc::channel();
     let begin_frame_page = page_sender.clone();
-    let begin_frame_requested = page_frame_requested.clone();
+    let begin_frame_demand = page_frame_demand.clone();
     let begin_main_frame: crate::presentation_runtime::BeginMainFrameClient =
         Arc::new(move |frame| {
-            if begin_frame_requested.swap(false, Ordering::AcqRel) {
+            if begin_frame_demand.lock().unwrap().TakeFor(frame) {
                 let _ = begin_frame_page.send(Command::BeginFrame(frame));
             }
         });
@@ -280,7 +334,7 @@ pub fn spawn(
                         let _ = compositor_dispatch.send(
                             crate::presentation_runtime::CompositorCommand::BeginFrame(*frame),
                         );
-                        if !page_frame_requested.swap(false, Ordering::AcqRel) {
+                        if !page_frame_demand.lock().unwrap().TakeFor(*frame) {
                             continue;
                         }
                     }
@@ -1081,6 +1135,14 @@ fn create_page(
         browser::CreateBrowserConstraints(width.ceil() as u32, height.ceil() as u32);
     constraints.available_size = Size { width, height };
     constraints.device_pixel_ratio = scale;
+    // The embedder supplies the viewport in CSS pixels. Device scale belongs
+    // to media-resolution evaluation and the raster transform; applying it a
+    // second time as layout zoom makes Layout see a 640 CSS-pixel viewport
+    // while media queries see 1280 CSS pixels at DPR 2. Chromium's
+    // use-zoom-for-dsf path compensates by changing the LayoutView input size
+    // as well. Rechrom keeps the equivalent, simpler CSS-pixel contract at
+    // this boundary and reserves layout_zoom_factor for actual page zoom.
+    constraints.layout_zoom_factor = 1.0;
     let document_images = Rc::new(RefCell::new(
         document_image::SVGImageDecoder::new_with_constraints(&assembly, &constraints),
     ));
@@ -1535,6 +1597,27 @@ impl BrowserState {
             .CurrentFrame()
             .ok_or_else(|| io::Error::other("toolbar has no frame"))?;
         let page = self.tabs.active.page.as_ref().and_then(Page::CurrentFrame);
+        // A newly-created document has no compositor surface until its first
+        // PageFrame is committed.  Do not turn that transient absence into a
+        // `content: None` submission: Display interprets None as destruction
+        // of the active content surface, which exposes the white output
+        // buffer between navigation start and the replacement document's
+        // first frame.  Chromium's navigation paint holding keeps the prior
+        // active surface until the new RenderFrame supplies content.  Keep the
+        // same lifetime rule at this Page -> Compositor boundary.  Startup has
+        // no prior surface and therefore simply produces no screenshot until
+        // the first real page frame exists.
+        if self.tabs.active.page.is_some() && page.is_none() {
+            browser_tracing::instant(
+                "frame",
+                "NavigationPaintHolding",
+                &[(
+                    "document_generation",
+                    self.tabs.active.document_generation as f64,
+                )],
+            );
+            return Ok(());
+        }
         let content = self
             .popup
             .as_ref()
@@ -1558,6 +1641,7 @@ impl BrowserState {
             fragment: &FragmentNode,
             id: u64,
             parent: Offset,
+            layout_zoom: f64,
         ) -> Option<crate::chrome::DragRegion> {
             let origin = Offset {
                 x: parent.x + fragment.offset.x,
@@ -1565,18 +1649,30 @@ impl BrowserState {
             };
             if fragment.node_id == id {
                 return Some(crate::chrome::DragRegion {
-                    x: origin.x,
-                    y: origin.y,
-                    width: fragment.size.width,
-                    height: fragment.size.height,
+                    x: origin.x / layout_zoom,
+                    y: origin.y / layout_zoom,
+                    width: fragment.size.width / layout_zoom,
+                    height: fragment.size.height / layout_zoom,
                 });
             }
             fragment
                 .children
                 .iter()
-                .find_map(|child| bounds(child, id, origin))
+                .find_map(|child| bounds(child, id, origin, layout_zoom))
         }
-        if let Some(region) = bounds(&toolbar.fragments, id, Offset::default()) {
+        let toolbar_layout_zoom = toolbar
+            .fragments
+            .paint
+            .resources
+            .as_ref()
+            .map_or(1.0, |resources| resources.layout_zoom_factor)
+            .max(f64::MIN_POSITIVE);
+        if let Some(region) = bounds(
+            &toolbar.fragments,
+            id,
+            Offset::default(),
+            toolbar_layout_zoom,
+        ) {
             drag_regions.push(region);
         }
         let signature = self.current_frame_signature()?;
@@ -1602,7 +1698,8 @@ impl BrowserState {
                     async_root_scroll,
                     blocking_wheel_regions: ::compositor::BlockingWheelEventRegions {
                         covers_viewport: blocking_wheel_regions.covers_viewport,
-                        rects: blocking_wheel_regions.rects,
+                        scrolling_rects: blocking_wheel_regions.scrolling_rects,
+                        fixed_rects: blocking_wheel_regions.fixed_rects,
                     },
                 },
             ))
@@ -2194,6 +2291,13 @@ impl BrowserState {
                 self.retired_documents.push_back(old);
             }
         }
+        // ScheduleWork coalescing belongs to the document loader which issued
+        // the wake. A user-blocking navigation can overtake the old loader's
+        // normal-priority Wake command; do not let that retired document's
+        // still-set bit suppress the replacement document's first resource
+        // wake. The stale Wake may clear this bit again later, which only
+        // permits an extra coalesced notification and cannot hide ready work.
+        self.loading_wake_pending.store(false, Ordering::Release);
         self.tabs.active.document_generation = self.tabs.active.document_generation.wrapping_add(1);
         let mut page = {
             let _phase = browser_tracing::span("navigation", "NavigationCreateDocument");
@@ -3389,7 +3493,9 @@ impl BrowserState {
             if !result.default_prevented {
                 if let InputEvent::Wheel(event) = &input {
                     let started = Instant::now();
-                    scroll(page, event, self.viewport.content_height())?;
+                    let mut targeted = event.clone();
+                    targeted.target_node_id = result.target_node_id;
+                    scroll(page, &targeted, self.viewport.content_height())?;
                     if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
                         eprintln!(
                             "scroll-default-profile ms={:.3} sequence={}",
@@ -4091,6 +4197,44 @@ input:focus{border-color:#15919d}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_frame_demand_does_not_let_an_old_pulse_consume_new_work() {
+        let now = Instant::now();
+        let first = NativeBeginFrame {
+            args: BeginFrameArgs {
+                source_id: 17,
+                sequence_number: 3,
+                frame_time: now,
+                deadline: now + Duration::from_millis(16),
+                interval: Duration::from_millis(16),
+            },
+            display_time: None,
+        };
+        let mut demand = PageFrameDemand::InitiallyRequested();
+        assert!(demand.TakeFor(first));
+
+        // The direct host and compositor routes can both observe this physical
+        // pulse. Work requested between those callbacks belongs to the next
+        // frame; the duplicate must neither deliver nor acknowledge it.
+        demand.Request();
+        assert!(!demand.TakeFor(first));
+        assert_ne!(demand.requested_generation, demand.acknowledged_generation);
+
+        let second = NativeBeginFrame {
+            args: BeginFrameArgs {
+                sequence_number: 4,
+                frame_time: now + Duration::from_millis(16),
+                deadline: now + Duration::from_millis(32),
+                ..first.args
+            },
+            ..first
+        };
+        assert!(demand.TakeFor(second));
+        assert_eq!(demand.requested_generation, demand.acknowledged_generation);
+        assert!(!demand.TakeFor(second));
+    }
+
     #[test]
     fn active_scroll_prioritizes_ready_input_without_suspending_page_tasks() {
         assert!(defer_foreground_for_priority(true));
@@ -5053,6 +5197,38 @@ mod tests {
         assert!(
             !pending.load(Ordering::Acquire),
             "failed delivery must allow rearm"
+        );
+    }
+
+    #[test]
+    fn navigation_rearms_resource_wakes_after_retiring_a_document() {
+        let output = Output {
+            mailbox: Arc::new(Mutex::new(None)),
+            notify: Arc::new(|_| {}),
+        };
+        let mut state = BrowserState::new(
+            Viewport {
+                width: 320,
+                height: 248,
+                scale: 1.0,
+            },
+            output,
+        )
+        .unwrap();
+        state.loading_wake_pending.store(true, Ordering::Release);
+        state
+            .navigate_request(
+                url_loader::URLRequest {
+                    url: "about:blank".into(),
+                    ..Default::default()
+                },
+                true,
+                false,
+            )
+            .unwrap();
+        assert!(
+            !state.loading_wake_pending.load(Ordering::Acquire),
+            "a retired loader's coalescing bit must not suppress replacement-document work"
         );
     }
 

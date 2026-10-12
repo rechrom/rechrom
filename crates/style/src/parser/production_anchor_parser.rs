@@ -62,8 +62,14 @@ pub(super) fn ConsumeNameScope<T: TokenStreamTokenizer>(
     Names(id, s)
 }
 fn AreaKeyword<T: TokenStreamTokenizer>(s: &mut Stream<T>) -> Option<(CSSValueID, Kind)> {
+    AreaKeywordWithAny(s, false)
+}
+fn AreaKeywordWithAny<T: TokenStreamTokenizer>(
+    s: &mut Stream<T>,
+    allow_any: bool,
+) -> Option<(CSSValueID, Kind)> {
     let id = s.Peek().Id();
-    let kind = area::KeywordKind(id, false)?;
+    let kind = area::KeywordKind(id, allow_any)?;
     s.ConsumeIncludingWhitespace();
     Some((id, kind))
 }
@@ -72,9 +78,20 @@ fn AreaKeyword<T: TokenStreamTokenizer>(s: &mut Stream<T>) -> Option<(CSSValueID
 fn PositionArea<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     s: &mut Stream<T>,
+    allow_any: bool,
 ) -> Result<Rc<Value>, PropertyParseError> {
-    let mut first = AreaKeyword(s).ok_or_else(|| invalid(id))?;
-    let Some(mut second) = AreaKeyword(s) else {
+    let mut first = if allow_any {
+        AreaKeywordWithAny(s, true)
+    } else {
+        AreaKeyword(s)
+    }
+    .ok_or_else(|| invalid(id))?;
+    let second = if allow_any {
+        AreaKeywordWithAny(s, true)
+    } else {
+        AreaKeyword(s)
+    };
+    let Some(mut second) = second else {
         return Ok(values::identifier(first.0));
     };
     if matches!(first.1, Kind::Vertical | Kind::Inline | Kind::SelfInline)
@@ -147,7 +164,7 @@ fn SingleFallback<T: TokenStreamTokenizer>(
         break;
     }
     if name.is_none() && flips.is_empty() {
-        return PositionArea(id, s);
+        return PositionArea(id, s, false);
     }
     let mut list = Vec::new();
     if let Some(name) = name {
@@ -155,6 +172,22 @@ fn SingleFallback<T: TokenStreamTokenizer>(
     }
     list.extend(flips.into_iter().map(values::identifier));
     Ok(values::list(list, values::ListSeparator::Space))
+}
+pub(super) fn ConsumeAnchoredFallbackQueryValue<T: TokenStreamTokenizer>(
+    s: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Rc<Value>, PropertyParseError> {
+    let id = CSSPropertyID::kPositionTryFallbacks;
+    let save = s.Save();
+    match SingleFallback(id, s, mode) {
+        Ok(value) => Ok(value),
+        Err(error) if error.kind == PropertyParseErrorKind::Invalid => {
+            s.EnsureLookAhead();
+            s.Restore(save);
+            PositionArea(id, s, true)
+        }
+        Err(error) => Err(error),
+    }
 }
 pub(super) fn Consume<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
@@ -185,7 +218,7 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
             if s.Peek().Id() == CSSValueID::kNone {
                 return Ok(values::identifier(s.ConsumeIncludingWhitespace().Id()));
             }
-            PositionArea(id, s)
+            PositionArea(id, s, false)
         }
         kPositionVisibility => {
             // longhands_custom.cc:273-301. anchors-valid remains unsupported by

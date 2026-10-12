@@ -13,7 +13,10 @@ pub extern "Rust" fn ShapeHyphenResult(result: &mut HyphenResult, style: &Comput
     result.text_ = if hyphen.IsNull() {
         String::default()
     } else {
-        String::from_utf16(hyphen.Span16())
+        // AtomicString may retain Latin-1 storage for the ordinary hyphen.
+        // Blink's String(AtomicString) preserves either backing; requiring a
+        // 16-bit span here made font/style changes expose a layout crash.
+        String::from_utf16(hyphen.utf16_units().unwrap_or_default())
     };
     let shaper = HarfBuzzShaper::new(result.text_.clone());
     result.shape_result_ = Member::from_ptr(shaper.Shape(style.GetFont(), style.Direction()));

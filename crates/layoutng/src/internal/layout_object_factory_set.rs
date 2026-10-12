@@ -35,8 +35,6 @@ pub type FieldsetAnonymousStyleUpdater =
 pub type FieldsetContentBox = fn(&mut LayoutBlockFlow) -> *mut LayoutBox;
 pub type FieldsetScrollExtent = fn(&LayoutBlockFlow) -> foundation::LayoutUnit;
 pub type CustomLayoutChildFactory = fn(&mut LayoutBox);
-pub type MulticolObjectUpdater =
-    fn(&mut LayoutBlockFlow, &StyleDifference, *const ComputedStyle, &ComputedStyle);
 pub type InlineObjectStyleUpdater = fn(&mut LayoutBlockFlow, *const ComputedStyle, &ComputedStyle);
 pub type AnonymousTextCombineStyleUpdater = fn(&mut LayoutObject, &mut ComputedStyleBuilder);
 pub type SvgBlockTextScale = fn(&LayoutBlock) -> f64;
@@ -146,7 +144,6 @@ pub struct LayoutObjectFactorySet {
     pub svg_root_add_child: Option<SvgRootChildInserter>,
     pub svg_root_remove_child: Option<SvgRootChildRemover>,
     pub svg_root_children: Option<SvgRootChildren>,
-    pub update_multicol: Option<MulticolObjectUpdater>,
     pub invalidate_column_spanners: Option<ColumnSpannerInvalidator>,
 
     pub forms_metadata: Option<ElementMetadataFactory>,

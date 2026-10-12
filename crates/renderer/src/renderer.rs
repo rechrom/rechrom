@@ -7,7 +7,7 @@
 use std::{collections::HashMap, io};
 
 use raster::RasterResourceProvider;
-use viz::{AggregatedFrame, SurfaceId};
+use viz::{AggregatedFrame, RenderPassId, SurfaceId};
 
 use crate::render_pass::RenderPassRenderer;
 
@@ -33,7 +33,7 @@ pub struct RenderTarget<'a> {
 
 #[derive(Default)]
 pub struct Renderer {
-    surfaces: HashMap<SurfaceId, RenderPassRenderer>,
+    surfaces: HashMap<(SurfaceId, RenderPassId), RenderPassRenderer>,
 }
 
 /// Resolves the opaque resource namespace retained by each Viz surface.
@@ -62,7 +62,8 @@ impl Renderer {
     }
 
     pub fn InvalidateSurface(&mut self, surface_id: SurfaceId) {
-        self.surfaces.remove(&surface_id);
+        self.surfaces
+            .retain(|(surface, _), _| *surface != surface_id);
     }
 
     pub fn Render(
@@ -92,26 +93,32 @@ impl Renderer {
             .ok_or_else(|| io::Error::other("aggregated frame does not match render target"))?;
         debug_assert_eq!(expected, buffer.len());
 
-        let covers_output = frame.RenderPasses().iter().all(|pass| {
-            let destination = pass.Destination();
-            destination.x == 0 && destination.width == width
-        }) && {
-            let mut rows: Vec<_> = frame
-                .RenderPasses()
-                .iter()
-                .map(|pass| {
-                    let destination = pass.Destination();
-                    (destination.y, destination.y + destination.height as i32)
-                })
-                .collect();
-            rows.sort_unstable();
-            let mut end = 0i32;
-            rows.into_iter().all(|(top, bottom)| {
-                let contiguous = top <= end;
-                end = end.max(bottom);
-                contiguous
-            }) && end >= height as i32
-        };
+        let covers_output = frame
+            .RenderPasses()
+            .iter()
+            .filter(|pass| pass.IsRoot())
+            .all(|pass| {
+                let destination = pass.Destination();
+                destination.x == 0 && destination.width == width
+            })
+            && {
+                let mut rows: Vec<_> = frame
+                    .RenderPasses()
+                    .iter()
+                    .filter(|pass| pass.IsRoot())
+                    .map(|pass| {
+                        let destination = pass.Destination();
+                        (destination.y, destination.y + destination.height as i32)
+                    })
+                    .collect();
+                rows.sort_unstable();
+                let mut end = 0i32;
+                rows.into_iter().all(|(top, bottom)| {
+                    let contiguous = top <= end;
+                    end = end.max(bottom);
+                    contiguous
+                }) && end >= height as i32
+            };
         if !covers_output {
             buffer.fill(match format {
                 skia::PixelFormat::Bgrx8888 => 0x00ff_ffff,
@@ -122,11 +129,49 @@ impl Renderer {
         let mut damage_pixels = 0usize;
         let mut copied_bytes = 0usize;
         let mut all_retained = true;
+        let mut pass_outputs: HashMap<(SurfaceId, RenderPassId), Vec<u32>> = HashMap::new();
         for pass in frame.RenderPasses() {
             let destination = pass.Destination();
             let provider = resources.ResourcesFor(pass.Surface()).ok_or_else(|| {
                 io::Error::other("aggregated render pass has no raster resource provider")
             })?;
+            if !pass.IsRoot() {
+                let length = (destination.width as usize)
+                    .checked_mul(destination.height as usize)
+                    .ok_or_else(|| io::Error::other("render pass is too large"))?;
+                let mut scratch = vec![0u32; length];
+                let local_outputs: HashMap<_, _> = pass_outputs
+                    .iter()
+                    .filter_map(|(&(surface, id), pixels)| {
+                        (surface == pass.Surface()).then_some((id, pixels.as_slice()))
+                    })
+                    .collect();
+                let update = self
+                    .surfaces
+                    .entry((pass.Surface(), pass.RenderPassId()))
+                    .or_default()
+                    .compose(
+                        pass,
+                        provider,
+                        destination.width,
+                        destination.height,
+                        &mut scratch,
+                        skia::PixelFormat::Rgba8888,
+                        destination.width as usize,
+                        &local_outputs,
+                    )?;
+                damage_pixels = damage_pixels.saturating_add(update.damage_pixels);
+                copied_bytes = copied_bytes.saturating_add(update.copied_bytes);
+                all_retained &= update.damage_pixels == 0;
+                pass_outputs.insert((pass.Surface(), pass.RenderPassId()), scratch);
+                continue;
+            }
+            let local_outputs: HashMap<_, _> = pass_outputs
+                .iter()
+                .filter_map(|(&(surface, id), pixels)| {
+                    (surface == pass.Surface()).then_some((id, pixels.as_slice()))
+                })
+                .collect();
             let update = if destination.x == 0 && destination.width == width {
                 let top = usize::try_from(destination.y)
                     .map_err(|_| io::Error::other("negative surface destination"))?;
@@ -135,29 +180,38 @@ impl Renderer {
                     .filter(|&bottom| bottom <= height as usize)
                     .ok_or_else(|| io::Error::other("surface destination exceeds target"))?;
                 let target = &mut buffer[top * row_stride..bottom * row_stride];
-                self.surfaces.entry(pass.Surface()).or_default().compose(
-                    pass,
-                    provider,
-                    destination.width,
-                    destination.height,
-                    target,
-                    format,
-                    row_stride,
-                )?
+                self.surfaces
+                    .entry((pass.Surface(), pass.RenderPassId()))
+                    .or_default()
+                    .compose(
+                        pass,
+                        provider,
+                        destination.width,
+                        destination.height,
+                        target,
+                        format,
+                        row_stride,
+                        &local_outputs,
+                    )?
             } else {
                 let length = (destination.width as usize)
                     .checked_mul(destination.height as usize)
                     .ok_or_else(|| io::Error::other("surface destination is too large"))?;
                 let mut scratch = vec![0u32; length];
-                let update = self.surfaces.entry(pass.Surface()).or_default().compose(
-                    pass,
-                    provider,
-                    destination.width,
-                    destination.height,
-                    &mut scratch,
-                    format,
-                    destination.width as usize,
-                )?;
+                let update = self
+                    .surfaces
+                    .entry((pass.Surface(), pass.RenderPassId()))
+                    .or_default()
+                    .compose(
+                        pass,
+                        provider,
+                        destination.width,
+                        destination.height,
+                        &mut scratch,
+                        format,
+                        destination.width as usize,
+                        &local_outputs,
+                    )?;
                 let left = usize::try_from(destination.x)
                     .map_err(|_| io::Error::other("negative surface destination"))?;
                 let top = usize::try_from(destination.y)

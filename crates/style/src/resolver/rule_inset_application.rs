@@ -32,6 +32,8 @@ fn Convert(
         root,
         b.EffectiveZoom(),
         media,
+        Some(CurrentComputedLineHeight(b)),
+        None,
     );
     if let CSSValuePayload::kMathFunctionClass(m) = v.Payload() {
         return m

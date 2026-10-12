@@ -124,7 +124,18 @@ impl DocumentEngine {
                     if dom.GetDocument().FindNodeById(sample.node_id).is_none() {
                         dom::error::invalid_argument("Animation target missing");
                     }
-                    dom.SetAnimationStyle(sample.node_id, sample.effect_id, sample.declarations);
+                    match sample.cascade_origin {
+                        animation::AnimationCascadeOrigin::Animation => dom.SetAnimationStyle(
+                            sample.node_id,
+                            sample.effect_id,
+                            sample.declarations,
+                        ),
+                        animation::AnimationCascadeOrigin::Transition => dom.SetTransitionStyle(
+                            sample.node_id,
+                            sample.effect_id,
+                            sample.declarations,
+                        ),
+                    }
                 }
                 DocumentEffects {
                     style: Some(StyleMutation::Recalculate),

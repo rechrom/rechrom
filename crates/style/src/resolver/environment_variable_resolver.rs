@@ -52,6 +52,9 @@ pub trait EnvironmentVariableResolver {
         name: &AtomicString,
         indices: &[u32],
     ) -> Option<Rc<CSSVariableData>>;
+    fn HasEnvironmentVariableReference(&self) -> bool {
+        false
+    }
 }
 /// Adapts the existing neutral environment-variable store, preserving its
 /// inherited lookup and observer/invalidation path without text conversion.

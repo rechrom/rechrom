@@ -512,7 +512,7 @@ pub trait CSSParserImplRuleBackend:
         parser: &mut CSSParserImpl<'_, Self>,
         stream: &mut CSSParserTokenStream<'_, T>,
         nesting: CSSNestingType,
-        parent: Rc<std::cell::RefCell<Self::StyleRule>>,
+        parent: Rc<Self::StyleRule>,
         rules: &mut Vec<Rc<Self::StyleRuleBase>>,
     );
     fn ConsumeFontFamily<T: TokenStreamTokenizer>(
@@ -3209,12 +3209,7 @@ where
         let old_in_mixin = std::mem::replace(&mut self.in_mixin_, true);
         let parent = self.ConsumeDeclarationListForMixins(stream);
         self.in_mixin_ = old_in_mixin;
-        let rules = {
-            let mut parent_rule = parent.borrow_mut();
-            parent_rule.EnsureChildRules();
-            let mut child_rules = parent_rule.ChildRulesMut().unwrap();
-            std::mem::take(&mut *child_rules)
-        };
+        let rules = parent.TakeChildRules();
         Some(Rc::new(crate::style_rule::StyleRuleBase::Result(
             crate::style_rule::StyleRuleResult::new(rules),
         )))
@@ -3300,7 +3295,7 @@ where
     pub fn ConsumeDeclarationListForMixins<T: TokenStreamTokenizer>(
         &mut self,
         stream: &mut CSSParserTokenStream<'_, T>,
-    ) -> Rc<std::cell::RefCell<B::StyleRule>> {
+    ) -> Rc<B::StyleRule> {
         let mut guard = BlockGuard::new(stream);
         if let Some(observer) = &mut self.observer_ {
             observer.StartRuleBody(guard.Offset());
@@ -3311,12 +3306,10 @@ where
         let selectors = CSSSelectorList::AdoptSelectorVector(vec![dummy]);
         let properties =
             ImmutableCSSPropertyValueSet::Create(&[], CSSParserMode::kHTMLStandardMode, false);
-        let parent = Rc::new(std::cell::RefCell::new(
-            crate::style_rule::StyleRule::Create(
-                (*selectors).clone(),
-                CSSPropertyValueSetRuleHandle::FromImmutable(properties),
-                None,
-            ),
+        let parent = Rc::new(crate::style_rule::StyleRule::Create(
+            (*selectors).clone(),
+            CSSPropertyValueSetRuleHandle::FromImmutable(properties),
+            None,
         ));
         let mut rules = Vec::new();
         B::ConsumeMixinRuleListOrNestedDeclarationList(
@@ -3326,11 +3319,8 @@ where
             parent.clone(),
             &mut rules,
         );
-        {
-            let mut parent_rule = parent.borrow_mut();
-            for rule in rules {
-                parent_rule.AddChildRule(rule);
-            }
+        for rule in rules {
+            parent.AddChildRule(rule);
         }
         self.EndObservedRuleBody(guard.Offset());
         parent
@@ -3378,12 +3368,7 @@ where
             return None;
         }
         let parent = self.ConsumeDeclarationListForMixins(stream);
-        let rules = {
-            let mut parent_rule = parent.borrow_mut();
-            parent_rule.EnsureChildRules();
-            let mut child_rules = parent_rule.ChildRulesMut().unwrap();
-            std::mem::take(&mut *child_rules)
-        };
+        let rules = parent.TakeChildRules();
         Some(Rc::new(crate::style_rule::StyleRuleBase::ApplyMixin(
             crate::style_rule::StyleRuleApplyMixin::WithContents(name, arguments, rules),
         )))
@@ -3420,12 +3405,7 @@ where
             observer.EndRuleHeader(stream.LookAheadOffset());
         }
         let parent = self.ConsumeDeclarationListForMixins(stream);
-        let rules = {
-            let mut parent_rule = parent.borrow_mut();
-            parent_rule.EnsureChildRules();
-            let mut child_rules = parent_rule.ChildRulesMut().unwrap();
-            std::mem::take(&mut *child_rules)
-        };
+        let rules = parent.TakeChildRules();
         Some(Rc::new(crate::style_rule::StyleRuleBase::Contents(
             crate::style_rule::StyleRuleContentsStatement::new(rules),
         )))

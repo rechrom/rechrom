@@ -9,7 +9,7 @@ use layoutng_assembly::internal::layout_input::{
 use layoutng_assembly::internal::layout_input_types::Color;
 use layoutng_assembly::internal::paint_input::{
     PaintStyleData, SvgMarkerInstance, SvgMarkerPrimitive, SvgPaintComponent, SvgPaintServer,
-    SvgStrokeLineCap, SvgStrokeLineJoin,
+    SvgPaintServerReferenceBox, SvgStrokeLineCap, SvgStrokeLineJoin,
 };
 
 use crate::display_item_id::DisplayItemIdType;
@@ -18,7 +18,7 @@ use crate::geometry_mapper::MapRectToRoot;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, PaintPhase};
 use crate::paint_info::PaintInfo;
-use crate::paint_shader_resolver::ResolvePaintShader;
+use crate::paint_shader_resolver::ResolvePaintShaderForBounds;
 use crate::pre_paint_tree_walk::PaintTreeNode;
 use crate::PaintRect;
 
@@ -28,6 +28,8 @@ struct ShapePaintStyle {
     stroke: Option<Color>,
     fill_server: Option<SvgPaintServer>,
     stroke_server: Option<SvgPaintServer>,
+    fill_server_reference_box: Option<SvgPaintServerReferenceBox>,
+    stroke_server_reference_box: Option<SvgPaintServerReferenceBox>,
     stroke_width: f64,
     stroke_dash_array: Vec<f64>,
     stroke_dash_offset: f64,
@@ -301,6 +303,8 @@ fn MainStyle(style: &PaintStyleData) -> ShapePaintStyle {
         stroke: style.svg_stroke,
         fill_server: style.svg_fill_server.clone(),
         stroke_server: style.svg_stroke_server.clone(),
+        fill_server_reference_box: None,
+        stroke_server_reference_box: None,
         stroke_width: style.svg_stroke_width,
         stroke_dash_array: style.svg_stroke_dash_array.clone(),
         stroke_dash_offset: style.svg_stroke_dash_offset,
@@ -320,6 +324,8 @@ fn MarkerStyle(primitive: &SvgMarkerPrimitive) -> ShapePaintStyle {
         stroke: primitive.stroke,
         fill_server: primitive.fill_server.clone(),
         stroke_server: primitive.stroke_server.clone(),
+        fill_server_reference_box: primitive.fill_server_reference_box.clone(),
+        stroke_server_reference_box: primitive.stroke_server_reference_box.clone(),
         stroke_width: primitive.stroke_width,
         stroke_dash_array: primitive.stroke_dash_array.clone(),
         stroke_dash_offset: primitive.stroke_dash_offset,
@@ -412,17 +418,27 @@ fn BuildShapeItems(
         item.antialias = style.antialias;
         item.svg_marker_resource_id = marker_resource_id;
         if let Some(fill_server) = &style.fill_server {
-            item.paint_shader = Some(ResolvePaintShader(
-                fill_server,
-                fragment.paint.resources.as_deref(),
+            let reference = style.fill_server_reference_box.as_ref();
+            let reference_origin = reference.map_or(
                 Offset {
                     x: bounds.x,
                     y: bounds.y,
                 },
-                Some(Size {
+                |reference| reference.offset,
+            );
+            let reference_size = reference.map_or(
+                Size {
                     width: bounds.width,
                     height: bounds.height,
-                }),
+                },
+                |reference| reference.size,
+            );
+            item.paint_shader = Some(ResolvePaintShaderForBounds(
+                fill_server,
+                fragment.paint.resources.as_deref(),
+                origin,
+                reference_origin,
+                Some(reference_size),
             ));
         }
         items.push(item);
@@ -452,17 +468,27 @@ fn BuildShapeItems(
         item.non_scaling_stroke = style.non_scaling_stroke;
         item.svg_marker_resource_id = marker_resource_id;
         if let Some(stroke_server) = &style.stroke_server {
-            item.paint_shader = Some(ResolvePaintShader(
-                stroke_server,
-                fragment.paint.resources.as_deref(),
+            let reference = style.stroke_server_reference_box.as_ref();
+            let reference_origin = reference.map_or(
                 Offset {
                     x: bounds.x,
                     y: bounds.y,
                 },
-                Some(Size {
+                |reference| reference.offset,
+            );
+            let reference_size = reference.map_or(
+                Size {
                     width: bounds.width,
                     height: bounds.height,
-                }),
+                },
+                |reference| reference.size,
+            );
+            item.paint_shader = Some(ResolvePaintShaderForBounds(
+                stroke_server,
+                fragment.paint.resources.as_deref(),
+                origin,
+                reference_origin,
+                Some(reference_size),
             ));
         }
         items.push(item);
@@ -542,6 +568,24 @@ fn PaintMarkers(
                     },
                     node,
                 );
+                if let Some(offset) = marker.clip_offset {
+                    context.borrow_mut().Append(
+                        DisplayItem {
+                            r#type: DisplayItemType::kClipRect,
+                            phase: PaintPhase::kForeground,
+                            node_id,
+                            svg_marker_resource_id: marker.resource_id,
+                            rect: PaintRect {
+                                x: offset.x,
+                                y: offset.y,
+                                width: marker.clip_size.width,
+                                height: marker.clip_size.height,
+                            },
+                            ..Default::default()
+                        },
+                        node,
+                    );
+                }
                 began_marker = true;
             }
             let has_local =

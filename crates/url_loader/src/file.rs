@@ -38,6 +38,7 @@ pub(crate) fn FilePathFromURL(url: &str) -> io::Result<PathBuf> {
 struct FileState {
     cancelled: AtomicBool,
     response: Mutex<Option<io::Result<URLResponse>>>,
+    wake: Mutex<Option<crate::URLWakeCallback>>,
 }
 
 pub(crate) struct FileURLLoad {
@@ -49,6 +50,7 @@ impl FileURLLoad {
         let state = Arc::new(FileState {
             cancelled: AtomicBool::new(false),
             response: Mutex::new(None),
+            wake: Mutex::new(None),
         });
         let worker_state = state.clone();
         thread::Builder::new()
@@ -85,6 +87,14 @@ impl FileURLLoad {
                     .response
                     .lock()
                     .expect("file URL load state poisoned") = Some(result);
+                let callback = worker_state
+                    .wake
+                    .lock()
+                    .expect("file URL wake poisoned")
+                    .clone();
+                if let Some(callback) = callback {
+                    callback();
+                }
             })?;
         Ok(Self { state })
     }
@@ -104,5 +114,18 @@ impl URLLoadOperation for FileURLLoad {
             .lock()
             .expect("file URL load state poisoned");
         response.take().transpose()
+    }
+
+    fn SetWakeCallback(&mut self, callback: crate::URLWakeCallback) {
+        *self.state.wake.lock().expect("file URL wake poisoned") = Some(callback.clone());
+        if self
+            .state
+            .response
+            .lock()
+            .expect("file URL load state poisoned")
+            .is_some()
+        {
+            callback();
+        }
     }
 }

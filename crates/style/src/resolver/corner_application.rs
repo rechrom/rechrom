@@ -63,6 +63,8 @@ fn Shape(
                             root,
                             b.EffectiveZoom(),
                             media,
+                            Some(CurrentComputedLineHeight(b)),
+                            None,
                         ),
                         None,
                     )

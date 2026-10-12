@@ -12,4 +12,10 @@ impl URLLoadOperation for ReadyURLLoad {
     fn Poll(&mut self) -> io::Result<Option<URLResponse>> {
         Ok(self.response.take())
     }
+
+    fn SetWakeCallback(&mut self, callback: crate::URLWakeCallback) {
+        if self.response.is_some() {
+            callback();
+        }
+    }
 }

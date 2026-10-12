@@ -359,16 +359,20 @@ pub(super) fn ApplyLineHeight(
                     (number * 100.0).clamp(-(f32::MAX as f64), f32::MAX as f64) as f32,
                 ),
                 UnitType::kPercentage => Length::Fixed(
-                    font * (number.clamp(i32::MIN as f64, i32::MAX as f64) as i32) as f32 / 100.0,
+                    font * number.clamp(-(f32::MAX as f64), f32::MAX as f64) as f32 / 100.0,
                 ),
                 _ => {
-                    if b.EffectiveZoom() != 1.0 {
-                        return Err(LonghandApplicationError::Unsupported(id));
-                    }
+                    let pixels = Pixels(id, number, unit, font, root, media)?;
+                    // The current font is already computed at effective zoom;
+                    // the retained root font size is specified/unzoomed.
+                    let zoomed = if matches!(unit, UnitType::kEms | UnitType::kQuirkyEms) {
+                        pixels
+                    } else {
+                        pixels * f64::from(b.EffectiveZoom())
+                    };
                     Length::Fixed(
-                        crate::css_value_clamping_utils::CSSValueClampingUtils::ClampLength(Pixels(
-                            id, number, unit, font, root, media,
-                        )?) as f32,
+                        crate::css_value_clamping_utils::CSSValueClampingUtils::ClampLength(zoomed)
+                            as f32,
                     )
                 }
             })
@@ -382,7 +386,15 @@ pub(super) fn ApplyLineHeight(
                 use crate::css_math_expression_node::CalculationResultCategory as C;
                 let number = m
                     .ComputeValue(
-                        &mut MathLengthResolver(id, font, root, b.EffectiveZoom(), media),
+                        &mut MathLengthResolver(
+                            id,
+                            font,
+                            root,
+                            b.EffectiveZoom(),
+                            media,
+                            Some(CurrentComputedLineHeight(b)),
+                            None,
+                        ),
                         Some(font as f64),
                     )
                     .map_err(|_| LonghandApplicationError::Unsupported(id))?;

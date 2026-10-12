@@ -13,8 +13,8 @@ use crate::{
     production_css_value::ProductionCSSValueDispatch,
     production_style_sheet::{
         Backend, LayerSegment, ProductionFontFaceRule, ProductionKeyframeRule,
-        ProductionKeyframesRule, ProductionNestedDeclarationsRule, ProductionStyleRule,
-        ProductionStyleSheet,
+        ProductionKeyframesRule, ProductionNestedDeclarationsRule, ProductionProjectionRule,
+        ProductionStyleRule, ProductionStyleSheet,
     },
     style_rule::{LayerNameAsString, StyleRuleBase},
 };
@@ -27,12 +27,69 @@ use std::rc::Rc;
 /// resulting typed rule ownership into the DOM's retained stylesheet storage.
 /// UTF-8 decoding happens exactly once at this public boundary.
 pub fn ParseCSS(text: &str) -> CSSStyleSheet {
-    let source = foundation::String::FromUtf8(text.as_bytes());
-    let parsed = crate::production_style_sheet::ParseStyleSheet(
-        &source,
+    ParseCSSWithMode(
+        text,
         crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
+    )
+}
+
+/// Parse an author sheet with its response/document URL installed on the
+/// production CSSParserContext. Typed URL values resolve while their token is
+/// consumed and retain their author spelling separately; the source itself is
+/// never rewritten.
+pub fn ParseCSSWithBase(text: &str, base_url: &str) -> CSSStyleSheet {
+    ParseCSSWithModeAndBase(
+        text,
+        crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
+        base_url,
+    )
+}
+
+/// Parse the browser's built-in sheets with Blink's UA parser mode while
+/// retaining the same typed owner used to build the CSSOM projection. Keeping
+/// the mode on `ProductionStyleSheet::contents` lets StyleEngine verify that a
+/// typed declaration owner is valid for its cascade origin before using it.
+pub fn ParseUserAgentCSS(text: &str) -> CSSStyleSheet {
+    ParseUserAgentCSSWithRole(text, cssom::CSSUserAgentStyleSheetRole::kHTML)
+}
+
+pub fn ParseUserAgentCSSWithRole(
+    text: &str,
+    role: cssom::CSSUserAgentStyleSheetRole,
+) -> CSSStyleSheet {
+    let mut sheet = ParseCSSWithMode(
+        text,
+        crate::parser::css_parser_mode::CSSParserMode::kUASheetMode,
     );
-    ProjectStyleSheet(&parsed)
+    sheet.SetUserAgentStyleSheetRole(role);
+    sheet
+}
+
+fn ParseCSSWithMode(
+    text: &str,
+    mode: crate::parser::css_parser_mode::CSSParserMode,
+) -> CSSStyleSheet {
+    let source = foundation::String::FromUtf8(text.as_bytes());
+    let parsed = Rc::new(crate::production_style_sheet::ParseStyleSheet(
+        &source, mode,
+    ));
+    let mut projection = ProjectStyleSheet(&parsed);
+    projection.AttachParsedBacking(text, parsed);
+    projection
+}
+
+fn ParseCSSWithModeAndBase(
+    text: &str,
+    mode: crate::parser::css_parser_mode::CSSParserMode,
+    base_url: &str,
+) -> CSSStyleSheet {
+    let source = foundation::String::FromUtf8(text.as_bytes());
+    let parsed = Rc::new(crate::production_style_sheet::ParseStyleSheetWithBase(
+        &source, mode, base_url,
+    ));
+    let mut projection = ProjectStyleSheet(&parsed);
+    projection.AttachParsedBacking(text, parsed);
+    projection
 }
 
 /// Parse an inline declaration list through the translated Blink property
@@ -56,39 +113,34 @@ pub fn ParseCSSDeclarationList(text: &str) -> Vec<CSSDeclaration> {
 /// declaration list; unsupported declarations remain in `declaration_text`.
 /// DOM sets `owner_node_id` when attaching this projection to an owner node.
 pub fn ProjectStyleSheet(sheet: &ProductionStyleSheet) -> CSSStyleSheet {
-    let mut rules = sheet
-        .rules
+    let mut output = CSSStyleSheet::default();
+    output.rules = sheet
+        .ProjectionRulesInSourceOrder()
+        .into_iter()
+        .map(|rule| match rule {
+            ProductionProjectionRule::Style(rule) => ProjectStyleRule(rule),
+            ProductionProjectionRule::NestedDeclarations(rule) => {
+                ProjectNestedDeclarationsRule(rule)
+            }
+        })
+        .collect();
+    output.font_faces = sheet.font_faces.iter().map(ProjectFontFaceRule).collect();
+    output.keyframes = sheet.keyframes.iter().map(ProjectKeyframesRule).collect();
+    output.scopes = sheet
+        .scopes
         .iter()
-        .map(|rule| (rule.source_order, ProjectStyleRule(rule)))
-        .chain(
-            sheet
-                .nested_declarations
-                .iter()
-                .map(|rule| (rule.source_order, ProjectNestedDeclarationsRule(rule))),
-        )
-        .collect::<Vec<_>>();
-    rules.sort_by_key(|rule| rule.0);
-    let mut output = CSSStyleSheet {
-        rules: rules.into_iter().map(|rule| rule.1).collect(),
-        font_faces: sheet.font_faces.iter().map(ProjectFontFaceRule).collect(),
-        keyframes: sheet.keyframes.iter().map(ProjectKeyframesRule).collect(),
-        scopes: sheet
-            .scopes
-            .iter()
-            .map(crate::production_rule_effect_projection::ProjectScopeRule)
-            .collect(),
-        property_rules: sheet
-            .property_registration_effects
-            .iter()
-            .filter_map(|effect| {
-                crate::production_rule_effect_projection::ProjectPropertyRegistrationEffect(
-                    effect,
-                    &sheet.source,
-                )
-            })
-            .collect(),
-        ..CSSStyleSheet::default()
-    };
+        .map(crate::production_rule_effect_projection::ProjectScopeRule)
+        .collect();
+    output.property_rules = sheet
+        .property_registration_effects
+        .iter()
+        .filter_map(|effect| {
+            crate::production_rule_effect_projection::ProjectPropertyRegistrationEffect(
+                effect,
+                &sheet.source,
+            )
+        })
+        .collect();
     let mut source_order = 0;
     for index in 0..sheet.contents.RuleCount() {
         AppendLayerOrder(
@@ -333,6 +385,80 @@ mod tests {
             &String::FromUtf8(text.as_bytes()),
             CSSParserMode::kHTMLStandardMode,
         ))
+    }
+
+    #[test]
+    fn public_parse_retains_the_typed_owner_and_source_provenance() {
+        let css = "/* exact source */ .item { color: red }";
+        let sheet = ParseCSS(css);
+        assert_ne!(sheet.Identity(), 0);
+        assert_eq!(sheet.Revision(), 1);
+        assert_eq!(sheet.SourceText(), css);
+        let parsed = sheet
+            .ParsedBacking::<ProductionStyleSheet>()
+            .expect("translated parser result must survive its CSSOM projection");
+        assert_eq!(parsed.source.Utf8(), css);
+        assert_eq!(parsed.rules.len(), 1);
+        let cloned = sheet.clone();
+        assert!(Rc::ptr_eq(
+            &parsed,
+            &cloned
+                .ParsedBacking::<ProductionStyleSheet>()
+                .expect("clones retain the same typed owner")
+        ));
+        assert!(!format!("{sheet:?}").contains("parsed_backing"));
+    }
+
+    #[test]
+    fn parse_with_base_rebases_urls_in_the_retained_typed_owner() {
+        let css = "/* url(fake.png) */ .item{--raw:'url(fake.png)';background-image:url(../images/a.svg);mask-image:url(mask.svg);filter:url(#fx)}.item::before{content:url('flag')}@font-face{font-family:x;src:url('../fonts/x.woff2') format('woff2')}";
+        let sheet = ParseCSSWithBase(css, "https://example.test/css/main/site.css");
+        assert_eq!(sheet.SourceText(), css);
+        let declarations = sheet
+            .rules
+            .iter()
+            .flat_map(|rule| rule.declarations.iter())
+            .map(|declaration| declaration.value.as_str())
+            .collect::<Vec<_>>();
+        assert!(declarations
+            .iter()
+            .any(|value| { value.contains("https://example.test/css/images/a.svg") }));
+        assert!(declarations
+            .iter()
+            .any(|value| value.contains("https://example.test/css/main/mask.svg")));
+        assert!(declarations
+            .iter()
+            .any(|value| value.contains("https://example.test/css/main/flag")));
+        assert!(declarations
+            .iter()
+            .any(|value| value.contains("url(\"#fx\")")));
+        assert!(sheet.font_faces[0].declarations.iter().any(|declaration| {
+            declaration
+                .value
+                .contains("https://example.test/css/fonts/x.woff2")
+        }));
+        let parsed = sheet
+            .ParsedBacking::<ProductionStyleSheet>()
+            .expect("based sheet keeps its translated typed owner");
+        assert_eq!(parsed.source.Utf8(), css);
+        assert_eq!(
+            parsed.contents.ParserContext().BaseURL(),
+            &crate::production_css_value::ProductionURL::FromString(
+                "https://example.test/css/main/site.css"
+            )
+        );
+    }
+
+    #[test]
+    fn user_agent_parse_retains_ua_mode_on_the_typed_owner() {
+        let sheet = ParseUserAgentCSS("html { display: block }");
+        let parsed = sheet
+            .ParsedBacking::<ProductionStyleSheet>()
+            .expect("UA projection retains its translated owner");
+        assert_eq!(
+            parsed.contents.ParserContext().Mode(),
+            CSSParserMode::kUASheetMode
+        );
     }
 
     #[test]

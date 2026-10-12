@@ -17,28 +17,32 @@ use font_engine::text::native::phrase_break_services::{
     NativePhraseBreakResolver, NativePhraseBreakResolverScope,
 };
 use font_engine::{
-    CanvasRotationInVertical, Font, FontBaseline, FontDescription, FontFamilyType, FontOrientation,
-    FontPlatformData, FontSelectionValue, FontSmoothingMode, Hyphenation, LayoutLocale,
-    ResolvedFontFeatures, ShapeResultView, SharedFontFamily, SimpleFontData, TextRenderingMode,
+    CanvasRotationInVertical, Font, FontBaseline, FontDescription, FontFallbackMetadata,
+    FontFallbackRole, FontFamilyType, FontOrientation, FontPlatformData, FontSelectionValue,
+    FontSmoothingMode, HarfBuzzShaper, Hyphenation, LayoutLocale, ResolvedFontFeatures, ShapeResultView,
+    SharedFontFamily, SimpleFontData,
 };
 use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use foundation::graphics_types::graphics::paint::display_item_client::DisplayItemClient;
 use foundation::{
     gfx, AtomicString, DynamicTo, EBorderStyle, EBoxDecorationBreak, EDisplay,
-    ETextDecorationSkipInk, ETextDecorationStyle as NativeTextDecorationStyle, ETextTransform,
-    LayoutUnit, Length, MakeGarbageCollected, Member, Persistent, PhysicalOffset, PhysicalRect,
-    PhysicalSize, String as BlinkString, TextDecorationLine, TextOffsetMap, To, UnsupportedLayout,
-    WritingMode as NativeWritingMode,
+    EOverscrollBehavior, ETextDecorationSkipInk,
+    ETextDecorationStyle as NativeTextDecorationStyle, ETextTransform, LayoutUnit, Length,
+    MakeGarbageCollected, Member, Persistent, PhysicalOffset, PhysicalRect, PhysicalSize,
+    String as BlinkString, TextDecorationLine, TextOffsetMap, To, UnsupportedLayout,
+    TextEmphasisMark, WritingMode as NativeWritingMode,
 };
 use layoutng_fragment_tree::block_break_token::BlockBreakToken;
 use layoutng_fragment_tree::fragment_item::{FragmentItem, ItemType};
 use layoutng_fragment_tree::fragment_tree::{
-    CollapsedTableEdge, CollapsedTablePaintData, CollapsedTableSection, ColumnRule,
-    ColumnRulePaintData, FieldsetPaintData, FormControlPaintData, FragmentBoxSides, FragmentKind,
-    FragmentNode, FragmentPaintRect, FrameSetPaintData, MathMLPaintData, MathMLPaintKind,
-    PaintGlyph, PaintGlyphRun, PaintProperties, PaintResources, ReplacedContentPaintData,
-    ScrollContainerPaintData, ScrollbarPaintAxis, ScrollbarPaintData, StitchedDecorationData,
-    SvgTextPaintData, TablePaintColumn, TablePaintData,
+    BackgroundPaintLocation, CanvasBackgroundPaintData, CollapsedTableEdge, CollapsedTablePaintData,
+    CollapsedTableSection, ColumnRule, ColumnRulePaintData, FieldsetPaintData,
+    FormControlPaintData, FragmentBoxSides, FragmentKind, FragmentNode, FragmentPaintRect,
+    FrameSetPaintData, MathMLPaintData, MathMLPaintKind, PaintGlyph, PaintGlyphRun,
+    PaintProperties, PaintResources, ReplacedContentPaintData, ScrollContainerPaintData,
+    ScrollbarPaintAxis, ScrollbarPaintData, StickyAxisPaintData, StickyPositionPaintData,
+    StitchedDecorationData, SvgTextPaintData, TablePaintColumn, TablePaintData,
+    TextCombineEmphasisPaintData,
 };
 use layoutng_fragment_tree::layout_result::LayoutResult;
 use layoutng_fragment_tree::logical_fragment::LogicalFragment;
@@ -58,6 +62,7 @@ use layoutng_style::style::computed_style::{
 };
 use layoutng_style::style::computed_style_constants::{EVerticalAlign, PseudoId};
 use layoutng_style::style::grid_enums::GridTrackSizingDirection;
+use layoutng_style::style::gap_data_list::GapDataListIterator;
 use layoutng_style::text_transform_services::{
     NativeTextTransformResolver, NativeTextTransformResolverScope,
 };
@@ -78,10 +83,11 @@ use crate::internal::layout_inline::LayoutInline;
 use crate::internal::layout_input::{
     BorderLineStyle, BoxDecorationBreak, ComputedStyle, ConstraintSpace, Display, Edges,
     ExtendedStyle, FontFace, FontSmoothing, FontVariation, HyphenationProvider,
-    NativeNodeConstructionData, NodeKind, Offset, PaintImage, PhraseBreakProvider, Position, Size,
-    TextDecorationPaint, TextDecorationStyle, TextDirection, TextTransform, TextTransformProvider,
-    TransformMatrix, WritingMode,
+    NativeNodeConstructionData, NodeKind, Offset, PaintImage, PaintStyle, PhraseBreakProvider,
+    Position, Size, TextDecorationPaint, TextDecorationStyle, TextDirection, TextTransform,
+    TextTransformProvider, TransformMatrix, WritingMode,
 };
+use crate::internal::layout_text_combine::LayoutTextCombine;
 use crate::internal::layout_invalidation_reason::{kFontsChanged, kStyleChange};
 use crate::internal::layout_node_metadata::{Element, NativeNodeMetadataRelations, Node};
 use crate::internal::layout_object::ApplyStyleChanges;
@@ -122,6 +128,7 @@ impl ReusableLayoutEnvironment {
                 scrollbar_theme: input.scrollbar_theme,
                 minimum_font_physical_size: input.minimum_font_physical_size,
                 device_pixel_ratio: input.device_pixel_ratio,
+                layout_zoom_factor: input.layout_zoom_factor,
                 canvas_draw_element_enabled: input.canvas_draw_element_enabled,
                 viewport: input.viewport,
                 control_theme: input.control_theme,
@@ -164,6 +171,7 @@ impl ReusableLayoutEnvironment {
             && self.snapshot.scrollbar_theme == space.scrollbar_theme
             && self.snapshot.minimum_font_physical_size == space.minimum_font_physical_size
             && self.snapshot.device_pixel_ratio == space.device_pixel_ratio
+            && self.snapshot.layout_zoom_factor == space.layout_zoom_factor
             && self.snapshot.canvas_draw_element_enabled == space.canvas_draw_element_enabled
             && self.snapshot.control_theme == space.control_theme
             && match (
@@ -326,9 +334,12 @@ struct InputFontFace {
     variations: Vec<FontVariation>,
     supports_optical_size: bool,
     supports_weight: bool,
+    fallback_role: FontFallbackRole,
+    fallback_locales: Vec<String>,
 }
 
 struct InputFontEntry {
+    description: FontDescription,
     size: f64,
     specified_size: f64,
     letter_spacing: f64,
@@ -347,6 +358,35 @@ struct InputFontResolver {
     fonts_: Vec<InputFontEntry>,
     font_indices_: HashMap<*const SimpleFontData, usize>,
     font_variations_: HashMap<*const SimpleFontData, Vec<FontVariation>>,
+}
+
+// cpp: third_party/blink/renderer/core/css/font_size_functions.cc:132-168
+fn FontAspectValue(
+    font_data: &SimpleFontData,
+    metric: font_engine::fonts::font_size_adjust::Metric,
+) -> Option<f32> {
+    use font_engine::fonts::font_size_adjust::Metric;
+
+    let font_size = font_data.PlatformData().size();
+    if font_size == 0.0 {
+        return None;
+    }
+    let metrics = font_data.GetFontMetrics();
+    let value = match metric {
+        Metric::kCapHeight if metrics.CapHeight() > 0.0 => metrics.CapHeight() / font_size,
+        Metric::kChWidth if metrics.HasZeroWidth() => metrics.ZeroWidth() / font_size,
+        Metric::kIcWidth => font_data
+            .IdeographicAdvanceWidth()
+            .map_or(1.0, |value| value / font_size),
+        Metric::kIcHeight => font_data
+            .IdeographicAdvanceHeight()
+            .map_or(1.0, |value| value / font_size),
+        Metric::kExHeight if metrics.HasXHeight() => metrics.XHeight() / font_size,
+        // CSS Fonts specifies a fallback multiplier of 1 for unavailable
+        // metrics; Chromium's AspectValue follows that rule.
+        _ => 1.0,
+    };
+    Some(value)
 }
 
 impl InputFontResolver {
@@ -377,8 +417,15 @@ impl InputFontResolver {
                 1.0,
                 &native_variations,
             ));
-            let supports_optical_size = open_type_font.HasVariationAxis(OPTICAL_SIZE_TAG);
-            let supports_weight = open_type_font.HasVariationAxis(WEIGHT_TAG);
+            // Chromium obtains `system-ui` from CTFontCreateUIFontForLanguage;
+            // that UI font carries CoreText's optical instance. Reapplying the
+            // file's `opsz` axis from CSS pixels changes it into a different
+            // SFNS instance.
+            let is_native_system_ui = face.family == "system-ui";
+            let supports_optical_size =
+                !is_native_system_ui && open_type_font.HasVariationAxis(OPTICAL_SIZE_TAG);
+            let supports_weight =
+                !is_native_system_ui && open_type_font.HasVariationAxis(WEIGHT_TAG);
             prepared_faces.push(InputFontFace {
                 family: face.family.clone(),
                 weight: face.weight,
@@ -399,7 +446,18 @@ impl InputFontResolver {
                 variations: face.variations.clone(),
                 supports_optical_size,
                 supports_weight,
+                fallback_role: face.fallback_role,
+                fallback_locales: face.fallback_locales.clone(),
             });
+        }
+        if std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some() {
+            eprintln!(
+                "FONT_CATALOG faces={:?}",
+                prepared_faces
+                    .iter()
+                    .map(|face| (&face.family, face.weight, face.italic))
+                    .collect::<Vec<_>>()
+            );
         }
         Self {
             faces_: prepared_faces,
@@ -410,12 +468,17 @@ impl InputFontResolver {
     }
 
     // cpp: layoutng/internal/boundary/layout_boundary.cc:202-217
-    fn CachedFont(&self, request: &NativeFontRequest<'_>) -> Option<*mut Font> {
+    fn CachedFont(
+        &self,
+        request: &NativeFontRequest<'_>,
+        description: &FontDescription,
+    ) -> Option<*mut Font> {
         if !request.weight.is_finite() || request.weight < 1.0 || request.weight > 1000.0 {
             panic!("font request weight must be within 1..1000");
         }
         let entry = self.fonts_.iter().find(|entry| {
-            entry.size == request.size
+            entry.description == *description
+                && entry.size == request.size
                 && entry.specified_size == request.specified_size
                 && entry.letter_spacing == request.letter_spacing
                 && entry.word_spacing == request.word_spacing
@@ -427,6 +490,78 @@ impl InputFontResolver {
                 && entry.families.as_slice() == request.families
         })?;
         Some(entry.font.Get())
+    }
+
+    // Chromium FontBuilder::UpdateAdjustedSize first resolves the primary
+    // face at the unadjusted computed size, reads that face's metrics, and
+    // only then creates the final Font at the adjusted size. Keep that work at
+    // the Style -> Layout binding boundary: Style owns FontDescription while
+    // Layout owns the concrete faces supplied by ConstraintSpace.
+    fn BuildResolvedFonts(
+        &mut self,
+        request: &NativeFontRequest<'_>,
+        description: &FontDescription,
+        order: &[usize],
+    ) -> Vec<*const SimpleFontData> {
+        let effective_size = description.EffectiveFontSize();
+        let mut ordered_fonts = Vec::with_capacity(self.faces_.len());
+        for &index in order {
+            let face = &self.faces_[index];
+            let mut skia_font = face.skia_font.clone();
+            let resolved_variations = ResolveFontVariations(
+                &face.variations,
+                face.supports_optical_size
+                    && description.FontOpticalSizing()
+                        == font_engine::OpticalSizing::kAutoOpticalSizing,
+                face.supports_weight,
+                // cpp: font_platform_data_mac.mm:168-180. Optical sizing is
+                // selected from the specified CSS size, not the zoomed or
+                // font-size-adjusted effective size.
+                request.specified_size,
+                request.weight,
+                description,
+            );
+            let native_variations: Vec<OpenTypeVariation> = resolved_variations
+                .iter()
+                .map(|variation| OpenTypeVariation {
+                    tag: variation.tag,
+                    value: variation.value,
+                })
+                .collect();
+            let open_type_font = face.font.WithSizeVariationsAndSpecifiedSize(
+                effective_size as f64,
+                &native_variations,
+                request.specified_size,
+            );
+            // A custom axis from font-variation-settings must configure the
+            // metrics/raster typeface even when the face has neither `opsz`
+            // nor `wght`. HarfBuzz already receives the same complete vector
+            // through OpenTypeFont above.
+            if !resolved_variations.is_empty() {
+                skia_font = face
+                    .skia_font
+                    .as_ref()
+                    .map(|backend| backend.WithVariations(&resolved_variations));
+            }
+            let platform = MakeGarbageCollected(FontPlatformData::new(
+                open_type_font,
+                skia_font,
+                effective_size,
+                request.weight >= 600.0 && face.weight < 600.0 && !face.supports_weight,
+                request.italic && !face.italic,
+                description.TextRendering(),
+                ResolvedFontFeatures::default(),
+                request.orientation,
+                face.unicode_ranges.clone(),
+            ));
+            let simple = SimpleFontData::Create(platform);
+            ordered_fonts.push(simple as *const SimpleFontData);
+            self.font_indices_.entry(simple).or_insert(index);
+            self.font_variations_
+                .entry(simple)
+                .or_insert(resolved_variations);
+        }
+        ordered_fonts
     }
 
     // cpp: layoutng/internal/boundary/layout_boundary.cc:363-367
@@ -443,22 +578,25 @@ impl InputFontResolver {
 impl NativeFontResolver for InputFontResolver {
     // cpp: layoutng/internal/boundary/layout_boundary.cc:202-361
     fn Resolve(&mut self, request: &NativeFontRequest<'_>) -> &mut Font {
-        if let Some(font) = self.CachedFont(request) {
-            return unsafe { &mut *font };
-        }
-        let mut description = FontDescription::default();
+        // Preserve the complete computed description produced by Style. The
+        // old reconstruction from `default()` silently discarded translated
+        // properties such as font-size-adjust and OpenType feature controls.
+        let has_base_description = request.base_description.is_some();
+        let mut description = request.base_description.cloned().unwrap_or_default();
         description.SetSpecifiedSize(request.specified_size as f32);
         description.SetComputedSize(request.size as f32);
         description.SetAdjustedSize(request.size as f32);
         description.SetLetterSpacing(&Length::Fixed(request.letter_spacing));
         description.SetWordSpacing(&Length::Fixed(request.word_spacing));
         description.SetOrientation(request.orientation);
-        description.SetWeight(FontSelectionValue::from_double(request.weight));
-        description.SetStyle(FontSelectionValue::from_int(if request.italic {
-            14
-        } else {
-            0
-        }));
+        if !has_base_description {
+            description.SetWeight(FontSelectionValue::from_double(request.weight));
+            description.SetStyle(FontSelectionValue::from_int(if request.italic {
+                14
+            } else {
+                0
+            }));
+        }
         description.SetFontSmoothing(match request.smoothing {
             FontSmoothing::kNone => FontSmoothingMode::kNoSmoothing,
             FontSmoothing::kAntialiased => FontSmoothingMode::kAntialiased,
@@ -481,62 +619,92 @@ impl NativeFontResolver for InputFontResolver {
             }
             description.SetFamily(family_chain.as_ref().expect("nonempty font family"));
         }
-        let effective_size = description.EffectiveFontSize();
-        let order = OrderFontFaces(&self.faces_, request);
-        let mut ordered_fonts = Vec::with_capacity(self.faces_.len());
-        for &index in &order {
-            let face = &self.faces_[index];
-            let open_type_font;
-            let mut skia_font = face.skia_font.clone();
-            let resolved_variations = ResolveFontVariations(
-                &face.variations,
-                face.supports_optical_size,
-                face.supports_weight,
-                effective_size as f64,
-                request.weight,
-            );
-            let native_variations: Vec<OpenTypeVariation> = resolved_variations
-                .iter()
-                .map(|variation| OpenTypeVariation {
-                    tag: variation.tag,
-                    value: variation.value,
-                })
-                .collect();
-            open_type_font = face.font.WithSizeVariationsAndSpecifiedSize(
-                effective_size as f64,
-                &native_variations,
-                request.specified_size,
-            );
-            if face.supports_optical_size || face.supports_weight {
-                skia_font = face
-                    .skia_font
-                    .as_ref()
-                    .map(|backend| backend.WithVariations(&resolved_variations));
-            }
-            let platform = MakeGarbageCollected(FontPlatformData::new(
-                open_type_font,
-                skia_font,
-                effective_size,
-                request.weight >= 600.0 && face.weight < 600.0 && !face.supports_weight,
-                request.italic && !face.italic,
-                TextRenderingMode::kAutoTextRendering,
-                ResolvedFontFeatures::default(),
-                request.orientation,
-                face.unicode_ranges.clone(),
-            ));
-            let simple = SimpleFontData::Create(platform);
-            ordered_fonts.push(simple as *const SimpleFontData);
-            self.font_indices_.entry(simple).or_insert(index);
-            self.font_variations_
-                .entry(simple)
-                .or_insert(resolved_variations);
+        let cache_description = description.clone();
+        if let Some(font) = self.CachedFont(request, &cache_description) {
+            return unsafe { &mut *font };
         }
-        let primary_position = PrimaryFontPosition(&self.faces_, &order);
-        let primary_font = ordered_fonts[primary_position];
+        let order = OrderFontFaces(&self.faces_, request);
+        let primary_position = PrimaryFontPosition(&self.faces_, &order.indices);
+        let mut ordered_fonts = self.BuildResolvedFonts(request, &description, &order.indices);
+        let mut primary_font = ordered_fonts[primary_position];
+        if std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some() {
+            let face = &self.faces_[order.indices[primary_position]];
+            eprintln!(
+                "FONT_BIND families={:?} requested_weight={} italic={} size={} primary={} face_weight={} face_italic={} size_adjust={:?}",
+                request.families,
+                request.weight,
+                request.italic,
+                request.size,
+                face.family,
+                face.weight,
+                face.italic,
+                description.SizeAdjust(),
+            );
+        }
+        if description.HasSizeAdjust() && description.ComputedSize() != 0.0 {
+            let adjust = description.SizeAdjust();
+            let aspect = FontAspectValue(unsafe { &*primary_font }, adjust.GetMetric());
+            if adjust.IsFromFont()
+                && adjust.Value()
+                    == font_engine::fonts::font_size_adjust::FontSizeAdjust::kFontSizeAdjustNone
+            {
+                description.SetSizeAdjust(
+                    &font_engine::fonts::font_size_adjust::FontSizeAdjust::with_metric_and_type(
+                        aspect.unwrap_or(
+                            font_engine::fonts::font_size_adjust::FontSizeAdjust::kFontSizeAdjustNone,
+                        ),
+                        adjust.GetMetric(),
+                        font_engine::fonts::font_size_adjust::ValueType::kFromFont,
+                    ),
+                );
+            }
+            let adjust = description.SizeAdjust();
+            if adjust.Value()
+                != font_engine::fonts::font_size_adjust::FontSizeAdjust::kFontSizeAdjustNone
+            {
+                if let Some(aspect) = aspect.filter(|value| *value != 0.0) {
+                    let adjusted = (adjust.Value() / aspect) * description.ComputedSize();
+                    if adjusted.is_finite() && adjusted > 0.0 {
+                        description.SetAdjustedSize(adjusted);
+                        ordered_fonts =
+                            self.BuildResolvedFonts(request, &description, &order.indices);
+                        primary_font = ordered_fonts[primary_position];
+                    }
+                }
+            }
+        }
+        if std::env::var_os("RECHROM_TRACE_CONTROL_WIDTH").is_some() && request.size == 14.0 {
+            let face = &self.faces_[order.indices[primary_position]];
+            eprintln!(
+                "RESOLVED_PRIMARY family={} variations={:?}",
+                face.family,
+                self.font_variations_.get(&primary_font)
+            );
+        }
+        let fallback_metadata: Vec<FontFallbackMetadata> = order
+            .indices
+            .iter()
+            .map(|&index| {
+                let face = &self.faces_[index];
+                FontFallbackMetadata {
+                    role: face.fallback_role,
+                    locales: face.fallback_locales.clone(),
+                    weight: face.weight as f32,
+                    italic: face.italic,
+                }
+            })
+            .collect();
         let font = MakeGarbageCollected(unsafe {
-            FontNewFromResolvedData(&description, &ordered_fonts, primary_font)
+            FontNewFromResolvedData(
+                &description,
+                &ordered_fonts,
+                primary_font,
+                &fallback_metadata,
+                order.font_group_length,
+            )
         });
         self.fonts_.push(InputFontEntry {
+            description: cache_description,
             size: request.size,
             specified_size: request.specified_size,
             letter_spacing: request.letter_spacing,
@@ -587,7 +755,12 @@ fn FontWeightRank(candidate: f64, requested: f64) -> (u8, f64) {
 }
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:259-292
-fn OrderFontFaces(faces: &[InputFontFace], request: &NativeFontRequest<'_>) -> Vec<usize> {
+struct FontFaceOrder {
+    indices: Vec<usize>,
+    font_group_length: usize,
+}
+
+fn OrderFontFaces(faces: &[InputFontFace], request: &NativeFontRequest<'_>) -> FontFaceOrder {
     let mut order = Vec::with_capacity(faces.len());
     let mut selected = vec![false; faces.len()];
     let append_best_face = |family: &str, order: &mut Vec<usize>, selected: &mut [bool]| loop {
@@ -623,15 +796,37 @@ fn OrderFontFaces(faces: &[InputFontFace], request: &NativeFontRequest<'_>) -> V
     if request.families.is_empty() && !faces[0].family.is_empty() {
         append_best_face(&faces[0].family, &mut order, &mut selected);
     }
-    if !request.families.is_empty() {
-        append_best_face("serif", &mut order, &mut selected);
+    if order.is_empty()
+        && !faces
+            .iter()
+            .any(|face| face.fallback_role != FontFallbackRole::kFamilyOnly)
+    {
+        // Small embedders often provide one unclassified face. Preserve that
+        // face as the family/.notdef candidate without publishing it as a
+        // general platform fallback font.
+        selected[0] = true;
+        order.push(0);
     }
-    for index in 0..faces.len() {
-        if !selected[index] {
+    let font_group_length = order.len();
+    for (index, face) in faces.iter().enumerate() {
+        if !selected[index]
+            && !matches!(
+                face.fallback_role,
+                FontFallbackRole::kFamilyOnly | FontFallbackRole::kLastResort
+            )
+        {
             order.push(index);
         }
     }
-    order
+    for (index, face) in faces.iter().enumerate() {
+        if !selected[index] && face.fallback_role == FontFallbackRole::kLastResort {
+            order.push(index);
+        }
+    }
+    FontFaceOrder {
+        indices: order,
+        font_group_length,
+    }
 }
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:296-315
@@ -640,10 +835,11 @@ const WEIGHT_TAG: u32 = u32::from_be_bytes(*b"wght");
 
 fn ResolveFontVariations(
     face_variations: &[FontVariation],
-    supports_optical_size: bool,
+    apply_optical_size: bool,
     supports_weight: bool,
-    effective_size: f64,
+    specified_size: f64,
     request_weight: f64,
+    description: &FontDescription,
 ) -> Vec<FontVariation> {
     let mut variations = face_variations.to_vec();
     let mut set_variation = |tag, value: f64| {
@@ -656,12 +852,23 @@ fn ResolveFontVariations(
             });
         }
     };
-    if supports_optical_size {
-        set_variation(OPTICAL_SIZE_TAG, effective_size);
+    if apply_optical_size {
+        set_variation(OPTICAL_SIZE_TAG, specified_size);
     }
     if supports_weight {
         set_variation(WEIGHT_TAG, request_weight);
     }
+    // cpp: font_platform_data_mac.mm:157-180. Registered-axis values derived
+    // from high-level CSS properties are installed first. Explicit
+    // font-variation-settings are applied last and therefore win, including
+    // an explicit `opsz` overriding font-optical-sizing:auto. The face vector
+    // contains catalog/@font-face defaults and remains the lowest priority.
+    if let Some(settings) = description.VariationSettings() {
+        for setting in settings.iter() {
+            set_variation(setting.Tag(), setting.Value() as f64);
+        }
+    }
+    variations.sort_unstable_by_key(|setting| setting.tag);
     variations
 }
 
@@ -1015,7 +1222,7 @@ pub(crate) fn CreateLayoutObject(
         NodeKind::kWordBreak => return require(factories.inline_word_break, "inline", node),
         NodeKind::kListMarker => return require(factories.list, "list", node),
         NodeKind::kReplaced | NodeKind::kFrame => {
-            return require(factories.replaced, "replaced", node)
+            return require(factories.replaced, "replaced", node);
         }
         NodeKind::kFormControl => {
             let Some(factory) = factories.forms else {
@@ -1092,6 +1299,7 @@ fn ExportAppliedTextDecorations(style: &NativeComputedStyle) -> Vec<TextDecorati
         .map(|applied| {
             let lines = applied.Lines();
             let native_color = applied.GetColor();
+            let (red, green, blue) = native_color.ToSRGB();
             let thickness = applied.Thickness();
             let underline_offset = applied.UnderlineOffset();
             TextDecorationPaint {
@@ -1100,12 +1308,9 @@ fn ExportAppliedTextDecorations(style: &NativeComputedStyle) -> Vec<TextDecorati
                 line_through: (lines & TextDecorationLine::kLineThrough)
                     != TextDecorationLine::kNone,
                 color: Some(crate::internal::layout_input_types::Color {
-                    // foundation::Color stores kSRGBLegacy channels in the
-                    // Chromium-compatible 0..255 representation; the public
-                    // paint input uses normalized channels.
-                    red: native_color.Param0() / 255.0,
-                    green: native_color.Param1() / 255.0,
-                    blue: native_color.Param2() / 255.0,
+                    red,
+                    green,
+                    blue,
                     alpha: native_color.Alpha(),
                 }),
                 style: match applied.Style() {
@@ -1186,8 +1391,70 @@ fn ExportPaintProperties(
     output.display_item_client_is_cacheable = client.IsCacheable();
     output.display_item_client_is_just_created = client.IsJustCreated();
     output.display_item_raster_effect_outset = client.VisualRectOutsetForRasterEffects();
+    let text_combine = DynamicTo::<LayoutTextCombine>(object);
+    if !text_combine.is_null() {
+        let text_combine = unsafe { &*text_combine };
+        // TextCombinePainter paints decorations and emphasis from the parent
+        // inline's style after restoring the compressed-text transform.  The
+        // anonymous LayoutTextCombine has no source Node, so freeze that
+        // parent-owned paint state into this wrapper's typed payload here.
+        // cpp: core/paint/text_combine_painter.cc:35-48
+        let parent = text_combine.Parent();
+        let parent_style = unsafe { &*parent }.StyleRef();
+        let parent_image_resource_id = sources
+            .get(&(parent as *const LayoutObject))
+            .map(|entry| unsafe { &*entry.node }.InputStyle().paint.image_resource_id)
+            .unwrap_or(None);
+        output.style = crate::internal::boundary::native_paint_style::ExportStyle(
+            parent_style,
+            parent_image_resource_id,
+        );
+        output.style.applied_text_decorations = ExportAppliedTextDecorations(parent_style);
+        output.writing_mode = PublicWritingMode(parent_style.GetWritingMode());
+        let scale_x = text_combine.ScaleXForInline().map(f64::from);
+        let inline_spacing =
+            scale_x.map_or(0.0, |_| f64::from(text_combine.ComputeInlineSpacing()));
+        let wrapper_font = unsafe { &*text_combine.StyleRef().GetFont() };
+        let primary_font = wrapper_font.PrimaryFont();
+        let text_top_offset = if primary_font.is_null() {
+            0.0
+        } else {
+            let primary_font = unsafe { &*primary_font };
+            Number(LayoutUnit::from_f32(
+                primary_font.GetFontMetrics().Ascent() as f32
+                    - primary_font.InternalLeading() / 2.0,
+            ))
+        };
+        output.text_combine = Some(
+            layoutng_fragment_tree::fragment_tree::TextCombinePaintData {
+                scale_x,
+                inline_spacing,
+                text_top_offset,
+                synthetic_oblique: text_combine.UsingSyntheticOblique(),
+                font_size: unsafe { &*parent_style.GetFont() }
+                    .GetFontDescription()
+                    .ComputedSize() as f64,
+                emphasis: ExportTextCombineEmphasis(parent_style),
+            },
+        );
+    }
     let layout_box = DynamicTo::<LayoutBox>(object);
     if !layout_box.is_null() {
+        output.can_composite_background_attachment_fixed =
+            unsafe { &*object }.CanCompositeBackgroundAttachmentFixed();
+        output.background_paint_location = match unsafe { &*layout_box }.GetBackgroundPaintLocation()
+        {
+            crate::internal::layout_object::kBackgroundPaintInBorderBoxSpace => {
+                BackgroundPaintLocation::BorderBox
+            }
+            crate::internal::layout_object::kBackgroundPaintInContentsSpace => {
+                BackgroundPaintLocation::Contents
+            }
+            crate::internal::layout_object::kBackgroundPaintInBothSpaces => {
+                BackgroundPaintLocation::Both
+            }
+            value => panic!("invalid native background paint location {value}"),
+        };
         // Preserve the LayoutBox virtual override rather than calling only
         // the DisplayItemClient base default (layout_box.cc:4099-4108).
         output.display_item_raster_effect_outset =
@@ -1219,6 +1486,13 @@ fn ExportPaintProperties(
             output.paint_layer_client_is_cacheable = layer.IsCacheable();
             output.paint_layer_client_is_just_created = layer.IsJustCreated();
             output.paint_layer_is_self_painting = layer.IsSelfPaintingLayer();
+            // These decisions belong to native Layout/PaintLayer setup. In
+            // particular, style adjustment makes static flex/grid items with
+            // z-index stacking contexts, and containment/perspective can form
+            // contexts without an equivalent field in the public projection.
+            let layout_object = unsafe { &*object };
+            output.paint_layer_is_stacking_context = layout_object.IsStackingContext();
+            output.paint_layer_stacking_level = layout_object.StyleRef().EffectiveZIndex();
         }
     }
     let Some(source_entry) = sources.get(&object) else {
@@ -1248,13 +1522,27 @@ fn ExportPaintProperties(
         .extended
         .as_ref()
         .map_or(1.0, |e| e.effective_zoom);
-    output.style = paint_style.paint.clone();
     let native_paint_style = if effective_style.is_null() {
         unsafe { &*object }.StyleRef()
     } else {
         unsafe { &*effective_style }
     };
+    output.style = crate::internal::boundary::native_paint_style::ExportStyleWithProjectedSvg(
+        native_paint_style,
+        paint_style.paint.image_resource_id,
+        &paint_style.paint,
+    );
+    if native_paint_style.HasOffset() && !layout_box.is_null() {
+        let box_model = DynamicTo::<LayoutBoxModelObject>(object);
+        if !box_model.is_null() {
+            crate::internal::boundary::native_paint_style::SetResolvedLayoutTransform(
+                &mut output.style,
+                unsafe { &*box_model }.CurrentTransformForLayout(),
+            );
+        }
+    }
     output.style.applied_text_decorations = ExportAppliedTextDecorations(native_paint_style);
+    output.margin = paint_style.margin;
     output.border = paint_style.border;
     output.border_styles = paint_style.border_styles;
     output.padding = paint_style.padding;
@@ -1266,11 +1554,71 @@ fn ExportPaintProperties(
     if paint_style.position == Position::kSticky {
         let box_model = DynamicTo::<LayoutBoxModelObject>(object);
         if !box_model.is_null() {
-            let offset = unsafe { &*box_model }.StickyPositionOffset();
+            let box_model = unsafe { &*box_model };
+            let constraints = box_model.StickyConstraints();
+            let offset = box_model.StickyPositionOffset();
             output.sticky_offset = Offset {
                 x: Number(offset.left),
                 y: Number(offset.top),
             };
+            let display_client_id = |object: *const LayoutObject| {
+                if object.is_null() {
+                    0
+                } else {
+                    unsafe { &*(object as *const DisplayItemClient) }.Id() as u64
+                }
+            };
+            let nearest_sticky_box_client_id = display_client_id(
+                constraints.NearestStickyLayerShiftingStickyBox() as *const LayoutObject,
+            );
+            let nearest_containing_block_client_id = display_client_id(
+                constraints.NearestStickyLayerShiftingContainingBlock() as *const LayoutObject,
+            );
+            let export_axis = |axis: PhysicalAxis| {
+                let data = constraints.AxisData(axis);
+                if data.is_null() {
+                    return None;
+                }
+                let data = unsafe { &*data };
+                Some(StickyAxisPaintData {
+                    min_inset: data.min_inset.map(Number),
+                    max_inset: data.max_inset.map(Number),
+                    scroll_container_relative_containing_block_offset: Number(
+                        data.scroll_container_relative_containing_block_range.offset,
+                    ),
+                    scroll_container_relative_containing_block_size: Number(
+                        data.scroll_container_relative_containing_block_range.size,
+                    ),
+                    scroll_container_relative_sticky_box_offset: Number(
+                        data.scroll_container_relative_sticky_box_range.offset,
+                    ),
+                    scroll_container_relative_sticky_box_size: Number(
+                        data.scroll_container_relative_sticky_box_range.size,
+                    ),
+                    constraining_offset: Number(data.constraining_range.offset),
+                    constraining_size: Number(data.constraining_range.size),
+                    scroll_container_client_id: display_client_id(
+                        data.containing_scroll_container.Get() as *const LayoutObject,
+                    ),
+                    nearest_sticky_box_client_id,
+                    nearest_containing_block_client_id,
+                    current_sticky_offset: Number(data.sticky_offset),
+                    current_total_sticky_box_offset: Number(
+                        data.total_sticky_box_sticky_offset,
+                    ),
+                    current_total_containing_block_offset: Number(
+                        data.total_containing_block_sticky_offset,
+                    ),
+                })
+            };
+            let constraint = StickyPositionPaintData {
+                owner_client_id: output.display_item_client_id,
+                horizontal: export_axis(PhysicalAxis::kHorizontal),
+                vertical: export_axis(PhysicalAxis::kVertical),
+            };
+            if constraint.horizontal.is_some() || constraint.vertical.is_some() {
+                output.sticky_constraint = Some(constraint);
+            }
         }
     }
     output.writing_mode = paint_style.writing_mode;
@@ -1279,6 +1627,22 @@ fn ExportPaintProperties(
         output.overflow_x = extended.overflow_x;
         output.overflow_y = extended.overflow_y;
     }
+    let export_overscroll = |behavior| match behavior {
+        EOverscrollBehavior::kAuto => {
+            crate::internal::layout_input::OverscrollBehavior::kAuto
+        }
+        EOverscrollBehavior::kContain => {
+            crate::internal::layout_input::OverscrollBehavior::kContain
+        }
+        EOverscrollBehavior::kNone => {
+            crate::internal::layout_input::OverscrollBehavior::kNone
+        }
+        EOverscrollBehavior::kChain => {
+            crate::internal::layout_input::OverscrollBehavior::kChain
+        }
+    };
+    output.overscroll_behavior_x = export_overscroll(native_paint_style.OverscrollBehaviorX());
+    output.overscroll_behavior_y = export_overscroll(native_paint_style.OverscrollBehaviorY());
     let element_data = if source.IsElementNode() {
         unsafe { &*(source as *const Node as *const Element) }
             .InputElementData()
@@ -1292,6 +1656,37 @@ fn ExportPaintProperties(
             output.svg_shape = Some(Arc::new(svg_shape.clone()));
         }
         output.svg_view_box = element_data.svg_view_box;
+    }
+    // SVGResources::ReferenceBoxForEffects resolves `view-box` against the
+    // nearest viewport-establishing SVG ancestor. Carry that typed viewport
+    // on SVG child fragments so PrePaint need not reach back into DOM/Layout.
+    if output.svg_view_box.is_none()
+        && matches!(
+            output.source_kind,
+            NodeKind::kSvgGroup
+                | NodeKind::kSvgText
+                | NodeKind::kSvgInline
+                | NodeKind::kSvgTSpan
+                | NodeKind::kSvgTextPath
+                | NodeKind::kSvgShape
+        )
+    {
+        let mut ancestor = source.parentNode().cast::<Node>();
+        while !ancestor.is_null() {
+            let node = unsafe { &*ancestor };
+            if node.IsElementNode() {
+                let element = unsafe { &*(node as *const Node as *const Element) };
+                if let Some(view_box) = element
+                    .InputElementData()
+                    .as_ref()
+                    .and_then(|data| data.svg_view_box)
+                {
+                    output.svg_view_box = Some(view_box);
+                    break;
+                }
+            }
+            ancestor = node.parentNode().cast();
+        }
     }
     // Preserve the real editor identity rather than reconstructing its synthetic id.
     let mut ancestor = source as *const Node;
@@ -1398,7 +1793,7 @@ struct GlyphExportContext {
     writing_mode: WritingMode,
     current_font: *const SimpleFontData,
     current_rotation: CanvasRotationInVertical,
-    font_size: f64,
+    optical_size: f64,
     baseline: f64,
     last_run: usize,
     last_glyph: usize,
@@ -1453,10 +1848,25 @@ fn ExportGlyph(
             .unwrap_or(default_thickness)
             .abs();
         let resolver = unsafe { &*CurrentNativeFontResolver() };
-        let variations = resolver.Variations(context.current_font);
+        let mut variations = resolver.Variations(context.current_font).to_vec();
+        // The platform font selector can encode optical sizing in the native
+        // typeface rather than in its explicit variation list. Paint records
+        // must nevertheless retain the specified CSS optical size: raster is
+        // allowed to scale the glyph to the zoomed/device size, but must not
+        // silently select a different optical design at that later boundary.
+        if raw_font.HasVariationAxis(OPTICAL_SIZE_TAG)
+            && !variations
+                .iter()
+                .any(|variation| variation.tag == OPTICAL_SIZE_TAG)
+        {
+            variations.push(FontVariation {
+                tag: OPTICAL_SIZE_TAG,
+                value: context.optical_size as f32,
+            });
+        }
         runs.push(PaintGlyphRun {
             font_face_index: resolver.FaceIndex(context.current_font) as u32,
-            font_variations: variations.to_vec(),
+            font_variations: variations,
             font_size: run_font_size,
             ascent: font.GetFontMetrics().FloatAscent() as f64,
             // TextFragmentPainter establishes the origin from the primary font.
@@ -1506,7 +1916,7 @@ fn ExportGlyph(
 // cpp: layoutng/internal/boundary/layout_boundary.cc:931-951
 fn ExportShapeResult(
     shape: *const ShapeResultView,
-    font_size: f64,
+    optical_size: f64,
     baseline: f64,
     writing_mode: WritingMode,
     runs: &mut Vec<PaintGlyphRun>,
@@ -1520,7 +1930,7 @@ fn ExportShapeResult(
         writing_mode,
         current_font: std::ptr::null(),
         current_rotation: CanvasRotationInVertical::kRegular,
-        font_size,
+        optical_size,
         baseline,
         last_run: 0,
         last_glyph: 0,
@@ -1537,25 +1947,209 @@ fn ExportShapeResult(
     }
 }
 
+struct FirstGlyphFont {
+    font: *const SimpleFontData,
+    glyph: u16,
+}
+
+fn CaptureFirstGlyphFont(
+    opaque: *mut c_void,
+    _character_index: u32,
+    glyph: u16,
+    _glyph_offset: gfx::Vector2dF,
+    _total_advance: f32,
+    _is_horizontal: bool,
+    _canvas_rotation: CanvasRotationInVertical,
+    font: *const SimpleFontData,
+) {
+    let context = unsafe { &mut *(opaque as *mut FirstGlyphFont) };
+    if context.font.is_null() {
+        context.font = font;
+        context.glyph = glyph;
+    }
+}
+
+// text_combine_painter.cc:116-160. Combined text is treated as one U+FFFC-like
+// glyph for emphasis positioning; Chromium shapes U+3042 to obtain that
+// cluster's advance, then centers one emphasis glyph over it.
+fn ExportTextCombineEmphasis(
+    style: &NativeComputedStyle,
+) -> Option<TextCombineEmphasisPaintData> {
+    use layoutng_style::style::computed_style_constants::LineLogicalSide;
+
+    if style.GetTextEmphasisMark() == TextEmphasisMark::kNone {
+        return None;
+    }
+    let mark_units = style.TextEmphasisMarkString().utf16_units()?;
+    if mark_units.is_empty() {
+        return None;
+    }
+    let font = unsafe { &*style.GetFont() };
+    let primary = font.PrimaryFont();
+    if primary.is_null() {
+        return None;
+    }
+
+    let mark_text = BlinkString::from_utf16(&mark_units);
+    let mark_shape = HarfBuzzShaper::new(mark_text)
+        .Shape(style.GetFont(), foundation::TextDirection::kLtr);
+    let mark_view = ShapeResultView::CreateFromResult(mark_shape);
+    if mark_view.is_null() {
+        return None;
+    }
+    let mut glyph_font = FirstGlyphFont {
+        font: std::ptr::null(),
+        glyph: 0,
+    };
+    unsafe { &*mark_view }.ForEachGlyph(
+        0.0,
+        CaptureFirstGlyphFont,
+        &mut glyph_font as *mut _ as *mut c_void,
+    );
+    if glyph_font.font.is_null() {
+        return None;
+    }
+
+    let placeholder_text = BlinkString::from_utf16(&[0x3042]);
+    let placeholder_shape = HarfBuzzShaper::new(placeholder_text)
+        .Shape(style.GetFont(), foundation::TextDirection::kLtr);
+    let placeholder_view = ShapeResultView::CreateFromResult(placeholder_shape);
+    if placeholder_view.is_null() {
+        return None;
+    }
+
+    let mut glyph_runs = Vec::new();
+    let description = font.GetFontDescription();
+    ExportShapeResult(
+        mark_view,
+        description.SpecifiedSize() as f64,
+        0.0,
+        WritingMode::kHorizontalTb,
+        &mut glyph_runs,
+    );
+    let smoothing = match description.FontSmoothing() {
+        FontSmoothingMode::kNoSmoothing => FontSmoothing::kNone,
+        FontSmoothingMode::kAntialiased => FontSmoothing::kAntialiased,
+        FontSmoothingMode::kSubpixelAntialiased => FontSmoothing::kSubpixelAntialiased,
+        FontSmoothingMode::kAutoSmoothing => FontSmoothing::kAuto,
+    };
+    for run in &mut glyph_runs {
+        run.font_smoothing = smoothing;
+    }
+    // FillTextEmphasisGlyphsNG centers the chosen emphasis glyph's platform
+    // bounds, rather than the shaped mark run's aggregate ink bounds.
+    let mark_bounds = unsafe { &*glyph_font.font }.BoundsForGlyph(glyph_font.glyph);
+    let mut x = unsafe { &*placeholder_view }.Width() as f64 / 2.0
+        - f64::from(mark_bounds.x() + mark_bounds.width() / 2.0);
+    // TextEmphasisLetterSpacing is enabled in the Chromium revision this
+    // translation targets; the runtime feature accessor has not otherwise
+    // crossed the foundation boundary.
+    x -= f64::from(description.LetterSpacing()) / 2.0;
+    let base_metrics = unsafe { &*primary }.GetFontMetrics();
+    let mark_metrics = unsafe { &*glyph_font.font }.GetFontMetrics();
+    let emphasis_offset = if style.GetTextEmphasisLineLogicalSide() == LineLogicalSide::kOver {
+        let offset = -base_metrics.FixedAscent(FontBaseline::kAlphabeticBaseline)
+            - mark_metrics.FixedDescent(FontBaseline::kAlphabeticBaseline);
+        offset.Floor() as f64
+    } else {
+        let offset = base_metrics.FixedDescent(FontBaseline::kAlphabeticBaseline)
+            + mark_metrics.FixedAscent(FontBaseline::kAlphabeticBaseline);
+        offset.Ceil() as f64
+    };
+    Some(TextCombineEmphasisPaintData {
+        glyph_runs,
+        origin: Offset {
+            x,
+            y: base_metrics.Ascent() as f64 + emphasis_offset,
+        },
+        color: crate::internal::boundary::native_paint_style::TextEmphasisColor(style),
+    })
+}
+
+// text_fragment_painter.cc:520-525. Text-combine can reshape with a
+// compressed Font that is owned by its anonymous LayoutTextCombine parent.
+// Keep the paint origin's primary-font metrics tied to that same instance;
+// the FragmentItem style font is only the fallback when compression was not
+// selected.
+fn TextCombineForItem(item: &FragmentItem) -> *mut LayoutTextCombine {
+    let object = item.GetLayoutObject();
+    if object.is_null() {
+        return std::ptr::null_mut();
+    }
+    DynamicTo::<LayoutTextCombine>(unsafe { &*object }.Parent())
+}
+
+fn TextPaintFont(item: &FragmentItem) -> &Font {
+    let text_combine = TextCombineForItem(item);
+    if !text_combine.is_null() {
+        let compressed = unsafe { &*text_combine }.CompressedFont();
+        if !compressed.is_null() {
+            return unsafe { &*compressed };
+        }
+    }
+    item.ScaledFont()
+}
+
 // cpp: layoutng/internal/boundary/layout_boundary.cc:953-981
 fn ExportGlyphRuns(item: &FragmentItem, paint: &mut PaintProperties) {
     if !item.IsText() {
         return;
     }
-    let font_size = if item.IsSvgText() {
-        item.ScaledFont().GetFontDescription().ComputedSize() as f64
-    } else {
-        item.Style().ComputedFontSize() as f64
-    };
-    let primary_font = item.ScaledFont().PrimaryFont();
-    let baseline = if primary_font.is_null() {
+    let paint_font = TextPaintFont(item);
+    let font_description = paint_font.GetFontDescription();
+    let optical_size = font_description.SpecifiedSize() as f64;
+    let primary_font = paint_font.PrimaryFont();
+    let text_combine = TextCombineForItem(item);
+    if !text_combine.is_null() {
+        let text_combine_ref = unsafe { &*text_combine };
+        if let Some(scale_x) = text_combine_ref.ScaleXForInline() {
+            // layout_text_combine.cc:168-176. Spacing precedes the wrapper's
+            // scale transform, hence the division by scale_x.
+            paint.text_combine_inline_offset = Number(LayoutUnit::from_f32(
+                text_combine_ref.ComputeInlineSpacing() / scale_x,
+            ));
+        }
+    }
+    let baseline = if !text_combine.is_null() {
+        // layout_text_combine.cc:178-186. Combined horizontal text paints in
+        // a vertical line box. Its origin is based on the anonymous wrapper's
+        // uncompressed font and half internal-leading adjustment, even when
+        // shaping selected a compressed font instance.
+        let wrapper_font_ptr = unsafe { &*text_combine }.StyleRef().GetFont();
+        let wrapper_font = unsafe { &*wrapper_font_ptr };
+        let wrapper_data = wrapper_font.PrimaryFont();
+        if wrapper_data.is_null() {
+            0.0
+        } else {
+            let wrapper_data = unsafe { &*wrapper_data };
+            Number(LayoutUnit::from_f32(
+                wrapper_data.GetFontMetrics().Ascent() as f32
+                    - wrapper_data.InternalLeading() / 2.0,
+            ))
+        }
+    } else if primary_font.is_null() {
         0.0
     } else {
-        unsafe { &*primary_font }.GetFontMetrics().Ascent() as f64
+        let ascent = unsafe { &*primary_font }.GetFontMetrics().Ascent();
+        // text_fragment_painter.cc:531-540. Normal text uses the integer
+        // primary-font ascent. `text-fit` is the one HTML branch that scales
+        // that ascent before constructing the LayoutUnit text origin; using
+        // the unscaled ascent here separated the Fragment and Paint baseline
+        // phases even though shaping already used the scaled font.
+        let text_fit_scale = if item.IsSvgText() {
+            1.0
+        } else {
+            item.GetTextFitScale()
+        };
+        if text_fit_scale == 1.0 {
+            ascent as f64
+        } else {
+            Number(LayoutUnit::from_f32(ascent as f32 * text_fit_scale))
+        }
     };
     ExportShapeResult(
         item.TextShapeResult(),
-        font_size,
+        optical_size,
         baseline,
         paint.writing_mode,
         &mut paint.glyph_runs,
@@ -1742,6 +2336,31 @@ fn ExportBoxPaintGeometry(box_fragment: &PhysicalBoxFragment, paint: &mut PaintP
             && (layout_box.ScrollsOverflow() || paint.scroll_offset != Offset::default());
         if layout_box.IsLayoutView() || needs_local_scroll {
             let clip = layout_box.OverflowClipRectForScrollNode();
+            let (minimum_scroll_offset, maximum_scroll_offset) = if area.is_null() {
+                let visible_width = Number(clip.size.width);
+                let visible_height = Number(clip.size.height);
+                (
+                    Offset::default(),
+                    Offset {
+                        x: (paint.scroll_size.width - visible_width).max(0.0),
+                        y: (paint.scroll_size.height - visible_height).max(0.0),
+                    },
+                )
+            } else {
+                let area = unsafe { &*area };
+                let minimum = area.MinimumScrollOffsetInt();
+                let maximum = area.MaximumScrollOffsetInt();
+                (
+                    Offset {
+                        x: minimum.x() as f64,
+                        y: minimum.y() as f64,
+                    },
+                    Offset {
+                        x: maximum.x() as f64,
+                        y: maximum.y() as f64,
+                    },
+                )
+            };
             let (horizontal, vertical) = if layout_box.IsLayoutView() {
                 use crate::internal::scrollbar_mode::mojom::blink::ScrollbarMode;
                 let view = unsafe { &*To::<LayoutView>(box_fragment.GetLayoutObject()) };
@@ -1768,6 +2387,8 @@ fn ExportBoxPaintGeometry(box_fragment: &PhysicalBoxFragment, paint: &mut PaintP
                         height: Number(clip.size.height),
                     },
                 },
+                minimum_scroll_offset,
+                maximum_scroll_offset,
                 user_scrollable_horizontal: horizontal,
                 user_scrollable_vertical: vertical,
             });
@@ -1784,6 +2405,7 @@ fn ExportBoxPaintGeometry(box_fragment: &PhysicalBoxFragment, paint: &mut PaintP
                     width: Number(rect.size.width),
                     height: Number(rect.size.height),
                 },
+                clips_to_content_box: unsafe { &*replaced }.ClipsToContentBox(),
             });
         }
     }
@@ -1817,6 +2439,23 @@ fn ExportBoxPaintGeometry(box_fragment: &PhysicalBoxFragment, paint: &mut PaintP
     paint.stitched_decoration = ExportStitchedDecorationData(box_fragment);
 }
 
+// Chromium's PhysicalBoxFragment::ContentRect() DCHECKs that border and
+// padding fit inside the fragment. That precondition intentionally does not
+// hold for every table-part fragment: CSS padding may remain represented in
+// the fragment metadata even though the table algorithm resolves a zero row
+// block-size. The public FragmentNode boundary still needs a total content-box
+// size for every fragment, so use the same non-negative subtraction semantics
+// as Blink's ShrinkLogicalSize rather than calling ContentRect() outside its
+// valid domain.
+fn ExportContentSize(box_fragment: &PhysicalBoxFragment) -> Size {
+    let insets = box_fragment.Borders() + box_fragment.Padding();
+    let size = box_fragment.Size();
+    Size {
+        width: Number((size.width - insets.HorizontalSum()).ClampNegativeToZero()),
+        height: Number((size.height - insets.VerticalSum()).ClampNegativeToZero()),
+    }
+}
+
 // cpp: layoutng/internal/boundary/layout_boundary.cc:1138-1278
 fn ExportScrollbarPaintData(box_fragment: &PhysicalBoxFragment, paint: &mut PaintProperties) {
     let layout_box = DynamicTo::<LayoutBox>(box_fragment.GetLayoutObject());
@@ -1841,8 +2480,11 @@ fn ExportScrollbarPaintData(box_fragment: &PhysicalBoxFragment, paint: &mut Pain
     let border_right = Number(borders.right);
     let border_bottom = Number(borders.bottom);
     let border_left = Number(borders.left);
-    let vertical_on_left =
-        Number(reserved.left) > 0.0 || layout_box.ShouldPlaceVerticalScrollbarOnLeft();
+    // The reserved strut is not a placement signal: scrollbar-gutter:
+    // stable both-edges deliberately reserves both inline sides. Use Layout's
+    // canonical writing-direction decision so an LTR both-edges gutter does
+    // not move the actual vertical scrollbar and scroll corner to the left.
+    let vertical_on_left = layout_box.ShouldPlaceVerticalScrollbarOnLeft();
     let vertical_thickness = if area.HasVerticalScrollbar() {
         if theme.uses_overlay_scrollbars {
             themed_thickness
@@ -2284,13 +2926,6 @@ fn ExportFieldsetPaintData(box_fragment: &PhysicalBoxFragment, paint: &mut Paint
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:1512-1551
 fn ExportColumnRulePaintData(box_fragment: &PhysicalBoxFragment, paint: &mut PaintProperties) {
-    let style = &paint.style;
-    if style.column_rule_width <= 0.0
-        || style.column_rule_style == BorderLineStyle::kNone
-        || style.column_rule_color.alpha <= 0.0
-    {
-        return;
-    }
     let geometry = box_fragment.GetGapGeometry();
     if geometry.is_null() || unsafe { &*geometry }.GetContainerType() != ContainerType::kMultiColumn
     {
@@ -2304,17 +2939,41 @@ fn ExportColumnRulePaintData(box_fragment: &PhysicalBoxFragment, paint: &mut Pai
     );
     let block_start = geometry.GetContentBlockStart();
     let block_size = geometry.GetContentBlockEnd() - block_start;
-    let thickness = LayoutUnit::from_f64(style.column_rule_width);
     let columns_are_main = geometry.IsMainDirection(GridTrackSizingDirection::kForColumns);
     let gap_count = if columns_are_main {
         geometry.MainGapCount()
     } else {
         geometry.CrossGapCount()
     };
+    let native_style = box_fragment.Style();
+    let iterator_gap_count = u32::try_from(gap_count).expect("gap count exceeds WTF size");
+    let mut width_iterator = GapDataListIterator::new(
+        native_style.ColumnRuleWidth().GetGapDataList(),
+        iterator_gap_count,
+    );
+    let mut style_iterator = GapDataListIterator::new(
+        native_style.ColumnRuleStyle().GetGapDataList(),
+        iterator_gap_count,
+    );
+    let mut color_iterator = GapDataListIterator::new(
+        native_style.ColumnRuleColor().GetGapDataList(),
+        iterator_gap_count,
+    );
     for index in 0..gap_count {
         if geometry.IsMultiColSpanner(index, GridTrackSizingDirection::kForColumns) {
             continue;
         }
+        let width = f64::from(width_iterator.Next());
+        let line_style = crate::internal::boundary::native_paint_style::BorderStyle(
+            NativeComputedStyle::CollapsedBorderStyle(style_iterator.Next()),
+        );
+        let color = crate::internal::boundary::native_paint_style::ColorValue(
+            native_style.VisitedDependentGapColor(&color_iterator.Next(), true),
+        );
+        if width <= 0.0 || line_style == BorderLineStyle::kNone || color.alpha <= 0.0 {
+            continue;
+        }
+        let thickness = LayoutUnit::from_f64(width);
         let center = geometry.GetGapCenterOffset(GridTrackSizingDirection::kForColumns, index);
         let logical =
             LogicalRect::from_units(center - thickness / 2, block_start, thickness, block_size);
@@ -2328,6 +2987,9 @@ fn ExportColumnRulePaintData(box_fragment: &PhysicalBoxFragment, paint: &mut Pai
                 width: Number(physical.size.width),
                 height: Number(physical.size.height),
             },
+            color,
+            line_style,
+            stroke_width: width,
         });
     }
     if !data.rules.is_empty() {
@@ -2563,6 +3225,7 @@ fn ExportBoxInkOverflow(fragment: &PhysicalBoxFragment, paint: &mut PaintPropert
         let plain = paint.style.box_shadows.is_empty()
             && paint.style.outline_width == 0.0
             && paint.style.border_image.is_none()
+            && paint.style.mask_box_image.is_none()
             && !fragment.IsTableRow();
         if layout_box.VisualOverflowIsSet() || (plain && !fragment.IsInlineBox()) {
             paint.box_self_visual_overflow =
@@ -2635,11 +3298,52 @@ fn ExportInlineInkOverflow(item: &FragmentItem, paint: &mut PaintProperties) {
     }
 }
 
+fn ExportNativeNinePieceImages(
+    style: &NativeComputedStyle,
+    size: Size,
+    resources: &PaintResources,
+    paint: &mut PaintProperties,
+) {
+    let borders = paint.border;
+    let export = |native: &layoutng_style::style::nine_piece_image::NinePieceImage,
+                  image_area_size: Size| {
+        let resource_id = unsafe { native.GetImage().as_ref() }.and_then(
+            crate::internal::boundary::native_paint_style::FetchedNinePieceImageResourceId,
+        );
+        let resource =
+            resource_id.and_then(|id| resources.images.iter().find(|image| image.id == id));
+        crate::internal::boundary::native_paint_style::ExportNinePieceImageForFragment(
+            style,
+            native,
+            image_area_size,
+            borders,
+            resource,
+        )
+    };
+    paint.style.border_image = export(style.BorderImage(), size);
+    paint.style.mask_box_image = export(style.MaskBoxImage(), size);
+    if let Some(reflection) = unsafe { style.BoxReflect().as_ref() } {
+        if reflection.Mask().HasImage() {
+            if let Some(filter) = paint.style.filters.iter_mut().find(|filter| {
+                filter.r#type
+                    == crate::internal::paint_input::PaintFilterType::kBoxReflect
+            }) {
+                let stitched_size = paint
+                    .stitched_decoration
+                    .as_ref()
+                    .map_or(size, |stitched| stitched.size);
+                filter.reflection_mask_image = export(reflection.Mask(), stitched_size);
+            }
+        }
+    }
+}
+
 fn ExportInlineItem(
     item: &FragmentItem,
     fragment_items: &layoutng_fragment_tree::fragment_items::FragmentItems,
     parent_offset: PhysicalOffset,
     containing_line_offset: Option<PhysicalOffset>,
+    containing_line_height: Option<LayoutUnit>,
     sources: &SourceMap,
     style_sources: &StyleSourceMap,
     resources: &Arc<PaintResources>,
@@ -2675,6 +3379,14 @@ fn ExportInlineItem(
         height: Number(rect.size.height),
     };
     output.content_size = output.size;
+    if item.Type() == ItemType::kBox && !object.is_null() {
+        let native_style = if effective_style.is_null() {
+            unsafe { &*object }.StyleRef()
+        } else {
+            unsafe { &*effective_style }
+        };
+        ExportNativeNinePieceImages(native_style, output.size, resources, &mut output.paint);
+    }
     ExportInlineInkOverflow(item, &mut output.paint);
     ExportSvgTextPaintData(item, rect, &mut output.paint);
     match item.Type() {
@@ -2686,7 +3398,22 @@ fn ExportInlineItem(
             };
             if let Some(line_offset) = containing_line_offset {
                 output.paint.text_line_top_offset = Some(Number(line_offset.top - rect.offset.top));
+                if std::env::var_os("RECHROM_TRACE_INLINE_EXPORT").is_some() {
+                    eprintln!(
+                        "inline-export node={} item={:.4},{:.4} line={:.4},{:.4} parent={:.4},{:.4} local={:.4},{:.4}",
+                        output.node_id,
+                        rect.offset.left.ToDouble(),
+                        rect.offset.top.ToDouble(),
+                        line_offset.left.ToDouble(),
+                        line_offset.top.ToDouble(),
+                        parent_offset.left.ToDouble(),
+                        parent_offset.top.ToDouble(),
+                        output.offset.x,
+                        output.offset.y,
+                    );
+                }
             }
+            output.paint.text_line_height = containing_line_height.map(Number);
             output.text_start = Some(item.StartOffset());
             output.text_end = Some(item.EndOffset());
             ExportListMarkerSymbol(item, &mut output.paint);
@@ -2741,11 +3468,7 @@ fn ExportInlineItem(
                     owner_fragment
                 };
                 output.paint.establishes_paint_state = paint_state_owners.insert(owner_fragment);
-                let content = box_fragment.ContentRect();
-                output.content_size = Size {
-                    width: Number(content.size.width),
-                    height: Number(content.size.height),
-                };
+                output.content_size = ExportContentSize(box_fragment);
                 ExportMathMLPaintData(box_fragment, &mut output.paint);
                 ExportFrameSetPaintData(box_fragment, &mut output.paint);
                 ExportFieldsetPaintData(box_fragment, &mut output.paint);
@@ -2779,6 +3502,7 @@ fn ExportInlineItem(
                                 index,
                                 span.len(),
                                 PhysicalOffset::default(),
+                                None,
                                 None,
                                 &mut output.children,
                                 sources,
@@ -2819,6 +3543,7 @@ fn AppendInlineItemTree(
     limit: usize,
     parent_offset: PhysicalOffset,
     mut containing_line_offset: Option<PhysicalOffset>,
+    mut containing_line_height: Option<LayoutUnit>,
     output: &mut Vec<FragmentNode>,
     sources: &SourceMap,
     style_sources: &StyleSourceMap,
@@ -2832,6 +3557,7 @@ fn AppendInlineItemTree(
     let item = &items[index];
     if containing_line_offset.is_none() && item.Type() == ItemType::kLine {
         containing_line_offset = Some(*item.OffsetInContainerFragment());
+        containing_line_height = Some(item.Size().height);
     }
     let subtree_size = 1_usize.max(item.DescendantsCount() as usize);
     let subtree_end = limit.min(index + subtree_size);
@@ -2840,6 +3566,7 @@ fn AppendInlineItemTree(
         fragment_items,
         parent_offset,
         containing_line_offset,
+        containing_line_height,
         sources,
         style_sources,
         resources,
@@ -2857,6 +3584,7 @@ fn AppendInlineItemTree(
             subtree_end,
             *item.OffsetInContainerFragment(),
             containing_line_offset,
+            containing_line_height,
             &mut node.children,
             sources,
             style_sources,
@@ -2918,6 +3646,14 @@ fn ExportFragment(
     }
     let box_fragment = To::<PhysicalBoxFragment>(fragment as *const PhysicalFragment);
     let box_fragment = unsafe { &*box_fragment };
+    if !object.is_null() {
+        let native_style = if effective_style.is_null() {
+            unsafe { &*object }.StyleRef()
+        } else {
+            unsafe { &*effective_style }
+        };
+        ExportNativeNinePieceImages(native_style, output.size, resources, &mut output.paint);
+    }
     ExportBoxInkOverflow(box_fragment, &mut output.paint);
     if box_fragment.IsFragmentainerBox() {
         fragmentainer_instance_id = *next_fragmentainer_instance_id;
@@ -2956,11 +3692,7 @@ fn ExportFragment(
     output.paint.has_collapsed_borders = fragment.HasCollapsedBorders();
     output.paint.establishes_paint_state =
         paint_state_owners.insert(box_fragment as *const PhysicalBoxFragment);
-    let content = box_fragment.ContentRect();
-    output.content_size = Size {
-        width: Number(content.size.width),
-        height: Number(content.size.height),
-    };
+    output.content_size = ExportContentSize(box_fragment);
     ExportMathMLPaintData(box_fragment, &mut output.paint);
     ExportFrameSetPaintData(box_fragment, &mut output.paint);
     ExportFieldsetPaintData(box_fragment, &mut output.paint);
@@ -2996,6 +3728,7 @@ fn ExportFragment(
                 span.len(),
                 PhysicalOffset::default(),
                 None,
+                None,
                 &mut output.children,
                 sources,
                 style_sources,
@@ -3022,12 +3755,76 @@ fn ExportFragment(
     output
 }
 
+fn FragmentPaintForNode(root: &FragmentNode, node_id: u64) -> Option<&PaintProperties> {
+    if root.node_id == node_id && root.paint.has_source {
+        return Some(&root.paint);
+    }
+    root.children
+        .iter()
+        .find_map(|child| FragmentPaintForNode(child, node_id))
+}
+
+fn MarkBackgroundTransfersToView(root: &mut FragmentNode, node_id: u64) {
+    if root.node_id == node_id && root.paint.has_source {
+        root.paint.background_transfers_to_view = true;
+    }
+    for child in &mut root.children {
+        MarkBackgroundTransfersToView(child, node_id);
+    }
+}
+
+/// Select the CSS canvas background while the native LayoutObject tree still
+/// owns document roles and containment state.  Chromium performs this choice
+/// in LayoutBoxModelObject::BackgroundTransfersToView and propagates the
+/// selected FillLayer chain to LayoutView.  Rechrom's immutable boundary keeps
+/// the same decision as typed root paint data instead of making Paint infer DOM
+/// semantics from tag names.
+fn ExportCanvasBackground(
+    root_object: &LayoutObject,
+    objects: &[*mut LayoutObject],
+    output: &mut FragmentNode,
+) {
+    if !root_object.IsDocumentElement() {
+        return;
+    }
+    let root_id = InputId(root_object);
+    MarkBackgroundTransfersToView(output, root_id);
+
+    let body = objects
+        .iter()
+        .copied()
+        .find(|object| !object.is_null() && unsafe { &**object }.IsBody());
+    let body_transfers = body.is_some_and(|body| {
+        !root_object.StyleRef().HasBackground()
+            && !root_object.ShouldApplyAnyContainment()
+            && !unsafe { &*body }.ShouldApplyAnyContainment()
+    });
+    let source_id = if body_transfers {
+        let body_id = InputId(body.expect("transferred body exists"));
+        MarkBackgroundTransfersToView(output, body_id);
+        body_id
+    } else {
+        root_id
+    };
+    let Some(source) = FragmentPaintForNode(output, source_id) else {
+        return;
+    };
+    if source.style.background_color.alpha <= 0.0 && source.style.background_images.is_empty() {
+        return;
+    }
+    output.paint.canvas_background = Some(CanvasBackgroundPaintData {
+        style: source.style.clone(),
+        effective_zoom: source.effective_zoom,
+    });
+}
+
 // cpp: layoutng/internal/boundary/layout_boundary.cc:714-726
 fn StyleRequiresPaintBackedInlineFragment(style: &ComputedStyle) -> bool {
     let paint = &style.paint;
     paint.background_color.alpha > 0.0
         || !paint.background_images.is_empty()
         || paint.border_image.is_some()
+        || paint.mask_box_image.is_some()
         || !paint.box_shadows.is_empty()
         || (paint.outline_width > 0.0 && paint.outline_style != BorderLineStyle::kNone)
         || paint.opacity != 1.0
@@ -3035,18 +3832,35 @@ fn StyleRequiresPaintBackedInlineFragment(style: &ComputedStyle) -> bool {
         || paint.transform.is_some()
         || paint.clip_path.is_some()
         || !paint.filters.is_empty()
+        || !paint.backdrop_filters.is_empty()
+        || paint.backdrop_filter_has_reference
         || !paint.mask_images.is_empty()
         || paint.blend_mode != PaintBlendMode::kNormal
         || paint.isolate_blending
 }
 
+// cpp: core/layout/layout_inline.cc:183-230
+fn NativeStyleRequiresPaintBackedInlineFragment(style: &NativeComputedStyle) -> bool {
+    style.HasBoxDecorationBackground()
+        || style.MayHavePadding()
+        || style.MayHaveMargin()
+        || style.HasOutline()
+        || style.HasMask()
+}
+
 // cpp: layoutng/internal/boundary/layout_boundary.cc:728-733
 pub(crate) fn RequiresPaintBackedInlineFragment(source: &NativeNodeConstructionData) -> bool {
-    StyleRequiresPaintBackedInlineFragment(&source.style)
-        || source
-            .first_line_style
-            .as_ref()
-            .is_some_and(StyleRequiresPaintBackedInlineFragment)
+    let standard = unsafe { source.style.native_style.as_ref() }.map_or_else(
+        || StyleRequiresPaintBackedInlineFragment(&source.style),
+        NativeStyleRequiresPaintBackedInlineFragment,
+    );
+    let first_line = source.first_line_style.as_ref().is_some_and(|style| {
+        unsafe { style.native_style.as_ref() }.map_or_else(
+            || StyleRequiresPaintBackedInlineFragment(style),
+            NativeStyleRequiresPaintBackedInlineFragment,
+        )
+    });
+    standard || first_line
 }
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:1195-1233
@@ -3639,6 +4453,7 @@ fn InitialLetterTextStyle(initial_letter_box: &mut LayoutObject) -> *const Nativ
     let mut adjusted_font = std::ptr::null_mut();
     while adjusted_size > 1.0 {
         let request = NativeFontRequest {
+            base_description: Some(box_style.GetFontDescription()),
             size: adjusted_size as f64,
             specified_size: adjusted_size as f64 / f64::from(extra.effective_zoom),
             letter_spacing: extra.letter_spacing,
@@ -3730,6 +4545,7 @@ fn RebindFont(
         }
     }
     let request = NativeFontRequest {
+        base_description: Some(native_style.GetFontDescription()),
         size: resolved_font_size,
         specified_size: resolved_font_size / f64::from(extra.effective_zoom),
         letter_spacing: extra.letter_spacing,
@@ -4011,11 +4827,11 @@ pub fn PrepareLayoutObjectTree(
         let node = current.GetNode();
         if !layout_inline.is_null() && !node.is_null() {
             let node = unsafe { &*node };
-            let needs_fragment = StyleRequiresPaintBackedInlineFragment(node.InputStyle())
-                || node
-                    .InputFirstLineStyleData()
-                    .as_ref()
-                    .is_some_and(StyleRequiresPaintBackedInlineFragment);
+            let style = current.StyleRef();
+            let first_line_style = current.FirstLineStyleRef();
+            let needs_fragment = NativeStyleRequiresPaintBackedInlineFragment(style)
+                || (!std::ptr::eq(style, first_line_style)
+                    && NativeStyleRequiresPaintBackedInlineFragment(first_line_style));
             if needs_fragment {
                 let layout_inline = unsafe { &mut *layout_inline };
                 layout_inline.SetIsInLayoutNGInlineFormattingContext(true);
@@ -4080,6 +4896,8 @@ pub fn ExportLayoutObjectTree(
         fonts: space.fonts.clone(),
         images: space.images.clone(),
         device_pixel_ratio: space.device_pixel_ratio,
+        layout_zoom_factor: space.layout_zoom_factor,
+        paints_opaque_base_background: !space.printing,
         viewport: space.viewport,
     });
     let mut paint_state_owners = HashSet::new();
@@ -4097,6 +4915,7 @@ pub fn ExportLayoutObjectTree(
         &mut next_fragment_instance_id,
         &mut next_fragmentainer_instance_id,
     );
+    ExportCanvasBackground(root, &objects, &mut output);
     ResolveLogicalParentOccurrences(&mut output);
     ExportInlineStitchedDecorations(&mut output);
     output

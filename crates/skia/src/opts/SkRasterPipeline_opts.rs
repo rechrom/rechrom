@@ -152,6 +152,7 @@ pub mod SK_OPTS_NS {
         repeat_x_1,
         gradient,
         evenly_spaced_2_stop_gradient,
+        gradient_color_to_srgb,
         xy_to_unit_angle,
         xy_to_radius,
         xy_to_2pt_conical_focal_on_circle,
@@ -1162,6 +1163,32 @@ pub mod SK_OPTS_NS {
         p.next_stage();
     }
 
+    fn gradient_color_to_srgb(p: &mut Pipeline) {
+        let r: [f32; 8] = p.r.into();
+        let g: [f32; 8] = p.g.into();
+        let b: [f32; 8] = p.b.into();
+        let a: [f32; 8] = p.a.into();
+        let mut rr = [0.0; 8];
+        let mut gg = [0.0; 8];
+        let mut bb = [0.0; 8];
+        let space = p.ctx.gradient_interpolation_space;
+        let premultiplied = p.ctx.gradient_interpolate_premultiplied;
+        for i in 0..8 {
+            let c = crate::compat::gradient_interpolation::finish(
+                [r[i], g[i], b[i], a[i]],
+                space,
+                premultiplied,
+            );
+            rr[i] = c[0];
+            gg[i] = c[1];
+            bb[i] = c[2];
+        }
+        p.r = f32x8::from(rr);
+        p.g = f32x8::from(gg);
+        p.b = f32x8::from(bb);
+        p.next_stage();
+    }
+
     fn xy_to_unit_angle(p: &mut Pipeline) {
         let x = p.r;
         let y = p.g;
@@ -1737,6 +1764,7 @@ pub mod SK_OPTS_NS {
             repeat_x_1,
             gradient,
             evenly_spaced_2_stop_gradient,
+            null_fn, // GradientColorToSrgb (explicit interpolation forces highp)
             // TODO: Can be implemented for lowp as well. The implementation is very similar to its highp
             // variant.
             null_fn, // XYToUnitAngle

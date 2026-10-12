@@ -173,6 +173,7 @@ fn Components<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     s: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
     fill: bool,
 ) -> Result<Components, PropertyParseError> {
     let mut c = Components::default();
@@ -183,7 +184,7 @@ fn Components<T: TokenStreamTokenizer>(
                 || s.Peek().FunctionId() == Some(CSSValueID::kUrl)
                 || is_function(s) && !IsMathFunction(s)
             {
-                c.source = Some(list_counter_parser::ListImage(id, s, mode)?);
+                c.source = Some(list_counter_parser::ListImage(id, s, mode, context)?);
                 continue;
             }
         }
@@ -227,11 +228,12 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     s: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
 ) -> Result<Rc<Value>, PropertyParseError> {
     use CSSPropertyID::*;
     match id {
         kBorderImageSource | kWebkitMaskBoxImageSource => {
-            list_counter_parser::ListImage(id, s, mode)
+            list_counter_parser::ListImage(id, s, mode, context)
         }
         kBorderImageSlice | kWebkitMaskBoxImageSlice => {
             Slice(id, s, id == kWebkitMaskBoxImageSlice)?.ok_or_else(|| invalid(id))
@@ -244,7 +246,7 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
         }
         kBorderImageRepeat | kWebkitMaskBoxImageRepeat => Repeat(id, s)?.ok_or_else(|| invalid(id)),
         // css_border_image.cc:24-59 preserves source nested slash-list order.
-        kWebkitBorderImage => ConsumeWebkitBorderImage(id, s, mode),
+        kWebkitBorderImage => ConsumeWebkitBorderImage(id, s, mode, context),
         _ => Err(invalid(id)),
     }
 }
@@ -252,8 +254,9 @@ pub(super) fn ConsumeWebkitBorderImage<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     s: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
 ) -> Result<Rc<Value>, PropertyParseError> {
-    let c = Components(id, s, mode, true)?;
+    let c = Components(id, s, mode, context, true)?;
     let mut list = Vec::new();
     if let Some(v) = c.source {
         list.push(v);
@@ -273,10 +276,11 @@ pub(super) fn ParseShorthand<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     s: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
     out: &mut Vec<PropertyValue>,
 ) -> Result<(), PropertyParseError> {
     let mask = id == CSSPropertyID::kWebkitMaskBoxImage;
-    let c = Components(id, s, mode, mask)?;
+    let c = Components(id, s, mode, context, mask)?;
     // shorthands_custom.cc:5960-6006: omitted mask-box components are
     // CSSInitialValue, with default fill supplied to the shared slice consumer.
     if mask {

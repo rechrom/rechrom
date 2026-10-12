@@ -13,10 +13,13 @@ use alloc::vec::Vec;
 
 use crate::path::Scalar;
 
-use crate::raster::{Color, ColorSpace, GradientStop, Point, Shader, SpreadMode, Transform};
+use crate::raster::{ColorSpace, GradientStop, Point, Shader, SpreadMode, Transform};
 
+use crate::compat::gradient_interpolation::{GradientHueMethod, GradientInterpolationSpace};
 use crate::raster::pipeline::RasterPipelineBuilder;
-use crate::raster::shaders::gradient::{Gradient, DEGENERATE_THRESHOLD};
+use crate::raster::shaders::gradient::{
+    average_gradient_color_in_space, Gradient, DEGENERATE_THRESHOLD,
+};
 
 /// A linear gradient shader.
 #[derive(Clone, PartialEq, Debug)]
@@ -43,6 +46,28 @@ impl SkLinearGradient {
         stops: Vec<GradientStop>,
         mode: SpreadMode,
         transform: Transform,
+    ) -> Option<Shader<'static>> {
+        Self::new_with_interpolation(
+            start,
+            end,
+            stops,
+            mode,
+            transform,
+            GradientInterpolationSpace::None,
+            GradientHueMethod::Shorter,
+            false,
+        )
+    }
+
+    pub(crate) fn new_with_interpolation(
+        start: Point,
+        end: Point,
+        stops: Vec<GradientStop>,
+        mode: SpreadMode,
+        transform: Transform,
+        interpolation_space: GradientInterpolationSpace,
+        hue_method: GradientHueMethod,
+        interpolate_premultiplied: bool,
     ) -> Option<Shader<'static>> {
         if stops.is_empty() {
             return None;
@@ -79,7 +104,12 @@ impl SkLinearGradient {
                     // repeat and mirror are treated the same: the border colors are never visible,
                     // but approximate the final color as infinite repetitions of the colors, so
                     // it can be represented as the average color of the gradient.
-                    return Some(Shader::SolidColor(average_gradient_color(&stops)));
+                    return Some(Shader::SolidColor(average_gradient_color_in_space(
+                        &stops,
+                        interpolation_space,
+                        hue_method,
+                        interpolate_premultiplied,
+                    )));
                 }
             }
         }
@@ -87,9 +117,9 @@ impl SkLinearGradient {
         transform.invert()?;
 
         let unit_ts = points_to_unit_ts(start, end)?;
-        Some(Shader::LinearGradient(SkLinearGradient {
-            base: Gradient::new(stops, mode, transform, unit_ts),
-        }))
+        let mut base = Gradient::new(stops, mode, transform, unit_ts);
+        base.set_interpolation(interpolation_space, hue_method, interpolate_premultiplied);
+        Some(Shader::LinearGradient(SkLinearGradient { base }))
     }
 
     pub(crate) fn is_opaque(&self) -> bool {
@@ -114,58 +144,6 @@ fn points_to_unit_ts(start: Point, end: Point) -> Option<Transform> {
     Some(ts)
 }
 
-fn average_gradient_color(points: &[GradientStop]) -> Color {
-    use crate::raster::wide::f32x4;
-
-    fn load_color(c: Color) -> f32x4 {
-        f32x4::from([c.red(), c.green(), c.blue(), c.alpha()])
-    }
-
-    fn store_color(c: f32x4) -> Color {
-        let c: [f32; 4] = c.into();
-        Color::from_rgba(c[0], c[1], c[2], c[3]).unwrap()
-    }
-
-    assert!(!points.is_empty());
-
-    // The gradient is a piecewise linear interpolation between colors. For a given interval,
-    // the integral between the two endpoints is 0.5 * (ci + cj) * (pj - pi), which provides that
-    // intervals average color. The overall average color is thus the sum of each piece. The thing
-    // to keep in mind is that the provided gradient definition may implicitly use p=0 and p=1.
-    let mut blend = f32x4::splat(0.0);
-
-    // Bake 1/(colorCount - 1) uniform stop difference into this scale factor
-    let w_scale = f32x4::splat(0.5);
-
-    for i in 0..points.len() - 1 {
-        // Calculate the average color for the interval between pos(i) and pos(i+1)
-        let c0 = load_color(points[i].color);
-        let c1 = load_color(points[i + 1].color);
-        // when pos == null, there are colorCount uniformly distributed stops, going from 0 to 1,
-        // so pos[i + 1] - pos[i] = 1/(colorCount-1)
-        let w = points[i + 1].position.get() - points[i].position.get();
-        blend += w_scale * f32x4::splat(w) * (c1 + c0);
-    }
-
-    // Now account for any implicit intervals at the start or end of the stop definitions
-    if points[0].position.get() > 0.0 {
-        // The first color is fixed between p = 0 to pos[0], so 0.5 * (ci + cj) * (pj - pi)
-        // becomes 0.5 * (c + c) * (pj - 0) = c * pj
-        let c = load_color(points[0].color);
-        blend += f32x4::splat(points[0].position.get()) * c;
-    }
-
-    let last_idx = points.len() - 1;
-    if points[last_idx].position.get() < 1.0 {
-        // The last color is fixed between pos[n-1] to p = 1, so 0.5 * (ci + cj) * (pj - pi)
-        // becomes 0.5 * (c + c) * (1 - pi) = c * (1 - pi)
-        let c = load_color(points[last_idx].color);
-        blend += (f32x4::splat(1.0) - f32x4::splat(points[last_idx].position.get())) * c;
-    }
-
-    store_color(blend)
-}
-
 fn ts_from_sin_cos_at(sin: f32, cos: f32, px: f32, py: f32) -> Transform {
     let cos_inv = 1.0 - cos;
     Transform::from_row(
@@ -184,3 +162,65 @@ fn sdot(a: f32, b: f32, c: f32, d: f32) -> f32 {
 
 /// Compatibility spelling retained for migrated callers; use `SkLinearGradient` in the mapped API.
 pub use SkLinearGradient as LinearGradient;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::raster::Color;
+
+    fn solid(shader: Shader<'static>) -> Color {
+        match shader {
+            Shader::SolidColor(color) => color,
+            _ => panic!("zero-length repeating gradient must become a solid average"),
+        }
+    }
+
+    #[test]
+    fn zero_length_repeat_averages_in_the_requested_space() {
+        let stops = || {
+            vec![
+                GradientStop::new_extended(
+                    0.0,
+                    [1.0, 0.0, 0.0, 1.0],
+                    Color::from_rgba8(255, 0, 0, 255),
+                    GradientInterpolationSpace::Srgb,
+                    0,
+                ),
+                GradientStop::new_extended(
+                    1.0,
+                    [0.0, 0.0, 1.0, 1.0],
+                    Color::from_rgba8(0, 0, 255, 255),
+                    GradientInterpolationSpace::Srgb,
+                    0,
+                ),
+            ]
+        };
+        let srgb = solid(
+            SkLinearGradient::new_with_interpolation(
+                Point::from_xy(0.0, 0.0),
+                Point::from_xy(0.0, 0.0),
+                stops(),
+                SpreadMode::Repeat,
+                Transform::identity(),
+                GradientInterpolationSpace::Srgb,
+                GradientHueMethod::Shorter,
+                true,
+            )
+            .unwrap(),
+        );
+        let oklab = solid(
+            SkLinearGradient::new_with_interpolation(
+                Point::from_xy(0.0, 0.0),
+                Point::from_xy(0.0, 0.0),
+                stops(),
+                SpreadMode::Repeat,
+                Transform::identity(),
+                GradientInterpolationSpace::Oklab,
+                GradientHueMethod::Shorter,
+                true,
+            )
+            .unwrap(),
+        );
+        assert!(oklab.red() > srgb.red() && oklab.green() > srgb.green());
+    }
+}

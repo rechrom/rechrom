@@ -141,7 +141,6 @@ pub fn TextFieldIntrinsicInlineSize(input: &HTMLInputElement, box_: &LayoutBox) 
     if max_char_width > char_width {
         float_result += max_char_width - char_width;
     }
-
     let mut result = LayoutUnit::from_f32(float_result.ceil());
     if includes_decoration {
         let spin_button = input.SpinButtonForLayout();

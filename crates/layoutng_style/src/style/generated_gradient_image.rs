@@ -1,20 +1,137 @@
-//! Native generated-image objects for resolved, non-repeating linear gradients.
-//! The supported values have absolute colors and percentage stop positions;
-//! unresolved CSS colors, container units, paint(), and fetched images are not
-//! represented by this subset.
+//! Native generated-image ownership for resolved CSS gradients.
+//!
+//! The native object retains target-size-dependent geometry and stop positions
+//! until the Style -> Paint boundary. Paint resolves that symbolic payload
+//! against the concrete background/mask/content tile size.
 #![allow(non_snake_case)]
 
 use super::{
     forward::ImageResourceObserver, natural_sizing_info::NaturalSizingInfo, style_image::*,
 };
-use foundation::{gfx::SizeF, Color, Member, Persistent, ScopedRefPtr, Traceable, Visitor};
+use crate::css::style_color::StyleColor;
+use foundation::{
+    gfx::SizeF, ColorSpace, HueInterpolationMethod, Member, Persistent, ScopedRefPtr, Traceable,
+    Visitor,
+};
 use std::{
     cell::RefCell,
     collections::HashMap,
     hash::{Hash, Hasher},
 };
 
-// cpp: core/css/css_value.h: CSSValue::ClassType, Hash, Equals
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GradientLength {
+    /// Fraction of the target axis/gradient basis (1.0 == 100%).
+    pub percent: f64,
+    pub pixels: f64,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct GradientStop {
+    /// Fraction of the gradient basis. Values outside 0..1 are valid until the
+    /// target-size normalization step.
+    pub offset: f64,
+    pub offset_length: f64,
+    /// Keep the computed StyleColor symbolic. `currentColor` and color
+    /// functions that depend on it resolve against the final ComputedStyle at
+    /// the Style -> Paint boundary, matching CSSGradientValue::AddStops.
+    pub color: StyleColor,
+    pub is_hint: bool,
+}
+impl std::fmt::Debug for GradientStop {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = formatter.debug_struct("GradientStop");
+        debug
+            .field("offset", &self.offset)
+            .field("offset_length", &self.offset_length)
+            .field("is_hint", &self.is_hint)
+            .field(
+                "color_depends_on_current_color",
+                &self.color.DependsOnCurrentColor(),
+            );
+        if self.color.IsAbsoluteColor() {
+            debug.field("color", &self.color.GetColor());
+        }
+        debug.finish()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinearGradientData {
+    pub start: [f64; 2],
+    pub end: [f64; 2],
+    /// CSS bearing angle. Corner directions are converted to an angle only
+    /// after the target size is known.
+    pub angle_degrees: Option<f64>,
+    pub corner: Option<[i8; 2]>,
+    pub repeating: bool,
+    pub color_interpolation_space: ColorSpace,
+    pub hue_interpolation_method: HueInterpolationMethod,
+    pub stops: Vec<GradientStop>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RadialGradientShape {
+    Circle,
+    Ellipse,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RadialGradientExtent {
+    Explicit,
+    ClosestSide,
+    ClosestCorner,
+    FarthestSide,
+    FarthestCorner,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct RadialGradientData {
+    pub center_x: GradientLength,
+    pub center_y: GradientLength,
+    pub radius_x: GradientLength,
+    pub radius_y: GradientLength,
+    pub shape: RadialGradientShape,
+    pub extent: RadialGradientExtent,
+    pub repeating: bool,
+    pub color_interpolation_space: ColorSpace,
+    pub hue_interpolation_method: HueInterpolationMethod,
+    pub stops: Vec<GradientStop>,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConicGradientData {
+    pub center_x: GradientLength,
+    pub center_y: GradientLength,
+    pub angle_degrees: f64,
+    pub repeating: bool,
+    pub color_interpolation_space: ColorSpace,
+    pub hue_interpolation_method: HueInterpolationMethod,
+    pub stops: Vec<GradientStop>,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum GeneratedGradientData {
+    Linear(LinearGradientData),
+    Radial(RadialGradientData),
+    Conic(ConicGradientData),
+}
+impl GeneratedGradientData {
+    fn Hash(&self) -> u32 {
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        format!("{self:?}").hash(&mut hash);
+        hash.finish() as u32
+    }
+    fn Stops(&self) -> &[GradientStop] {
+        match self {
+            Self::Linear(value) => &value.stops,
+            Self::Radial(value) => &value.stops,
+            Self::Conic(value) => &value.stops,
+        }
+    }
+    fn IsUsingCurrentColor(&self) -> bool {
+        self.Stops()
+            .iter()
+            .any(|stop| !stop.is_hint && stop.color.DependsOnCurrentColor())
+    }
+}
+
 #[repr(C)]
 pub struct CSSValue {
     class_type: CSSValueClass,
@@ -22,85 +139,33 @@ pub struct CSSValue {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CSSValueClass {
     LinearGradient,
+    RadialGradient,
+    ConicGradient,
 }
 impl CSSValue {
-    pub fn Hash(&self) -> u32 {
-        self.linear().data.Hash()
+    fn gradient(&self) -> &CSSGeneratedGradientValue {
+        unsafe { &*(self as *const Self).cast() }
     }
-    fn linear(&self) -> &CSSLinearGradientValue {
-        // CSSValue is the first base of CSSImageGeneratorValue, itself the
-        // first base of this tagged, live CSSLinearGradientValue allocation.
-        match self.class_type {
-            CSSValueClass::LinearGradient => unsafe { &*(self as *const Self).cast() },
-        }
+    pub fn Hash(&self) -> u32 {
+        self.gradient().data.Hash()
     }
     pub fn IsImageGeneratorValue(&self) -> bool {
         true
     }
-    // cpp: core/css/css_value.cc:161-166
-    // The supported gradient class is neither an image/URI reference nor a
-    // value list. Keep this exhaustive when adding real CSS value classes.
     pub fn MayContainUrl(&self) -> bool {
-        match self.class_type {
-            CSSValueClass::LinearGradient => false,
-        }
+        false
     }
 }
 impl PartialEq for CSSValue {
     fn eq(&self, other: &Self) -> bool {
-        self.class_type == other.class_type && self.linear().data == other.linear().data
+        self.class_type == other.class_type && self.gradient().data == other.gradient().data
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct GradientStop {
-    pub offset: f64,
-    pub color: Color,
-}
-#[derive(Clone, Debug, PartialEq)]
-pub struct LinearGradientData {
-    pub start: [f64; 2],
-    pub end: [f64; 2],
-    pub stops: Vec<GradientStop>,
-}
-impl LinearGradientData {
-    fn Hash(&self) -> u32 {
-        let mut hash = std::collections::hash_map::DefaultHasher::new();
-        let bits = |value: f64| if value == 0.0 { 0 } else { value.to_bits() };
-        for value in self.start.into_iter().chain(self.end) {
-            bits(value).hash(&mut hash);
-        }
-        for stop in &self.stops {
-            bits(stop.offset).hash(&mut hash);
-            for value in [
-                stop.color.Param0(),
-                stop.color.Param1(),
-                stop.color.Param2(),
-                stop.color.Alpha(),
-            ] {
-                bits(value as f64).hash(&mut hash);
-            }
-        }
-        hash.finish() as u32
-    }
-}
-
-// cpp: platform/graphics/gradient.h: Gradient::CreateLinear, AddColorStop
-#[derive(Clone, Debug, PartialEq)]
-pub struct Gradient {
-    pub start: [f64; 2],
-    pub end: [f64; 2],
-    pub stops: Vec<GradientStop>,
-}
-// cpp: platform/graphics/gradient_generated_image.h: GradientGeneratedImage
-// GeneratedImage's refcount ownership is ScopedRefPtr/Arc. This is a real
-// generated-image payload with target-sized endpoints and color stops.
 pub struct GradientGeneratedImage {
-    pub gradient: Gradient,
+    pub data: GeneratedGradientData,
     pub size: SizeF,
 }
-// The native Image dispatch currently has this supported concrete variant.
-// Rendering the descriptor remains at the existing paint/raster boundary.
 pub struct Image {
     pub generated: GradientGeneratedImage,
 }
@@ -119,7 +184,6 @@ fn size_key(size: &SizeF) -> (u32, u32) {
     (size.width().to_bits(), size.height().to_bits())
 }
 
-// cpp: core/css/css_image_generator_value.h: CSSImageGeneratorValue
 #[repr(C)]
 pub struct CSSImageGeneratorValue {
     value: CSSValue,
@@ -129,18 +193,15 @@ pub struct CSSImageGeneratorValue {
     keep_alive: RefCell<Option<Persistent<CSSImageGeneratorValue>>>,
 }
 impl CSSImageGeneratorValue {
-    fn new() -> Self {
+    fn new(class_type: CSSValueClass) -> Self {
         Self {
-            value: CSSValue {
-                class_type: CSSValueClass::LinearGradient,
-            },
+            value: CSSValue { class_type },
             clients: RefCell::new(HashMap::new()),
             sizes: RefCell::new(HashMap::new()),
             images: RefCell::new(HashMap::new()),
             keep_alive: RefCell::new(None),
         }
     }
-    // cpp: core/css/css_image_generator_value.cc:79-90
     pub fn AddClient(&self, client: *mut ImageResourceObserver) {
         assert!(!client.is_null());
         let mut clients = self.clients.borrow_mut();
@@ -169,7 +230,6 @@ impl CSSImageGeneratorValue {
             self.images.borrow_mut().remove(&key);
         }
     }
-    // cpp: core/css/css_image_generator_value.cc:91-115
     pub fn RemoveClient(&self, client: *mut ImageResourceObserver) {
         let mut clients = self.clients.borrow_mut();
         let (_, state) = clients
@@ -185,15 +245,12 @@ impl CSSImageGeneratorValue {
             self.keep_alive.borrow_mut().take();
         }
     }
-    // cpp: core/css/css_image_generator_value.cc:117-141
     pub fn GetImage(
         &self,
         observer: &ImageResourceObserver,
         target: &SizeF,
     ) -> ScopedRefPtr<Image> {
         let mut clients = self.clients.borrow_mut();
-        // This supported resolved-gradient subset is cacheable. Source
-        // CSSGradientValue::GetImage rejects unregistered observers.
         if !clients.contains_key(&(observer as *const _ as usize)) {
             return ScopedRefPtr::default();
         }
@@ -207,7 +264,6 @@ impl CSSImageGeneratorValue {
             }
         }
         drop(clients);
-        // Source gradients have no image for an empty target.
         if target.IsEmpty() {
             return ScopedRefPtr::default();
         }
@@ -215,21 +271,9 @@ impl CSSImageGeneratorValue {
         if let Some(image) = self.images.borrow().get(&key) {
             return image.clone();
         }
-        let linear = self.value.linear();
-        let data = &linear.data;
         let image = ScopedRefPtr::new(Image {
             generated: GradientGeneratedImage {
-                gradient: Gradient {
-                    start: [
-                        data.start[0] * target.width() as f64,
-                        data.start[1] * target.height() as f64,
-                    ],
-                    end: [
-                        data.end[0] * target.width() as f64,
-                        data.end[1] * target.height() as f64,
-                    ],
-                    stops: data.stops.clone(),
-                },
+                data: self.value.gradient().data.clone(),
                 size: target.clone(),
             },
         });
@@ -245,34 +289,59 @@ impl CSSImageGeneratorValue {
     }
 }
 
-// cpp: core/css/css_gradient_value.h: CSSLinearGradientValue
 #[repr(C)]
-pub struct CSSLinearGradientValue {
+pub struct CSSGeneratedGradientValue {
     generator: CSSImageGeneratorValue,
-    data: LinearGradientData,
+    data: GeneratedGradientData,
 }
-impl CSSLinearGradientValue {
+impl CSSGeneratedGradientValue {
     pub fn FromResolved(data: LinearGradientData) -> Self {
-        assert!(data.stops.len() >= 2);
+        Self::new(GeneratedGradientData::Linear(data))
+    }
+    pub fn FromRadial(data: RadialGradientData) -> Self {
+        Self::new(GeneratedGradientData::Radial(data))
+    }
+    pub fn FromConic(data: ConicGradientData) -> Self {
+        Self::new(GeneratedGradientData::Conic(data))
+    }
+    fn new(data: GeneratedGradientData) -> Self {
+        assert!(!match &data {
+            GeneratedGradientData::Linear(value) => value.stops.is_empty(),
+            GeneratedGradientData::Radial(value) => value.stops.is_empty(),
+            GeneratedGradientData::Conic(value) => value.stops.is_empty(),
+        });
+        let class_type = match &data {
+            GeneratedGradientData::Linear(_) => CSSValueClass::LinearGradient,
+            GeneratedGradientData::Radial(_) => CSSValueClass::RadialGradient,
+            GeneratedGradientData::Conic(_) => CSSValueClass::ConicGradient,
+        };
         Self {
-            generator: CSSImageGeneratorValue::new(),
+            generator: CSSImageGeneratorValue::new(class_type),
             data,
         }
     }
     pub fn Generator(&self) -> &CSSImageGeneratorValue {
         &self.generator
     }
-    pub fn Data(&self) -> &LinearGradientData {
+    pub fn Data(&self) -> &GeneratedGradientData {
         &self.data
     }
+    pub fn IsUsingCurrentColor(&self) -> bool {
+        self.data.IsUsingCurrentColor()
+    }
 }
-impl Traceable for CSSLinearGradientValue {
+pub type CSSLinearGradientValue = CSSGeneratedGradientValue;
+pub type CSSRadialGradientValue = CSSGeneratedGradientValue;
+pub type CSSConicGradientValue = CSSGeneratedGradientValue;
+impl Traceable for CSSGeneratedGradientValue {
     fn Trace(&self, visitor: &mut Visitor) {
         self.generator.Trace(visitor);
+        for stop in self.data.Stops() {
+            stop.color.Trace(visitor);
+        }
     }
 }
 
-// cpp: core/style/style_generated_image.h, .cc
 #[repr(C)]
 pub struct StyleGeneratedImage {
     base: StyleImage,
@@ -301,15 +370,26 @@ impl Traceable for StyleGeneratedImage {
     }
 }
 fn generated(base: &StyleImage) -> &StyleGeneratedImage {
-    // This callback is installed only on a real StyleGeneratedImage object.
     unsafe { &*(base as *const StyleImage).cast() }
+}
+
+pub fn ResolvedGradient(base: &StyleImage) -> Option<&GeneratedGradientData> {
+    if !base.IsGeneratedImage() {
+        return None;
+    }
+    Some(&generated(base).generator().value.gradient().data)
+}
+pub fn ResolvedLinearGradient(base: &StyleImage) -> Option<&LinearGradientData> {
+    match ResolvedGradient(base)? {
+        GeneratedGradientData::Linear(value) => Some(value),
+        _ => None,
+    }
 }
 fn css_value(base: &StyleImage) -> *mut CSSValue {
     &generated(base).generator().value as *const CSSValue as *mut CSSValue
 }
 static GENERATED_VTABLE: StyleImageVTable = StyleImageVTable {
     CssValue: css_value,
-    // Every admitted value already contains resolved colors and stop positions.
     ComputedCSSValue: |base, _, _, _| css_value(base),
     CanRender: StyleImageDefaultCanRender,
     IsLoaded: StyleImageDefaultIsLoaded,
@@ -325,8 +405,13 @@ static GENERATED_VTABLE: StyleImageVTable = StyleImageVTable {
     Data: |base| generated(base).image_generator_value.Get().cast(),
     ImageScaleFactor: StyleImageDefaultImageScaleFactor,
     CachedImage: StyleImageDefaultCachedImage,
-    // The boundary admits only already resolved absolute colors.
-    DependsOnCurrentColor: StyleImageDefaultDependsOnCurrentColor,
+    DependsOnCurrentColor: |base| {
+        generated(base)
+            .generator()
+            .value
+            .gradient()
+            .IsUsingCurrentColor()
+    },
     IsLoadedAfterMouseover: StyleImageDefaultIsLoadedAfterMouseover,
     Trace: |base, visitor| generated(base).Trace(visitor),
     IsEqual: |base, other| {

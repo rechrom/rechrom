@@ -24,7 +24,12 @@ pub struct MediaValuesCachedData {
     pub dynamic_viewport_height: f64,
     pub device_width: i32,
     pub device_height: i32,
+    /// LocalFrame::DevicePixelRatio: host/inspector device scale multiplied by
+    /// LayoutZoomFactor. Consumers must not multiply zoom a second time.
     pub device_pixel_ratio: f32,
+    /// LocalFrame::LayoutZoomFactor retained independently for CSS coordinate
+    /// conversion; it is already represented in `device_pixel_ratio` above.
+    pub layout_zoom_factor: f32,
     pub device_supports_hdr: bool,
     pub color_bits_per_component: i32,
     pub monochrome_bits_per_component: i32,
@@ -40,6 +45,13 @@ pub struct MediaValuesCachedData {
     pub ic_size: f32,
     pub cap_size: f32,
     pub line_height: f32,
+    /// Style property conversion's retained unzoomed document-element
+    /// line-height.
+    /// MediaValuesCached::LineHeight/RootLineHeight continue to use
+    /// `line_height`; this optional owner is installed only for a translated
+    /// style-application scope, matching CSSToLengthConversionData's separate
+    /// LineHeightSize root member.
+    pub style_root_line_height: Option<f32>,
     pub three_d_enabled: bool,
     pub strict_mode: bool,
     pub media_type: String,
@@ -75,6 +87,7 @@ impl Default for MediaValuesCachedData {
             device_width: 0,
             device_height: 0,
             device_pixel_ratio: 1.0,
+            layout_zoom_factor: 1.0,
             device_supports_hdr: false,
             color_bits_per_component: 24,
             monochrome_bits_per_component: 0,
@@ -90,6 +103,7 @@ impl Default for MediaValuesCachedData {
             ic_size: 16.0,
             cap_size: 16.0,
             line_height: 0.0,
+            style_root_line_height: None,
             three_d_enabled: false,
             strict_mode: true,
             media_type: String::default(),

@@ -123,7 +123,15 @@ pub(super) fn Apply(
                         use crate::css_math_expression_node::CalculationResultCategory as C;
                         let value = math
                             .ComputeValue(
-                                &mut MathLengthResolver(id, parent_size, root, 1.0, media),
+                                &mut MathLengthResolver(
+                                    id,
+                                    parent_size,
+                                    root,
+                                    1.0,
+                                    media,
+                                    Some(CurrentComputedLineHeight(b)),
+                                    None,
+                                ),
                                 (math.Category() == C::LengthFunction)
                                     .then_some(parent_size as f64),
                             )
@@ -390,6 +398,8 @@ fn Degrees(
                     root,
                     b.EffectiveZoom(),
                     media,
+                    Some(CurrentComputedLineHeight(b)),
+                    None,
                 ),
                 None,
             )
@@ -418,11 +428,25 @@ fn Family(
     let mut result = None;
     for item in list.values.iter().rev() {
         let (name, kind, g) = match item.Payload() {
-            CSSValuePayload::kFontFamilyClass(f) => (
-                foundation::AtomicString::from_str(&f.0.Utf8()),
-                FontFamilyType::kFamilyName,
-                GenericFamilyType::kNoFamily,
-            ),
+            CSSValuePayload::kFontFamilyClass(f) => {
+                let family = f.0.Utf8();
+                // cpp: style_builder_converter.cc ConvertFontFamily. On macOS
+                // BlinkMacSystemFont is the legacy spelling of system-ui; it
+                // remains an ordinary family token on other platforms.
+                #[cfg(target_os = "macos")]
+                let family = if family.eq_ignore_ascii_case("BlinkMacSystemFont") {
+                    "system-ui"
+                } else {
+                    family.as_str()
+                };
+                #[cfg(not(target_os = "macos"))]
+                let family = family.as_str();
+                (
+                    foundation::AtomicString::from_str(family),
+                    FontFamilyType::kFamilyName,
+                    GenericFamilyType::kNoFamily,
+                )
+            }
             CSSValuePayload::kIdentifierClass(i) => {
                 let g = match i.0 {
                     kSerif => GenericFamilyType::kSerifFamily,

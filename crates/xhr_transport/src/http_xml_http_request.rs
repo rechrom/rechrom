@@ -29,6 +29,7 @@ fn HTTPRequest(request: &XMLHttpRequestData) -> HTTPRequestData {
         referrer: request.referrer.clone(),
         body: request.body.clone(),
         headers: request.headers.clone(),
+        ..HTTPRequestData::default()
     }
 }
 

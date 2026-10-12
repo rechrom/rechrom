@@ -119,6 +119,7 @@ impl Edge {
 pub struct NinePieceImageGrid {
     area: PaintRect,
     image_size: Size,
+    zoom: f64,
     horizontal_rule: PaintImageTileRule,
     vertical_rule: PaintImageTileRule,
     fill: bool,
@@ -134,11 +135,13 @@ impl NinePieceImageGrid {
     pub fn new(
         input: &NinePieceImagePaint,
         image_size: Size,
+        zoom: f64,
         border_image_area: PaintRect,
     ) -> Self {
         let mut grid = Self {
             area: border_image_area,
             image_size,
+            zoom,
             horizontal_rule: input.horizontal_rule,
             vertical_rule: input.vertical_rule,
             fill: input.fill,
@@ -151,6 +154,8 @@ impl NinePieceImageGrid {
             || !image_size.height.is_finite()
             || image_size.width <= 0.0
             || image_size.height <= 0.0
+            || !grid.zoom.is_finite()
+            || grid.zoom <= 0.0
             || !grid.area.x.is_finite()
             || !grid.area.y.is_finite()
             || !grid.area.width.is_finite()
@@ -381,14 +386,14 @@ impl NinePieceImageGrid {
             } else if self.bottom.IsDrawable() {
                 self.bottom.Scale()
             } else {
-                1.0
+                self.zoom
             },
             y: if self.left.IsDrawable() {
                 self.left.Scale()
             } else if self.right.IsDrawable() {
                 self.right.Scale()
             } else {
-                1.0
+                self.zoom
             },
         };
         if self.horizontal_rule == PaintImageTileRule::kStretch {

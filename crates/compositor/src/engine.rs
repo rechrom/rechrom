@@ -13,8 +13,9 @@ use interaction::input_event::{ScrollGranularity, WheelEvent};
 use layer_tile::{
     CompositorScrollOffset, FrameConfig, FramePlan, LayerTileEngine, UnsupportedReason,
 };
+use layoutng_assembly::internal::layout_input::Offset;
 use paint::{
-    paint_engine::{PaintArtifact, PaintRect},
+    paint_engine::{PaintArtifact, PaintRect, RecordedDisplayItemKind},
     paint_property_tree::TransformPaintPropertyNode,
 };
 use std::{io, sync::Arc, time::Instant};
@@ -33,6 +34,12 @@ pub trait CompositorViewport: Copy + PartialEq {
     fn Width(self) -> u32;
     fn Height(self) -> u32;
     fn Scale(self) -> f64;
+
+    /// Platform policy selected by the application host. LayerTile consumes
+    /// the value as pure configuration and never queries an OS or display.
+    fn RasterTileSize(self) -> u32 {
+        256
+    }
 
     fn LogicalWidth(self) -> f64 {
         f64::from(self.Width()) / self.Scale()
@@ -54,15 +61,23 @@ pub trait CompositorViewport: Copy + PartialEq {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BlockingWheelEventRegions {
     pub covers_viewport: bool,
-    pub rects: Vec<PaintRect>,
+    /// CSS client-space regions attached to the root scroll node.
+    pub scrolling_rects: Vec<PaintRect>,
+    /// CSS client-space regions attached to the viewport.
+    pub fixed_rects: Vec<PaintRect>,
 }
 
 impl BlockingWheelEventRegions {
-    pub fn Contains(&self, x: f64, y: f64) -> bool {
+    pub fn Contains(&self, x: f64, y: f64, root_scroll_delta: Offset) -> bool {
+        let contains = |rect: &PaintRect, x: f64, y: f64| {
+            x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
+        };
         self.covers_viewport
-            || self.rects.iter().any(|rect| {
-                x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
-            })
+            || self
+                .scrolling_rects
+                .iter()
+                .any(|rect| contains(rect, x + root_scroll_delta.x, y + root_scroll_delta.y))
+            || self.fixed_rects.iter().any(|rect| contains(rect, x, y))
     }
 }
 
@@ -118,8 +133,8 @@ pub struct PlannedFrame<V, M> {
     pub toolbar: FramePlan,
     pub content: Option<FramePlan>,
     scroll_tree: ScrollTreeSnapshot,
-    visual_scroll: Option<(u64, f64)>,
-    raster_scroll: Option<(u64, f64)>,
+    visual_scroll: Option<(u64, Offset)>,
+    raster_scroll: Option<(u64, Offset)>,
 }
 
 pub struct SubmittedFrame<V, M> {
@@ -129,18 +144,36 @@ pub struct SubmittedFrame<V, M> {
     pub metadata: M,
 }
 
-#[derive(Default)]
 pub struct RasterBundle {
+    tile_size: u32,
     pub toolbar_tiles: LayerTileEngine,
     pub content_tiles: LayerTileEngine,
     pub toolbar_raster: raster::RasterEngine,
     pub content_raster: raster::RasterEngine,
 }
 
+impl Default for RasterBundle {
+    fn default() -> Self {
+        Self::new(256)
+    }
+}
+
+impl RasterBundle {
+    fn new(tile_size: u32) -> Self {
+        Self {
+            tile_size,
+            toolbar_tiles: LayerTileEngine::new(tile_size),
+            content_tiles: LayerTileEngine::new(tile_size),
+            toolbar_raster: raster::RasterEngine::default(),
+            content_raster: raster::RasterEngine::default(),
+        }
+    }
+}
+
 pub struct RasterJob<V, M> {
     pub snapshot: ArtifactSnapshot<V, M>,
     pub bundle: RasterBundle,
-    pub activation_target: Option<(u64, f64)>,
+    pub activation_target: Option<(u64, Offset)>,
 }
 
 pub struct RasterReady<V, M> {
@@ -151,20 +184,43 @@ pub struct RasterReady<V, M> {
 impl<V: CompositorViewport, M> PlannedFrame<V, M> {
     fn RootOverlayScrollbarQuad(&self) -> Option<(SolidColorDrawQuad, DeviceRect)> {
         let root = self.scroll_tree.root()?;
-        if root.maximum_y <= 0.0 {
+        // Paint already records the platform/theme scrollbar in border-box
+        // space and associates it with the owning scroll translation. Do not
+        // cover that output with the compositor's generic black fallback
+        // during an active gesture. The fallback remains for embeddings which
+        // deliberately publish no painted root scrollbar.
+        if self.snapshot.content.as_ref().is_some_and(|artifact| {
+            artifact.display_items.iter().any(|record| {
+                record.kind == RecordedDisplayItemKind::Scrollbar
+                    && record
+                        .scroll_translation
+                        .as_ref()
+                        .and_then(|transform| transform.scroll.as_ref())
+                        .is_some_and(|scroll| scroll.id == root.id)
+            })
+        }) {
+            return None;
+        }
+        let range = root.maximum.y - root.minimum.y;
+        if range <= 0.0 {
             return None;
         }
         let offset = self
             .visual_scroll
             .filter(|(id, _)| *id == root.id)
-            .map_or(root.committed_y, |(_, value)| value)
-            .clamp(0.0, root.maximum_y);
+            .map_or(root.committed.y, |(_, value)| value.y)
+            .clamp(root.minimum.y, root.maximum.y);
         let viewport = self
             .snapshot
             .viewport
             .ContentHeight(self.snapshot.toolbar_height)
             .max(1.0);
-        let contents = viewport + root.maximum_y;
+        let layout_zoom = self
+            .content
+            .as_ref()
+            .map_or(1.0, |content| content.config.layout_zoom_factor)
+            .max(f64::MIN_POSITIVE);
+        let contents = viewport + range / layout_zoom;
         let inner_length = (viewport - 4.0).max(0.0);
         let thumb_length = (inner_length * viewport / contents)
             .max(24.0)
@@ -173,7 +229,7 @@ impl<V: CompositorViewport, M> PlannedFrame<V, M> {
             return None;
         }
         let travel = (inner_length - thumb_length).max(0.0);
-        let top = 2.0 + travel * (offset / root.maximum_y).clamp(0.0, 1.0);
+        let top = 2.0 + travel * ((offset - root.minimum.y) / range).clamp(0.0, 1.0);
         let right = self.snapshot.viewport.LogicalWidth() - 3.0;
         let rect = PaintRect {
             x: (right - 10.0).max(0.0),
@@ -213,7 +269,7 @@ pub struct CompositorEngine<V, F, M> {
     display_has_bundle: bool,
     raster_in_flight: bool,
     pending_snapshot: Option<ArtifactSnapshot<V, M>>,
-    pending_activation_target: Option<(u64, f64)>,
+    pending_activation_target: Option<(u64, Offset)>,
     snapshot: Option<ArtifactSnapshot<V, M>>,
     planned: Option<PlannedFrame<V, M>>,
     scroll_tree: CompositorScrollTree,
@@ -319,21 +375,34 @@ where
                     .planned
                     .as_ref()
                     .is_some_and(|planned| Some(planned.snapshot.document) == current_document);
+                let layout_zoom = self
+                    .planned
+                    .as_ref()
+                    .and_then(|planned| planned.content.as_ref())
+                    .map_or(1.0, |content| content.config.layout_zoom_factor)
+                    .max(f64::MIN_POSITIVE);
                 let blocks_main = !compositor_ready
                     || self.planned.as_ref().is_some_and(|planned| {
                         planned.snapshot.async_root_scroll
                             && planned.snapshot.blocking_wheel_regions.Contains(
                                 event.position.x,
-                                event.position.y - planned.snapshot.toolbar_height
-                                    + self.scroll_tree.pending_delta_y(),
+                                event.position.y - planned.snapshot.toolbar_height,
+                                Offset {
+                                    x: self.scroll_tree.pending_delta().x / layout_zoom,
+                                    y: self.scroll_tree.pending_delta().y / layout_zoom,
+                                },
                             )
                     });
                 let update = self.scroll_tree.apply_wheel(
                     event.phase,
-                    event.delta.y,
-                    self.planned
-                        .as_ref()
-                        .is_some_and(|planned| planned.snapshot.async_root_scroll),
+                    Offset {
+                        x: event.delta.x * layout_zoom,
+                        y: event.delta.y * layout_zoom,
+                    },
+                    self.planned.as_ref().is_some_and(|planned| {
+                        planned.snapshot.async_root_scroll
+                            && planned.scroll_tree.supports_root_only_input()
+                    }),
                     blocks_main,
                 );
                 if update.did_scroll {
@@ -365,7 +434,13 @@ where
                         (
                             "region_rects",
                             self.planned.as_ref().map_or(0.0, |planned| {
-                                planned.snapshot.blocking_wheel_regions.rects.len() as f64
+                                planned
+                                    .snapshot
+                                    .blocking_wheel_regions
+                                    .scrolling_rects
+                                    .len() as f64
+                                    + planned.snapshot.blocking_wheel_regions.fixed_rects.len()
+                                        as f64
                             }),
                         ),
                     ],
@@ -444,10 +519,14 @@ where
             return;
         };
         let activation_target = self.pending_activation_target.take();
-        let bundle = self
+        let mut bundle = self
             .spare_bundle
             .take()
             .expect("spare raster bundle checked above");
+        let tile_size = snapshot.viewport.RasterTileSize();
+        if bundle.tile_size != tile_size {
+            bundle = RasterBundle::new(tile_size);
+        }
         effects.push(Effect::Raster(RasterJob {
             snapshot,
             bundle,
@@ -456,7 +535,7 @@ where
         self.raster_in_flight = true;
     }
 
-    fn current_scroll_position(&self) -> Option<(u64, f64)> {
+    fn current_scroll_position(&self) -> Option<(u64, Offset)> {
         self.scroll_tree.current_position()
     }
 
@@ -515,8 +594,11 @@ where
         if let Some(root) = root_scroll {
             let desired = previous_scroll
                 .filter(|(id, _)| *id == root.id)
-                .map_or(root.committed_y, |(_, offset)| offset)
-                .clamp(0.0, root.maximum_y);
+                .map_or(root.committed, |(_, offset)| offset);
+            let desired = Offset {
+                x: desired.x.clamp(root.minimum.x, root.maximum.x),
+                y: desired.y.clamp(root.minimum.y, root.maximum.y),
+            };
             // Pending-tree raster completion is not by itself permission to
             // activate.  The tree must also cover the compositor's current
             // scroll position.  Otherwise replacing the active bundle here
@@ -531,8 +613,8 @@ where
                     "PendingTreeActivationDeferred",
                     &[
                         ("scroll_node", root.id as f64),
-                        ("committed", root.committed_y),
-                        ("desired", desired),
+                        ("committed", root.committed.y),
+                        ("desired", desired.y),
                         (
                             "frame_id",
                             planned.content.as_ref().map_or(0, |plan| plan.frame_id) as f64,
@@ -548,6 +630,7 @@ where
         }
         self.scroll_tree.activate(root_scroll, previous_scroll);
         self.planned = Some(planned);
+        let tile_size = ready.bundle.tile_size;
         effects.push(Effect::InstallRasterBundle(ready.bundle));
         // Bootstrap the second half of the fixed active/pending pair.  The
         // first Display::Install has no preceding active bundle to return;
@@ -557,7 +640,7 @@ where
         if !self.display_has_bundle {
             self.display_has_bundle = true;
             debug_assert!(self.spare_bundle.is_none());
-            self.spare_bundle = Some(RasterBundle::default());
+            self.spare_bundle = Some(RasterBundle::new(tile_size));
         }
         self.dirty = true;
         effects.push(Effect::RequestBeginFrame);
@@ -650,21 +733,32 @@ where
 pub fn PlanAndRaster<V, M>(
     bundle: &mut RasterBundle,
     snapshot: ArtifactSnapshot<V, M>,
-    activation_target: Option<(u64, f64)>,
+    activation_target: Option<(u64, Offset)>,
 ) -> io::Result<PlannedFrame<V, M>>
 where
     V: CompositorViewport,
     M: Clone,
 {
     let mut trace = browser_tracing::span("raster", "RasterPendingTree");
+    let artifact_scale = |artifact: &PaintArtifact| {
+        artifact
+            .resources
+            .as_ref()
+            .map_or(1.0, |resources| resources.layout_zoom_factor)
+            .max(f64::MIN_POSITIVE)
+    };
+    let toolbar_layout_zoom = artifact_scale(&snapshot.toolbar);
+    let toolbar_raster_scale = snapshot.viewport.Scale() / toolbar_layout_zoom;
     let toolbar_config = FrameConfig {
         viewport: PaintRect {
             x: 0.0,
             y: 0.0,
-            width: snapshot.viewport.LogicalWidth(),
-            height: snapshot.toolbar_height,
+            width: snapshot.viewport.LogicalWidth() * toolbar_layout_zoom,
+            height: snapshot.toolbar_height * toolbar_layout_zoom,
         },
-        raster_scale: snapshot.viewport.Scale(),
+        raster_scale: toolbar_raster_scale,
+        device_scale_factor: snapshot.viewport.Scale(),
+        layout_zoom_factor: toolbar_layout_zoom,
         activation_scroll: None,
         frame_time: Some(snapshot.frame_time),
     };
@@ -682,8 +776,10 @@ where
         .content
         .as_ref()
         .and_then(|artifact| build_artifact_scroll_tree(artifact).root());
-    let raster_scroll = source_root_scroll.map(|root| (root.id, root.committed_y));
+    let raster_scroll = source_root_scroll.map(|root| (root.id, root.committed));
     let content = if let Some(artifact) = &snapshot.content {
+        let layout_zoom = artifact_scale(artifact);
+        let raster_scale = snapshot.viewport.Scale() / layout_zoom;
         let content_update = bundle
             .content_tiles
             .UpdatePending(
@@ -692,16 +788,20 @@ where
                     viewport: PaintRect {
                         x: 0.0,
                         y: 0.0,
-                        width: snapshot.viewport.LogicalWidth(),
-                        height: snapshot.viewport.ContentHeight(snapshot.toolbar_height),
+                        width: snapshot.viewport.LogicalWidth() * layout_zoom,
+                        height: snapshot.viewport.ContentHeight(snapshot.toolbar_height)
+                            * layout_zoom,
                     },
-                    raster_scale: snapshot.viewport.Scale(),
+                    raster_scale,
+                    device_scale_factor: snapshot.viewport.Scale(),
+                    layout_zoom_factor: layout_zoom,
                     activation_scroll: source_root_scroll.and_then(|root| {
                         activation_target
                             .filter(|(id, _)| *id == root.id)
                             .map(|(_, desired)| CompositorScrollOffset {
                                 scroll_node_id: root.id,
-                                translation_y: root.committed_y - desired,
+                                translation_x: root.committed.x - desired.x,
+                                translation_y: root.committed.y - desired.y,
                             })
                     }),
                     frame_time: Some(snapshot.frame_time),
@@ -777,7 +877,7 @@ where
         toolbar,
         content,
         scroll_tree,
-        visual_scroll: root_scroll.map(|root| (root.id, root.committed_y)),
+        visual_scroll: root_scroll.map(|root| (root.id, root.committed)),
         raster_scroll,
     })
 }
@@ -789,14 +889,22 @@ fn build_scroll_tree(plan: &FramePlan) -> ScrollTreeSnapshot {
         while let Some(transform) = node {
             if let Some(scroll) = &transform.scroll {
                 nodes.entry(scroll.id).or_insert_with(|| {
-                    let maximum_y =
-                        (scroll.contents_rect.height - scroll.container_rect.height).max(0.0);
+                    let minimum = scroll.minimum_scroll_offset;
+                    let maximum = Offset {
+                        x: scroll.maximum_scroll_offset.x.max(minimum.x),
+                        y: scroll.maximum_scroll_offset.y.max(minimum.y),
+                    };
                     ScrollNode {
                         id: scroll.id,
                         parent_id: scroll.parent.as_ref().map(|parent| parent.id),
                         container_rect: scroll.container_rect,
-                        committed_y: (-transform.matrix.values[13]).clamp(0.0, maximum_y),
-                        maximum_y,
+                        committed: Offset {
+                            x: (-transform.matrix.values[12]).clamp(minimum.x, maximum.x),
+                            y: (-transform.matrix.values[13]).clamp(minimum.y, maximum.y),
+                        },
+                        minimum,
+                        maximum,
+                        user_scrollable_horizontal: scroll.user_scrollable_horizontal,
                         user_scrollable_vertical: scroll.user_scrollable_vertical,
                     }
                 });
@@ -814,14 +922,22 @@ fn build_artifact_scroll_tree(artifact: &PaintArtifact) -> ScrollTreeSnapshot {
         while let Some(transform) = node {
             if let Some(scroll) = &transform.scroll {
                 nodes.entry(scroll.id).or_insert_with(|| {
-                    let maximum_y =
-                        (scroll.contents_rect.height - scroll.container_rect.height).max(0.0);
+                    let minimum = scroll.minimum_scroll_offset;
+                    let maximum = Offset {
+                        x: scroll.maximum_scroll_offset.x.max(minimum.x),
+                        y: scroll.maximum_scroll_offset.y.max(minimum.y),
+                    };
                     ScrollNode {
                         id: scroll.id,
                         parent_id: scroll.parent.as_ref().map(|parent| parent.id),
                         container_rect: scroll.container_rect,
-                        committed_y: (-transform.matrix.values[13]).clamp(0.0, maximum_y),
-                        maximum_y,
+                        committed: Offset {
+                            x: (-transform.matrix.values[12]).clamp(minimum.x, maximum.x),
+                            y: (-transform.matrix.values[13]).clamp(minimum.y, maximum.y),
+                        },
+                        minimum,
+                        maximum,
+                        user_scrollable_horizontal: scroll.user_scrollable_horizontal,
                         user_scrollable_vertical: scroll.user_scrollable_vertical,
                     }
                 });
@@ -850,7 +966,7 @@ fn layer_has_scroll(transform: &Arc<TransformPaintPropertyNode>, id: u64) -> boo
 fn apply_scroll_offset<V, M>(
     frame: &mut PlannedFrame<V, M>,
     root: ScrollNode,
-    desired: f64,
+    desired: Offset,
 ) -> bool {
     let Some(content) = &mut frame.content else {
         return true;
@@ -858,8 +974,11 @@ fn apply_scroll_offset<V, M>(
     let raster_base = frame
         .raster_scroll
         .filter(|(id, _)| *id == root.id)
-        .map_or(root.committed_y, |(_, offset)| offset);
-    let delta = (raster_base - desired) * content.config.raster_scale;
+        .map_or(root.committed, |(_, offset)| offset);
+    let delta = Offset {
+        x: (raster_base.x - desired.x) * content.config.raster_scale,
+        y: (raster_base.y - desired.y) * content.config.raster_scale,
+    };
     // A compositor scroll transform and the tile set which covers it are one
     // activation transaction.  Applying the transform while retaining only
     // the preceding viewport's tiles exposes the transparent backing for a
@@ -874,7 +993,8 @@ fn apply_scroll_offset<V, M>(
         layer.compositor_scroll = if layer_has_scroll(&layer.properties.transform, root.id) {
             Some(CompositorScrollOffset {
                 scroll_node_id: root.id,
-                translation_y: raster_base - desired,
+                translation_x: raster_base.x - desired.x,
+                translation_y: raster_base.y - desired.y,
             })
         } else {
             None
@@ -888,7 +1008,7 @@ fn apply_scroll_offset<V, M>(
         browser_tracing::instant(
             "raster",
             "ScrollVisualActivationDeferred",
-            &[("scroll_node", root.id as f64), ("desired", desired)],
+            &[("scroll_node", root.id as f64), ("desired", desired.y)],
         );
         return false;
     }
@@ -897,10 +1017,11 @@ fn apply_scroll_offset<V, M>(
         "ScrollApplied",
         &[
             ("scroll_node", root.id as f64),
-            ("committed", root.committed_y),
-            ("offset_y", desired),
-            ("desired", desired),
-            ("delta_device", delta),
+            ("committed", root.committed.y),
+            ("offset_x", desired.x),
+            ("offset_y", desired.y),
+            ("desired", desired.y),
+            ("delta_device", delta.y),
             ("compositor", 1.0),
         ],
     );

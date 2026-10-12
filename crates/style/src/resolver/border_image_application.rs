@@ -67,6 +67,8 @@ fn Number(
                     root,
                     b.EffectiveZoom(),
                     media,
+                    Some(CurrentComputedLineHeight(b)),
+                    None,
                 ),
                 None,
             )
@@ -179,18 +181,24 @@ pub(super) fn MapNinePieceImage(
     }
     for value in &list.values {
         match value.Payload() {
-            CSSValuePayload::kImageClass(_) | CSSValuePayload::kLinearGradientClass(_) => image
-                .SetImage(ResolveStyleImage(
-                    if id == CSSPropertyID::kWebkitBorderImage {
-                        CSSPropertyID::kBorderImageSource
-                    } else if id == CSSPropertyID::kWebkitMaskBoxImage {
-                        CSSPropertyID::kWebkitMaskBoxImageSource
-                    } else {
-                        id
-                    },
-                    value,
-                    images,
-                )?),
+            CSSValuePayload::kImageClass(_)
+            | CSSValuePayload::kImageSetClass(_)
+            | CSSValuePayload::kLinearGradientClass(_)
+            | CSSValuePayload::kRadialGradientClass(_)
+            | CSSValuePayload::kConicGradientClass(_) => image.SetImage(ResolveStyleImage(
+                if id == CSSPropertyID::kWebkitBorderImage {
+                    CSSPropertyID::kBorderImageSource
+                } else if id == CSSPropertyID::kWebkitMaskBoxImage {
+                    CSSPropertyID::kWebkitMaskBoxImageSource
+                } else {
+                    id
+                },
+                b,
+                value,
+                root,
+                media,
+                images,
+            )?),
             CSSValuePayload::kBorderImageSliceClass(_) => {
                 MapSlice(id, b, value, root, media, &mut image)?
             }
@@ -274,7 +282,7 @@ pub(super) fn Apply(
                 parent.unwrap().BorderImageSource()
             }
         } else {
-            ResolveStyleImage(id, v, images)?
+            ResolveStyleImage(id, b, v, root, media, images)?
         };
         if mask {
             b.SetMaskBoxImageSource(image);

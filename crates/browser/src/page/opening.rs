@@ -11,6 +11,7 @@ pub(super) fn ResolvePageStylesAndLoadResources(
     resources: &Rc<ResourceFetcher>,
     scripts: &mut Option<Box<PageScripts>>,
     allowance: usize,
+    rendering_opportunity: bool,
 ) -> io::Result<usize> {
     let mut trace = browser_tracing::span("lifecycle", "Page.ResolveStylesAndLoadResources");
     // Synchronous JS geometry queries may resolve styles before this pass;
@@ -19,9 +20,17 @@ pub(super) fn ResolvePageStylesAndLoadResources(
     // remain dirty for the next discovery pass.
     let profile = std::env::var_os("BROWSER_PROFILE_RESOURCES").map(|_| std::time::Instant::now());
     let elapsed = || profile.map(|start| start.elapsed()).unwrap_or_default();
-    let discover = state.resource_references_dirty.replace(false);
+    // Network/parser task turns may complete resources, but they are not a
+    // rendering opportunity.  Blink batches parser mutations until the next
+    // lifecycle update; resolving the whole growing document after every
+    // bounded parser pump makes streaming input quadratic and publishes
+    // arbitrary intermediate frames.  Keep discovery dirty until Page enters
+    // UpdateFrameIfNeeded from BeginFrame.
+    let discover = rendering_opportunity && state.resource_references_dirty.replace(false);
     trace.set("discover", discover as u8 as f64);
-    state.ResolveStyles();
+    if rendering_opportunity {
+        state.ResolveStyles();
+    }
     let style_before_done = elapsed();
     let mut images_discovered_done = style_before_done;
     let mut fonts_discovered_done = style_before_done;
@@ -60,7 +69,9 @@ pub(super) fn ResolvePageStylesAndLoadResources(
     trace.set("font_completions", fonts as f64);
     let fonts_polled_done = elapsed();
     drop(client);
-    state.ResolveStyles();
+    if rendering_opportunity {
+        state.ResolveStyles();
+    }
     let style_after_done = elapsed();
     if let Some(scripts) = scripts.as_deref() {
         let _trace = browser_tracing::span("lifecycle", "Page.FlushScriptTasks");
@@ -144,7 +155,13 @@ impl OpenDocumentAdapter for PageOpenAdapter<'_> {
     }
 
     fn UpdateDocumentResources(&mut self, allowance: usize) -> io::Result<usize> {
-        ResolvePageStylesAndLoadResources(&self.state, &self.resources, self.scripts, allowance)
+        ResolvePageStylesAndLoadResources(
+            &self.state,
+            &self.resources,
+            self.scripts,
+            allowance,
+            false,
+        )
     }
 
     fn HasPendingImageEvents(&self) -> bool {

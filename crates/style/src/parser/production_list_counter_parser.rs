@@ -156,21 +156,39 @@ pub(super) fn ListImage<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
 ) -> Result<Rc<Value>, PropertyParseError> {
     if stream.Peek().Id() == CSSValueID::kNone {
         return Ok(values::identifier(stream.ConsumeIncludingWhitespace().Id()));
     }
-    if let Some(image) = ConsumeContentImage(id, stream)? {
+    if let Some(image) = ConsumeContentImage(id, stream, context)? {
         return Ok(image);
     }
     if matches!(
         stream.Peek().FunctionId(),
-        Some(CSSValueID::kLinearGradient | CSSValueID::kRepeatingLinearGradient)
+        Some(CSSValueID::kImageSet | CSSValueID::kWebkitImageSet)
     ) {
-        return ConsumeLinearGradient(id, stream, mode);
+        return crate::parser::production_property_parser::ConsumeImageSet(
+            id, stream, mode, context,
+        );
+    }
+    if matches!(
+        stream.Peek().FunctionId(),
+        Some(
+            CSSValueID::kLinearGradient
+                | CSSValueID::kRepeatingLinearGradient
+                | CSSValueID::kRadialGradient
+                | CSSValueID::kRepeatingRadialGradient
+                | CSSValueID::kConicGradient
+                | CSSValueID::kRepeatingConicGradient
+        )
+    ) {
+        return crate::parser::production_property_parser::ConsumeGeneratedGradient(
+            id, stream, mode,
+        );
     }
     Err(if is_function(stream) {
-        unsupported(id, "ConsumeImage generated/image-set subtype")
+        unsupported(id, "ConsumeImage generated subtype")
     } else {
         invalid(id)
     })
@@ -179,13 +197,14 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
 ) -> Result<Rc<Value>, PropertyParseError> {
     use CSSPropertyID::*;
     match id {
         kCounterIncrement | kCounterReset | kCounterSet => Counters(id, stream, mode),
         kQuotes => Quotes(id, stream),
         kListStyleType => ListType(id, stream, mode),
-        kListStyleImage => ListImage(id, stream, mode),
+        kListStyleImage => ListImage(id, stream, mode, context),
         kListStylePosition => {
             ConsumeLiteral(id, stream, mode, Grammar::Keywords(&["inside", "outside"]))
         }
@@ -198,6 +217,7 @@ pub(super) fn ParseShorthand<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<Backend>,
     out: &mut Vec<PropertyValue>,
 ) -> Result<(), PropertyParseError> {
     let mut none = None;
@@ -220,7 +240,7 @@ pub(super) fn ParseShorthand<T: TokenStreamTokenizer>(
             }
             stream.EnsureLookAhead();
             let save = stream.Save();
-            match Consume(property, stream, mode) {
+            match Consume(property, stream, mode, context) {
                 Ok(value) => {
                     *field = Some(value);
                     consumed = true;

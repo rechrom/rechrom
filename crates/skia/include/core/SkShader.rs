@@ -25,6 +25,7 @@ pub use sweep_gradient::SweepGradient;
 
 use crate::raster::{Color, ColorSpace, Transform};
 
+use crate::compat::gradient_interpolation::{GradientHueMethod, GradientInterpolationSpace};
 use crate::raster::pipeline::RasterPipelineBuilder;
 
 pub use super::SkTileMode::{SkTileMode, SpreadMode};
@@ -52,6 +53,19 @@ pub enum SkShader<'a> {
 }
 
 impl SkShader<'_> {
+    pub(crate) fn set_gradient_interpolation(
+        &mut self,
+        space: GradientInterpolationSpace,
+        hue: GradientHueMethod,
+        premultiplied: bool,
+    ) {
+        match self {
+            SkShader::LinearGradient(g) => g.base.set_interpolation(space, hue, premultiplied),
+            SkShader::RadialGradient(g) => g.base.set_interpolation(space, hue, premultiplied),
+            SkShader::SweepGradient(g) => g.base.set_interpolation(space, hue, premultiplied),
+            SkShader::SolidColor(_) | SkShader::Pattern(_) => {}
+        }
+    }
     /// Checks if the shader is guaranteed to produce only opaque colors.
     pub fn is_opaque(&self) -> bool {
         match self {

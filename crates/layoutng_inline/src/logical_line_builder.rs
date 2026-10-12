@@ -514,6 +514,23 @@ impl LogicalLineBuilder {
         }
 
         let line_top = item_result.margins.line_over - metrics.ascent;
+        if std::env::var_os("LAYOUTNG_INLINE_BASELINE_DIAGNOSTICS").is_some() {
+            let object = item.GetLayoutObject();
+            let node_id = if object.is_null() {
+                0
+            } else {
+                unsafe { &*object }.OwnerNodeIdDefault()
+            };
+            if node_id == 1231 || node_id == 1247 {
+                eprintln!(
+                    "INLINE_ATOMIC_BASELINE node={node_id} size={:?} first={:?} last={:?} margins={:?} metrics={metrics:?} line_top={line_top:?}",
+                    physical_box.Size(),
+                    physical_box.FirstBaseline(),
+                    physical_box.LastBaseline(),
+                    item_result.margins,
+                );
+            }
+        }
         let layout_result = std::mem::take(&mut item_result.layout_result);
         line_box.AddChild(LogicalLineItem::from_layout_result_offset(
             layout_result.Get(),

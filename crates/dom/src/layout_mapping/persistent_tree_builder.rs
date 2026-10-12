@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 use crate::layout_mapping::layout_object_tree_builder::*;
-use crate::persistent_document::{DOMNamespace, DOMNodeType, PseudoElement};
+use crate::persistent_document::{DOMNamespace, DOMNodeType, PseudoContent, PseudoElement};
 use crate::svg_path_parser::ParseSVGPathDefault;
 use crate::{Document, UserInteractionState, DOM};
 use layoutng_assembly::internal::form_control_types::FormControlType;
@@ -16,6 +16,7 @@ fn ElementMetadata(
     document: &crate::Document,
     index: usize,
     interaction_state: &UserInteractionState,
+    respect_image_orientation: bool,
 ) -> ElementData {
     let node = document.Node(index);
     let mut data = ElementData::default();
@@ -42,18 +43,26 @@ fn ElementMetadata(
             data.natural_aspect_ratio = Some(width / height);
         }
         // cpp: dom_to_layout/layout_object_tree_builder.cc:427-435
-        if let Some(source) = attribute(node, "src") {
+        if let Some(source) = document.CurrentImageSource(index) {
             if let Some(image) = document.ImageResourceFor(source) {
+                let candidate_density = document
+                    .ResponsiveImageSelectionFor(index)
+                    .and_then(|selection| selection.density);
+                let (image_width, image_height) =
+                    image.NaturalSizeForCandidate(respect_image_orientation, candidate_density);
                 if data.natural_width.is_none() {
-                    data.natural_width = Some(image.natural_width);
+                    data.natural_width = Some(image_width);
                 }
                 if data.natural_height.is_none() {
-                    data.natural_height = Some(image.natural_height);
+                    data.natural_height = Some(image_height);
                 }
-                if data.natural_aspect_ratio.is_none() && image.natural_height > 0.0 {
-                    data.natural_aspect_ratio = Some(image.natural_width / image.natural_height);
+                if data.natural_aspect_ratio.is_none() && image_height > 0.0 {
+                    data.natural_aspect_ratio = Some(image_width / image_height);
                 }
-                data.image_device_pixel_ratio = image.resolution_scale;
+                // Match HTMLImageElement::image_device_pixel_ratio_: this is
+                // inverse candidate density, not the resource resolution.
+                data.image_device_pixel_ratio =
+                    1.0 / candidate_density.unwrap_or(image.resolution_scale);
             }
         }
     }
@@ -70,6 +79,77 @@ fn ElementMetadata(
     data.scroll_offset = document.ScrollOffsetFor(index);
     if node.Namespace() == DOMNamespace::kSVG {
         element_metadata_svg(node, ResolveSVGTextPath(document, index), &mut data);
+        // cpp: SVGSVGElement::{CurrentViewBox,CurrentPreserveAspectRatio,
+        // ViewBoxToViewTransform}. SVGImageViewInfo is document-owned and
+        // overrides the root's authored values only for the active recording.
+        if node.IsElement("svg", DOMNamespace::kSVG) {
+            if let Some(view) = document.SVGImageViewSpecFor(index) {
+                if let Some([x, y, width, height]) = view.view_box {
+                    let has_intrinsic_dimensions =
+                        data.natural_width.is_some() && data.natural_height.is_some();
+                    let inherited_preserve = data.svg_view_box.map(|view_box| {
+                        (
+                            view_box.preserve_none,
+                            view_box.slice,
+                            view_box.align_x,
+                            view_box.align_y,
+                        )
+                    });
+                    data.svg_view_box = Some(SvgViewBoxData {
+                        x,
+                        y,
+                        width,
+                        height,
+                        preserve_none: inherited_preserve.is_some_and(|preserve| preserve.0),
+                        slice: inherited_preserve.is_some_and(|preserve| preserve.1),
+                        align_x: inherited_preserve.map_or(0, |preserve| preserve.2),
+                        align_y: inherited_preserve.map_or(0, |preserve| preserve.3),
+                        ..Default::default()
+                    });
+                    if data.natural_width.is_none() {
+                        data.natural_width = Some(width);
+                    }
+                    if data.natural_height.is_none() {
+                        data.natural_height = Some(height);
+                    }
+                    if !has_intrinsic_dimensions {
+                        data.natural_aspect_ratio = (height > 0.0).then_some(width / height);
+                    }
+                }
+                if data.svg_view_box.is_none() && view.transform.is_some() {
+                    if let (Some(width), Some(height)) = (data.natural_width, data.natural_height) {
+                        if width > 0.0 && height > 0.0 {
+                            data.svg_view_box = Some(SvgViewBoxData {
+                                width,
+                                height,
+                                preserve_none: true,
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+                if let (Some(view_box), Some(preserve)) =
+                    (data.svg_view_box.as_mut(), view.preserve_aspect_ratio)
+                {
+                    view_box.preserve_none = preserve.preserve_none;
+                    view_box.slice = preserve.slice;
+                    view_box.align_x = preserve.align_x;
+                    view_box.align_y = preserve.align_y;
+                }
+                if let (Some(view_box), Some([a, b, c, d, e, f])) =
+                    (data.svg_view_box.as_mut(), view.transform)
+                {
+                    let mut matrix = TransformMatrix::default();
+                    matrix.values[0] = a;
+                    matrix.values[1] = b;
+                    matrix.values[4] = c;
+                    matrix.values[5] = d;
+                    matrix.values[12] = e;
+                    matrix.values[13] = f;
+                    view_box.view_transform = Some(matrix);
+                }
+            }
+        }
     }
     if node.Namespace() == DOMNamespace::kMathML {
         element_metadata_mathml(node, &mut data);
@@ -78,6 +158,7 @@ fn ElementMetadata(
         return data;
     }
     data.control_checked = document.ControlChecked(index);
+    data.control_indeterminate = document.ShouldAppearIndeterminate(index);
     data.control_disabled = attribute(node, "disabled").is_some();
     let node_id = node.Id();
     data.control_hovered = interaction_state.hovered_node_id == Some(node_id);
@@ -154,8 +235,7 @@ fn ElementMetadata(
         } else {
             FormControlType::kSelectOne
         });
-        data.select_uses_menu_list =
-            Some(!multiple && positive_attribute_integer(node, "size", 0) <= 1);
+        data.select_uses_menu_list = Some(document.SelectUsesMenuList(index));
     } else if node.Name() == "button" {
         let button_type = lower_ascii(attribute(node, "type").unwrap_or("submit"));
         data.form_control_type = Some(match button_type.as_str() {
@@ -541,7 +621,12 @@ fn ConsiderGeneratedFirstLetter<'a>(
     }
 }
 fn IsAtomicFirstLetterBoundary(document: &Document, index: usize, style: &ComputedStyle) -> bool {
-    let element = ElementMetadata(document, index, &UserInteractionState::default());
+    let element = ElementMetadata(
+        document,
+        index,
+        &UserInteractionState::default(),
+        style.paint.respect_image_orientation,
+    );
     let mut adjusted = style.clone();
     apply_control_appearance(&element, &mut adjusted);
     matches!(
@@ -675,14 +760,198 @@ fn AppendInitialLetter(
     );
     insertion.consumed = true;
 }
+#[derive(Clone, Copy)]
+struct MarkerObjectBits {
+    box_bit: u64,
+    text_bit: u64,
+    suffix_bit: u64,
+    image_bit: u64,
+}
+
+// cpp: PseudoElement::AttachLayoutTree(kPseudoIdMarker)
+// cpp: ListMarker::UpdateMarkerContentIfNeeded
+fn AppendListMarker(
+    tree: &mut LayoutTreeUpdate<'_>,
+    document: &Document,
+    originating_index: usize,
+    id: u64,
+    parent: *mut LayoutObject,
+    item_style: &ComputedStyle,
+    marker_pseudo: Option<&PseudoElement>,
+    name: &str,
+    bits: MarkerObjectBits,
+) {
+    let marker_has_custom_content = marker_pseudo
+        .and_then(|pseudo| unsafe { pseudo.native_style.Get().as_ref() })
+        .is_some_and(|native| !native.ContentBehavesAsNormal());
+    let fallback_marker_style;
+    let marker_style = if let Some(pseudo) = marker_pseudo {
+        &pseudo.style
+    } else {
+        fallback_marker_style = list_marker_style(item_style);
+        &fallback_marker_style
+    };
+    let marker_image = (!marker_has_custom_content)
+        .then(|| {
+            marker_style
+                .extended
+                .as_ref()
+                .and_then(|extra| extra.list_style_image.as_ref())
+        })
+        .flatten();
+    let marker_text = if marker_has_custom_content {
+        marker_pseudo.map_or_else(String::new, |pseudo| pseudo.text.clone())
+    } else {
+        DefaultListMarkerText(document, originating_index, item_style)
+    };
+    if item_style.display != Display::kListItem
+        || (!marker_has_custom_content && marker_image.is_none() && marker_text.is_empty())
+    {
+        return;
+    }
+    let marker = tree.AddBox(
+        unsafe { &mut *parent },
+        id | bits.box_bit,
+        marker_style,
+        name.into(),
+        None,
+        NodeKind::kListMarker,
+        true,
+        std::ptr::null(),
+    ) as *mut LayoutObject;
+    if marker_has_custom_content {
+        let pseudo = marker_pseudo.expect("custom marker content has resolved style");
+        if pseudo.content.is_empty() && !marker_text.is_empty() {
+            tree.AddText(
+                unsafe { &mut *marker },
+                id | bits.text_bit,
+                marker_text,
+                format!("{name}-text"),
+                std::ptr::null(),
+                true,
+                std::ptr::null(),
+            );
+        }
+        for (ordinal, content) in pseudo.content.iter().enumerate() {
+            let sequence = ((ordinal as u64 + 1) & 0x7ff) << 32;
+            match content {
+                PseudoContent::Text(value) if !value.is_empty() => {
+                    tree.AddText(
+                        unsafe { &mut *marker },
+                        id | bits.text_bit | sequence,
+                        value.clone(),
+                        format!("{name}-text-{ordinal}"),
+                        std::ptr::null(),
+                        true,
+                        std::ptr::null(),
+                    );
+                }
+                PseudoContent::Image {
+                    resource_id,
+                    shader,
+                    natural_width,
+                    natural_height,
+                    resolution_scale: _,
+                } if *resource_id != 0 || shader.is_some() => {
+                    let mut image_style = marker_style.clone();
+                    image_style.paint.image_resource_id =
+                        (*resource_id != 0).then_some(*resource_id);
+                    image_style.paint.replaced_image_shader = shader.clone();
+                    let mut element = ElementData {
+                        natural_width: *natural_width,
+                        natural_height: *natural_height,
+                        // NaturalSize is already divided by the selected
+                        // image-set resolution at the Style boundary.
+                        image_device_pixel_ratio: 1.0,
+                        ..Default::default()
+                    };
+                    if let (Some(width), Some(height)) = (*natural_width, *natural_height) {
+                        if width > 0.0 && height > 0.0 {
+                            element.natural_aspect_ratio = Some(width / height);
+                        }
+                    }
+                    tree.AddGeneratedReplaced(
+                        unsafe { &mut *marker },
+                        id | bits.image_bit | sequence,
+                        &image_style,
+                        element,
+                        format!("{name}-image-{ordinal}"),
+                    );
+                }
+                _ => {}
+            }
+        }
+    } else if let Some(image) = marker_image {
+        append_list_marker_image(
+            tree,
+            marker,
+            id | bits.image_bit,
+            marker_style,
+            image,
+            format!("{name}-image"),
+        );
+    } else {
+        let marker_type = item_style
+            .extended
+            .as_ref()
+            .map_or(ListStyleType::kDisc, |e| e.list_style_type);
+        let symbol = matches!(
+            marker_type,
+            ListStyleType::kDisc | ListStyleType::kCircle | ListStyleType::kSquare
+        );
+        if symbol && marker_text.ends_with(' ') {
+            tree.AddText(
+                unsafe { &mut *marker },
+                id | bits.text_bit,
+                marker_text[..marker_text.len() - 1].into(),
+                format!("{name}-symbol"),
+                std::ptr::null(),
+                true,
+                std::ptr::null(),
+            );
+            let mut suffix = marker_style.clone();
+            suffix.width = Some(12.0);
+            suffix.height = Some(0.0);
+            tree.AddBox(
+                unsafe { &mut *marker },
+                id | bits.suffix_bit,
+                &suffix,
+                format!("{name}-suffix"),
+                None,
+                NodeKind::kBox,
+                true,
+                std::ptr::null(),
+            );
+        } else {
+            tree.AddText(
+                unsafe { &mut *marker },
+                id | bits.text_bit,
+                marker_text,
+                format!("{name}-text"),
+                std::ptr::null(),
+                true,
+                std::ptr::null(),
+            );
+        }
+    }
+}
+
 // cpp: dom_to_layout/layout_object_tree_builder.cc:1167-1206
 fn AppendPseudoElement(
     tree: &mut LayoutTreeUpdate<'_>,
+    document: &Document,
+    originating_index: usize,
     id: u64,
     parent: *mut LayoutObject,
     pseudo: Option<&PseudoElement>,
     before: bool,
     mut first: Option<&mut FirstLetterInsertion<'_>>,
+    svg_filter_graphs: &std::sync::Arc<
+        Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
+    >,
+    svg_clip_path_graphs: &std::sync::Arc<
+        Vec<layoutng_assembly::internal::paint_input::SvgClipPathGraph>,
+    >,
 ) {
     let Some(p) = pseudo else {
         return;
@@ -690,13 +959,16 @@ fn AppendPseudoElement(
     let box_bit = 1u64 << if before { 50 } else { 48 };
     let text_bit = 1u64 << if before { 49 } else { 47 };
     let name = if before { "::before" } else { "::after" };
+    let mut style = p.style.clone();
+    style.paint.svg_filter_graphs = std::sync::Arc::clone(svg_filter_graphs);
+    resolve_svg_clip_path(&mut style, svg_clip_path_graphs);
     let object = if p.display_contents {
         parent
     } else {
         tree.AddBox(
             unsafe { &mut *parent },
             id | box_bit,
-            &p.style,
+            &style,
             name.into(),
             None,
             NodeKind::kBox,
@@ -704,7 +976,39 @@ fn AppendPseudoElement(
             std::ptr::null(),
         ) as *mut LayoutObject
     };
-    if !p.text.is_empty() {
+    AppendListMarker(
+        tree,
+        document,
+        originating_index,
+        id,
+        object,
+        &style,
+        p.marker.as_deref(),
+        if before {
+            "::before::marker"
+        } else {
+            "::after::marker"
+        },
+        if before {
+            MarkerObjectBits {
+                box_bit: 1 << 59,
+                text_bit: 1 << 57,
+                suffix_bit: 1 << 55,
+                image_bit: 1 << 53,
+            }
+        } else {
+            MarkerObjectBits {
+                box_bit: 1 << 58,
+                text_bit: 1 << 56,
+                suffix_bit: 1 << 54,
+                image_bit: 1 << 52,
+            }
+        },
+    );
+    // Older fixtures may still construct the concatenated text projection
+    // directly. Production style resolution retains the ordered ContentData
+    // chain below, matching PseudoElement::AttachLayoutTree.
+    if p.content.is_empty() && !p.text.is_empty() {
         let first = first.as_deref_mut().filter(|f| {
             !f.consumed
                 && f.candidate
@@ -735,6 +1039,85 @@ fn AppendPseudoElement(
                 std::ptr::null(),
             );
         }
+        return;
+    }
+    let mut first_consumed_all_text = false;
+    for (ordinal, content) in p.content.iter().enumerate() {
+        let sequence = ((ordinal as u64 + 1) & 0x7ff) << 32;
+        match content {
+            PseudoContent::Text(value) if !value.is_empty() => {
+                if first_consumed_all_text {
+                    continue;
+                }
+                let first = first.as_deref_mut().filter(|f| {
+                    !f.consumed
+                        && f.candidate
+                            .generated
+                            .is_some_and(|candidate| std::ptr::eq(candidate, p))
+                });
+                if let Some(first) = first {
+                    // The current first-letter adapter reasons over the
+                    // concatenated textual view. Emit it once and let the
+                    // existing split preserve that behavior.
+                    AppendInitialLetter(
+                        tree,
+                        object,
+                        first,
+                        id | text_bit,
+                        &format!("{name}-text"),
+                        true,
+                    );
+                    first_consumed_all_text = true;
+                } else {
+                    tree.AddText(
+                        unsafe { &mut *object },
+                        id | text_bit | sequence,
+                        value.clone(),
+                        format!("{name}-text-{ordinal}"),
+                        if p.display_contents {
+                            &p.style
+                        } else {
+                            std::ptr::null()
+                        },
+                        true,
+                        std::ptr::null(),
+                    );
+                }
+            }
+            PseudoContent::Image {
+                resource_id,
+                shader,
+                natural_width,
+                natural_height,
+                resolution_scale: _,
+            } if *resource_id != 0 || shader.is_some() => {
+                let mut style = p.style.clone();
+                style.paint.image_resource_id = (*resource_id != 0).then_some(*resource_id);
+                style.paint.replaced_image_shader = shader.clone();
+                let mut element = ElementData {
+                    natural_width: *natural_width,
+                    natural_height: *natural_height,
+                    // NaturalSize is already divided by the selected
+                    // image-set resolution at the Style boundary.
+                    image_device_pixel_ratio: 1.0,
+                    ..Default::default()
+                };
+                if let (Some(width), Some(height)) = (*natural_width, *natural_height) {
+                    if width > 0.0 && height > 0.0 {
+                        element.natural_aspect_ratio = Some(width / height);
+                    }
+                }
+                let image_bit = 1u64 << if before { 44 } else { 43 };
+                tree.AddGeneratedReplaced(
+                    unsafe { &mut *object },
+                    id | image_bit | sequence,
+                    &style,
+                    element,
+                    format!("{name}-image-{ordinal}"),
+                );
+            }
+            _ => {}
+        }
     }
 }
 
@@ -747,6 +1130,12 @@ fn AppendChildren<'a>(
     parent: *mut LayoutObject,
     flattened: Option<&'a ComputedStyle>,
     mut first: Option<&mut FirstLetterInsertion<'a>>,
+    svg_filter_graphs: &std::sync::Arc<
+        Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
+    >,
+    svg_clip_path_graphs: &std::sync::Arc<
+        Vec<layoutng_assembly::internal::paint_input::SvgClipPathGraph>,
+    >,
 ) {
     let dom_parent = document.Node(index);
     for &child in dom_parent.Children() {
@@ -802,11 +1191,15 @@ fn AppendChildren<'a>(
             if resolved.display_contents {
                 AppendPseudoElement(
                     tree,
+                    document,
+                    child,
                     node.Id(),
                     parent,
                     resolved.before.as_ref(),
                     true,
                     first.as_deref_mut(),
+                    svg_filter_graphs,
+                    svg_clip_path_graphs,
                 );
                 AppendChildren(
                     tree,
@@ -816,24 +1209,40 @@ fn AppendChildren<'a>(
                     parent,
                     Some(&resolved.style),
                     first.as_deref_mut(),
+                    svg_filter_graphs,
+                    svg_clip_path_graphs,
                 );
                 AppendPseudoElement(
                     tree,
+                    document,
+                    child,
                     node.Id(),
                     parent,
                     resolved.after.as_ref(),
                     false,
                     first.as_deref_mut(),
+                    svg_filter_graphs,
+                    svg_clip_path_graphs,
                 );
             }
             continue;
         }
-        let element = ElementMetadata(document, child, interaction);
+        let element = ElementMetadata(
+            document,
+            child,
+            interaction,
+            resolved.style.paint.respect_image_orientation,
+        );
         // Most elements project their resolved style without modification.
         // Own a copy only when resource/control adapters actually need it.
         let mut style = std::borrow::Cow::Borrowed(&resolved.style);
+        style.to_mut().paint.svg_filter_graphs = std::sync::Arc::clone(svg_filter_graphs);
+        resolve_svg_clip_path(style.to_mut(), svg_clip_path_graphs);
         if node.Name() == "img" {
-            if let Some(image) = attribute(node, "src").and_then(|s| document.ImageResourceFor(s)) {
+            if let Some(image) = document
+                .CurrentImageSource(child)
+                .and_then(|source| document.ImageResourceFor(source))
+            {
                 style.to_mut().paint.image_resource_id = Some(image.id);
             }
         }
@@ -849,7 +1258,6 @@ fn AppendChildren<'a>(
             control,
             Some(FormControlType::kSelectOne | FormControlType::kSelectMultiple)
         ) && !menu;
-        let disabled = element.control_disabled;
         if range && style.height.is_none() {
             style.to_mut().height = Some(16.0);
         }
@@ -921,75 +1329,88 @@ fn AppendChildren<'a>(
             );
         }
         if file {
-            let mut button_style = ComputedStyle::default();
-            button_style.display = Display::kInlineBlock;
-            button_style.border = Edges {
-                top: 2.0,
-                right: 2.0,
-                bottom: 2.0,
-                left: 2.0,
-            };
-            button_style.padding = Edges {
-                top: 1.0,
-                right: 6.0,
-                bottom: 1.0,
-                left: 6.0,
-            };
-            button_style
-                .extended
-                .get_or_insert_with(Default::default)
-                .effective_appearance = AppearanceValue::kButton;
-            let button = tree.AddBox(
-                unsafe { &mut *object },
-                node.Id() | (1 << 59),
-                &button_style,
-                "::-webkit-file-upload-button".into(),
-                Some(ElementData {
-                    form_control_type: Some(FormControlType::kInputButton),
-                    control_host_ancestor: Some(1),
-                    control_disabled: disabled,
-                    file_upload_button: true,
-                    ..Default::default()
-                }),
-                NodeKind::kFormControl,
-                false,
-                std::ptr::null(),
-            ) as *mut LayoutObject;
-            tree.AddText(
-                unsafe { &mut *button },
-                node.Id() | (1 << 58),
-                if attribute(node, "multiple").is_some() {
-                    "Choose files"
-                } else {
-                    "Choose file"
+            // FileInputType owns real UA-shadow nodes. Project their resolved
+            // styles and stable node identities instead of fabricating a
+            // second button/status subtree at layout time.
+            let button_index = document
+                .FileUploadButtonElement(child)
+                .expect("file input must retain its upload button");
+            let button_node = document.Node(button_index);
+            let button_resolved = document
+                .ResolvedStyleFor(button_index)
+                .expect("file upload button style must be resolved");
+            if button_resolved.generates_box {
+                let mut button_style = button_resolved.style.clone();
+                let mut button_data = ElementMetadata(
+                    document,
+                    button_index,
+                    interaction,
+                    button_resolved.style.paint.respect_image_orientation,
+                );
+                button_data.control_host_ancestor = Some(1);
+                button_data.file_upload_button = true;
+                apply_control_appearance(&button_data, &mut button_style);
+                let button = tree.AddBox(
+                    unsafe { &mut *object },
+                    button_node.Id(),
+                    &button_style,
+                    "::-webkit-file-upload-button".into(),
+                    Some(button_data),
+                    NodeKind::kFormControl,
+                    false,
+                    std::ptr::null(),
+                ) as *mut LayoutObject;
+                let label = attribute(button_node, "value").unwrap_or_default();
+                if !label.is_empty() {
+                    tree.AddText(
+                        unsafe { &mut *button },
+                        button_node.Id() | (1 << 58),
+                        label.into(),
+                        "::file-upload-label".into(),
+                        std::ptr::null(),
+                        false,
+                        std::ptr::null(),
+                    );
                 }
-                .into(),
-                "::file-upload-label".into(),
-                std::ptr::null(),
-                false,
-                std::ptr::null(),
-            );
-            let mut status_style = ComputedStyle::default();
-            status_style.display = Display::kInline;
-            let status = tree.AddBox(
-                unsafe { &mut *object },
-                node.Id() | (1 << 57),
-                &status_style,
-                "::file-status".into(),
-                None,
-                NodeKind::kBox,
-                false,
-                std::ptr::null(),
-            ) as *mut LayoutObject;
-            tree.AddText(
-                unsafe { &mut *status },
-                node.Id() | (1 << 56),
-                "No file selected".into(),
-                "::file-status-label".into(),
-                std::ptr::null(),
-                false,
-                std::ptr::null(),
-            );
+            }
+            let status_index = document
+                .FileStatusElement(child)
+                .expect("file input must retain its status element");
+            let status_node = document.Node(status_index);
+            let status_resolved = document
+                .ResolvedStyleFor(status_index)
+                .expect("file status style must be resolved");
+            if status_resolved.generates_box {
+                let status = tree.AddBox(
+                    unsafe { &mut *object },
+                    status_node.Id(),
+                    &status_resolved.style,
+                    "::file-status".into(),
+                    Some(ElementMetadata(
+                        document,
+                        status_index,
+                        interaction,
+                        status_resolved.style.paint.respect_image_orientation,
+                    )),
+                    NodeKind::kBox,
+                    false,
+                    std::ptr::null(),
+                ) as *mut LayoutObject;
+                for &text_index in status_node.Children() {
+                    let text = document.Node(text_index);
+                    if text.Type() == DOMNodeType::kText && !text.Data().is_empty() {
+                        tree.AddText(
+                            unsafe { &mut *status },
+                            text.Id(),
+                            text.Data().into(),
+                            "::file-status-label".into(),
+                            std::ptr::null(),
+                            false,
+                            std::ptr::null(),
+                        );
+                    }
+                }
+            }
         }
         if matches!(
             control,
@@ -1055,16 +1476,39 @@ fn AppendChildren<'a>(
         }
         let textarea = control == Some(FormControlType::kTextArea);
         if control.is_some_and(is_single_line_text_control) || textarea {
-            let mut value = document.ControlValue(child);
-            let mut placeholder = false;
-            if value.is_empty() {
-                if let Some(p) = attribute(node, "placeholder") {
-                    value = p.into();
-                    placeholder = true;
+            let control_value = document.ControlValue(child);
+            let suggested = document.SuggestedValue(child);
+            let mut implementation_text = suggested.is_some();
+            let mut suggested_text = suggested.is_some_and(|value| !value.is_empty());
+            let mut value = suggested
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| control_value.clone());
+            if implementation_text && !suggested_text {
+                value = attribute(node, "placeholder").unwrap_or_default().into();
+            } else if !implementation_text && value.is_empty() {
+                if let Some(placeholder) = attribute(node, "placeholder") {
+                    value = placeholder.into();
+                    implementation_text = true;
+                    suggested_text = false;
                 }
             }
-            let mut editor_style = if placeholder && resolved.placeholder.is_some() {
-                resolved.placeholder.as_ref().unwrap().style.clone()
+            // TextControlElement owns a real implementation element in its UA
+            // shadow tree. Consume that element's resolved style so inline
+            // display !important and -internal-input-suggested participate in
+            // the same resolver path as Blink's layout object.
+            let implementation_style = implementation_text
+                .then(|| document.TextControlPlaceholderElement(child))
+                .flatten()
+                .and_then(|placeholder| document.ResolvedStyleFor(placeholder))
+                .map(|resolved| resolved.style.clone())
+                .or_else(|| {
+                    implementation_text
+                        .then(|| resolved.placeholder.as_ref().map(|p| p.style.clone()))
+                        .flatten()
+                });
+            let mut editor_style = if let Some(style) = implementation_style {
+                style
             } else {
                 list_marker_style(&style)
             };
@@ -1089,14 +1533,18 @@ fn AppendChildren<'a>(
                 false,
                 std::ptr::null(),
             ) as *mut LayoutObject;
-            let trailing_newline = textarea && !placeholder && value.ends_with('\n');
+            let trailing_newline = textarea && !implementation_text && value.ends_with('\n');
             if !value.is_empty() {
                 tree.AddText(
                     unsafe { &mut *editor },
                     node.Id() | (1 << 53),
                     value,
-                    if placeholder {
-                        "::placeholder"
+                    if implementation_text {
+                        if suggested_text {
+                            "::-internal-input-suggested"
+                        } else {
+                            "::placeholder"
+                        }
                     } else {
                         "::text-control-value"
                     }
@@ -1124,61 +1572,22 @@ fn AppendChildren<'a>(
                 );
             }
         }
-        let marker_text = DefaultListMarkerText(document, child, &style);
-        if style.display == Display::kListItem && !marker_text.is_empty() {
-            let marker = tree.AddBox(
-                unsafe { &mut *object },
-                node.Id() | (1 << 63),
-                &list_marker_style(&style),
-                "::marker".into(),
-                None,
-                NodeKind::kListMarker,
-                true,
-                std::ptr::null(),
-            ) as *mut LayoutObject;
-            let marker_type = style
-                .extended
-                .as_ref()
-                .map_or(ListStyleType::kDisc, |e| e.list_style_type);
-            let symbol = matches!(
-                marker_type,
-                ListStyleType::kDisc | ListStyleType::kCircle | ListStyleType::kSquare
-            );
-            if symbol && marker_text.ends_with(' ') {
-                tree.AddText(
-                    unsafe { &mut *marker },
-                    node.Id() | (1 << 62),
-                    marker_text[..marker_text.len() - 1].into(),
-                    "::marker-symbol".into(),
-                    std::ptr::null(),
-                    true,
-                    std::ptr::null(),
-                );
-                let mut suffix = list_marker_style(&style);
-                suffix.width = Some(12.0);
-                suffix.height = Some(0.0);
-                tree.AddBox(
-                    unsafe { &mut *marker },
-                    node.Id() | (1 << 61),
-                    &suffix,
-                    "::marker-suffix".into(),
-                    None,
-                    NodeKind::kBox,
-                    true,
-                    std::ptr::null(),
-                );
-            } else {
-                tree.AddText(
-                    unsafe { &mut *marker },
-                    node.Id() | (1 << 62),
-                    marker_text,
-                    "::marker-text".into(),
-                    std::ptr::null(),
-                    true,
-                    std::ptr::null(),
-                );
-            }
-        }
+        AppendListMarker(
+            tree,
+            document,
+            child,
+            node.Id(),
+            object,
+            &style,
+            resolved.marker.as_ref(),
+            "::marker",
+            MarkerObjectBits {
+                box_bit: 1 << 63,
+                text_bit: 1 << 62,
+                suffix_bit: 1 << 61,
+                image_bit: 1 << 60,
+            },
+        );
         if !matches!(kind, NodeKind::kReplaced | NodeKind::kFrame) && !textarea && !menu && !range {
             let mut own_first = if is_block_container_display(style.display) {
                 resolved.first_letter.as_ref().and_then(|pseudo| {
@@ -1197,29 +1606,51 @@ fn AppendChildren<'a>(
             if let Some(own) = own_first.as_mut() {
                 AppendPseudoElement(
                     tree,
+                    document,
+                    child,
                     node.Id(),
                     object,
                     resolved.before.as_ref(),
                     true,
                     Some(own),
+                    svg_filter_graphs,
+                    svg_clip_path_graphs,
                 );
-                AppendChildren(tree, document, interaction, child, object, None, Some(own));
+                AppendChildren(
+                    tree,
+                    document,
+                    interaction,
+                    child,
+                    object,
+                    None,
+                    Some(own),
+                    svg_filter_graphs,
+                    svg_clip_path_graphs,
+                );
                 AppendPseudoElement(
                     tree,
+                    document,
+                    child,
                     node.Id(),
                     object,
                     resolved.after.as_ref(),
                     false,
                     Some(own),
+                    svg_filter_graphs,
+                    svg_clip_path_graphs,
                 );
             } else {
                 AppendPseudoElement(
                     tree,
+                    document,
+                    child,
                     node.Id(),
                     object,
                     resolved.before.as_ref(),
                     true,
                     first.as_deref_mut(),
+                    svg_filter_graphs,
+                    svg_clip_path_graphs,
                 );
                 AppendChildren(
                     tree,
@@ -1229,14 +1660,20 @@ fn AppendChildren<'a>(
                     object,
                     None,
                     first.as_deref_mut(),
+                    svg_filter_graphs,
+                    svg_clip_path_graphs,
                 );
                 AppendPseudoElement(
                     tree,
+                    document,
+                    child,
                     node.Id(),
                     object,
                     resolved.after.as_ref(),
                     false,
                     first.as_deref_mut(),
+                    svg_filter_graphs,
+                    svg_clip_path_graphs,
                 );
             }
         }
@@ -1253,6 +1690,8 @@ pub fn EmitLayoutMutations(
     let _heap_scope = foundation::LayoutHeapScope::new();
     let mut projection = |mut tree: &mut LayoutTreeUpdate<'_>| {
         let document = owner.GetDocument();
+        let svg_filter_graphs = super::svg_filter_graph::build_persistent(document);
+        let svg_clip_path_graphs = super::svg_clip_path_graph::build_persistent(document);
         let index = document
             .Node(document.Root())
             .Children()
@@ -1265,11 +1704,19 @@ pub fn EmitLayoutMutations(
             .ResolvedStyleFor(index)
             .expect("computed styles must be installed before tree build");
         assert!(resolved.generates_box, "document root has display:none");
+        let mut root_style = resolved.style.clone();
+        root_style.paint.svg_filter_graphs = std::sync::Arc::clone(&svg_filter_graphs);
+        resolve_svg_clip_path(&mut root_style, &svg_clip_path_graphs);
         let root = tree.CreateRoot(
             node.Id(),
-            &resolved.style,
+            &root_style,
             node.Name().into(),
-            Some(ElementMetadata(document, index, interaction)),
+            Some(ElementMetadata(
+                document,
+                index,
+                interaction,
+                root_style.paint.respect_image_orientation,
+            )),
             std::ptr::null(),
         ) as *mut LayoutObject;
         let mut first = resolved.first_letter.as_ref().and_then(|pseudo| {
@@ -1284,11 +1731,15 @@ pub fn EmitLayoutMutations(
         });
         AppendPseudoElement(
             &mut tree,
+            document,
+            index,
             node.Id(),
             root,
             resolved.before.as_ref(),
             true,
             first.as_mut(),
+            &svg_filter_graphs,
+            &svg_clip_path_graphs,
         );
         AppendChildren(
             &mut tree,
@@ -1298,14 +1749,20 @@ pub fn EmitLayoutMutations(
             root,
             None,
             first.as_mut(),
+            &svg_filter_graphs,
+            &svg_clip_path_graphs,
         );
         AppendPseudoElement(
             &mut tree,
+            document,
+            index,
             node.Id(),
             root,
             resolved.after.as_ref(),
             false,
             first.as_mut(),
+            &svg_filter_graphs,
+            &svg_clip_path_graphs,
         );
     };
     // The projection borrows DOM style/metadata only during this callback.
@@ -1354,11 +1811,16 @@ mod tests {
         index: usize,
         interaction: &UserInteractionState,
     ) -> Vec<Option<f64>> {
-        let d = ElementMetadata(document, index, interaction);
         let fallback = ComputedStyle::default();
         let s = document
             .ResolvedStyleFor(index)
             .map_or(&fallback, |r| &r.style);
+        let d = ElementMetadata(
+            document,
+            index,
+            interaction,
+            s.paint.respect_image_orientation,
+        );
         let mut values = Vec::new();
         macro_rules! n {
             ($value:expr) => {
@@ -1482,11 +1944,11 @@ mod tests {
                 .unwrap()
         };
         let interaction = UserInteractionState::default();
-        let absolute = ElementMetadata(document, find("absolute"), &interaction);
+        let absolute = ElementMetadata(document, find("absolute"), &interaction, true);
         assert_eq!(absolute.natural_width, Some(50.0));
         assert_eq!(absolute.natural_height, Some(58.0));
         assert_eq!(absolute.natural_aspect_ratio, Some(50.0 / 58.0));
-        let percent = ElementMetadata(document, find("percent"), &interaction);
+        let percent = ElementMetadata(document, find("percent"), &interaction, true);
         assert_eq!(percent.natural_width, None);
         assert_eq!(percent.natural_height, None);
         assert_eq!(percent.natural_aspect_ratio, Some(2.0));
@@ -1630,6 +2092,7 @@ mod tests {
                 natural_width: 32.0,
                 natural_height: 24.0,
                 resolution_scale: 2.0,
+                orientation: Default::default(),
             },
         );
         let interaction = UserInteractionState {

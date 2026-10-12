@@ -123,7 +123,11 @@ impl Compare<'_> {
             parent,
             matrix,
             origin,
+            flattens_inherited_transform,
+            rendering_context_id,
+            backface_visibility,
             scroll,
+            sticky_constraint,
             direct_compositing_reasons,
         } = &**a;
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
@@ -131,6 +135,10 @@ impl Compare<'_> {
             && matrix == &b.matrix
             && origin.iter().all(|v| v.is_finite())
             && origin == &b.origin
+            && flattens_inherited_transform == &b.flattens_inherited_transform
+            && rendering_context_id == &b.rendering_context_id
+            && backface_visibility == &b.backface_visibility
+            && sticky_constraint == &b.sticky_constraint
             && direct_compositing_reasons == &b.direct_compositing_reasons
             && self.optional(parent, &b.parent, Self::transform)
             && self.optional(scroll, &b.scroll, Self::scroll);
@@ -152,7 +160,9 @@ impl Compare<'_> {
             rect,
             radii,
             clip_path,
+            clip_path_children,
             clip_path_even_odd,
+            clip_path_error,
             pixel_moving_filter,
         } = &**a;
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
@@ -162,7 +172,12 @@ impl Compare<'_> {
             && radii == &b.radii
             && clip_path.iter().all(finite_path)
             && clip_path == &b.clip_path
+            && clip_path_children
+                .iter()
+                .all(|child| child.commands.iter().all(finite_path))
+            && clip_path_children == &b.clip_path_children
             && clip_path_even_odd == &b.clip_path_even_odd
+            && clip_path_error == &b.clip_path_error
             && self.optional(parent, &b.parent, Self::clip)
             && self.transform(local_transform_space, &b.local_transform_space)
             && self.optional(pixel_moving_filter, &b.pixel_moving_filter, Self::effect);
@@ -186,9 +201,14 @@ impl Compare<'_> {
             parent,
             local_transform_space,
             output_clip,
+            filter_reference_box,
+            filter_reference_scale,
             opacity,
             blend_mode,
             filters,
+            backdrop_filters,
+            backdrop_filter_has_reference,
+            backdrop_filter_clip,
             isolates_blending,
             has_mask,
             is_mask,
@@ -200,6 +220,12 @@ impl Compare<'_> {
             && blend_mode == &b.blend_mode
             && filters.iter().all(finite_filter)
             && filters == &b.filters
+            && filter_reference_box == &b.filter_reference_box
+            && filter_reference_scale == &b.filter_reference_scale
+            && backdrop_filters.iter().all(finite_filter)
+            && backdrop_filters == &b.backdrop_filters
+            && backdrop_filter_has_reference == &b.backdrop_filter_has_reference
+            && self.optional(backdrop_filter_clip, &b.backdrop_filter_clip, Self::clip)
             && isolates_blending == &b.isolates_blending
             && has_mask == &b.has_mask
             && is_mask == &b.is_mask
@@ -224,18 +250,24 @@ impl Compare<'_> {
         let ScrollPaintPropertyNode {
             lifecycle,
             id,
+            owner_client_id,
             parent,
             overflow_clip,
             container_rect,
             contents_rect,
+            minimum_scroll_offset,
+            maximum_scroll_offset,
             user_scrollable_horizontal,
             user_scrollable_vertical,
         } = &**a;
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
+            && owner_client_id == &b.owner_client_id
             && finite_rect(container_rect)
             && container_rect == &b.container_rect
             && finite_rect(contents_rect)
             && contents_rect == &b.contents_rect
+            && minimum_scroll_offset == &b.minimum_scroll_offset
+            && maximum_scroll_offset == &b.maximum_scroll_offset
             && user_scrollable_horizontal == &b.user_scrollable_horizontal
             && user_scrollable_vertical == &b.user_scrollable_vertical
             && self.optional(parent, &b.parent, Self::scroll)
@@ -283,11 +315,16 @@ fn finite_filter(filter: &PaintFilterOperation) -> bool {
         offset,
         blur_radius,
         color,
+        reflection_offset,
+        reflection_offset_percentage,
+        ..
     } = filter;
     amount.is_finite()
         && offset.x.is_finite()
         && offset.y.is_finite()
         && blur_radius.is_finite()
+        && reflection_offset.is_finite()
+        && reflection_offset_percentage.is_finite()
         && [color.red, color.green, color.blue, color.alpha]
             .iter()
             .all(|v| v.is_finite())

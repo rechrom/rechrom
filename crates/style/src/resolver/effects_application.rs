@@ -2,16 +2,21 @@
 //! Chromium visual-effect application against real native style owners.
 #![allow(non_snake_case)]
 use super::*;
-use foundation::{ECursor, MakeGarbageCollected, Member};
+use foundation::{ECursor, LengthPoint, LengthSize, MakeGarbageCollected, Member};
 use layoutng_style::style::{
-    basic_shapes::{BasicShape, BasicShapePolygon},
+    basic_shapes::{
+        BasicShape, BasicShapeCircle, BasicShapeEllipse, BasicShapeInset, BasicShapePolygon,
+        BasicShapeRadius, BasicShapeWithCenterAndRadii, RadiusType,
+    },
     clip_path_operation::ClipPathOperation,
     computed_style_constants::{GeometryBox, ShapeBox},
     filter_operation::*,
     filter_operations::FilterOperations,
     geometry_box_clip_path_operation::GeometryBoxClipPathOperation,
+    reference_clip_path_operation::ReferenceClipPathOperation,
     shape_clip_path_operation::ShapeClipPathOperation,
     shape_value::ShapeValue,
+    style_path::StylePath,
 };
 pub(super) fn IsEffectsProperty(id: CSSPropertyID) -> bool {
     matches!(
@@ -52,6 +57,8 @@ fn Number(
                         root,
                         b.EffectiveZoom(),
                         media,
+                        Some(CurrentComputedLineHeight(b)),
+                        None,
                     ),
                     None,
                 )
@@ -81,6 +88,8 @@ fn LengthValue(
                 root,
                 b.EffectiveZoom(),
                 media,
+                Some(CurrentComputedLineHeight(b)),
+                None,
             ))
             .map_err(|_| LonghandApplicationError::Unsupported(id));
     }
@@ -119,8 +128,16 @@ fn Filter(
         return Err(LonghandApplicationError::InvalidValue(id));
     };
     for value in &list.values {
-        if value.IsURIValue() {
-            return Err(LonghandApplicationError::Unsupported(id));
+        if let CSSValuePayload::kURIClass(uri) = value.Payload() {
+            // CSSURIValue may also retain an absolute fetch URL.  Computed
+            // style needs the serialized fragment identity so same-document
+            // `url(#filter)` remains distinguishable from an external IRI.
+            let pointer = MakeGarbageCollected(ReferenceFilterOperation::new(
+                uri.url_data.ValueForSerialization().clone(),
+            ))
+            .cast::<FilterOperation>();
+            operations.OperationsMut().push(Member::from_ptr(pointer));
+            continue;
         }
         let CSSValuePayload::kFunctionClass(function) = value.Payload() else {
             return Err(LonghandApplicationError::InvalidValue(id));
@@ -158,7 +175,7 @@ fn Filter(
                     return Err(LonghandApplicationError::InvalidValue(id));
                 };
                 MakeGarbageCollected(DropShadowFilterOperation::new(ConvertShadow(
-                    id, b, shadow, root, media,
+                    id, b, shadow, root, media, None,
                 )?))
                 .cast::<FilterOperation>()
             }
@@ -215,21 +232,139 @@ pub(super) fn Shape(
     root: f32,
     media: &MediaValuesCachedData,
 ) -> std::result::Result<*mut dyn BasicShape, LonghandApplicationError> {
-    let CSSValuePayload::kBasicShapePolygonClass(value) = v.Payload() else {
-        return Err(LonghandApplicationError::Unsupported(id));
+    match v.Payload() {
+        CSSValuePayload::kBasicShapeCircleClass(value) => {
+            let mut shape = BasicShapeCircle::default();
+            let explicit_center = value.center_x.is_some();
+            let center_x = value
+                .center_x
+                .as_ref()
+                .map(|center| {
+                    crate::resolver::position_repeat_application::ConvertPositionLength(
+                        id, center, true, b, root, media,
+                    )
+                })
+                .transpose()?
+                .unwrap_or_else(|| Length::Percent(50));
+            let center_y = value
+                .center_y
+                .as_ref()
+                .map(|center| {
+                    crate::resolver::position_repeat_application::ConvertPositionLength(
+                        id, center, false, b, root, media,
+                    )
+                })
+                .transpose()?
+                .unwrap_or_else(|| Length::Percent(50));
+            shape.SetCenter(LengthPoint::new(&center_x, &center_y));
+            shape.SetHasExplicitCenter(explicit_center);
+            shape.SetRadius(ShapeRadius(id, value.radius.as_deref(), b, root, media)?);
+            Ok(MakeGarbageCollected(shape))
+        }
+        CSSValuePayload::kBasicShapeEllipseClass(value) => {
+            let mut shape = BasicShapeEllipse::default();
+            let explicit_center = value.center_x.is_some();
+            let center_x = value
+                .center_x
+                .as_ref()
+                .map(|center| {
+                    crate::resolver::position_repeat_application::ConvertPositionLength(
+                        id, center, true, b, root, media,
+                    )
+                })
+                .transpose()?
+                .unwrap_or_else(|| Length::Percent(50));
+            let center_y = value
+                .center_y
+                .as_ref()
+                .map(|center| {
+                    crate::resolver::position_repeat_application::ConvertPositionLength(
+                        id, center, false, b, root, media,
+                    )
+                })
+                .transpose()?
+                .unwrap_or_else(|| Length::Percent(50));
+            shape.SetCenter(LengthPoint::new(&center_x, &center_y));
+            shape.SetHasExplicitCenter(explicit_center);
+            shape.SetRadiusX(ShapeRadius(id, value.radius_x.as_deref(), b, root, media)?);
+            shape.SetRadiusY(ShapeRadius(id, value.radius_y.as_deref(), b, root, media)?);
+            Ok(MakeGarbageCollected(shape))
+        }
+        CSSValuePayload::kBasicShapePolygonClass(value) => {
+            let mut shape = BasicShapePolygon::default();
+            shape.SetWindRule(value.wind_rule);
+            if let Some(radius) = &value.rounding_radius {
+                shape.SetRoundingRadius(&LengthValue(id, radius, b, root, media)?);
+            }
+            for point in value.coordinates.chunks_exact(2) {
+                shape.AppendPoint(
+                    &LengthValue(id, &point[0], b, root, media)?,
+                    &LengthValue(id, &point[1], b, root, media)?,
+                );
+            }
+            Ok(MakeGarbageCollected(shape))
+        }
+        CSSValuePayload::kBasicShapeInsetClass(value) => {
+            let mut shape = BasicShapeInset::default();
+            let sides = value
+                .sides
+                .each_ref()
+                .map(|side| LengthValue(id, side, b, root, media))
+                .into_iter()
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            shape.SetTop(&sides[0]);
+            shape.SetRight(&sides[1]);
+            shape.SetBottom(&sides[2]);
+            shape.SetLeft(&sides[3]);
+            if let Some(radii) = &value.radii {
+                let resolved = radii
+                    .each_ref()
+                    .map(|pair| {
+                        Ok::<_, LonghandApplicationError>(LengthSize::new(
+                            &LengthValue(id, &pair[0], b, root, media)?,
+                            &LengthValue(id, &pair[1], b, root, media)?,
+                        ))
+                    })
+                    .into_iter()
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                shape.SetTopLeftRadius(&resolved[0]);
+                shape.SetTopRightRadius(&resolved[1]);
+                shape.SetBottomRightRadius(&resolved[2]);
+                shape.SetBottomLeftRadius(&resolved[3]);
+            }
+            Ok(MakeGarbageCollected(shape))
+        }
+        CSSValuePayload::kBasicShapePathClass(value) => Ok(MakeGarbageCollected(StylePath::new(
+            value.byte_stream.clone(),
+            value.wind_rule,
+        ))),
+        _ => Err(LonghandApplicationError::Unsupported(id)),
+    }
+}
+
+fn ShapeRadius(
+    id: CSSPropertyID,
+    value: Option<&Value>,
+    b: &ComputedStyleBuilder,
+    root: f32,
+    media: &MediaValuesCachedData,
+) -> std::result::Result<BasicShapeRadius, LonghandApplicationError> {
+    let Some(value) = value else {
+        return Ok(BasicShapeRadius::from_type(RadiusType::kClosestSide));
     };
-    let mut shape = BasicShapePolygon::default();
-    shape.SetWindRule(value.wind_rule);
-    if let Some(radius) = &value.rounding_radius {
-        shape.SetRoundingRadius(&LengthValue(id, radius, b, root, media)?);
+    if let CSSValuePayload::kIdentifierClass(keyword) = value.Payload() {
+        let radius_type = match keyword.0 {
+            CSSValueID::kClosestSide => RadiusType::kClosestSide,
+            CSSValueID::kFarthestSide => RadiusType::kFarthestSide,
+            CSSValueID::kClosestCorner => RadiusType::kClosestCorner,
+            CSSValueID::kFarthestCorner => RadiusType::kFarthestCorner,
+            _ => return Err(LonghandApplicationError::InvalidValue(id)),
+        };
+        return Ok(BasicShapeRadius::from_type(radius_type));
     }
-    for point in value.coordinates.chunks_exact(2) {
-        shape.AppendPoint(
-            &LengthValue(id, &point[0], b, root, media)?,
-            &LengthValue(id, &point[1], b, root, media)?,
-        );
-    }
-    Ok(MakeGarbageCollected(shape))
+    Ok(BasicShapeRadius::from_value(&LengthValue(
+        id, value, b, root, media,
+    )?))
 }
 pub(super) fn Geometry(
     id: CSSPropertyID,
@@ -315,6 +450,7 @@ pub(super) fn Apply(
     v: &Value,
     root: f32,
     media: &MediaValuesCachedData,
+    images: Option<&dyn URLImageResolver>,
 ) -> Result {
     let inherit = v.IsInheritedValue() || v.IsUnsetValue() && CSSProperty::Get(id).IsInherited();
     let initial = v.IsInitialValue()
@@ -396,28 +532,35 @@ pub(super) fn Apply(
             {
                 None
             } else {
-                if v.IsURIValue() {
-                    return Err(LonghandApplicationError::Unsupported(id));
-                }
-                let CSSValuePayload::kValueListClass(list) = v.Payload() else {
-                    return Err(LonghandApplicationError::InvalidValue(id));
-                };
-                let Some(first) = list.values.first() else {
-                    return Err(LonghandApplicationError::InvalidValue(id));
-                };
-                let pointer: *mut dyn ClipPathOperation = if first.IsBasicShapeValue() {
-                    let geometry = if list.values.len() == 2 {
-                        Geometry(id, &list.values[1])?
-                    } else {
-                        GeometryBox::kBorderBox
-                    };
-                    MakeGarbageCollected(unsafe {
-                        ShapeClipPathOperation::new(Shape(id, first, b, root, media)?, geometry)
-                    })
+                if let CSSValuePayload::kURIClass(uri) = v.Payload() {
+                    let pointer: *mut dyn ClipPathOperation =
+                        MakeGarbageCollected(ReferenceClipPathOperation::new(
+                            uri.url_data.ValueForSerialization().clone(),
+                        ));
+                    Some(pointer)
                 } else {
-                    MakeGarbageCollected(GeometryBoxClipPathOperation::new(Geometry(id, first)?))
-                };
-                Some(pointer)
+                    let CSSValuePayload::kValueListClass(list) = v.Payload() else {
+                        return Err(LonghandApplicationError::InvalidValue(id));
+                    };
+                    let Some(first) = list.values.first() else {
+                        return Err(LonghandApplicationError::InvalidValue(id));
+                    };
+                    let pointer: *mut dyn ClipPathOperation = if first.IsBasicShapeValue() {
+                        let geometry = if list.values.len() == 2 {
+                            Geometry(id, &list.values[1])?
+                        } else {
+                            GeometryBox::kBorderBox
+                        };
+                        MakeGarbageCollected(unsafe {
+                            ShapeClipPathOperation::new(Shape(id, first, b, root, media)?, geometry)
+                        })
+                    } else {
+                        MakeGarbageCollected(GeometryBoxClipPathOperation::new(Geometry(
+                            id, first,
+                        )?))
+                    };
+                    Some(pointer)
+                }
             };
             b.SetClipPath(operation);
         }
@@ -430,25 +573,27 @@ pub(super) fn Apply(
                 std::ptr::null_mut()
             } else {
                 if v.IsImageValue() || v.IsImageGeneratorValue() || v.IsImageSetValue() {
-                    return Err(LonghandApplicationError::Unsupported(id));
-                }
-                let CSSValuePayload::kValueListClass(list) = v.Payload() else {
-                    return Err(LonghandApplicationError::InvalidValue(id));
-                };
-                let mut shape = None;
-                let mut shape_box = ShapeBox::kMarginBox;
-                for item in &list.values {
-                    if item.IsBasicShapeValue() {
-                        shape = Some(Shape(id, item, b, root, media)?);
-                    } else {
-                        shape_box = ShapeBoxValue(id, item)?;
-                    }
-                }
-                MakeGarbageCollected(if let Some(shape) = shape {
-                    unsafe { ShapeValue::from_shape(shape, shape_box) }
+                    let image = ResolveStyleImage(id, b, v, root, media, images)?;
+                    MakeGarbageCollected(ShapeValue::from_image(image))
                 } else {
-                    ShapeValue::from_box(shape_box)
-                })
+                    let CSSValuePayload::kValueListClass(list) = v.Payload() else {
+                        return Err(LonghandApplicationError::InvalidValue(id));
+                    };
+                    let mut shape = None;
+                    let mut shape_box = ShapeBox::kMarginBox;
+                    for item in &list.values {
+                        if item.IsBasicShapeValue() {
+                            shape = Some(Shape(id, item, b, root, media)?);
+                        } else {
+                            shape_box = ShapeBoxValue(id, item)?;
+                        }
+                    }
+                    MakeGarbageCollected(if let Some(shape) = shape {
+                        unsafe { ShapeValue::from_shape(shape, shape_box) }
+                    } else {
+                        ShapeValue::from_box(shape_box)
+                    })
+                }
             };
             b.SetShapeOutside(&Member::from_ptr(value));
         }

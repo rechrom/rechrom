@@ -7,6 +7,7 @@ use rustybuzz::ttf_parser::trak::{Track, TrackData};
 use rustybuzz::ttf_parser::Tag;
 use rustybuzz::{BufferClusterLevel, Direction, Face, Feature, UnicodeBuffer, Variation};
 
+use crate::fonts::shaping::font_features::FontFeatureRange;
 use crate::text_shaper::{ShapedGlyph, ShapedRun, TextDirection};
 
 use super::opentype_font::OpenTypeVariation;
@@ -176,6 +177,38 @@ pub fn shape_utf16_with_specified_size(
     language: Option<&str>,
     script: Option<&str>,
 ) -> Utf16Run {
+    shape_utf16_with_specified_size_and_features(
+        bytes,
+        face_index,
+        size,
+        specified_size,
+        variations,
+        units,
+        start,
+        end,
+        text_direction,
+        language,
+        script,
+        &[],
+    )
+}
+
+// cpp: font_engine/fonts/shaping/harfbuzz_shaper.cc:309-354
+#[allow(clippy::too_many_arguments)]
+pub fn shape_utf16_with_specified_size_and_features(
+    bytes: &[u8],
+    face_index: u32,
+    size: f64,
+    specified_size: f64,
+    variations: &[OpenTypeVariation],
+    units: &[u16],
+    start: u32,
+    end: u32,
+    text_direction: TextDirection,
+    language: Option<&str>,
+    script: Option<&str>,
+    features: &[FontFeatureRange],
+) -> Utf16Run {
     assert!(start <= end && end as usize <= units.len());
     assert!(
         face_index >> 16 == 0,
@@ -236,8 +269,22 @@ pub fn shape_utf16_with_specified_size(
     } else {
         buffer.script().tag().0
     };
+    let mut shaping_features = Vec::with_capacity(features.len() + 1);
+    for feature in features {
+        let tag = Tag(feature.tag);
+        shaping_features.push(if feature.end == u32::MAX {
+            Feature::new(tag, feature.value, feature.start as usize..)
+        } else {
+            Feature::new(
+                tag,
+                feature.value,
+                feature.start as usize..feature.end as usize,
+            )
+        });
+    }
     let disable_internal_tracking = Feature::new(Tag::from_bytes(b"trak"), 0, ..);
-    let shaped = rustybuzz::shape(&face, &[disable_internal_tracking], buffer);
+    shaping_features.push(disable_internal_tracking);
+    let shaped = rustybuzz::shape(&face, &shaping_features, buffer);
     let scale = (size * 65536.0).round().clamp(0.0, f64::from(i32::MAX)) as i32;
     let upem = face.units_per_em();
     let track_units = face
@@ -611,6 +658,42 @@ mod tests {
                     },
                 ],
             );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tmp_dump_sfns_navigation_widths() {
+        let bytes = std::fs::read("/System/Library/Fonts/SFNS.ttf").unwrap();
+        for weight in [400.0, 600.0] {
+            for with_opsz in [false, true] {
+                let mut variations = vec![OpenTypeVariation {
+                    tag: u32::from_be_bytes(*b"wght"),
+                    value: weight,
+                }];
+                if with_opsz {
+                    variations.push(OpenTypeVariation {
+                        tag: u32::from_be_bytes(*b"opsz"),
+                        value: 14.0,
+                    });
+                }
+                for text in ["Issues", "Pull requests", "Actions", "Projects", "Insights"] {
+                    let run = shape_run(
+                        &bytes,
+                        0,
+                        14.0,
+                        &variations,
+                        text,
+                        TextDirection::kLtr,
+                        "en",
+                        "Latn",
+                    );
+                    eprintln!(
+                        "SFNS width weight={weight} opsz={with_opsz} text={text:?} width={}",
+                        run.advance
+                    );
+                }
+            }
         }
     }
 

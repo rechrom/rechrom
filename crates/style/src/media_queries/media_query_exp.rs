@@ -29,17 +29,17 @@
 // Ledger uses C++ physical / effective / mapped / omitted / pending lines.
 // Effective excludes comments, blanks, preprocessor/includes, namespaces and
 // lines consisting only of braces/parentheses/semicolons.
-// media_query_exp.cc: 834 / 535 / 167 / 10 / 358 (cumulative, partial file).
-// Mapped: 373-488,610-638,656-699,712-731,820-827 (latter AST dispatch
-// in conditional_exp_node.rs; plain factory in parser/media_query_parser.rs).
+// media_query_exp.cc: 834 / 535 / 525 / 10 / 0 (complete).
+// Mapped: 58-606,610-629,631-647,656-827. Feature/value consumption is in
+// media_query_backend.rs, with custom/fallback production CSSValue ownership in
+// production_container_parser.rs and parser/production_anchor_parser.rs.
+// Style-range construction and unit/dependency forwarding are here and in
+// conditional_exp_node.rs; plain factory dispatch is in media_query_parser.rs.
 // Omitted: 54-56,608,630,649-654,829-832 (using/namespace/default dtor/GC).
-// Pending: 58-371,491-606,640-647,701-710,733-819: value grammar/type
-// dispatch, style-range factory, unit flags and feature dependency wrappers.
 // Header runtime still pending: 79-95,102-110,127-141,156,179-183,
 // 288-289,327,350-385; this batch maps serialization declarations 158,324.
-// This batch adds .cc:662-699,712-731 serialization. CSSValue::CssText is
-// required from its real owning backend; the numeric/value grammar stays
-// in the precise pending ranges above.
+// CSSValue::CssText and typed math values remain owned by their real production
+// backends rather than by a parallel media-query value representation.
 use foundation::CSSValueID;
 use std::rc::Rc;
 
@@ -47,6 +47,73 @@ use std::rc::Rc;
 // supplied CSS object's source-aligned CssText, without substitute formatting.
 pub trait MediaQueryExpSerialization {
     fn CssText(&self) -> foundation::String;
+}
+
+// CSSPrimitiveValue::AccumulateLengthUnitTypes/IsElementDependent boundary
+// used by MediaQueryExpValue::GetUnitFlags (media_query_exp.cc:733-817).
+pub trait MediaQueryExpUnitFlags {
+    fn GetUnitFlags(&self) -> u32;
+}
+
+fn NumericUnitFlags(value: &crate::css_numeric_literal_value::CSSNumericLiteralValue) -> u32 {
+    use crate::css_primitive_value::UnitType::*;
+    if let Some(math) = value.MathValue() {
+        return MathUnitFlags(&math.expression);
+    }
+    match value.GetType() {
+        kEms | kExs | kChs | kIcs | kCaps => MediaQueryExpValue::<()>::kFontRelative,
+        kRems | kRexs | kRchs | kRics | kRcaps => MediaQueryExpValue::<()>::kRootRelative,
+        kLhs => MediaQueryExpValue::<()>::kLineHeightRelative,
+        kRlhs => MediaQueryExpValue::<()>::kRootRelative,
+        kDynamicViewportWidth
+        | kDynamicViewportHeight
+        | kDynamicViewportInlineSize
+        | kDynamicViewportBlockSize
+        | kDynamicViewportMin
+        | kDynamicViewportMax => MediaQueryExpValue::<()>::kDynamicViewport,
+        kViewportWidth
+        | kViewportHeight
+        | kViewportInlineSize
+        | kViewportBlockSize
+        | kViewportMin
+        | kViewportMax
+        | kSmallViewportWidth
+        | kSmallViewportHeight
+        | kSmallViewportInlineSize
+        | kSmallViewportBlockSize
+        | kSmallViewportMin
+        | kSmallViewportMax
+        | kLargeViewportWidth
+        | kLargeViewportHeight
+        | kLargeViewportInlineSize
+        | kLargeViewportBlockSize
+        | kLargeViewportMin
+        | kLargeViewportMax => MediaQueryExpValue::<()>::kStaticViewport,
+        kContainerWidth | kContainerHeight | kContainerInlineSize | kContainerBlockSize
+        | kContainerMin | kContainerMax => MediaQueryExpValue::<()>::kContainer,
+        _ => MediaQueryExpValue::<()>::kNone,
+    }
+}
+
+fn MathUnitFlags(expression: &crate::css_math_expression_node::CSSMathExpressionNode) -> u32 {
+    use crate::css_math_expression_node::CSSMathExpressionNode;
+    match expression {
+        CSSMathExpressionNode::Numeric(value) => NumericUnitFlags(value),
+        CSSMathExpressionNode::Operation { operands, .. } => operands
+            .iter()
+            .fold(0, |flags, value| flags | MathUnitFlags(value)),
+    }
+}
+
+impl MediaQueryExpUnitFlags for crate::css_numeric_literal_value::CSSNumericLiteralValue {
+    fn GetUnitFlags(&self) -> u32 {
+        NumericUnitFlags(self)
+    }
+}
+impl MediaQueryExpUnitFlags for crate::css_math_function_value::CSSMathFunctionValue {
+    fn GetUnitFlags(&self) -> u32 {
+        MathUnitFlags(&self.expression)
+    }
 }
 
 impl<V: MediaQueryExpSerialization> MediaQueryExpValue<V> {
@@ -200,6 +267,15 @@ impl<V> MediaQueryExpValue<V> {
     pub const kTreeCounting: u32 = 1 << 5;
     pub const kLineHeightRelative: u32 = 1 << 6;
     pub const kUnitFlagsBits: u32 = 7;
+}
+impl<V: MediaQueryExpUnitFlags> MediaQueryExpValue<V> {
+    // cpp: third_party/blink/renderer/core/css/media_query_exp.cc:733-817
+    pub fn GetUnitFlags(&self) -> u32 {
+        match self {
+            Self::Value(value) => value.GetUnitFlags(),
+            Self::Invalid | Self::Id(_) | Self::Ratio(_) => Self::kNone,
+        }
+    }
 }
 fn ValuesEquivalent<V: PartialEq>(a: &Rc<V>, b: &Rc<V>) -> bool {
     Rc::ptr_eq(a, b) || **a == **b
@@ -549,10 +625,20 @@ impl<V, U> MediaQueryExp<V, U> {
             || self.media_feature_ == "max-block-size"
     }
 }
-// Deliberately unported: primitive/numeric CSSValue dispatch, canonical-unit
-// resolution, Consume(), the style-range public factory, accumulated-unit
-// dispatch, and the feature dependency wrappers.
 
+impl<V: MediaQueryExpUnitFlags, U> MediaQueryExp<V, U> {
+    // cpp: third_party/blink/renderer/core/css/media_query_exp.cc:701-710
+    pub fn GetUnitFlags(&self) -> u32 {
+        let mut flags = 0;
+        if self.bounds_.left.IsValid() {
+            flags |= self.bounds_.left.value.GetUnitFlags();
+        }
+        if self.bounds_.right.IsValid() {
+            flags |= self.bounds_.right.value.GetUnitFlags();
+        }
+        flags
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -15,6 +15,9 @@ use crate::path::{NormalizedF32, Scalar};
 
 use crate::raster::{Color, ColorSpace, SpreadMode, Transform};
 
+use crate::compat::gradient_interpolation::{
+    finish, prepare_pair, GradientHueMethod, GradientInterpolationSpace,
+};
 use crate::raster::pipeline::RasterPipelineBuilder;
 use crate::raster::pipeline::{self, EvenlySpaced2StopGradientCtx, GradientColor, GradientCtx};
 
@@ -22,12 +25,119 @@ use crate::raster::pipeline::{self, EvenlySpaced2StopGradientCtx, GradientColor,
 // gradients defined in the wild.
 pub const DEGENERATE_THRESHOLD: f32 = 1.0 / (1 << 15) as f32;
 
+pub(crate) fn average_gradient_color_in_space(
+    stops: &[GradientStop],
+    space: GradientInterpolationSpace,
+    hue: GradientHueMethod,
+    interpolate_premultiplied: bool,
+) -> Color {
+    debug_assert!(stops.len() >= 2);
+    if space == GradientInterpolationSpace::None {
+        return average_gradient_color_srgb(stops, interpolate_premultiplied);
+    }
+    let rgba = |stop: &GradientStop| {
+        [
+            stop.source_color.r,
+            stop.source_color.g,
+            stop.source_color.b,
+            stop.source_color.a,
+        ]
+    };
+    let pair = |left: &GradientStop, right: &GradientStop| {
+        prepare_pair(
+            rgba(left),
+            left.source_space,
+            left.missing_components,
+            rgba(right),
+            right.source_space,
+            right.missing_components,
+            space,
+            hue,
+            interpolate_premultiplied,
+        )
+    };
+    let mut average = [0.0; 4];
+    for index in 0..stops.len() - 1 {
+        let (left, right) = pair(&stops[index], &stops[index + 1]);
+        let width = stops[index + 1].position.get() - stops[index].position.get();
+        for channel in 0..4 {
+            average[channel] += 0.5 * width * (left[channel] + right[channel]);
+        }
+    }
+    if stops[0].position.get() > 0.0 {
+        let (color, _) = pair(&stops[0], &stops[0]);
+        for channel in 0..4 {
+            average[channel] += stops[0].position.get() * color[channel];
+        }
+    }
+    let last = stops.len() - 1;
+    if stops[last].position.get() < 1.0 {
+        let (_, color) = pair(&stops[last], &stops[last]);
+        for channel in 0..4 {
+            average[channel] += (1.0 - stops[last].position.get()) * color[channel];
+        }
+    }
+    let result = finish(average, space, interpolate_premultiplied);
+    Color::from_rgba(
+        result[0].clamp(0.0, 1.0),
+        result[1].clamp(0.0, 1.0),
+        result[2].clamp(0.0, 1.0),
+        result[3].clamp(0.0, 1.0),
+    )
+    .unwrap()
+}
+
+fn average_gradient_color_srgb(points: &[GradientStop], premultiplied: bool) -> Color {
+    let mut blend = [0.0; 4];
+    let rgba = |color: Color| {
+        let alpha = color.alpha();
+        let scale = if premultiplied { alpha } else { 1.0 };
+        [
+            color.red() * scale,
+            color.green() * scale,
+            color.blue() * scale,
+            alpha,
+        ]
+    };
+    for index in 0..points.len() - 1 {
+        let left = rgba(points[index].color);
+        let right = rgba(points[index + 1].color);
+        let width = points[index + 1].position.get() - points[index].position.get();
+        for channel in 0..4 {
+            blend[channel] += 0.5 * width * (left[channel] + right[channel]);
+        }
+    }
+    if points[0].position.get() > 0.0 {
+        let color = rgba(points[0].color);
+        for channel in 0..4 {
+            blend[channel] += points[0].position.get() * color[channel];
+        }
+    }
+    let last = points.len() - 1;
+    if points[last].position.get() < 1.0 {
+        let color = rgba(points[last].color);
+        for channel in 0..4 {
+            blend[channel] += (1.0 - points[last].position.get()) * color[channel];
+        }
+    }
+    let alpha = blend[3];
+    if premultiplied && alpha != 0.0 {
+        for channel in &mut blend[..3] {
+            *channel /= alpha;
+        }
+    }
+    Color::from_rgba(blend[0], blend[1], blend[2], alpha).unwrap()
+}
+
 /// A gradient point.
 #[allow(missing_docs)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct GradientStop {
     pub(crate) position: NormalizedF32,
     pub(crate) color: Color,
+    source_color: GradientColor,
+    source_space: GradientInterpolationSpace,
+    missing_components: u8,
 }
 
 impl GradientStop {
@@ -38,6 +148,25 @@ impl GradientStop {
         GradientStop {
             position: NormalizedF32::new_clamped(position),
             color,
+            source_color: GradientColor::from(color),
+            source_space: GradientInterpolationSpace::None,
+            missing_components: 0,
+        }
+    }
+
+    pub(crate) fn new_extended(
+        position: f32,
+        color: [f32; 4],
+        fallback: Color,
+        source_space: GradientInterpolationSpace,
+        missing_components: u8,
+    ) -> Self {
+        Self {
+            position: NormalizedF32::new_clamped(position),
+            color: fallback,
+            source_color: GradientColor::new(color[0], color[1], color[2], color[3]),
+            source_space,
+            missing_components,
         }
     }
 }
@@ -50,6 +179,9 @@ pub struct SkGradientBaseShader {
     points_to_unit: Transform,
     pub(crate) colors_are_opaque: bool,
     has_uniform_stops: bool,
+    interpolation_space: GradientInterpolationSpace,
+    hue_method: GradientHueMethod,
+    interpolate_premultiplied: bool,
 }
 
 impl SkGradientBaseShader {
@@ -71,11 +203,15 @@ impl SkGradientBaseShader {
 
         // Now copy over the colors, adding the dummies as needed.
         if dummy_first {
-            stops.insert(0, GradientStop::new(0.0, stops[0].color));
+            let mut stop = stops[0];
+            stop.position = NormalizedF32::ZERO;
+            stops.insert(0, stop);
         }
 
         if dummy_last {
-            stops.push(GradientStop::new(1.0, stops[stops.len() - 1].color));
+            let mut stop = stops[stops.len() - 1];
+            stop.position = NormalizedF32::ONE;
+            stops.push(stop);
         }
 
         let colors_are_opaque = stops.iter().all(|p| p.color.is_opaque());
@@ -105,7 +241,71 @@ impl SkGradientBaseShader {
             points_to_unit,
             colors_are_opaque,
             has_uniform_stops,
+            interpolation_space: GradientInterpolationSpace::None,
+            hue_method: GradientHueMethod::Shorter,
+            interpolate_premultiplied: false,
         }
+    }
+
+    pub fn set_interpolation(
+        &mut self,
+        space: GradientInterpolationSpace,
+        hue: GradientHueMethod,
+        premultiplied: bool,
+    ) {
+        self.interpolation_space = space;
+        self.hue_method = hue;
+        self.interpolate_premultiplied = premultiplied;
+    }
+
+    fn prepared_pair(
+        &self,
+        left: &GradientStop,
+        right: &GradientStop,
+        cs: ColorSpace,
+    ) -> (GradientColor, GradientColor) {
+        if self.interpolation_space == GradientInterpolationSpace::None {
+            let prepare = |stop: &GradientStop| {
+                let mut color = GradientColor::from(cs.expand_color(stop.color));
+                // Blink creates CSS gradient shaders with premultiplied-alpha
+                // interpolation even when no explicit Color 4 space is named.
+                // Keep the channels premultiplied through the gradient stage;
+                // adding the ordinary post-gradient premultiply would square
+                // alpha and darken every translucent interval.
+                if self.interpolate_premultiplied {
+                    color.r *= color.a;
+                    color.g *= color.a;
+                    color.b *= color.a;
+                }
+                color
+            };
+            return (prepare(left), prepare(right));
+        }
+        let (left, right) = prepare_pair(
+            [
+                left.source_color.r,
+                left.source_color.g,
+                left.source_color.b,
+                left.source_color.a,
+            ],
+            left.source_space,
+            left.missing_components,
+            [
+                right.source_color.r,
+                right.source_color.g,
+                right.source_color.b,
+                right.source_color.a,
+            ],
+            right.source_space,
+            right.missing_components,
+            self.interpolation_space,
+            self.hue_method,
+            self.interpolate_premultiplied,
+        );
+        (
+            GradientColor::new(left[0], left[1], left[2], left[3]),
+            GradientColor::new(right[0], right[1], right[2], right[3]),
+        )
     }
 
     pub fn appendStages(
@@ -129,6 +329,12 @@ impl SkGradientBaseShader {
 
         appendStages_pre(p);
 
+        if self.interpolation_space != GradientInterpolationSpace::None {
+            p.set_force_hq_pipeline(true);
+            p.ctx.gradient_interpolation_space = self.interpolation_space;
+            p.ctx.gradient_interpolate_premultiplied = self.interpolate_premultiplied;
+        }
+
         match self.tile_mode {
             SpreadMode::Reflect => {
                 p.push(pipeline::Stage::ReflectX1);
@@ -151,17 +357,11 @@ impl SkGradientBaseShader {
         if self.stops.len() == 2 {
             debug_assert!(self.has_uniform_stops);
 
-            let c0 = cs.expand_color(self.stops[0].color);
-            let c1 = cs.expand_color(self.stops[1].color);
+            let (c0, c1) = self.prepared_pair(&self.stops[0], &self.stops[1], cs);
 
             p.ctx.evenly_spaced_2_stop_gradient = EvenlySpaced2StopGradientCtx {
-                factor: GradientColor::new(
-                    c1.red() - c0.red(),
-                    c1.green() - c0.green(),
-                    c1.blue() - c0.blue(),
-                    c1.alpha() - c0.alpha(),
-                ),
-                bias: GradientColor::from(c0),
+                factor: GradientColor::new(c1.r - c0.r, c1.g - c0.g, c1.b - c0.b, c1.a - c0.a),
+                bias: c0,
             };
 
             p.push(pipeline::Stage::EvenlySpaced2StopGradient);
@@ -202,40 +402,41 @@ impl SkGradientBaseShader {
             };
 
             let mut t_l = self.stops[first_stop].position.get();
-            let mut c_l = GradientColor::from(cs.expand_color(self.stops[first_stop].color));
-            ctx.push_const_color(c_l);
+            let (first_color, mut last_color) =
+                self.prepared_pair(&self.stops[first_stop], &self.stops[first_stop + 1], cs);
+            ctx.push_const_color(first_color);
             ctx.t_values.push(NormalizedF32::ZERO);
             // N.B. lastStop is the index of the last stop, not one after.
             for i in first_stop..last_stop {
                 let t_r = self.stops[i + 1].position.get();
-                let c_r = GradientColor::from(cs.expand_color(self.stops[i + 1].color));
+                let (segment_l, c_r) = self.prepared_pair(&self.stops[i], &self.stops[i + 1], cs);
                 debug_assert!(t_l <= t_r);
                 if t_l < t_r {
                     // For each stop we calculate a bias B and a scale factor F, such that
                     // for any t between stops n and n+1, the color we want is B[n] + F[n]*t.
                     let f = GradientColor::new(
-                        (c_r.r - c_l.r) / (t_r - t_l),
-                        (c_r.g - c_l.g) / (t_r - t_l),
-                        (c_r.b - c_l.b) / (t_r - t_l),
-                        (c_r.a - c_l.a) / (t_r - t_l),
+                        (c_r.r - segment_l.r) / (t_r - t_l),
+                        (c_r.g - segment_l.g) / (t_r - t_l),
+                        (c_r.b - segment_l.b) / (t_r - t_l),
+                        (c_r.a - segment_l.a) / (t_r - t_l),
                     );
                     ctx.factors.push(f);
 
                     ctx.biases.push(GradientColor::new(
-                        c_l.r - f.r * t_l,
-                        c_l.g - f.g * t_l,
-                        c_l.b - f.b * t_l,
-                        c_l.a - f.a * t_l,
+                        segment_l.r - f.r * t_l,
+                        segment_l.g - f.g * t_l,
+                        segment_l.b - f.b * t_l,
+                        segment_l.a - f.a * t_l,
                     ));
 
                     ctx.t_values.push(NormalizedF32::new_clamped(t_l));
                 }
 
                 t_l = t_r;
-                c_l = c_r;
+                last_color = c_r;
             }
 
-            ctx.push_const_color(c_l);
+            ctx.push_const_color(last_color);
             ctx.t_values.push(NormalizedF32::new_clamped(t_l));
 
             ctx.len = ctx.factors.len();
@@ -254,7 +455,13 @@ impl SkGradientBaseShader {
             p.ctx.gradient = ctx;
         }
 
-        if !self.colors_are_opaque {
+        if self.interpolation_space != GradientInterpolationSpace::None {
+            p.push(pipeline::Stage::GradientColorToSrgb);
+        }
+        if !self.colors_are_opaque
+            && (self.interpolation_space != GradientInterpolationSpace::None
+                || !self.interpolate_premultiplied)
+        {
             p.push(pipeline::Stage::Premultiply);
         }
 
@@ -266,6 +473,7 @@ impl SkGradientBaseShader {
     pub fn apply_opacity(&mut self, opacity: f32) {
         for stop in &mut self.stops {
             stop.color.apply_opacity(opacity);
+            stop.source_color.a *= opacity;
         }
 
         self.colors_are_opaque = self.stops.iter().all(|p| p.color.is_opaque());

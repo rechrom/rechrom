@@ -86,4 +86,12 @@ impl URLStreamOperation for BufferedURLStream {
         self.finished = true;
         Ok(Some(URLLoadEvent::Finished))
     }
+
+    fn SetWakeCallback(&mut self, callback: URLWakeCallback) {
+        if let Some(operation) = &mut self.operation {
+            operation.SetWakeCallback(callback);
+        } else {
+            callback();
+        }
+    }
 }

@@ -63,6 +63,8 @@ fn Number(
                     root,
                     b.EffectiveZoom(),
                     media,
+                    Some(super::CurrentComputedLineHeight(b)),
+                    None,
                 ),
                 None,
             )
@@ -289,7 +291,7 @@ pub(super) fn Apply(
             } else if inherit {
                 parent.unwrap().ListStyleImage().Get()
             } else {
-                super::ResolveStyleImage(id, value, images)?
+                super::ResolveStyleImage(id, b, value, root, media, images)?
             };
             b.SetListStyleImage(&Member::from_ptr(pointer));
         }

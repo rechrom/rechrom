@@ -35,8 +35,8 @@ fn retained_commands_flattened_curves_and_invalid_paths() {
 
     let arc = ParseSVGPathDefault("M0 0 A10 10 0 0 1 20 0").unwrap();
     assert_eq!(arc.commands.len(), 3);
-    assert_eq!(arc.commands[1].verb, PaintPathVerb::kCubicTo);
-    assert_eq!(arc.commands[2].verb, PaintPathVerb::kCubicTo);
+    assert_eq!(arc.commands[1].verb, PaintPathVerb::kConicTo);
+    assert_eq!(arc.commands[2].verb, PaintPathVerb::kConicTo);
     assert!(arc.flattened_points.len() >= 5);
     expect_point(arc.commands.last().unwrap().point, 20.0, 0.0);
     assert!(near(arc.bounds_width, 20.0, 0.01));
@@ -51,4 +51,16 @@ fn retained_commands_flattened_curves_and_invalid_paths() {
             "accepted: {invalid}"
         );
     }
+}
+
+#[test]
+fn repeated_relative_moveto_pairs_remain_relative_lines() {
+    let path = ParseSVGPathDefault("M0 0zm7.251 10.324.004-5.073-.002-2.253").unwrap();
+    let tail = &path.commands[path.commands.len() - 3..];
+    assert_eq!(tail[0].verb, PaintPathVerb::kMoveTo);
+    assert_eq!(tail[1].verb, PaintPathVerb::kLineTo);
+    assert_eq!(tail[2].verb, PaintPathVerb::kLineTo);
+    expect_point(tail[0].point, 7.251, 10.324);
+    expect_point(tail[1].point, 7.255, 5.251);
+    expect_point(tail[2].point, 7.253, 2.998);
 }
