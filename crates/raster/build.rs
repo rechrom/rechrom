@@ -9,8 +9,14 @@ fn main() {
     if !text && !font_backend && !source_replay {
         return;
     }
-    let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let skia = manifest.join("../../../layoutng/deps/skia");
+    assert_eq!(
+        env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("macos"),
+        "C++ Skia reference-oracle features require macOS; use pure_replay for production"
+    );
+    println!("cargo:rerun-if-env-changed=RECHROM_REFERENCE_SKIA_DIR");
+    let skia = PathBuf::from(env::var_os("RECHROM_REFERENCE_SKIA_DIR")
+        .expect("explicit C++ oracle requires RECHROM_REFERENCE_SKIA_DIR; production builds do not need C++ Skia"));
     let archive = skia.join("lib/libskia.a");
     assert!(archive.exists(), "Skia archive is required for text replay");
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());

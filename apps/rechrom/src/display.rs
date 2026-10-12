@@ -5,7 +5,7 @@
 //! delivers messages and routes the returned effects.
 use crate::{
     engine::{Output, UserEvent, Viewport},
-    window_surface::{PreparedWindowFrame, WindowTarget},
+    window_surface::{DisplayTarget, PreparedDisplayTarget},
 };
 use compositor::RasterBundle;
 use renderer::Renderer;
@@ -38,14 +38,14 @@ pub(crate) enum Effect {
 }
 
 struct PreparedDisplayFrame {
-    output: PreparedWindowFrame,
+    output: PreparedDisplayTarget,
     sequence: u64,
     viewport: Viewport,
     drag_regions: Vec<crate::chrome::DragRegion>,
 }
 
 pub(crate) struct Display {
-    target: WindowTarget,
+    target: DisplayTarget,
     active_bundle: Option<RasterBundle>,
     prepared: Option<PreparedDisplayFrame>,
     sequence: u64,
@@ -56,7 +56,7 @@ pub(crate) struct Display {
 }
 
 impl Display {
-    pub(crate) fn New(target: WindowTarget, output: Output, capture_frames: bool) -> Self {
+    pub(crate) fn New(target: DisplayTarget, output: Output, capture_frames: bool) -> Self {
         Self {
             target,
             active_bundle: None,
@@ -269,12 +269,15 @@ impl Display {
             diagnostic.publish(output.readback_rgba(viewport)?);
         }
         let notify = self.notify.clone();
+        let native_presentation = self.target.is_native();
         let post_swap_ack = post_swap_ack.clone();
         self.target.present_prepared(
             output,
             sequence,
             Box::new(move |_, _| {
-                (notify)(UserEvent::FramePresented(viewport));
+                if native_presentation {
+                    (notify)(UserEvent::FramePresented(viewport));
+                }
                 (post_swap_ack)(sequence);
             }),
         )?;
@@ -300,11 +303,13 @@ impl Display {
                 ("frame_id", frame.sequence_number as f64),
             ],
         );
-        browser_tracing::instant(
-            "frame",
-            "FramePresentedToNative",
-            &[("present_sequence", sequence as f64), ("compositor", 1.0)],
-        );
+        if native_presentation {
+            browser_tracing::instant(
+                "frame",
+                "FramePresentedToNative",
+                &[("present_sequence", sequence as f64), ("compositor", 1.0)],
+            );
+        }
         Ok(if scroll_active {
             vec![Effect::RequestBeginFrame]
         } else {

@@ -7,6 +7,7 @@ pub mod font_backend;
 pub mod font_baseline;
 pub mod font_data;
 pub mod font_description;
+pub(crate) mod font_fallback_iterator;
 pub mod font_fallback_metadata;
 pub mod font_fallback_priority;
 pub mod font_family;

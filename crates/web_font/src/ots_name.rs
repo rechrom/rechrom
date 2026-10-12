@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn name_table_bytes_match_independent_cpp_ots() {
         let original =
-            include_bytes!("../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf");
+            include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
         let sanitized =
             include_bytes!("../../../artifacts/cpp-reference/page-resources/font-sanitized.ttf");
         let name = OpenTypeName::Parse(table(original, b"name")).unwrap();

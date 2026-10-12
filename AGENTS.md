@@ -87,6 +87,8 @@ has reached a stable integration point. Tests should validate a completed
 slice of work rather than interrupt each small edit, because excessive test
 runs reduce iteration speed.
 
+When disk usage is high, stale `target/` build caches may be evicted, but do not remove artifacts used by active builds.
+
 1. Use the repository's browser pixel-comparison workflow whenever visual
    correctness is involved. Capture Rechrom and Chromium through
    `Page.captureScreenshot` under identical viewport, DPR, URL, scroll,
@@ -217,6 +219,14 @@ URL/input
   at the Layout boundary. It does not perform geometry, paint recording,
   raster, or presentation. The native `ComputedStyle` remains the canonical
   result; projections must not replace or reinterpret it.
+- `font_engine`: input is immutable decoded faces, typed font-rule/loading and
+  versioned system-query mutations; output is retained ShapeResult/metrics or
+  explicit host requests. It owns selection, lazy face admission, fallback and
+  shaping caches. Platform discovery and file I/O are supplied by the embedding
+  through SystemFontProvider and completed outside compute. The synchronous
+  Layout adapter may collect pure cache misses; Page completes them and retries
+  privately through existing invalidation gates before publishing fragments.
+  Inline still owns item analysis, bidi, line breaking and boundary reshaping.
 - `layoutng`: input is `LayoutMutation` (constraints, tree/style/text/editing or
   scroll changes) containing Style's canonical result; output is a retained,
   immutable `FragmentNode` snapshot and related geometry indices. It owns the

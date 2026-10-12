@@ -599,7 +599,7 @@ mod shared_bytes_tests {
             sync::atomic::{AtomicUsize, Ordering},
         };
         let reference = include_bytes!(
-            "../../../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
+            "../../../../../assets/fonts/Roboto-Regular.ttf"
         );
         let path =
             std::env::temp_dir().join(format!("harfbuzz-font-map-{}.ttf", std::process::id()));
@@ -643,7 +643,7 @@ mod shared_bytes_tests {
     #[test]
     fn native_blob_retains_shared_backing_after_font_owner_is_dropped() {
         let bytes: Arc<[u8]> = include_bytes!(
-            "../../../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
+            "../../../../../assets/fonts/Roboto-Regular.ttf"
         )
         .as_slice()
         .into();
@@ -672,7 +672,7 @@ mod shared_bytes_tests {
         assert_eq!(
             retained,
             include_bytes!(
-                "../../../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
+                "../../../../../assets/fonts/Roboto-Regular.ttf"
             )
         );
         drop(retained_blob);

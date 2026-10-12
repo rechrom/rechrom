@@ -66,7 +66,7 @@ impl URLLoader for Loader {
             (
                 PathBuf::from(concat!(
                     env!("CARGO_MANIFEST_DIR"),
-                    "/../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
+                    "/../../assets/fonts/Roboto-Regular.ttf"
                 )),
                 "font/ttf",
                 request.url.clone(),
@@ -250,7 +250,7 @@ fn create_page(
     space.fonts = vec![FontFace {
         family: "sans-serif".into(),
         bytes: include_bytes!(
-            "../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
+            "../../../assets/fonts/Roboto-Regular.ttf"
         )
         .as_slice()
         .into(),
@@ -1106,7 +1106,7 @@ fn without_javascript(mode: &str) {
     space.fonts = vec![FontFace {
         family: "sans-serif".into(),
         bytes: include_bytes!(
-            "../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
+            "../../../assets/fonts/Roboto-Regular.ttf"
         )
         .as_slice()
         .into(),
@@ -1380,7 +1380,7 @@ fn create_image_fixture_page(
     space.fonts = vec![FontFace {
         family: "sans-serif".into(),
         bytes: include_bytes!(
-            "../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
+            "../../../assets/fonts/Roboto-Regular.ttf"
         )
         .as_slice()
         .into(),

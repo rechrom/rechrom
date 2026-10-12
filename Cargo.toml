@@ -7,6 +7,7 @@ members = [
     "crates/quickjs",
     "crates/quickjs_tools",
     "crates/foundation",
+    "crates/foundation/base",
     "crates/font_engine",
     "crates/layoutng_geometry",
     "crates/layoutng_style",

@@ -256,6 +256,7 @@ struct PageState {
     #[cfg(feature = "pure_source_png")]
     rendering: RefCell<PageRenderPipeline>,
     constraints: Rc<RefCell<ConstraintSpace>>,
+    system_fonts: RefCell<crate::font_session::SystemFontSession>,
     interaction: Rc<RefCell<UserInteractionState>>,
     layout_editing: Rc<layoutng_assembly::editing_state::LayoutEditingState>,
     bindings: RefCell<Weak<RefCell<DOMJavaScriptBindings>>>,
@@ -303,6 +304,7 @@ impl PageState {
             #[cfg(feature = "pure_source_png")]
             rendering: RefCell::new(rendering),
             constraints: Rc::new(RefCell::new(constraints)),
+            system_fonts: RefCell::new(crate::font_session::SystemFontSession::new()),
             interaction: Rc::new(RefCell::new(UserInteractionState::default())),
             layout_editing: Rc::new(Default::default()),
             bindings: RefCell::new(Weak::new()),
@@ -864,11 +866,12 @@ impl PageState {
                 .set(self.full_layout_lifecycles.get() + 1);
             let sizes = {
                 let mut layout = self.layout_engine.borrow_mut();
-                crate::persistent_layout::LayoutDocumentWithEngine(
+                crate::font_session::LayoutWithSystemFonts(
                     &mut layout,
                     &mut self.document.borrow_mut(),
                     &self.interaction.borrow(),
-                    &self.constraints.borrow(),
+                    &mut self.constraints.borrow_mut(),
+                    &mut self.system_fonts.borrow_mut(),
                 );
                 if !self.style_engine.borrow().HasContainerQueries() {
                     return;
@@ -1646,6 +1649,32 @@ impl Page {
     }
     pub fn ResourceEngine(&self) -> Rc<ResourceEngine> {
         self.open_engine.Resources()
+    }
+    /// Inject an embedding-owned platform font service. Discovery/opening run
+    /// at the host boundary, never inside FontEngine or Layout computation.
+    pub fn SetSystemFontProvider(&mut self, provider: Box<dyn font_engine::SystemFontProvider>) {
+        self.state.system_fonts.borrow_mut().SetProvider(
+            provider,
+            &mut self.state.constraints.borrow_mut(),
+        );
+        self.state.InvalidateMeasurement();
+        self.state.document.borrow_mut().InvalidateLayout();
+        self.state.dirty.set(true);
+        self.state.scroll_only.set(false);
+        self.RequestBeginFrameIfNeeded();
+    }
+    /// Called by the embedding after installed fonts or platform font settings
+    /// change. Existing frames retain their immutable bytes; the next lifecycle
+    /// re-resolves only the fonts actually requested by the document.
+    pub fn SystemFontsChanged(&mut self) {
+        self.state.system_fonts.borrow_mut().EnvironmentChanged(
+            &mut self.state.constraints.borrow_mut(),
+        );
+        self.state.InvalidateMeasurement();
+        self.state.document.borrow_mut().InvalidateLayout();
+        self.state.dirty.set(true);
+        self.state.scroll_only.set(false);
+        self.RequestBeginFrameIfNeeded();
     }
     pub fn SetPreferredColorScheme(&mut self, preference: PreferredColorScheme) {
         if let Some(scripts) = &self.scripts {

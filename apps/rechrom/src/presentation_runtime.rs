@@ -8,7 +8,7 @@ use crate::{
     chrome::DragRegion,
     display::{self, Display},
     engine::{Output, UserEvent, Viewport},
-    window_surface::WindowTarget,
+    window_surface::DisplayTarget,
 };
 use foundation::begin_frame::BeginFrameSource;
 use std::{
@@ -49,7 +49,7 @@ pub(crate) type BeginMainFrameClient =
 
 pub(crate) fn Spawn(
     config: Config,
-    target: WindowTarget,
+    target: DisplayTarget,
     output: Output,
     input_frame_source: Arc<crate::begin_frame_source::LogicalBeginFrameSource>,
     display_frame_source: Arc<crate::begin_frame_source::LogicalBeginFrameSource>,
@@ -120,7 +120,7 @@ fn SpawnRasterOwner(
 }
 
 fn SpawnDedicated(
-    target: WindowTarget,
+    target: DisplayTarget,
     output: Output,
     frame_source: Arc<dyn BeginFrameSource>,
     compositor_sender: mpsc::Sender<CompositorCommand>,
@@ -349,7 +349,7 @@ fn RouteDedicated(
 }
 
 fn SpawnShared(
-    target: WindowTarget,
+    target: DisplayTarget,
     output: Output,
     frame_source: Arc<dyn BeginFrameSource>,
     receiver: mpsc::Receiver<CompositorCommand>,
@@ -385,7 +385,7 @@ fn SpawnShared(
 }
 
 fn RunShared(
-    target: WindowTarget,
+    target: DisplayTarget,
     output: Output,
     frame_source: Arc<dyn BeginFrameSource>,
     receiver: mpsc::Receiver<CompositorCommand>,

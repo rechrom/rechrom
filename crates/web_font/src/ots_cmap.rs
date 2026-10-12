@@ -392,7 +392,7 @@ mod tests {
     #[test]
     fn character_map_and_os2_ranges_match_independent_cpp_ots() {
         let original =
-            include_bytes!("../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf");
+            include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
         let reference =
             include_bytes!("../../../artifacts/cpp-reference/page-resources/font-sanitized.ttf");
         let mut os2 = table(original, b"OS/2").to_vec();

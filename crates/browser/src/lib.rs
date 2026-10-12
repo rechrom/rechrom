@@ -25,6 +25,8 @@ use std::path::Path;
 
 pub mod dom_mutation;
 mod font_catalog;
+mod font_session;
+pub mod system_font_provider;
 #[cfg(feature = "source_paint")]
 mod form_submission;
 #[cfg(test)]
@@ -110,11 +112,22 @@ pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
         overscroll_type: OverscrollType::kTransform,
         ..ViewportGeometry::default()
     });
-    space.fonts = font_catalog::DemoFonts();
+    // A small immutable emergency face permits speculative layout while the
+    // host resolves actual CSS/platform matches. No installed font catalog is
+    // opened or parsed here; query completion happens before publication.
+    space.fonts = vec![font_engine::FontFace {
+        family: "Rechrom Emergency".into(),
+        bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf").as_slice().into(),
+        fallback_role: font_engine::FontFallbackRole::kLastResort,
+        ..Default::default()
+    }];
+    space.font_queries = Some(font_engine::FontQueryCollector::default());
     space.text_transform = Some(std::sync::Arc::new(
         text_transform::BrowserTextTransformProvider,
     ));
-    #[cfg(any(feature = "source_png", feature = "pure_source_png"))]
+    // Production uses the OpenType font engine on every platform. Only the
+    // explicitly requested C++ reference renderer injects its metrics adapter.
+    #[cfg(feature = "source_png")]
     {
         space.font_backend_factory = Some(std::sync::Arc::new(
             raster::font_backend::SkiaFontBackendFactory,
@@ -170,15 +183,13 @@ fn LayoutStaticHtml(source: &str, width: u32, height: u32) -> io::Result<Fragmen
         document.GetDocumentMut().AppendStyleSheet(sheet.clone());
     }
     let assembly = CreateLayoutAssembly();
-    let space = CreateBrowserConstraints(width, height);
+    let mut space = CreateBrowserConstraints(width, height);
     style_services::ResolveLayoutStyles(&mut document, &space);
     let mut layout = LayoutEngine::new(&assembly);
-    Ok(LayoutPersistentDocument(
-        &mut layout,
-        &mut document,
-        &dom::UserInteractionState::default(),
-        &space,
-    ))
+    font_session::LayoutWithSystemFonts(&mut layout, &mut document,
+        &dom::UserInteractionState::default(), &mut space, &mut font_session::SystemFontSession::new());
+    let fragments = layout.TakeLayoutResult().expect("completed font/layout transaction");
+    Ok(std::rc::Rc::try_unwrap(fragments).unwrap_or_else(|shared| (*shared).clone()))
 }
 
 pub fn RenderFile(path: &Path, width: u32, height: u32) -> io::Result<Vec<u8>> {

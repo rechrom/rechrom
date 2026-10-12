@@ -10,9 +10,11 @@ use hyper::{Method, Request, Uri};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::proxy::matcher::Matcher;
 use hyper_util::rt::{TokioExecutor, TokioTimer};
+use rustls::pki_types::{pem::PemObject, CertificateDer};
 use std::error::Error;
 use std::future::Future;
 use std::io::{self, Read};
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -167,8 +169,8 @@ impl Scheduler {
         let milliseconds = u64::try_from(options.connect_timeout_ms).map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidInput, "negative HTTP connect timeout")
         })?;
-        let roots =
-            rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let certificate_file = std::env::var_os("SSL_CERT_FILE");
+        let roots = root_certificates(certificate_file.as_deref().map(Path::new))?;
         let timeout = (milliseconds > 0).then(|| Duration::from_millis(milliseconds));
         let client = build_client(roots, timeout)?;
         // Chromium's ResourceLoadScheduler prevents render-blocking resources
@@ -184,6 +186,41 @@ impl Scheduler {
             client,
         })
     }
+}
+
+fn root_certificates(certificate_file: Option<&Path>) -> io::Result<rustls::RootCertStore> {
+    let mut roots =
+        rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    if let Some(path) = certificate_file {
+        // Honor the host's explicit CA configuration without modifying its trust
+        // store or relaxing certificate/hostname verification.
+        let certificates = CertificateDer::pem_file_iter(path).map_err(|error| {
+            io::Error::other(format!("SSL_CERT_FILE could not be read: {error}"))
+        })?;
+        let mut count = 0;
+        for certificate in certificates {
+            let certificate = certificate.map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("SSL_CERT_FILE contains invalid PEM: {error}"),
+                )
+            })?;
+            roots.add(certificate).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("SSL_CERT_FILE contains an invalid certificate: {error}"),
+                )
+            })?;
+            count += 1;
+        }
+        if count == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "SSL_CERT_FILE contains no certificates",
+            ));
+        }
+    }
+    Ok(roots)
 }
 
 fn build_client(roots: rustls::RootCertStore, timeout: Option<Duration>) -> io::Result<HTTPClient> {
@@ -729,8 +766,73 @@ pub fn StartHTTPRequest(
 #[cfg(test)]
 mod tls_tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicU64;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_rustls::TlsAcceptor;
+
+    struct CertificateFile(PathBuf);
+
+    impl CertificateFile {
+        fn new(contents: &[u8]) -> Self {
+            static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "rechrom-ca-{}-{}.pem",
+                std::process::id(),
+                NEXT_FILE.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::write(&path, contents).unwrap();
+            Self(path)
+        }
+
+        fn fixture() -> Self {
+            let encoded = base64::engine::general_purpose::STANDARD
+                .encode(include_bytes!("../tests/fixtures/ca.der"));
+            Self::new(
+                format!("-----BEGIN CERTIFICATE-----\n{encoded}\n-----END CERTIFICATE-----\n")
+                    .as_bytes(),
+            )
+        }
+    }
+
+    impl Drop for CertificateFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn configured_ca_file_preserves_public_roots() {
+        let file = CertificateFile::fixture();
+        let defaults = root_certificates(None).unwrap();
+        let configured = root_certificates(Some(&file.0)).unwrap();
+        assert_eq!(defaults.len(), webpki_roots::TLS_SERVER_ROOTS.len());
+        assert_eq!(configured.len(), defaults.len() + 1);
+        assert_eq!(configured.roots[..defaults.len()], defaults.roots);
+    }
+
+    #[test]
+    fn configured_ca_file_reports_missing_empty_and_invalid_files() {
+        let missing = CertificateFile::new(b"");
+        std::fs::remove_file(&missing.0).unwrap();
+        assert!(root_certificates(Some(&missing.0))
+            .unwrap_err()
+            .to_string()
+            .contains("SSL_CERT_FILE could not be read"));
+
+        for contents in [
+            b"".as_slice(),
+            b"not a certificate".as_slice(),
+            b"-----BEGIN CERTIFICATE-----\n!invalid-base64!\n-----END CERTIFICATE-----\n"
+                .as_slice(),
+            b"-----BEGIN CERTIFICATE-----\nYWJj\n-----END CERTIFICATE-----\n".as_slice(),
+        ] {
+            let file = CertificateFile::new(contents);
+            let error = root_certificates(Some(&file.0)).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains("SSL_CERT_FILE"));
+        }
+    }
 
     // Public, locally generated fixture key; never used outside these tests.
     fn server() -> (String, tokio::task::JoinHandle<bool>) {
@@ -797,6 +899,7 @@ mod tls_tests {
                 ..Default::default()
             },
             slots: Arc::new(Semaphore::new(1)),
+            priority_slots: None,
             client: build_client_with_proxy(fixture_roots(), Some(Duration::from_secs(2)), proxy)
                 .unwrap(),
         }
@@ -1079,18 +1182,15 @@ mod tls_tests {
     #[test]
     fn rustcrypto_https_accepts_trusted_certificate_and_rejects_untrusted_certificate() {
         let (url, server_task) = server();
-        let mut roots = rustls::RootCertStore::empty();
-        roots
-            .add(rustls::pki_types::CertificateDer::from(
-                include_bytes!("../tests/fixtures/ca.der").to_vec(),
-            ))
-            .unwrap();
+        let file = CertificateFile::fixture();
+        let roots = root_certificates(Some(&file.0)).unwrap();
         let scheduler = Scheduler {
             options: HTTPTransportOptions {
                 max_retries: 0,
                 ..Default::default()
             },
             slots: Arc::new(Semaphore::new(1)),
+            priority_slots: None,
             client: build_client(roots, Some(Duration::from_secs(2))).unwrap(),
         };
         let result = runtime()

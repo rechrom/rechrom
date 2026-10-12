@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn complete_font_bytes_match_independent_cpp_ots() {
         let raw =
-            include_bytes!("../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf");
+            include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
         let reference =
             include_bytes!("../../../artifacts/cpp-reference/page-resources/font-sanitized.ttf");
         assert_eq!(Sanitize(raw).unwrap(), reference);

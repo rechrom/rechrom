@@ -2476,6 +2476,8 @@ impl SkCanvas {
         } else {
             &item.font_variations
         };
+        let canonical_variations = crate::compat::commands::canonical_font_variations(variations);
+        let variations = canonical_variations.as_ref();
         let descriptor = crate::compat::glyph_paths::Descriptor {
             font: 0,
             face_index: font.face_index,
@@ -2506,19 +2508,11 @@ impl SkCanvas {
                                     && face.tables().cff.is_none()
                                     && face.tables().cff2.is_none()
                                 {
-                                    let data = face
-                                        .raw_face()
+                                    // Bitmap-only faces have images, not paths. This is
+                                    // SkScalerContext's neverRequestPath case.
+                                    face.raw_face()
                                         .table(Tag::from_bytes(b"hvgl"))
-                                        .unwrap_or_else(|| {
-                                            panic!(
-                                                "font {} has no supported vector outlines",
-                                                font.family
-                                            )
-                                        });
-                                    Some(
-                                        HvglTable::parse(data)
-                                            .expect("invalid HVGL glyph outline table"),
-                                    )
+                                        .and_then(|data| HvglTable::parse(data).ok())
                                 } else {
                                     None
                                 };
@@ -2584,6 +2578,136 @@ impl SkCanvas {
         })
     }
 
+    fn draw_embedded_bitmap_glyph(
+        &mut self,
+        item: &DrawCommand,
+        glyph: &PaintGlyph,
+        bitmap: &crate::compat::glyph_bitmaps::GlyphBitmap,
+    ) {
+        // SkFontHost_FreeType_common::generateGlyphImage scales native images
+        // through the remaining matrix with linear/mipmap sampling. Paint RGB
+        // only tints A8 masks; ARGB glyphs retain their embedded colors.
+        let mut transform = crate::cpu::glyph_position::mask_position_transform(
+            self.state.transform,
+            (item.text_blob_origin.x + glyph.offset.x) as f32,
+            (item.text_blob_origin.y + glyph.offset.y) as f32,
+        );
+        if item.synthetic_italic {
+            transform = transform.pre_concat(Transform::from_row(1.0, 0.0, -0.25, 1.0, 0.0, 0.0));
+        }
+        let scale = item.font_size as f32 / f32::from(bitmap.pixels_per_em);
+        transform = transform
+            .pre_scale(scale, scale)
+            .pre_translate(bitmap.left, bitmap.top);
+        let Some(bounds) = Rect::from_xywh(
+            0.0,
+            0.0,
+            bitmap.pixels.width() as f32,
+            bitmap.pixels.height() as f32,
+        )
+        .and_then(|rect| rect.transform(transform)) else {
+            return;
+        };
+        let mut left = bounds.left().floor().max(0.0) as u32;
+        let mut top = bounds.top().floor().max(0.0) as u32;
+        let mut right = bounds
+            .right()
+            .ceil()
+            .max(0.0)
+            .min(self.pixmap.width() as f32) as u32;
+        let mut bottom = bounds
+            .bottom()
+            .ceil()
+            .max(0.0)
+            .min(self.pixmap.height() as f32) as u32;
+        if let Some(clip) = self.state.clip_summary {
+            let Some(bounds) = clip.getBounds() else {
+                return;
+            };
+            left = left.max(bounds.left().max(0) as u32);
+            top = top.max(bounds.top().max(0) as u32);
+            right = right.min(bounds.right().max(0) as u32);
+            bottom = bottom.min(bounds.bottom().max(0) as u32);
+        }
+        if right <= left || bottom <= top {
+            return;
+        }
+        let Some(mut image) = Pixmap::new(right - left, bottom - top) else {
+            return;
+        };
+        let x_scale = transform.sx.hypot(transform.ky);
+        let y_scale = transform.kx.hypot(transform.sy);
+        let level = mip_level_for_size(
+            bitmap.pixels.width(),
+            bitmap.pixels.height(),
+            (bitmap.pixels.width() as f32 * x_scale).ceil().max(1.0) as u32,
+            (bitmap.pixels.height() as f32 * y_scale).ceil().max(1.0) as u32,
+        );
+        let mip;
+        let source = if level > 0 {
+            mip = build_mip_image(&bitmap.pixels, level);
+            transform = transform.pre_scale(
+                bitmap.pixels.width() as f32 / mip.width() as f32,
+                bitmap.pixels.height() as f32 / mip.height() as f32,
+            );
+            &mip
+        } else {
+            &bitmap.pixels
+        };
+        image.draw_pixmap(
+            0,
+            0,
+            source.as_ref(),
+            &crate::raster::PixmapPaint {
+                quality: FilterQuality::Bilinear,
+                ..Default::default()
+            },
+            transform.post_translate(-(left as f32), -(top as f32)),
+            None,
+        );
+        let format = self.pixmap.format;
+        let stride = self.pixmap.width() as usize;
+        let alpha = (item.color.alpha.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        for y in top..bottom {
+            for x in left..right {
+                let index = y as usize * stride + x as usize;
+                let offset =
+                    ((y - top) as usize * image.width() as usize + (x - left) as usize) * 4;
+                let source = &image.data()[offset..offset + 4];
+                if source[3] == 0 {
+                    continue;
+                }
+                if !bitmap.color {
+                    self.blend_coverage(index, item.color, source[3], false);
+                    continue;
+                }
+                let coverage = self
+                    .state
+                    .clip
+                    .as_deref()
+                    .map_or(255, |clip| clip.alpha_at(x, y));
+                let dst = &mut self.pixmap.data_mut()[index * 4..index * 4 + 4];
+                if let Some(surface) = self.f16_surface.as_mut() {
+                    surface.composite_n32_span(
+                        index,
+                        source,
+                        dst,
+                        item.color.alpha.clamp(0.0, 1.0),
+                        coverage,
+                        format,
+                    );
+                } else {
+                    let source: [u8; 4] = source.try_into().unwrap();
+                    let source = source
+                        .map(|channel| crate::cpu::mask_blitter::mul_div_255_round(channel, alpha));
+                    crate::cpu::mask_blitter::blend_prepared_format(
+                        dst, source, coverage, false, format,
+                    );
+                }
+            }
+        }
+    }
+
     pub(crate) fn drawGlyphRunList(&mut self, item: &DrawCommand, list: &ResourceContext) {
         if item.glyphs.is_empty() {
             return;
@@ -2603,6 +2727,8 @@ impl SkCanvas {
         } else {
             &item.font_variations
         };
+        let canonical_variations = crate::compat::commands::canonical_font_variations(variations);
+        let variations = canonical_variations.as_ref();
         #[cfg(target_os = "macos")]
         if self.glyph_mode == GlyphRasterMode::Platform
             && !item.synthetic_bold
@@ -2764,7 +2890,30 @@ impl SkCanvas {
         // placement and framebuffer remain draw-local and are replayed each time.
         crate::compat::glyph_paths::with_paths(font.bytes, descriptor, |strike| {
             let mut face_data = None;
+            let mut bitmap_face = None;
             for glyph in &item.glyphs {
+                // SkScalerContext's image branch precedes generatePath. Images
+                // and outlines share the same exact-font strike owner.
+                let bitmap = strike.prepare_image(
+                    glyph.id as u16,
+                    || {
+                        let face = bitmap_face.get_or_insert_with(|| {
+                            Face::parse(font.bytes, font.face_index & 0xffff).ok()
+                        });
+                        let image = face.as_ref()?.glyph_raster_image(
+                            GlyphId(glyph.id as u16),
+                            (item.font_size as f32 * resolution)
+                                .ceil()
+                                .clamp(1.0, 65535.0) as u16,
+                        )?;
+                        crate::compat::glyph_bitmaps::GlyphBitmap::decode(image)
+                    },
+                    crate::compat::glyph_bitmaps::GlyphBitmap::heap_bytes,
+                );
+                if let Some(bitmap) = bitmap {
+                    self.draw_embedded_bitmap_glyph(item, glyph, &bitmap);
+                    continue;
+                }
                 let cached = strike.prepare_path(
                     glyph.id as u16,
                     || {
@@ -2776,19 +2925,11 @@ impl SkCanvas {
                                     && face.tables().cff.is_none()
                                     && face.tables().cff2.is_none()
                                 {
-                                    let data = face
-                                        .raw_face()
+                                    // Bitmap-only faces have images, not paths. This is
+                                    // SkScalerContext's neverRequestPath case.
+                                    face.raw_face()
                                         .table(Tag::from_bytes(b"hvgl"))
-                                        .unwrap_or_else(|| {
-                                            panic!(
-                                                "font {} has no supported vector outlines",
-                                                font.family
-                                            )
-                                        });
-                                    Some(
-                                        HvglTable::parse(data)
-                                            .expect("invalid HVGL font outline table"),
-                                    )
+                                        .and_then(|data| HvglTable::parse(data).ok())
                                 } else {
                                     None
                                 };
@@ -2830,10 +2971,13 @@ impl SkCanvas {
                             face.outline_glyph(id, &mut outline).is_some()
                         };
                         if !has_outline {
-                            assert!(
-                                face.glyph_bounding_box(id).is_none(),
-                                "glyph has bounds without supported outline"
-                            );
+                            if face.is_color_glyph(id) || face.glyph_svg_image(id).is_some() {
+                                log::warn!(
+                                    "glyph {} in {} requires an unsupported color outline renderer",
+                                    id.0,
+                                    font.family
+                                );
+                            }
                             return None;
                         }
                         let path = outline.path.finish()?;
@@ -3827,10 +3971,71 @@ mod readback_and_path_tests {
         assert_eq!(c.finish(), vec![255; 8 * 8 * 4]);
     }
     #[test]
+    #[cfg(feature = "png-format")]
+    fn bitmap_only_font_renders_color_and_has_no_decoration_intercepts() {
+        let bytes = crate::compat::glyph_bitmaps::test_font();
+        let face = Face::parse(&bytes, 0).unwrap();
+        assert!(face.tables().glyf.is_none());
+        assert!(face.glyph_raster_image(GlyphId(1), 16).is_some());
+        let list = ResourceContext {
+            resources: Some(ResourceCatalog {
+                fonts: vec![FontFace {
+                    bytes: &bytes,
+                    face_index: 0,
+                    family: "bitmap test",
+                    native_family: "",
+                    weight: 400.0,
+                    italic: false,
+                    variations: vec![],
+                }],
+                images: vec![],
+            }),
+        };
+        let item = DrawCommand {
+            r#type: CommandKind::kDrawGlyphRun,
+            font_size: 16.0,
+            text_blob_origin: Offset { x: 4.0, y: 8.0 },
+            color: Color {
+                red: 0.0,
+                green: 1.0,
+                blue: 0.0,
+                alpha: 0.5,
+            },
+            glyphs: vec![PaintGlyph {
+                id: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(SkCanvas::glyph_run_intercepts(&list, &item, 5.0, 9.0).is_empty());
+        for f16 in [false, true] {
+            let render = || {
+                let mut canvas = SkCanvas::new(&list, 16, 16);
+                canvas.pixmap.data_mut().fill(0);
+                canvas.known_opaque = false;
+                canvas.set_glyph_mode(GlyphRasterMode::Outlines);
+                if f16 {
+                    canvas.f16_surface = Some(crate::cpu::f16_surface::Surface::new(256));
+                }
+                canvas.drawGlyphRunList(&item, &list);
+                canvas.pixmap.data().to_vec()
+            };
+            crate::compat::glyph_paths::purge();
+            let cold = render();
+            assert_eq!(cold, render());
+            let pixel = &cold[(6 * 16 + 4) * 4..(6 * 16 + 4) * 4 + 4];
+            assert_eq!(
+                pixel,
+                [128, 0, 0, 128],
+                "embedded colors keep paint alpha without RGB tint"
+            );
+            assert_eq!(cold.chunks_exact(4).filter(|p| p[3] != 0).count(), 4);
+        }
+    }
+
+    #[test]
     fn warmed_outline_paths_preserve_placement_color_scale_clip_and_stroke() {
-        let bytes = include_bytes!(
-            "../../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
-        );
+        let bytes = include_bytes!("../../../../assets/fonts/Roboto-Regular.ttf");
         let list = ResourceContext {
             resources: Some(ResourceCatalog {
                 fonts: vec![FontFace {
@@ -3915,9 +4120,7 @@ mod readback_and_path_tests {
 
     #[test]
     fn blurred_glyph_run_uses_bounded_normal_blur() {
-        let bytes = include_bytes!(
-            "../../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
-        );
+        let bytes = include_bytes!("../../../../assets/fonts/Roboto-Regular.ttf");
         let list = ResourceContext {
             resources: Some(ResourceCatalog {
                 fonts: vec![FontFace {
@@ -4502,9 +4705,7 @@ mod color_layout_tests {
     }
     #[test]
     fn bgra_bgrx_platform_and_outline_glyphs() {
-        let bytes = include_bytes!(
-            "../../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
-        );
+        let bytes = include_bytes!("../../../../assets/fonts/Roboto-Regular.ttf");
         let face = Face::parse(bytes, 0).unwrap();
         let list = ResourceContext {
             resources: Some(ResourceCatalog {
@@ -5201,9 +5402,7 @@ mod conservative_glyph_damage_tests {
     use super::*;
     #[test]
     fn whole_font_bounds_enclose_all_drawn_native_mask_pixels() {
-        let bytes = include_bytes!(
-            "../../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
-        );
+        let bytes = include_bytes!("../../../../assets/fonts/Roboto-Regular.ttf");
         let face = ttf_parser::Face::parse(bytes, 0).unwrap();
         let font = FontFace {
             family: "Roboto",

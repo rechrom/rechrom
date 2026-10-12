@@ -1,5 +1,6 @@
 //! Exact font identity adapter around SkStrike's persistent outline records.
 //! Filled and derived stroke paths are replayed separately, preserving existing paint order.
+use crate::compat::glyph_bitmaps::GlyphBitmap;
 use crate::raster::Path;
 use crate::src::core::SkStrikeCache::SkStrikeCache;
 use std::cell::RefCell;
@@ -33,13 +34,13 @@ struct Cache {
     fonts: Vec<(u64, Vec<u8>)>,
     next_id: u64,
     bytes: usize,
-    strikes: SkStrikeCache<Descriptor, u16, (), GlyphPaths>,
+    strikes: SkStrikeCache<Descriptor, u16, GlyphBitmap, GlyphPaths>,
 }
 thread_local! {static CACHE:RefCell<Cache> = RefCell::new(Cache::default());}
 pub(crate) fn with_paths<R>(
     bytes: &[u8],
     mut descriptor: Descriptor,
-    f: impl FnOnce(&mut crate::src::core::SkStrike::SkStrike<u16, (), GlyphPaths>) -> R,
+    f: impl FnOnce(&mut crate::src::core::SkStrike::SkStrike<u16, GlyphBitmap, GlyphPaths>) -> R,
 ) -> R {
     CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();

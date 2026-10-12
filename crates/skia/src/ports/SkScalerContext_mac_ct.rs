@@ -11,7 +11,9 @@ use std::ptr::{self, NonNull};
 use std::sync::OnceLock;
 
 use crate::compat::commands::Color;
-use crate::compat::commands::{FontFace, FontSmoothing, FontVariation};
+use crate::compat::commands::{
+    canonical_font_variations, FontDataIdentity, FontFace, FontSmoothing, FontVariation,
+};
 use crate::raster::{Mask, Pixmap, Transform};
 use crate::src::core::SkScalerContext::{PreMatrixScale, SkScalerContextRec};
 
@@ -115,9 +117,12 @@ extern "C" {
         external: bool,
     ) -> Ref;
     fn CFDataCreate(allocator: Ref, bytes: *const u8, length: isize) -> Ref;
+    #[cfg(test)]
+    fn CFDataGetLength(data: Ref) -> isize;
+    #[cfg(test)]
+    fn CFDataGetBytePtr(data: Ref) -> *const u8;
     fn CFArrayGetCount(array: Ref) -> isize;
     fn CFArrayGetValueAtIndex(array: Ref, index: isize) -> Ref;
-    fn CFSetCreate(allocator: Ref, values: *const Ref, count: isize, callbacks: Ref) -> Ref;
     fn CFNumberCreate(allocator: Ref, kind: isize, value: Ref) -> Ref;
     fn CFDictionaryCreate(
         allocator: Ref,
@@ -129,7 +134,6 @@ extern "C" {
     ) -> Ref;
     static kCFTypeDictionaryKeyCallBacks: u8;
     static kCFTypeDictionaryValueCallBacks: u8;
-    static kCFTypeSetCallBacks: u8;
 }
 #[link(name = "CoreText", kind = "framework")]
 extern "C" {
@@ -142,9 +146,10 @@ extern "C" {
     fn CTFontCopyVariationAxes(font: Ref) -> Ref;
     fn CTFontCopyAttribute(font: Ref, attribute: Ref) -> Ref;
     fn CTFontGetSize(font: Ref) -> f64;
+    #[cfg(test)]
+    fn CTFontCopyTable(font: Ref, tag: u32, options: u32) -> Ref;
     fn CTFontCreateWithFontDescriptor(descriptor: Ref, size: f64, matrix: *const Affine) -> Ref;
     fn CTFontDescriptorCreateWithAttributes(attributes: Ref) -> Ref;
-    fn CTFontDescriptorCreateMatchingFontDescriptor(descriptor: Ref, mandatory: Ref) -> Ref;
     fn CTFontCreateCopyWithAttributes(
         font: Ref,
         size: f64,
@@ -166,14 +171,6 @@ extern "C" {
         context: Ref,
     );
     static kCTFontVariationAttribute: Ref;
-    static kCTFontFamilyNameAttribute: Ref;
-    static kCTFontTraitsAttribute: Ref;
-    static kCTFontWeightTrait: Ref;
-    static kCTFontWidthTrait: Ref;
-    static kCTFontSlantTrait: Ref;
-}
-extern "C" {
-    fn dlsym(handle: *mut c_void, name: *const std::ffi::c_char) -> *mut c_void;
 }
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -223,77 +220,6 @@ unsafe fn dictionary(keys: &[Ref], values: &[Ref]) -> Owned {
         keys.len() as isize,
         ptr::addr_of!(kCFTypeDictionaryKeyCallBacks).cast(),
         ptr::addr_of!(kCFTypeDictionaryValueCallBacks).cast(),
-    ))
-}
-
-// SkCTFont.cpp: SkCTFontGetNSFontWeightMapping and
-// SkTypeface_mac_ct.cpp: SkCTFontCTWeightForCSSWeight.
-fn native_weight(weight: f64) -> f64 {
-    static MAPPING: OnceLock<[f64; 11]> = OnceLock::new();
-    let weights = MAPPING.get_or_init(|| {
-        let fallback = [-1.0, -0.8, -0.6, -0.4, 0.0, 0.23, 0.3, 0.4, 0.56, 0.62, 1.0];
-        let mut result = fallback;
-        for (index, name) in [
-            c"NSFontWeightUltraLight",
-            c"NSFontWeightThin",
-            c"NSFontWeightLight",
-            c"NSFontWeightRegular",
-            c"NSFontWeightMedium",
-            c"NSFontWeightSemibold",
-            c"NSFontWeightBold",
-            c"NSFontWeightHeavy",
-            c"NSFontWeightBlack",
-        ]
-        .iter()
-        .enumerate()
-        {
-            // Darwin RTLD_DEFAULT, as in Skia's runtime AppKit lookup.
-            let address = unsafe { dlsym((-2isize) as *mut c_void, name.as_ptr()) };
-            if address.is_null() {
-                return fallback;
-            }
-            result[index + 1] = unsafe { *address.cast::<f64>() };
-        }
-        result
-    });
-    let weight = (weight as i32).clamp(0, 1000) as f64 / 100.0;
-    let lower = (weight.floor() as usize).min(9);
-    weights[lower] + (weights[lower + 1] - weights[lower]) * (weight - lower as f64)
-}
-
-// SkFontMgr_mac_ct.cpp: create_descriptor and onMatchFamilyStyle.
-unsafe fn match_native_family(name: Ref, weight: f64, italic: bool, size: f32) -> Owned {
-    let traits = [native_weight(weight), 0.0, if italic { 0.07 } else { 0.0 }];
-    let numbers = traits.map(|value| {
-        Owned::new(CFNumberCreate(
-            ptr::null(),
-            13,
-            (&value as *const f64).cast(),
-        ))
-    });
-    let trait_dictionary = dictionary(
-        &[kCTFontWeightTrait, kCTFontWidthTrait, kCTFontSlantTrait],
-        &numbers.each_ref().map(Owned::get),
-    );
-    let attributes = dictionary(
-        &[kCTFontFamilyNameAttribute, kCTFontTraitsAttribute],
-        &[name, trait_dictionary.get()],
-    );
-    let request = Owned::new(CTFontDescriptorCreateWithAttributes(attributes.get()));
-    let mandatory = Owned::new(CFSetCreate(
-        ptr::null(),
-        &kCTFontFamilyNameAttribute,
-        1,
-        ptr::addr_of!(kCFTypeSetCallBacks).cast(),
-    ));
-    let descriptor = Owned::new(CTFontDescriptorCreateMatchingFontDescriptor(
-        request.get(),
-        mandatory.get(),
-    ));
-    Owned::new(CTFontCreateWithFontDescriptor(
-        descriptor.get(),
-        size.into(),
-        ptr::null(),
     ))
 }
 
@@ -695,30 +621,11 @@ fn paint_rgba8(color: Color) -> [u8; 4] {
 }
 struct TypefaceIdentity {
     id: u64,
-    native_family: String,
-    weight: u64,
-    italic: bool,
-    face_index: u32,
-    bytes: Vec<u8>,
-}
-impl TypefaceIdentity {
-    fn matches(&self, face: &FontFace<'_>) -> bool {
-        self.native_family == face.native_family
-            && self.weight == face.weight.to_bits()
-            && self.italic == face.italic
-            && self.face_index == face.face_index
-            && self.bytes
-                == if face.native_family.is_empty() {
-                    face.bytes
-                } else {
-                    &[]
-                }
-    }
+    data: FontDataIdentity,
 }
 // SkTypeface_Mac::getVariationAxes initializes immutable axis metadata once
-// per typeface. This adapter receives borrowed font data separately from its
-// native-family CTFont identity, so cache by actual axis/validation table bytes.
-// In particular, a native-family identity deliberately does not compare bytes.
+// per typeface. Cache by the actual axis/validation table bytes so distinct
+// faces can share this small immutable result without retaining whole fonts.
 struct OpticalAxisMetadata {
     tables: [Vec<u8>; 4],
     has_opsz: bool,
@@ -786,7 +693,11 @@ pub fn glyph_cache_stats() -> (u64, u64, u64, usize, usize, usize, usize) {
         let scaler = scaler.borrow();
         (
             scaler.fonts.len(),
-            scaler.typefaces.iter().map(|face| face.bytes.len()).sum(),
+            scaler
+                .typefaces
+                .iter()
+                .map(|face| face.data.byte_len())
+                .sum(),
         )
     });
     (
@@ -929,59 +840,50 @@ impl SkScalerContext_Mac {
         device_size: f32,
         variations: &[FontVariation],
     ) -> Ref {
-        let typeface = if let Some(entry) = self.typefaces.iter().find(|entry| entry.matches(face))
-        {
-            entry.id
-        } else {
-            // Bounds are local font-owner adapter limits, separate from the
-            // official 2 MiB image budget. Keep at most 32 identities/64 CTFonts.
-            // One oversized font may exceed the identity byte budget alone.
-            let bytes: usize = self.typefaces.iter().map(|entry| entry.bytes.len()).sum();
-            if self.typefaces.len() >= 32
-                || bytes.saturating_add(if face.native_family.is_empty() {
-                    face.bytes.len()
-                } else {
-                    0
-                }) > 2 * 1024 * 1024
-            {
-                self.fonts.clear();
-                // Every native font owner has been dropped before its metadata.
-                self.font_bounds.clear();
-                self.typefaces.clear();
-                purge_images();
-            }
-            self.next_typeface = self
-                .next_typeface
-                .checked_add(1)
-                .expect("typeface identity exhausted");
-            self.typefaces.push(TypefaceIdentity {
-                id: self.next_typeface,
-                native_family: face.native_family.to_owned(),
-                weight: face.weight.to_bits(),
-                italic: face.italic,
-                face_index: face.face_index,
-                bytes: if face.native_family.is_empty() {
-                    face.bytes.to_vec()
-                } else {
-                    Vec::new()
-                },
-            });
-            self.next_typeface
-        };
+        let typeface =
+            if let Some(entry) = self.typefaces.iter().find(|entry| entry.data.matches(face)) {
+                entry.id
+            } else {
+                // Bounds are local font-owner adapter limits, separate from the
+                // official 2 MiB image budget. Keep at most 32 identities/64 CTFonts.
+                // One oversized font may exceed the identity byte budget alone.
+                let bytes: usize = self
+                    .typefaces
+                    .iter()
+                    .map(|entry| entry.data.byte_len())
+                    .sum();
+                if self.typefaces.len() >= 32
+                    || bytes.saturating_add(face.bytes.len()) > 2 * 1024 * 1024
+                {
+                    self.fonts.clear();
+                    // Every native font owner has been dropped before its metadata.
+                    self.font_bounds.clear();
+                    self.typefaces.clear();
+                    purge_images();
+                }
+                self.next_typeface = self
+                    .next_typeface
+                    .checked_add(1)
+                    .expect("typeface identity exhausted");
+                self.typefaces.push(TypefaceIdentity {
+                    id: self.next_typeface,
+                    data: FontDataIdentity::new(face),
+                });
+                self.next_typeface
+            };
         // Font selection may already have resolved optical sizing from the
         // specified CSS size. Preserve that explicit value when raster scales
         // the same run to its zoomed/device size; only synthesize `opsz` for
         // callers that did not carry a selection decision across the boundary.
-        let mut axes = variations.to_vec();
+        let mut axes = canonical_font_variations(variations).into_owned();
         if self.has_optical_axis(face) {
             if !axes
                 .iter()
                 .any(|axis| axis.tag == u32::from_be_bytes(*b"opsz"))
             {
-                axes.push(FontVariation {
-                    tag: u32::from_be_bytes(*b"opsz"),
-                    value: size,
-                });
+                let tag = u32::from_be_bytes(*b"opsz");
+                let index = axes.partition_point(|axis| axis.tag < tag);
+                axes.insert(index, FontVariation { tag, value: size });
             }
         }
         let variations = axes.as_slice();
@@ -1012,25 +914,10 @@ impl SkScalerContext_Mac {
         self.fonts
             .entry(key)
             .or_insert_with(|| unsafe {
-                let base = if !face.native_family.is_empty() {
-                    let name = Owned::new(CFStringCreateWithBytes(
-                        ptr::null(),
-                        face.native_family.as_ptr(),
-                        face.native_family.len() as isize,
-                        0x08000100,
-                        false,
-                    ));
-                    let matched =
-                        match_native_family(name.get(), face.weight, face.italic, source_size);
-                    if CTFontGetSymbolicTraits(matched.get()) & (1 << 13) != 0 {
-                        // Original SkFontMgr_mac_ct typeface starts at size0;
-                        // its scaler then always makes the exact device copy.
-                        // Keep that source optical/trak descriptor for colors.
-                        match_native_family(name.get(), face.weight, face.italic, 0.0)
-                    } else {
-                        matched
-                    }
-                } else {
+                // The shaping face is already resolved. Reconstruct that
+                // exact byte/index face, as SkTypeface_Mac::MakeFromStream
+                // does; matching a family again can change glyph identity.
+                let base = {
                     let data = Owned::new(CFDataCreate(
                         ptr::null(),
                         face.bytes.as_ptr(),
@@ -1645,12 +1532,35 @@ mod matrix_and_optical_size_tests {
             native_family: "",
             weight: 400.0,
             italic: false,
-            bytes: include_bytes!(
-                "../../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
-            ),
+            bytes: include_bytes!("../../../../assets/fonts/Roboto-Regular.ttf"),
             face_index: 0,
             variations: Vec::new(),
         }
+    }
+
+    #[test]
+    fn native_font_preserves_the_selected_source_tables_despite_family_metadata() {
+        let mut face = test_face();
+        // An unavailable family used to fail or substitute during raster.
+        face.native_family = "a nonexistent platform font family 314159";
+        let mut scaler = SkScalerContext_Mac::default();
+        let native = scaler.font(0, &face, 24.0, 24.0, &[]);
+        let raw = ttf_parser::RawFace::parse(face.bytes, 0).unwrap();
+        for tag in [*b"maxp", *b"cmap", *b"glyf"] {
+            let expected = raw.table(ttf_parser::Tag::from_bytes(&tag)).unwrap();
+            unsafe {
+                let actual = Owned::new(CTFontCopyTable(native, u32::from_be_bytes(tag), 0));
+                let actual = std::slice::from_raw_parts(
+                    CFDataGetBytePtr(actual.get()),
+                    CFDataGetLength(actual.get()) as usize,
+                );
+                assert_eq!(actual, expected, "selected source table {tag:?}");
+            }
+        }
+        face.native_family = "Arial";
+        face.weight = 900.0;
+        face.italic = true;
+        assert_eq!(native, scaler.font(9, &face, 24.0, 24.0, &[]));
     }
 
     fn font_with_optical_axis() -> Vec<u8> {
@@ -1769,21 +1679,13 @@ mod matrix_and_optical_size_tests {
                 assert_eq!(scaler.has_optical_axis(&face), old_has_optical_axis(&face));
             }
         }
-        // Native-family identity deliberately matches different bytes. Metadata
-        // must therefore use actual tables, never that identity alone.
+        // Family metadata cannot hide changed source bytes from either cache.
         let mut face = test_face();
         face.native_family = "Arial";
-        let identity = TypefaceIdentity {
-            id: 1,
-            native_family: "Arial".into(),
-            weight: face.weight.to_bits(),
-            italic: face.italic,
-            face_index: 0,
-            bytes: Vec::new(),
-        };
+        let identity = FontDataIdentity::new(&face);
         assert!(identity.matches(&face));
         face.bytes = &valid;
-        assert!(identity.matches(&face));
+        assert!(!identity.matches(&face));
         assert!(scaler.has_optical_axis(&face));
         face.bytes = &bad_head;
         assert!(!scaler.has_optical_axis(&face));
@@ -1892,14 +1794,14 @@ mod matrix_and_optical_size_tests {
                 assert_eq!(CTFontGetSize(font), 28.0);
             }
             assert_eq!(optical_size(static_font), 11.5);
-            assert_eq!(optical_size(variable_14), 14.0);
-            assert_eq!(optical_size(variable_7), 7.0);
+            assert_eq!(optical_size(variable_14), 11.5);
+            assert_eq!(optical_size(variable_7), 11.5);
         }
-        assert_eq!(scaler.typefaces.len(), 1, "same native-family identity");
+        assert_eq!(scaler.typefaces.len(), 2, "distinct exact font data");
         assert_eq!(
             scaler.fonts.len(),
             3,
-            "source-dependent opsz andpaintsize remain infontkey"
+            "source-dependent opsz and paint size remain in font key"
         );
         assert_eq!(
             scaler.font(0, &static_face, 14.0, 28.0, &explicit),
@@ -2111,9 +2013,10 @@ mod matrix_and_optical_size_tests {
         let regular = scaler.font(0, &face, 14.0, 14.0, &[]);
         let mut other = test_face();
         other.italic = true;
-        let italic = scaler.font(0, &other, 14.0, 14.0, &[]);
-        assert_ne!(regular, italic);
-        assert_eq!(scaler.typefaces.len(), 2);
+        other.native_family = "a family that must not be selected during paint";
+        let metadata_only = scaler.font(19, &other, 14.0, 14.0, &[]);
+        assert_eq!(regular, metadata_only);
+        assert_eq!(scaler.typefaces.len(), 1);
     }
 
     #[test]
@@ -2380,9 +2283,7 @@ mod native_allocation_bounds_tests {
     #[test]
     fn per_glyph_bounds_equal_existing_native_mask_allocation() {
         let sources: [&[u8]; 3] = [
-            include_bytes!(
-                "../../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
-            ),
+            include_bytes!("../../../../assets/fonts/Roboto-Regular.ttf"),
             include_bytes!("../../../../../src/third_party/skia/resources/fonts/Distortable.ttf"),
             include_bytes!("../../../../../src/third_party/skia/resources/fonts/Variable.ttf"),
         ];

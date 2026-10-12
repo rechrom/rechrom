@@ -1,26 +1,11 @@
 #![allow(non_snake_case)]
 
-use font_engine::{
-    Font, FontDescription, FontFallbackMetadata, FontFamily, FontSelector, SimpleFontData,
-};
+use font_engine::{Font, FontDescription, FontFamily, FontSelector};
 
 use crate::internal::layout_font_resolver::NativeFontRequest;
 use crate::internal::layout_input::WritingMode;
 
 use super::native_input::CurrentNativeFontResolver;
-
-// The resolved-data constructor is owned by //src/font_engine/fonts/font_data.cc.
-// It initializes Font's private description, primary, and ordered fallback
-// fields; this package owns only the selector-to-resolver path below.
-unsafe extern "Rust" {
-    pub(crate) fn FontNewFromResolvedData(
-        description: &FontDescription,
-        ordered_fonts: &[*const SimpleFontData],
-        primary_font: *const SimpleFontData,
-        fallback_metadata: &[FontFallbackMetadata],
-        font_group_length: usize,
-    ) -> Font;
-}
 
 // C++ defines Font::Font(description, selector) here. A free Rust constructor
 // keeps that cross-crate implementation in its Bazel source owner.
@@ -53,22 +38,9 @@ pub fn FontFromSelector(description: &FontDescription, _selector: *mut FontSelec
     .WithBaseDescription(description);
     let resolver = CurrentNativeFontResolver();
     let resolved = unsafe { &mut *resolver }.Resolve(&request);
-    let primary_font = resolved.PrimaryFont();
-    assert!(!primary_font.is_null());
-    let ordered_fonts: Vec<*const SimpleFontData> = resolved
-        .OrderedFontData()
-        .iter()
-        .map(|font| font.Get() as *const SimpleFontData)
-        .collect();
-    unsafe {
-        FontNewFromResolvedData(
-            description,
-            &ordered_fonts,
-            primary_font,
-            resolved.FallbackMetadata(),
-            resolved.FontGroupLength(),
-        )
-    }
+    // Retain the engine-owned lazy fallback source. Projecting the catalog
+    // through OrderedFontData would eagerly admit all fallback faces.
+    resolved.CloneWithDescription(description.clone())
 }
 
 // The constructor declaration lives in font_engine; this package supplies

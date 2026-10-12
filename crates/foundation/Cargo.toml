@@ -9,7 +9,6 @@ path = "src/lib.rs"
 
 [dependencies]
 browser_tracing = { path = "../tracing" }
-# Reuse the source checkout's existing independently tested Rust foundation
-# without modifying or copying its implementation.
-foundation_base = { package = "foundation", path = "../../../layoutng/rust/foundation" }
+# Keep translated primitives independent of the higher-level interfaces here.
+foundation_base = { package = "foundation", path = "base" }
 icu_bidi = { path = "../icu_bidi" }

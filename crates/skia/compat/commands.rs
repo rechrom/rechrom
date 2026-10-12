@@ -735,6 +735,9 @@ impl Default for DrawCommand {
     }
 }
 
+/// An already resolved shaping face. The exact bytes, collection index, and
+/// variation coordinates identify the raster face. Names and style metadata
+/// are descriptive and must never trigger a second platform-family selection.
 /// Typeface metadata borrows strings/font bytes from the caller.
 pub struct FontFace<'a> {
     pub family: &'a str,
@@ -745,6 +748,53 @@ pub struct FontFace<'a> {
     pub face_index: u32,
     pub variations: Vec<FontVariation>,
 }
+// The raster cache outlives a borrowed resource snapshot. Keep exact source
+// bytes, not a pointer or family name, so data replacement and allocator address
+// reuse cannot return outlines from an earlier font-context generation.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) struct FontDataIdentity {
+    bytes: Box<[u8]>,
+    face_index: u32,
+}
+#[cfg(any(target_os = "macos", test))]
+impl FontDataIdentity {
+    pub(crate) fn new(face: &FontFace<'_>) -> Self {
+        Self {
+            bytes: face.bytes.into(),
+            face_index: face.face_index,
+        }
+    }
+
+    pub(crate) fn matches(&self, face: &FontFace<'_>) -> bool {
+        self.face_index == face.face_index && self.bytes.as_ref() == face.bytes
+    }
+
+    pub(crate) fn byte_len(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+/// SkTypeface_Mac's variation argument conversion uses the last coordinate for
+/// an overspecified axis (CSS Fonts 4). Canonical order also makes equivalent
+/// shape/paint coordinates share a strike regardless of declaration order.
+pub(crate) fn canonical_font_variations(
+    variations: &[FontVariation],
+) -> std::borrow::Cow<'_, [FontVariation]> {
+    if variations.windows(2).all(|pair| pair[0].tag < pair[1].tag) {
+        return std::borrow::Cow::Borrowed(variations);
+    }
+    let values: std::collections::BTreeMap<_, _> = variations
+        .iter()
+        .map(|axis| (axis.tag, axis.value))
+        .collect();
+    std::borrow::Cow::Owned(
+        values
+            .into_iter()
+            .map(|(tag, value)| FontVariation { tag, value })
+            .collect(),
+    )
+}
+
 pub struct Image<'a> {
     pub id: u64,
     pub width: u32,
@@ -787,4 +837,83 @@ pub struct ResourceCatalog<'a> {
 #[derive(Default)]
 pub struct ResourceContext<'a> {
     pub resources: Option<ResourceCatalog<'a>>,
+}
+
+#[cfg(test)]
+mod font_identity_tests {
+    use super::*;
+
+    fn face(bytes: &[u8]) -> FontFace<'_> {
+        FontFace {
+            family: "alias",
+            native_family: "Arial",
+            weight: 400.0,
+            italic: false,
+            bytes,
+            face_index: 0,
+            variations: vec![],
+        }
+    }
+
+    #[test]
+    fn exact_source_identity_survives_aliases_and_rejects_replaced_bytes() {
+        let mut bytes = vec![1, 2, 3];
+        let identity = FontDataIdentity::new(&face(&bytes));
+        assert_eq!(identity.byte_len(), bytes.len());
+        let copy = bytes.clone();
+        let mut alias = face(&copy);
+        alias.family = "different alias";
+        alias.native_family = "a missing platform family";
+        alias.weight = 700.0;
+        alias.italic = true;
+        assert!(identity.matches(&alias));
+        alias.face_index = 1;
+        assert!(!identity.matches(&alias));
+        alias.face_index = 0x10000;
+        assert!(
+            !identity.matches(&alias),
+            "named-instance index is identity"
+        );
+        bytes[0] = 4;
+        assert!(
+            !identity.matches(&face(&bytes)),
+            "same allocation, new bytes"
+        );
+    }
+
+    #[test]
+    fn variation_identity_is_order_independent_and_last_declaration_wins() {
+        let wght = u32::from_be_bytes(*b"wght");
+        let opsz = u32::from_be_bytes(*b"opsz");
+        let input = [
+            FontVariation {
+                tag: wght,
+                value: 400.0,
+            },
+            FontVariation {
+                tag: opsz,
+                value: 12.0,
+            },
+            FontVariation {
+                tag: wght,
+                value: 700.0,
+            },
+        ];
+        let expected = [
+            FontVariation {
+                tag: opsz,
+                value: 12.0,
+            },
+            FontVariation {
+                tag: wght,
+                value: 700.0,
+            },
+        ];
+        let actual = canonical_font_variations(&input);
+        assert!(actual.as_ref() == expected);
+        assert!(matches!(
+            canonical_font_variations(&expected),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
 }

@@ -15,8 +15,12 @@ font_engine = { path = "../font_engine", optional = true }
 
 [features]
 default = []
+# macOS-only C++ reference oracle. Production uses pure_replay.
 text = []
 font_backend = ["dep:font_engine"]
 source_replay = ["font_backend"]
 pure_replay = []
 profiling = ["pure_replay", "skia/profiling"]
+
+[dev-dependencies]
+font_engine = { path = "../font_engine" }

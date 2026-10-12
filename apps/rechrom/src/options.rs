@@ -31,8 +31,9 @@ impl Options {
                     println!("rechrom [URL or file] [--url URL | --input FILE] [--width N] [--height N] [--headless]\n\
                         Shortcuts: Ctrl/Cmd+L address, Ctrl/Cmd+R reload, Alt+Left/Right history, F12 Performance DevTools.\n\
                         --devtools-port PORT selects the localhost Performance server (default 9223, 0 automatic).\n\
-                        --headless keeps the native rendering surface hidden for automated verification.\n\
-                        --exit-after SECONDS closes the window after a timed smoke run.");
+                        --headless renders without a display server or native window (DPR 1).\n\
+                        With --headless, --width and --height are the page viewport in CSS pixels.\n\
+                        --exit-after SECONDS stops the browser after a timed smoke run.");
                     return Ok(None);
                 }
                 "--url" | "--input" => {

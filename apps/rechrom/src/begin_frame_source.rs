@@ -317,13 +317,34 @@ pub fn create(
     fallback_interval: Duration,
     display_id: Option<u32>,
 ) -> io::Result<Arc<OrderedBeginFrameSource>> {
+    create_for_host(fallback_interval, display_id, false)
+}
+
+/// Offscreen embedding uses the same ordered BeginFrame scheduling without
+/// querying a native monitor or creating a display-link connection.
+pub fn create_offscreen(interval: Duration) -> io::Result<Arc<OrderedBeginFrameSource>> {
+    create_for_host(interval, None, true)
+}
+
+fn create_for_host(
+    fallback_interval: Duration,
+    display_id: Option<u32>,
+    offscreen: bool,
+) -> io::Result<Arc<OrderedBeginFrameSource>> {
+    if fallback_interval.is_zero() || Instant::now().checked_add(fallback_interval).is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid frame interval",
+        ));
+    }
     let dispatch = Arc::new(OrderedFrameDispatch::default());
     let output = dispatch.clone();
-    let native = create_native(
-        Arc::new(move |frame| output.issue(frame)),
-        fallback_interval,
-        display_id,
-    )?;
+    let notify: QueuedFrameNotify = Arc::new(move |frame| output.issue(frame));
+    let native = if offscreen {
+        TimerSource::create(notify, fallback_interval)?
+    } else {
+        create_native(notify, fallback_interval, display_id)?
+    };
     Ok(Arc::new(OrderedBeginFrameSource { native, dispatch }))
 }
 

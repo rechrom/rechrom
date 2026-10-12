@@ -6,21 +6,18 @@ use std::ffi::c_void;
 use std::sync::Arc;
 
 use font_engine::fonts::canvas_rotation_in_vertical::IsCanvasRotationInVerticalUpright;
-use font_engine::fonts::font_backend::{FontBackend, FontBackendFactory};
 use font_engine::fonts::opentype::open_type_math_support::{MathConstants, OpenTypeMathSupport};
 use font_engine::text::native::hyphenation::HyphenationBackend;
 use font_engine::text::native::hyphenation_services::{
     NativeHyphenationResolver, NativeHyphenationResolverScope,
 };
-use font_engine::text::native::opentype_font::{FontMetric, OpenTypeFont, OpenTypeVariation};
+use font_engine::text::native::opentype_font::FontMetric;
 use font_engine::text::native::phrase_break_services::{
     NativePhraseBreakResolver, NativePhraseBreakResolverScope,
 };
 use font_engine::{
-    CanvasRotationInVertical, Font, FontBaseline, FontDescription, FontFallbackMetadata,
-    FontFallbackRole, FontFamilyType, FontOrientation, FontPlatformData, FontSelectionValue,
-    FontSmoothingMode, HarfBuzzShaper, Hyphenation, LayoutLocale, ResolvedFontFeatures, ShapeResultView,
-    SharedFontFamily, SimpleFontData,
+    CanvasRotationInVertical, Font, FontBaseline, FontDescription, FontOrientation,
+    FontSmoothingMode, HarfBuzzShaper, Hyphenation, LayoutLocale, ShapeResultView, SimpleFontData,
 };
 use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use foundation::graphics_types::graphics::paint::display_item_client::DisplayItemClient;
@@ -67,7 +64,6 @@ use layoutng_style::text_transform_services::{
     NativeTextTransformResolver, NativeTextTransformResolverScope,
 };
 
-use crate::internal::boundary::font_from_selector::FontNewFromResolvedData;
 use crate::internal::boundary::native_input::{CurrentNativeFontResolver, NativeFontResolverScope};
 use crate::internal::constraint_space::ConstraintSpace as NativeConstraintSpace;
 use crate::internal::form_control_types::AutofillState;
@@ -82,7 +78,7 @@ use crate::internal::layout_font_resolver::{NativeFontRequest, NativeFontResolve
 use crate::internal::layout_inline::LayoutInline;
 use crate::internal::layout_input::{
     BorderLineStyle, BoxDecorationBreak, ComputedStyle, ConstraintSpace, Display, Edges,
-    ExtendedStyle, FontFace, FontSmoothing, FontVariation, HyphenationProvider,
+    ExtendedStyle, FontSmoothing, FontVariation, HyphenationProvider,
     NativeNodeConstructionData, NodeKind, Offset, PaintImage, PaintStyle, PhraseBreakProvider,
     Position, Size, TextDecorationPaint, TextDecorationStyle, TextDirection, TextTransform,
     TextTransformProvider, TransformMatrix, WritingMode,
@@ -108,12 +104,16 @@ use crate::internal::shapes::shape_outside_info::ShapeOutsideInfo;
 use crate::internal::table_borders::EdgeSide;
 use crate::layout_boundary_support::LayoutBoundaryEnvironment;
 
+// Paint export retains an optical axis selected implicitly by the native face.
+const OPTICAL_SIZE_TAG: u32 = u32::from_be_bytes(*b"opsz");
+
 // cpp: layoutng/internal/boundary/layout_boundary.cc:76-111
 pub(crate) struct ReusableLayoutEnvironment {
     snapshot: ConstraintSpace,
     // The native cache is shared with its root but only one layout pass uses
     // its mutable resolver at a time, as in the source shared_ptr boundary.
     fonts: UnsafeCell<Box<dyn NativeFontResolver>>,
+    font_query_revision: u64,
 }
 
 impl ReusableLayoutEnvironment {
@@ -137,9 +137,14 @@ impl ReusableLayoutEnvironment {
                 text_transform: input.text_transform.clone(),
                 font_backend_factory: input.font_backend_factory.clone(),
                 fonts: input.fonts.clone(),
+                font_queries: input.font_queries.clone(),
                 ..ConstraintSpace::default()
             },
             fonts: UnsafeCell::new(resolver),
+            font_query_revision: input
+                .font_queries
+                .as_ref()
+                .map_or(0, font_engine::FontQueryCollector::Revision),
         }
     }
 
@@ -157,6 +162,8 @@ impl ReusableLayoutEnvironment {
             }
         }
         Self::Eligible(space)
+            && self.font_query_revision
+                == space.font_queries.as_ref().map_or(0, font_engine::FontQueryCollector::Revision)
             && same_provider(&self.snapshot.hyphenation, &space.hyphenation)
             && same_provider(&self.snapshot.phrase_break, &space.phrase_break)
             && same_provider(&self.snapshot.text_transform, &space.text_transform)
@@ -179,6 +186,11 @@ impl ReusableLayoutEnvironment {
                 &space.font_backend_factory,
             ) {
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
+            && match (&self.snapshot.font_queries, &space.font_queries) {
+                (Some(left), Some(right)) => left.ptr_eq(right),
                 (None, None) => true,
                 _ => false,
             }
@@ -219,10 +231,7 @@ impl FontBinding {
         }
         if cache.is_none() {
             let eligible = ReusableLayoutEnvironment::Eligible(space);
-            let resolver = Box::new(InputFontResolver::new(
-                &space.fonts,
-                space.font_backend_factory.as_deref(),
-            ));
+            let resolver = EngineFontResolver(space);
             if eligible {
                 cache = Some(Arc::new(ReusableLayoutEnvironment::new(space, resolver)));
             } else {
@@ -298,593 +307,6 @@ impl NativeShapeImageResolver for InputShapeImageResolver {
         }
         image as *const PaintImage
     }
-}
-
-// cpp: layoutng/internal/boundary/layout_boundary.cc:136-144
-fn EqualFamilyName(left: &str, right: &str) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    left.bytes()
-        .zip(right.bytes())
-        .all(|(left, right)| left.to_ascii_lowercase() == right.to_ascii_lowercase())
-}
-
-// cpp: layoutng/internal/boundary/layout_boundary.cc:153-175
-fn ValidateFontFace(face: &FontFace) {
-    // The public Rust family strings are valid UTF-8 by construction.
-    if !face.weight.is_finite() || face.weight < 1.0 || face.weight > 1000.0 {
-        panic!("FontFace.weight must be within 1..1000");
-    }
-    for range in &face.unicode_ranges {
-        if range.start > range.end || range.end > 0x10ffff {
-            panic!("FontFace unicode range is invalid");
-        }
-    }
-}
-
-// cpp: layoutng/internal/boundary/layout_boundary.cc:376-405
-struct InputFontFace {
-    family: String,
-    weight: f64,
-    italic: bool,
-    font: Arc<OpenTypeFont>,
-    skia_font: Option<Arc<dyn FontBackend>>,
-    unicode_ranges: Vec<(u32, u32)>,
-    variations: Vec<FontVariation>,
-    supports_optical_size: bool,
-    supports_weight: bool,
-    fallback_role: FontFallbackRole,
-    fallback_locales: Vec<String>,
-}
-
-struct InputFontEntry {
-    description: FontDescription,
-    size: f64,
-    specified_size: f64,
-    letter_spacing: f64,
-    word_spacing: f64,
-    orientation: FontOrientation,
-    language: String,
-    families: Vec<String>,
-    weight: f64,
-    italic: bool,
-    smoothing: FontSmoothing,
-    font: Persistent<Font>,
-}
-
-struct InputFontResolver {
-    faces_: Vec<InputFontFace>,
-    fonts_: Vec<InputFontEntry>,
-    font_indices_: HashMap<*const SimpleFontData, usize>,
-    font_variations_: HashMap<*const SimpleFontData, Vec<FontVariation>>,
-}
-
-// cpp: third_party/blink/renderer/core/css/font_size_functions.cc:132-168
-fn FontAspectValue(
-    font_data: &SimpleFontData,
-    metric: font_engine::fonts::font_size_adjust::Metric,
-) -> Option<f32> {
-    use font_engine::fonts::font_size_adjust::Metric;
-
-    let font_size = font_data.PlatformData().size();
-    if font_size == 0.0 {
-        return None;
-    }
-    let metrics = font_data.GetFontMetrics();
-    let value = match metric {
-        Metric::kCapHeight if metrics.CapHeight() > 0.0 => metrics.CapHeight() / font_size,
-        Metric::kChWidth if metrics.HasZeroWidth() => metrics.ZeroWidth() / font_size,
-        Metric::kIcWidth => font_data
-            .IdeographicAdvanceWidth()
-            .map_or(1.0, |value| value / font_size),
-        Metric::kIcHeight => font_data
-            .IdeographicAdvanceHeight()
-            .map_or(1.0, |value| value / font_size),
-        Metric::kExHeight if metrics.HasXHeight() => metrics.XHeight() / font_size,
-        // CSS Fonts specifies a fallback multiplier of 1 for unavailable
-        // metrics; Chromium's AspectValue follows that rule.
-        _ => 1.0,
-    };
-    Some(value)
-}
-
-impl InputFontResolver {
-    // cpp: layoutng/internal/boundary/layout_boundary.cc:146-200
-    fn new(faces: &[FontFace], backend_factory: Option<&dyn FontBackendFactory>) -> Self {
-        if faces.is_empty() {
-            panic!("ConstraintSpace.fonts must contain an OpenType face");
-        }
-        let mut prepared_faces = Vec::with_capacity(faces.len());
-        for face in faces {
-            ValidateFontFace(face);
-            let native_variations: Vec<OpenTypeVariation> = face
-                .variations
-                .iter()
-                .map(|variation| OpenTypeVariation {
-                    tag: variation.tag,
-                    value: variation.value,
-                })
-                .collect();
-            let unicode_ranges: Vec<(u32, u32)> = face
-                .unicode_ranges
-                .iter()
-                .map(|range| (range.start, range.end))
-                .collect();
-            let open_type_font = Arc::new(OpenTypeFont::new_shared(
-                face.bytes.clone(),
-                face.face_index,
-                1.0,
-                &native_variations,
-            ));
-            // Chromium obtains `system-ui` from CTFontCreateUIFontForLanguage;
-            // that UI font carries CoreText's optical instance. Reapplying the
-            // file's `opsz` axis from CSS pixels changes it into a different
-            // SFNS instance.
-            let is_native_system_ui = face.family == "system-ui";
-            let supports_optical_size =
-                !is_native_system_ui && open_type_font.HasVariationAxis(OPTICAL_SIZE_TAG);
-            let supports_weight =
-                !is_native_system_ui && open_type_font.HasVariationAxis(WEIGHT_TAG);
-            prepared_faces.push(InputFontFace {
-                family: face.family.clone(),
-                weight: face.weight,
-                italic: face.italic,
-                font: open_type_font,
-                skia_font: backend_factory.map(|factory| {
-                    factory.Create(
-                        &face.bytes,
-                        face.face_index,
-                        &face.variations,
-                        &face.native_family,
-                        &face.metrics_family,
-                        face.weight,
-                        face.italic,
-                    )
-                }),
-                unicode_ranges,
-                variations: face.variations.clone(),
-                supports_optical_size,
-                supports_weight,
-                fallback_role: face.fallback_role,
-                fallback_locales: face.fallback_locales.clone(),
-            });
-        }
-        if std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some() {
-            eprintln!(
-                "FONT_CATALOG faces={:?}",
-                prepared_faces
-                    .iter()
-                    .map(|face| (&face.family, face.weight, face.italic))
-                    .collect::<Vec<_>>()
-            );
-        }
-        Self {
-            faces_: prepared_faces,
-            fonts_: Vec::new(),
-            font_indices_: HashMap::new(),
-            font_variations_: HashMap::new(),
-        }
-    }
-
-    // cpp: layoutng/internal/boundary/layout_boundary.cc:202-217
-    fn CachedFont(
-        &self,
-        request: &NativeFontRequest<'_>,
-        description: &FontDescription,
-    ) -> Option<*mut Font> {
-        if !request.weight.is_finite() || request.weight < 1.0 || request.weight > 1000.0 {
-            panic!("font request weight must be within 1..1000");
-        }
-        let entry = self.fonts_.iter().find(|entry| {
-            entry.description == *description
-                && entry.size == request.size
-                && entry.specified_size == request.specified_size
-                && entry.letter_spacing == request.letter_spacing
-                && entry.word_spacing == request.word_spacing
-                && entry.orientation == request.orientation
-                && entry.language == request.language
-                && entry.weight == request.weight
-                && entry.italic == request.italic
-                && entry.smoothing == request.smoothing
-                && entry.families.as_slice() == request.families
-        })?;
-        Some(entry.font.Get())
-    }
-
-    // Chromium FontBuilder::UpdateAdjustedSize first resolves the primary
-    // face at the unadjusted computed size, reads that face's metrics, and
-    // only then creates the final Font at the adjusted size. Keep that work at
-    // the Style -> Layout binding boundary: Style owns FontDescription while
-    // Layout owns the concrete faces supplied by ConstraintSpace.
-    fn BuildResolvedFonts(
-        &mut self,
-        request: &NativeFontRequest<'_>,
-        description: &FontDescription,
-        order: &[usize],
-    ) -> Vec<*const SimpleFontData> {
-        let effective_size = description.EffectiveFontSize();
-        let mut ordered_fonts = Vec::with_capacity(self.faces_.len());
-        for &index in order {
-            let face = &self.faces_[index];
-            let mut skia_font = face.skia_font.clone();
-            let resolved_variations = ResolveFontVariations(
-                &face.variations,
-                face.supports_optical_size
-                    && description.FontOpticalSizing()
-                        == font_engine::OpticalSizing::kAutoOpticalSizing,
-                face.supports_weight,
-                // cpp: font_platform_data_mac.mm:168-180. Optical sizing is
-                // selected from the specified CSS size, not the zoomed or
-                // font-size-adjusted effective size.
-                request.specified_size,
-                request.weight,
-                description,
-            );
-            let native_variations: Vec<OpenTypeVariation> = resolved_variations
-                .iter()
-                .map(|variation| OpenTypeVariation {
-                    tag: variation.tag,
-                    value: variation.value,
-                })
-                .collect();
-            let open_type_font = face.font.WithSizeVariationsAndSpecifiedSize(
-                effective_size as f64,
-                &native_variations,
-                request.specified_size,
-            );
-            // A custom axis from font-variation-settings must configure the
-            // metrics/raster typeface even when the face has neither `opsz`
-            // nor `wght`. HarfBuzz already receives the same complete vector
-            // through OpenTypeFont above.
-            if !resolved_variations.is_empty() {
-                skia_font = face
-                    .skia_font
-                    .as_ref()
-                    .map(|backend| backend.WithVariations(&resolved_variations));
-            }
-            let platform = MakeGarbageCollected(FontPlatformData::new(
-                open_type_font,
-                skia_font,
-                effective_size,
-                request.weight >= 600.0 && face.weight < 600.0 && !face.supports_weight,
-                request.italic && !face.italic,
-                description.TextRendering(),
-                ResolvedFontFeatures::default(),
-                request.orientation,
-                face.unicode_ranges.clone(),
-            ));
-            let simple = SimpleFontData::Create(platform);
-            ordered_fonts.push(simple as *const SimpleFontData);
-            self.font_indices_.entry(simple).or_insert(index);
-            self.font_variations_
-                .entry(simple)
-                .or_insert(resolved_variations);
-        }
-        ordered_fonts
-    }
-
-    // cpp: layoutng/internal/boundary/layout_boundary.cc:363-367
-    fn FaceIndexFor(&self, font: *const SimpleFontData) -> usize {
-        *self.font_indices_.get(&font).expect("font face index")
-    }
-
-    // cpp: layoutng/internal/boundary/layout_boundary.cc:369-374
-    fn VariationsFor(&self, font: *const SimpleFontData) -> &[FontVariation] {
-        self.font_variations_.get(&font).expect("font variations")
-    }
-}
-
-impl NativeFontResolver for InputFontResolver {
-    // cpp: layoutng/internal/boundary/layout_boundary.cc:202-361
-    fn Resolve(&mut self, request: &NativeFontRequest<'_>) -> &mut Font {
-        // Preserve the complete computed description produced by Style. The
-        // old reconstruction from `default()` silently discarded translated
-        // properties such as font-size-adjust and OpenType feature controls.
-        let has_base_description = request.base_description.is_some();
-        let mut description = request.base_description.cloned().unwrap_or_default();
-        description.SetSpecifiedSize(request.specified_size as f32);
-        description.SetComputedSize(request.size as f32);
-        description.SetAdjustedSize(request.size as f32);
-        description.SetLetterSpacing(&Length::Fixed(request.letter_spacing));
-        description.SetWordSpacing(&Length::Fixed(request.word_spacing));
-        description.SetOrientation(request.orientation);
-        if !has_base_description {
-            description.SetWeight(FontSelectionValue::from_double(request.weight));
-            description.SetStyle(FontSelectionValue::from_int(if request.italic {
-                14
-            } else {
-                0
-            }));
-        }
-        description.SetFontSmoothing(match request.smoothing {
-            FontSmoothing::kNone => FontSmoothingMode::kNoSmoothing,
-            FontSmoothing::kAntialiased => FontSmoothingMode::kAntialiased,
-            FontSmoothing::kSubpixelAntialiased => FontSmoothingMode::kSubpixelAntialiased,
-            FontSmoothing::kAuto => FontSmoothingMode::kAutoSmoothing,
-        });
-        if !request.language.is_empty() {
-            let locale = AtomicString::FromUtf8(request.language.as_bytes());
-            description.SetLocale(LayoutLocale::GetShared(&locale));
-        }
-        if !request.families.is_empty() {
-            let mut family_chain: Option<Arc<SharedFontFamily>> = None;
-            for family in request.families.iter().rev() {
-                let name = AtomicString::FromUtf8(family.as_bytes());
-                family_chain = Some(SharedFontFamily::Create(
-                    name,
-                    FontFamilyType::kFamilyName,
-                    family_chain,
-                ));
-            }
-            description.SetFamily(family_chain.as_ref().expect("nonempty font family"));
-        }
-        let cache_description = description.clone();
-        if let Some(font) = self.CachedFont(request, &cache_description) {
-            return unsafe { &mut *font };
-        }
-        let order = OrderFontFaces(&self.faces_, request);
-        let primary_position = PrimaryFontPosition(&self.faces_, &order.indices);
-        let mut ordered_fonts = self.BuildResolvedFonts(request, &description, &order.indices);
-        let mut primary_font = ordered_fonts[primary_position];
-        if std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some() {
-            let face = &self.faces_[order.indices[primary_position]];
-            eprintln!(
-                "FONT_BIND families={:?} requested_weight={} italic={} size={} primary={} face_weight={} face_italic={} size_adjust={:?}",
-                request.families,
-                request.weight,
-                request.italic,
-                request.size,
-                face.family,
-                face.weight,
-                face.italic,
-                description.SizeAdjust(),
-            );
-        }
-        if description.HasSizeAdjust() && description.ComputedSize() != 0.0 {
-            let adjust = description.SizeAdjust();
-            let aspect = FontAspectValue(unsafe { &*primary_font }, adjust.GetMetric());
-            if adjust.IsFromFont()
-                && adjust.Value()
-                    == font_engine::fonts::font_size_adjust::FontSizeAdjust::kFontSizeAdjustNone
-            {
-                description.SetSizeAdjust(
-                    &font_engine::fonts::font_size_adjust::FontSizeAdjust::with_metric_and_type(
-                        aspect.unwrap_or(
-                            font_engine::fonts::font_size_adjust::FontSizeAdjust::kFontSizeAdjustNone,
-                        ),
-                        adjust.GetMetric(),
-                        font_engine::fonts::font_size_adjust::ValueType::kFromFont,
-                    ),
-                );
-            }
-            let adjust = description.SizeAdjust();
-            if adjust.Value()
-                != font_engine::fonts::font_size_adjust::FontSizeAdjust::kFontSizeAdjustNone
-            {
-                if let Some(aspect) = aspect.filter(|value| *value != 0.0) {
-                    let adjusted = (adjust.Value() / aspect) * description.ComputedSize();
-                    if adjusted.is_finite() && adjusted > 0.0 {
-                        description.SetAdjustedSize(adjusted);
-                        ordered_fonts =
-                            self.BuildResolvedFonts(request, &description, &order.indices);
-                        primary_font = ordered_fonts[primary_position];
-                    }
-                }
-            }
-        }
-        if std::env::var_os("RECHROM_TRACE_CONTROL_WIDTH").is_some() && request.size == 14.0 {
-            let face = &self.faces_[order.indices[primary_position]];
-            eprintln!(
-                "RESOLVED_PRIMARY family={} variations={:?}",
-                face.family,
-                self.font_variations_.get(&primary_font)
-            );
-        }
-        let fallback_metadata: Vec<FontFallbackMetadata> = order
-            .indices
-            .iter()
-            .map(|&index| {
-                let face = &self.faces_[index];
-                FontFallbackMetadata {
-                    role: face.fallback_role,
-                    locales: face.fallback_locales.clone(),
-                    weight: face.weight as f32,
-                    italic: face.italic,
-                }
-            })
-            .collect();
-        let font = MakeGarbageCollected(unsafe {
-            FontNewFromResolvedData(
-                &description,
-                &ordered_fonts,
-                primary_font,
-                &fallback_metadata,
-                order.font_group_length,
-            )
-        });
-        self.fonts_.push(InputFontEntry {
-            description: cache_description,
-            size: request.size,
-            specified_size: request.specified_size,
-            letter_spacing: request.letter_spacing,
-            word_spacing: request.word_spacing,
-            orientation: request.orientation,
-            language: request.language.to_owned(),
-            families: request.families.to_vec(),
-            weight: request.weight,
-            italic: request.italic,
-            smoothing: request.smoothing,
-            font: Persistent::from_ptr(font),
-        });
-        unsafe { &mut *font }
-    }
-
-    fn FaceIndex(&self, font_data: *const SimpleFontData) -> usize {
-        self.FaceIndexFor(font_data)
-    }
-
-    fn Variations(&self, font_data: *const SimpleFontData) -> &[FontVariation] {
-        self.VariationsFor(font_data)
-    }
-}
-
-// Blink FontSelectionAlgorithm / CSS Fonts weight matching is directional.
-// Above 500, prefer a heavier face before searching lighter weights; between
-// 400 and 500, first search upward through 500, then downward, then above 500.
-fn FontWeightRank(candidate: f64, requested: f64) -> (u8, f64) {
-    if requested < 400.0 {
-        if candidate <= requested {
-            (0, requested - candidate)
-        } else {
-            (1, candidate - requested)
-        }
-    } else if requested <= 500.0 {
-        if candidate >= requested && candidate <= 500.0 {
-            (0, candidate - requested)
-        } else if candidate < requested {
-            (1, requested - candidate)
-        } else {
-            (2, candidate - requested)
-        }
-    } else if candidate >= requested {
-        (0, candidate - requested)
-    } else {
-        (1, requested - candidate)
-    }
-}
-
-// cpp: layoutng/internal/boundary/layout_boundary.cc:259-292
-struct FontFaceOrder {
-    indices: Vec<usize>,
-    font_group_length: usize,
-}
-
-fn OrderFontFaces(faces: &[InputFontFace], request: &NativeFontRequest<'_>) -> FontFaceOrder {
-    let mut order = Vec::with_capacity(faces.len());
-    let mut selected = vec![false; faces.len()];
-    let append_best_face = |family: &str, order: &mut Vec<usize>, selected: &mut [bool]| loop {
-        let mut best: Option<usize> = None;
-        for (index, face) in faces.iter().enumerate() {
-            if !selected[index] && !face.family.is_empty() && EqualFamilyName(family, &face.family)
-            {
-                let rank = (
-                    face.italic != request.italic,
-                    FontWeightRank(face.weight, request.weight),
-                    index,
-                );
-                if best.map_or(true, |previous| {
-                    let previous_face = &faces[previous];
-                    let previous_rank = (
-                        previous_face.italic != request.italic,
-                        FontWeightRank(previous_face.weight, request.weight),
-                        previous,
-                    );
-                    rank < previous_rank
-                }) {
-                    best = Some(index);
-                }
-            }
-        }
-        let Some(best) = best else { break };
-        selected[best] = true;
-        order.push(best);
-    };
-    for family in request.families {
-        append_best_face(family, &mut order, &mut selected);
-    }
-    if request.families.is_empty() && !faces[0].family.is_empty() {
-        append_best_face(&faces[0].family, &mut order, &mut selected);
-    }
-    if order.is_empty()
-        && !faces
-            .iter()
-            .any(|face| face.fallback_role != FontFallbackRole::kFamilyOnly)
-    {
-        // Small embedders often provide one unclassified face. Preserve that
-        // face as the family/.notdef candidate without publishing it as a
-        // general platform fallback font.
-        selected[0] = true;
-        order.push(0);
-    }
-    let font_group_length = order.len();
-    for (index, face) in faces.iter().enumerate() {
-        if !selected[index]
-            && !matches!(
-                face.fallback_role,
-                FontFallbackRole::kFamilyOnly | FontFallbackRole::kLastResort
-            )
-        {
-            order.push(index);
-        }
-    }
-    for (index, face) in faces.iter().enumerate() {
-        if !selected[index] && face.fallback_role == FontFallbackRole::kLastResort {
-            order.push(index);
-        }
-    }
-    FontFaceOrder {
-        indices: order,
-        font_group_length,
-    }
-}
-
-// cpp: layoutng/internal/boundary/layout_boundary.cc:296-315
-const OPTICAL_SIZE_TAG: u32 = u32::from_be_bytes(*b"opsz");
-const WEIGHT_TAG: u32 = u32::from_be_bytes(*b"wght");
-
-fn ResolveFontVariations(
-    face_variations: &[FontVariation],
-    apply_optical_size: bool,
-    supports_weight: bool,
-    specified_size: f64,
-    request_weight: f64,
-    description: &FontDescription,
-) -> Vec<FontVariation> {
-    let mut variations = face_variations.to_vec();
-    let mut set_variation = |tag, value: f64| {
-        if let Some(setting) = variations.iter_mut().find(|setting| setting.tag == tag) {
-            setting.value = value as f32;
-        } else {
-            variations.push(FontVariation {
-                tag,
-                value: value as f32,
-            });
-        }
-    };
-    if apply_optical_size {
-        set_variation(OPTICAL_SIZE_TAG, specified_size);
-    }
-    if supports_weight {
-        set_variation(WEIGHT_TAG, request_weight);
-    }
-    // cpp: font_platform_data_mac.mm:157-180. Registered-axis values derived
-    // from high-level CSS properties are installed first. Explicit
-    // font-variation-settings are applied last and therefore win, including
-    // an explicit `opsz` overriding font-optical-sizing:auto. The face vector
-    // contains catalog/@font-face defaults and remains the lowest priority.
-    if let Some(settings) = description.VariationSettings() {
-        for setting in settings.iter() {
-            set_variation(setting.Tag(), setting.Value() as f64);
-        }
-    }
-    variations.sort_unstable_by_key(|setting| setting.tag);
-    variations
-}
-
-// cpp: layoutng/internal/boundary/layout_boundary.cc:338-349
-fn PrimaryFontPosition(faces: &[InputFontFace], order: &[usize]) -> usize {
-    for (position, &index) in order.iter().enumerate() {
-        let ranges = &faces[index].unicode_ranges;
-        if ranges.is_empty()
-            || ranges
-                .iter()
-                .any(|range| range.0 <= 0x20 && 0x20 <= range.1)
-        {
-            return position;
-        }
-    }
-    0
 }
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:413-426
@@ -1158,15 +580,19 @@ impl NativeFontResolver for DeferredFontResolver {
     }
 }
 
+fn EngineFontResolver(space: &ConstraintSpace) -> Box<dyn NativeFontResolver> {
+    let mut engine =
+        font_engine::FontEngine::FromFaces(&space.fonts, space.font_backend_factory.clone());
+    engine.SetQueryCollector(space.font_queries.clone());
+    Box::new(engine)
+}
+
 // cpp: layoutng/internal/boundary/layout_boundary.cc:560-565
 pub(crate) fn ConstructionFontResolver(space: &ConstraintSpace) -> Box<dyn NativeFontResolver> {
     if space.fonts.is_empty() {
         return Box::new(DeferredFontResolver::new());
     }
-    Box::new(InputFontResolver::new(
-        &space.fonts,
-        space.font_backend_factory.as_deref(),
-    ))
+    EngineFontResolver(space)
 }
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:567-693

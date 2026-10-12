@@ -762,3 +762,205 @@ pub fn resources(list: &paint::paint_engine::PaintArtifact) -> target::ResourceC
         }),
     }
 }
+
+#[cfg(test)]
+mod font_identity_tests {
+    use super::*;
+    use layoutng_assembly::fragment_tree::{PaintGlyph, PaintResources};
+    use layoutng_assembly::internal::layout_input::{FontFace, FontVariation, Offset};
+    use paint::paint_engine::{DisplayItem, DisplayItemType, PaintArtifact};
+    use std::sync::Arc;
+
+    #[test]
+    fn paint_to_skia_preserves_exact_face_and_glyph_identity() {
+        let font = FontFace {
+            family: "CSS alias".into(),
+            native_family: "metadata must not select a face".into(),
+            bytes: Vec::from(b"selected immutable font data".as_slice()).into(),
+            face_index: 0x20003,
+            variations: vec![FontVariation {
+                tag: u32::from_be_bytes(*b"wght"),
+                value: 550.0,
+            }],
+            ..Default::default()
+        };
+        let source_bytes = font.bytes.clone();
+        let item = DisplayItem {
+            r#type: DisplayItemType::kDrawGlyphRun,
+            font_face_index: 0,
+            font_variations: vec![FontVariation {
+                tag: u32::from_be_bytes(*b"opsz"),
+                value: 12.0,
+            }],
+            synthetic_bold: true,
+            synthetic_italic: true,
+            glyphs: vec![PaintGlyph {
+                id: 513,
+                character_index: 4,
+                offset: Offset { x: 2.5, y: -1.0 },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let artifact = PaintArtifact {
+            resources: Some(Arc::new(PaintResources {
+                fonts: vec![font],
+                ..Default::default()
+            })),
+            items: Arc::new(vec![item]),
+            ..Default::default()
+        };
+        let converted = resources(&artifact);
+        let face = &converted.resources.as_ref().unwrap().fonts[0];
+        assert_eq!(face.bytes, source_bytes.as_ref());
+        assert_eq!(
+            face.bytes.as_ptr(),
+            source_bytes.as_ptr(),
+            "do not copy the font snapshot"
+        );
+        assert_eq!(face.face_index, 0x20003);
+        assert_eq!(face.variations[0].tag, u32::from_be_bytes(*b"wght"));
+        assert_eq!(face.variations[0].value, 550.0);
+        let command = artifact.items[0].to_skia();
+        assert_eq!(command.font_face_index, 0);
+        assert_eq!(command.font_variations[0].tag, u32::from_be_bytes(*b"opsz"));
+        assert_eq!(command.font_variations[0].value, 12.0);
+        assert_eq!(command.glyphs[0].id, 513);
+        assert_eq!(command.glyphs[0].character_index, 4);
+        assert_eq!(command.glyphs[0].offset.x, 2.5);
+        assert_eq!(command.glyphs[0].offset.y, -1.0);
+        assert!(command.synthetic_bold && command.synthetic_italic);
+    }
+
+    #[test]
+    fn font_data_replacement_keeps_old_paint_snapshot_independent() {
+        let old = PaintArtifact {
+            resources: Some(Arc::new(PaintResources {
+                fonts: vec![FontFace {
+                    family: "same family".into(),
+                    bytes: Vec::from(b"old font data".as_slice()).into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let mut new = old.clone();
+        Arc::make_mut(new.resources.as_mut().unwrap()).fonts[0].bytes =
+            Vec::from(b"new font data".as_slice()).into();
+        let old_skia = resources(&old);
+        let new_skia = resources(&new);
+        let old_face = &old_skia.resources.as_ref().unwrap().fonts[0];
+        let new_face = &new_skia.resources.as_ref().unwrap().fonts[0];
+        assert_eq!(old_face.family, new_face.family);
+        assert_eq!(old_face.bytes, b"old font data");
+        assert_eq!(new_face.bytes, b"new font data");
+        assert_ne!(old_face.bytes.as_ptr(), new_face.bytes.as_ptr());
+    }
+
+    fn render_selected_source(bytes: font_engine::SharedFontBytes, face_index: u32) -> Vec<u8> {
+        use font_engine::{OpenTypeFont, TextDirection};
+        let font = OpenTypeFont::new_shared(bytes.clone(), face_index, 24.0, &[]);
+        let shaped = font.ShapeRun("Exact face", TextDirection::kLtr, "en", "Latn");
+        assert!(!shaped.glyphs.is_empty());
+        assert!(shaped.glyphs.iter().all(|glyph| glyph.id != 0));
+        let mut x = 0.0;
+        let glyphs = shaped
+            .glyphs
+            .iter()
+            .map(|glyph| {
+                let painted = PaintGlyph {
+                    id: glyph.id,
+                    character_index: glyph.cluster,
+                    offset: Offset {
+                        x: x + glyph.x_offset,
+                        y: -glyph.y_offset,
+                    },
+                    ..Default::default()
+                };
+                x += glyph.x_advance;
+                painted
+            })
+            .collect();
+        let artifact = PaintArtifact {
+            resources: Some(Arc::new(PaintResources {
+                fonts: vec![FontFace {
+                    family: "CSS alias".into(),
+                    native_family: "a nonexistent platform font family 314159".into(),
+                    bytes,
+                    face_index,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            items: Arc::new(vec![DisplayItem {
+                r#type: DisplayItemType::kDrawGlyphRun,
+                font_size: 24.0,
+                color: layoutng_assembly::internal::layout_input_types::Color {
+                    red: 0.0,
+                    green: 0.0,
+                    blue: 0.0,
+                    alpha: 1.0,
+                },
+                text_blob_origin: Offset { x: 5.0, y: 32.0 },
+                glyphs,
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let render = |artifact: &PaintArtifact| {
+            let resources = resources(artifact);
+            let mut canvas = skia::cpu::canvas::Canvas::new(&resources, 180, 48);
+            canvas.replay_item(&artifact.items[0].to_skia(), &resources);
+            canvas.finish()
+        };
+        let mislabeled = render(&artifact);
+        assert!(mislabeled
+            .chunks_exact(4)
+            .any(|pixel| pixel != [255, 255, 255, 255]));
+        let mut without_metadata = artifact.clone();
+        let face = &mut Arc::make_mut(without_metadata.resources.as_mut().unwrap()).fonts[0];
+        face.family.clear();
+        face.native_family.clear();
+        assert_eq!(mislabeled, render(&without_metadata));
+        mislabeled
+    }
+
+    #[test]
+    fn shaped_glyphs_render_selected_bytes_even_with_unresolvable_family_metadata() {
+        render_selected_source(
+            include_bytes!("../../../assets/fonts/Roboto-Regular.ttf").into(),
+            0,
+        );
+    }
+
+    #[test]
+    fn shaped_collection_face_rasters_like_the_same_standalone_face() {
+        let reference = include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
+        let other = include_bytes!("../../skia/src/ports/spider_symbol.ttf");
+        let mut collection = Vec::from(b"ttcf".as_slice());
+        collection.extend_from_slice(&0x00010000u32.to_be_bytes());
+        collection.extend_from_slice(&2u32.to_be_bytes());
+        collection.extend_from_slice(&[0; 8]);
+        for (index, source) in [other.as_slice(), reference.as_slice()]
+            .into_iter()
+            .enumerate()
+        {
+            while collection.len() % 4 != 0 {
+                collection.push(0);
+            }
+            let start = collection.len();
+            collection[12 + index * 4..16 + index * 4]
+                .copy_from_slice(&(start as u32).to_be_bytes());
+            collection.extend_from_slice(source);
+            let tables = u16::from_be_bytes(source[4..6].try_into().unwrap()) as usize;
+            for table in 0..tables {
+                let at = start + 12 + table * 16 + 8;
+                let offset = u32::from_be_bytes(collection[at..at + 4].try_into().unwrap());
+                collection[at..at + 4].copy_from_slice(&(offset + start as u32).to_be_bytes());
+            }
+        }
+        let selected = render_selected_source(collection.into(), 1);
+        assert_eq!(selected, render_selected_source(reference.into(), 0));
+    }
+}

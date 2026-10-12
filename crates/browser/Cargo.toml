@@ -52,8 +52,9 @@ layoutng_style = { path = "../layoutng_style" }
 [features]
 default = ["inline_layout", "pure_source_png"]
 inline_layout = ["layoutng_assembly/translation_in_progress", "layoutng_block/inline_extension", "dep:layoutng_out_of_flow"]
+# Explicit C++ reference-oracle features; never enabled by a platform default.
 native_text = ["raster/text"]
 source_paint = ["paint/translation_in_progress"]
 source_png = ["source_paint", "raster/source_replay"]
-pure_source_png = ["source_paint", "raster/pure_replay", "raster/font_backend"]
+pure_source_png = ["source_paint", "raster/pure_replay"]
 raster_profile = ["raster/profiling"]

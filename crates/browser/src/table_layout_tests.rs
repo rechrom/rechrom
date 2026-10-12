@@ -35,7 +35,7 @@ fn body() {
     space.fonts.push(FontFace {
         family: "sans-serif".into(),
         bytes: include_bytes!(
-            "../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
+            "../../../assets/fonts/Roboto-Regular.ttf"
         )
         .as_slice()
         .into(),

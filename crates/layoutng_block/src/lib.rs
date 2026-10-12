@@ -44,7 +44,7 @@ mod block_fixture_test {
         space.fonts.push(FontFace {
             family: "Roboto".into(),
             bytes: include_bytes!(
-                "../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
+                "../../../assets/fonts/Roboto-Regular.ttf"
             )
             .as_slice()
             .into(),

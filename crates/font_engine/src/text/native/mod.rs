@@ -20,3 +20,4 @@ pub mod rustybuzz_shaper;
 pub mod text_break_iterator;
 pub mod unicode_category;
 pub mod vertical_orientation_data;
+mod variation_sequence_data;

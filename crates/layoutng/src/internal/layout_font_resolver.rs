@@ -82,3 +82,34 @@ pub trait NativeFontResolver {
 // cpp: layoutng/internal/layout_font_resolver.h:44-44
 // The implementation is in boundary/native_input.cc, translated with that file.
 pub use super::boundary::native_input::CurrentNativeFontResolver;
+
+// Layout carries writing-mode context, while font selection only needs the
+// resolved orientation. Matching and caching belong entirely to FontEngine.
+impl NativeFontResolver for font_engine::FontEngine {
+    fn Resolve(&mut self, request: &NativeFontRequest<'_>) -> &mut Font {
+        font_engine::FontEngine::ResolveFont(
+            self,
+            &font_engine::resolver::FontRequest {
+                base_description: request.base_description,
+                size: request.size,
+                specified_size: request.specified_size,
+                letter_spacing: request.letter_spacing,
+                word_spacing: request.word_spacing,
+                language: request.language,
+                families: request.families,
+                weight: request.weight,
+                italic: request.italic,
+                orientation: request.orientation,
+                smoothing: request.smoothing,
+            },
+        )
+    }
+
+    fn FaceIndex(&self, font_data: *const SimpleFontData) -> usize {
+        font_engine::FontEngine::FaceIndex(self, font_data)
+    }
+
+    fn Variations(&self, font_data: *const SimpleFontData) -> &[FontVariation] {
+        font_engine::FontEngine::Variations(self, font_data)
+    }
+}

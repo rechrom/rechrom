@@ -1,4 +1,4 @@
-use crate::window_surface::WindowSurface;
+use crate::window_surface::{DisplayTarget, WindowSurface};
 use crate::{
     crash_report::{CrashReport, CrashReportSink, JsonCrashReportSink},
     engine::{self, Command, FatalError, Output, UserEvent, Viewport},
@@ -19,58 +19,22 @@ use winit::{
 };
 
 pub fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
+    // Headless must branch before constructing any native event loop, window,
+    // or display handle. Its event pump and render target are entirely in memory.
+    if options.headless {
+        return crate::headless::run(options);
+    }
     let working_directory = std::env::current_dir()?;
     let current_location = options.address.clone();
-    let crash_reports: Option<Box<dyn CrashReportSink>> = (!options.headless).then(|| {
-        Box::new(JsonCrashReportSink::new(
-            working_directory.join("rechrom-crash-reports"),
-        )) as Box<dyn CrashReportSink>
-    });
-    browser_tracing::register_target(1, "Page", &options.address);
-    browser_tracing::register_target(2, "Browser toolbar", "browser://toolbar");
-    let devtools_url = devtools::serve(options.devtools_port).or_else(|error| {
-        if error.kind() == io::ErrorKind::AddrInUse {
-            devtools::serve(0)
-        } else {
-            Err(error)
-        }
-    })?;
-    println!("devtools-url\t{devtools_url}");
+    let crash_reports: Option<Box<dyn CrashReportSink>> = Some(Box::new(JsonCrashReportSink::new(
+        working_directory.join("rechrom-crash-reports"),
+    )));
+    let devtools_url = crate::devtools_host::serve(options.devtools_port, &options.address)?;
     // winit owns the native application's main thread (required on macOS).
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
     let mailbox: engine::FrameMailbox = Arc::new(Mutex::new(None));
-    let screenshot_mailbox = mailbox.clone();
-    devtools::set_screenshot_handler(Arc::new(move |target_id| {
-        let frame = screenshot_mailbox.lock().unwrap();
-        let frame = frame.as_ref().ok_or("No completed frame")?;
-        let surface = match target_id {
-            1 => &frame.content,
-            2 => &frame.toolbar,
-            _ => return Err("target_id must be 1 (page) or 2 (browser toolbar)".into()),
-        };
-        let (width, height) = surface.size();
-        // Page.captureScreenshot returns the composited page against its
-        // default canvas background. Keep the protocol image opaque like
-        // Chromium unless transparent-background emulation is explicitly
-        // added later. Some otherwise blank tiles retain zero alpha in the
-        // internal surface even though native presentation is opaque.
-        let mut pixels = surface.pixels().to_vec();
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel[3] = 255;
-        }
-        let mut encoded = Vec::new();
-        {
-            let mut encoder = png::Encoder::new(&mut encoded, width, height);
-            encoder.set_color(png::ColorType::Rgba);
-            encoder.set_depth(png::BitDepth::Eight);
-            let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
-            writer
-                .write_image_data(&pixels)
-                .map_err(|error| error.to_string())?;
-        }
-        Ok(encoded)
-    }));
+    crate::devtools_host::attach_screenshots(mailbox.clone());
     let output = Output {
         mailbox: mailbox.clone(),
         notify: Arc::new(move |event| {
@@ -101,6 +65,20 @@ pub fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
+
+pub(crate) fn presentation_config(capture_frames: bool) -> crate::presentation_runtime::Config {
+    crate::presentation_runtime::Config {
+        // Placement is a host policy. Compositor and Display keep the same
+        // message boundary whichever executor and render target are chosen.
+        display_executor: if std::env::var_os("RUST_AI_DISPLAY_WITH_COMPOSITOR").is_some() {
+            crate::presentation_runtime::DisplayExecutor::CompositorThread
+        } else {
+            crate::presentation_runtime::DisplayExecutor::DedicatedThread
+        },
+        capture_frames,
+    }
+}
+
 struct App {
     devtools_url: String,
     options: Options,
@@ -257,22 +235,10 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
-            // DevTools Page.captureScreenshot addresses the content target, so
-            // headless --height follows CDP viewport semantics.  The hidden
-            // host still owns a toolbar Page; allocate its height outside the
-            // requested content viewport instead of silently shrinking
-            // window.innerHeight and changing responsive layout.
-            let window_height = self.options.height
-                + if self.options.headless {
-                    crate::chrome::HEIGHT as u32
-                } else {
-                    0
-                };
             let attributes = Window::default_attributes()
                 .with_title("Rechrom")
-                .with_inner_size(LogicalSize::new(self.options.width, window_height))
-                .with_min_inner_size(LogicalSize::new(320, 200))
-                .with_visible(!self.options.headless);
+                .with_inner_size(LogicalSize::new(self.options.width, self.options.height))
+                .with_min_inner_size(LogicalSize::new(320, 200));
             #[cfg(target_os = "macos")]
             let attributes = {
                 use winit::platform::macos::WindowAttributesExtMacOS;
@@ -305,7 +271,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.viewport(),
                 self.options.address.clone(),
                 self.output.clone(),
-                surface,
+                DisplayTarget::Native(surface),
                 self.window
                     .as_ref()
                     .and_then(|window| window.current_monitor())
@@ -313,148 +279,10 @@ impl ApplicationHandler<UserEvent> for App {
                     .map(|rate| Duration::from_secs_f64(1000.0 / f64::from(rate)))
                     .unwrap_or(Duration::from_secs_f64(1.0 / 60.0)),
                 self.current_display_id(),
-                crate::presentation_runtime::Config {
-                    // Placement is a host policy. Compositor and Display keep
-                    // the same message boundary whichever executor is chosen.
-                    display_executor: if std::env::var_os("RUST_AI_DISPLAY_WITH_COMPOSITOR")
-                        .is_some()
-                    {
-                        crate::presentation_runtime::DisplayExecutor::CompositorThread
-                    } else {
-                        crate::presentation_runtime::DisplayExecutor::DedicatedThread
-                    },
-                    capture_frames: self.options.headless,
-                },
+                presentation_config(false),
             ) {
                 Ok(commands) => {
-                    let navigate_commands = commands.clone();
-                    devtools::set_navigate_handler(Arc::new(move |url| {
-                        navigate_commands
-                            .send(Command::Navigate(url))
-                            .map_err(|error| error.to_string())
-                    }));
-                    let reload_commands = commands.clone();
-                    devtools::set_reload_handler(Arc::new(move || {
-                        reload_commands
-                            .send(Command::Reload)
-                            .map_err(|error| error.to_string())
-                    }));
-                    let evaluate_commands = commands.clone();
-                    devtools::set_evaluate_handler(Arc::new(move |source| {
-                        let (reply, result) = mpsc::channel();
-                        evaluate_commands
-                            .send(Command::Evaluate { source, reply })
-                            .map_err(|error| error.to_string())?;
-                        result
-                            .recv_timeout(Duration::from_secs(10))
-                            .map_err(|error| error.to_string())?
-                    }));
-                    let wheel_commands = commands.clone();
-                    devtools::set_wheel_handler(Arc::new(move |wheel| {
-                        use interaction::input_event::{
-                            InputEvent, ScrollGranularity, WheelEvent, WheelPhase,
-                        };
-                        use layoutng_assembly::internal::layout_input::Offset;
-                        let phase = match wheel.phase.as_str() {
-                            "began" => WheelPhase::kBegan,
-                            "changed" => WheelPhase::kChanged,
-                            "ended" => WheelPhase::kEnded,
-                            "cancelled" => WheelPhase::kCancelled,
-                            "none" => WheelPhase::kNone,
-                            _ => return Err("Unsupported wheel phase".into()),
-                        };
-                        // Local synthetic input shares the native dispatch queue
-                        // and window coordinates, without fabricating NSEvent time.
-                        let input = InputEvent::Wheel(WheelEvent {
-                            position: Offset {
-                                x: wheel.x,
-                                y: wheel.y,
-                            },
-                            delta: Offset {
-                                x: wheel.delta_x,
-                                y: wheel.delta_y,
-                            },
-                            phase,
-                            native: None,
-                            delta_units: if wheel.precise {
-                                ScrollGranularity::kScrollByPrecisePixel
-                            } else {
-                                ScrollGranularity::kScrollByPixel
-                            },
-                            ..Default::default()
-                        });
-                        wheel_commands
-                            .send(Command::QueuedInput {
-                                input,
-                                queued_at: Instant::now(),
-                                samples: 1,
-                            })
-                            .map_err(|error| error.to_string())
-                    }));
-                    let mouse_commands = commands.clone();
-                    devtools::set_mouse_handler(Arc::new(move |mouse| {
-                        use interaction::input_event::{
-                            InputEvent, MouseButton, MouseEvent, MouseEventType,
-                        };
-                        use layoutng_assembly::internal::layout_input::Offset;
-                        let button = match mouse.button.as_str() {
-                            "none" => MouseButton::kNone,
-                            "left" => MouseButton::kPrimary,
-                            "right" => MouseButton::kSecondary,
-                            "middle" => MouseButton::kMiddle,
-                            _ => return Err("Unsupported mouse button".into()),
-                        };
-                        let kinds: &[MouseEventType] = match mouse.event_type.as_str() {
-                            "mouseMoved" => &[MouseEventType::kMove],
-                            "mousePressed" => &[MouseEventType::kDown],
-                            "mouseReleased" if mouse.click_count == 2 => &[
-                                MouseEventType::kUp,
-                                MouseEventType::kClick,
-                                MouseEventType::kDoubleClick,
-                            ],
-                            "mouseReleased" => &[MouseEventType::kUp, MouseEventType::kClick],
-                            _ => return Err("Unsupported mouse event type".into()),
-                        };
-                        let queued_at = Instant::now();
-                        for &kind in kinds {
-                            mouse_commands
-                                .send(Command::QueuedInput {
-                                    input: InputEvent::Mouse(MouseEvent {
-                                        r#type: kind,
-                                        button: if kind == MouseEventType::kMove {
-                                            MouseButton::kNone
-                                        } else {
-                                            button
-                                        },
-                                        // DevTools coordinates address the page target; the
-                                        // native queue uses full-window coordinates.
-                                        position: Offset {
-                                            x: mouse.x,
-                                            y: mouse.y + crate::chrome::HEIGHT,
-                                        },
-                                        ..Default::default()
-                                    }),
-                                    queued_at,
-                                    samples: 1,
-                                })
-                                .map_err(|error| error.to_string())?;
-                        }
-                        Ok(())
-                    }));
-                    let text_commands = commands.clone();
-                    devtools::set_insert_text_handler(Arc::new(move |text| {
-                        use interaction::input_event::{InputEvent, TextInputEvent};
-                        text_commands
-                            .send(Command::QueuedInput {
-                                input: InputEvent::TextInput(TextInputEvent {
-                                    text,
-                                    ..Default::default()
-                                }),
-                                queued_at: Instant::now(),
-                                samples: 1,
-                            })
-                            .map_err(|error| error.to_string())
-                    }));
+                    crate::devtools_host::attach_commands(&commands);
                     self.commands = Some(commands);
                     self.last_requested_display.set(self.current_display_id());
                 }

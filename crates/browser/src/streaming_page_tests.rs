@@ -1056,7 +1056,7 @@ fn resource_turn_budget_is_shared_by_loading_lifecycle_and_no_script_page() {
                     text_encoding: "utf-8".into(),
                     body: if font {
                         include_bytes!(
-                            "../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
+                            "../../../assets/fonts/Roboto-Regular.ttf"
                         )
                         .to_vec()
                     } else {

@@ -262,7 +262,7 @@ mod tests {
                 family: "sans-serif".into(),
                 bytes: std::fs::read(concat!(
                     env!("CARGO_MANIFEST_DIR"),
-                    "/../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
+                    "/../../assets/fonts/Roboto-Regular.ttf"
                 ))
                 .unwrap()
                 .into(),

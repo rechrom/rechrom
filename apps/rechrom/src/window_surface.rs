@@ -6,6 +6,116 @@ use std::{io, num::NonZeroU32, sync::Arc};
 pub(crate) type WindowTarget =
     WindowSurface<std::sync::Arc<winit::window::Window>, std::sync::Arc<winit::window::Window>>;
 
+/// Host allocation/presentation choice. Both targets consume the same Viz
+/// aggregate through Renderer; offscreen mode owns only ordinary CPU memory.
+pub(crate) enum DisplayTarget {
+    Native(WindowTarget),
+    Offscreen,
+}
+
+pub(crate) enum PreparedDisplayTarget {
+    Native(PreparedWindowFrame),
+    Offscreen { pixels: Vec<u32>, row_stride: usize },
+}
+
+impl PreparedDisplayTarget {
+    pub(crate) fn readback_rgba(
+        &self,
+        viewport: crate::engine::Viewport,
+    ) -> io::Result<crate::engine::WindowFrame> {
+        match self {
+            Self::Native(frame) => frame.readback_rgba(viewport),
+            Self::Offscreen { pixels, row_stride } => {
+                readback_pixels(pixels, *row_stride, false, viewport)
+            }
+        }
+    }
+}
+
+impl DisplayTarget {
+    pub(crate) fn is_native(&self) -> bool {
+        matches!(self, Self::Native(_))
+    }
+
+    pub(crate) fn render_aggregated_frame(
+        &mut self,
+        frame: &viz::AggregatedFrame,
+        renderer: &mut Renderer,
+        toolbar_raster: &raster::RasterEngine,
+        content_raster: Option<&raster::RasterEngine>,
+        viewport: crate::engine::Viewport,
+        present_sequence: u64,
+    ) -> io::Result<PreparedDisplayTarget> {
+        match self {
+            Self::Native(target) => target
+                .render_aggregated_frame(
+                    frame,
+                    renderer,
+                    toolbar_raster,
+                    content_raster,
+                    viewport,
+                    present_sequence,
+                )
+                .map(PreparedDisplayTarget::Native),
+            Self::Offscreen => {
+                if !viewport.valid() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid offscreen viewport",
+                    ));
+                }
+                let mut pixels = vec![0u32; viewport.width as usize * viewport.height as usize];
+                let row_stride = viewport.width as usize;
+                let resources = WindowRasterResources {
+                    toolbar: toolbar_raster,
+                    content: content_raster,
+                };
+                renderer.Render(
+                    frame,
+                    &resources,
+                    RenderTarget {
+                        width: viewport.width,
+                        height: viewport.height,
+                        pixels: &mut pixels,
+                        format: skia::PixelFormat::Bgrx8888,
+                        row_stride,
+                    },
+                )?;
+                Ok(PreparedDisplayTarget::Offscreen { pixels, row_stride })
+            }
+        }
+    }
+
+    pub(crate) fn present_prepared(
+        &mut self,
+        prepared: PreparedDisplayTarget,
+        sequence: u64,
+        on_complete: softbuffer::PresentCallback,
+    ) -> io::Result<()> {
+        match (self, prepared) {
+            (Self::Native(target), PreparedDisplayTarget::Native(frame)) => {
+                target.present_prepared(frame, sequence, on_complete)
+            }
+            (Self::Offscreen, PreparedDisplayTarget::Offscreen { .. }) => {
+                // A memory swap completes synchronously. The caller queues its
+                // acknowledgement so Viz submission is recorded before ack.
+                let now = std::time::Instant::now();
+                browser_tracing::instant(
+                    "frame",
+                    "OffscreenFrameComplete",
+                    &[("present_sequence", sequence as f64)],
+                );
+                on_complete(now, now);
+                Ok(())
+            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "prepared frame target mismatch",
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 pub struct SurfaceLayer<'a> {
     pub surface: &'a RasterSurface,
@@ -61,30 +171,39 @@ impl PreparedWindowFrame {
             (self.buffer.pixels(), self.buffer.row_stride(), true);
         #[cfg(not(target_os = "macos"))]
         let (pixels, row_stride, has_alpha) = (self.pixels.as_slice(), self.row_stride, false);
-        let rows = |start_y: u32, height: u32| -> io::Result<RasterSurface> {
-            let mut rgba = Vec::with_capacity(viewport.width as usize * height as usize * 4);
-            for y in start_y..start_y + height {
-                let row = &pixels
-                    [y as usize * row_stride..y as usize * row_stride + viewport.width as usize];
-                for &pixel in row {
-                    let bytes = pixel.to_ne_bytes();
-                    rgba.extend_from_slice(&[
-                        bytes[2],
-                        bytes[1],
-                        bytes[0],
-                        if has_alpha { bytes[3] } else { 255 },
-                    ]);
-                }
-            }
-            RasterSurface::from_pixels(viewport.width, height, rgba)
-        };
-        let toolbar_height = viewport.toolbar_pixels();
-        Ok(crate::engine::WindowFrame {
-            viewport,
-            toolbar: rows(0, toolbar_height)?,
-            content: rows(toolbar_height, viewport.height - toolbar_height)?,
-        })
+        readback_pixels(pixels, row_stride, has_alpha, viewport)
     }
+}
+
+fn readback_pixels(
+    pixels: &[u32],
+    row_stride: usize,
+    has_alpha: bool,
+    viewport: crate::engine::Viewport,
+) -> io::Result<crate::engine::WindowFrame> {
+    let rows = |start_y: u32, height: u32| -> io::Result<RasterSurface> {
+        let mut rgba = Vec::with_capacity(viewport.width as usize * height as usize * 4);
+        for y in start_y..start_y + height {
+            let row =
+                &pixels[y as usize * row_stride..y as usize * row_stride + viewport.width as usize];
+            for &pixel in row {
+                let bytes = pixel.to_ne_bytes();
+                rgba.extend_from_slice(&[
+                    bytes[2],
+                    bytes[1],
+                    bytes[0],
+                    if has_alpha { bytes[3] } else { 255 },
+                ]);
+            }
+        }
+        RasterSurface::from_pixels(viewport.width, height, rgba)
+    };
+    let toolbar_height = viewport.toolbar_pixels();
+    Ok(crate::engine::WindowFrame {
+        viewport,
+        toolbar: rows(0, toolbar_height)?,
+        content: rows(toolbar_height, viewport.height - toolbar_height)?,
+    })
 }
 
 fn error(error: softbuffer::SoftBufferError) -> io::Error {
@@ -487,6 +606,59 @@ fn rgba_to_window_rgb(dst: &mut [u32], src: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offscreen_readback_excludes_toolbar_and_keeps_rgba_channels() {
+        for scale in [1.0, 2.0] {
+            let viewport = crate::engine::Viewport {
+                width: 4,
+                height: (crate::chrome::HEIGHT * scale).round() as u32 + 3,
+                scale,
+            };
+            let toolbar_pixels = viewport.toolbar_pixels() as usize * viewport.width as usize;
+            let mut pixels = vec![0x0011_2233; viewport.width as usize * viewport.height as usize];
+            pixels[toolbar_pixels..].fill(0x007f_3a91);
+            let prepared = PreparedDisplayTarget::Offscreen {
+                pixels,
+                row_stride: 4,
+            };
+            let frame = prepared.readback_rgba(viewport).unwrap();
+            assert_eq!(frame.content.size(), (4, 3));
+            assert_eq!(frame.toolbar.size(), (4, viewport.toolbar_pixels()));
+            assert!(frame
+                .content
+                .pixels()
+                .chunks_exact(4)
+                .all(|pixel| pixel == [0x7f, 0x3a, 0x91, 255]));
+            assert!(frame
+                .toolbar
+                .pixels()
+                .chunks_exact(4)
+                .all(|pixel| pixel == [0x11, 0x22, 0x33, 255]));
+        }
+    }
+
+    #[test]
+    fn offscreen_completion_acknowledges_once_without_native_target() {
+        let mut target = DisplayTarget::Offscreen;
+        assert!(!target.is_native());
+        let completions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = completions.clone();
+        target
+            .present_prepared(
+                PreparedDisplayTarget::Offscreen {
+                    pixels: vec![0],
+                    row_stride: 1,
+                },
+                42,
+                Box::new(move |started, finished| {
+                    assert_eq!(started, finished);
+                    observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }),
+            )
+            .unwrap();
+        assert_eq!(completions.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
     #[test]
     fn window_format_swizzle_handles_every_channel_alignment_tail_and_guard() {
         for count in 0..=65 {

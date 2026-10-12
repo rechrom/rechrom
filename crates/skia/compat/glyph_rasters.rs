@@ -497,8 +497,7 @@ mod tests {
     }
     #[test]
     fn resident_glyph_resources_match_legacy_integer_phase_clip_and_formats() {
-        let bytes =
-            include_bytes!("../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf");
+        let bytes = include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
         let list = list(bytes);
         purge();
         let mut item = command(bytes);
@@ -538,8 +537,7 @@ mod tests {
     }
     #[test]
     fn resident_glyph_resources_preserve_bold_stroke_italic_smoothing_and_paint_order() {
-        let bytes =
-            include_bytes!("../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf");
+        let bytes = include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
         let list = list(bytes);
         let mut item = command(bytes);
         for format in [
@@ -569,8 +567,7 @@ mod tests {
     }
     #[test]
     fn resident_glyph_resources_reuse_integer_positions_and_keep_clipped_variants() {
-        let bytes =
-            include_bytes!("../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf");
+        let bytes = include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
         let list = list(bytes);
         purge();
         let mut item = command(bytes);
@@ -595,8 +592,7 @@ mod tests {
     #[test]
     #[ignore]
     fn local_bold_glyph_raster_latency() {
-        let bytes =
-            include_bytes!("../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf");
+        let bytes = include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
         let list = list(bytes);
         let mut item = command(bytes);
         item.font_size = 44.;
@@ -658,8 +654,7 @@ mod transform_and_budget_tests {
     use crate::{PixelFormat, PixelStorage};
     #[test]
     fn glyph_resources_preserve_shear_reflection_and_fractional_scale() {
-        let bytes =
-            include_bytes!("../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf");
+        let bytes = include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
         let face = ttf_parser::Face::parse(bytes, 0).unwrap();
         let list = ResourceContext {
             resources: Some(ResourceCatalog {

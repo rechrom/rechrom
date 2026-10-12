@@ -3209,6 +3209,7 @@ dependencies = [
  "cfg-if",
  "half",
  "log",
+ "png",
  "strict-num",
  "ttf-parser",
 ]

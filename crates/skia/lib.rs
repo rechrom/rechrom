@@ -123,6 +123,7 @@ pub mod compat {
     pub mod effect_composite;
     pub mod f16;
     pub mod geometry;
+    pub(crate) mod glyph_bitmaps;
     pub(crate) mod glyph_paths;
     pub mod glyph_position;
     pub(crate) mod glyph_rasters;

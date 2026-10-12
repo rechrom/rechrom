@@ -1,8 +1,8 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-// The source checkout already owns these translated foundation primitives.
-// This crate assembles the remaining interfaces required by LayoutNG while
-// keeping the source checkout read-only.
+// The internal base crate owns the translated foundation primitives.
+// This crate assembles the remaining interfaces required by LayoutNG without
+// introducing reverse dependencies into those primitives.
 pub use foundation_base::blink_geometry::geometry::color_channel_keyword::ColorChannelKeyword;
 pub use foundation_base::blink_geometry::geometry::path_types::{LineCap, LineJoin, WindRule};
 pub use foundation_base::blink_geometry::geometry::physical_size::AspectRatioFit;

@@ -334,14 +334,7 @@ pub enum TextOrientation {
     kUpright,
     kSideways,
 }
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FontSmoothing {
-    kAuto,
-    kNone,
-    kAntialiased,
-    kSubpixelAntialiased,
-}
+pub use font_engine::resolver::FontSmoothing;
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextCombine {
@@ -2056,59 +2049,9 @@ pub struct Size {
     pub height: f64,
 }
 
-// cpp: layoutng/internal/layout_input.h:1018-1023
-pub use font_engine::FontFallbackRole;
-pub use font_engine::FontVariation;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FontUnicodeRange {
-    pub start: u32,
-    pub end: u32,
-}
-impl Default for FontUnicodeRange {
-    fn default() -> Self {
-        Self {
-            start: 0,
-            end: 0x10ffff,
-        }
-    }
-}
-
-// cpp: layoutng/internal/layout_input.h:1031-1052
-#[derive(Clone, Debug, PartialEq)]
-pub struct FontFace {
-    pub family: String,
-    pub native_family: String,
-    pub metrics_family: String,
-    pub weight: f64,
-    pub italic: bool,
-    // Shared immutable bytes: aliases and layout snapshots must not copy font files.
-    pub bytes: font_engine::SharedFontBytes,
-    pub face_index: u32,
-    pub variations: Vec<FontVariation>,
-    pub unicode_ranges: Vec<FontUnicodeRange>,
-    /// Platform-catalog classification consumed by FontEngine's fallback
-    /// iterator. This does not affect an explicitly requested family.
-    pub fallback_role: FontFallbackRole,
-    /// BCP-47 locales for which the platform catalog prefers this face.
-    pub fallback_locales: Vec<String>,
-}
-impl Default for FontFace {
-    fn default() -> Self {
-        Self {
-            family: String::new(),
-            native_family: String::new(),
-            metrics_family: String::new(),
-            weight: 400.0,
-            italic: false,
-            bytes: font_engine::SharedFontBytes::default(),
-            face_index: 0,
-            variations: Vec::new(),
-            unicode_ranges: Vec::new(),
-            fallback_role: FontFallbackRole::kFamilyOnly,
-            fallback_locales: Vec::new(),
-        }
-    }
-}
+// Catalog types are owned by the platform-neutral font engine.
+pub use font_engine::resolver::{FontFace, FontUnicodeRange};
+pub use font_engine::{FontFallbackRole, FontVariation};
 
 // cpp: layoutng/internal/layout_input.h:1054-1064
 #[derive(Clone, Debug, PartialEq)]
@@ -2219,6 +2162,8 @@ pub struct ConstraintSpace {
     pub text_transform: Option<std::sync::Arc<dyn TextTransformProvider>>,
     pub font_backend_factory:
         Option<std::sync::Arc<dyn font_engine::fonts::font_backend::FontBackendFactory>>,
+    /// Pure font-discovery outbox; the embedding drains it between passes.
+    pub font_queries: Option<font_engine::FontQueryCollector>,
     pub fonts: Vec<FontFace>,
     pub images: Vec<PaintImage>,
 }
@@ -2241,6 +2186,7 @@ impl Default for ConstraintSpace {
             phrase_break: None,
             text_transform: None,
             font_backend_factory: None,
+            font_queries: None,
             fonts: Vec::new(),
             images: Vec::new(),
         }

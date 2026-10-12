@@ -1,5 +1,11 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
+pub mod engine;
+pub mod resolver;
+pub use resolver::{FontFace, FontUnicodeRange, FontSmoothing};
+pub mod system_fonts;
+pub use engine::{FontEngine, FontMutation, FontCompute, FontPending, FontError, FontRule, FontFaceState, FontShapeRequest, RetainedShapeResult};
+pub use system_fonts::*;
 pub mod clip_text_outline;
 pub mod font_family_names;
 pub mod fonts;

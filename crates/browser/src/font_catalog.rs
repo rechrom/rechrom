@@ -1,14 +1,18 @@
 #![allow(non_snake_case)]
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::OnceLock;
 
 use font_engine::SharedFontBytes;
-use layoutng_assembly::internal::layout_input::{
-    FontFace, FontFallbackRole, FontUnicodeRange, FontVariation,
-};
+#[cfg(test)]
+use layoutng_assembly::internal::layout_input::{FontFace, FontFallbackRole};
+#[cfg(all(test, not(target_os = "linux")))]
+use layoutng_assembly::internal::layout_input::{FontUnicodeRange, FontVariation};
 
-// Match the host faces used by the C++ demo/browser input boundary. The
-// current acceptance page requests system-ui, then -apple-system.
+// Historical eager fixture used only for font-reader regression tests.
+// Production resolves typed requests through BrowserSystemFontProvider.
+#[cfg(test)]
 pub fn DemoFonts() -> Vec<FontFace> {
     static FONTS: OnceLock<Vec<FontFace>> = OnceLock::new();
     let profile = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
@@ -25,7 +29,7 @@ pub fn DemoFonts() -> Vec<FontFace> {
     fonts
 }
 
-fn ReadFont(path: &str) -> std::io::Result<SharedFontBytes> {
+pub(crate) fn ReadFont(path: &str) -> std::io::Result<SharedFontBytes> {
     let started = std::env::var_os("BROWSER_PROFILE_INPUT")
         .is_some()
         .then(std::time::Instant::now);
@@ -180,11 +184,38 @@ fn ReadRegularFileArc(file: &std::fs::File, length: usize) -> std::io::Result<Ar
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn LoadDemoFonts() -> Vec<FontFace> {
     LoadDemoFontsWithReader(ReadFont)
 }
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "font_catalog_linux.rs"]
+mod linux;
+
+#[cfg(test)]
 fn LoadDemoFontsWithReader(
+    ReadFont: impl Fn(&str) -> std::io::Result<SharedFontBytes>,
+) -> Vec<FontFace> {
+    #[cfg(target_os = "linux")]
+    let mut faces = linux::LoadFonts(&ReadFont);
+    #[cfg(not(target_os = "linux"))]
+    let mut faces = LoadAppleFontsWithReader(ReadFont);
+    if faces.is_empty() {
+        faces.push(FontFace {
+            family: "sans-serif".into(),
+            bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
+                .as_slice()
+                .into(),
+            fallback_role: FontFallbackRole::kText,
+            ..FontFace::default()
+        });
+    }
+    faces
+}
+
+#[cfg(all(test, not(target_os = "linux")))]
+fn LoadAppleFontsWithReader(
     ReadFont: impl Fn(&str) -> std::io::Result<SharedFontBytes>,
 ) -> Vec<FontFace> {
     let sfns: SharedFontBytes = ReadFont("/System/Library/Fonts/SFNS.ttf")
@@ -486,18 +517,6 @@ fn LoadDemoFontsWithReader(
                 ..FontFace::default()
             });
         }
-    }
-    if faces.is_empty() {
-        faces.push(FontFace {
-            family: "sans-serif".into(),
-            bytes: include_bytes!(
-                "../../../../src/third_party/skia/resources/fonts/Roboto-Regular.ttf"
-            )
-            .as_slice()
-            .into(),
-            fallback_role: FontFallbackRole::kText,
-            ..FontFace::default()
-        });
     }
     faces
 }

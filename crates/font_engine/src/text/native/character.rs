@@ -45,6 +45,30 @@ impl Character {
     pub fn IsUnicodeEmojiVariationSelector(character: i32) -> bool {
         character == 0xFE0E || character == 0xFE0F
     }
+    // Chromium character_variation_sequences.cc, revision
+    // 78ef49f74feba3d0dde852881feef92bbf86aad7.
+    pub fn IsVariationSequence(character: i32, selector: i32) -> bool {
+        if character < 0 || character > 0x10ffff || !Self::IsUnicodeVariationSelector(selector) {
+            return false;
+        }
+        if Self::IsUnicodeEmojiVariationSelector(selector) {
+            return Self::IsEmoji(character);
+        }
+        if (0xe0100..=0xe01ef).contains(&selector) {
+            // ICU u_getIntPropertyValue supports binary as well as enum
+            // properties. UCHAR_IDEOGRAPHIC = 17; DECOMPOSITION_TYPE = 0x1003.
+            let ideographic =
+                unsafe { icu_bidi::native::u_getIntPropertyValue(character, 17) } != 0;
+            let decomposition =
+                unsafe { icu_bidi::native::u_getIntPropertyValue(character, 0x1003) };
+            return ideographic && decomposition != 1 && decomposition != 2;
+        }
+        let key = ((character as u64) << 21) | selector as u64;
+        super::variation_sequence_data::STANDARDIZED_VARIATION_SEQUENCES
+            .binary_search(&key)
+            .is_ok()
+    }
+
     pub fn IsCjkIdeographOrSymbol(c: i32) -> bool {
         if c < 0x2C7 {
             false
@@ -286,5 +310,40 @@ impl Character {
     // cpp: font_engine/text/native/character_unicode_data.cc:159-161
     pub fn IsPrivateUse(character: i32) -> bool {
         Category(character) & kOther_PrivateUse != 0
+    }
+}
+
+#[cfg(test)]
+mod variation_sequence_tests {
+    use super::Character;
+    #[test]
+    fn validates_registered_and_ideographic_sequences() {
+        for (base, selector) in [
+            (0x2293, 0xfe00),
+            (0x8279, 0xfe01),
+            (0x1820, 0x180b),
+            (0x1fae8, 0xfe0f),
+            (0x30, 0xfe0e),
+            (0x8279, 0xe0100),
+            (0x9038, 0xe01ef),
+        ] {
+            assert!(
+                Character::IsVariationSequence(base, selector),
+                "{base:x} {selector:x}"
+            );
+        }
+        for (base, selector) in [
+            (0x8279, 0xfe03),
+            (0x41, 0xfe0f),
+            (0x41, 0xe0100),
+            (0xf900, 0xe0100),
+            (0x1faf0, 0xfe00),
+            (-1, 0xfe00),
+        ] {
+            assert!(
+                !Character::IsVariationSequence(base, selector),
+                "{base:x} {selector:x}"
+            );
+        }
     }
 }

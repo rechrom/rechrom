@@ -284,14 +284,18 @@ pub fn spawn(
     viewport: Viewport,
     address: String,
     output: Output,
-    window_target: crate::window_surface::WindowTarget,
+    window_target: crate::window_surface::DisplayTarget,
     fallback_interval: Duration,
     display_id: Option<u32>,
     presentation_config: crate::presentation_runtime::Config,
 ) -> io::Result<mpsc::Sender<Command>> {
     let (sender, receiver) = mpsc::channel();
     let page_frame_demand = Arc::new(Mutex::new(PageFrameDemand::InitiallyRequested()));
-    let frame_source = crate::begin_frame_source::create(fallback_interval, display_id)?;
+    let frame_source = if window_target.is_native() {
+        crate::begin_frame_source::create(fallback_interval, display_id)?
+    } else {
+        crate::begin_frame_source::create_offscreen(fallback_interval)?
+    };
     let input_frames = frame_source.GetFrameSource(0)?;
     let compositor_frames = frame_source.GetFrameSource(1)?;
     let display_frames = frame_source.GetFrameSource(2)?;
