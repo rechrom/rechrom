@@ -95,7 +95,37 @@ impl LayoutSVGGroup {
     }
     pub fn UpdateSVGLayout(&mut self, info: &SVGLayoutInfo) -> SVGLayoutResult {
         self.local_transform = crate::svg_viewport::LocalTransform(self);
-        crate::svg_container_layout::LayoutContainer(self, info, 0.0, 0.0)
+        let element = foundation::DynamicTo::<Element>(self.GetNode());
+        let use_data = unsafe { element.as_ref() }
+            .and_then(|element| element.InputElementData().as_ref())
+            .and_then(|element| element.svg_use);
+        let mut relative = false;
+        if let Some(use_data) = use_data {
+            use layoutng_assembly::internal::layout_input::SvgUseData;
+            match use_data {
+                SvgUseData::Local => {},
+                SvgUseData::UnsupportedReference => crate::svg_viewport::Unsupported("SVG use external/normalized/encoded IRI is not translated"),
+                SvgUseData::UnsupportedViewport => crate::svg_viewport::Unsupported("SVG use svg/symbol viewport instances are not translated"),
+                SvgUseData::UnsupportedImage => crate::svg_viewport::Unsupported("SVG use image instances are not translated"),
+                SvgUseData::UnsupportedSwitch => crate::svg_viewport::Unsupported("SVG use switch instances are not translated"),
+                SvgUseData::UnbuiltInstance => crate::svg_viewport::Unsupported("SVG use instance lifecycle was not updated before layout"),
+            }
+            // LayoutSVGTransformableContainer::UpdateLocalTransform: canonical
+            // transform followed by use X/Y, resolved in the parent viewport.
+            let style = self.StyleRef();
+            if !style.X().HasOnlyFixedAndPercent() || !style.Y().HasOnlyFixedAndPercent() {
+                crate::svg_viewport::Unsupported("nonlinear SVG use X/Y is not translated");
+            }
+            let viewport = crate::svg_viewport::ResolveViewport(self);
+            let offset = crate::svg_length_functions::VectorForLengthPair(
+                style.X(), style.Y(), style.EffectiveZoom(), &viewport,
+            );
+            relative = style.X().HasPercent() || style.Y().HasPercent();
+            self.local_transform.Translate(f64::from(offset.x()), f64::from(offset.y()));
+        }
+        let mut result = crate::svg_container_layout::LayoutContainer(self, info, 0.0, 0.0);
+        result.has_viewport_dependence |= relative;
+        result
     }
 }
 
@@ -157,6 +187,11 @@ pub fn SvgContainerStyleDidChange(
         );
     }
     if let Some(old) = unsafe { old_style.as_ref() } {
+        if old.X() != new_style.X() || old.Y() != new_style.Y() {
+            flow.SetNeedsLayout(
+                &raw const layoutng_assembly::internal::layout_invalidation_reason::kStyleChange,
+            );
+        }
         if old.OverflowX() != new_style.OverflowX() {
             flow.SetNeedsPaintPropertyUpdate();
         }

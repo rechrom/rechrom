@@ -4,7 +4,7 @@ use crate::persistent_document::{
     DOMNamespace, DOMNodeType, DOMShadowRootMode, PseudoContent, PseudoElement,
 };
 use crate::svg_path_parser::ParseSVGPathDefault;
-use crate::{DOM, Document, UserInteractionState};
+use crate::{Document, UserInteractionState, DOM};
 use layoutng_assembly::internal::form_control_types::FormControlType;
 use layoutng_assembly::internal::layout_input::*;
 use layoutng_assembly::internal::layout_object::LayoutObject;
@@ -81,6 +81,18 @@ fn ElementMetadata(
     data.scroll_offset = document.ScrollOffsetFor(index);
     if node.Namespace() == DOMNamespace::kSVG {
         element_metadata_svg(node, ResolveSVGTextPath(document, index), &mut data);
+        if node.Name() == "use" {
+            use crate::persistent_document::SVGUseInstanceStatus as Status;
+            data.svg_use = Some(match document.SVGUseInstanceStatus(index) {
+                Some(Status::UnsupportedReference) => SvgUseData::UnsupportedReference,
+                Some(Status::UnsupportedViewport) => SvgUseData::UnsupportedViewport,
+                Some(Status::UnsupportedImage) => SvgUseData::UnsupportedImage,
+                Some(Status::UnsupportedSwitch) => SvgUseData::UnsupportedSwitch,
+                Some(_) => SvgUseData::Local,
+                None => SvgUseData::UnbuiltInstance,
+            });
+        }
+
         // cpp: SVGSVGElement::{CurrentViewBox,CurrentPreserveAspectRatio,
         // ViewBoxToViewTransform}. SVGImageViewInfo is document-owned and
         // overrides the root's authored values only for the active recording.
@@ -309,22 +321,12 @@ fn ElementMetadata(
     data
 }
 
-// cpp: dom_to_layout/layout_object_tree_builder.cc:182-193
-fn FindElementById(document: &Document, index: usize, id: &str) -> Option<usize> {
-    let node = document.Node(index);
-    if node.Type() == DOMNodeType::kElement && attribute(node, "id") == Some(id) {
-        return Some(index);
-    }
-    node.Children()
-        .iter()
-        .find_map(|&child| FindElementById(document, child, id))
-}
 // cpp: dom_to_layout/layout_object_tree_builder.cc:260-300
 fn ResolveSVGTextPath(document: &Document, index: usize) -> Option<SvgTextPathData> {
     let node = document.Node(index);
     let href = attribute(node, "href")?;
     let id = href.strip_prefix('#').filter(|id| !id.is_empty())?;
-    let path = document.Node(FindElementById(document, document.Root(), id)?);
+    let path = document.Node(document.FindSVGResourceById(index, id)?);
     if path.Namespace() != DOMNamespace::kSVG || path.Name() != "path" {
         return None;
     }
@@ -376,6 +378,9 @@ fn ElementKind(
                 }
             }
             "foreignObject" => NodeKind::kSvgForeignObject,
+            "defs" => NodeKind::kSvgHiddenContainer,
+            "clipPath" => NodeKind::kSvgResourceClipper,
+                "mask" => NodeKind::kSvgResourceMasker,
             "text" => NodeKind::kSvgText,
             // SVGTextPathElement::CreateLayoutObject preserves element identity
             // independently of href resolution. LayoutSVGTextPath::LayoutPath
@@ -528,9 +533,11 @@ fn DefaultListMarkerText(document: &Document, index: usize, style: &ComputedStyl
 // controls still have specialized owners below (native file nodes, synthesized
 // editor/slider/menu, and host-painted meter/progress). Preserve that existing
 // projection until each adapter migrates together with its native shadow tree;
-// entering a UA root here would duplicate content or native theme painting.
+// entering a control UA root here would duplicate content or native theme painting.
+// SVGUseElement owns real SVG descendants and uses ordinary flat-tree attachment.
 fn AttachmentChildren(document: &Document, index: usize) -> std::borrow::Cow<'_, [usize]> {
-    if document
+    if !document.Node(index).IsElement("use", DOMNamespace::kSVG)
+        && document
         .ShadowRoot(index)
         .is_some_and(|root| document.ShadowRootMode(root) == Some(DOMShadowRootMode::kUserAgent))
     {
@@ -748,6 +755,7 @@ fn FindFirstLetterCandidate<'a>(
 }
 struct FirstLetterInsertion<'a> {
     originating_id: u64,
+    svg_clip_resources: layoutng_assembly::internal::paint_input::SvgClipResourceBinding,
     pseudo: &'a PseudoElement,
     candidate: FirstLetterCandidate<'a>,
     consumed: bool,
@@ -765,10 +773,12 @@ fn AppendInitialLetter(
         first_letter_pseudo: true,
         ..Default::default()
     };
+    let mut letter_style = insertion.pseudo.style.clone();
+    letter_style.svg_clip_resources = insertion.svg_clip_resources.clone();
     let letter = tree.AddBox(
         unsafe { &mut *parent },
         insertion.originating_id | (1 << 46),
-        &insertion.pseudo.style,
+        &letter_style,
         "::first-letter".into(),
         Some(data),
         NodeKind::kBox,
@@ -784,12 +794,14 @@ fn AppendInitialLetter(
         true,
         std::ptr::null(),
     );
+    let mut remaining_style = insertion.candidate.source_style.clone();
+    remaining_style.svg_clip_resources = insertion.svg_clip_resources.clone();
     tree.AddText(
         unsafe { &mut *parent },
         remaining_id,
         insertion.candidate.remainder.clone(),
         name.into(),
-        insertion.candidate.source_style,
+        &remaining_style,
         generated,
         std::ptr::null(),
     );
@@ -819,13 +831,12 @@ fn AppendListMarker(
     let marker_has_custom_content = marker_pseudo
         .and_then(|pseudo| unsafe { pseudo.native_style.Get().as_ref() })
         .is_some_and(|native| !native.ContentBehavesAsNormal());
-    let fallback_marker_style;
-    let marker_style = if let Some(pseudo) = marker_pseudo {
-        &pseudo.style
-    } else {
-        fallback_marker_style = list_marker_style(item_style);
-        &fallback_marker_style
-    };
+    let mut resolved_marker_style = marker_pseudo.map_or_else(
+        || list_marker_style(item_style),
+        |pseudo| pseudo.style.clone(),
+    );
+    resolved_marker_style.svg_clip_resources = item_style.svg_clip_resources.clone();
+    let marker_style = &resolved_marker_style;
     let marker_image = (!marker_has_custom_content)
         .then(|| {
             marker_style
@@ -985,7 +996,7 @@ fn AppendPseudoElement(
         Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
     >,
     svg_clip_path_graphs: &std::sync::Arc<
-        Vec<layoutng_assembly::internal::paint_input::SvgClipPathGraph>,
+        layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot,
     >,
 ) {
     let Some(p) = pseudo else {
@@ -996,7 +1007,11 @@ fn AppendPseudoElement(
     let name = if before { "::before" } else { "::after" };
     let mut style = p.style.clone();
     style.paint.svg_filter_graphs = std::sync::Arc::clone(svg_filter_graphs);
-    resolve_svg_clip_path(&mut style, svg_clip_path_graphs);
+    resolve_svg_clip_path(
+        &mut style,
+        svg_clip_path_graphs,
+        document.SVGResourceScope(originating_index),
+    );
     let object = if p.display_contents {
         parent
     } else {
@@ -1066,7 +1081,7 @@ fn AppendPseudoElement(
                 p.text.clone(),
                 format!("{name}-text"),
                 if p.display_contents {
-                    &p.style
+                    &style
                 } else {
                     std::ptr::null()
                 },
@@ -1110,7 +1125,7 @@ fn AppendPseudoElement(
                         value.clone(),
                         format!("{name}-text-{ordinal}"),
                         if p.display_contents {
-                            &p.style
+                            &style
                         } else {
                             std::ptr::null()
                         },
@@ -1126,9 +1141,9 @@ fn AppendPseudoElement(
                 natural_height,
                 resolution_scale: _,
             } if *resource_id != 0 || shader.is_some() => {
-                let mut style = p.style.clone();
-                style.paint.image_resource_id = (*resource_id != 0).then_some(*resource_id);
-                style.paint.replaced_image_shader = shader.clone();
+                let mut image_style = style.clone();
+                image_style.paint.image_resource_id = (*resource_id != 0).then_some(*resource_id);
+                image_style.paint.replaced_image_shader = shader.clone();
                 let mut element = ElementData {
                     natural_width: *natural_width,
                     natural_height: *natural_height,
@@ -1146,7 +1161,7 @@ fn AppendPseudoElement(
                 tree.AddGeneratedReplaced(
                     unsafe { &mut *object },
                     id | image_bit | sequence,
-                    &style,
+                    &image_style,
                     element,
                     format!("{name}-image-{ordinal}"),
                 );
@@ -1169,7 +1184,7 @@ fn AppendChildren<'a>(
         Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
     >,
     svg_clip_path_graphs: &std::sync::Arc<
-        Vec<layoutng_assembly::internal::paint_input::SvgClipPathGraph>,
+        layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot,
     >,
 ) {
     let dom_parent = document.Node(index);
@@ -1217,9 +1232,9 @@ fn AppendChildren<'a>(
             continue;
         }
         if node.IsElement("textPath", DOMNamespace::kSVG)
-            && !svg_text_path_layout_needed(
-                dom_parent.Namespace(), dom_parent.Name(), unsafe { &*parent },
-            )
+            && !svg_text_path_layout_needed(dom_parent.Namespace(), dom_parent.Name(), unsafe {
+                &*parent
+            })
         {
             continue;
         }
@@ -1281,7 +1296,11 @@ fn AppendChildren<'a>(
         // Own a copy only when resource/control adapters actually need it.
         let mut style = std::borrow::Cow::Borrowed(&resolved.style);
         style.to_mut().paint.svg_filter_graphs = std::sync::Arc::clone(svg_filter_graphs);
-        resolve_svg_clip_path(style.to_mut(), svg_clip_path_graphs);
+        resolve_svg_clip_path(
+            style.to_mut(),
+            svg_clip_path_graphs,
+            document.SVGResourceScope(child),
+        );
         if node.Name() == "img" {
             if let Some(image) = document
                 .CurrentImageSource(child)
@@ -1556,6 +1575,7 @@ fn AppendChildren<'a>(
             } else {
                 list_marker_style(&style)
             };
+            editor_style.svg_clip_resources = style.svg_clip_resources.clone();
             editor_style.display = Display::kBlock;
             let e = editor_style.extended.get_or_insert_with(Default::default);
             e.width_percent = Some(100.0);
@@ -1638,6 +1658,7 @@ fn AppendChildren<'a>(
                     FindFirstLetterCandidate(document, child, &style).map(|candidate| {
                         FirstLetterInsertion {
                             originating_id: node.Id(),
+                            svg_clip_resources: style.svg_clip_resources.clone(),
                             pseudo,
                             candidate,
                             consumed: false,
@@ -1735,7 +1756,10 @@ pub fn EmitLayoutMutations(
     let mut projection = |mut tree: &mut LayoutTreeUpdate<'_>| {
         let document = owner.GetDocument();
         let svg_filter_graphs = super::svg_filter_graph::build_persistent(document);
-        let svg_clip_path_graphs = super::svg_clip_path_graph::build_persistent(document);
+        let svg_clip_path_graphs = document
+            .SVGResources()
+            .cloned()
+            .unwrap_or_else(|| super::svg_clip_path_graph::build_persistent(document));
         let index = document
             .Node(document.Root())
             .Children()
@@ -1750,7 +1774,11 @@ pub fn EmitLayoutMutations(
         assert!(resolved.generates_box, "document root has display:none");
         let mut root_style = resolved.style.clone();
         root_style.paint.svg_filter_graphs = std::sync::Arc::clone(&svg_filter_graphs);
-        resolve_svg_clip_path(&mut root_style, &svg_clip_path_graphs);
+        resolve_svg_clip_path(
+            &mut root_style,
+            &svg_clip_path_graphs,
+            document.SVGResourceScope(index),
+        );
         let root = tree.CreateRoot(
             node.Id(),
             &root_style,
@@ -1767,6 +1795,7 @@ pub fn EmitLayoutMutations(
             FindFirstLetterCandidate(document, index, &resolved.style).map(|candidate| {
                 FirstLetterInsertion {
                     originating_id: node.Id(),
+                    svg_clip_resources: root_style.svg_clip_resources.clone(),
                     pseudo,
                     candidate,
                     consumed: false,

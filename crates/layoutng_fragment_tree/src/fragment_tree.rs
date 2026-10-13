@@ -640,6 +640,9 @@ pub struct PaintProperties {
     pub logical_tree_order: u64,
     pub establishes_paint_state: bool,
     pub hidden: bool,
+    /// Native LayoutSVGHiddenContainer semantics: retain SVG layout and
+    /// resource descendants, but omit this subtree from ordinary paint/hits.
+    pub svg_hidden_container: bool,
     pub painted_atomically: bool,
     pub has_collapsed_borders: bool,
     pub source_kind: NodeKind,
@@ -748,6 +751,7 @@ impl Default for PaintProperties {
             logical_tree_order: 0,
             establishes_paint_state: false,
             hidden: false,
+            svg_hidden_container: false,
             painted_atomically: false,
             has_collapsed_borders: false,
             source_kind: NodeKind::kBox,

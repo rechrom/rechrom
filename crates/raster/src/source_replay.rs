@@ -835,6 +835,7 @@ fn DrawShader(canvas: &Canvas, item: &DisplayItem) {
 // cpp: skia_renderer/skia_renderer.cc:1358-1360
 fn DrawMaskLayers(canvas: &Canvas, layers: &[paint::paint_engine::DisplayMaskLayer]) {
     for (reverse_index, layer) in layers.iter().rev().enumerate() {
+        assert!(layer.source_error.is_none(), "unsupported SVG mask resource: {:?}", layer.source_error);
         // BoxPainterBase skips non-renderable sources before selecting a
         // composite. Keep the native slot so an upper layer is never promoted
         // to bottom merely because the real bottom source failed or is none.

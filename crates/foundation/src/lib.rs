@@ -111,7 +111,7 @@ pub use css_bitset::{CSSBitset, CSSBitsetBase, CSSBitsetIterator};
 pub use gc_heap::{
     BasicPersistent, CollectLayoutHeapForTesting, CollectLayoutHeapIfRequested, FreeLayoutBacking,
     IsLayoutHeapCollectionRequested, IsLayoutHeapSweepingOnOwningThread, IsManagedLayoutAddress,
-    LayoutHeapAllocationCountForTesting, LayoutHeapScope, LayoutObjectSize, LivenessBroker,
+    LayoutHeapAllocationCountForTesting, LayoutHeapMemoryDiagnostics, LayoutHeapScope, LayoutObjectSize, LivenessBroker,
     MakeGarbageCollected, MakeGarbageCollectedWithAdditionalBytes, Persistent,
     RequestLayoutHeapCollection, TraceIfNeeded, Traceable, Visitor, WeakPersistent,
 };

@@ -76,6 +76,14 @@ impl ImageDecoder for SkiaImageDecoder {
                 "cannot decode an empty image",
             ));
         }
+        // Blink AVIFImageDecoder::MatchesAVIFSignature uses the pinned parser
+        // and at most 144 bytes, independently of server MIME or URL suffix.
+        #[cfg(feature = "avif-backend")]
+        if crabby_avif::decoder::Decoder::peek_compatible_file_type(
+            &input.bytes[..input.bytes.len().min(144)],
+        ) {
+            return crate::avif_backend::decode(input.bytes);
+        }
         if IsJpeg(input) {
             return DecodeImage(input, Some(image::ImageFormat::Jpeg));
         }

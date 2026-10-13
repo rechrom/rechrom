@@ -1,0 +1,24 @@
+# Decode-only packaging of Chromium-pinned CrabbyAvif. See RECHROM.md.
+[package]
+name = "crabby-avif"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+build = false
+autobins = false
+autotests = false
+autoexamples = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+libc = "0.2.152"
+rav1d = { version = "=1.1.0", default-features = false, features = ["bitdepth_8", "bitdepth_16"], optional = true }
+
+[features]
+default = []
+rav1d = ["dep:rav1d"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(google3)', 'cfg(android_soong)', 'cfg(feature, values("encoder", "capi", "disable_cfi", "dav1d", "libyuv", "png", "jpeg", "gif", "sharpyuv", "cli", "android_mediacodec", "heic", "aom", "avm", "jpegxl", "satofloat"))'] }

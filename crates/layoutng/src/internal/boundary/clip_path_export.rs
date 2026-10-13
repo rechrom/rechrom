@@ -411,6 +411,7 @@ pub(super) fn ExportClipPath(style: &ComputedStyle) -> Option<ClipPathPaint> {
         };
         return Some(ClipPathPaint {
             reference_url: Some(reference.Url().Utf8()),
+            reference_scope: reference.ResourceScope(),
             ..ClipPathPaint::default()
         });
     }

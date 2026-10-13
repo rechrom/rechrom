@@ -215,6 +215,20 @@ impl FetchedImageBinding {
     }
 }
 pub trait URLImageResolver {
+    /// ElementStyleResources binds local SVG references to the originating
+    /// element's TreeScope, independent of the declaration's stylesheet.
+    fn SVGResourceScope(
+        &self,
+    ) -> Option<layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope> {
+        None
+    }
+
+    fn ResolveMaskSource(
+        &self, value: &crate::production_css_value::CSSImageValue,
+    ) -> std::result::Result<std::ptr::NonNull<layoutng_style::style::style_image::StyleImage>, LonghandApplicationError> {
+        self.ResolveImage(value).map(|binding| binding.Image())
+    }
+
     fn ResolveImage(
         &self,
         value: &crate::production_css_value::CSSImageValue,
@@ -258,7 +272,7 @@ pub fn ApplyWithImageResolver(
     if id == CSSPropertyID::kContent {
         return content_application::Apply(b, parent, v, root, media, Some(images));
     }
-    if id == CSSPropertyID::kShapeOutside {
+    if matches!(id, CSSPropertyID::kShapeOutside | CSSPropertyID::kClipPath) {
         return effects_application::Apply(id, b, parent, v, root, media, Some(images));
     }
     Apply(id, b, parent, v, root, media)
@@ -312,6 +326,7 @@ pub(crate) fn ApplyWithImageResolverColorSchemeAndRootStyle(
             | CSSPropertyID::kListStyleImage
             | CSSPropertyID::kContent
             | CSSPropertyID::kShapeOutside
+            | CSSPropertyID::kClipPath
     ) || border_image_application::IsBorderImageProperty(id)
     {
         let uses_lh = UsesLineHeightUnit(v, UnitType::kLhs);
@@ -704,6 +719,9 @@ fn ResolveStyleImage(
         CSSValuePayload::kIdentifierClass(keyword) if keyword.0 == CSSValueID::kNone => {
             std::ptr::null_mut()
         }
+        CSSValuePayload::kImageClass(url) if id == CSSPropertyID::kMaskImage => {
+            images.ok_or(LonghandApplicationError::Unsupported(id))?.ResolveMaskSource(url)?.as_ptr()
+        }
         CSSValuePayload::kImageClass(url) => ResolveFetchedImage(id, images, url, None)?,
         CSSValuePayload::kImageSetClass(set) => {
             let mut options = set
@@ -887,7 +905,10 @@ pub fn Pixels(
     media: &MediaValuesCachedData,
 ) -> std::result::Result<f64, LonghandApplicationError> {
     let factor = match unit {
-        UnitType::kPixels => 1.0,
+        // SVG attribute parsing produces typed user-unit lengths. Chromium's
+        // CSSLengthResolver resolves these like pixels; the caller applies
+        // EffectiveZoom once. CSS grammar admission remains with the parser.
+        UnitType::kPixels | UnitType::kUserUnits => 1.0,
         UnitType::kEms | UnitType::kQuirkyEms => font as f64,
         UnitType::kRems => root as f64,
         UnitType::kCentimeters => 96.0 / 2.54,
@@ -1453,6 +1474,19 @@ fn UsesLineHeightUnit(value: &Value, unit: UnitType) -> bool {
         CSSValuePayload::kNumericLiteralClass(value) => value.GetType() == unit,
         CSSValuePayload::kMathFunctionClass(value) => value.expression.UsesUnit(unit),
         CSSValuePayload::kValueListClass(value) => value
+            .values
+            .iter()
+            .any(|value| UsesLineHeightUnit(value, unit)),
+        CSSValuePayload::kGridIntegerRepeatClass(value) => {
+            UsesLineHeightUnit(&value.repetitions, unit)
+                || value
+                    .list
+                    .values
+                    .iter()
+                    .any(|value| UsesLineHeightUnit(value, unit))
+        }
+        CSSValuePayload::kFunctionClass(value) => value
+            .arguments
             .values
             .iter()
             .any(|value| UsesLineHeightUnit(value, unit)),

@@ -127,6 +127,7 @@ impl<'a> PageOpenAdapter<'a> {
 impl OpenDocumentAdapter for PageOpenAdapter<'_> {
     fn CommitURL(&mut self, url: &str) {
         self.resources.SetDocumentURL(url.to_owned());
+        self.state.document.borrow_mut().GetDocumentMut().SetDocumentURL(url.to_owned());
         if let Some(scripts) = self.scripts.as_ref() {
             scripts.SetURL(url.to_owned());
         }

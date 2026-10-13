@@ -291,7 +291,7 @@ fn clip_output(
                     .map_or(rect, |parent| intersection(parent, rect)),
             );
         }
-    } else if !clip.clip_path.is_empty() {
+    } else if (clip.clip_path_is_empty || !clip.clip_path.is_empty()) {
         return None;
     }
     cache.insert(clip.id, output);

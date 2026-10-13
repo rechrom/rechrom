@@ -779,6 +779,7 @@ struct ProductionResolverElement {
     assigned_slot: Option<Box<ProductionResolverSlot>>,
     part: Option<crate::persistent_selector::PersistentPartNames>,
     part_names_map: Option<DOMPartNamesMap>,
+    corresponding_element: Option<Box<ProductionResolverElement>>,
 }
 
 impl ProductionResolverTreeScope {
@@ -872,6 +873,8 @@ impl ProductionResolverElement {
                 .map(|slot| Box::new(ProductionResolverSlot::ForNode(document, slot))),
             part,
             part_names_map: document.PartNamesMap(index).cloned(),
+            corresponding_element: document.CorrespondingSVGElement(index)
+                .map(|source| Box::new(Self::ForNode(document, source, media_type, false))),
         }
     }
 }
@@ -1709,8 +1712,8 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
     fn MathMLNamespaceURI(&self) -> &AtomicString {
         &self.mathml_namespace
     }
-    fn CorrespondingElement<'e>(&self, _: &'e Self::Element) -> Option<&'e Self::Element> {
-        None
+    fn CorrespondingElement<'e>(&self, element: &'e Self::Element) -> Option<&'e Self::Element> {
+        element.corresponding_element.as_deref()
     }
     fn ShadowPseudoId<'e>(&self, e: &'e Self::Element) -> &'e AtomicString {
         &e.shadow_pseudo_id
@@ -1892,9 +1895,10 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
             // the cascade: author rules must override these declarations.
             if let CSSPropertyValueSetRuleHandle::Mutable(set) = properties.as_ref().as_ref() {
                 let mut set = set.borrow_mut();
-                for property in
-                    crate::svg_presentation_attributes::CollectPresentationAttributes(node)
-                {
+                for property in crate::svg_presentation_attributes::CollectPresentationAttributes(
+                    self.document,
+                    element.index,
+                ) {
                     set.SetLonghandProperty(property);
                 }
             }
@@ -3834,10 +3838,16 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         state.builder.SetForcesStackingContext(false);
         super::style_adjuster::AdjustStyleForZIndex(&mut state.builder, Self::style(parent));
         if self.cascade.is_document_element
-            || matches!(state.builder.StyleType(), PseudoId::kPseudoIdBackdrop | PseudoId::kPseudoIdViewTransition)
+            || matches!(
+                state.builder.StyleType(),
+                PseudoId::kPseudoIdBackdrop | PseudoId::kPseudoIdViewTransition
+            )
             || element_if_not_pseudo.is_some_and(|element| {
                 self.document.IsInTopLayer(element.index)
-                    || self.document.Node(element.index).IsElement("foreignObject", DOMNamespace::kSVG)
+                    || self
+                        .document
+                        .Node(element.index)
+                        .IsElement("foreignObject", DOMNamespace::kSVG)
             })
         {
             state.builder.SetForcesStackingContext(true);
@@ -3970,9 +3980,20 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         if self.cascade.animations.is_some() || self.cascade.transitions.is_some() {
             return false;
         }
+        // cpp: StyleResolverState::GetSVGResource sets HasTreeScopedReference.
+        // The production resource boundary installs the canonical reference
+        // directly; exclude that result here as well so MPC cannot transplant
+        // an operation (including an inherited one) into a different scope.
+        let has_svg_reference = state.builder.MutableClipPath().is_some_and(|operation| {
+            unsafe { operation.as_ref() }.is_some_and(|operation| {
+                operation.GetType()
+                    == layoutng_style::style::clip_path_operation::OperationType::kReference
+            })
+        });
         if !MatchedPropertiesCache::<StyleAdjusterElementTypeForCache>::IsStyleCacheable(
             &state.builder,
         ) || state.has_tree_scoped_reference
+            || has_svg_reference
         {
             return false;
         }
@@ -4787,12 +4808,8 @@ mod tests {
             assert!(Rc::ptr_eq(&first_handle, &current.handle(first)));
             assert!(Rc::ptr_eq(&second_handle, &current.handle(second)));
         }
-        let standalone = ProductionRuleMatchingHost::new(
-            document,
-            &media,
-            ua_rule_set("", &media),
-            Vec::new(),
-        );
+        let standalone =
+            ProductionRuleMatchingHost::new(document, &media, ua_rule_set("", &media), Vec::new());
         assert!(!Rc::ptr_eq(&selectors, &standalone.selectors));
     }
 

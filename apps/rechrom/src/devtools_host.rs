@@ -33,6 +33,9 @@ pub(crate) fn attach_screenshots(mailbox: FrameMailbox) {
             _ => return Err("target_id must be 1 (page) or 2 (browser toolbar)".into()),
         };
         let (width, height) = surface.size();
+        if crate::engine::memory_diagnostics_enabled() {
+            eprintln!("pipeline-capture time_ns={} target={} provenance={:?}", crate::engine::diagnostic_time_ns(), target_id, frame.provenance);
+        }
         // Page.captureScreenshot returns the composited page against its
         // default canvas background. Keep the protocol image opaque like
         // Chromium unless transparent-background emulation is explicitly

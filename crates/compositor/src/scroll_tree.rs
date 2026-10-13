@@ -16,6 +16,7 @@ use paint::paint_engine::PaintRect;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ScrollNode {
     pub id: u64,
+    pub owner_client_id: u64,
     pub parent_id: Option<u64>,
     pub container_rect: PaintRect,
     pub committed: Offset,
@@ -92,11 +93,16 @@ struct ScrollChainEntry {
     allows_y_chaining: bool,
 }
 
+#[path = "synced_scroll_offset.rs"]
+mod synced_scroll_offset;
+use synced_scroll_offset::SyncedScrollOffset;
+
 /// Mutable state belonging to the active compositor tree.
 #[derive(Default)]
 pub(crate) struct CompositorScrollTree {
+    // Committed geometry and source-aligned synchronized impl offset.
     root: Option<ScrollNode>,
-    pending_delta: Offset,
+    offset: SyncedScrollOffset,
     gesture_blocked_on_main: Option<bool>,
     active: bool,
 }
@@ -105,56 +111,44 @@ impl CompositorScrollTree {
     pub fn reset_document(&mut self) {
         *self = Self::default();
     }
-
     pub fn root(&self) -> Option<ScrollNode> {
         self.root
     }
-
     pub fn is_active(&self) -> bool {
         self.active
     }
-
     pub fn current_position(&self) -> Option<(u64, Offset)> {
-        let root = self.root?;
-        Some((
-            root.id,
-            Offset {
-                x: (root.committed.x + self.pending_delta.x).clamp(root.minimum.x, root.maximum.x),
-                y: (root.committed.y + self.pending_delta.y).clamp(root.minimum.y, root.maximum.y),
-            },
-        ))
+        self.offset.current_position()
     }
-
     pub fn pending_delta(&self) -> Offset {
-        self.pending_delta
-    }
-
-    pub fn visual_offset_for(&self, root: ScrollNode) -> Offset {
-        if self.root.is_some_and(|active| active.id == root.id) {
-            Offset {
-                x: (root.committed.x + self.pending_delta.x).clamp(root.minimum.x, root.maximum.x),
-                y: (root.committed.y + self.pending_delta.y).clamp(root.minimum.y, root.maximum.y),
-            }
-        } else {
-            Offset {
-                x: root.committed.x.clamp(root.minimum.x, root.maximum.x),
-                y: root.committed.y.clamp(root.minimum.y, root.maximum.y),
-            }
-        }
-    }
-
-    /// Activate the immutable tree while retaining the live compositor offset
-    /// for a property node with stable identity.
-    pub fn activate(&mut self, root: Option<ScrollNode>, retained: Option<(u64, Offset)>) {
-        self.root = root;
-        self.pending_delta = match (root, retained) {
-            (Some(root), Some((id, offset))) if id == root.id => Offset {
-                x: offset.x.clamp(root.minimum.x, root.maximum.x) - root.committed.x,
-                y: offset.y.clamp(root.minimum.y, root.maximum.y) - root.committed.y,
+        match (self.root, self.current_position()) {
+            (Some(root), Some((_, position))) => Offset {
+                x: position.x - root.committed.x,
+                y: position.y - root.committed.y,
             },
             _ => Offset::default(),
-        };
-        if root.is_none() {
+        }
+    }
+    pub fn visual_offset_for(&self, root: ScrollNode) -> Offset {
+        self.current_position()
+            .filter(|(id, _)| *id == root.id)
+            .map_or(root.committed, |(_, position)| position)
+    }
+    pub fn pull_delta_for_main(&mut self) -> Option<crate::MainThreadScrollDelta> {
+        self.offset.pull_delta_for_main()
+    }
+    pub fn has_unacknowledged_batch(&self, acknowledged: u64) -> bool {
+        self.offset.has_unacknowledged_batch(acknowledged)
+    }
+    pub fn activation_position(&self, root: ScrollNode, acknowledged: u64) -> Offset {
+        self.offset.activation_position(root, acknowledged)
+    }
+    pub fn activate(&mut self, root: Option<ScrollNode>, acknowledged: u64) {
+        let owner_changed =
+            self.root.map(|root| root.owner_client_id) != root.map(|root| root.owner_client_id);
+        self.offset.activate(root, acknowledged);
+        self.root = root;
+        if root.is_none() || owner_changed {
             self.active = false;
             self.gesture_blocked_on_main = None;
         }
@@ -202,8 +196,7 @@ impl CompositorScrollTree {
                 };
                 desired = Some(next);
                 if next != old {
-                    self.pending_delta.x += next.x - old.x;
-                    self.pending_delta.y += next.y - old.y;
+                    self.offset.set_current(next);
                     did_scroll = true;
                 }
             }
@@ -353,9 +346,8 @@ fn ScrollChain(
     let mut chain = None;
     let target_here = target == Some(fragment.node_id);
     for child in fragment.children.iter().rev() {
-        let child_is_target_branch = target.is_some()
-            && !target_here
-            && FragmentContainsNode(child, target.unwrap());
+        let child_is_target_branch =
+            target.is_some() && !target_here && FragmentContainsNode(child, target.unwrap());
         if target.is_some() && !child_is_target_branch {
             continue;
         }
@@ -454,12 +446,11 @@ fn ScrollChain(
         || (delta.y != 0.0 && (offset.y + delta.y).clamp(minimum.y, maximum.y) != offset.y);
     let allows_x_chaining = fragment.paint.overscroll_behavior_x.AllowsScrollChaining();
     let allows_y_chaining = fragment.paint.overscroll_behavior_y.AllowsScrollChaining();
-    let blocks_chain = (delta.x != 0.0
-        && user_scrollable(fragment.paint.overflow_x, true)
-        && !allows_x_chaining)
-        || (delta.y != 0.0
-            && user_scrollable(fragment.paint.overflow_y, false)
-            && !allows_y_chaining);
+    let blocks_chain =
+        (delta.x != 0.0 && user_scrollable(fragment.paint.overflow_x, true) && !allows_x_chaining)
+            || (delta.y != 0.0
+                && user_scrollable(fragment.paint.overflow_y, false)
+                && !allows_y_chaining);
     // Once EventHandler has resolved a DOM target, that target's ancestor
     // branch is authoritative. Re-testing an untransformed fragment rect here
     // drops nested scrollers beneath transforms and fixed/sticky positioning.
@@ -469,16 +460,14 @@ fn ScrollChain(
         && (root || fragment.paint.establishes_paint_state)
         && (can_move || blocks_chain)
     {
-        chain
-            .get_or_insert_with(Vec::new)
-            .push(ScrollChainEntry {
-                id: fragment.node_id,
-                before: offset,
-                minimum,
-                maximum,
-                allows_x_chaining,
-                allows_y_chaining,
-            });
+        chain.get_or_insert_with(Vec::new).push(ScrollChainEntry {
+            id: fragment.node_id,
+            before: offset,
+            minimum,
+            maximum,
+            allows_x_chaining,
+            allows_y_chaining,
+        });
     }
     chain
 }
@@ -494,95 +483,77 @@ fn FragmentContainsNode(fragment: &FragmentNode, node_id: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn root() -> ScrollNode {
         ScrollNode {
             id: 7,
+            owner_client_id: 70,
             parent_id: None,
             container_rect: PaintRect::default(),
-            committed: Offset { x: 0.0, y: 20.0 },
+            committed: Offset { x: 0., y: 20. },
             minimum: Offset::default(),
-            maximum: Offset { x: 0.0, y: 100.0 },
+            maximum: Offset { x: 0., y: 100. },
             user_scrollable_horizontal: false,
             user_scrollable_vertical: true,
         }
     }
-
     #[test]
     fn wheel_gesture_latches_main_thread_disposition() {
         let mut tree = CompositorScrollTree::default();
-        tree.activate(Some(root()), None);
-        let began = tree.apply_wheel(WheelPhase::kBegan, Offset { x: 0.0, y: 10.0 }, true, true);
-        assert!(began.blocked_on_main);
-        let changed = tree.apply_wheel(
-            WheelPhase::kChanged,
-            Offset { x: 0.0, y: 10.0 },
-            true,
-            false,
+        tree.activate(Some(root()), 0);
+        assert!(
+            tree.apply_wheel(WheelPhase::kBegan, Offset { x: 0., y: 10. }, true, true)
+                .blocked_on_main
         );
-        assert!(changed.blocked_on_main);
-        assert_eq!(
-            tree.current_position(),
-            Some((7, Offset { x: 0.0, y: 20.0 }))
+        assert!(
+            tree.apply_wheel(WheelPhase::kChanged, Offset { x: 0., y: 10. }, true, false)
+                .blocked_on_main
         );
+        assert_eq!(tree.current_position().unwrap().1.y, 20.);
         tree.apply_wheel(WheelPhase::kEnded, Offset::default(), true, false);
-        let next = tree.apply_wheel(WheelPhase::kBegan, Offset { x: 0.0, y: 10.0 }, true, false);
-        assert!(next.did_scroll);
-        assert_eq!(
-            tree.current_position(),
-            Some((7, Offset { x: 0.0, y: 30.0 }))
+        assert!(
+            tree.apply_wheel(WheelPhase::kBegan, Offset { x: 0., y: 10. }, true, false)
+                .did_scroll
         );
+        assert_eq!(tree.current_position().unwrap().1.y, 30.);
+        assert_eq!(tree.pull_delta_for_main().unwrap().delta.y, 10.);
     }
-
     #[test]
-    fn activation_retains_offset_for_the_same_scroll_node() {
+    fn negative_range_and_document_identity_do_not_reuse_old_delta() {
         let mut tree = CompositorScrollTree::default();
-        tree.activate(Some(root()), None);
-        tree.apply_wheel(WheelPhase::kBegan, Offset { x: 0.0, y: 35.0 }, true, false);
-        let retained = tree.current_position();
-        let mut committed = root();
-        committed.committed.y = 30.0;
-        tree.activate(Some(committed), retained);
-        assert_eq!(
-            tree.current_position(),
-            Some((7, Offset { x: 0.0, y: 55.0 }))
-        );
-    }
-
-    #[test]
-    fn compositor_scroll_preserves_a_negative_native_range() {
-        let mut tree = CompositorScrollTree::default();
-        let mut negative_range = root();
-        negative_range.committed.y = -20.0;
-        negative_range.minimum.y = -100.0;
-        negative_range.maximum.y = 0.0;
-        tree.activate(Some(negative_range), None);
-        tree.apply_wheel(
-            WheelPhase::kBegan,
-            Offset { x: 0.0, y: -200.0 },
-            true,
-            false,
-        );
-        assert_eq!(
-            tree.current_position(),
-            Some((7, Offset { x: 0.0, y: -100.0 }))
-        );
+        let node = ScrollNode {
+            committed: Offset { x: 0., y: -20. },
+            minimum: Offset { x: 0., y: -100. },
+            maximum: Offset::default(),
+            ..root()
+        };
+        tree.activate(Some(node), 0);
         tree.apply_wheel(
             WheelPhase::kChanged,
-            Offset { x: 0.0, y: 500.0 },
+            Offset { x: 0., y: -200. },
             true,
             false,
         );
-        assert_eq!(tree.current_position(), Some((7, Offset::default())));
+        assert_eq!(tree.current_position().unwrap().1.y, -100.);
+        assert_eq!(tree.pull_delta_for_main().unwrap().delta.y, -80.);
+        tree.reset_document();
+        tree.activate(Some(node), 0);
+        assert_eq!(tree.current_position().unwrap().1.y, -20.);
+        assert!(tree.pull_delta_for_main().is_none());
     }
-
     #[test]
-    fn snapshot_selects_the_outer_scroll_node_as_viewport_scroller() {
-        let mut nested = root();
-        nested.id = 8;
-        nested.parent_id = Some(7);
-        nested.maximum.y = 1000.0;
-        let tree = ScrollTreeSnapshot::new(vec![nested, root()]);
-        assert_eq!(tree.root().map(|node| node.id), Some(7));
+    fn snapshot_selects_outer_scroll_owner() {
+        let nested = ScrollNode {
+            id: 8,
+            parent_id: Some(7),
+            maximum: Offset { x: 0., y: 1000. },
+            ..root()
+        };
+        assert_eq!(
+            ScrollTreeSnapshot::new(vec![nested, root()])
+                .root()
+                .unwrap()
+                .id,
+            7
+        );
     }
 }

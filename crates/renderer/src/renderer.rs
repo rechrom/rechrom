@@ -4,7 +4,10 @@
 //! aggregation and swap throttling live in `viz`. `Renderer` retains only the
 //! backend state needed to draw each surface into a borrowed output target.
 
-use std::{collections::HashMap, io};
+use std::{
+    collections::{HashMap, HashSet},
+    io,
+};
 
 use raster::RasterResourceProvider;
 use viz::{AggregatedFrame, RenderPassId, SurfaceId};
@@ -31,6 +34,16 @@ pub struct RenderTarget<'a> {
     pub row_stride: usize,
 }
 
+/// Renderer-owned retained storage. Capacities exclude container overhead;
+/// clip products are the cache's accounted bytes, not allocator residency.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BackingStats {
+    pub passes: usize,
+    pub composed_capacity_bytes: usize,
+    pub scratch_capacity_bytes: usize,
+    pub clip_product_accounted_bytes: usize,
+}
+
 #[derive(Default)]
 pub struct Renderer {
     surfaces: HashMap<(SurfaceId, RenderPassId), RenderPassRenderer>,
@@ -54,6 +67,23 @@ impl RasterResourceRegistry for SingleSurfaceResources<'_> {
 }
 
 impl Renderer {
+    pub fn BackingStats(&self) -> BackingStats {
+        let (passes, composed_capacity_bytes, scratch_capacity_bytes, clip_product_accounted_bytes) =
+            self.backing_usage();
+        BackingStats {
+            passes,
+            composed_capacity_bytes,
+            scratch_capacity_bytes,
+            clip_product_accounted_bytes,
+        }
+    }
+    fn backing_usage(&self) -> (usize, usize, usize, usize) {
+        self.surfaces.values().fold((0, 0, 0, 0), |sum, pass| {
+            let (composed, scratch, clips) = pass.backing_usage();
+            (sum.0 + 1, sum.1 + composed, sum.2 + scratch, sum.3 + clips)
+        })
+    }
+
     pub fn Invalidate(&mut self) {
         for surface in self.surfaces.values_mut() {
             surface.invalidate();
@@ -93,6 +123,34 @@ impl Renderer {
             .ok_or_else(|| io::Error::other("aggregated frame does not match render target"))?;
         debug_assert_eq!(expected, buffer.len());
 
+        // DirectRenderer::DecideRenderPassAllocations supplies the complete
+        // current pass requirements to SoftwareRenderer before drawing. Viz
+        // aggregates every pass, including undamaged retained children, for
+        // each represented surface. Omitted surfaces have an independent
+        // lifetime and remain owned by InvalidateSurface.
+        let required: HashSet<_> = frame
+            .RenderPasses()
+            .iter()
+            .map(|pass| (pass.Surface(), pass.RenderPassId()))
+            .collect();
+        let represented: HashSet<_> = required.iter().map(|key| key.0).collect();
+        // Admission precedes reconciliation. A missing/mismatched provider
+        // cannot discard backings from a candidate which will not render.
+        for pass in frame.RenderPasses() {
+            let provider = resources.ResourcesFor(pass.Surface()).ok_or_else(|| {
+                io::Error::other("aggregated render pass has no raster resource provider")
+            })?;
+            if provider.prepared_frame_id() != Some(pass.SourceFrameId()) {
+                return Err(io::Error::other(
+                    "aggregated render-pass raster resources are not prepared",
+                ));
+            }
+        }
+        let before = self.backing_usage();
+        self.surfaces
+            .retain(|key, _| !represented.contains(&key.0) || required.contains(key));
+        let reconciled = self.backing_usage();
+
         let covers_output = frame
             .RenderPasses()
             .iter()
@@ -130,6 +188,8 @@ impl Renderer {
         let mut copied_bytes = 0usize;
         let mut all_retained = true;
         let mut pass_outputs: HashMap<(SurfaceId, RenderPassId), Vec<u32>> = HashMap::new();
+        let mut temporary_output_bytes = 0usize;
+        let mut temporary_output_peak = 0usize;
         for pass in frame.RenderPasses() {
             let destination = pass.Destination();
             let provider = resources.ResourcesFor(pass.Surface()).ok_or_else(|| {
@@ -163,6 +223,8 @@ impl Renderer {
                 damage_pixels = damage_pixels.saturating_add(update.damage_pixels);
                 copied_bytes = copied_bytes.saturating_add(update.copied_bytes);
                 all_retained &= update.damage_pixels == 0;
+                temporary_output_bytes += scratch.capacity() * std::mem::size_of::<u32>();
+                temporary_output_peak = temporary_output_peak.max(temporary_output_bytes);
                 pass_outputs.insert((pass.Surface(), pass.RenderPassId()), scratch);
                 continue;
             }
@@ -212,6 +274,8 @@ impl Renderer {
                         destination.width as usize,
                         &local_outputs,
                     )?;
+                temporary_output_peak = temporary_output_peak
+                    .max(temporary_output_bytes + scratch.capacity() * std::mem::size_of::<u32>());
                 let left = usize::try_from(destination.x)
                     .map_err(|_| io::Error::other("negative surface destination"))?;
                 let top = usize::try_from(destination.y)
@@ -225,6 +289,39 @@ impl Renderer {
             damage_pixels = damage_pixels.saturating_add(update.damage_pixels);
             copied_bytes = copied_bytes.saturating_add(update.copied_bytes);
             all_retained &= update.damage_pixels == 0;
+        }
+        let after = self.backing_usage();
+        browser_tracing::instant(
+            "render",
+            "RenderPassBackingReconciled",
+            &[
+                ("current_surfaces", represented.len() as f64),
+                ("current_passes", required.len() as f64),
+                ("evicted_passes", (before.0 - reconciled.0) as f64),
+                (
+                    "evicted_capacity_bytes",
+                    (before.1 + before.2 - reconciled.1 - reconciled.2) as f64,
+                ),
+            ],
+        );
+        browser_tracing::instant(
+            "render",
+            "RenderPassBackingUsage",
+            &[
+                ("retained_passes", self.surfaces.len() as f64),
+                ("composed_capacity_bytes", after.1 as f64),
+                ("effect_scratch_capacity_bytes", after.2 as f64),
+                ("clip_product_accounted_bytes", after.3 as f64),
+                (
+                    "temporary_output_peak_capacity_bytes",
+                    temporary_output_peak as f64,
+                ),
+            ],
+        );
+        if std::env::var_os("RECHROM_RENDERER_BACKING_DIAGNOSTICS").is_some() {
+            eprintln!("renderer-backings surfaces={} current={} retained={} evicted={} evicted_capacity={} composed_capacity={} scratch_capacity={} clip_accounted={} temporary_peak={}",
+                represented.len(), required.len(), self.surfaces.len(), before.0 - reconciled.0,
+                before.1 + before.2 - reconciled.1 - reconciled.2, after.1, after.2, after.3, temporary_output_peak);
         }
         Ok(RenderUpdate {
             mode: "aggregated-surfaces",

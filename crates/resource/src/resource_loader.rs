@@ -34,6 +34,12 @@ pub struct ResourceLoader {
     took_result: bool,
 }
 
+impl SharedResourceLoad {
+    pub(crate) fn MemoryUsage(&self) -> (bool, usize) {
+        (self.status == ResourceLoadStatus::kLoading,
+         self.result.response.as_ref().map_or(0, |response| response.body.capacity()))
+    }
+}
 impl ResourceLoader {
     pub fn Start(loader: &mut dyn URLLoader, request: &URLRequest) -> Self {
         let shared = match loader.Load(request) {

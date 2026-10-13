@@ -13,6 +13,21 @@ use std::rc::Rc;
 // DOM owns style/input state. Native tree ownership and application of these
 // synchronous mutation events belong to the Page's LayoutEngine.
 impl DOM {
+    /// Finish the document-owned SVG resource lifecycle after computed style
+    /// resolution and before an assembly root chooses retained paint. This
+    /// conservative invalidation refreshes every consumer on a resource change.
+    pub fn UpdateSVGResources(&mut self) -> bool {
+        if self.GetDocument().SVGResources().is_some() {
+            return false;
+        }
+        let snapshot = super::svg_clip_path_graph::build_persistent(self.GetDocument());
+        let changed = self.GetDocumentMut().PublishSVGResources(snapshot);
+        if changed {
+            self.InvalidatePaint();
+        }
+        changed
+    }
+
     pub fn EmitLayoutMutations(
         &mut self,
         interaction: &UserInteractionState,
@@ -30,6 +45,9 @@ impl DOM {
         mut receive: impl FnMut(LayoutMutation<'_>),
     ) -> bool {
         let document = self.GetDocument();
+        let Some(resources) = document.SVGResources() else {
+            return false;
+        };
         let Some(index) = document.FindNodeById(node_id) else {
             return false;
         };
@@ -44,6 +62,7 @@ impl DOM {
             node_id,
             style: native_style,
             projected: &resolved.style.paint,
+            clip_resource_version: resources.version,
         });
         true
     }

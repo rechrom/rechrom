@@ -101,6 +101,75 @@ pub(crate) fn document_records(
         .collect()
 }
 
+fn validate_document_clip_chain(
+    leaf: &Arc<ClipPaintPropertyNode>,
+) -> Result<(), ReplayUnsupported> {
+    let mut current = Some(leaf);
+    while let Some(clip) = current {
+        if clip.clip_path_error.is_some() {
+            return Err(ReplayUnsupported("unsupported-document-clip-path"));
+        }
+        // LayoutSVGResourceClipper unions independently filled child paths.
+        // A single SkCanvas clipPath of their concatenation cannot represent
+        // that union (even-odd overlaps and opposite winding cancel). This
+        // document replay route has no PathOps/mask-union owner yet. Reject
+        // before replay rather than silently replacing union with winding.
+        if clip.clip_path_children.len() > 1 {
+            return Err(ReplayUnsupported("union-document-clip-requires-mask"));
+        }
+        current = clip.parent.as_ref();
+    }
+    Ok(())
+}
+
+fn validate_document_artifact(
+    artifact: &paint::paint_engine::PaintArtifact,
+    depth: usize,
+) -> Result<(), ReplayUnsupported> {
+    for chunk in &artifact.chunks {
+        let records = artifact.display_items.get(chunk.begin_index as usize..chunk.end_index as usize)
+            .ok_or(ReplayUnsupported("invalid-document-record-range"))?;
+        for record in records {
+            let raw = artifact.items.get(record.record_begin..record.record_end)
+                .ok_or(ReplayUnsupported("invalid-document-record-range"))?;
+            layer_tile::recording::mask_record_body(raw, chunk.properties.effect.is_mask)?;
+        }
+        validate_document_clip_chain(&chunk.properties.clip)?;
+        let mut current = Some(&chunk.properties.effect);
+        while let Some(effect) = current {
+            if let Some(clip) = &effect.output_clip {
+                validate_document_clip_chain(clip)?;
+            }
+            current = effect.parent.as_ref();
+        }
+    }
+    validate_document_images(artifact, depth)
+}
+
+fn validate_document_images(
+    artifact: &paint::paint_engine::PaintArtifact,
+    depth: usize,
+) -> Result<(), ReplayUnsupported> {
+    let documents = document_records(artifact);
+    for (id, key) in artifact.DocumentImageContainerRequirements() {
+        let record = documents
+            .get(&id)
+            .and_then(|content| content.exact_record_for(&key))
+            .ok_or(ReplayUnsupported("missing-document-image-container"))?;
+        let record = record
+            .as_any()
+            .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
+            .ok_or(ReplayUnsupported("unsupported-document-image-record"))?;
+        // Keep admission bounded by the same nesting limit as document
+        // replay; a deeper resource must not become an apparently empty image.
+        if depth >= 8 {
+            return Err(ReplayUnsupported("document-image-depth-exceeded"));
+        }
+        validate_document_artifact(&record.artifact, depth + 1)?;
+    }
+    Ok(())
+}
+
 fn hydrate_bitmap_pattern_shader(
     shader: &mut skia::compat::commands::PaintShader,
     resources: &layoutng_assembly::fragment_tree::PaintResources,
@@ -197,20 +266,7 @@ pub(crate) fn rasterize_pattern_document_record(
     if width > 8192 || height > 8192 || byte_count > 256 * 1024 * 1024 {
         return None;
     }
-    let documents = document_records(&record.artifact);
-    if record
-        .artifact
-        .DocumentImageContainerRequirements()
-        .iter()
-        .any(|(id, key)| {
-            documents
-                .get(id)
-                .and_then(|content| content.exact_record_for(key))
-                .is_none()
-        })
-    {
-        return None;
-    }
+    validate_document_artifact(&record.artifact, depth + 1).ok()?;
     let empty = ResourceContext::default();
     let mut canvas = skia::cpu::canvas::Canvas::new(&empty, width, height);
     canvas.clear_transparent();
@@ -624,7 +680,7 @@ fn document_clip_chain(
         chain.push(clip);
     }
     for clip in chain.into_iter().rev() {
-        if (clip.rect.is_some() || !clip.clip_path.is_empty())
+        if (clip.rect.is_some() || (clip.clip_path_is_empty || !clip.clip_path.is_empty()))
             && !seen
                 .iter()
                 .any(|old| old.lifecycle.same_node(&clip.lifecycle))
@@ -755,7 +811,7 @@ fn replay_document_clip_open(
         );
         return;
     };
-    let Some(inverse) = inverse_affine(&matrix) else {
+    let Some(_) = inverse_affine(&matrix) else {
         // A singular local space has no drawable projection. Keep the canvas
         // in the document root coordinate space for following sibling scopes.
         canvas.replay_item(
@@ -769,10 +825,14 @@ fn replay_document_clip_open(
         );
         return;
     };
+    let saved_matrix = canvas.local_to_device();
     replay_concat(canvas, matrix, resources);
     // A path node's rect is its conservative scheduling bound, not an
     // additional clip. Applying both would multiply antialiased edge coverage.
-    if let Some(rect) = clip.rect.filter(|_| clip.clip_path.is_empty()) {
+    if let Some(rect) = clip
+        .rect
+        .filter(|_| !clip.clip_path_is_empty && clip.clip_path.is_empty())
+    {
         canvas.replay_item(
             &DisplayItem {
                 r#type: if clip.radii == Default::default() {
@@ -789,7 +849,7 @@ fn replay_document_clip_open(
             resources,
         );
     }
-    if !clip.clip_path.is_empty() {
+    if (clip.clip_path_is_empty || !clip.clip_path.is_empty()) {
         canvas.replay_item(
             &DisplayItem {
                 r#type: Kind::kClipPath,
@@ -802,9 +862,12 @@ fn replay_document_clip_open(
             resources,
         );
     }
-    // SkCanvas materializes the clip in device space. Returning the CTM to
-    // the document root keeps later effect and chunk transforms independent.
-    replay_concat(canvas, inverse, resources);
+    // SkCanvas materializes the clip in device space. Restore the exact
+    // receiver CTM without changing that clip. Concatenating an f64 inverse
+    // through SkMatrix's f32 receiver introduces M*inverse(M) roundoff before
+    // the next chunk, unlike PaintChunksToCcLayer's retained transform state.
+    // No device/saveLayer boundary is crossed inside this clip scope.
+    canvas.set_matrix(saved_matrix);
 }
 
 fn replay_document_effect_open(
@@ -950,8 +1013,8 @@ fn replay_document_artifact(
     let nested_resources = resources(artifact);
     let nested_documents = document_records(artifact);
     let empty_resources = ResourceContext::default();
-    let replay_range = |canvas: &mut skia::cpu::canvas::Canvas, range: std::ops::Range<usize>| {
-        for nested in &artifact.items[range] {
+    let replay_range = |canvas: &mut skia::cpu::canvas::Canvas, items: &[DisplayItem]| {
+        for nested in items {
             let nested_record = nested_documents
                 .get(&nested.resource_id)
                 .and_then(|content| {
@@ -987,7 +1050,7 @@ fn replay_document_artifact(
     // Match PaintChunksToCcLayer: switch shared Effect/Clip scopes to their
     // lifecycle LCA, then apply the individual chunk Transform to its record.
     if artifact.display_items.is_empty() || artifact.chunks.is_empty() {
-        replay_range(canvas, 0..artifact.items.len());
+        replay_range(canvas, &artifact.items);
         return;
     }
     let mut masked_parents = Vec::new();
@@ -1051,7 +1114,14 @@ fn replay_document_artifact(
         for record in &artifact.display_items[begin..end] {
             if record.record_begin <= record.record_end && record.record_end <= artifact.items.len()
             {
-                replay_range(canvas, record.record_begin..record.record_end);
+                // The effect scope already owns the complete parent DstIn.
+                // Share LayerTile's formal mask boundary validation; ordinary
+                // nested DstIn paint operations remain in non-mask records.
+                let body = layer_tile::recording::mask_record_body(
+                    &artifact.items[record.record_begin..record.record_end],
+                    chunk.properties.effect.is_mask,
+                ).expect("validated document mask record");
+                replay_range(canvas, body);
             }
         }
         canvas.replay_item(
@@ -1136,18 +1206,10 @@ impl<'a> LayerReplay<'a> {
     pub fn new(plan: &'a FramePlan, tasks: &[RasterTask]) -> Result<Self, ReplayUnsupported> {
         let list = plan.GetPaintArtifact();
         let documents = document_records(list);
-        if list
-            .DocumentImageContainerRequirements()
-            .iter()
-            .any(|(id, key)| {
-                documents
-                    .get(id)
-                    .and_then(|content| content.exact_record_for(key))
-                    .is_none()
-            })
-        {
-            return Err(ReplayUnsupported("missing-document-image-container"));
-        }
+        // Top-level clip masks belong to Renderer. Only nested document
+        // artifacts use this raster-local property replay, so validate those
+        // at admission, before any tile or worker can render partial content.
+        validate_document_images(list, 0)?;
         let content = plan.GetRasterRecords();
         if plan.unsupported.is_some() {
             return Err(ReplayUnsupported("unsupported-layer-plan"));
@@ -1651,6 +1713,198 @@ mod tests {
         PropertyTreeState, TransformPaintPropertyNode,
     };
 
+    fn document_clip_fixture(child_count: usize) -> PaintArtifact {
+        use layoutng_assembly::internal::layout_input::{
+            Offset, PaintClipPathChild, PaintPathCommand, PaintPathVerb,
+        };
+        let root = PropertyTreeState::default();
+        let children = (0..child_count)
+            .map(|index| {
+                let x = index as f64 * 2.0;
+                PaintClipPathChild {
+                    commands: [
+                        (PaintPathVerb::kMoveTo, x, 0.0),
+                        (PaintPathVerb::kLineTo, x + 4.0, 0.0),
+                        (PaintPathVerb::kLineTo, x + 4.0, 4.0),
+                        (PaintPathVerb::kLineTo, x, 4.0),
+                        (PaintPathVerb::kClose, 0.0, 0.0),
+                    ]
+                    .into_iter()
+                    .map(|(verb, x, y)| PaintPathCommand {
+                        verb,
+                        point: Offset { x, y },
+                        ..Default::default()
+                    })
+                    .collect(),
+                    even_odd: true,
+                }
+            })
+            .collect::<Vec<_>>();
+        let clip = Arc::new(ClipPaintPropertyNode {
+            lifecycle: PaintPropertyNodeLifecycle::default(),
+            id: 1,
+            parent: Some(root.clip.clone()),
+            rect: Some(PaintRect {
+                width: 8.0,
+                height: 8.0,
+                ..Default::default()
+            }),
+            clip_path: children
+                .iter()
+                .flat_map(|child| child.commands.clone())
+                .collect(),
+            clip_path_is_empty: children.is_empty(),
+            clip_path_children: children,
+            clip_path_even_odd: true,
+            ..(*root.clip).clone()
+        });
+        let rect = PaintRect {
+            width: 8.0,
+            height: 8.0,
+            ..Default::default()
+        };
+        PaintArtifact {
+            items: vec![DisplayItem {
+                r#type: Kind::kDrawRect,
+                rect,
+                color: Color {
+                    red: 1.0,
+                    alpha: 1.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }]
+            .into(),
+            display_items: vec![RecordedDisplayItem {
+                kind: RecordedDisplayItemKind::Drawing,
+                id: Default::default(),
+                visual_rect: rect,
+                visual_rect_is_accurate: true,
+                draws_content: true,
+                raster_effect_outset: paint::paint_engine::RasterEffectOutset::kNone,
+                record_begin: 0,
+                record_end: 1,
+                scroll_translation: None,
+            }],
+            chunks: vec![PaintChunk {
+                begin_index: 0,
+                end_index: 1,
+                bounds: rect,
+                drawable_bounds: rect,
+                properties: PropertyTreeState { clip, ..root },
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn embed_document_fixture(artifact: PaintArtifact) -> PaintArtifact {
+        let key = image_resource::ContainerKey::new(8, 8, 1.0, 1.0);
+        let record = paint::paint_engine::DocumentPaintArtifactRecord {
+            artifact: Arc::new(artifact),
+            intrinsic_size: image_resource::IntrinsicSize {
+                width: 8,
+                height: 8,
+            },
+            record_size: image_resource::IntrinsicSize {
+                width: 8,
+                height: 8,
+            },
+            container_key: key.clone(),
+        };
+        PaintArtifact {
+            items: vec![DisplayItem {
+                r#type: Kind::kDrawImageRect,
+                resource_id: 1,
+                document_image_container_key: Some(key.clone()),
+                ..Default::default()
+            }]
+            .into(),
+            resources: Some(Arc::new(layoutng_assembly::fragment_tree::PaintResources {
+                images: vec![layoutng_assembly::internal::layout_input::PaintImage {
+                    id: 1,
+                    width: 8,
+                    height: 8,
+                    document_container_key: Some(key.clone()),
+                    content: image_resource::PaintImageContent::Document(Arc::new(
+                        image_resource::DocumentPaintContent::new(key, Arc::new(record)),
+                    )),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn document_clip_admission_rejects_partial_graph_and_effect_clip_errors() {
+        let mut artifact = document_clip_fixture(1);
+        Arc::make_mut(&mut artifact.chunks[0].properties.clip).clip_path_error =
+            Some("nested clip-path on clip content is unsupported".into());
+        assert_eq!(
+            validate_document_artifact(&artifact, 0),
+            Err(ReplayUnsupported("unsupported-document-clip-path"))
+        );
+        let failed_clip = artifact.chunks[0].properties.clip.clone();
+        artifact.chunks[0].properties.clip = PropertyTreeState::default().clip;
+        Arc::make_mut(&mut artifact.chunks[0].properties.effect).output_clip = Some(failed_clip);
+        assert_eq!(
+            validate_document_artifact(&artifact, 0),
+            Err(ReplayUnsupported("unsupported-document-clip-path"))
+        );
+        let nested = embed_document_fixture(embed_document_fixture(artifact));
+        assert_eq!(
+            validate_document_images(&nested, 0),
+            Err(ReplayUnsupported("unsupported-document-clip-path"))
+        );
+    }
+
+    #[test]
+    fn document_clip_admission_rejects_evenodd_union_without_flattening() {
+        let artifact = document_clip_fixture(2);
+        assert_eq!(
+            validate_document_artifact(&artifact, 0),
+            Err(ReplayUnsupported("union-document-clip-requires-mask"))
+        );
+        // Admission must leave the separately filled children immutable.
+        assert_eq!(
+            artifact.chunks[0].properties.clip.clip_path_children.len(),
+            2
+        );
+        assert_eq!(
+            validate_document_images(&embed_document_fixture(artifact), 0),
+            Err(ReplayUnsupported("union-document-clip-requires-mask"))
+        );
+    }
+
+    #[test]
+    fn document_clip_admission_preserves_empty_and_single_child_replay() {
+        for child_count in [0, 1] {
+            let artifact = document_clip_fixture(child_count);
+            assert_eq!(validate_document_artifact(&artifact, 0), Ok(()));
+            assert_eq!(
+                validate_document_images(&embed_document_fixture(artifact.clone()), 0),
+                Ok(())
+            );
+            let resources = ResourceContext::default();
+            let mut canvas = skia::cpu::canvas::Canvas::new(&resources, 8, 8);
+            canvas.clear_transparent();
+            replay_document_artifact(&mut canvas, &artifact, 0);
+            let pixels = canvas.finish_direct().into_vec();
+            let pixel = |x: usize, y: usize| &pixels[(y * 8 + x) * 4..(y * 8 + x + 1) * 4];
+            assert_eq!(
+                pixel(2, 2),
+                if child_count == 0 {
+                    &[0, 0, 0, 0]
+                } else {
+                    &[255, 0, 0, 255]
+                }
+            );
+            assert_eq!(pixel(6, 2), &[0, 0, 0, 0]);
+        }
+    }
+
     #[test]
     fn document_artifact_replays_chunk_transform() {
         let root = PropertyTreeState::default();
@@ -2035,6 +2289,7 @@ mod tests {
                         alpha: 1.0,
                     },
                 ),
+                DisplayItem {r#type: Kind::kSaveLayerDstIn, ..Default::default()},
                 draw(
                     left,
                     Color {
@@ -2044,9 +2299,10 @@ mod tests {
                         alpha: 1.0,
                     },
                 ),
+                DisplayItem {r#type: Kind::kRestore, ..Default::default()},
             ]
             .into(),
-            display_items: vec![record(0, full), record(1, left)],
+            display_items: vec![record(0, full), RecordedDisplayItem {record_end:4, ..record(1,left)}],
             chunks: vec![
                 PaintChunk {
                     begin_index: 0,
@@ -2075,6 +2331,7 @@ mod tests {
             ],
             ..Default::default()
         };
+        assert_eq!(validate_document_artifact(&artifact, 0), Ok(()));
         let resources = ResourceContext::default();
         let mut canvas = skia::cpu::canvas::Canvas::new(&resources, 8, 4);
         replay_document_artifact(&mut canvas, &artifact, 0);

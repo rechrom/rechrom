@@ -2131,6 +2131,11 @@ impl LayoutBox {
         box_type: BoxQuadType,
     ) {
         self.CheckIsNotDestroyed();
+        // The LayoutBox storage used by SVG containers must not turn a
+        // resource definition into a CSS geometry box.
+        if self.IsSVGHiddenContainer() {
+            return;
+        }
         let mut first_fragment: Option<&PhysicalBoxFragment> = None;
         for fragment in self.PhysicalFragments() {
             let offset = if let Some(first) = first_fragment {

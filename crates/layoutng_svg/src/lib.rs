@@ -4,8 +4,10 @@ pub mod assembly;
 pub mod block_style;
 pub mod layout_svg_foreign_object;
 pub mod layout_svg_group;
+pub mod layout_svg_hidden_container;
 pub mod layout_svg_inline;
 pub mod layout_svg_inline_text;
+pub mod layout_svg_resource_clipper;
 pub mod layout_svg_root;
 pub mod layout_svg_shape;
 pub mod layout_svg_text;
@@ -22,3 +24,5 @@ mod svg_container_layout;
 mod svg_viewport;
 
 mod svg_text_visual_rect;
+
+pub mod layout_svg_resource_masker;

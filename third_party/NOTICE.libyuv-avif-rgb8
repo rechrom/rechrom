@@ -1,0 +1,8 @@
+The private image_decoder AVIF RGB8 conversion is a safe Rust translation of
+libyuv a0fa6329391922faca64955c1a7bf635ab87d833, pinned by Chromium
+6c1d401fcca5e1b0030563a90c2f2bba168e0c15. Source functions and edge semantics
+are identified in crates/image_decoder/src/avif_rgb8.rs and docs/avif-rust-backend.md.
+Copyright 2011 The LibYuv Project Authors. All rights reserved.
+License: BSD-3-Clause, retained in LICENSE.libyuv-avif-rgb8.
+No native libyuv library is a production dependency. Checked-in pixel oracles
+are generated using that exact official revision for verification only.

@@ -250,6 +250,7 @@ impl PaintRect {
 // cpp: paint/paint_engine.h:82-100
 #[derive(Clone, PartialEq)]
 pub struct DisplayMaskLayer {
+    pub source_error: Option<String>,
     pub resource_id: u64,
     pub image_interpolation_quality: InterpolationQuality,
     pub document_image_container_key: Option<image_resource::ContainerKey>,
@@ -271,6 +272,7 @@ pub struct DisplayMaskLayer {
 impl Default for DisplayMaskLayer {
     fn default() -> Self {
         Self {
+            source_error: None,
             resource_id: 0,
             image_interpolation_quality: InterpolationQuality::kInterpolationMedium,
             document_image_container_key: None,

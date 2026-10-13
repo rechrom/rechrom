@@ -10,7 +10,7 @@ mod engine;
 mod resource_loader;
 
 pub use decode::{DecodeEffect, DecodeMutation, DecodedImageResource};
-pub use engine::ResourceEngine;
+pub use engine::{ResourceEngine, ResourceMemoryDiagnostics};
 pub use resource_loader::{
     AwaitResource, LoadResponse, RequireResponse, ResourceLoadResult, ResourceLoadStatus,
     ResourceLoader, StartResource,

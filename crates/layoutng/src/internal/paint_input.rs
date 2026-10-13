@@ -95,6 +95,12 @@ pub enum ClipPathReferenceBox {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClipPathPaint {
     pub reference_url: Option<String>,
+    pub reference_target_id: Option<u64>,
+    /// Resolved by the referenced native SVG resource's viewport owner during
+    /// Layout export. Percentages do not use the consumer's bounding box.
+    pub reference_viewport: Option<super::layout_input::Size>,
+    pub reference_scope:
+        Option<layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope>,
     pub reference_graph: Option<Arc<SvgClipPathGraph>>,
     pub reference_error: Option<String>,
     pub reference_box: ClipPathReferenceBox,
@@ -116,6 +122,9 @@ impl Default for ClipPathPaint {
     fn default() -> Self {
         Self {
             reference_url: None,
+            reference_target_id: None,
+            reference_viewport: None,
+            reference_scope: None,
             reference_graph: None,
             reference_error: None,
             reference_box: ClipPathReferenceBox::kBorderBox,
@@ -256,6 +265,38 @@ pub struct SvgClipPathGraph {
     pub transform: SvgClipTransform,
     pub children: Vec<SvgClipPathChild>,
     pub unsupported: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SvgClipResourceVersion {
+    pub document_id: u64,
+    pub revision: u64,
+}
+
+/// The first connected element with this ID in its TreeScope. A wrong-kind
+/// target deliberately has no graph; a later clipPath with the same ID cannot
+/// replace it. A present graph with no children is a valid empty clip.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SvgClipResourceEntry {
+    pub scope_id: u64,
+    pub target_node_id: u64,
+    pub id: String,
+    pub graph: Option<Arc<SvgClipPathGraph>>,
+    pub mask_graph: Option<Arc<SvgMaskGraph>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SvgClipResourceSnapshot {
+    pub version: SvgClipResourceVersion,
+    pub entries: Vec<SvgClipResourceEntry>,
+}
+
+/// Non-CSS resource ownership carried into the resident Layout input tree.
+/// It outlives paint-only replacements of the canonical computed style.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SvgClipResourceBinding {
+    pub snapshot: Arc<SvgClipResourceSnapshot>,
+    pub scope: layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope,
 }
 
 // cpp: layoutng/internal/paint_input.h:17-36
@@ -997,8 +1038,20 @@ pub enum PaintMaskImageState {
     kLoading,
     kInvalid,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct SvgMaskReference {
+    pub id: String,
+    pub scope: layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope,
+    pub graph: Option<Arc<SvgMaskGraph>>,
+    pub target_id: Option<u64>,
+    pub viewport: Option<Size>,
+}
+
 #[derive(Clone, PartialEq)]
 pub struct PaintMaskLayer {
+    pub svg_reference: Option<SvgMaskReference>,
+    pub match_source: bool,
+    pub source_error: Option<String>,
     pub image_state: PaintMaskImageState,
     pub image: BackgroundImageLayer,
     pub mode: PaintMaskMode,
@@ -1007,6 +1060,9 @@ pub struct PaintMaskLayer {
 impl Default for PaintMaskLayer {
     fn default() -> Self {
         Self {
+            svg_reference: None,
+            match_source: false,
+            source_error: None,
             image: BackgroundImageLayer::default(),
             image_state: PaintMaskImageState::kReady,
             mode: PaintMaskMode::kAlpha,
@@ -1337,6 +1393,7 @@ pub struct PaintStyleData {
     /// flattened operation payload cannot represent. Consumers must reject it.
     pub backdrop_filter_has_reference: bool,
     pub mask_images: Vec<PaintMaskLayer>,
+    pub svg_mask_resource: Option<Arc<SvgMaskGraph>>,
     /// Fragment-sized projection of -webkit-mask-box-image. It shares the
     /// nine-piece geometry contract with border-image but is consumed by the
     /// mask source phase rather than box decoration painting.
@@ -1440,6 +1497,7 @@ impl Default for PaintStyleData {
             backdrop_filters: Vec::new(),
             backdrop_filter_has_reference: false,
             mask_images: Vec::new(),
+            svg_mask_resource: None,
             mask_box_image: None,
             blend_mode: PaintBlendMode::kNormal,
             isolate_blending: false,

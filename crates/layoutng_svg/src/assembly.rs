@@ -17,11 +17,14 @@ use layoutng_style::style::computed_style::ComputedStyle;
 use crate::block_style::{SquaredLocalSvgTextScale, UpdateSvgBlockStyle};
 use crate::layout_svg_foreign_object::LayoutSVGForeignObject;
 use crate::layout_svg_group::{LayoutSVGGroup, SvgGroupAddChild};
+use crate::layout_svg_hidden_container::LayoutSVGHiddenContainer;
 use crate::layout_svg_inline::LayoutSVGInline;
 use crate::layout_svg_inline_text::{
     ComputeScaledSvgFont, LayoutSVGInlineText, SvgInlineTextScaledFont, SvgInlineTextScalingFactor,
     SvgInlineTextUpdateScaledFont,
 };
+use crate::layout_svg_resource_clipper::LayoutSVGResourceClipper;
+use crate::layout_svg_resource_masker::LayoutSVGResourceMasker;
 use crate::layout_svg_root::LayoutSVGRoot;
 use crate::layout_svg_root::{
     QuerySvgRootSizing, SvgRootAddChild, SvgRootChildren, SvgRootLayout, SvgRootNaturalDimensions,
@@ -57,6 +60,15 @@ fn CreateSvgObject(node: &mut Node, _style: &ComputedStyle) -> *mut LayoutObject
         }
         NodeKind::kSvgRoot => MakeGarbageCollected(LayoutSVGRoot::new(element)).cast(),
         NodeKind::kSvgGroup => MakeGarbageCollected(LayoutSVGGroup::new(element)).cast(),
+        NodeKind::kSvgHiddenContainer => {
+            MakeGarbageCollected(LayoutSVGHiddenContainer::new(element)).cast()
+        }
+        NodeKind::kSvgResourceMasker => {
+            MakeGarbageCollected(LayoutSVGResourceMasker::new(element)).cast()
+        }
+        NodeKind::kSvgResourceClipper => {
+            MakeGarbageCollected(LayoutSVGResourceClipper::new(element)).cast()
+        }
         NodeKind::kSvgForeignObject => {
             MakeGarbageCollected(LayoutSVGForeignObject::new(element)).cast()
         }
@@ -119,6 +131,10 @@ fn LayoutSvgText(
 // uses the runtime class to select the translated derived method.
 fn UpdateSvgObjectLayout(object: &mut LayoutObject, info: &SVGLayoutInfo) -> SVGLayoutResult {
     match object.RuntimeClass() {
+        LayoutObjectClass::SvgHiddenContainer | LayoutObjectClass::SvgResourceClipper | LayoutObjectClass::SvgResourceMasker => {
+            unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGHiddenContainer>() }
+                .UpdateSVGLayout(info)
+        }
         LayoutObjectClass::SvgViewportContainer => {
             unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGViewportContainer>() }
                 .UpdateSVGLayout(info)
@@ -149,7 +165,11 @@ fn SvgIsChildAllowed(
     style: &ComputedStyle,
 ) -> bool {
     match object.RuntimeClass() {
-        LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer => {
+        LayoutObjectClass::SvgGroup
+        | LayoutObjectClass::SvgViewportContainer
+        | LayoutObjectClass::SvgHiddenContainer
+        | LayoutObjectClass::SvgResourceClipper
+        | LayoutObjectClass::SvgResourceMasker => {
             unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGGroup>() }
                 .IsChildAllowed(child, style)
         }

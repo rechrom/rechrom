@@ -44,8 +44,8 @@ enum LocalMessage {
     Display(display::Message),
 }
 
-pub(crate) type BeginMainFrameClient =
-    Arc<dyn Fn(crate::begin_frame_source::NativeBeginFrame) + Send + Sync>;
+pub(crate) type MainThreadClient =
+    Arc<dyn Fn(compositor::MainThreadEvent<crate::begin_frame_source::NativeBeginFrame>) + Send + Sync>;
 
 pub(crate) fn Spawn(
     config: Config,
@@ -53,7 +53,7 @@ pub(crate) fn Spawn(
     output: Output,
     input_frame_source: Arc<crate::begin_frame_source::LogicalBeginFrameSource>,
     display_frame_source: Arc<crate::begin_frame_source::LogicalBeginFrameSource>,
-    begin_main_frame: BeginMainFrameClient,
+    main_thread: MainThreadClient,
 ) -> io::Result<mpsc::Sender<CompositorCommand>> {
     let (compositor_sender, compositor_receiver) = mpsc::channel();
     let input_sender = compositor_sender.clone();
@@ -75,7 +75,7 @@ pub(crate) fn Spawn(
             compositor_receiver,
             raster_sender,
             config.capture_frames,
-            begin_main_frame,
+            main_thread,
         )?,
         DisplayExecutor::CompositorThread => SpawnShared(
             target,
@@ -84,7 +84,7 @@ pub(crate) fn Spawn(
             compositor_receiver,
             raster_sender,
             config.capture_frames,
-            begin_main_frame,
+            main_thread,
         )?,
     }
     Ok(compositor_sender)
@@ -127,7 +127,7 @@ fn SpawnDedicated(
     compositor_receiver: mpsc::Receiver<CompositorCommand>,
     raster_sender: mpsc::Sender<RasterJob>,
     capture_frames: bool,
-    begin_main_frame: BeginMainFrameClient,
+    main_thread: MainThreadClient,
 ) -> io::Result<()> {
     let (display_sender, display_receiver) = mpsc::channel::<display::Message>();
     let display_reply = display_sender.clone();
@@ -189,7 +189,7 @@ fn SpawnDedicated(
                 raster_sender,
                 display_sender,
                 frame_source,
-                begin_main_frame,
+                main_thread,
             ) {
                 (output.notify)(UserEvent::Fatal(crate::engine::FatalError::new(
                     "compositor",
@@ -205,7 +205,7 @@ fn RunDedicatedCompositor(
     raster_sender: mpsc::Sender<RasterJob>,
     display_sender: mpsc::Sender<display::Message>,
     frame_source: Arc<dyn BeginFrameSource>,
-    begin_main_frame: BeginMainFrameClient,
+    main_thread: MainThreadClient,
 ) -> io::Result<()> {
     let mut compositor = CompositorEngine::default();
     let mut scheduler = viz::DisplayScheduler::default();
@@ -223,7 +223,7 @@ fn RunDedicatedCompositor(
                     &raster_sender,
                     &display_sender,
                     &frame_source,
-                    &begin_main_frame,
+                    &main_thread,
                 )?;
             }
             Ok(CompositorCommand::DisplayBeginFrame(frame)) => {
@@ -234,7 +234,7 @@ fn RunDedicatedCompositor(
                             &raster_sender,
                             &display_sender,
                             &frame_source,
-                            &begin_main_frame,
+                            &main_thread,
                         )?;
                     }
                     RouteDedicated(
@@ -242,7 +242,7 @@ fn RunDedicatedCompositor(
                         &raster_sender,
                         &display_sender,
                         &frame_source,
-                        &begin_main_frame,
+                        &main_thread,
                     )?;
                 }
             }
@@ -251,14 +251,14 @@ fn RunDedicatedCompositor(
                 &raster_sender,
                 &display_sender,
                 &frame_source,
-                &begin_main_frame,
+                &main_thread,
             )?,
             Ok(message) => RouteDedicated(
                 compositor.Handle(message)?,
                 &raster_sender,
                 &display_sender,
                 &frame_source,
-                &begin_main_frame,
+                &main_thread,
             )?,
         }
         AdvanceCycle(
@@ -267,7 +267,7 @@ fn RunDedicatedCompositor(
             &raster_sender,
             &display_sender,
             &frame_source,
-            &begin_main_frame,
+            &main_thread,
         )?;
     }
 }
@@ -278,7 +278,7 @@ fn AdvanceCycle(
     raster_sender: &mpsc::Sender<RasterJob>,
     display_sender: &mpsc::Sender<display::Message>,
     frame_source: &Arc<dyn BeginFrameSource>,
-    begin_main_frame: &BeginMainFrameClient,
+    main_thread: &MainThreadClient,
 ) -> io::Result<()> {
     let now = Instant::now();
     if scheduler.NeedsPrepare(now) {
@@ -290,7 +290,7 @@ fn AdvanceCycle(
             raster_sender,
             display_sender,
             frame_source,
-            begin_main_frame,
+            main_thread,
         )?;
         scheduler.MarkPrepared();
     }
@@ -300,7 +300,7 @@ fn AdvanceCycle(
             raster_sender,
             display_sender,
             frame_source,
-            begin_main_frame,
+            main_thread,
         )?;
     }
     Ok(())
@@ -311,7 +311,7 @@ fn RouteDedicated(
     raster_sender: &mpsc::Sender<RasterJob>,
     display_sender: &mpsc::Sender<display::Message>,
     frame_source: &Arc<dyn BeginFrameSource>,
-    begin_main_frame: &BeginMainFrameClient,
+    main_thread: &MainThreadClient,
 ) -> io::Result<()> {
     for effect in effects {
         match effect {
@@ -341,7 +341,7 @@ fn RouteDedicated(
                     scroll_active,
                 })
                 .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "display stopped"))?,
-            compositor::Effect::BeginMainFrame(frame) => begin_main_frame(frame),
+            compositor::Effect::MainThread(event) => main_thread(event),
             compositor::Effect::RequestBeginFrame => frame_source.request_begin_frame(),
         }
     }
@@ -355,7 +355,7 @@ fn SpawnShared(
     receiver: mpsc::Receiver<CompositorCommand>,
     raster_sender: mpsc::Sender<RasterJob>,
     capture_frames: bool,
-    begin_main_frame: BeginMainFrameClient,
+    main_thread: MainThreadClient,
 ) -> io::Result<()> {
     std::thread::Builder::new()
         .name("browser-presentation".into())
@@ -373,7 +373,7 @@ fn SpawnShared(
                 receiver,
                 raster_sender,
                 capture_frames,
-                begin_main_frame,
+                main_thread,
             ) {
                 (output.notify)(UserEvent::Fatal(crate::engine::FatalError::new(
                     "presentation",
@@ -391,7 +391,7 @@ fn RunShared(
     receiver: mpsc::Receiver<CompositorCommand>,
     raster_sender: mpsc::Sender<RasterJob>,
     capture_frames: bool,
-    begin_main_frame: BeginMainFrameClient,
+    main_thread: MainThreadClient,
 ) -> io::Result<()> {
     let mut compositor = CompositorEngine::default();
     let mut display = Display::New(target, output, capture_frames);
@@ -427,7 +427,7 @@ fn RunShared(
                                 &mut local,
                                 &raster_sender,
                                 &frame_source,
-                                &begin_main_frame,
+                                &main_thread,
                             )?;
                         }
                         RouteSharedCompositor(
@@ -435,7 +435,7 @@ fn RunShared(
                             &mut local,
                             &raster_sender,
                             &frame_source,
-                            &begin_main_frame,
+                            &main_thread,
                         )?;
                     }
                 }
@@ -445,7 +445,7 @@ fn RunShared(
                         &mut local,
                         &raster_sender,
                         &frame_source,
-                        &begin_main_frame,
+                        &main_thread,
                     )?;
                 }
                 LocalMessage::Compositor(CompositorCommand::Stop) => {
@@ -457,7 +457,7 @@ fn RunShared(
                     &mut local,
                     &raster_sender,
                     &frame_source,
-                    &begin_main_frame,
+                    &main_thread,
                 )?,
                 LocalMessage::Display(message) => {
                     for effect in display.Handle(message, &post_swap_ack)? {
@@ -483,7 +483,7 @@ fn RunShared(
                 &mut local,
                 &raster_sender,
                 &frame_source,
-                &begin_main_frame,
+                &main_thread,
             )?;
             scheduler.MarkPrepared();
         }
@@ -493,7 +493,7 @@ fn RunShared(
                 &mut local,
                 &raster_sender,
                 &frame_source,
-                &begin_main_frame,
+                &main_thread,
             )?;
         }
     }
@@ -504,7 +504,7 @@ fn RouteSharedCompositor(
     local: &mut VecDeque<LocalMessage>,
     raster_sender: &mpsc::Sender<RasterJob>,
     frame_source: &Arc<dyn BeginFrameSource>,
-    begin_main_frame: &BeginMainFrameClient,
+    main_thread: &MainThreadClient,
 ) -> io::Result<()> {
     for effect in effects {
         match effect {
@@ -530,7 +530,7 @@ fn RouteSharedCompositor(
                 frame,
                 scroll_active,
             })),
-            compositor::Effect::BeginMainFrame(frame) => begin_main_frame(frame),
+            compositor::Effect::MainThread(event) => main_thread(event),
             compositor::Effect::RequestBeginFrame => frame_source.request_begin_frame(),
         }
     }

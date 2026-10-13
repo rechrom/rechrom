@@ -534,8 +534,9 @@ pub(super) fn Apply(
             } else {
                 if let CSSValuePayload::kURIClass(uri) = v.Payload() {
                     let pointer: *mut dyn ClipPathOperation =
-                        MakeGarbageCollected(ReferenceClipPathOperation::new(
+                        MakeGarbageCollected(ReferenceClipPathOperation::with_scope(
                             uri.url_data.ValueForSerialization().clone(),
+                            images.and_then(URLImageResolver::SVGResourceScope),
                         ));
                     Some(pointer)
                 } else {

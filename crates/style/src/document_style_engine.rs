@@ -86,6 +86,10 @@ use crate::element_rule_collector::SearchTextRequest;
 #[path = "document_style_selector_service_test.rs"]
 mod selector_service_tests;
 
+#[cfg(test)]
+#[path = "document_style_custom_property_ownership_test.rs"]
+mod custom_property_ownership_tests;
+
 // cpp: style_cascade.cc:2351-2390,2924-2930.  Environment lookup is supplied
 // by the document host, while the style bits always belong to the current
 // builder.  Keeping these per-cascade flags here prevents an environment owner
@@ -142,9 +146,42 @@ struct CascadeAttributeState {
 
 struct DocumentURLImageResolver<'a> {
     document: &'a Document,
+    originating_index: usize,
 }
 
 impl production_style_builder::URLImageResolver for DocumentURLImageResolver<'_> {
+    fn SVGResourceScope(
+        &self,
+    ) -> Option<layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope> {
+        Some(self.document.SVGResourceScope(self.originating_index))
+    }
+
+    fn ResolveMaskSource(
+        &self, value: &crate::production_css_value::CSSImageValue,
+    ) -> Result<std::ptr::NonNull<StyleImage>, LonghandApplicationError> {
+        use layoutng_style::style::style_mask_source_image::StyleMaskSourceImage;
+        let local = value.url_data.unresolved_url.starts_with('#') || {
+            let parsed = url::Url::parse(value.url_data.resolved_url.as_ref()).ok();
+            let document = url::Url::parse(self.document.DocumentURL()).ok();
+            match (parsed, document) {
+                (Some(mut a), Some(mut b)) => { a.set_fragment(None); b.set_fragment(None); a == b },
+                _ => false,
+            }
+        };
+        crate::resolver::element_style_resources::LoadMaskSourceBranch(local, || {
+            let image = foundation::MakeGarbageCollected(StyleMaskSourceImage::Local(
+                value.url_data.clone(), self.document.SVGResourceScope(self.originating_index),
+            ));
+            Ok(std::ptr::NonNull::new(image.cast()).unwrap())
+        }, || {
+            let fetched = self.ResolveImage(value)?;
+            let image = foundation::MakeGarbageCollected(StyleMaskSourceImage::Fetched(
+                value.url_data.clone(), fetched.Image().as_ptr(),
+            ));
+            Ok(std::ptr::NonNull::new(image.cast()).unwrap())
+        })
+    }
+
     fn ResolveImage(
         &self,
         value: &crate::production_css_value::CSSImageValue,
@@ -887,7 +924,53 @@ pub struct DocumentStyleEngine {
     registered_container_properties: Option<Rc<dyn RegisteredContainerPropertyResolver>>,
     color_scheme_settings: production_style_builder::ColorSchemeSettings,
 }
+/// Read-only capacities of the production custom-property owner. Map bucket
+/// figures exclude control bytes/allocator rounding. Token payloads and maps
+/// are deduplicated by their actual retained Rc backing, never by node count.
+#[derive(Clone, Debug, Default)]
+pub struct CustomPropertyMemoryDiagnostics {
+    pub node_entries: usize,
+    pub custom_records: usize,
+    pub value_maps: usize,
+    pub value_entries: usize,
+    pub value_key_capacity: usize,
+    pub value_bucket_payload_capacity_estimate: usize,
+    pub registered_maps: usize,
+    pub registered_entries: usize,
+    pub registered_key_capacity: usize,
+    pub variable_data_owners: usize,
+    pub token_inline_capacity: usize,
+}
 impl DocumentStyleEngine {
+    pub fn CustomPropertyMemoryDiagnostics(&self) -> CustomPropertyMemoryDiagnostics {
+        let mut stats = CustomPropertyMemoryDiagnostics { node_entries: self.custom_properties.len(), ..Default::default() };
+        let (mut records, mut maps, mut registered, mut data) = (HashSet::new(), HashSet::new(), HashSet::new(), HashSet::new());
+        for custom in self.custom_properties.values() {
+            if !records.insert(Rc::as_ptr(custom)) { continue; }
+            stats.custom_records += 1;
+            if maps.insert(Rc::as_ptr(&custom.values)) {
+                stats.value_maps += 1;
+                stats.value_entries += custom.values.len();
+                stats.value_key_capacity += custom.values.keys().map(std::string::String::capacity).sum::<usize>();
+                stats.value_bucket_payload_capacity_estimate += custom.values.capacity() * std::mem::size_of::<(std::string::String, ComputedVariableValue)>();
+                for value in custom.values.values() {
+                    if let ComputedVariableValue::Data(value) = value {
+                        if data.insert(Rc::as_ptr(value)) {
+                            stats.variable_data_owners += 1;
+                            stats.token_inline_capacity += value.tokens.capacity() * std::mem::size_of::<crate::production_css_value::VariableToken>();
+                        }
+                    }
+                }
+            }
+            if registered.insert(Rc::as_ptr(&custom.registered_values)) {
+                stats.registered_maps += 1;
+                stats.registered_entries += custom.registered_values.len();
+                stats.registered_key_capacity += custom.registered_values.keys().map(std::string::String::capacity).sum::<usize>();
+            }
+        }
+        stats
+    }
+
     pub fn new(owner: &DOM) -> Self {
         Self {
             document: owner.GetDocument().RootHandle(),
@@ -1375,7 +1458,7 @@ impl DocumentStyleEngine {
                 let mut elements = HashSet::new();
                 AddSubtree(document, document.Root(), &mut elements);
                 for index in elements {
-                    let element_scope = document.TreeScopeRoot(index);
+                    let element_scope = document.TreeScopeRoot(document.CorrespondingSVGElement(index).unwrap_or(index));
                     let element_sheets = scoped_sheets
                         .get(&element_scope)
                         .map_or(&[][..], Vec::as_slice);
@@ -1458,7 +1541,7 @@ impl DocumentStyleEngine {
                 if dirty.contains(&index) || !ConnectedElement(document, index) {
                     continue;
                 }
-                let element_scope = document.TreeScopeRoot(index);
+                let element_scope = document.TreeScopeRoot(document.CorrespondingSVGElement(index).unwrap_or(index));
                 let element_sheets = scoped_sheets
                     .get(&element_scope)
                     .map_or(&[][..], Vec::as_slice);
@@ -1474,6 +1557,17 @@ impl DocumentStyleEngine {
                 if self.matches.get(&index) != Some(&matches) {
                     dirty.insert(index);
                 }
+            }
+        }
+        // SVGElement::InvalidateInstances: cloned declarations match within
+        // the instance tree but use their corresponding element's RuleSets.
+        // Conservatively revisit connected instances at each style lifecycle,
+        // including CSSOM, ancestor selector and host-inheritance changes.
+        for index in 0..document.NodeCount() {
+            if document.CorrespondingSVGElement(index).is_some()
+                && ConnectedElement(document, index)
+            {
+                dirty.insert(index);
             }
         }
         dirty.retain(|&index| ConnectedElement(document, index));
@@ -1560,7 +1654,7 @@ impl DocumentStyleEngine {
         {
             let node = document.Node(index);
             let element = node.Type() == DOMNodeType::kElement;
-            let element_scope = document.TreeScopeRoot(index);
+            let element_scope = document.TreeScopeRoot(document.CorrespondingSVGElement(index).unwrap_or(index));
             let element_sheets = scoped_sheets
                 .get(&element_scope)
                 .map_or(&[][..], Vec::as_slice);
@@ -1657,7 +1751,10 @@ impl DocumentStyleEngine {
                                 environment: Some(&resolver_environment),
                                 attributes: Some(&resolver_attributes),
                             };
-                            let resolver_images = DocumentURLImageResolver { document };
+                            let resolver_images = DocumentURLImageResolver {
+                                document,
+                                originating_index: index,
+                            };
                             let parent_handle = parent.map(|style| {
                                 Persistent::from_ptr(
                                     style as *const ComputedStyle as *mut ComputedStyle,
@@ -2118,7 +2215,10 @@ impl DocumentStyleEngine {
                                         environment: Some(&resolver_environment),
                                         attributes: Some(&resolver_attributes),
                                     };
-                                    let resolver_images = DocumentURLImageResolver { document };
+                                    let resolver_images = DocumentURLImageResolver {
+                                        document,
+                                        originating_index: index,
+                                    };
                                     let root_handle = root_style.map(|root| {
                                         Persistent::from_ptr(
                                             root as *const ComputedStyle as *mut ComputedStyle,
@@ -2726,16 +2826,23 @@ impl DocumentStyleEngine {
             // A CSSOM projection without authoritative backing cannot provide
             // feature-value rules. SynchronizeTypedSheets deliberately refuses
             // stale source; retain that boundary instead of reparsing it here.
-            if let Some(rules) = self.translated_rule_sets.get(&(sheet.Identity(), sheet.Revision())) {
+            if let Some(rules) = self
+                .translated_rule_sets
+                .get(&(sheet.Identity(), sheet.Revision()))
+            {
                 active.push(crate::active_style_sheets::ActiveStyleSheet::new(
-                    Rc::new(()), Some(rules.clone()),
+                    Rc::new(()),
+                    Some(rules.clone()),
                 ));
             }
         }
         let layers = crate::cascade_layer_map::CascadeLayerMap::new(&active);
         let mut next = crate::font_feature_values_registry::FontFeatureValuesRegistry::default();
         for sheet in &active {
-            next.AddRules(sheet.rule_set.as_ref().unwrap().FontFeatureValuesRules(), Some(&layers));
+            next.AddRules(
+                sheet.rule_set.as_ref().unwrap().FontFeatureValuesRules(),
+                Some(&layers),
+            );
         }
         let changed = self.font_feature_values != next;
         self.font_feature_values = next;
@@ -2752,7 +2859,9 @@ impl DocumentStyleEngine {
         if let Some(alternates) = description.FontVariantAlternatesValue() {
             let mut family = Some(description.Family());
             while let Some(current) = family {
-                let storage = self.font_feature_values.FontFeatureValuesForFamily(current.FamilyName());
+                let storage = self
+                    .font_feature_values
+                    .FontFeatureValuesForFamily(current.FamilyName());
                 let alternate = alternates.Resolve(
                     |name| storage.map_or_else(Vec::new, |s| s.ResolveStylistic(name)),
                     |name| storage.map_or_else(Vec::new, |s| s.ResolveStyleset(name)),
@@ -2761,7 +2870,10 @@ impl DocumentStyleEngine {
                     |name| storage.map_or_else(Vec::new, |s| s.ResolveOrnaments(name)),
                     |name| storage.map_or_else(Vec::new, |s| s.ResolveAnnotation(name)),
                 );
-                resolved.push((current.FamilyName().clone(), alternate.GetResolvedFontFeatures().clone()));
+                resolved.push((
+                    current.FamilyName().clone(),
+                    alternate.GetResolvedFontFeatures().clone(),
+                ));
                 family = unsafe { current.Next().as_ref() };
             }
         }
@@ -3417,7 +3529,11 @@ impl DocumentStyleEngine {
                         scope_sheets,
                         inputs.len(),
                         authoritative_rules,
-                        Some(scope_root),
+                        Some(if matches!(pass, crate::production_rule_matching::ProductionShadowRulePass::ElementScope(_)) {
+                            document.TreeScopeRoot(shadow_matching_index)
+                        } else {
+                            scope_root
+                        }),
                         collection,
                         &mut direct_rules,
                     );
@@ -3455,7 +3571,7 @@ impl DocumentStyleEngine {
                 }
 
                 if pseudo.is_none() {
-                    let element_scope = document.TreeScopeRoot(index);
+                    let element_scope = document.TreeScopeRoot(document.CorrespondingSVGElement(index).unwrap_or(index));
                     collect_scope(
                         element_scope,
                         crate::production_rule_matching::ProductionShadowRulePass::ElementScope(
@@ -3744,9 +3860,8 @@ impl DocumentStyleEngine {
         // svg/svg_transformable_element.cc:45-53. SVG presentation
         // attributes are author-cascade input below ordinary author rules.
         if pseudo.is_none() && document.Node(index).Namespace() == DOMNamespace::kSVG {
-            let properties = crate::svg_presentation_attributes::CollectPresentationAttributes(
-                document.Node(index),
-            );
+            let properties =
+                crate::svg_presentation_attributes::CollectPresentationAttributes(document, index);
             if !properties.is_empty() {
                 result.push(MatchedRule {
                     specificity: 0,
@@ -4425,7 +4540,10 @@ impl DocumentStyleEngine {
             environment: Some(&environment),
             attributes: Some(&attributes),
         };
-        let image_resolver = DocumentURLImageResolver { document };
+        let image_resolver = DocumentURLImageResolver {
+            document,
+            originating_index: node,
+        };
         let compute_custom = |font: f32| {
             let length = |n, u| {
                 production_style_builder::Pixels(CSSPropertyID::kVariable, n, u, font, root, media)
@@ -4927,7 +5045,8 @@ fn ResolveSVGPaintServers(
         let marker_start = native.and_then(|style| marker_url(style.MarkerStartResource()));
         let marker_mid = native.and_then(|style| marker_url(style.MarkerMidResource()));
         let marker_end = native.and_then(|style| marker_url(style.MarkerEndResource()));
-        if fill_reference.is_none()
+        let mask_definition = document.Node(node).IsElement("mask", DOMNamespace::kSVG);
+        if !mask_definition && fill_reference.is_none()
             && stroke_reference.is_none()
             && marker_start.is_none()
             && marker_mid.is_none()
@@ -4938,10 +5057,10 @@ fn ResolveSVGPaintServers(
         let fill_opacity = native.map_or(1.0, |style| style.FillOpacity());
         let stroke_opacity = native.map_or(1.0, |style| style.StrokeOpacity());
         let fill = fill_reference.and_then(|reference| {
-            crate::svg_paint_server::Resolve(document, &snapshot, reference, fill_opacity)
+            crate::svg_paint_server::Resolve(document, node, &snapshot, reference, fill_opacity)
         });
         let stroke = stroke_reference.and_then(|reference| {
-            crate::svg_paint_server::Resolve(document, &snapshot, reference, stroke_opacity)
+            crate::svg_paint_server::Resolve(document, node, &snapshot, reference, stroke_opacity)
         });
         let mut context_paint = current.style.paint.clone();
         context_paint.svg_fill_server = fill.clone();
@@ -4956,13 +5075,16 @@ fn ResolveSVGPaintServers(
             marker_end.as_deref(),
             current.style.paint.svg_stroke_width,
         );
-        if current.style.paint.svg_fill_server == fill
+        let mask_graph = mask_definition.then(|| crate::svg_paint_server::ResolveMaskDefinition(document, &snapshot, node));
+        if current.style.paint.svg_mask_resource == mask_graph
+            && current.style.paint.svg_fill_server == fill
             && current.style.paint.svg_stroke_server == stroke
             && current.style.paint.svg_markers == markers
         {
             continue;
         }
         let mut updated = current.clone();
+        updated.style.paint.svg_mask_resource = mask_graph;
         updated.style.paint.svg_fill_server = fill;
         updated.style.paint.svg_stroke_server = stroke;
         updated.style.paint.svg_markers = markers;
@@ -5677,7 +5799,9 @@ fn StyleImpact(old: Option<&ResolvedNodeStyle>, new: &ResolvedNodeStyle) -> Styl
                     unsafe { &*old.native_style.Get() },
                     unsafe { &*new.native_style.Get() },
                 );
-                let layout = fields & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits()) != 0
+                let layout = fields
+                    & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits())
+                    != 0
                     || !old.style.LayoutEquivalent(&new.style);
                 pseudo_impact.layout |= layout;
                 pseudo_impact.paint |= layout || fields != 0 || old.style.paint != new.style.paint;
@@ -5701,8 +5825,8 @@ fn StyleImpact(old: Option<&ResolvedNodeStyle>, new: &ResolvedNodeStyle) -> Styl
     // cpp: ComputedStyle::VisualInvalidationDiff, computed_style.cc:753-757.
     // A reshape changes intrinsic advances and therefore requires layout even
     // when the projected font size/family/weight fields remain unchanged.
-    let layout =
-        fields & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits()) != 0 || !old.style.LayoutEquivalent(&new.style);
+    let layout = fields & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits()) != 0
+        || !old.style.LayoutEquivalent(&new.style);
     StyleUpdateImpact {
         reattach: false,
         layout: pseudo_impact.layout || layout,
@@ -5731,18 +5855,7 @@ fn CustomPropertiesEquivalent(a: &CustomProperties, b: &CustomProperties) -> boo
         let Some(right) = b.values.get(name) else {
             return false;
         };
-        match (left, right) {
-            (ComputedVariableValue::Invalid, ComputedVariableValue::Invalid)
-            | (ComputedVariableValue::Cyclic, ComputedVariableValue::Cyclic) => true,
-            (ComputedVariableValue::Data(left), ComputedVariableValue::Data(right)) => {
-                Rc::ptr_eq(left, right)
-                    || left.original_text == right.original_text
-                        && left.features == right.features
-                        && left.is_animation_tainted == right.is_animation_tainted
-                        && left.is_attr_tainted == right.is_attr_tainted
-            }
-            _ => false,
-        }
+        crate::resolver::production_style_builder::custom_properties::ComputedVariablesEquivalent(left, right)
     })
 }
 

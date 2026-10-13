@@ -61,10 +61,11 @@ members = [
 ]
 # These source trees have reciprocal C++ dependencies and compile through
 # layoutng_assembly. They remain source modules rather than standalone builds.
-exclude = ["crates/layoutng", "crates/layoutng_fragment_tree", "vendor/softbuffer", "vendor/winit"]
+exclude = ["crates/layoutng", "crates/layoutng_fragment_tree", "vendor/softbuffer", "vendor/winit", "vendor/crabby-avif", "vendor/rav1d"]
 resolver = "2"
 
 [patch.crates-io]
+rav1d = { path = "vendor/rav1d" }
 icu_locale_data = { path = "vendor/icu_locale_data-2.3.0" }
 zune-jpeg = { path = "vendor/zune-jpeg" }
 ttf-parser = { path = "vendor/ttf-parser" }

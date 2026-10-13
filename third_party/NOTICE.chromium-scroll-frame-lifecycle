@@ -1,0 +1,31 @@
+Scroll publication, sticky/clamp lifecycle and render-pass backing requirements
+Chromium revision: 6c1d401fcca5e1b0030563a90c2f2bba168e0c15
+
+The cc synchronization/scheduler and Viz renderer portions are based on
+The Chromium Authors' BSD-licensed code. See LICENSE.chromium.
+  cc/base/synced_property.h
+  cc/scheduler/scheduler_state_machine.cc
+  cc/scheduler/scheduler_settings.h
+  cc/trees/property_tree_layer_list_delegate.cc
+  cc/trees/layer_tree_host_impl.cc
+  components/viz/service/display/direct_renderer.cc
+  components/viz/service/display/software_renderer.cc
+  components/viz/service/display/skia_renderer.cc
+
+The native Blink sticky and delayed scroll-clamp integration reconnects the
+existing source-translated implementation; source-specific licenses continue
+to apply. In particular, paint_layer_scrollable_area.cc carries the retained
+Apple/Netscape/contributor copyright and LGPL-2.1-or-later alternative header.
+See NOTICE.chromium-root-scrollbars for the complete retained source header,
+source URL and SHA-256, and LICENSE-LGPL-2.1. The delayed clamp scope
+implementation is in paint_layer_scrollable_area.cc:3059-3095. This notice does not replace or
+relicense those terms.
+  third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
+  third_party/blink/renderer/core/layout/layout_box_model_object.cc
+  third_party/blink/renderer/core/layout/layout_object.cc
+  third_party/blink/renderer/core/dom/element.cc
+  third_party/blink/renderer/core/page/scrolling/scrolling_coordinator.cc
+  third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc
+
+Canonical source prefix:
+https://chromium.googlesource.com/chromium/src/+/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/

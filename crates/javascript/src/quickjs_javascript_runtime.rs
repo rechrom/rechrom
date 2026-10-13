@@ -613,6 +613,21 @@ impl ModuleLoader for Loader {
 }
 
 impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
+    fn MemoryDiagnostics(&self, realm: &JavaScriptRealm) -> Option<JavaScriptMemoryDiagnostics> {
+        realm.WithImplementation::<QuickJsRealm, _>(|realm| {
+            let usage = realm.context.memory_usage();
+            let state = realm.state.borrow();
+            JavaScriptMemoryDiagnostics {
+                malloc_bytes: usage.malloc_size, used_bytes: usage.memory_used_size,
+                objects: usage.obj_count, strings: usage.str_count, string_bytes: usage.str_size,
+                atoms: usage.atom_count, properties: usage.prop_count, property_bytes: usage.prop_size,
+                shapes: usage.shape_count, function_bytes: usage.js_func_size,
+                code_bytes: usage.js_func_code_size, array_elements: usage.fast_array_elements,
+                binary_bytes: usage.binary_object_size, host_wrappers: state.wrappers.len(),
+                host_identities: state.wrapper_ids.len(), host_fallbacks: state.fallbacks.len(),
+            }
+        })
+    }
     fn CreateRealm(&mut self, host: Rc<RefCell<dyn JavaScriptHostBindings>>) -> JavaScriptRealm {
         let profiling = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
         let realm_started = profiling.then(std::time::Instant::now);

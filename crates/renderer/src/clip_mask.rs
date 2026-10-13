@@ -441,6 +441,11 @@ pub(crate) struct ClipMaskCache {
     raster_pixels: u64,
 }
 impl ClipMaskCache {
+    // Product bytes already accounted by the bounded cache, excluding keys
+    // and container overhead. This is not an allocator-residency estimate.
+    pub(crate) fn accounted_bytes(&self) -> usize {
+        self.bytes
+    }
     const BYTE_LIMIT: usize = 128 * 1024 * 1024;
     pub(super) fn observations(&self) -> [u64; 4] {
         [
@@ -486,6 +491,7 @@ impl ClipMaskCache {
         if !clips.is_empty()
             && clips.iter().all(|clip| {
                 clip.rect.is_some()
+                    && !clip.clip_path_is_empty
                     && clip.clip_path.is_empty()
                     && clip.pixel_moving_filter.is_none()
                     && layer_tile::compositor_transform_with_scroll(
@@ -527,7 +533,7 @@ impl ClipMaskCache {
                         if !old.lifecycle.same_node(&new.lifecycle)
                             || old.rect != new.rect
                             || old.radii != new.radii
-                            || !old.clip_path.is_empty()
+                            || (old.clip_path_is_empty || !old.clip_path.is_empty())
                             || old.pixel_moving_filter.is_some()
                             || !same_local_transform(
                                 clip_transform(old, scale, entry.key.scroll_override())?,
@@ -1040,7 +1046,7 @@ fn raster_coverage(
                 }
             }
             union
-        } else if !clip.clip_path.is_empty() {
+        } else if (clip.clip_path_is_empty || !clip.clip_path.is_empty()) {
             raster_one(
                 clip,
                 matrix,

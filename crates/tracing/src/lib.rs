@@ -1,4 +1,7 @@
 //! Engine-independent, opt-in wall-clock tracing. Collection never calls Page.
+pub mod diagnostics;
+#[cfg(feature = "allocation_diagnostics")]
+pub mod allocation;
 use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
@@ -152,6 +155,7 @@ struct Recording {
     archive: Mutex<Vec<Event>>,
 }
 pub fn start(mut options: StartOptions) -> Result<u64, String> {
+    let _allocation = diagnostics::AllocationScope::trace();
     let mut s = service().lock().unwrap();
     if enabled() {
         return Err("A recording is already active".into());
@@ -288,12 +292,16 @@ fn push(r: &Recording, b: &ThreadBuffer, e: Event) {
     }
 }
 pub struct Span {
+    diagnostic: Option<diagnostics::PhaseGuard>,
     record: Option<(Arc<Recording>, Arc<ThreadBuffer>, Event)>,
     previous: u64,
     _same_thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 pub fn span(category: &'static str, name: &'static str) -> Span {
+    let diagnostic = diagnostics::PhaseGuard::enter(category, name);
+    let _allocation = diagnostics::AllocationScope::trace();
     let mut span = Span {
+        diagnostic,
         record: None,
         previous: 0,
         _same_thread: std::marker::PhantomData,
@@ -340,12 +348,15 @@ impl Span {
 }
 impl Drop for Span {
     fn drop(&mut self) {
+        let _allocation = diagnostics::AllocationScope::trace();
         if let Some((r, b, mut e)) = self.record.take() {
             LOCAL.with(|l| l.borrow_mut().parent = self.previous);
             e.at = timestamp(&r, Instant::now());
             e.kind = Kind::End;
             push(&r, &b, e);
         }
+        drop(_allocation);
+        drop(self.diagnostic.take());
     }
 }
 pub fn instant(category: &'static str, name: &'static str, fields: &[(&'static str, f64)]) {
@@ -389,6 +400,7 @@ fn emit(
     if !enabled() {
         return;
     }
+    let _allocation = diagnostics::AllocationScope::trace();
     if let Some((r, b, c, parent, thread)) = attach() {
         let mut e = Event {
             id: IDS.fetch_add(1, Ordering::Relaxed),
@@ -459,6 +471,7 @@ fn recorded(e: &Event, end: u64, incomplete: bool) -> RecordedSpan {
     }
 }
 pub fn snapshot(id: Option<u64>) -> Result<Snapshot, String> {
+    let _allocation = diagnostics::AllocationScope::trace();
     let r = {
         let s = service().lock().unwrap();
         match id {
@@ -522,6 +535,7 @@ pub fn snapshot(id: Option<u64>) -> Result<Snapshot, String> {
     })
 }
 pub fn chrome_trace(s: &Snapshot) -> serde_json::Value {
+    let _allocation = diagnostics::AllocationScope::trace();
     let mut events = Vec::new();
     for e in s.spans.iter().chain(s.instants.iter()) {
         let mut args = serde_json::to_value(&e.fields).unwrap();

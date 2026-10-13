@@ -637,9 +637,17 @@ pub(crate) fn CollectProductionShadowRuleMatchesInto(
         cascade_result,
         EInsideLink::kNotInsideLink,
     );
-    collector.BeginAddingAuthorRulesForTreeScope(Rc::new(ProductionTreeScope(scope_root)));
+    // StyleResolver::MatchElementScopeRules selects the corresponding source
+    // RuleSets but begins the transfer/matching scope on the instance itself.
+    // Conflating these scopes silently drops SVG use rules in fallback recalc.
+    let matching_scope = if matches!(pass, ProductionShadowRulePass::ElementScope(_)) {
+        document.TreeScopeRoot(element_index)
+    } else {
+        scope_root
+    };
+    collector.BeginAddingAuthorRulesForTreeScope(Rc::new(ProductionTreeScope(matching_scope)));
     for group in &groups {
-        let request = MatchRequest::new(group, Some(Rc::new(scope_root)), None);
+        let request = MatchRequest::new(group, Some(Rc::new(matching_scope)), None);
         match pass {
             ProductionShadowRulePass::Host => collector.CollectMatchingShadowHostRules(&request),
             ProductionShadowRulePass::Slotted => collector.CollectMatchingSlottedRules(&request),
@@ -1586,4 +1594,28 @@ mod tests {
         assert_eq!(narrow_result.GetMatchedProperties().len(), 1);
         assert!(narrow_result.DependsOnSizeContainerQueries());
     }
+    #[test]
+    fn svg_use_element_scope_keeps_clone_matching_separate_from_rule_owner() {
+        let sheet = parse(".shape{fill:blue} #source-parent .shape{fill:red} use .shape{fill:green}");
+        let rule_set = Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
+        let routing = ProductionRuleRouting::Build(&rule_set, &sheet);
+        let mut owner = html::html_parser::ParseHTML(
+            r##"<svg><defs id="source-parent"><rect id="box" class="shape" width="10" height="10"/></defs><use href="#box"/></svg>"##,
+        );
+        let document = owner.GetDocumentMut();
+        document.UpdateSVGUseInstances();
+        let host = (0..document.NodeCount()).find(|&i| document.Node(i).IsElement("use", DOMNamespace::kSVG)).unwrap();
+        let instance = document.SVGUseInstanceRoot(host).unwrap();
+        assert_ne!(document.TreeScopeRoot(instance), document.Root());
+        let mut result = MatchResult::default();
+        let collection = CollectProductionShadowRuleMatchesInto(
+            &[ProductionRuleSetInput { sheet_index: 0, rule_set, routing: &routing, implicit_scope_trigger: None }],
+            document, instance, &mut PersistentSelectorService::default(), document.Root(),
+            &ProductionShadowRulePass::ElementScope(None), None, &mut result,
+        );
+        assert_eq!(collection.report.selector_matches, 1, "match clone attributes, never source ancestors or use host");
+        assert_eq!(collection.report.transferred_property_sets, 1);
+        assert_eq!(result.GetMatchedProperties().len(), 1);
+    }
+
 }

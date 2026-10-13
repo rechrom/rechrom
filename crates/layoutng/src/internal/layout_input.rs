@@ -90,6 +90,9 @@ pub enum NodeKind {
     kRubyAnnotation,
     kSvgRoot,
     kSvgGroup,
+    kSvgHiddenContainer,
+    kSvgResourceClipper,
+    kSvgResourceMasker,
     kSvgForeignObject,
     kSvgText,
     kSvgInline,
@@ -1635,6 +1638,17 @@ pub struct SvgTextPathData {
     pub start_offset: f64,
     pub reverse_direction: bool,
 }
+// SVGUseElement's semantic input, independent of DOM objects and Paint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SvgUseData {
+    Local,
+    UnsupportedReference,
+    UnsupportedViewport,
+    UnsupportedImage,
+    UnsupportedSwitch,
+    UnbuiltInstance,
+}
+
 #[derive(Clone)]
 pub struct ElementData {
     pub used_canvas_transform: Option<TransformMatrix>,
@@ -1676,6 +1690,7 @@ pub struct ElementData {
     pub frame_border: Option<bool>,
     pub frame_no_resize: bool,
     pub frame_has_border_color: bool,
+    pub svg_use: Option<SvgUseData>,
     pub svg_x: Vec<f64>,
     pub svg_y: Vec<f64>,
     pub svg_dx: Vec<f64>,
@@ -1754,6 +1769,7 @@ impl PartialEq for ElementData {
             && (self.frame_border == other.frame_border)
             && (self.frame_no_resize == other.frame_no_resize)
             && (self.frame_has_border_color == other.frame_has_border_color)
+            && (self.svg_use == other.svg_use)
             && (self.svg_x == other.svg_x)
             && (self.svg_y == other.svg_y)
             && (self.svg_dx == other.svg_dx)
@@ -1840,6 +1856,7 @@ impl Default for ElementData {
             frame_border: None,
             frame_no_resize: false,
             frame_has_border_color: false,
+            svg_use: None,
             svg_x: Vec::new(),
             svg_y: Vec::new(),
             svg_dx: Vec::new(),
@@ -1901,6 +1918,8 @@ pub struct ComputedStyle {
     /// projection consumed by the Rust paint boundary; layout itself reuses
     /// this exact immutable style object instead of reconstructing one.
     pub native_style: *const NativeComputedStyle,
+    /// Document-owned SVG resource input, separate from canonical CSS style.
+    pub svg_clip_resources: super::paint_input::SvgClipResourceBinding,
     pub display: Display,
     pub width: Option<f64>,
     pub height: Option<f64>,
@@ -2036,27 +2055,46 @@ mod computed_style_layout_equivalence_tests {
             description.SetResolvedFontFeaturesForFamilies(
                 vec![(
                     foundation::AtomicString::from_str("Example"),
-                    vec![font_engine::fonts::shaping::font_features::FontFeatureValue {
-                        tag: u32::from_be_bytes(*b"ss02"), value,
-                    }],
-                )].into(),
+                    vec![
+                        font_engine::fonts::shaping::font_features::FontFeatureValue {
+                            tag: u32::from_be_bytes(*b"ss02"),
+                            value,
+                        },
+                    ],
+                )]
+                .into(),
             );
-            builder.SetFont(foundation::Member::from_ptr(foundation::MakeGarbageCollected(
-                font_engine::Font::new(description),
-            )));
+            builder.SetFont(foundation::Member::from_ptr(
+                foundation::MakeGarbageCollected(font_engine::Font::new(description)),
+            ));
             builder.TakeStyle()
         };
         let first = make_style(1);
         let same = make_style(1);
         let second = make_style(0);
-        let old = ComputedStyle { native_style: first, ..Default::default() };
-        let equivalent = ComputedStyle { native_style: same, ..Default::default() };
-        let changed = ComputedStyle { native_style: second, ..Default::default() };
+        let old = ComputedStyle {
+            native_style: first,
+            ..Default::default()
+        };
+        let equivalent = ComputedStyle {
+            native_style: same,
+            ..Default::default()
+        };
+        let changed = ComputedStyle {
+            native_style: second,
+            ..Default::default()
+        };
         assert!(old.LayoutEquivalent(&equivalent));
         assert!(!old.LayoutEquivalent(&changed));
         assert!(!changed.LayoutEquivalent(&old));
-        assert_eq!(unsafe { &*first }.GetFontDescription()
-            .ResolvedFontFeaturesForFamilies()[0].1[0].value, 1);
+        assert_eq!(
+            unsafe { &*first }
+                .GetFontDescription()
+                .ResolvedFontFeaturesForFamilies()[0]
+                .1[0]
+                .value,
+            1
+        );
     }
 
     #[test]
@@ -2117,6 +2155,7 @@ impl Default for ComputedStyle {
     fn default() -> Self {
         Self {
             native_style: std::ptr::null(),
+            svg_clip_resources: Default::default(),
             display: Display::kBlock,
             width: None,
             height: None,

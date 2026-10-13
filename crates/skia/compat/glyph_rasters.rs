@@ -456,6 +456,7 @@ mod tests {
             resources: Some(ResourceCatalog {
                 fonts: vec![FontFace {
                     bytes,
+                    bytes_owner: None,
                     face_index: 0,
                     family: "Roboto",
                     native_family: "",
@@ -660,6 +661,7 @@ mod transform_and_budget_tests {
             resources: Some(ResourceCatalog {
                 fonts: vec![FontFace {
                     bytes,
+                    bytes_owner: None,
                     face_index: 0,
                     family: "Roboto",
                     native_family: "",
@@ -904,5 +906,14 @@ pub(crate) fn profile_stats() -> (usize, usize, u64, u64, u64) {
             c.misses(),
             c.evictions(),
         )
+    })
+}
+
+/// Read-only account of the calling lane. Includes shared outline charges that
+/// can overlap the outline strike cache; it is not an additive heap census.
+pub(crate) fn memory_diagnostics() -> (usize, usize) {
+    CACHE.with(|cache| {
+        let cache = cache.borrow();
+        (cache.count(), cache.memory_used())
     })
 }

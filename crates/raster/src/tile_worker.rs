@@ -237,6 +237,8 @@ fn worker_loop(receiver: mpsc::Receiver<Batch>, clip_limit: usize, image_limit: 
     let mut scratch = Vec::new();
     // Decoded sources and mip products remain warm on the same persistent
     // raster lane. Their catalog owners are immutable Arcs.
+    let memory_id =
+        crate::engine::memory_diagnostics_enabled().then(crate::engine::next_memory_diagnostic_id);
     let mut images = RasterImageCache::with_pixel_byte_limit(image_limit);
     let mut clips = skia::RasterClipProductCache::with_byte_limit(clip_limit);
     while let Ok(batch) = receiver.recv() {
@@ -325,6 +327,22 @@ fn worker_loop(receiver: mpsc::Receiver<Batch>, clip_limit: usize, image_limit: 
                 )))
             }
         };
+        if let Some(id) = memory_id {
+            let product_capacity = result.as_ref().map_or(0, |products| {
+                products
+                    .iter()
+                    .map(|p| p.rgba.capacity() + p.bgra.capacity() * std::mem::size_of::<u32>())
+                    .sum::<usize>()
+            });
+            eprintln!("raster-memory-worker time_ns={} thread={:?} lane={} batch={} image_accounted={} clip_accounted={} halo_capacity={} thread_scratch={} completed_product_capacity={} glyphs={:?}",
+                crate::engine::diagnostic_time_ns(), std::thread::current().id(), id, frame, images.resident_pixel_bytes(), clips.accounting().resident_requested_bytes,
+                scratch.capacity(), skia::src::core::SkCanvas::RasterThreadScratchBytes(), product_capacity,
+                skia::src::core::SkCanvas::RasterThreadGlyphMemoryDiagnostics());
+        }
         let _ = reply.send((frame, result));
+    }
+    if let Some(id) = memory_id {
+        eprintln!("raster-memory-worker-exit time_ns={} thread={:?} lane={}",
+            crate::engine::diagnostic_time_ns(), std::thread::current().id(), id);
     }
 }

@@ -730,7 +730,9 @@ fn needs_clip_mask(clip: &ClipPaintPropertyNode, scale: f64) -> bool {
     let affine = layer_tile::compositor_transform(&clip.local_transform_space, scale)
         .map(|matrix| matrix.values[1] != 0.0 || matrix.values[4] != 0.0)
         .unwrap_or(true);
-    affine || clip.radii != PaintCornerRadii::default() || !clip.clip_path.is_empty()
+    affine
+        || clip.radii != PaintCornerRadii::default()
+        || (clip.clip_path_is_empty || !clip.clip_path.is_empty())
 }
 fn append_clip_scopes(
     leaf: &Arc<ClipPaintPropertyNode>,
@@ -1378,6 +1380,7 @@ pub(crate) struct RenderPassRenderer {
     // Persistent root render-pass backing; native presentation surfaces rotate.
     composed_pixels: Vec<u32>,
     composed_format: Option<skia::PixelFormat>,
+    composed_valid: bool,
     clip_masks: ClipMaskCache,
     stats: LayerTileRasterStats,
 }
@@ -1388,6 +1391,7 @@ impl Default for RenderPassRenderer {
             effect_scratch: Vec::new(),
             composed_pixels: Vec::new(),
             composed_format: None,
+            composed_valid: false,
             clip_masks: ClipMaskCache::default(),
             stats: LayerTileRasterStats::default(),
         }
@@ -1395,9 +1399,20 @@ impl Default for RenderPassRenderer {
 }
 
 impl RenderPassRenderer {
+    pub(crate) fn backing_usage(&self) -> (usize, usize, usize) {
+        (
+            self.composed_pixels.capacity() * std::mem::size_of::<u32>(),
+            self.effect_scratch.iter().map(|scratch| {
+                scratch.pixels.capacity() * std::mem::size_of::<u32>()
+            }).sum(),
+            self.clip_masks.accounted_bytes(),
+        )
+    }
+
     pub(crate) fn invalidate(&mut self) {
         self.composed_pixels.clear();
         self.composed_format = None;
+        self.composed_valid = false;
         self.clip_masks = ClipMaskCache::default();
         self.stats = LayerTileRasterStats::default();
     }
@@ -1656,7 +1671,7 @@ impl RenderPassRenderer {
                 "aggregated render-pass raster resources are not prepared",
             ));
         }
-        let plan = CompositionPlan::from_pass(pass)?;
+        let mut plan = CompositionPlan::from_pass(pass)?;
         self.stats = resources.stats();
         let output_len = row_stride
             .checked_mul(height as usize)
@@ -1670,6 +1685,15 @@ impl RenderPassRenderer {
         if self.composed_pixels.len() != retained_len || self.composed_format != Some(format) {
             self.composed_pixels.resize(retained_len, 0);
             self.composed_format = Some(format);
+            self.composed_valid = false;
+        }
+        // DirectRenderer::CanSkipRenderPass requires an existing valid backing.
+        // New/recreated/resized storage and a failed previous draw must repaint
+        // even when the compositor's unchanged frame carries no new damage.
+        if !self.composed_valid {
+            plan.root_damage = Some(SurfaceBounds {
+                left: 0, top: 0, right: width as usize, bottom: height as usize,
+            });
         }
         // Keep one renderer-owned root render-pass backing. Native IOSurfaces
         // are a rotating presentation queue, so repainting them directly would
@@ -1701,10 +1725,9 @@ impl RenderPassRenderer {
             update.copied_bytes = retained_len * std::mem::size_of::<u32>();
             update
         });
-        if result.is_err() {
-            // A failed draw may have modified part of the retained target.
-            // Never expose it as the previous root pass on the next attempt.
-        }
+        // A failed draw may have modified part of the retained target. Never
+        // expose it as a valid retained pass on the next attempt.
+        self.composed_valid = result.is_ok();
         render_trace.set("succeeded", if result.is_ok() { 1.0 } else { 0.0 });
         if let Ok(update) = &result {
             render_trace.set("layers", self.stats.layers as f64);
@@ -6626,6 +6649,7 @@ mod backdrop_filter_test {
             radii: PaintCornerRadii::default(),
             clip_path: Vec::new(),
             clip_path_children: Vec::new(),
+            clip_path_is_empty: false,
             clip_path_even_odd: false,
             clip_path_error: None,
             pixel_moving_filter: None,

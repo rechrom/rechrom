@@ -160,6 +160,7 @@ impl Compare<'_> {
             rect,
             radii,
             clip_path,
+            clip_path_is_empty,
             clip_path_children,
             clip_path_even_odd,
             clip_path_error,
@@ -172,6 +173,7 @@ impl Compare<'_> {
             && radii == &b.radii
             && clip_path.iter().all(finite_path)
             && clip_path == &b.clip_path
+            && clip_path_is_empty == &b.clip_path_is_empty
             && clip_path_children
                 .iter()
                 .all(|child| child.commands.iter().all(finite_path))

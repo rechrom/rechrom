@@ -118,8 +118,9 @@ fn validate_mask(item: &DisplayItem) -> Result<(), ReplayUnsupported> {
         return Err(ReplayUnsupported("missing-mask-payload"));
     }
     for (index, layer) in item.mask_layers.iter().enumerate() {
-        let source_count = usize::from(layer.resource_id != 0)
-            + usize::from(layer.paint_shader.is_some());
+        if layer.source_error.is_some() { return Err(ReplayUnsupported("unsupported-svg-mask-resource")); }
+        let source_count =
+            usize::from(layer.resource_id != 0) + usize::from(layer.paint_shader.is_some());
         let radii = [
             layer.clip_radii.top_left,
             layer.clip_radii.top_right,
@@ -160,7 +161,7 @@ fn validate_mask(item: &DisplayItem) -> Result<(), ReplayUnsupported> {
 // parent effect group at composition.  Ordinary drawing records may contain
 // nested DstIn layers (background-clip:text and border-area-text); those are
 // local paint operations and must survive canonicalization and raster replay.
-fn mask_record_body(
+pub fn mask_record_body(
     raw: &[DisplayItem],
     is_mask: bool,
 ) -> Result<&[DisplayItem], ReplayUnsupported> {
@@ -181,10 +182,7 @@ fn mask_record_body(
     // image/gradient draws. A pending mask resource legitimately leaves this
     // body empty, which is a transparent DstIn source and clears the content
     // surface. The formal is_mask property is the semantic boundary proof.
-    if body
-        .iter()
-        .any(|item| item.r#type == Kind::kSaveLayerDstIn)
-    {
+    if body.iter().any(|item| item.r#type == Kind::kSaveLayerDstIn) {
         return Err(ReplayUnsupported("invalid-mask-source-record"));
     }
     Ok(body)
@@ -205,7 +203,7 @@ struct RoundedClip {
     // Exact receiver CTM for a removed clip in the drawing's affine space.
     // Translation-only clips keep their established root-space representation.
     affine: Option<(f64, f64, f64, f64, f64, f64)>,
-    path: Vec<layoutng_assembly::internal::layout_input::PaintPathCommand>,
+    path: Option<Vec<layoutng_assembly::internal::layout_input::PaintPathCommand>>,
     even_odd: bool,
 }
 fn affine_key(state: State) -> (f64, f64, f64, f64, f64, f64) {
@@ -230,7 +228,7 @@ fn clip_shape(
             radii,
             antialias,
             affine: None,
-            path: Vec::new(),
+            path: None,
             even_odd: false,
         }
     } else {
@@ -239,13 +237,13 @@ fn clip_shape(
             radii,
             antialias,
             affine: Some(affine_key(state)),
-            path: Vec::new(),
+            path: None,
             even_odd: false,
         }
     }
 }
 fn path_clip_shape(item: &DisplayItem, state: State) -> Result<RoundedClip, ReplayUnsupported> {
-    if path_control_bounds(item).is_none() {
+    if clip_path_control_bounds(item).is_none() {
         return Err(ReplayUnsupported("invalid-property-clip-path"));
     }
     // Keep the actual commands and receiver CTM. The compositor executes the
@@ -258,9 +256,9 @@ fn path_clip_shape(item: &DisplayItem, state: State) -> Result<RoundedClip, Repl
     );
     shape.rect = PaintRect::default();
     if shape.affine.is_none() {
-        shape.path = canonical_item(item, state.translation)?.path;
+        shape.path = Some(canonical_item(item, state.translation)?.path);
     } else {
-        shape.path = item.path.clone();
+        shape.path = Some(item.path.clone());
     }
     shape.even_odd = item.even_odd;
     Ok(shape)
@@ -270,10 +268,10 @@ fn clip_shape_item(
     shape: &RoundedClip,
     delta: (f64, f64),
 ) -> Result<DisplayItem, ReplayUnsupported> {
-    if !shape.path.is_empty() {
+    if let Some(path) = &shape.path {
         let mut item = DisplayItem {
             r#type: Kind::kClipPath,
-            path: shape.path.clone(),
+            path: path.clone(),
             even_odd: shape.even_odd,
             antialias: shape.antialias,
             ..Default::default()
@@ -366,7 +364,9 @@ pub(crate) fn clip_transform_state(
     }
     let mut state = State::default();
     for node in chain.iter().rev() {
-        concatenate_affine(&mut state, &node.matrix)?;
+        let projected = crate::geometry::record_plane_transform(&node.matrix)
+            .ok_or(ReplayUnsupported("unsupported-clip-transform-plane"))?;
+        concatenate_affine(&mut state, &projected)?;
     }
     Ok(state)
 }
@@ -397,7 +397,7 @@ fn rounded_clips_between_in_raster_space(
                 "union-property-clip-requires-synthesized-mask",
             ));
         }
-        if !node.clip_path.is_empty() {
+        if node.clip_path_is_empty || !node.clip_path.is_empty() {
             let item = DisplayItem {
                 r#type: Kind::kClipPath,
                 path: node.clip_path.clone(),
@@ -414,7 +414,9 @@ fn rounded_clips_between_in_raster_space(
                 let mut delta = (0.0, 0.0);
                 let mut transform = Some(&node.local_transform_space);
                 while let Some(current) = transform {
-                    let Ok(offset) = translation(&current.matrix, scale) else {
+                    let Ok(offset) = crate::geometry::record_plane_transform(&current.matrix)
+                        .ok_or(ReplayUnsupported("unsupported-clip-transform-plane"))
+                        .and_then(|matrix| translation(&matrix, scale)) else {
                         return true;
                     };
                     delta.0 += offset.0;
@@ -434,7 +436,9 @@ fn rounded_clips_between_in_raster_space(
             let mut current = Some(&node.local_transform_space);
             let mut translations = true;
             while let Some(space) = current {
-                match translation(&space.matrix, scale) {
+                match crate::geometry::record_plane_transform(&space.matrix)
+                    .ok_or(ReplayUnsupported("unsupported-clip-transform-plane"))
+                    .and_then(|matrix| translation(&matrix, scale)) {
                     Ok(offset) => {
                         delta.0 += offset.0;
                         delta.1 += offset.1;
@@ -484,9 +488,15 @@ fn removed_clip_bounds(
         if node.lifecycle.same_node(&stop.lifecycle) {
             return Ok(result);
         }
-        if node.pixel_moving_filter.is_some() || !node.clip_path.is_empty() {
+        if node.clip_path_error.is_some()
+            || node.pixel_moving_filter.is_some()
+            || node.clip_path_children.len() > 1
+        {
             return Err(ReplayUnsupported("unsupported-removed-clip"));
         }
+        // Path bounds only constrain scheduling. rounded_clips_between keeps
+        // the real ClipPathOp (including a valid empty path) in the record;
+        // this rectangle must never replace its antialiased geometry.
         if let Some(rect) = node.rect {
             let mut transforms = Vec::new();
             let mut transform = Some(&node.local_transform_space);
@@ -791,6 +801,16 @@ fn pixel_bounds(r: PaintRect, scale: f64) -> PaintRect {
 // Proven fill support, independent of opaque coverage. Rounded rectangles
 // and ellipses have complete enclosing rects but do NOT cover their corners;
 // is_rect_draw remains narrow for LCD/opaque-background proofs.
+// SkCanvas clips a non-inverse empty Path to the empty set. Keep this
+// explicit clip-only case separate from draw bounds and malformed nonempty
+// paths, which retain their existing strict validation.
+fn clip_path_control_bounds(item: &DisplayItem) -> Option<PaintRect> {
+    if item.path.is_empty() && !item.inverse_winding {
+        Some(PaintRect::default())
+    } else {
+        path_control_bounds(item)
+    }
+}
 fn path_control_bounds(item: &DisplayItem) -> Option<PaintRect> {
     if item.inverse_winding || item.path.is_empty() {
         return None;
@@ -1225,8 +1245,8 @@ fn update_state(
             state.complex_clip = true;
         }
         Kind::kClipPath => {
-            let bounds =
-                path_control_bounds(item).ok_or(ReplayUnsupported("invalid-record-clip-path"))?;
+            let bounds = clip_path_control_bounds(item)
+                .ok_or(ReplayUnsupported("invalid-record-clip-path"))?;
             state.clip = intersect(state.clip, mapped_rect(bounds, *state));
             state.complex_clip = true;
         }
@@ -1936,8 +1956,10 @@ fn validate_property_only_update(
             || a.rect != b.rect
             || a.radii != b.radii
             || a.clip_path != b.clip_path
+            || a.clip_path_is_empty != b.clip_path_is_empty
             || a.clip_path_children != b.clip_path_children
             || a.clip_path_even_odd != b.clip_path_even_odd
+            || a.clip_path_error != b.clip_path_error
             || !a
                 .local_transform_space
                 .lifecycle
@@ -2300,6 +2322,74 @@ mod canonical_directory_tests {
     use super::*;
     use paint::display_item_id::{DisplayItemId, DisplayItemIdType};
     use paint::paint_engine::{RasterEffectOutset, RecordedDisplayItemKind};
+
+    #[test]
+    fn path_upcast_keeps_errors_and_rejects_error_only_cached_updates() {
+        let root = PropertyTreeState::default();
+        let clip = Arc::new(ClipPaintPropertyNode {
+            lifecycle: Default::default(),
+            id: 71,
+            parent: Some(root.clip.clone()),
+            local_transform_space: root.transform.clone(),
+            clip_path_is_empty: true,
+            ..(*root.clip).clone()
+        });
+        let original = PropertyTreeState { clip: clip.clone(), ..root.clone() };
+        assert!(crate::raster_properties(&original).unwrap().clip.lifecycle.same_node(&root.clip.lifecycle));
+        let mut failed = (*clip).clone();
+        failed.clip_path_error = Some("unsupported-nested-clip".into());
+        let failed = Arc::new(failed);
+        let changed = PropertyTreeState { clip: failed.clone(), ..root.clone() };
+        assert!(crate::raster_properties(&changed).unwrap().clip.lifecycle.same_node(&failed.lifecycle));
+        assert!(removed_clip_bounds(&failed, &root.clip).is_err());
+        let old = vec![PaintChunk { properties: original, ..Default::default() }];
+        let new = vec![PaintChunk { properties: changed, ..Default::default() }];
+        assert!(validate_property_only_update(RecordingChunks::current(&old), &new, 1.0).is_err());
+    }
+
+    #[test]
+    fn empty_clip_keeps_its_path_kind_and_invalid_paths_still_reject() {
+        let item = DisplayItem {
+            r#type: Kind::kClipPath,
+            ..Default::default()
+        };
+        let state = State {
+            translation: (7.0, 9.0),
+            axis_scale: (1.0, 1.0),
+            cross_axis: (0.0, 0.0),
+            clip: None,
+            complex_clip: false,
+        };
+        let shape = path_clip_shape(&item, state).expect("valid empty path");
+        let replay = clip_shape_item(&shape, (2.0, 3.0)).unwrap();
+        assert_eq!(replay.r#type, Kind::kClipPath);
+        assert!(replay.path.is_empty());
+        let mut clipped = state;
+        update_state(&item, &mut clipped, &mut Vec::new(), 1.0, true).unwrap();
+        assert!(clipped.clip.unwrap().is_empty());
+        let invalid = DisplayItem {
+            path: vec![
+                layoutng_assembly::internal::layout_input::PaintPathCommand {
+                    point: layoutng_assembly::internal::layout_input::Offset {
+                        x: f64::NAN,
+                        y: 0.0,
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..item.clone()
+        };
+        assert!(path_clip_shape(&invalid, state).is_err());
+        assert!(update_state(&invalid, &mut clipped, &mut Vec::new(), 1.0, true).is_err());
+        assert!(path_clip_shape(
+            &DisplayItem {
+                inverse_winding: true,
+                ..item
+            },
+            state
+        )
+        .is_err());
+    }
 
     #[test]
     fn borrowed_recording_view_reuses_cache_and_preserves_rejections() {

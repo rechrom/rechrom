@@ -42,10 +42,11 @@ use crate::internal::{
         BackgroundRepeatRule, BackgroundSizeMode, NinePieceImagePaint, PaintBlendMode,
         PaintColorInterpolationSpace, PaintColorStop, PaintCornerRadii, PaintCornerRadius,
         PaintFilterOperation, PaintFilterType, PaintHueInterpolationMethod, PaintImageTileRule,
-        PaintMaskComposite, PaintMaskImageState, PaintMaskLayer, PaintMaskMode, PaintRadialExtent, PaintRadialShape,
-        PaintReflectionDirection, PaintShader, PaintShaderKind, PaintSpreadMethod, PaintStyleData,
-        PaintTransform, PaintTransformOperation, PaintTransformOperationKind, PaintTransformOrigin,
-        PaintTransformReferenceBox, SvgPaintComponent, SvgStrokeLineCap, SvgStrokeLineJoin,
+        PaintMaskComposite, PaintMaskImageState, PaintMaskLayer, PaintMaskMode, PaintRadialExtent,
+        PaintRadialShape, PaintReflectionDirection, PaintShader, PaintShaderKind,
+        PaintSpreadMethod, PaintStyleData, PaintTransform, PaintTransformOperation,
+        PaintTransformOperationKind, PaintTransformOrigin, PaintTransformReferenceBox,
+        SvgPaintComponent, SvgStrokeLineCap, SvgStrokeLineJoin,
     },
 };
 
@@ -556,6 +557,8 @@ pub fn ExportGeneratedImageShader(
 
 fn BackgroundLayer(style: &ComputedStyle, layer: &FillLayer) -> Option<BackgroundImageLayer> {
     let image = unsafe { layer.GetImage().as_ref() }?;
+    let image = layoutng_style::style::style_mask_source_image::MaskSourceImage(image)
+        .and_then(|mask| mask.FetchedImage()).unwrap_or(image);
     let mut output = BackgroundImageLayer::default();
     if let Some(shader) = ExportGeneratedImageShader(style, image) {
         output.shader = Some(shader);
@@ -678,11 +681,13 @@ fn Masks(style: &ComputedStyle) -> Vec<PaintMaskLayer> {
         let image_state = match native_image {
             Some(image) if !image.IsLoaded() && !image.ErrorOccurred() => {
                 PaintMaskImageState::kLoading
-            },
+            }
             Some(image) if image.CanRender() => PaintMaskImageState::kReady,
             _ => PaintMaskImageState::kInvalid,
         };
-        let image = BackgroundLayer(style, current).or_else(|| {
+        let local = native_image.and_then(layoutng_style::style::style_mask_source_image::MaskSourceImage)
+            .filter(|mask| mask.IsLocal());
+        let image = local.map(|_| BackgroundImageLayer::default()).or_else(|| BackgroundLayer(style, current)).or_else(|| {
             native_image.is_none().then(|| {
                 let mut image = BackgroundImageLayer::default();
                 BackgroundLayerGeometry(current, &mut image);
@@ -692,6 +697,16 @@ fn Masks(style: &ComputedStyle) -> Vec<PaintMaskLayer> {
         let composite = MaskComposite(current.CompositingOperator());
         if let (Some(image), Some(composite)) = (image, composite) {
             output.push(PaintMaskLayer {
+                svg_reference: local.map(|mask| crate::internal::paint_input::SvgMaskReference {
+                    id: mask.NormalizedFragment(), scope: mask.ResourceScope().unwrap(),
+                    graph: None, target_id: None, viewport: None,
+                }),
+                match_source: current.MaskMode() == EFillMaskMode::kMatchSource,
+                source_error: native_image.and_then(layoutng_style::style::style_mask_source_image::MaskSourceImage)
+                    .filter(|mask| !mask.IsLocal() && !mask.NormalizedFragment().is_empty())
+                    .and_then(|mask|mask.FetchedImage()).and_then(FetchedImage)
+                    .filter(|image|image.IsDocumentImage())
+                    .map(|_| "external SVG mask target selection".to_owned()),
                 image,
                 image_state,
                 mode: match current.MaskMode() {
@@ -1179,19 +1194,54 @@ pub(crate) fn ExportStyleWithProjectedSvg(
     style: &ComputedStyle,
     image_resource_id: Option<u64>,
     projected: &PaintStyleData,
+    clip_resources: &crate::internal::paint_input::SvgClipResourceBinding,
 ) -> crate::internal::layout_input::PaintStyle {
     let mut output = ExportStyle(style, image_resource_id);
+    output.svg_mask_resource = projected.svg_mask_resource.clone();
+    for layer in &mut output.mask_images {
+        let Some(reference) = layer.svg_reference.as_mut() else { continue; };
+        let entry = (reference.scope.document_id == clip_resources.snapshot.version.document_id)
+            .then(|| clip_resources.snapshot.entries.iter().find(|entry|
+                entry.scope_id == reference.scope.tree_scope_id && entry.id == reference.id)).flatten();
+        if let Some(graph) = entry.and_then(|entry| entry.mask_graph.as_ref()) {
+            reference.graph = Some(Arc::clone(graph));
+            reference.target_id = entry.map(|entry| entry.target_node_id);
+            layer.source_error = graph.unsupported.clone();
+            if layer.match_source { layer.mode = graph.mode; }
+        } else { layer.image_state = PaintMaskImageState::kInvalid; }
+    }
     output.svg_fill_server = projected.svg_fill_server.clone();
     output.svg_stroke_server = projected.svg_stroke_server.clone();
     output.svg_markers = projected.svg_markers.clone();
     output.replaced_image_shader = projected.replaced_image_shader.clone();
     output.svg_filter_graphs = Arc::clone(&projected.svg_filter_graphs);
-    if let (Some(output_clip), Some(projected_clip)) =
-        (output.clip_path.as_mut(), projected.clip_path.as_ref())
-    {
-        if output_clip.reference_url == projected_clip.reference_url {
-            output_clip.reference_graph = projected_clip.reference_graph.clone();
-            output_clip.reference_error = projected_clip.reference_error.clone();
+    if let Some(clip) = output.clip_path.as_mut() {
+        if let Some(url) = clip.reference_url.as_deref() {
+            if let Some(id) = url.strip_prefix('#') {
+                let scope = clip.reference_scope.unwrap_or(clip_resources.scope);
+                let entry =
+                    (scope.document_id == clip_resources.snapshot.version.document_id)
+                        .then(|| {
+                            clip_resources.snapshot.entries.iter().find(|entry| {
+                                entry.scope_id == scope.tree_scope_id && entry.id == id
+                            })
+                        })
+                        .flatten();
+                if let Some(graph) = entry.and_then(|entry| entry.graph.as_ref()) {
+                    clip.reference_target_id = entry.map(|entry| entry.target_node_id);
+                    clip.reference_graph = Some(Arc::clone(graph));
+                    clip.reference_error = graph.unsupported.clone();
+                } else {
+                    // cpp: ClipPathClipper::PathBasedClipInternal. A missing
+                    // or wrong-kind resource supplies no clip. A present,
+                    // empty graph above remains a real empty clip instead.
+                    output.clip_path = None;
+                }
+            } else {
+                // External fetch/loading ownership is not represented by this
+                // local resource snapshot. Keep it explicitly unsupported.
+                clip.reference_error = Some("external clip-path IRI".into());
+            }
         }
     }
     let fill_paint = output.svg_fill;

@@ -102,9 +102,10 @@ struct ManagedObject {
 /// Non-CSS data attached by DOM/resource loading and needed when a native
 /// `ComputedStyle` is frozen for Paint.  This stays separate from Blink's
 /// style object, matching the resource/client relationship in Chromium.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PaintStyleBinding {
     pub image_resource_id: Option<u64>,
+    pub svg_clip_resources: super::paint_input::SvgClipResourceBinding,
 }
 
 // cpp: layoutng/internal/layout_object_builder.h:75-77
@@ -1047,10 +1048,23 @@ impl LayoutObjectTree {
         &mut self,
         id: u64,
         style: &NativeComputedStyle,
+        clip_resource_version: super::paint_input::SvgClipResourceVersion,
     ) -> Option<PaintStyleBinding> {
         let storage = unsafe { &mut *self.storage_ };
         let _factory_scope = LayoutObjectFactoryScope::new(&storage.factories);
         assert!(!storage.updating);
+        // Validate before mutating any native pointers. A resource-only change
+        // must use the ordinary tree/export lifecycle to refresh every client.
+        if storage
+            .managed
+            .values()
+            .filter(|record| record.input.id == id)
+            .any(|record| {
+                record.input.style.svg_clip_resources.snapshot.version != clip_resource_version
+            })
+        {
+            return None;
+        }
         let native_style = style as *const NativeComputedStyle;
         let mut binding = None;
         for record in storage.managed.values_mut().filter(|record| {
@@ -1060,9 +1074,10 @@ impl LayoutObjectTree {
         }) {
             let current = PaintStyleBinding {
                 image_resource_id: record.input.style.paint.image_resource_id,
+                svg_clip_resources: record.input.style.svg_clip_resources.clone(),
             };
-            if let Some(previous) = binding {
-                debug_assert_eq!(previous, current);
+            if let Some(previous) = binding.as_ref() {
+                debug_assert_eq!(previous, &current);
             } else {
                 binding = Some(current);
             }

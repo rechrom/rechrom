@@ -1533,6 +1533,7 @@ mod matrix_and_optical_size_tests {
             weight: 400.0,
             italic: false,
             bytes: include_bytes!("../../../../assets/fonts/Roboto-Regular.ttf"),
+            bytes_owner: None,
             face_index: 0,
             variations: Vec::new(),
         }
@@ -2311,6 +2312,7 @@ mod native_allocation_bounds_tests {
                     weight: 400.,
                     italic: false,
                     bytes,
+                    bytes_owner: None,
                     face_index: 0,
                     variations: Vec::new(),
                 };

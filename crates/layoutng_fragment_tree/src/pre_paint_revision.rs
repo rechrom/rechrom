@@ -391,6 +391,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         logical_tree_order,
         establishes_paint_state,
         hidden,
+        svg_hidden_container,
         painted_atomically,
         has_collapsed_borders,
         source_kind,
@@ -479,6 +480,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && logical_tree_order == &b.logical_tree_order
         && establishes_paint_state == &b.establishes_paint_state
         && hidden == &b.hidden
+        && svg_hidden_container == &b.svg_hidden_container
         && painted_atomically == &b.painted_atomically
         && has_collapsed_borders == &b.has_collapsed_borders
         && source_kind == &b.source_kind
@@ -539,8 +541,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && background_transfers_to_view == &b.background_transfers_to_view
         && canvas_background == &b.canvas_background
         && background_paint_location == &b.background_paint_location
-        && can_composite_background_attachment_fixed
-            == &b.can_composite_background_attachment_fixed
+        && can_composite_background_attachment_fixed == &b.can_composite_background_attachment_fixed
 }
 
 fn self_equal(a: &FragmentNode, b: &FragmentNode) -> bool {
@@ -616,6 +617,22 @@ fn resources_equal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_svg_container_kind_changes_pre_paint_revision() {
+        let mut fragment = FragmentNode::default();
+        let mut tracker = PrePaintRevisionTracker::new();
+        tracker.update(&mut fragment);
+        let visible = fragment.clone();
+        fragment.paint.svg_hidden_container = true;
+        assert!(!SamePrePaintInput(&visible, &fragment));
+        tracker.update(&mut fragment);
+        assert_ne!(fragment.pre_paint_revision, visible.pre_paint_revision);
+        assert_ne!(
+            fragment.pre_paint_subtree_revision,
+            visible.pre_paint_subtree_revision
+        );
+    }
 
     #[test]
     fn revisions_observe_complete_input_and_order_without_retaining_children() {

@@ -253,7 +253,11 @@ URL/input
   input-scroll, resize, and raster-completion commands; it internally
   coordinates `layer_tile` and `raster`; output is typed effects culminating in
   a `CompositorFrame`. It owns active/pending frame scheduling and compositor
-  scrolling, but not surface aggregation or platform presentation.
+  scrolling, but not surface aggregation or platform presentation. Typed
+  main-thread effects carry wheel disposition and acknowledged impl-scroll
+  deltas; Page returns a completed frame's acknowledgement. Main-frame
+  completion and pending-tree activation gate commits without blocking impl
+  input/display or impl-only tile coverage.
 - `viz`: input is `CompositorFrame`, surface lifecycle, BeginFrame/deadline, and
   swap acknowledgements; output is a validated aggregate render pass and swap
   decision for Renderer. It owns surface aggregation and display scheduling as

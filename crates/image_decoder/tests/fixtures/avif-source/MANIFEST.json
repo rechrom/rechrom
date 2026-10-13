@@ -1,0 +1,116 @@
+[
+  {
+    "file": "white_1x1.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/white_1x1.avif",
+    "sha256": "ea4e43d1f07e4c00de16c13afa32376111bb306e51f08212cf4c1b6064df3667",
+    "bytes": 305
+  },
+  {
+    "file": "white_2x2.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/white_2x2.avif",
+    "sha256": "6764f794ad14773a41539413b378fe8fd204b0db78be271d3e2faeccd3a0e2ae",
+    "bytes": 297
+  },
+  {
+    "file": "alpha.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/alpha.avif",
+    "sha256": "8cec6b3f0e2a9318578bb3031cd1c6bf81e4af72279f77a9fbe10bbf5aeb8068",
+    "bytes": 1979
+  },
+  {
+    "file": "alpha_premultiplied.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/alpha_premultiplied.avif",
+    "sha256": "ff5dddbcb692c017a5ad426d32af9663830780eba49cb329273c152722f8e99c",
+    "bytes": 1510
+  },
+  {
+    "file": "invalid_color10x10_alpha5x5.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/invalid_color10x10_alpha5x5.avif",
+    "sha256": "121d669d5213067e81314ba9696a3a31864eb82c065d406f1eb6a6def1ce197c",
+    "bytes": 530
+  },
+  {
+    "file": "paris_identity.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/paris_identity.avif",
+    "sha256": "4268546d6eb2a915a7efa365b6b94637c0f5512a22487b3be670f0f8a9d99f05",
+    "bytes": 205017
+  },
+  {
+    "file": "paris_icc_exif_xmp.png",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/paris_icc_exif_xmp.png",
+    "sha256": "308bb51c3338ed9519cdaaa79186b934a21d1748d94120ed0348eb4f193d0988",
+    "bytes": 153217
+  },
+  {
+    "file": "paris_10bpc.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/paris_10bpc.avif",
+    "sha256": "2514965a6fdaabfd0d71785773e1edf3667529da894d551db67b314a2207ef9c",
+    "bytes": 13206
+  },
+  {
+    "file": "colors-animated-12bpc-keyframes-0-2-3.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/colors-animated-12bpc-keyframes-0-2-3.avif",
+    "sha256": "3bf9f91da471749e7df639ba7945d4d94c1c3e3968c26f3619fbbcfc92790576",
+    "bytes": 2267
+  },
+  {
+    "file": "colors-animated-8bpc-alpha-exif-xmp.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/colors-animated-8bpc-alpha-exif-xmp.avif",
+    "sha256": "c2e38681057c15009c4b76ea08cea68cdde80806abd41d42a646f697bf5aabb2",
+    "bytes": 7506
+  },
+  {
+    "file": "sofa_grid1x5_420.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/sofa_grid1x5_420.avif",
+    "sha256": "c9e04ff9d90d7093454750fa33b7543ee5479e0cfb151e2c3d2ce6a16c1651c1",
+    "bytes": 25409
+  },
+  {
+    "file": "sofa_grid1x5_420_dimg_repeat.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/sofa_grid1x5_420_dimg_repeat.avif",
+    "sha256": "0a2abbe8b388df51e51b47cc4f1a932fed8c64d340490604fe6b510d77025514",
+    "bytes": 25409
+  },
+  {
+    "file": "white_iden_irot.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/white_iden_irot.avif",
+    "sha256": "65b510e5ddd833a5512620aedc57459f75a53f2897d5991e7c224d5633a3f5ca",
+    "bytes": 448
+  },
+  {
+    "file": "white_iden_chain_with_imir_primary.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/white_iden_chain_with_imir_primary.avif",
+    "sha256": "a093e1006f87481e3c57d2dabc9426e18ac3dafa0f7892cb33d57879be2c1934",
+    "bytes": 546
+  },
+  {
+    "file": "clap_irot_imir_non_essential.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/clap_irot_imir_non_essential.avif",
+    "sha256": "33f869fcf2a879913eb394982b8fc03e9a60c25831aa37622ddefa656fd39fc1",
+    "bytes": 653
+  },
+  {
+    "file": "seine_hdr_srgb.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/seine_hdr_srgb.avif",
+    "sha256": "b4f440392ad8cdfd398aea0c8817c93d98cfd8cde381bbe430aceae0207e93c8",
+    "bytes": 168028
+  },
+  {
+    "file": "progressive/progressive_layered_grid.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/progressive/progressive_layered_grid.avif",
+    "sha256": "37d35a32a6377407eac4da3fce143ba68b3e316ca3b447ddc3b39d1db6809eb5",
+    "bytes": 26623
+  },
+  {
+    "file": "progressive/tiger_3layer_1res.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/progressive/tiger_3layer_1res.avif",
+    "sha256": "d70954bc4defecd6481ed5e31ebafc4d8f57a4c529d2813f8f183b51c2a141da",
+    "bytes": 70944
+  },
+  {
+    "file": "progressive/tiger_3layer_3res.avif",
+    "url": "https://raw.githubusercontent.com/webmproject/CrabbyAvif/8f2b74b4d8be956395f527020c2190762e086f98/tests/data/progressive/tiger_3layer_3res.avif",
+    "sha256": "74726115c4b45083c19d9fc844591584391e3953c9ee6f8d2f36a39962684d15",
+    "bytes": 64981
+  }
+]

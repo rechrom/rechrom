@@ -60,7 +60,11 @@ impl Page {
         // cannot advance that work and must not compete with its task queue.
         // Once readiness changes, the next task reaches UpdateFrameIfNeeded.
         let demand = (self.IsRenderingReady()
-            && (self.HasPendingFrameInput() || self.state.dirty.get() || self.hover_state_dirty))
+            && (self.HasPendingFrameInput()
+                || self.state.dirty.get()
+                || self.hover_state_dirty
+                || (self.scripts.is_some()
+                    && !self.state.scroll_event_targets.borrow().is_empty())))
             || self.state.animation_begin_frame_requested.get()
             || self.resources.HasAnimatedImages()
             || self

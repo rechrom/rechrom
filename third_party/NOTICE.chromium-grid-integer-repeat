@@ -1,0 +1,12 @@
+The integer grid repeat production parser/value bridge and shared native grid
+converter operation are translated from The Chromium Authors' BSD-licensed code.
+See LICENSE.chromium.
+
+Pinned revision: 6c1d401fcca5e1b0030563a90c2f2bba168e0c15
+Sources under third_party/blink/renderer/:
+core/css/properties/css_parsing_utils.cc (ConsumeGridTrackRepeatFunction)
+core/css/css_grid_integer_repeat_value.h
+core/css/css_grid_integer_repeat_value.cc
+core/css/resolver/style_builder_converter.cc (ConvertGridTrackList)
+core/style/grid_track_list.h
+core/style/grid_track_list.cc

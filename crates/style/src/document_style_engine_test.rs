@@ -2429,7 +2429,7 @@ fn native_list_style_none_and_position_cross_the_layout_boundary() {
 fn unsupported_declarations_are_diagnostic_and_do_not_drop_valid_styles() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
-        "<div id=target style='width:7px;grid-template-columns:repeat(2,1fr);padding-left:9px'></div>",
+        "<div id=target style='width:7px;grid-template-columns:repeat(auto-fill,20px);padding-left:9px'></div>",
     );
     let target = node(&owner, "target");
     let mut engine = StyleEngine::new(&owner);

@@ -1,0 +1,28 @@
+[
+  {
+    "file": "src/decode.rs",
+    "preimage_sha256": "fa441c578551c67d66f06e699fa232ae4fd16fd44753b3f7a82c6a447b9b6971",
+    "postimage_sha256": "702928ce261a2da92d02fdc8020be19862fc54c9778aabbfbbb3699cd54ebc7b",
+    "replacements": [
+      {
+        "old": "if f.frame_hdr.as_ref().unwrap().refresh_context != 0 {",
+        "new": "if f.frame_hdr.as_ref().is_some_and(|h| h.refresh_context != 0) {"
+      }
+    ]
+  },
+  {
+    "file": "src/obu.rs",
+    "preimage_sha256": "805eac7f1b10e23c7a171bb7c73a0f74732563a983f80fe480df6d1feafd56d5",
+    "postimage_sha256": "af12148c7445c867e1cd8d8f27caf5aa2a3c7e620e5c412395e2ec9a8048c692",
+    "replacements": [
+      {
+        "old": "let mut payload_size = gb.remaining_len();",
+        "new": "let mut payload_size = gb.remaining_len() as isize;"
+      },
+      {
+        "old": "if payload_size <= 0 || gb[payload_size] != 0x80 {",
+        "new": "if payload_size <= 0 || gb[payload_size as usize] != 0x80 {"
+      }
+    ]
+  }
+]

@@ -344,10 +344,14 @@ impl Node {
     }
 
     // Scroll translation is paint state, not a font or geometry invalidation.
-    pub(crate) fn UpdateInputScrollOffset(&mut self, offset: super::layout_input::Offset) {
+    pub(crate) fn ReflectInputScrollOffset(&mut self, offset: super::layout_input::Offset) {
         if let Some(data) = self.input_data_.element_data.as_mut() {
             data.scroll_offset = offset;
         }
+    }
+
+    pub(crate) fn UpdateInputScrollOffset(&mut self, offset: super::layout_input::Offset) {
+        self.ReflectInputScrollOffset(offset);
         let area = super::layout_scrollable_area::PaintLayerScrollableArea::FromNode(self);
         if !area.is_null() {
             // The resident area, not SavedLayerScrollOffset, owns live offsets.

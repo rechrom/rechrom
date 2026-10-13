@@ -9,6 +9,83 @@ use super::*;
 use interaction::input_event::{WheelEvent, WheelPhase};
 
 impl Page {
+    /// Apply cc's scroll-and-scale delta batch before the main rendering
+    /// opportunity. The host verifies document identity; Page owns DOM lookup
+    /// and publishes this acknowledgement only with a completed paint frame.
+    pub fn ApplyCompositorScrollDelta(
+        &mut self,
+        sequence: u64,
+        owner_client_id: u64,
+        delta: Offset,
+    ) -> io::Result<()> {
+        if sequence <= self.processed_compositor_scroll_sequence {
+            return Ok(());
+        }
+        if !delta.x.is_finite() || !delta.y.is_finite() {
+            return Err(io::Error::other("nonfinite compositor scroll delta"));
+        }
+        // ScrollingCoordinator ignores callbacks for deleted scroll owners.
+        // Never force measurement before a replacement document has a root.
+        if !self.state.document.HasRenderableRoot() {
+            self.processed_compositor_scroll_sequence = sequence;
+            return Ok(());
+        }
+        self.state.EnsureMeasurement();
+        let range = self
+            .state
+            .measurement
+            .borrow()
+            .as_ref()
+            .filter(|measurement| measurement.paint.display_item_client_id == owner_client_id)
+            .and_then(|measurement| measurement.paint.scroll_container);
+        let Some(range) = range else {
+            self.processed_compositor_scroll_sequence = sequence;
+            return Ok(());
+        };
+        let (target_node_id, accumulated) = {
+            let owner = self.state.document.borrow();
+            let document = owner.GetDocument();
+            let root = document
+                .Node(document.Root())
+                .Children()
+                .iter()
+                .copied()
+                .find(|&index| document.Node(index).IsHTMLElement("html"))
+                .ok_or_else(|| io::Error::other("compositor scroll has no document root"))?;
+            let current = document.ScrollOffsetFor(root);
+            (
+                document.Node(root).Id(),
+                Offset {
+                    x: current.x + delta.x,
+                    y: current.y + delta.y,
+                },
+            )
+        };
+        // Blink reflects the impl batch through its real scroll range. The
+        // next delta-bearing main frame waits for this commit to activate,
+        // matching the non-overlapping cc main/pending scheduler branch.
+        let offset = Offset {
+            x: accumulated
+                .x
+                .clamp(range.minimum_scroll_offset.x, range.maximum_scroll_offset.x),
+            y: accumulated
+                .y
+                .clamp(range.minimum_scroll_offset.y, range.maximum_scroll_offset.y),
+        };
+        let mutation = PageMutation::ScrollMutation(page_mutation::ScrollMutation {
+            target_node_id,
+            offset,
+        });
+        if let Some(scripts) = &mut self.scripts {
+            scripts.ApplyMutation(mutation)?;
+        } else {
+            self.state.ApplyMutation(mutation);
+        }
+        self.processed_compositor_scroll_sequence = sequence;
+        self.RequestBeginFrameIfNeeded();
+        Ok(())
+    }
+
     pub fn ScrollWheelDefault(&mut self, wheel: &WheelEvent) -> io::Result<()> {
         self.ApplyWheelDefaultWithoutLifecycle(wheel, wheel.target_node_id)?;
         self.UpdateFrameIfNeeded()
@@ -18,6 +95,18 @@ impl Page {
         wheel: &WheelEvent,
         target_node_id: Option<u64>,
     ) -> io::Result<()> {
+        if wheel.compositor_handled {
+            // InputHandler already moved the impl tree. Main receives its
+            // actual (clamped) delta at BeginMainFrame, including corrections.
+            if matches!(wheel.phase, WheelPhase::kEnded | WheelPhase::kCancelled) {
+                if std::mem::take(&mut self.wheel_scroll_active) {
+                    self.hover_state_dirty = self.cursor_position.is_some();
+                }
+            } else if wheel.delta.x != 0.0 || wheel.delta.y != 0.0 {
+                self.wheel_scroll_active = true;
+            }
+            return Ok(());
+        }
         if !wheel.delta.x.is_finite() || !wheel.delta.y.is_finite() {
             return Ok(());
         }

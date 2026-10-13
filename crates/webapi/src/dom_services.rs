@@ -49,12 +49,18 @@ struct BoundEvent {
 
 fn event_path_value(event: &Event, current_target: HostObjectId) -> HostValue {
     let state = event.dispatch_state.borrow();
-    let nodes = state.path.as_ref().map_or_else(Vec::new,
-        |path| path.ComposedPath(current_target));
+    let nodes = state
+        .path
+        .as_ref()
+        .map_or_else(Vec::new, |path| path.ComposedPath(current_target));
     let mut values = Vec::with_capacity(nodes.len() + 1);
     values.push(("length".into(), HostValue::Number(nodes.len() as f64)));
-    values.extend(nodes.into_iter().enumerate().map(|(index, id)|
-        (index.to_string(), HostValue::Object(HostObjectRef { id }))));
+    values.extend(
+        nodes
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| (index.to_string(), HostValue::Object(HostObjectRef { id }))),
+    );
     HostValue::Record(values)
 }
 
@@ -78,6 +84,9 @@ pub(super) struct DOMServices {
     next_event_object_id: HostObjectId,
 }
 impl DOMServices {
+    pub(super) fn MemoryCounts(&self) -> (usize, usize) {
+        (self.events.len(), self.event_wrappers.len())
+    }
     pub fn new(host: DOMBindingsHost) -> Self {
         Self {
             host,
@@ -432,8 +441,13 @@ impl DOMJavaScriptBindings {
                     &HostValue::Object(HostObjectRef { id: 0 }),
                     &[
                         handle,
-                        event.dispatch_state.borrow().final_target.map_or(HostValue::Null(JavaScriptNull),
-                            |id| HostValue::Object(HostObjectRef { id })),
+                        event
+                            .dispatch_state
+                            .borrow()
+                            .final_target
+                            .map_or(HostValue::Null(JavaScriptNull), |id| {
+                                HostValue::Object(HostObjectRef { id })
+                            }),
                         HostValue::Null(JavaScriptNull),
                         HostValue::Number(0.0),
                         HostValue::Boolean(false),
@@ -441,9 +455,7 @@ impl DOMJavaScriptBindings {
                 );
             }
             *state.borrow_mut() = previous;
-            Self::value(HostValue::Boolean(
-                !event.default_prevented,
-            ))
+            Self::value(HostValue::Boolean(!event.default_prevented))
         })
     }
 
@@ -471,10 +483,15 @@ impl DOMJavaScriptBindings {
             "target" => {
                 let state = event.dispatch_state.borrow();
                 if state.finished {
-                    state.final_target.map_or(HostValue::Null(JavaScriptNull),
-                        |id| HostValue::Object(HostObjectRef { id }))
-                } else { HostValue::Object(HostObjectRef { id: bound.target }) }
-            },
+                    state
+                        .final_target
+                        .map_or(HostValue::Null(JavaScriptNull), |id| {
+                            HostValue::Object(HostObjectRef { id })
+                        })
+                } else {
+                    HostValue::Object(HostObjectRef { id: bound.target })
+                }
+            }
             "currentTarget" => {
                 if bound.dispatching {
                     HostValue::Object(HostObjectRef {
@@ -523,7 +540,9 @@ impl DOMJavaScriptBindings {
             let Some(HostValue::String(name)) = arguments.first() else {
                 return Some(Self::type_error("Illegal invocation"));
             };
-            if !matches!(name.as_str(), "target" | "currentTarget" | "eventPhase") || !self.services.IsEvent(receiver) {
+            if !matches!(name.as_str(), "target" | "currentTarget" | "eventPhase")
+                || !self.services.IsEvent(receiver)
+            {
                 return Some(Self::type_error("Illegal invocation"));
             }
             return self.GetBoundEvent(receiver, name);
@@ -534,7 +553,9 @@ impl DOMJavaScriptBindings {
             };
             return Some(Self::value(if bound.dispatching {
                 event_path_value(&bound.event, bound.current_target)
-            } else { HostValue::Record(vec![("length".into(), HostValue::Number(0.0))]) }));
+            } else {
+                HostValue::Record(vec![("length".into(), HostValue::Number(0.0))])
+            }));
         }
         if member == "mutationObserverState" {
             let [HostValue::Number(count)] = arguments else {
@@ -593,6 +614,19 @@ impl DOMJavaScriptBindings {
             let Some(HostValue::String(axis)) = arguments.first() else {
                 return Some(Self::type_error("Invalid scroll axis"));
             };
+            // Element::scrollTop/scrollLeft synchronously update layout before
+            // reading its canonical offset (element.cc:2678-2690). The existing
+            // native metric boundary performs that measurement/overflow clamp.
+            if let Some(read) = self.services.host.read_metric.as_mut() {
+                read(
+                    receiver,
+                    if axis == "x" {
+                        "minimumScrollLeft"
+                    } else {
+                        "minimumScrollTop"
+                    },
+                );
+            }
             let mut offset = self.document.borrow().GetDocument().ScrollOffsetFor(node);
             let zoom = self
                 .document

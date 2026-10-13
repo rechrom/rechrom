@@ -232,7 +232,7 @@ fn fast_rounded_shape(clip: &ClipPaintPropertyNode) -> bool {
     // surface; SoftwareRenderer::SetClipRRect then clips the actual leaf quad
     // directly with AA=true, without creating a saveLayer.
     if clip.clip_path_error.is_some()
-        || !clip.clip_path.is_empty()
+        || (clip.clip_path_is_empty || !clip.clip_path.is_empty())
         || clip.pixel_moving_filter.is_some()
         || !translation_space(&clip.local_transform_space)
     {
@@ -347,6 +347,7 @@ mod test {
             radii: paint::border_shape_utils::UniformCornerRadii(9.75),
             clip_path: vec![],
             clip_path_children: Vec::new(),
+            clip_path_is_empty: false,
             clip_path_even_odd: false,
             clip_path_error: None,
             pixel_moving_filter: None,

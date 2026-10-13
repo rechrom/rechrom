@@ -8,37 +8,9 @@ use foundation::{DisallowNewWrapper, HeapVector, MakeGarbageCollected, Member, P
 
 use super::layout_box::LayoutBox;
 
-// The concrete scroll host owns the GC object and supplies virtual dispatch.
-// cpp: layoutng/internal/scroll_layout_scope.h:57-65
-#[repr(C)]
-pub struct ScrollOffsetClampTarget {
-    _private: (),
-}
-
-impl ScrollOffsetClampTarget {
-    pub fn NeedsScrollOffsetClamp(&self) -> bool {
-        unsafe { ScrollOffsetClampTargetNeedsScrollOffsetClamp(self) }
-    }
-
-    pub fn SetNeedsScrollOffsetClamp(&mut self, value: bool) {
-        unsafe { ScrollOffsetClampTargetSetNeedsScrollOffsetClamp(self, value) }
-    }
-
-    pub fn ClampScrollOffsetAfterOverflowChange(&mut self) {
-        unsafe { ScrollOffsetClampTargetClampScrollOffsetAfterOverflowChange(self) }
-    }
-}
-
-unsafe extern "Rust" {
-    fn ScrollOffsetClampTargetNeedsScrollOffsetClamp(target: &ScrollOffsetClampTarget) -> bool;
-    fn ScrollOffsetClampTargetSetNeedsScrollOffsetClamp(
-        target: &mut ScrollOffsetClampTarget,
-        value: bool,
-    );
-    fn ScrollOffsetClampTargetClampScrollOffsetAfterOverflowChange(
-        target: &mut ScrollOffsetClampTarget,
-    );
-}
+// The delayed queue roots the real native owner. No external placeholder
+// dispatch is needed now that scrollable areas live in this same package.
+pub type ScrollOffsetClampTarget = super::layout_scrollable_area::PaintLayerScrollableArea;
 
 // cpp: layoutng/internal/scroll_layout_scope.h:78-79
 // cpp: layoutng/internal/scroll_layout_scope.cc:53

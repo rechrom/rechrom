@@ -653,10 +653,12 @@ impl SVGImageDecoder {
             container.height = intrinsic.height;
         }
         let media = ImageMediaData(&container);
+        document.GetDocumentMut().UpdateSVGUseInstances();
         let mut style_engine = style::StyleEngine::new(&document);
         style_engine
             .Update(&mut document, &media, &self.user_agent_sheets_)
             .map_err(|error| io::Error::other(error.to_string()))?;
+        document.UpdateSVGResources();
         let environment = MediaValuesCached::new(&media);
         let animations = CollectAnimations(document.GetDocument(), &environment)?;
         let mut constraints = self.host_constraints_.clone();
@@ -712,7 +714,9 @@ impl SVGDocumentAnimation {
             width: f64::from(self.container.width),
             height: f64::from(self.container.height),
         };
-        self.constraints.document_image_container.as_mut()
+        self.constraints
+            .document_image_container
+            .as_mut()
             .expect("SVG image retains its root container input")
             .size = self.constraints.available_size;
         self.constraints.device_pixel_ratio = self.container.device_pixel_ratio();
@@ -761,6 +765,7 @@ impl SVGDocumentAnimation {
                 animation.declarations.clone(),
             );
         }
+        self.document.GetDocumentMut().UpdateSVGUseInstances();
         self.style_engine
             .Update(
                 &mut self.document,
@@ -768,6 +773,7 @@ impl SVGDocumentAnimation {
                 &self.user_agent_sheets,
             )
             .map_err(|error| io::Error::other(error.to_string()))?;
+        self.document.UpdateSVGResources();
         self.document
             .EmitConstraints(&self.constraints, |mutation| {
                 self.engine.ApplyMutation(mutation);

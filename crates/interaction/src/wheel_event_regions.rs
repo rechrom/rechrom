@@ -97,20 +97,35 @@ fn ResolveBlockingWheelEventRegions(
     // Fixed descendants are painted in the viewport transform space. Keep
     // that attachment across this input metadata boundary: compositor scroll
     // can then move ordinary event regions without moving fixed controls.
-    fn CollectFixedNodes(fragment: &FragmentNode, inherited: bool, output: &mut HashSet<u64>) {
+    fn CollectHitNodes(
+        fragment: &FragmentNode,
+        inherited: bool,
+        hit_nodes: &mut HashSet<u64>,
+        fixed_nodes: &mut HashSet<u64>,
+    ) {
+        // Resource definitions retain measurable descendant geometry, but
+        // LayoutSVGHiddenContainer::NodeAtPoint rejects the entire subtree.
+        if fragment.paint.svg_hidden_container {
+            return;
+        }
+        hit_nodes.insert(fragment.node_id);
         let fixed = inherited || fragment.paint.fixed_to_view;
         if fixed {
-            output.insert(fragment.node_id);
+            fixed_nodes.insert(fragment.node_id);
         }
         for child in &fragment.children {
-            CollectFixedNodes(child, fixed, output);
+            CollectHitNodes(child, fixed, hit_nodes, fixed_nodes);
         }
     }
+    let mut hit_nodes = HashSet::new();
     let mut fixed_nodes = HashSet::new();
-    CollectFixedNodes(fragments, false, &mut fixed_nodes);
+    CollectHitNodes(fragments, false, &mut hit_nodes, &mut fixed_nodes);
     let mut scrolling_rects = Vec::new();
     let mut fixed_rects = Vec::new();
     for id in node_ids {
+        if !hit_nodes.contains(&id) {
+            continue;
+        }
         let Some(node_rects) = by_node.get(&id) else {
             continue;
         };
@@ -131,6 +146,55 @@ fn ResolveBlockingWheelEventRegions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_svg_resource_listeners_have_no_wheel_regions() {
+        use dom::persistent_document::DOMNamespace;
+        use layoutng_assembly::internal::layout_input::Size;
+        let mut owner = dom::DOM::new();
+        let document = owner.GetDocumentMut();
+        let svg = document.CreateElementDefault(DOMNamespace::kSVG, "svg".into());
+        document.AppendChild(document.Root(), svg);
+        let hidden = document.CreateElementDefault(DOMNamespace::kSVG, "clipPath".into());
+        document.AppendChild(svg, hidden);
+        let child = document.CreateElementDefault(DOMNamespace::kSVG, "rect".into());
+        document.AppendChild(hidden, child);
+        let visible = document.CreateElementDefault(DOMNamespace::kSVG, "rect".into());
+        document.AppendChild(svg, visible);
+        let shape = |id| {
+            let mut fragment = FragmentNode {
+                node_id: id,
+                size: Size {
+                    width: 20.0,
+                    height: 20.0,
+                },
+                ..Default::default()
+            };
+            fragment.paint.has_source = true;
+            fragment.paint.establishes_paint_state = true;
+            fragment
+        };
+        let mut root = shape(document.Node(svg).Id());
+        let mut resource = shape(document.Node(hidden).Id());
+        resource.paint.svg_hidden_container = true;
+        let mut descendant = shape(document.Node(child).Id());
+        descendant.paint.fixed_to_view = true;
+        resource.children.push(descendant);
+        root.children = vec![resource, shape(document.Node(visible).Id())];
+        // Measuring a definition descendant must not make it a hit target.
+        assert!(FragmentClientRectsByNode(&root).contains_key(&document.Node(child).Id()));
+        let regions = ResolveBlockingWheelEventRegions(
+            &[document.Node(hidden).Id(), document.Node(child).Id()],
+            document,
+            Some(&root),
+        );
+        assert!(!regions.covers_viewport);
+        assert!(regions.scrolling_rects.is_empty());
+        assert!(regions.fixed_rects.is_empty());
+        let visible_regions =
+            ResolveBlockingWheelEventRegions(&[document.Node(visible).Id()], document, Some(&root));
+        assert_eq!(visible_regions.scrolling_rects.len(), 1);
+    }
 
     #[test]
     fn document_listener_covers_viewport_without_fragment_scan() {

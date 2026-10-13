@@ -1767,6 +1767,74 @@ pub trait StyleBuilderConverterBatch2Backend: StyleBuilderConverterBackend {
     ) -> foundation::TransformOperations;
 }
 
+/// Typed entries at the grid converter boundary. Native sizes stay compact;
+/// only the named-line indices are expanded for integer repetition.
+pub enum GridTrackListEntry {
+    Names(Vec<AtomicString>),
+    Track(GridTrackSize),
+}
+
+// cpp: style_builder_converter.cc:1772-1815. Shared by the generic source
+// converter and the production CSSValue adapter, including ordered-name flags.
+pub fn AppendIntegerGridRepeat(
+    result: &mut ComputedGridTrackList,
+    line: &mut u32,
+    entries: &[GridTrackListEntry],
+    repetitions: u32,
+) -> bool {
+    let subgrid = result.IsSubgriddedAxis();
+    let mut name_count = 0;
+    for repetition in 0..repetitions {
+        for entry in entries {
+            match entry {
+                GridTrackListEntry::Names(names) => {
+                    for name in names {
+                        result
+                            .GetMutableNamedGridLines()
+                            .entry(foundation::String::from_utf16(
+                                name.utf16_units().unwrap_or_default(),
+                            ))
+                            .or_default()
+                            .push(*line);
+                        result
+                            .GetMutableOrderedNamedGridLines()
+                            .entry(*line as usize)
+                            .or_default()
+                            .push(NamedGridLine::new(name, true, repetition == 0));
+                    }
+                    if repetition == 0 {
+                        name_count += 1;
+                    }
+                    if subgrid {
+                        *line += 1;
+                        result
+                            .GetMutableTrackList()
+                            .IncrementNonAutoRepeatLineCount();
+                    }
+                }
+                GridTrackListEntry::Track(_) => *line += 1,
+            }
+        }
+    }
+    let sizes = if subgrid {
+        vec![]
+    } else {
+        entries
+            .iter()
+            .filter_map(|entry| match entry {
+                GridTrackListEntry::Track(size) => Some(size.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    result.GetMutableTrackList().AddRepeater(
+        &sizes,
+        GridTrackRepeatType::kInteger,
+        repetitions,
+        if subgrid { name_count } else { 1 },
+    )
+}
+
 impl StyleBuilderConverter {
     // cpp: style_builder_converter.cc:1660-1680,1826-1833. The native plain
     // track construction is shared by both generic and production value owners.
@@ -1888,38 +1956,25 @@ impl StyleBuilderConverter {
                 continue;
             }
             if let Some(repetitions) = b.GridIntegerRepeat(&s.CssToLengthConversionData(), value) {
-                let entries = b.List(value).expect("integer repeat list");
-                let mut name_count = 0;
-                for repetition in 0..repetitions {
-                    for entry in &entries {
-                        let count = ConvertGridLineNameOrTrackSize(
-                            b,
-                            entry,
-                            &mut result,
-                            &mut line,
-                            true,
-                            repetition == 0,
-                        );
-                        if repetition == 0 {
-                            name_count += count;
+                let entries = b
+                    .List(value)
+                    .expect("integer repeat list")
+                    .iter()
+                    .map(|entry| {
+                        if b.IsGridLineNames(entry) {
+                            GridTrackListEntry::Names(
+                                b.List(entry)
+                                    .expect("line names list")
+                                    .iter()
+                                    .map(|name| b.CustomIdent(name).expect("line name"))
+                                    .collect(),
+                            )
+                        } else {
+                            GridTrackListEntry::Track(Self::ConvertGridTrackSize(b, s, entry))
                         }
-                    }
-                }
-                let sizes = if subgrid {
-                    vec![]
-                } else {
-                    entries
-                        .iter()
-                        .filter(|v| !b.IsGridLineNames(v))
-                        .map(|v| Self::ConvertGridTrackSize(b, s, v))
-                        .collect()
-                };
-                result.GetMutableTrackList().AddRepeater(
-                    &sizes,
-                    GridTrackRepeatType::kInteger,
-                    repetitions,
-                    if subgrid { name_count } else { 1 },
-                );
+                    })
+                    .collect::<Vec<_>>();
+                AppendIntegerGridRepeat(&mut result, &mut line, &entries, repetitions);
                 continue;
             }
             ConvertGridLineNameOrTrackSize(b, value, &mut result, &mut line, false, false);

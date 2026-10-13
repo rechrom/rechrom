@@ -8358,7 +8358,7 @@ mod tests {
     fn invalid_shorthands_are_transactional_and_basic_math_is_typed() {
         let parsed = ParseDeclarationList(
             &String::from(
-                "margin: 2px bad; width:calc(100% - 2px); color:red; --x:4px; grid-template-columns:repeat(2,1fr); padding:-1px",
+                "margin: 2px bad; width:calc(100% - 2px); color:red; --x:4px; grid-template-columns:repeat(auto-fill,20px); padding:-1px",
             ),
             CSSParserMode::kHTMLStandardMode,
         );

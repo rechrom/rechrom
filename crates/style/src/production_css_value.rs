@@ -1771,7 +1771,7 @@ impl CSSValueDispatch for ProductionCSSValueDispatch {
     type CSSImageSetValue = CSSImageSetValue;
     type CSSBracketedValueList = CSSBracketedValueList;
     type CSSGridAutoRepeatValue = UnavailableCSSValue;
-    type CSSGridIntegerRepeatValue = UnavailableCSSValue;
+    type CSSGridIntegerRepeatValue = CSSGridIntegerRepeatValue;
     type CSSAxisValue = CSSAxisValue;
     // cpp: css_identifier_value.cc:55-83
     fn CreateIdentifierFromLength(length: &Length) -> Rc<Value> {
@@ -1992,6 +1992,46 @@ pub fn grid_line_names(values: Vec<Rc<Value>>) -> Rc<Value> {
             list: CSSValueList::new(values, ListSeparator::Space),
         },
     )))
+}
+
+// cpp: css_grid_integer_repeat_value.{h,cc}. Keep the count expression typed
+// until computed-value conversion, and retain the parser's track-count clamp.
+pub struct CSSGridIntegerRepeatValue {
+    pub repetitions: Rc<Value>,
+    pub extra_clamp: u32,
+    pub list: CSSValueList,
+}
+impl CSSGridIntegerRepeatValue {
+    pub fn ClampRepetitions(&self, repetitions: u32) -> u32 {
+        repetitions
+            .min(layoutng_style::style::grid_area::K_GRID_MAX_TRACKS as u32)
+            .min(self.extra_clamp)
+    }
+}
+impl CSSValueSubclass for CSSGridIntegerRepeatValue {
+    fn CustomCSSText(&self) -> String {
+        String::from(
+            format!(
+                "repeat({}, {})",
+                self.repetitions.CssText().Utf8(),
+                self.list.CustomCSSText().Utf8()
+            )
+            .as_str(),
+        )
+    }
+    fn Equals(&self, other: &Self) -> bool {
+        self.repetitions == other.repetitions && self.list.Equals(&other.list)
+    }
+}
+impl CSSValueListSubclass<ProductionCSSValueDispatch> for CSSGridIntegerRepeatValue {
+    fn AsValueList(&self) -> &CSSValueList {
+        &self.list
+    }
+}
+impl CSSValueRandom for CSSGridIntegerRepeatValue {
+    fn HasRandomFunctions(&self) -> bool {
+        self.repetitions.HasRandomFunctions()
+    }
 }
 impl CSSValueUrl<()> for CSSValueList {
     fn ReResolveUrl(&self, document: &()) {

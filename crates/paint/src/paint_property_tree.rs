@@ -112,6 +112,8 @@ pub struct ClipPaintPropertyNode {
     pub rect: Option<PaintRect>,
     pub radii: PaintCornerRadii,
     pub clip_path: Vec<PaintPathCommand>,
+    /// A valid zero-command path clips everything; absence of a path does not.
+    pub clip_path_is_empty: bool,
     pub clip_path_children: Vec<PaintClipPathChild>,
     pub clip_path_even_odd: bool,
     pub clip_path_error: Option<String>,
@@ -242,6 +244,7 @@ impl Default for PropertyTreeState {
                 radii: PaintCornerRadii::default(),
                 clip_path: Vec::new(),
                 clip_path_children: Vec::new(),
+                clip_path_is_empty: false,
                 clip_path_even_odd: false,
                 clip_path_error: None,
                 pixel_moving_filter: None,
@@ -851,6 +854,7 @@ impl RetainedScrollSnapshotRebinder {
                 radii: input.radii,
                 clip_path: input.clip_path.clone(),
                 clip_path_children: input.clip_path_children.clone(),
+                clip_path_is_empty: input.clip_path_is_empty,
                 clip_path_even_odd: input.clip_path_even_odd,
                 clip_path_error: input.clip_path_error.clone(),
                 pixel_moving_filter: filter,
@@ -1044,6 +1048,7 @@ fn clip_state_change(
         && a.rect == b.rect
         && a.radii == b.radii
         && a.clip_path == b.clip_path
+        && a.clip_path_is_empty == b.clip_path_is_empty
         && a.clip_path_children == b.clip_path_children
         && a.clip_path_even_odd == b.clip_path_even_odd
         && a.clip_path_error == b.clip_path_error
@@ -1272,6 +1277,7 @@ mod retained_scroll_update_tests {
             radii: Default::default(),
             clip_path: Vec::new(),
             clip_path_children: Vec::new(),
+            clip_path_is_empty: false,
             clip_path_even_odd: false,
             clip_path_error: None,
             pixel_moving_filter: None,
@@ -1365,6 +1371,7 @@ mod retained_scroll_update_tests {
             radii: PaintCornerRadii::default(),
             clip_path: Vec::new(),
             clip_path_children: Vec::new(),
+            clip_path_is_empty: false,
             clip_path_even_odd: false,
             clip_path_error: None,
             pixel_moving_filter: None,

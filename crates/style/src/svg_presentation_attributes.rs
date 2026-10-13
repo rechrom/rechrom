@@ -3,6 +3,10 @@
 //! Source: Chromium 78ef49f74feba3d0dde852881feef92bbf86aad7,
 //! core/svg/svg_element.cc:319-412,579-602 and
 //! core/svg/svg_transformable_element.cc:45-49.
+//! Geometry presentation mappings: Chromium
+//! 6c1d401fcca5e1b0030563a90c2f2bba168e0c15, core/svg/svg_{rect,circle,
+//! ellipse,use,viewport_container}_element.cc constructors and
+//! SVGSVGElement::CollectStyleForPresentationAttribute.
 use crate::{
     css_property_names::{kNotKnownExposedPropertyBit, FindProperty},
     parser::{
@@ -12,15 +16,20 @@ use crate::{
     },
     production_css_value::PropertyValue,
 };
-use dom::persistent_document::{DOMNamespace, DOMNode};
+use dom::persistent_document::{DOMNamespace, PersistentDocument};
 
-pub(crate) fn CollectPresentationAttributes(node: &DOMNode) -> Vec<PropertyValue> {
+pub(crate) fn CollectPresentationAttributes(
+    document: &PersistentDocument,
+    index: usize,
+) -> Vec<PropertyValue> {
+    let node = document.Node(index);
     if node.Namespace() != DOMNamespace::kSVG {
         return Vec::new();
     }
-    // SVGElement's CSS-facing attribute map. Geometry attributes remain with
-    // the existing DOM/Layout owner; transform is the animated-property
-    // mapping supplied by SVGTransformableElement.
+    // SVGElement's common CSS-facing attribute map. Element-specific animated
+    // geometry properties join these hints below ordinary author declarations;
+    // the native cascade, including explicit auto/zero, owns the final value.
+    // Transform is supplied by SVGTransformableElement.
     const PROPERTIES: &[&str] = &[
         "alignment-baseline",
         "baseline-shift",
@@ -85,7 +94,8 @@ pub(crate) fn CollectPresentationAttributes(node: &DOMNode) -> Vec<PropertyValue
     let mut properties = Vec::new();
     for attribute in node.Attributes() {
         if !attribute.namespace_uri.is_empty()
-            || !PROPERTIES.contains(&attribute.local_name.as_str())
+            || !(PROPERTIES.contains(&attribute.local_name.as_str())
+                || IsGeometryPresentationAttribute(document, index, &attribute.local_name))
         {
             continue;
         }
@@ -112,6 +122,53 @@ pub(crate) fn CollectPresentationAttributes(node: &DOMNode) -> Vec<PropertyValue
         }
     }
     properties
+}
+
+// SVGAnimatedLength carries a CSSPropertyID only on these element-specific
+// properties. Do not turn similarly named attributes on arbitrary SVG elements
+// (or <use> width/height) into CSS declarations.
+fn IsGeometryPresentationAttribute(
+    document: &PersistentDocument,
+    index: usize,
+    name: &str,
+) -> bool {
+    match document.Node(index).Name() {
+        "rect" => matches!(name, "x" | "y" | "width" | "height" | "rx" | "ry"),
+        "circle" => matches!(name, "cx" | "cy" | "r"),
+        "ellipse" => matches!(name, "cx" | "cy" | "rx" | "ry"),
+        "use" => matches!(name, "x" | "y"),
+        "svg" => {
+            matches!(name, "x" | "y")
+                || (matches!(name, "width" | "height") && IsOutermostSVG(document, index))
+        }
+        _ => false,
+    }
+}
+
+// cpp: SVGElement::IsOutermostSVGSVGElement. This uses the DOM parent, not
+// flat-tree attachment: an SVG below foreignObject is a new outermost root,
+// while the synthetic SVG of a <use> instance remains an inner viewport.
+fn IsOutermostSVG(document: &PersistentDocument, index: usize) -> bool {
+    let Some(parent) = document.Node(index).Parent() else {
+        return true;
+    };
+    if document
+        .Node(parent)
+        .IsElement("foreignObject", DOMNamespace::kSVG)
+    {
+        return true;
+    }
+    let in_use_shadow_tree = document
+        .ShadowHost(document.TreeScopeRoot(index))
+        .is_some_and(|host| document.Node(host).IsElement("use", DOMNamespace::kSVG));
+    if in_use_shadow_tree
+        && document
+            .ParentOrShadowHostElement(index)
+            .is_some_and(|host| document.Node(host).Namespace() == DOMNamespace::kSVG)
+    {
+        return false;
+    }
+    document.Node(parent).Namespace() != DOMNamespace::kSVG
 }
 
 fn NormalizeSVGTransform(value: &str) -> String {
@@ -224,4 +281,126 @@ fn NormalizeSVGTransform(value: &str) -> String {
         "matrix({},{},{},{},{},{})",
         result[0], result[1], result[2], result[3], result[4], result[5]
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use foundation::{CSSPropertyID as P, Length};
+    use layoutng_style::style::computed_style::ComputedStyle;
+
+    fn node(document: &PersistentDocument, id: &str) -> usize {
+        (0..document.NodeCount())
+            .find(|&index| {
+                document
+                    .Node(index)
+                    .FindAttribute("id")
+                    .is_some_and(|attribute| attribute.value == id)
+            })
+            .unwrap()
+    }
+
+    fn native<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
+        let document = owner.GetDocument();
+        unsafe {
+            &*document
+                .ResolvedStyleFor(node(document, id))
+                .unwrap()
+                .native_style
+                .Get()
+        }
+    }
+
+    #[test]
+    fn svg_geometry_hints_are_element_specific_and_outermost_aware() {
+        let owner = html::html_parser::ParseHTML(
+            "<svg id=root x=1 y=2 width=100 height=80>\
+             <svg id=inner x=3 y=4 width=50 height=40></svg>\
+             <rect id=rect x=1 y=2 width=20 height=30 rx=4 ry=5 cx=99 />\
+             <circle id=circle cx=6 cy=7 r=8 width=99 />\
+             <ellipse id=ellipse cx=9 cy=10 rx=11 ry=12 r=99 />\
+             <use id=use x=13 y=14 width=99 height=99 />\
+             <g id=group x=99 y=99 width=99 height=99 />\
+             <foreignObject><svg id=foreign width=70 height=60></svg></foreignObject>\
+             </svg>",
+        );
+        let document = owner.GetDocument();
+        let ids = |id| {
+            CollectPresentationAttributes(document, node(document, id))
+                .iter()
+                .map(PropertyValue::PropertyID)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids("root"), vec![P::kX, P::kY, P::kWidth, P::kHeight]);
+        assert_eq!(ids("inner"), vec![P::kX, P::kY]);
+        assert_eq!(
+            ids("rect"),
+            vec![P::kX, P::kY, P::kWidth, P::kHeight, P::kRx, P::kRy]
+        );
+        assert_eq!(ids("circle"), vec![P::kCx, P::kCy, P::kR]);
+        assert_eq!(ids("ellipse"), vec![P::kCx, P::kCy, P::kRx, P::kRy]);
+        assert_eq!(ids("use"), vec![P::kX, P::kY]);
+        assert!(ids("group").is_empty());
+        assert_eq!(ids("foreign"), vec![P::kWidth, P::kHeight]);
+    }
+
+    #[test]
+    fn svg_geometry_hints_reach_native_cascade_without_overriding_css_auto_or_zero() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let mut owner = html::html_parser::ParseHTML(
+            "<svg id=root width=100 height=80>\
+             <rect id=rect x=3 y=4 width=20 height=30 rx=5 ry=6 />\
+             <rect id=auto width=20 height=30 rx=5 style='width:auto;height:0;rx:auto'/>\
+             <rect id=zero x=3 y=4 width=20 height=30 />\
+             <circle id=circle cx=25% cy=7 r=8 />\
+             <ellipse id=ellipse cx=9 cy=10 rx=11 ry=12 />\
+             <use id=use x=13 y=14 width=99 height=99 />\
+             </svg>",
+        );
+        owner
+            .GetDocumentMut()
+            .AppendStyleSheet(crate::ParseCSS("#zero { x:0; y:0; width:0; height:auto }"));
+        let media = crate::media_queries::MediaValuesCachedData {
+            media_type: foundation::String::from("screen"),
+            viewport_width: 800.,
+            viewport_height: 600.,
+            em_size: 16.,
+            ..Default::default()
+        };
+        let mut engine = crate::StyleEngine::new(&owner);
+        engine.Update(&mut owner, &media, &[]).unwrap();
+        assert!(
+            engine.Diagnostics().is_empty(),
+            "{:?}",
+            engine.Diagnostics()
+        );
+        assert_eq!(native(&owner, "root").Width(), &Length::Fixed(100));
+        assert_eq!(native(&owner, "root").Height(), &Length::Fixed(80));
+        let rect = native(&owner, "rect");
+        assert_eq!(rect.X(), &Length::Fixed(3));
+        assert_eq!(rect.Y(), &Length::Fixed(4));
+        assert_eq!(rect.Width(), &Length::Fixed(20));
+        assert_eq!(rect.Height(), &Length::Fixed(30));
+        assert_eq!(rect.Rx(), &Length::Fixed(5));
+        assert_eq!(rect.Ry(), &Length::Fixed(6));
+        let auto = native(&owner, "auto");
+        assert!(auto.Width().IsAuto());
+        assert_eq!(auto.Height(), &Length::Fixed(0));
+        assert!(auto.Rx().IsAuto());
+        let zero = native(&owner, "zero");
+        assert_eq!(zero.X(), &Length::Fixed(0));
+        assert_eq!(zero.Y(), &Length::Fixed(0));
+        assert_eq!(zero.Width(), &Length::Fixed(0));
+        assert!(zero.Height().IsAuto());
+        assert_eq!(native(&owner, "circle").Cx(), &Length::Percent(25.));
+        assert_eq!(native(&owner, "circle").Cy(), &Length::Fixed(7));
+        assert_eq!(native(&owner, "circle").R(), &Length::Fixed(8));
+        assert_eq!(native(&owner, "ellipse").Cx(), &Length::Fixed(9));
+        assert_eq!(native(&owner, "ellipse").Cy(), &Length::Fixed(10));
+        assert_eq!(native(&owner, "ellipse").Rx(), &Length::Fixed(11));
+        assert_eq!(native(&owner, "ellipse").Ry(), &Length::Fixed(12));
+        assert_eq!(native(&owner, "use").X(), &Length::Fixed(13));
+        assert_eq!(native(&owner, "use").Y(), &Length::Fixed(14));
+        assert!(native(&owner, "use").Width().IsAuto());
+    }
 }

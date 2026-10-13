@@ -104,7 +104,7 @@ fn append(items: &mut Vec<DisplayItem>, node: &FragmentNode, rect: PaintRect, co
 }
 
 fn walk(node: &FragmentNode, parent: Offset, items: &mut Vec<DisplayItem>) {
-    if node.paint.hidden || !node.paint.style.visible {
+    if node.paint.hidden || node.paint.svg_hidden_container || !node.paint.style.visible {
         return;
     }
     let style = &*node.paint.style;

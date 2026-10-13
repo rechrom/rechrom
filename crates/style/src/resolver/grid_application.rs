@@ -4,7 +4,9 @@
 use super::*;
 use crate::production_css_value::ListSeparator;
 use crate::resolver::position_repeat_application::ConvertLength;
-use crate::resolver::style_builder_converter::{GridTrackSizeInput, StyleBuilderConverter};
+use crate::resolver::style_builder_converter::{
+    AppendIntegerGridRepeat, GridTrackListEntry, GridTrackSizeInput, StyleBuilderConverter,
+};
 use foundation::{MakeGarbageCollected, Member};
 use layoutng_style::style::{
     computed_grid_template_areas::ComputedGridTemplateAreas,
@@ -161,8 +163,8 @@ fn Track(
 }
 
 // cpp: style_builder_converter.cc:1682-1833 ConvertGridTrackList, plain-track
-// branch plus bracketed line-name conversion. Repeat/subgrid retain their
-// separate typed collaborators; this path owns every non-repeat entry rather
+// branch plus bracketed line names and the shared integer-repeat converter.
+// Auto-repeat/subgrid retain explicit unsupported collaborators, rather
 // than reconstructing names from CSS text.
 fn TemplateTracks(
     id: CSSPropertyID,
@@ -175,6 +177,36 @@ fn TemplateTracks(
         ComputedGridTrackList::new(&GridTrackList::default(), AutoRepeatType::kNoAutoRepeat);
     let mut line = 0u32;
     for value in List(id, v)? {
+        if let CSSValuePayload::kGridIntegerRepeatClass(repeat) = value.Payload() {
+            let count =
+                typography_application::Scalar(id, b, &repeat.repetitions, root, media, false)?;
+            let repetitions = repeat.ClampRepetitions((count + 0.5).floor() as u32);
+            let entries = repeat
+                .list
+                .values
+                .iter()
+                .map(|entry| {
+                    if let CSSValuePayload::kGridLineNamesClass(names) = entry.Payload() {
+                        let names = names
+                            .list
+                            .values
+                            .iter()
+                            .map(|name| match name.Payload() {
+                                CSSValuePayload::kCustomIdentClass(name) => Ok(name.name.clone()),
+                                _ => Err(LonghandApplicationError::InvalidValue(id)),
+                            })
+                            .collect::<std::result::Result<Vec<_>, _>>()?;
+                        Ok(GridTrackListEntry::Names(names))
+                    } else {
+                        Track(id, b, entry, root, media).map(GridTrackListEntry::Track)
+                    }
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            if !AppendIntegerGridRepeat(&mut result, &mut line, &entries, repetitions) {
+                return Err(LonghandApplicationError::InvalidValue(id));
+            }
+            continue;
+        }
         if let CSSValuePayload::kGridLineNamesClass(names) = value.Payload() {
             for name in &names.list.values {
                 let CSSValuePayload::kCustomIdentClass(name) = name.Payload() else {

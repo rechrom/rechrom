@@ -207,10 +207,7 @@ fn ConsumeTrackSize<T: TokenStreamTokenizer>(
         return Ok(Some(result));
     }
     if stream.Peek().FunctionId() == Some(CSSValueID::kRepeat) {
-        return Err(unsupported(
-            id,
-            "ConsumeGridTrackSize/repeat typed function values",
-        ));
+        return Ok(None); // repeat is a track-list entry, never a track size.
     }
     ConsumeGridBreadth(id, stream, mode)
 }
@@ -273,7 +270,10 @@ fn ConsumeLineNames<T: TokenStreamTokenizer>(
                 ));
             }
             if token.GetType() != kIdentToken
-                || token.Id() == CSSValueID::kDefault
+                || matches!(
+                    token.Id(),
+                    CSSValueID::kDefault | CSSValueID::kAuto | CSSValueID::kSpan
+                )
                 || values::wide(token.Id()).is_some()
             {
                 return Err(invalid(id));
@@ -295,6 +295,56 @@ pub(super) fn ConsumeTracks<T: TokenStreamTokenizer>(
     no_repeat: bool,
 ) -> Result<Rc<Value>, PropertyParseError> {
     ConsumeTracksWithGridLanes(id, stream, mode, template, no_repeat, false)
+}
+
+// cpp: css_parsing_utils.cc:7105-7203 ConsumeGridTrackRepeatFunction,
+// standalone integer-repeat branch. Auto-repeat and subgrid remain explicit
+// unsupported collaborators rather than being expanded into plain tracks.
+fn ConsumeIntegerRepeat<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Rc<Value>, PropertyParseError> {
+    let result;
+    {
+        let mut args = RestoringBlockGuard::new(stream);
+        args.ConsumeWhitespace();
+        if matches!(
+            args.Peek().Id(),
+            CSSValueID::kAutoFill | CSSValueID::kAutoFit
+        ) {
+            return Err(unsupported(id, "CSSGridAutoRepeatValue"));
+        }
+        let repetitions = ConsumeLiteral(id, &mut args, mode, Grammar::Integer { minimum: 1 })?;
+        if args.Peek().GetType() != kCommaToken {
+            return Err(invalid(id));
+        }
+        args.ConsumeIncludingWhitespace();
+        let mut entries = Vec::new();
+        if args.Peek().GetType() == kLeftBracketToken {
+            entries.push(ConsumeLineNames(id, &mut args)?);
+        }
+        let mut tracks = 0u32;
+        while !args.AtEnd() {
+            entries.push(ConsumeTrackSize(id, &mut args, mode)?.ok_or_else(|| invalid(id))?);
+            tracks += 1;
+            if args.Peek().GetType() == kLeftBracketToken {
+                entries.push(ConsumeLineNames(id, &mut args)?);
+            }
+        }
+        if tracks == 0 || !args.Release() {
+            return Err(invalid(id));
+        }
+        result = Rc::new(Value::new(CSSValuePayload::kGridIntegerRepeatClass(
+            values::CSSGridIntegerRepeatValue {
+                repetitions,
+                extra_clamp: layoutng_style::style::grid_area::K_GRID_MAX_TRACKS as u32 / tracks,
+                list: values::CSSValueList::new(entries, values::ListSeparator::Space),
+            },
+        )));
+    }
+    stream.ConsumeWhitespace();
+    Ok(result)
 }
 // cpp: css_parsing_utils.cc:7420-7425,7472-7479. The same track-list consumer
 // stops at direction/string components only for the GridLanes shorthand.
@@ -320,8 +370,12 @@ pub(super) fn ConsumeTracksWithGridLanes<T: TokenStreamTokenizer>(
         {
             break;
         }
-        if no_repeat && stream.Peek().FunctionId() == Some(CSSValueID::kRepeat) {
-            return Err(invalid(id));
+        if stream.Peek().FunctionId() == Some(CSSValueID::kRepeat) {
+            if no_repeat || !template {
+                return Err(invalid(id));
+            }
+            tracks.push(ConsumeIntegerRepeat(id, stream, mode)?);
+            continue;
         }
         if stream.Peek().GetType() == kLeftBracketToken {
             if !template {

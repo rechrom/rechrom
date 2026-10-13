@@ -117,7 +117,10 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let text_combine = fragment.paint.text_combine.is_some();
-        if (!fragment.paint.has_source && !text_combine) || !fragment.paint.style.visible {
+        if fragment.paint.svg_hidden_container
+            || (!fragment.paint.has_source && !text_combine)
+            || !fragment.paint.style.visible
+        {
             return;
         }
         if text_combine {
@@ -169,7 +172,10 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // decoration. The LayoutBox fragment storage ABI does not make a
         // nested SVG viewport into a CSS border/background box.
         if IsBackgroundPhase(phase)
-            && !matches!(fragment.paint.source_kind, NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer)
+            && !matches!(
+                fragment.paint.source_kind,
+                NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
+            )
             && fragment.kind == FragmentKind::kBox
             && fragment.paint.establishes_paint_state
         {
@@ -1239,7 +1245,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     phase,
                 )
             };
-            self.context.borrow_mut().BeginEscapableGeometry(self.node, None);
+            self.context
+                .borrow_mut()
+                .BeginEscapableGeometry(self.node, None);
             let _drawing = DrawingRecorder::with_client(
                 self.context,
                 self.node,
@@ -1330,7 +1338,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItemIdType::kDocumentBackground
             };
             if !fixed {
-                self.context.borrow_mut().BeginEscapableGeometry(self.node, None);
+                self.context
+                    .borrow_mut()
+                    .BeginEscapableGeometry(self.node, None);
             }
             let drawing = DrawingRecorder::with_client(
                 self.context,
@@ -1572,7 +1582,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // so enter the same native overflow clip in the flat record wrapper.
         // Fixed canvas layers retain border-box properties and their clip.
         if !fixed {
-            self.context.borrow_mut().BeginEscapableGeometry(self.node, None);
+            self.context
+                .borrow_mut()
+                .BeginEscapableGeometry(self.node, None);
         }
         let _drawing = DrawingRecorder::with_client(
             self.context,
@@ -1646,7 +1658,6 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if !fixed {
             self.context.borrow_mut().EndEscapableGeometry(self.node);
         }
-
     }
 
     // box_painter_base.cc:1563-1605.  A text-clipped background is an
@@ -2040,10 +2051,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     height: tile.height,
                 },
                 f64::from(effective_zoom),
-                fragment
-                    .paint
-                    .resources
-                    .as_deref(),
+                fragment.paint.resources.as_deref(),
                 (!paint_style.color_scheme_flags_is_normal)
                     .then_some(u8::from(paint_style.used_dark_color_scheme)),
             )
@@ -4123,10 +4131,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 height: destination.height,
             },
             f64::from(style.effective_zoom),
-            fragment
-                .paint
-                .resources
-                .as_deref(),
+            fragment.paint.resources.as_deref(),
             (!style.style.color_scheme_flags_is_normal)
                 .then_some(u8::from(style.style.used_dark_color_scheme)),
         );

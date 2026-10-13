@@ -78,7 +78,15 @@ impl ::compositor::CompositorViewport for Viewport {
         }
     }
 }
+pub(crate) fn memory_diagnostics_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("RECHROM_MEMORY_DIAGNOSTICS").is_some())
+}
+pub(crate) fn diagnostic_time_ns() -> u128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos())
+}
 pub struct WindowFrame {
+    pub provenance: Option<compositor::FrameProvenance>,
     pub viewport: Viewport,
     pub toolbar: RasterSurface,
     pub content: RasterSurface,
@@ -148,8 +156,20 @@ pub enum Command {
     Stop,
     Wake(EngineWakeToken),
     BeginFrame(NativeBeginFrame),
+    CompositorScroll { document: (u64, u64), update: ::compositor::MainThreadScrollDelta },
 }
 impl Command {
+    fn diagnostic_name(&self) -> &'static str {
+        match self {
+            Self::Navigate(_) => "Host.Navigate", Self::Resize(_) => "Host.Resize",
+            Self::VSyncDisplayChanged(_) => "Host.VSyncDisplayChanged", Self::Redraw => "Host.Redraw",
+            Self::Input(_) | Self::QueuedInput { .. } => "Host.Input", Self::FocusAddress => "Host.FocusAddress",
+            Self::SetActive(_) => "Host.SetActive", Self::Reload => "Host.Reload", Self::Evaluate { .. } => "Host.Evaluate",
+            Self::NewTab => "Host.NewTab", Self::CloseActiveTab => "Host.CloseActiveTab", Self::CycleTab(_) => "Host.CycleTab",
+            Self::Back => "Host.Back", Self::Forward => "Host.Forward", Self::Stop => "Host.Stop",
+            Self::Wake(_) => "Host.Wake", Self::BeginFrame(_) => "Host.BeginFrame", Self::CompositorScroll { .. } => "Host.CompositorScroll",
+        }
+    }
     fn input(&self) -> Option<&InputEvent> {
         match self {
             Self::Input(input) | Self::QueuedInput { input, .. } => Some(input),
@@ -306,10 +326,21 @@ pub fn spawn(
     let (page_sender, page_receiver) = mpsc::channel();
     let begin_frame_page = page_sender.clone();
     let begin_frame_demand = page_frame_demand.clone();
-    let begin_main_frame: crate::presentation_runtime::BeginMainFrameClient =
-        Arc::new(move |frame| {
-            if begin_frame_demand.lock().unwrap().TakeFor(frame) {
+    let main_thread: crate::presentation_runtime::MainThreadClient =
+        Arc::new(move |event| match event {
+            ::compositor::MainThreadEvent::BeginFrame { frame, document, scroll } => {
+                if let (Some(document), Some(update)) = (document, scroll) {
+                    let _ = begin_frame_page.send(Command::CompositorScroll { document, update });
+                }
+                // Every request gets an explicit completion, including a
+                // clean frame, parser deferral and navigation paint holding.
+                begin_frame_demand.lock().unwrap().TakeFor(frame);
                 let _ = begin_frame_page.send(Command::BeginFrame(frame));
+            }
+            ::compositor::MainThreadEvent::Wheel { event, queued_at, samples } => {
+                let _ = begin_frame_page.send(Command::QueuedInput {
+                    input: InputEvent::Wheel(event), queued_at, samples,
+                });
             }
         });
     let compositor = crate::presentation_runtime::Spawn(
@@ -318,7 +349,7 @@ pub fn spawn(
         output.clone(),
         input_frames,
         display_frames,
-        begin_main_frame,
+        main_thread,
     )?;
     let begin_frame_compositor = compositor.clone();
     compositor_frames.SetClient(Arc::new(move |frame| {
@@ -338,29 +369,31 @@ pub fn spawn(
                         let _ = compositor_dispatch.send(
                             crate::presentation_runtime::CompositorCommand::BeginFrame(*frame),
                         );
-                        if !page_frame_demand.lock().unwrap().TakeFor(*frame) {
-                            continue;
-                        }
+                        continue;
                     }
                     Command::QueuedInput {
                         input: InputEvent::Wheel(event),
                         queued_at,
-                        ..
+                        samples,
                     } => {
                         let _ = compositor_dispatch.send(
                             crate::presentation_runtime::CompositorCommand::Wheel {
                                 event: event.clone(),
                                 queued_at: *queued_at,
+                                samples: *samples,
                             },
                         );
+                        continue;
                     }
                     Command::Input(InputEvent::Wheel(event)) => {
                         let _ = compositor_dispatch.send(
                             crate::presentation_runtime::CompositorCommand::Wheel {
                                 event: event.clone(),
                                 queued_at: Instant::now(),
+                                samples: 1,
                             },
                         );
+                        continue;
                     }
                     Command::Resize(viewport) => {
                         let _ = compositor_dispatch.send(
@@ -412,6 +445,12 @@ pub fn spawn(
 }
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    // Preserve the engine's typed unsupported boundary at the application
+    // thread handoff. A generic non-string panic hides the actual capability
+    // gap (including SVG use features that deliberately reject rendering).
+    if let Some(error) = payload.downcast_ref::<foundation::UnsupportedLayout>() {
+        return format!("unsupported layout: {error}");
+    }
     if let Some(error) = payload.downcast_ref::<dom::error::DOMException>() {
         return format!("browser thread {:?}: {}", error.kind, error.message);
     }
@@ -463,6 +502,7 @@ fn run(
             }
         }
         let now = Instant::now();
+        QueueRequestedNativeGC(&mut event_loop, &mut scheduling, now);
         let event_loop_deadline = match event_loop.NextWakeRequest(now) {
             WakeRequest::Now => Some(now),
             WakeRequest::At(deadline) => Some(deadline),
@@ -490,6 +530,9 @@ fn run(
         match receive_command(&receiver, &mut pending, timeout) {
             Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Ok(Command::BeginFrame(frame)) => {
+                if browser_tracing::diagnostics::enabled() {
+                    eprintln!("owner-frame-received time_ns={} source={} sequence={}", diagnostic_time_ns(), frame.args.source_id, frame.args.sequence_number);
+                }
                 event_loop.Apply(
                     EventLoopMutation::BeginMainFrame {
                         context: ExecutionContextId(1),
@@ -569,6 +612,7 @@ fn run(
         let request_foreground = executor.request_foreground;
         let request_background = executor.request_background;
         drop(executor);
+        QueueRequestedNativeGC(&mut event_loop, &mut scheduling, Instant::now());
         if state.late_scroll.is_none() && request_foreground {
             QueueForegroundTurn(&mut event_loop, &mut scheduling, Instant::now());
         }
@@ -583,6 +627,7 @@ enum BrowserEventLoopTask {
     Command(Command),
     Foreground,
     Background,
+    NativeGC { queued_at: Instant },
 }
 
 #[derive(Default)]
@@ -590,13 +635,15 @@ struct BrowserEventLoopScheduling {
     next_task_id: u64,
     foreground_queued: bool,
     background_queued: bool,
+    native_gc_queued: bool,
 }
 
 fn BrowserTaskPriority(command: &Command) -> TaskPriority {
     if command.input().is_some()
         || matches!(
             command,
-            Command::FocusAddress
+            Command::CompositorScroll { .. }
+                | Command::FocusAddress
                 | Command::Navigate(_)
                 | Command::Reload
                 | Command::NewTab
@@ -653,6 +700,23 @@ fn QueueForegroundTurn(
     );
 }
 
+// cppgc precise GC and V8 marking jobs post a coalesced, non-nestable
+// foreground task. Background-only service can starve behind a loading stream.
+// EventLoopEngine already serializes complete tasks and gives input/rendering
+// priority over this Normal FIFO; no Page or GC policy enters that engine.
+fn QueueRequestedNativeGC(
+    event_loop: &mut EventLoopEngine<BrowserEventLoopTask, NativeBeginFrame>,
+    scheduling: &mut BrowserEventLoopScheduling,
+    now: Instant,
+) {
+    if scheduling.native_gc_queued || !foundation::IsLayoutHeapCollectionRequested() {
+        return;
+    }
+    scheduling.native_gc_queued = true;
+    QueueBrowserTask(event_loop, scheduling, TaskPriority::Normal,
+        BrowserEventLoopTask::NativeGC { queued_at: now }, None, now);
+}
+
 fn QueueBackgroundTurn(
     event_loop: &mut EventLoopEngine<BrowserEventLoopTask, NativeBeginFrame>,
     scheduling: &mut BrowserEventLoopScheduling,
@@ -690,6 +754,15 @@ impl EventLoopExecutor<BrowserEventLoopTask, NativeBeginFrame> for BrowserEventL
         _priority: TaskPriority,
         task: BrowserEventLoopTask,
     ) -> io::Result<()> {
+        let observe = browser_tracing::enabled() || browser_tracing::diagnostics::enabled() || cfg!(feature = "allocation_diagnostics");
+        let _context = observe.then(|| browser_tracing::scope(browser_tracing::Context { task_id: browser_tracing::next_id(), ..Default::default() }));
+        let name = match &task {
+            BrowserEventLoopTask::Command(command) => command.diagnostic_name(),
+            BrowserEventLoopTask::Foreground => "Host.Foreground",
+            BrowserEventLoopTask::Background => "Host.Background",
+            BrowserEventLoopTask::NativeGC { .. } => "Host.NativeGC",
+        };
+        let _execution = browser_tracing::span("owner_task", name);
         match task {
             BrowserEventLoopTask::Command(command) => {
                 dispatch_host_command(self.state, command, self.receiver, self.pending)?;
@@ -704,6 +777,20 @@ impl EventLoopExecutor<BrowserEventLoopTask, NativeBeginFrame> for BrowserEventL
                 })?;
                 self.state.publish()?;
                 self.request_background = true;
+            }
+            BrowserEventLoopTask::NativeGC { queued_at } => {
+                self.scheduling.native_gc_queued = false;
+                if !native_command_waiting(self.receiver, self.pending, self.state.has_priority_frame()) {
+                    if memory_diagnostics_enabled() {
+                        eprintln!("native-gc-task time_ns={} queue_ms={:.3} requested={}",
+                            diagnostic_time_ns(), queued_at.elapsed().as_secs_f64() * 1000.0,
+                            foundation::IsLayoutHeapCollectionRequested());
+                    }
+                    self.state.collect_native_heap_if_requested();
+                }
+                // A priority yield leaves the heap request intact. The host's
+                // post-turn request poll requeues one task; a stale task after
+                // another scope collected is a requested-only no-op.
             }
             BrowserEventLoopTask::Background => {
                 self.scheduling.background_queued = false;
@@ -727,6 +814,12 @@ impl EventLoopExecutor<BrowserEventLoopTask, NativeBeginFrame> for BrowserEventL
         _context: ExecutionContextId,
         frame: NativeBeginFrame,
     ) -> io::Result<()> {
+        let observe = browser_tracing::enabled() || browser_tracing::diagnostics::enabled() || cfg!(feature = "allocation_diagnostics");
+        let _context = observe.then(|| browser_tracing::scope(browser_tracing::Context {
+            task_id: browser_tracing::next_id(), source_id: frame.args.source_id,
+            frame_id: frame.args.sequence_number, ..Default::default()
+        }));
+        let _execution = browser_tracing::span("owner_frame", "Host.UpdateRendering");
         dispatch_host_command(
             self.state,
             Command::BeginFrame(frame),
@@ -1485,7 +1578,9 @@ impl BrowserState {
     #[cfg(test)]
     fn tick(&mut self) -> io::Result<()> {
         self.tick_foreground(|| false)?;
-        self.tick_background()
+        self.tick_background()?;
+        self.collect_native_heap_if_requested();
+        Ok(())
     }
     fn has_pending_frame_input(&self) -> bool {
         self.toolbar.HasPendingFrameInput()
@@ -1527,10 +1622,31 @@ impl BrowserState {
                 page.HasPendingFrameInput() && !page.HasPendingWheelFrameInput()
             })
     }
+    fn report_memory_diagnostics(&self) {
+        let _census = browser_tracing::span("diagnostic", "Host.MemoryCensus");
+        let _allocation = browser_tracing::diagnostics::AllocationScope::new(17);
+        if !memory_diagnostics_enabled() { return; }
+        thread_local! { static LAST: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) }; }
+        let now = Instant::now();
+        if !LAST.with(|last| {
+            if last.get().is_some_and(|previous| now.duration_since(previous) < Duration::from_secs(1)) { return false; }
+            last.set(Some(now)); true
+        }) { return; }
+        let time_ns = diagnostic_time_ns();
+        crate::memory_diagnostics::report_allocator(time_ns, "sample");
+        eprintln!("native-heap-memory time_ns={} active_loading={} usage={:?}", time_ns,
+            self.tabs.active.page.as_ref().is_some_and(Page::IsLoading), foundation::LayoutHeapMemoryDiagnostics());
+        if let Some(page) = &self.tabs.active.page {
+            eprintln!("page-memory time_ns={} tab={} generation={} usage={:?}", time_ns,
+                self.tabs.active.id, self.tabs.active.document_generation, page.MemoryDiagnostics());
+        }
+        eprintln!("toolbar-memory time_ns={} usage={:?}", time_ns, self.toolbar.MemoryDiagnostics());
+    }
     fn tick_foreground(
         &mut self,
         mut native_input_waiting: impl FnMut() -> bool,
     ) -> io::Result<()> {
+        self.report_memory_diagnostics();
         let _trace = browser_tracing::span("task", "ForegroundTasks");
         let started = Instant::now();
         {
@@ -1758,6 +1874,7 @@ impl BrowserState {
                     toolbar_height: TOOLBAR_HEIGHT,
                     frame_time: Instant::now(),
                     signature,
+                    compositor_scroll_sequence: page.map_or(0, |frame| frame.compositor_scroll_sequence),
                     toolbar: toolbar.display_items.clone(),
                     content,
                     metadata: drag_regions,
@@ -1856,6 +1973,11 @@ impl BrowserState {
                 .produce_frame_lifecycle(args, true)
                 .and_then(|_| self.send_compositor_snapshot());
             self.handling_begin_frame = false;
+            if let Some(sender) = self.presentation.Compositor() {
+                let _ = sender.send(crate::presentation_runtime::CompositorCommand::MainFrameComplete {
+                    source_id: args.source_id, sequence_number: args.sequence_number,
+                });
+            }
             let finished = Instant::now();
             browser_tracing::interval(
                 "frame",
@@ -2272,10 +2394,40 @@ impl BrowserState {
             }
         }
     }
+    fn collect_native_heap_if_requested(&mut self) {
+        let mut trace = browser_tracing::span("task", "NativeHeapCollection");
+        // Service heap pressure after Page tasks and their native scopes unwind.
+        // Loading is not a no-GC scope: cppgc/V8's loading optimization is
+        // bounded and allocation-pressure overridable (see docs/native-gc-loading.md).
+        // The heap owns request policy. A coalesced foreground task supplies
+        // an owner-thread FIFO opportunity after input/frame priority; later
+        // normal loading tasks cannot keep overtaking the requested service.
+        let gc_diagnostic = (memory_diagnostics_enabled()
+            && foundation::IsLayoutHeapCollectionRequested())
+            .then(|| {
+                let time_ns = diagnostic_time_ns();
+                eprintln!("native-heap-before-gc time_ns={} active_loading={} usage={:?}",
+                    time_ns, self.tabs.active.page.as_ref().is_some_and(Page::IsLoading),
+                    foundation::LayoutHeapMemoryDiagnostics());
+                crate::memory_diagnostics::report_allocator(time_ns, "before_gc");
+                Instant::now()
+            });
+        if foundation::CollectLayoutHeapIfRequested() {
+            trace.set("layout_gc", 1.0);
+            if let Some(started) = gc_diagnostic {
+                let pause_ms = started.elapsed().as_secs_f64() * 1000.0;
+                let time_ns = diagnostic_time_ns();
+                eprintln!("native-heap-after-gc time_ns={} active_loading={} pause_ms={:.3} usage={:?}",
+                    time_ns, self.tabs.active.page.as_ref().is_some_and(Page::IsLoading),
+                    pause_ms, foundation::LayoutHeapMemoryDiagnostics());
+                crate::memory_diagnostics::report_allocator(time_ns, "after_gc");
+            }
+        }
+    }
     fn tick_background(&mut self) -> io::Result<()> {
+        self.report_memory_diagnostics();
         if self.tabs.background.is_empty()
             && (self.retired_documents.is_empty() || self.last_frame.is_none())
-            && !foundation::IsLayoutHeapCollectionRequested()
         {
             return Ok(());
         }
@@ -2302,13 +2454,6 @@ impl BrowserState {
                 drop(retired);
                 foundation::RequestLayoutHeapCollection();
             }
-        }
-        // Keep stop-the-world tracing out of loading, input and frame work.
-        // The heap itself owns the allocation-pressure policy; the application
-        // layer merely supplies the low-priority owner-thread opportunity.
-        let active_loading = self.tabs.active.page.as_ref().is_some_and(Page::IsLoading);
-        if !active_loading && foundation::CollectLayoutHeapIfRequested() {
-            trace.set("layout_gc", 1.0);
         }
         if std::env::var_os("BROWSER_APP_TRACE_LOADING").is_some()
             && started.elapsed() >= Duration::from_millis(16)
@@ -3019,6 +3164,14 @@ impl BrowserState {
                 self.update_active_pages()
             }
             Command::BeginFrame(args) => self.begin_frame(args),
+            Command::CompositorScroll { document, update } => {
+                if document == (self.tabs.active.id, self.tabs.active.document_generation) {
+                    if let Some(page) = &mut self.tabs.active.page {
+                        page.ApplyCompositorScrollDelta(update.sequence, update.owner_client_id, update.delta)?;
+                    }
+                }
+                Ok(())
+            }
             Command::VSyncDisplayChanged(display_id) => {
                 if let Some(source) = &self.frame_source {
                     source.set_display(display_id);
@@ -3854,6 +4007,7 @@ impl BrowserState {
         self.presented_sequence = self.presented_sequence.wrapping_add(1);
         self.failed_frame = None;
         self.output.publish(WindowFrame {
+            provenance: None,
             viewport: self.viewport,
             toolbar: toolbar_surface,
             content,
@@ -4263,6 +4417,243 @@ input:focus{border-color:#15919d}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requested_native_gc_survives_loading_yields_roots_and_retirement() {
+        std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
+            use std::{cell::{Cell, RefCell}, rc::Rc};
+            use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
+            struct Response { response: Option<URLResponse>, release: Option<Rc<Cell<bool>>> }
+            impl URLLoadOperation for Response {
+                fn Poll(&mut self) -> io::Result<Option<URLResponse>> {
+                    if self.release.as_ref().is_some_and(|release| !release.get()) {
+                        return Ok(None);
+                    }
+                    Ok(self.response.take())
+                }
+            }
+            struct Loader(Rc<Cell<bool>>);
+            impl URLLoader for Loader {
+                fn Load(&mut self, request: &URLRequest) -> io::Result<Box<dyn URLLoadOperation>> {
+                    let script = request.url.ends_with("delayed.js");
+                    let body = if script {
+                        b"window.resourceCompleted=true;document.getElementById('marker').style.background='lime';void document.body.offsetHeight;".to_vec()
+                    } else {
+                        format!("<!doctype html><style>body{{margin:0}}.card{{height:8px;padding-left:1px}}.a .card{{padding-left:2px}}#marker{{position:fixed;top:0;left:0;width:50px;height:50px;background:red}}</style><div id=marker></div>{}<script src=delayed.js></script>",
+                            "<div class=card>row</div>".repeat(240)).into_bytes()
+                    };
+                    Ok(Box::new(Response { response: Some(URLResponse {
+                        final_url: request.url.clone(), status_code: 200,
+                        mime_type: if script { "text/javascript" } else { "text/html" }.into(),
+                        body, ..Default::default()
+                    }), release: script.then(|| self.0.clone()) }))
+                }
+            }
+            struct XHR;
+            impl xhr_transport::XMLHttpRequestTransport for XHR {
+                fn Start(&mut self, _: &xhr_transport::XMLHttpRequestData)
+                    -> io::Result<Box<dyn xhr_transport::XMLHttpRequestOperation>> {
+                    Err(io::Error::other("unexpected loading fixture XHR"))
+                }
+            }
+            fn page(release: Rc<Cell<bool>>) -> Page {
+                let assembly = browser::CreateLayoutAssembly();
+                let constraints = browser::CreateBrowserConstraints(320, 160);
+                let decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+                let mut page = Page::Create(Rc::new(RefCell::new(Loader(release))),
+                    Rc::new(RefCell::new(image_decoder::skia_image_decoder::SkiaImageDecoder)),
+                    Rc::new(RefCell::new(decoder)), constraints,
+                    Some(browser::page::ScriptEnvironment {
+                        runtime: Box::new(javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(8 * 1024 * 1024)),
+                        xhr: Box::new(XHR), user_agent: "loading-gc-fixture".into(),
+                    }), None);
+                page.Open("https://loading-gc.test/", 16384, 4096).unwrap();
+                for _ in 0..12 { page.RunTask().unwrap(); }
+                assert!(page.IsLoading());
+                assert!(page.CurrentFrame().is_some());
+                page
+            }
+            fn pixels(page: &Page, artifact: &Arc<paint::paint_engine::PaintArtifact>) -> Vec<u32> {
+                let mut pixels = vec![0; 320 * 160];
+                page.PaintArtifactInto(artifact, 320, 160, 1.0, &mut pixels,
+                    renderer::PixelFormat::Rgba8888, 320).unwrap();
+                pixels
+            }
+            let release = Rc::new(Cell::new(false));
+            let output = Output { mailbox: Arc::new(Mutex::new(None)), notify: Arc::new(|_| {}) };
+            let mut state = BrowserState::new(Viewport { width: 320, height: 248, scale: 1.0 }, output).unwrap();
+            state.tabs.active.page = Some(page(release.clone()));
+            state.tabs.add();
+            state.tabs.active.page = Some(page(release.clone()));
+            let active = state.tabs.active.page.as_mut().unwrap();
+            let held = active.CurrentFrame().unwrap().display_items.clone();
+            let held_fragments = active.CurrentFrame().unwrap().fragments.clone();
+            let held_pixels = pixels(active, &held);
+            let held_style = {
+                let owner = active.Document();
+                let document = owner.GetDocument();
+                let marker = document.FindNodeById(find_id(active, "marker").unwrap()).unwrap();
+                document.ResolvedStyleFor(marker).unwrap().native_style.clone()
+            };
+            let held_display = unsafe { &*held_style.Get() }.Display();
+            // Actual production style/layout work raises the existing allocation
+            // request. Neither RequestLayoutHeapCollection nor a testing collector
+            // is used to manufacture this loading-time regression.
+            for turn in 0..120 {
+                let source = format!("document.body.className='{}';var cards=document.querySelectorAll('.card');for(var i=0;i<20;i++)cards[i].textContent='row '+i+' / '+{};void document.body.offsetHeight;", if turn % 2 == 0 { "a" } else { "" }, turn);
+                assert!(active.Evaluate(&source, "test:loading-pressure").unwrap().Succeeded());
+                if foundation::IsLayoutHeapCollectionRequested() { break; }
+            }
+            let before = foundation::LayoutHeapMemoryDiagnostics();
+            assert!(before.collection_requested);
+            assert_eq!(before.active_scopes, 0);
+            assert!(state.tabs.active.page.as_ref().unwrap().IsLoading());
+            assert!(state.tabs.background[0].page.as_ref().unwrap().IsLoading());
+            let (sender, receiver) = mpsc::channel();
+            sender.send(Command::Input(InputEvent::Mouse(MouseEvent::default()))).unwrap();
+            let mut pending = VecDeque::new();
+            let mut scheduling = BrowserEventLoopScheduling::default();
+            let mut executor = BrowserEventLoopExecutor { state: &mut state,
+                receiver: &receiver, pending: &mut pending, scheduling: &mut scheduling,
+                request_foreground: false, request_background: false };
+            executor.RunTask(ExecutionContextId(1), TaskPriority::Normal,
+                BrowserEventLoopTask::NativeGC { queued_at: Instant::now() }).unwrap();
+            assert_eq!(foundation::LayoutHeapMemoryDiagnostics().collections_completed,
+                before.collections_completed);
+            assert!(foundation::IsLayoutHeapCollectionRequested());
+            drop(executor);
+            assert!(matches!(pending.pop_front(), Some(Command::Input(_))));
+            // A queued priority frame retains the same guard as queued input.
+            state.scroll_active = true;
+            let now = Instant::now();
+            sender.send(Command::BeginFrame(BeginFrameArgs { source_id: 9, sequence_number: 1,
+                frame_time: now, deadline: now + Duration::from_millis(16),
+                interval: Duration::from_millis(16) }.into())).unwrap();
+            let mut executor = BrowserEventLoopExecutor { state: &mut state,
+                receiver: &receiver, pending: &mut pending, scheduling: &mut scheduling,
+                request_foreground: false, request_background: false };
+            executor.RunTask(ExecutionContextId(1), TaskPriority::Normal,
+                BrowserEventLoopTask::NativeGC { queued_at: now }).unwrap();
+            assert!(foundation::IsLayoutHeapCollectionRequested());
+            assert_eq!(foundation::LayoutHeapMemoryDiagnostics().collections_completed,
+                before.collections_completed);
+            drop(executor);
+            assert!(matches!(pending.pop_front(), Some(Command::BeginFrame(_))));
+            state.scroll_active = false;
+            let mut executor = BrowserEventLoopExecutor { state: &mut state,
+                receiver: &receiver, pending: &mut pending, scheduling: &mut scheduling,
+                request_foreground: false, request_background: false };
+            executor.RunTask(ExecutionContextId(1), TaskPriority::Normal,
+                BrowserEventLoopTask::NativeGC { queued_at: Instant::now() }).unwrap();
+            drop(executor);
+            let after = foundation::LayoutHeapMemoryDiagnostics();
+            assert!(after.collections_completed > before.collections_completed);
+            assert!(after.last_after_bytes < after.last_before_bytes);
+            assert!(state.tabs.active.page.as_ref().unwrap().IsLoading());
+            assert_eq!(unsafe { &*held_style.Get() }.Display(), held_display);
+            assert!(!held_fragments.children.is_empty());
+            assert_eq!(pixels(state.tabs.active.page.as_ref().unwrap(), &held), held_pixels);
+            // Repeated pressure cannot wait for Background while ordinary
+            // loading work remains continuously ready. Use the real FIFO engine,
+            // request coalescer, task payload and production executor together.
+            let mut event_loop = EventLoopEngine::New();
+            QueueBackgroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+            for round in 0..3 {
+                let active = state.tabs.active.page.as_mut().unwrap();
+                for turn in 0..120 {
+                    let source = format!("document.body.style.paddingLeft='{}px';void document.body.offsetHeight;", (turn + round) % 2);
+                    assert!(active.Evaluate(&source, "test:repeated-loading-pressure").unwrap().Succeeded());
+                    if foundation::IsLayoutHeapCollectionRequested() { break; }
+                }
+                assert!(foundation::IsLayoutHeapCollectionRequested());
+                let before = foundation::LayoutHeapMemoryDiagnostics().collections_completed;
+                QueueForegroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+                let token_before = scheduling.next_task_id;
+                for _ in 0..8 {
+                    QueueRequestedNativeGC(&mut event_loop, &mut scheduling, Instant::now());
+                }
+                assert_eq!(scheduling.next_task_id, token_before + 1, "coalesce one request task");
+                let mut collected = false;
+                for _ in 0..16 {
+                    // Replenish normal work before every turn, never making the
+                    // Background queue eligible as a way to pass this test.
+                    QueueForegroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+                    let mut executor = BrowserEventLoopExecutor { state: &mut state,
+                        receiver: &receiver, pending: &mut pending, scheduling: &mut scheduling,
+                        request_foreground: false, request_background: false };
+                    event_loop.OnWake(Instant::now(), &mut executor).unwrap();
+                    drop(executor);
+                    QueueRequestedNativeGC(&mut event_loop, &mut scheduling, Instant::now());
+                    if foundation::LayoutHeapMemoryDiagnostics().collections_completed > before {
+                        collected = true;
+                        break;
+                    }
+                }
+                assert!(collected, "normal loading flood starved the requested foreground GC task");
+                assert!(scheduling.background_queued, "GC must not promote general Background work");
+                assert!(state.tabs.active.page.as_ref().unwrap().IsLoading());
+                assert_eq!(pixels(state.tabs.active.page.as_ref().unwrap(), &held), held_pixels);
+            }
+            // Continue another loading document's work after collection, then
+            // cancel/retire it while the surviving document is still loading.
+            assert!(state.tabs.background[0].page.as_mut().unwrap().Evaluate(
+                "document.body.style.height='2400px';void document.body.offsetHeight;",
+                "test:background-after-gc").unwrap().Succeeded());
+            let background = state.tabs.background[0].page.as_ref().unwrap();
+            let retired_artifact = background.CurrentFrame().unwrap().display_items.clone();
+            let retired_pixels = pixels(background, &retired_artifact);
+            let retired_style = {
+                let owner = background.Document();
+                let document = owner.GetDocument();
+                let marker = document.FindNodeById(find_id(background, "marker").unwrap()).unwrap();
+                document.ResolvedStyleFor(marker).unwrap().native_style.clone()
+            };
+            let retired_display = unsafe { &*retired_style.Get() }.Display();
+            state.publish().unwrap();
+            let mut retired = state.tabs.background[0].page.take().unwrap();
+            retired.StopLoading();
+            state.retired_documents.push_back(retired);
+            state.tick_background().unwrap();
+            let mut executor = BrowserEventLoopExecutor { state: &mut state,
+                receiver: &receiver, pending: &mut pending, scheduling: &mut scheduling,
+                request_foreground: false, request_background: false };
+            executor.RunTask(ExecutionContextId(1), TaskPriority::Normal,
+                BrowserEventLoopTask::NativeGC { queued_at: Instant::now() }).unwrap();
+            drop(executor);
+            assert!(state.retired_documents.is_empty());
+            assert_eq!(unsafe { &*retired_style.Get() }.Display(), retired_display);
+            assert_eq!(pixels(state.tabs.active.page.as_ref().unwrap(), &retired_artifact), retired_pixels);
+            release.set(true);
+            for _ in 0..40 { state.tick().unwrap(); }
+            let active = state.tabs.active.page.as_mut().unwrap();
+            assert!(!active.IsLoading());
+            assert!(active.Evaluate("if(!resourceCompleted)throw Error('lost callback');scrollTo(0,120);void document.body.offsetHeight;", "test:after-loading-gc").unwrap().Succeeded());
+            for _ in 0..4 { active.RunTask().unwrap(); }
+            let final_pixels = pixels(active, &active.CurrentFrame().unwrap().display_items);
+            assert_eq!(final_pixels[10 * 320 + 10].to_ne_bytes(), [0, 255, 0, 255]);
+            assert_eq!(pixels(active, &held), held_pixels);
+            assert_eq!(unsafe { &*held_style.Get() }.Display(), held_display);
+            // A requested service is not an unconditional collection policy.
+            state.tick_background().unwrap();
+            state.collect_native_heap_if_requested();
+            assert!(!foundation::IsLayoutHeapCollectionRequested());
+            let collections = foundation::LayoutHeapMemoryDiagnostics().collections_completed;
+            let token_before = scheduling.next_task_id;
+            QueueRequestedNativeGC(&mut event_loop, &mut scheduling, Instant::now());
+            assert_eq!(scheduling.next_task_id, token_before, "quiet heap schedules no task");
+            // A task that was posted for an earlier request but has become
+            // stale must neither force another GC nor leave its queued bit set.
+            scheduling.native_gc_queued = true;
+            let mut executor = BrowserEventLoopExecutor { state: &mut state,
+                receiver: &receiver, pending: &mut pending, scheduling: &mut scheduling,
+                request_foreground: false, request_background: false };
+            executor.RunTask(ExecutionContextId(1), TaskPriority::Normal,
+                BrowserEventLoopTask::NativeGC { queued_at: Instant::now() }).unwrap();
+            drop(executor);
+            assert!(!scheduling.native_gc_queued);
+            assert_eq!(foundation::LayoutHeapMemoryDiagnostics().collections_completed, collections);
+        }).unwrap().join().unwrap();
+    }
 
     #[test]
     fn page_frame_demand_does_not_let_an_old_pulse_consume_new_work() {
@@ -5011,6 +5402,13 @@ mod tests {
             pending.pop_front(),
             Some(Command::Wake(OPEN_ENGINE_WAKE))
         ));
+    }
+
+    #[test]
+    fn compositor_delta_is_consumed_before_rendering_opportunity() {
+        let command = Command::CompositorScroll { document: (1, 1),
+            update: ::compositor::MainThreadScrollDelta { sequence: 1, owner_client_id: 10, delta: Offset { x:0., y:10. } } };
+        assert_eq!(BrowserTaskPriority(&command), TaskPriority::UserBlocking);
     }
 
     #[test]
@@ -7589,5 +7987,16 @@ mod scrollbar_theme_tests {
         super::configure_scrollbar_mode(&mut theme,Some("overlay")).unwrap();
         assert!(theme.uses_overlay_scrollbars);
         assert!(super::configure_scrollbar_mode(&mut theme,Some("invalid")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod unsupported_layout_diagnostic_tests {
+    #[test]
+    fn typed_unsupported_layout_reason_survives_page_thread_boundary() {
+        let message = super::panic_message(Box::new(foundation::UnsupportedLayout::new(
+            "SVG use svg/symbol viewport instances are not translated",
+        )));
+        assert_eq!(message, "unsupported layout: SVG use svg/symbol viewport instances are not translated");
     }
 }

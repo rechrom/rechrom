@@ -8,3 +8,5 @@ pub use persistent_tree_builder::BuildLayoutObjectTree;
 pub use persistent_tree_builder::EmitLayoutMutations;
 
 pub use layout_object_tree_builder::{Build, BuildResolved, BuildResolvedWithInteraction};
+
+pub use svg_clip_path_graph::SVGMaskShape;

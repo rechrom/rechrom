@@ -20,6 +20,19 @@ use paint::{
 };
 use std::{io, sync::Arc, time::Instant};
 
+fn memory_diagnostics_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("RECHROM_MEMORY_DIAGNOSTICS").is_some())
+}
+fn report_pipeline<V, M>(phase: &str, snapshot: &ArtifactSnapshot<V, M>) {
+    if memory_diagnostics_enabled() {
+        eprintln!("pipeline-memory time_ns={} phase={} tab={} generation={} sequence={} revision={} ack={} artifact_owners={} resource_owners={}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()), phase,
+            snapshot.document.0, snapshot.document.1, snapshot.signature.1,
+            snapshot.content.as_ref().map_or(0, |a| a.recording_revision), snapshot.compositor_scroll_sequence,
+            snapshot.content.as_ref().map_or(0, Arc::strong_count),
+            snapshot.content.as_ref().and_then(|a| a.resources.as_ref()).map_or(0, Arc::strong_count));
+    }
+}
 pub trait CompositorBeginFrame: Copy {
     fn BeginFrameArgs(&self) -> &BeginFrameArgs;
 }
@@ -88,6 +101,8 @@ pub struct ArtifactSnapshot<V, M> {
     pub toolbar_height: f64,
     pub frame_time: Instant,
     pub signature: (u64, u64, V),
+    /// Compositor delta batch reflected by this exact content commit.
+    pub compositor_scroll_sequence: u64,
     pub toolbar: Arc<PaintArtifact>,
     pub content: Option<Arc<PaintArtifact>>,
     pub metadata: M,
@@ -115,10 +130,13 @@ impl<V, M> ArtifactSnapshot<V, M> {
     fn Provenance(&self) -> FrameProvenance {
         FrameProvenance {
             document: self.document,
-            content: self.content.as_ref().map(|artifact| ContentFrameProvenance {
-                sequence: self.signature.1,
-                recording_revision: artifact.recording_revision,
-            }),
+            content: self
+                .content
+                .as_ref()
+                .map(|artifact| ContentFrameProvenance {
+                    sequence: self.signature.1,
+                    recording_revision: artifact.recording_revision,
+                }),
         }
     }
 }
@@ -128,15 +146,40 @@ pub enum Command<V, F, M> {
     InputBeginFrame(F),
     BeginFrame(F),
     DisplayBeginFrame(F),
+    MainFrameComplete {
+        source_id: u64,
+        sequence_number: u64,
+    },
     Wheel {
         event: WheelEvent,
         queued_at: Instant,
+        samples: usize,
     },
     Resize(V),
     Redraw,
     RasterReady(RasterReady<V, M>),
     SpareBundle(RasterBundle),
     Stop,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MainThreadScrollDelta {
+    pub sequence: u64,
+    pub owner_client_id: u64,
+    pub delta: Offset,
+}
+
+pub enum MainThreadEvent<F> {
+    BeginFrame {
+        frame: F,
+        document: Option<(u64, u64)>,
+        scroll: Option<MainThreadScrollDelta>,
+    },
+    Wheel {
+        event: WheelEvent,
+        queued_at: Instant,
+        samples: usize,
+    },
 }
 
 pub enum Effect<V, F, M> {
@@ -151,7 +194,7 @@ pub enum Effect<V, F, M> {
         frame: F,
         scroll_active: bool,
     },
-    BeginMainFrame(F),
+    MainThread(MainThreadEvent<F>),
     RequestBeginFrame,
 }
 
@@ -297,6 +340,8 @@ pub struct CompositorEngine<V, F, M> {
     spare_bundle: Option<RasterBundle>,
     display_has_bundle: bool,
     raster_in_flight: bool,
+    raster_in_flight_main_commit: bool,
+    main_frame_in_flight: Option<(u64, u64)>,
     pending_snapshot: Option<ArtifactSnapshot<V, M>>,
     pending_activation_target: Option<(u64, Offset)>,
     snapshot: Option<ArtifactSnapshot<V, M>>,
@@ -315,6 +360,8 @@ impl<V, F, M> Default for CompositorEngine<V, F, M> {
             spare_bundle: Some(RasterBundle::default()),
             display_has_bundle: false,
             raster_in_flight: false,
+            raster_in_flight_main_commit: false,
+            main_frame_in_flight: None,
             pending_snapshot: None,
             pending_activation_target: None,
             snapshot: None,
@@ -337,13 +384,18 @@ where
         let mut effects = Vec::new();
         match command {
             Command::Snapshot(snapshot) => {
+                report_pipeline("snapshot", &snapshot);
                 let document_changed = self
                     .snapshot
                     .as_ref()
                     .is_some_and(|old| old.document != snapshot.document);
                 let raster_changed = self.snapshot.as_ref().is_none_or(|old| {
-                    old.document != snapshot.document || old.signature != snapshot.signature
-                });
+                    old.document != snapshot.document
+                        || old.signature != snapshot.signature
+                        || old.compositor_scroll_sequence != snapshot.compositor_scroll_sequence
+                }) || (!self.snapshot_matches_active(&snapshot)
+                    && !self.raster_in_flight
+                    && self.pending_snapshot.is_none());
                 if document_changed {
                     self.toolbar_frame_builder.Invalidate();
                     self.content_frame_builder.Invalidate();
@@ -364,6 +416,17 @@ where
                         ],
                     );
                 }
+                // A deferred main lifecycle can reply with its preceding
+                // artifact. It cannot activate against an impl batch that
+                // its committed geometry does not yet acknowledge.
+                if !document_changed
+                    && self
+                        .scroll_tree
+                        .has_unacknowledged_batch(snapshot.compositor_scroll_sequence)
+                {
+                    effects.push(Effect::RequestBeginFrame);
+                    return Ok(effects);
+                }
                 // Input regions are compositor metadata, not raster content.
                 // Refresh them even when the PaintArtifact identity is stable.
                 if let Some(planned) = &mut self.planned {
@@ -373,16 +436,26 @@ where
                 }
                 self.snapshot = Some(snapshot.clone());
                 if raster_changed {
+                    self.pending_activation_target = snapshot
+                        .content
+                        .as_ref()
+                        .and_then(|artifact| build_artifact_scroll_tree(artifact).root())
+                        .map(|root| {
+                            (
+                                root.id,
+                                self.scroll_tree
+                                    .activation_position(root, snapshot.compositor_scroll_sequence),
+                            )
+                        });
                     self.pending_snapshot = Some(snapshot);
-                    self.pending_activation_target = if document_changed {
-                        None
-                    } else {
-                        self.current_scroll_position()
-                    };
                     self.ScheduleRaster(&mut effects);
                 }
             }
-            Command::Wheel { event, queued_at } => {
+            Command::Wheel {
+                mut event,
+                queued_at,
+                samples,
+            } => {
                 let _input = browser_tracing::scope(browser_tracing::Context {
                     target_id: 1,
                     input_id: browser_tracing::instant_id(queued_at),
@@ -395,6 +468,12 @@ where
                 if event.position.y < toolbar_height
                     || event.delta_units != ScrollGranularity::kScrollByPrecisePixel
                 {
+                    event.compositor_handled = false;
+                    effects.push(Effect::MainThread(MainThreadEvent::Wheel {
+                        event,
+                        queued_at,
+                        samples,
+                    }));
                     return Ok(effects);
                 }
                 let started = Instant::now();
@@ -422,11 +501,12 @@ where
                                 },
                             )
                     });
+                let constrained = event.DefaultScrollDelta();
                 let update = self.scroll_tree.apply_wheel(
                     event.phase,
                     Offset {
-                        x: event.delta.x * layout_zoom,
-                        y: event.delta.y * layout_zoom,
+                        x: constrained.x * layout_zoom,
+                        y: constrained.y * layout_zoom,
                     },
                     self.planned.as_ref().is_some_and(|planned| {
                         planned.snapshot.async_root_scroll
@@ -474,6 +554,12 @@ where
                         ),
                     ],
                 );
+                event.compositor_handled = !update.blocked_on_main;
+                effects.push(Effect::MainThread(MainThreadEvent::Wheel {
+                    event,
+                    queued_at,
+                    samples,
+                }));
                 if update.did_scroll || update.active_changed {
                     effects.push(Effect::RequestBeginFrame);
                 }
@@ -521,11 +607,51 @@ where
                 // cc's scheduler turns an impl-frame pulse into a main-frame
                 // request. The Page never observes the physical source
                 // directly; its owner event loop receives this effect.
-                effects.push(Effect::BeginMainFrame(frame));
+                // cc Scheduler's non-overlapping main/pending-tree branch.
+                // Input and display continue; only a new main commit waits.
+                if self.main_frame_in_flight.is_some()
+                    || self.raster_in_flight_main_commit
+                    || self
+                        .pending_snapshot
+                        .as_ref()
+                        .is_some_and(|snapshot| !self.snapshot_matches_active(snapshot))
+                {
+                    effects.push(Effect::RequestBeginFrame);
+                    return Ok(effects);
+                }
+                if memory_diagnostics_enabled() {
+                    eprintln!("pipeline-main-request time_ns={} source={} sequence={}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()), args.source_id, args.sequence_number);
+                }
+                self.main_frame_in_flight = Some((args.source_id, args.sequence_number));
+                let scroll = self.scroll_tree.pull_delta_for_main();
+                effects.push(Effect::MainThread(MainThreadEvent::BeginFrame {
+                    frame,
+                    document: self.snapshot.as_ref().map(|snapshot| snapshot.document),
+                    scroll,
+                }));
+            }
+            Command::MainFrameComplete {
+                source_id,
+                sequence_number,
+            } => {
+                if self.main_frame_in_flight == Some((source_id, sequence_number)) {
+                    if memory_diagnostics_enabled() {
+                        eprintln!("pipeline-main-complete time_ns={} source={} sequence={}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()), source_id, sequence_number);
+                    }
+                    self.main_frame_in_flight = None;
+                }
             }
             Command::DisplayBeginFrame(_) | Command::Stop => {}
         }
         Ok(effects)
+    }
+
+    fn snapshot_matches_active(&self, snapshot: &ArtifactSnapshot<V, M>) -> bool {
+        self.planned.as_ref().is_some_and(|active| {
+            active.snapshot.document == snapshot.document
+                && active.snapshot.signature == snapshot.signature
+                && active.snapshot.compositor_scroll_sequence == snapshot.compositor_scroll_sequence
+        })
     }
 
     fn ScheduleRaster(&mut self, effects: &mut Vec<Effect<V, F, M>>) {
@@ -556,6 +682,10 @@ where
         if bundle.tile_size != tile_size {
             bundle = RasterBundle::new(tile_size);
         }
+        // Impl-side tile coverage may overlap main-frame synchronization;
+        // only a distinct main commit participates in the pending-tree gate.
+        self.raster_in_flight_main_commit = !self.snapshot_matches_active(&snapshot);
+        report_pipeline("raster-scheduled", &snapshot);
         effects.push(Effect::Raster(RasterJob {
             snapshot,
             bundle,
@@ -564,16 +694,13 @@ where
         self.raster_in_flight = true;
     }
 
-    fn current_scroll_position(&self) -> Option<(u64, Offset)> {
-        self.scroll_tree.current_position()
-    }
-
     fn InstallRaster(
         &mut self,
         ready: RasterReady<V, M>,
         effects: &mut Vec<Effect<V, F, M>>,
     ) -> io::Result<()> {
         self.raster_in_flight = false;
+        self.raster_in_flight_main_commit = false;
         let mut planned = match ready.result {
             Ok(planned) => planned,
             Err(error) => {
@@ -585,6 +712,12 @@ where
                 // Preserve a startup failure, where no active pixels exist,
                 // so real initialization errors remain visible.
                 if error.kind() == io::ErrorKind::OutOfMemory && self.planned.is_some() {
+                    // This failed candidate owns no installable pending tree.
+                    // Release its retry gate; a later main opportunity may
+                    // retry the latest unactivated commit without spinning on
+                    // an immediately repeated allocation failure.
+                    self.pending_snapshot = None;
+                    self.pending_activation_target = None;
                     browser_tracing::instant(
                         "raster",
                         "PendingTreeRasterRejected",
@@ -601,6 +734,7 @@ where
         if self.snapshot.as_ref().is_some_and(|current| {
             current.document != planned.snapshot.document
                 || current.signature != planned.snapshot.signature
+                || current.compositor_scroll_sequence != planned.snapshot.compositor_scroll_sequence
         }) {
             browser_tracing::instant(
                 "raster",
@@ -614,20 +748,26 @@ where
             self.ScheduleRaster(effects);
             return Ok(());
         }
+        if !self.snapshot_matches_active(&planned.snapshot)
+            && self
+                .scroll_tree
+                .has_unacknowledged_batch(planned.snapshot.compositor_scroll_sequence)
+        {
+            self.spare_bundle = Some(ready.bundle);
+            effects.push(Effect::RequestBeginFrame);
+            return Ok(());
+        }
         if let Some(current) = &self.snapshot {
             planned.snapshot.async_root_scroll = current.async_root_scroll;
             planned.snapshot.blocking_wheel_regions = current.blocking_wheel_regions.clone();
         }
         let root_scroll = planned.scroll_tree.root();
-        let previous_scroll = self.current_scroll_position();
+        let acknowledged = planned.snapshot.compositor_scroll_sequence;
         if let Some(root) = root_scroll {
-            let desired = previous_scroll
-                .filter(|(id, _)| *id == root.id)
-                .map_or(root.committed, |(_, offset)| offset);
-            let desired = Offset {
-                x: desired.x.clamp(root.minimum.x, root.maximum.x),
-                y: desired.y.clamp(root.minimum.y, root.maximum.y),
-            };
+            // SyncedScrollOffset: the main commit supplies the new base.
+            // Preserve only impl deltas not reflected by that exact commit,
+            // including wheel input which arrived while raster was in flight.
+            let desired = self.scroll_tree.activation_position(root, acknowledged);
             // Pending-tree raster completion is not by itself permission to
             // activate.  The tree must also cover the compositor's current
             // scroll position.  Otherwise replacing the active bundle here
@@ -657,7 +797,8 @@ where
                 return Ok(());
             }
         }
-        self.scroll_tree.activate(root_scroll, previous_scroll);
+        self.scroll_tree.activate(root_scroll, acknowledged);
+        report_pipeline("activated", &planned.snapshot);
         self.planned = Some(planned);
         let tile_size = ready.bundle.tile_size;
         effects.push(Effect::InstallRasterBundle(ready.bundle));
@@ -769,6 +910,8 @@ where
     V: CompositorViewport,
     M: Clone,
 {
+    report_pipeline("raster-start", &snapshot);
+    let diagnostic_start = memory_diagnostics_enabled().then(Instant::now);
     let mut trace = browser_tracing::span("raster", "RasterPendingTree");
     let provenance = snapshot.Provenance();
     trace.set("tab_id", provenance.document.0 as f64);
@@ -915,6 +1058,16 @@ where
     let scroll_tree = content.as_ref().map(build_scroll_tree).unwrap_or_default();
     let root_scroll = scroll_tree.root();
     trace.set("succeeded", 1.0);
+    report_pipeline("raster-complete", &snapshot);
+    if let Some(start) = diagnostic_start {
+        eprintln!(
+            "pipeline-raster-time tab={} generation={} sequence={} elapsed_ms={:.3}",
+            snapshot.document.0,
+            snapshot.document.1,
+            snapshot.signature.1,
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     Ok(PlannedFrame {
         snapshot,
         toolbar,
@@ -939,6 +1092,7 @@ fn build_scroll_tree(plan: &FramePlan) -> ScrollTreeSnapshot {
                     };
                     ScrollNode {
                         id: scroll.id,
+                        owner_client_id: scroll.owner_client_id,
                         parent_id: scroll.parent.as_ref().map(|parent| parent.id),
                         container_rect: scroll.container_rect,
                         committed: Offset {
@@ -972,6 +1126,7 @@ fn build_artifact_scroll_tree(artifact: &PaintArtifact) -> ScrollTreeSnapshot {
                     };
                     ScrollNode {
                         id: scroll.id,
+                        owner_client_id: scroll.owner_client_id,
                         parent_id: scroll.parent.as_ref().map(|parent| parent.id),
                         container_rect: scroll.container_rect,
                         committed: Offset {
@@ -1233,6 +1388,7 @@ mod provenance_tests {
             toolbar_height: 0.0,
             frame_time: Instant::now(),
             signature: (3, 1, ()),
+            compositor_scroll_sequence: 0,
             toolbar: Arc::new(PaintArtifact::default()),
             content: content.then(|| {
                 Arc::new(PaintArtifact {
@@ -1267,5 +1423,179 @@ mod provenance_tests {
             })
         );
         assert_ne!(retained_provenance, replacement.Provenance());
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[derive(Clone, Copy, PartialEq)]
+    struct Viewport;
+    impl CompositorViewport for Viewport {
+        fn Width(self) -> u32 {
+            32
+        }
+        fn Height(self) -> u32 {
+            32
+        }
+        fn Scale(self) -> f64 {
+            1.0
+        }
+    }
+    type Engine = CompositorEngine<Viewport, BeginFrameArgs, ()>;
+    fn frame(sequence_number: u64) -> BeginFrameArgs {
+        let now = Instant::now();
+        BeginFrameArgs {
+            source_id: 5,
+            sequence_number,
+            frame_time: now,
+            deadline: now + Duration::from_millis(16),
+            interval: Duration::from_millis(16),
+        }
+    }
+    fn snapshot(sequence: u64) -> ArtifactSnapshot<Viewport, ()> {
+        ArtifactSnapshot {
+            document: (1, 1),
+            viewport: Viewport,
+            toolbar_height: 0.0,
+            frame_time: Instant::now(),
+            signature: (0, sequence, Viewport),
+            compositor_scroll_sequence: 0,
+            toolbar: Arc::new(PaintArtifact::default()),
+            content: None,
+            metadata: (),
+            async_root_scroll: false,
+            blocking_wheel_regions: Default::default(),
+        }
+    }
+    fn requests_main(effects: &[Effect<Viewport, BeginFrameArgs, ()>]) -> bool {
+        effects.iter().any(|effect| {
+            matches!(
+                effect,
+                Effect::MainThread(MainThreadEvent::BeginFrame { .. })
+            )
+        })
+    }
+    fn complete(engine: &mut Engine, sequence_number: u64) {
+        engine
+            .Handle(Command::MainFrameComplete {
+                source_id: 5,
+                sequence_number,
+            })
+            .unwrap();
+    }
+    fn activate_empty(engine: &mut Engine) {
+        let mut job = engine
+            .Handle(Command::Snapshot(snapshot(1)))
+            .unwrap()
+            .into_iter()
+            .find_map(|effect| match effect {
+                Effect::Raster(job) => Some(job),
+                _ => None,
+            })
+            .unwrap();
+        let result = PlanAndRaster(&mut job.bundle, job.snapshot, job.activation_target);
+        engine
+            .Handle(Command::RasterReady(RasterReady {
+                result,
+                bundle: job.bundle,
+            }))
+            .unwrap();
+    }
+    #[test]
+    fn main_opportunities_are_serial_and_only_matching_completion_releases_them() {
+        let mut engine = Engine::default();
+        assert!(requests_main(
+            &engine.Handle(Command::BeginFrame(frame(1))).unwrap()
+        ));
+        assert!(!requests_main(
+            &engine.Handle(Command::BeginFrame(frame(2))).unwrap()
+        ));
+        complete(&mut engine, 2);
+        assert!(!requests_main(
+            &engine.Handle(Command::BeginFrame(frame(3))).unwrap()
+        ));
+        complete(&mut engine, 1);
+        assert!(requests_main(
+            &engine.Handle(Command::BeginFrame(frame(4))).unwrap()
+        ));
+        complete(&mut engine, 4);
+        // Main-thread abort/clean frames release the same gate without a snapshot.
+        assert!(requests_main(
+            &engine.Handle(Command::BeginFrame(frame(5))).unwrap()
+        ));
+    }
+    #[test]
+    fn impl_coverage_raster_allows_main_but_a_distinct_commit_waits_for_activation() {
+        let mut engine = Engine::default();
+        activate_empty(&mut engine);
+        engine.pending_snapshot = Some(snapshot(1));
+        let mut effects = vec![];
+        engine.ScheduleRaster(&mut effects);
+        assert!(engine.raster_in_flight);
+        assert!(!engine.raster_in_flight_main_commit);
+        assert!(requests_main(
+            &engine.Handle(Command::BeginFrame(frame(1))).unwrap()
+        ));
+        complete(&mut engine, 1);
+        // A newer main tree waits behind the impl coverage job, and gates another commit.
+        engine.Handle(Command::Snapshot(snapshot(2))).unwrap();
+        assert!(!requests_main(
+            &engine.Handle(Command::BeginFrame(frame(2))).unwrap()
+        ));
+        engine.pending_snapshot = None;
+        engine.raster_in_flight_main_commit = true;
+        assert!(!requests_main(
+            &engine.Handle(Command::BeginFrame(frame(3))).unwrap()
+        ));
+    }
+    #[test]
+    fn recoverable_raster_failure_keeps_active_and_releases_gate_for_later_retry() {
+        let mut engine = Engine::default();
+        activate_empty(&mut engine);
+        let mut effects = engine.Handle(Command::Snapshot(snapshot(2))).unwrap();
+        let job = effects
+            .drain(..)
+            .find_map(|effect| match effect {
+                Effect::Raster(job) => Some(job),
+                _ => None,
+            })
+            .unwrap();
+        // Newer requested work must not leave a permanent pending gate after failure.
+        engine.pending_snapshot = Some(snapshot(2));
+        let effects = engine
+            .Handle(Command::RasterReady(RasterReady {
+                result: Err(io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    "test allocation failure",
+                )),
+                bundle: job.bundle,
+            }))
+            .unwrap();
+        assert!(effects.is_empty());
+        assert_eq!(engine.planned.as_ref().unwrap().snapshot.signature.1, 1);
+        assert!(engine.pending_snapshot.is_none());
+        assert!(!engine.raster_in_flight_main_commit);
+        assert!(requests_main(
+            &engine.Handle(Command::BeginFrame(frame(1))).unwrap()
+        ));
+        complete(&mut engine, 1);
+        assert!(engine
+            .Handle(Command::Snapshot(snapshot(2)))
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, Effect::Raster(_))));
+        let mut startup = Engine::default();
+        assert!(startup
+            .Handle(Command::RasterReady(RasterReady {
+                result: Err(io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    "startup failure"
+                )),
+                bundle: RasterBundle::default()
+            }))
+            .is_err());
     }
 }

@@ -96,6 +96,9 @@ pub struct ResourceFetcher {
     pending_fonts: RefCell<Vec<PendingFontFace>>,
 }
 impl ResourceFetcher {
+    pub fn MemoryDiagnostics(&self) -> resource::ResourceMemoryDiagnostics {
+        self.engine.MemoryDiagnostics()
+    }
     pub fn WithEngine(
         engine: Rc<ResourceEngine>,
         document: Rc<RefCell<DOM>>,

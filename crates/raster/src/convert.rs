@@ -654,6 +654,7 @@ impl ToSkia for image_resource::ImageOrientation {
 impl ToSkia for paint::paint_engine::DisplayMaskLayer {
     type Output = target::MaskLayer;
     fn to_skia(&self) -> Self::Output {
+        assert!(self.source_error.is_none(), "unsupported SVG mask resource: {:?}", self.source_error);
         target::MaskLayer {
             resource_id: self.resource_id.to_skia(),
             image_interpolation_quality: self.image_interpolation_quality.to_skia(),
@@ -747,6 +748,7 @@ pub fn resources(list: &paint::paint_engine::PaintArtifact) -> target::ResourceC
                     weight: f.weight,
                     italic: f.italic,
                     bytes: &f.bytes,
+                    bytes_owner: Some(std::sync::Arc::new(f.bytes.clone())),
                     face_index: f.face_index,
                     variations: f.variations.to_skia(),
                 })
@@ -813,6 +815,10 @@ mod font_identity_tests {
         let converted = resources(&artifact);
         let face = &converted.resources.as_ref().unwrap().fonts[0];
         assert_eq!(face.bytes, source_bytes.as_ref());
+        let retained = face.bytes_owner.as_ref().expect("production font owner");
+        let view: &[u8] = retained.as_ref().as_ref();
+        assert_eq!(view.as_ptr(), source_bytes.as_ptr());
+        assert_eq!(view.len(), source_bytes.len());
         assert_eq!(
             face.bytes.as_ptr(),
             source_bytes.as_ptr(),
@@ -839,7 +845,7 @@ mod font_identity_tests {
                 fonts: vec![FontFace {
                     family: "same family".into(),
                     bytes: Vec::from(b"old font data".as_slice()).into(),
-                    ..Default::default()
+                            ..Default::default()
                 }],
                 ..Default::default()
             })),
@@ -888,7 +894,7 @@ mod font_identity_tests {
                     family: "CSS alias".into(),
                     native_family: "a nonexistent platform font family 314159".into(),
                     bytes,
-                    face_index,
+                            face_index,
                     ..Default::default()
                 }],
                 ..Default::default()

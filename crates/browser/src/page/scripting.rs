@@ -15,6 +15,9 @@ pub(super) struct PageScripts {
     flush_dynamic_scripts: Option<Rc<dyn Fn()>>,
 }
 impl PageScripts {
+    pub(super) fn MemoryDiagnostics(&self) -> (Option<javascript::javascript_runtime::JavaScriptMemoryDiagnostics>, webapi::dom_bindings::DOMHostMemoryDiagnostics) {
+        (self.script.borrow().MemoryDiagnostics(), self.web_api.DOMBindings().borrow().MemoryDiagnostics())
+    }
     pub(super) fn HasBlockingWheelListener(&self) -> bool {
         self.web_api
             .DOMBindings()

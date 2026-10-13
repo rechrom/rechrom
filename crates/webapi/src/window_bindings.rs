@@ -1044,6 +1044,7 @@ impl WindowJavaScriptBindings {
         frame_time: Instant,
         report_error: &mut dyn FnMut(&JavaScriptException),
     ) {
+        let _trace = browser_tracing::span("task", "Window.AnimationFrameCallbacks");
         let (ids, timestamp, tick) = {
             let mut w = window.borrow_mut();
             if w.animation_dispatching
@@ -1105,6 +1106,7 @@ impl WindowJavaScriptBindings {
         duration_ms: f64,
         report_error: &mut dyn FnMut(&JavaScriptException),
     ) {
+        let _trace = browser_tracing::span("task", "Window.RunTaskTurn");
         let deadline = Instant::now() + milliseconds(duration_ms);
         // A nonblocking host turn runs one macrotask and its complete microtask
         // checkpoint, then returns to input/render scheduling. Work posted by

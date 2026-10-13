@@ -7,3 +7,18 @@ edition = "2021"
 image_resource = { path = "../image_resource" }
 zune-jpeg = { version = "0.5.15", features = ["source_compat"] }
 image = { version = "0.25.10", default-features = false, features = ["bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
+
+# The production bitmap decoder admits the documented, source-aligned SDR slice.
+[features]
+default = ["avif-backend"]
+avif-backend = ["dep:crabby-avif"]
+
+[dependencies.crabby-avif]
+path = "../../vendor/crabby-avif"
+optional = true
+default-features = false
+features = ["rav1d"]
+
+[dev-dependencies]
+# Direct API tests cover malformed AV1 data below the container parser.
+rav1d = { version = "=1.1.0", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }

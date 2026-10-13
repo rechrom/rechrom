@@ -22,24 +22,23 @@ use font_engine::{
 use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use foundation::graphics_types::graphics::paint::display_item_client::DisplayItemClient;
 use foundation::{
-    gfx, AtomicString, DynamicTo, EBorderStyle, EBoxDecorationBreak, EDisplay,
-    EOverscrollBehavior, ETextDecorationSkipInk,
-    ETextDecorationStyle as NativeTextDecorationStyle, ETextTransform, LayoutUnit, Length,
-    MakeGarbageCollected, Member, Persistent, PhysicalOffset, PhysicalRect, PhysicalSize,
-    String as BlinkString, TextDecorationLine, TextOffsetMap, To, UnsupportedLayout,
-    TextEmphasisMark, WritingMode as NativeWritingMode,
+    gfx, AtomicString, DynamicTo, EBorderStyle, EBoxDecorationBreak, EDisplay, EOverscrollBehavior,
+    ETextDecorationSkipInk, ETextDecorationStyle as NativeTextDecorationStyle, ETextTransform,
+    LayoutUnit, Length, MakeGarbageCollected, Member, Persistent, PhysicalOffset, PhysicalRect,
+    PhysicalSize, String as BlinkString, TextDecorationLine, TextEmphasisMark, TextOffsetMap, To,
+    UnsupportedLayout, WritingMode as NativeWritingMode,
 };
 use layoutng_fragment_tree::block_break_token::BlockBreakToken;
 use layoutng_fragment_tree::fragment_item::{FragmentItem, ItemType};
 use layoutng_fragment_tree::fragment_tree::{
-    BackgroundPaintLocation, CanvasBackgroundPaintData, CollapsedTableEdge, CollapsedTablePaintData,
-    CollapsedTableSection, ColumnRule, ColumnRulePaintData, FieldsetPaintData,
-    FormControlPaintData, FragmentBoxSides, FragmentKind, FragmentNode, FragmentPaintRect,
-    FrameSetPaintData, MathMLPaintData, MathMLPaintKind, PaintGlyph, PaintGlyphRun,
-    PaintProperties, PaintResources, ReplacedContentPaintData, ScrollContainerPaintData,
-    ScrollbarPaintAxis, ScrollbarPaintData, StickyAxisPaintData, StickyPositionPaintData,
-    StitchedDecorationData, SvgTextPaintData, TablePaintColumn, TablePaintData,
-    TextCombineEmphasisPaintData,
+    BackgroundPaintLocation, CanvasBackgroundPaintData, CollapsedTableEdge,
+    CollapsedTablePaintData, CollapsedTableSection, ColumnRule, ColumnRulePaintData,
+    FieldsetPaintData, FormControlPaintData, FragmentBoxSides, FragmentKind, FragmentNode,
+    FragmentPaintRect, FrameSetPaintData, MathMLPaintData, MathMLPaintKind, PaintGlyph,
+    PaintGlyphRun, PaintProperties, PaintResources, ReplacedContentPaintData,
+    ScrollContainerPaintData, ScrollbarPaintAxis, ScrollbarPaintData, StickyAxisPaintData,
+    StickyPositionPaintData, StitchedDecorationData, SvgTextPaintData, TablePaintColumn,
+    TablePaintData, TextCombineEmphasisPaintData,
 };
 use layoutng_fragment_tree::layout_result::LayoutResult;
 use layoutng_fragment_tree::logical_fragment::LogicalFragment;
@@ -58,8 +57,8 @@ use layoutng_style::style::computed_style::{
     ComputedStyle as NativeComputedStyle, ComputedStyleBuilder,
 };
 use layoutng_style::style::computed_style_constants::{EVerticalAlign, PseudoId};
-use layoutng_style::style::grid_enums::GridTrackSizingDirection;
 use layoutng_style::style::gap_data_list::GapDataListIterator;
+use layoutng_style::style::grid_enums::GridTrackSizingDirection;
 use layoutng_style::text_transform_services::{
     NativeTextTransformResolver, NativeTextTransformResolverScope,
 };
@@ -78,12 +77,11 @@ use crate::internal::layout_font_resolver::{NativeFontRequest, NativeFontResolve
 use crate::internal::layout_inline::LayoutInline;
 use crate::internal::layout_input::{
     BorderLineStyle, BoxDecorationBreak, ComputedStyle, ConstraintSpace, Display, Edges,
-    ExtendedStyle, FontSmoothing, FontVariation, HyphenationProvider,
-    NativeNodeConstructionData, NodeKind, Offset, PaintImage, PaintStyle, PhraseBreakProvider,
-    Position, Size, TextDecorationPaint, TextDecorationStyle, TextDirection, TextTransform,
-    TextTransformProvider, TransformMatrix, WritingMode,
+    ExtendedStyle, FontSmoothing, FontVariation, HyphenationProvider, NativeNodeConstructionData,
+    NodeKind, Offset, PaintImage, PaintStyle, PhraseBreakProvider, Position, Size,
+    TextDecorationPaint, TextDecorationStyle, TextDirection, TextTransform, TextTransformProvider,
+    TransformMatrix, WritingMode,
 };
-use crate::internal::layout_text_combine::LayoutTextCombine;
 use crate::internal::layout_invalidation_reason::{kFontsChanged, kStyleChange};
 use crate::internal::layout_node_metadata::{Element, NativeNodeMetadataRelations, Node};
 use crate::internal::layout_object::ApplyStyleChanges;
@@ -92,6 +90,7 @@ use crate::internal::layout_object_factory_set::{LayoutObjectFactory, LayoutObje
 use crate::internal::layout_pass_scope::LayoutPassScope;
 use crate::internal::layout_replaced::LayoutReplaced;
 use crate::internal::layout_text::LayoutText;
+use crate::internal::layout_text_combine::LayoutTextCombine;
 use crate::internal::layout_view::LayoutView;
 use crate::internal::paint_input::PaintBlendMode;
 use crate::internal::relative_utils::ComputeRelativeOffset;
@@ -670,6 +669,9 @@ pub(crate) fn CreateLayoutObject(
         NodeKind::kSvgRoot
         | NodeKind::kSvgViewportContainer
         | NodeKind::kSvgGroup
+        | NodeKind::kSvgHiddenContainer
+        | NodeKind::kSvgResourceClipper
+        | NodeKind::kSvgResourceMasker
         | NodeKind::kSvgForeignObject
         | NodeKind::kSvgText
         | NodeKind::kSvgInline
@@ -809,6 +811,7 @@ fn ExportPaintProperties(
     if object.is_null() {
         return output;
     }
+    output.svg_hidden_container = unsafe { &*object }.IsSVGHiddenContainer();
     // LayoutObject's base-first representation preserves the native
     // DisplayItemClient subobject, including anonymous layout clients.
     // cpp: core/layout/layout_object.h:280
@@ -869,19 +872,19 @@ fn ExportPaintProperties(
     if !layout_box.is_null() {
         output.can_composite_background_attachment_fixed =
             unsafe { &*object }.CanCompositeBackgroundAttachmentFixed();
-        output.background_paint_location = match unsafe { &*layout_box }.GetBackgroundPaintLocation()
-        {
-            crate::internal::layout_object::kBackgroundPaintInBorderBoxSpace => {
-                BackgroundPaintLocation::BorderBox
-            }
-            crate::internal::layout_object::kBackgroundPaintInContentsSpace => {
-                BackgroundPaintLocation::Contents
-            }
-            crate::internal::layout_object::kBackgroundPaintInBothSpaces => {
-                BackgroundPaintLocation::Both
-            }
-            value => panic!("invalid native background paint location {value}"),
-        };
+        output.background_paint_location =
+            match unsafe { &*layout_box }.GetBackgroundPaintLocation() {
+                crate::internal::layout_object::kBackgroundPaintInBorderBoxSpace => {
+                    BackgroundPaintLocation::BorderBox
+                }
+                crate::internal::layout_object::kBackgroundPaintInContentsSpace => {
+                    BackgroundPaintLocation::Contents
+                }
+                crate::internal::layout_object::kBackgroundPaintInBothSpaces => {
+                    BackgroundPaintLocation::Both
+                }
+                value => panic!("invalid native background paint location {value}"),
+            };
         // Preserve the LayoutBox virtual override rather than calling only
         // the DisplayItemClient base default (layout_box.cc:4099-4108).
         output.display_item_raster_effect_outset =
@@ -961,7 +964,51 @@ fn ExportPaintProperties(
         native_paint_style,
         paint_style.paint.image_resource_id,
         &paint_style.paint,
+        &paint_style.svg_clip_resources,
     );
+    if let Some(target) = output
+        .style
+        .clip_path
+        .as_ref()
+        .and_then(|clip| clip.reference_target_id)
+    {
+        // Reuse the native SVG viewport query at the existing Layout boundary.
+        // The resource can live under a different nested SVG from its client.
+        let resource = sources.iter().find_map(|(&object, entry)| {
+            (unsafe { &*entry.node }.InputId() == target
+                && unsafe { &*entry.node }.InputKind() == NodeKind::kSvgResourceClipper)
+                .then_some(object)
+        });
+        let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
+        let resolve = unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.viewport_size);
+        if let (Some(resource), Some(resolve)) = (resource, resolve) {
+            let size = resolve(unsafe { &*resource });
+            output.style.clip_path.as_mut().unwrap().reference_viewport = Some(Size {
+                width: f64::from(size.width()),
+                height: f64::from(size.height()),
+            });
+        } else {
+            // Connected ID targets without an attached native resource are
+            // unavailable (for example a display:none ancestor).
+            output.style.clip_path = None;
+        }
+    }
+    for layer in &mut output.style.mask_images {
+        let Some(reference) = layer.svg_reference.as_mut() else { continue; };
+        let Some(target) = reference.target_id else { continue; };
+        let resource = sources.iter().find_map(|(&object, entry)| {
+            (unsafe { &*entry.node }.InputId() == target
+                && unsafe { &*entry.node }.InputKind() == NodeKind::kSvgResourceMasker).then_some(object)
+        });
+        let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
+        let resolve = unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.viewport_size);
+        if let (Some(resource), Some(resolve)) = (resource, resolve) {
+            let size = resolve(unsafe { &*resource });
+            reference.viewport = Some(Size { width: f64::from(size.width()), height: f64::from(size.height()) });
+        } else {
+            reference.graph = None; layer.image_state = crate::internal::paint_input::PaintMaskImageState::kInvalid;
+        }
+    }
     if native_paint_style.HasOffset() && !layout_box.is_null() {
         let box_model = DynamicTo::<LayoutBoxModelObject>(object);
         if !box_model.is_null() {
@@ -981,76 +1028,7 @@ fn ExportPaintProperties(
     output.fixed_to_view =
         !layout_box.is_null() && unsafe { &*layout_box }.IsFixedToView(std::ptr::null());
     output.floating = paint_style.floating;
-    if paint_style.position == Position::kSticky {
-        let box_model = DynamicTo::<LayoutBoxModelObject>(object);
-        if !box_model.is_null() {
-            let box_model = unsafe { &*box_model };
-            let constraints = box_model.StickyConstraints();
-            let offset = box_model.StickyPositionOffset();
-            output.sticky_offset = Offset {
-                x: Number(offset.left),
-                y: Number(offset.top),
-            };
-            let display_client_id = |object: *const LayoutObject| {
-                if object.is_null() {
-                    0
-                } else {
-                    unsafe { &*(object as *const DisplayItemClient) }.Id() as u64
-                }
-            };
-            let nearest_sticky_box_client_id = display_client_id(
-                constraints.NearestStickyLayerShiftingStickyBox() as *const LayoutObject,
-            );
-            let nearest_containing_block_client_id = display_client_id(
-                constraints.NearestStickyLayerShiftingContainingBlock() as *const LayoutObject,
-            );
-            let export_axis = |axis: PhysicalAxis| {
-                let data = constraints.AxisData(axis);
-                if data.is_null() {
-                    return None;
-                }
-                let data = unsafe { &*data };
-                Some(StickyAxisPaintData {
-                    min_inset: data.min_inset.map(Number),
-                    max_inset: data.max_inset.map(Number),
-                    scroll_container_relative_containing_block_offset: Number(
-                        data.scroll_container_relative_containing_block_range.offset,
-                    ),
-                    scroll_container_relative_containing_block_size: Number(
-                        data.scroll_container_relative_containing_block_range.size,
-                    ),
-                    scroll_container_relative_sticky_box_offset: Number(
-                        data.scroll_container_relative_sticky_box_range.offset,
-                    ),
-                    scroll_container_relative_sticky_box_size: Number(
-                        data.scroll_container_relative_sticky_box_range.size,
-                    ),
-                    constraining_offset: Number(data.constraining_range.offset),
-                    constraining_size: Number(data.constraining_range.size),
-                    scroll_container_client_id: display_client_id(
-                        data.containing_scroll_container.Get() as *const LayoutObject,
-                    ),
-                    nearest_sticky_box_client_id,
-                    nearest_containing_block_client_id,
-                    current_sticky_offset: Number(data.sticky_offset),
-                    current_total_sticky_box_offset: Number(
-                        data.total_sticky_box_sticky_offset,
-                    ),
-                    current_total_containing_block_offset: Number(
-                        data.total_containing_block_sticky_offset,
-                    ),
-                })
-            };
-            let constraint = StickyPositionPaintData {
-                owner_client_id: output.display_item_client_id,
-                horizontal: export_axis(PhysicalAxis::kHorizontal),
-                vertical: export_axis(PhysicalAxis::kVertical),
-            };
-            if constraint.horizontal.is_some() || constraint.vertical.is_some() {
-                output.sticky_constraint = Some(constraint);
-            }
-        }
-    }
+    ExportStickyPaintProperties(object, &mut output);
     output.writing_mode = paint_style.writing_mode;
     output.direction = paint_style.direction;
     if let Some(extended) = &paint_style.extended {
@@ -1058,18 +1036,12 @@ fn ExportPaintProperties(
         output.overflow_y = extended.overflow_y;
     }
     let export_overscroll = |behavior| match behavior {
-        EOverscrollBehavior::kAuto => {
-            crate::internal::layout_input::OverscrollBehavior::kAuto
-        }
+        EOverscrollBehavior::kAuto => crate::internal::layout_input::OverscrollBehavior::kAuto,
         EOverscrollBehavior::kContain => {
             crate::internal::layout_input::OverscrollBehavior::kContain
         }
-        EOverscrollBehavior::kNone => {
-            crate::internal::layout_input::OverscrollBehavior::kNone
-        }
-        EOverscrollBehavior::kChain => {
-            crate::internal::layout_input::OverscrollBehavior::kChain
-        }
+        EOverscrollBehavior::kNone => crate::internal::layout_input::OverscrollBehavior::kNone,
+        EOverscrollBehavior::kChain => crate::internal::layout_input::OverscrollBehavior::kChain,
     };
     output.overscroll_behavior_x = export_overscroll(native_paint_style.OverscrollBehaviorX());
     output.overscroll_behavior_y = export_overscroll(native_paint_style.OverscrollBehaviorY());
@@ -1089,7 +1061,9 @@ fn ExportPaintProperties(
     }
     if !object.is_null() && unsafe { &*object }.IsSVG() {
         let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
-        if let Some(query) = unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.paint_geometry) {
+        if let Some(query) =
+            unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.paint_geometry)
+        {
             (output.svg_local_transform, output.svg_viewport) = query(unsafe { &*object });
         }
     }
@@ -1098,10 +1072,14 @@ fn ExportPaintProperties(
     // when it has no viewBox; Paint does not discover Layout/DOM ancestors.
     if !object.is_null() && unsafe { &*object }.IsSVGChild() {
         let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
-        if let Some(resolve) = unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.viewport_size) {
+        if let Some(resolve) =
+            unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.viewport_size)
+        {
             let size = resolve(unsafe { &*object });
             output.svg_view_box = Some(crate::internal::layout_input::SvgViewBoxData {
-                width: size.width() as f64, height: size.height() as f64, ..Default::default()
+                width: size.width() as f64,
+                height: size.height() as f64,
+                ..Default::default()
             });
         }
     }
@@ -1389,9 +1367,7 @@ fn CaptureFirstGlyphFont(
 // text_combine_painter.cc:116-160. Combined text is treated as one U+FFFC-like
 // glyph for emphasis positioning; Chromium shapes U+3042 to obtain that
 // cluster's advance, then centers one emphasis glyph over it.
-fn ExportTextCombineEmphasis(
-    style: &NativeComputedStyle,
-) -> Option<TextCombineEmphasisPaintData> {
+fn ExportTextCombineEmphasis(style: &NativeComputedStyle) -> Option<TextCombineEmphasisPaintData> {
     use layoutng_style::style::computed_style_constants::LineLogicalSide;
 
     if style.GetTextEmphasisMark() == TextEmphasisMark::kNone {
@@ -1408,8 +1384,8 @@ fn ExportTextCombineEmphasis(
     }
 
     let mark_text = BlinkString::from_utf16(&mark_units);
-    let mark_shape = HarfBuzzShaper::new(mark_text)
-        .Shape(style.GetFont(), foundation::TextDirection::kLtr);
+    let mark_shape =
+        HarfBuzzShaper::new(mark_text).Shape(style.GetFont(), foundation::TextDirection::kLtr);
     let mark_view = ShapeResultView::CreateFromResult(mark_shape);
     if mark_view.is_null() {
         return None;
@@ -1770,12 +1746,22 @@ fn ExportBoxPaintGeometry(box_fragment: &PhysicalBoxFragment, paint: &mut PaintP
         let client_size = if layout_box.IsLayoutView() {
             let view = unsafe { &*To::<LayoutView>(box_fragment.GetLayoutObject()) };
             let size = view.GetLayoutSize(
-                crate::internal::scroll_types::IncludeScrollbarsInRect::kExcludeScrollbars);
-            Size { width: size.width() as f64, height: size.height() as f64 }
+                crate::internal::scroll_types::IncludeScrollbarsInRect::kExcludeScrollbars,
+            );
+            Size {
+                width: size.width() as f64,
+                height: size.height() as f64,
+            }
         } else {
-            let size = if layout_box.IsTable() { layout_box.StitchedSize() }
-                else { layout_box.PhysicalPaddingBoxRect().size };
-            Size { width: Number(size.width), height: Number(size.height) }
+            let size = if layout_box.IsTable() {
+                layout_box.StitchedSize()
+            } else {
+                layout_box.PhysicalPaddingBoxRect().size
+            };
+            Size {
+                width: Number(size.width),
+                height: Number(size.height),
+            }
         };
         paint.client_size = Some(client_size);
         // Export the native scroll owner, not the unpropagated input CSS.
@@ -2610,9 +2596,13 @@ fn AppendSVGChildren(
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
 ) {
-    if object.is_null() { return; }
+    if object.is_null() {
+        return;
+    }
     let owner = unsafe { &*object };
-    if !(owner.IsSVGRoot() || (owner.IsSVGContainer() && !owner.IsSVGForeignObject())) { return; }
+    if !(owner.IsSVGRoot() || (owner.IsSVGContainer() && !owner.IsSVGForeignObject())) {
+        return;
+    }
     // SVG children are owned by child LayoutBoxes, not linked into the root
     // replaced box's PhysicalBoxFragment::Children().
     let mut child = unsafe { &*object }.SlowFirstChild();
@@ -2775,8 +2765,7 @@ fn ExportNativeNinePieceImages(
     if let Some(reflection) = unsafe { style.BoxReflect().as_ref() } {
         if reflection.Mask().HasImage() {
             if let Some(filter) = paint.style.filters.iter_mut().find(|filter| {
-                filter.r#type
-                    == crate::internal::paint_input::PaintFilterType::kBoxReflect
+                filter.r#type == crate::internal::paint_input::PaintFilterType::kBoxReflect
             }) {
                 let stitched_size = paint
                     .stitched_decoration
@@ -2818,7 +2807,8 @@ fn ExportInlineItem(
     // cpp: core/paint/box_fragment_painter.cc:2025-2026,2071-2072
     // cpp: core/paint/inline_box_fragment_painter.cc:63-64
     output.paint.display_item_fragment = item.FragmentId();
-    output.paint.hidden = item.IsHiddenForPaint() || output.paint.svg_viewport.is_some_and(|v| v.disabled);
+    output.paint.hidden =
+        item.IsHiddenForPaint() || output.paint.svg_viewport.is_some_and(|v| v.disabled);
     let rect = *item.RectInContainerFragment();
     output.offset = Offset {
         x: Number(rect.offset.left - parent_offset.left),
@@ -3075,7 +3065,8 @@ fn ExportFragment(
     output.paint =
         ExportPaintProperties(object, sources, style_sources, effective_style, resources);
     output.paint.display_item_fragment = display_item_fragment;
-    output.paint.hidden = fragment.IsHiddenForPaint() || output.paint.svg_viewport.is_some_and(|v| v.disabled);
+    output.paint.hidden =
+        fragment.IsHiddenForPaint() || output.paint.svg_viewport.is_some_and(|v| v.disabled);
     output.kind = if fragment.IsBox() {
         FragmentKind::kBox
     } else {
@@ -3612,6 +3603,81 @@ fn ResolveLogicalParentOccurrences(root: &mut FragmentNode) {
 }
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:2137-2173
+// Keep the matrix offset and the compositor's recorded constraint basis from
+// the same native sticky update, for full export and retained scroll refresh.
+fn ExportStickyPaintProperties(object: *const LayoutObject, output: &mut PaintProperties) {
+    output.sticky_offset = Offset::default();
+    output.sticky_constraint = None;
+    if output.position == Position::kSticky {
+        let box_model = DynamicTo::<LayoutBoxModelObject>(object);
+        if !box_model.is_null() {
+            let box_model = unsafe { &*box_model };
+            let constraints = box_model.StickyConstraints();
+            let offset = box_model.StickyPositionOffset();
+            output.sticky_offset = Offset {
+                x: Number(offset.left),
+                y: Number(offset.top),
+            };
+            let display_client_id = |object: *const LayoutObject| {
+                if object.is_null() {
+                    0
+                } else {
+                    unsafe { &*(object as *const DisplayItemClient) }.Id() as u64
+                }
+            };
+            let nearest_sticky_box_client_id = display_client_id(
+                constraints.NearestStickyLayerShiftingStickyBox() as *const LayoutObject,
+            );
+            let nearest_containing_block_client_id = display_client_id(
+                constraints.NearestStickyLayerShiftingContainingBlock() as *const LayoutObject,
+            );
+            let export_axis = |axis: PhysicalAxis| {
+                let data = constraints.AxisData(axis);
+                if data.is_null() {
+                    return None;
+                }
+                let data = unsafe { &*data };
+                Some(StickyAxisPaintData {
+                    min_inset: data.min_inset.map(Number),
+                    max_inset: data.max_inset.map(Number),
+                    scroll_container_relative_containing_block_offset: Number(
+                        data.scroll_container_relative_containing_block_range.offset,
+                    ),
+                    scroll_container_relative_containing_block_size: Number(
+                        data.scroll_container_relative_containing_block_range.size,
+                    ),
+                    scroll_container_relative_sticky_box_offset: Number(
+                        data.scroll_container_relative_sticky_box_range.offset,
+                    ),
+                    scroll_container_relative_sticky_box_size: Number(
+                        data.scroll_container_relative_sticky_box_range.size,
+                    ),
+                    constraining_offset: Number(data.constraining_range.offset),
+                    constraining_size: Number(data.constraining_range.size),
+                    scroll_container_client_id: display_client_id(
+                        data.containing_scroll_container.Get() as *const LayoutObject,
+                    ),
+                    nearest_sticky_box_client_id,
+                    nearest_containing_block_client_id,
+                    current_sticky_offset: Number(data.sticky_offset),
+                    current_total_sticky_box_offset: Number(data.total_sticky_box_sticky_offset),
+                    current_total_containing_block_offset: Number(
+                        data.total_containing_block_sticky_offset,
+                    ),
+                })
+            };
+            let constraint = StickyPositionPaintData {
+                owner_client_id: output.display_item_client_id,
+                horizontal: export_axis(PhysicalAxis::kHorizontal),
+                vertical: export_axis(PhysicalAxis::kVertical),
+            };
+            if constraint.horizontal.is_some() || constraint.vertical.is_some() {
+                output.sticky_constraint = Some(constraint);
+            }
+        }
+    }
+}
+
 fn UpdateStickyOffsets(
     objects: impl IntoIterator<Item = *mut LayoutObject>,
     reuse_constraints: bool,
@@ -3646,9 +3712,24 @@ fn UpdateStickyOffsets(
                 && unsafe { &*cached }.containing_scroll_container.Get() as *const LayoutBox
                     == scroll_container;
             if !can_reuse {
+                // PaintLayer's containing-scroll query records whether a
+                // viewport-fixed ancestor separates this sticky box from root
+                // scrolling. Preserve that native constraint input here.
+                let mut ancestor = box_model.Parent();
+                let mut is_fixed_to_view = false;
+                while !ancestor.is_null() && ancestor as *const LayoutObject != scroll_container as *const LayoutObject {
+                    let ancestor_box = DynamicTo::<LayoutBox>(ancestor);
+                    if !ancestor_box.is_null()
+                        && unsafe { &*ancestor_box }.IsFixedToView(std::ptr::null())
+                    {
+                        is_fixed_to_view = true;
+                        break;
+                    }
+                    ancestor = unsafe { &*ancestor }.Parent();
+                }
                 let constraints = box_model.ComputeStickyPositionConstraintsForLayout(
                     scroll_container,
-                    false,
+                    is_fixed_to_view,
                     axis_mask,
                 );
                 box_model.SetStickyConstraints(constraints);
@@ -3746,6 +3827,7 @@ fn RefreshFragmentScrollPaintProperties(
 ) -> bool {
     let old_scroll = fragment.paint.scroll_offset;
     let old_sticky = fragment.paint.sticky_offset;
+    let old_sticky_constraint = fragment.paint.sticky_constraint;
     let old_scrollbars = fragment.paint.scrollbars.clone();
     if fragment.paint.has_source {
         if let Some(&object) = fragment
@@ -3762,16 +3844,7 @@ fn RefreshFragmentScrollPaintProperties(
                     fragment.paint.scroll_offset = data.scroll_offset;
                 }
             }
-            if fragment.paint.position == Position::kSticky {
-                let box_model = DynamicTo::<LayoutBoxModelObject>(object);
-                if !box_model.is_null() {
-                    let offset = unsafe { &*box_model }.StickyPositionOffset();
-                    fragment.paint.sticky_offset = Offset {
-                        x: Number(offset.left),
-                        y: Number(offset.top),
-                    };
-                }
-            }
+            ExportStickyPaintProperties(object, &mut fragment.paint);
             let layout_box = DynamicTo::<LayoutBox>(object);
             if !layout_box.is_null() && fragment.paint.scrollbars.is_some() {
                 let layout_box = unsafe { &*layout_box };
@@ -3852,6 +3925,7 @@ fn RefreshFragmentScrollPaintProperties(
     }
     old_scroll != fragment.paint.scroll_offset
         || old_sticky != fragment.paint.sticky_offset
+        || old_sticky_constraint != fragment.paint.sticky_constraint
         || old_scrollbars != fragment.paint.scrollbars
 }
 
@@ -4263,15 +4337,21 @@ pub fn PrepareLayoutObjectTree(
         let node = current.GetNode();
         let next = current.NextInPreOrder(root_ptr);
         if current.IsSVGRoot() {
-            let size = space.document_image_container
-                .filter(|container| !node.is_null()
-                    && unsafe { &*node }.InputId() == container.root_node_id)
-                .map_or(PhysicalSize::default(), |container| PhysicalSize::new(
-                    LayoutUnit::from_f64(container.size.width),
-                    LayoutUnit::from_f64(container.size.height),
-                ));
+            let size = space
+                .document_image_container
+                .filter(|container| {
+                    !node.is_null() && unsafe { &*node }.InputId() == container.root_node_id
+                })
+                .map_or(PhysicalSize::default(), |container| {
+                    PhysicalSize::new(
+                        LayoutUnit::from_f64(container.size.width),
+                        LayoutUnit::from_f64(container.size.height),
+                    )
+                });
             let algorithms = LayoutPassScope::Algorithms();
-            let set_container = unsafe { &*algorithms }.svg_support.set_root_container_size
+            let set_container = unsafe { &*algorithms }
+                .svg_support
+                .set_root_container_size
                 .expect("SVG layout module has a root container setter");
             set_container(unsafe { &mut *object }, size);
         }

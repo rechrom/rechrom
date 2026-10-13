@@ -15,7 +15,6 @@ use crate::{
 };
 use foundation::{AtomicString, CSSPropertyID, CSSValueID};
 use std::{
-    borrow::Cow,
     cell::RefCell,
     collections::{HashMap, HashSet},
     rc::Rc,
@@ -53,8 +52,10 @@ pub enum VariableResolutionError {
 // cpp: style_cascade.cc:1330-1415 ResolveCustomProperty.
 #[derive(Clone, Default)]
 pub struct CustomProperties {
-    pub values: HashMap<std::string::String, ComputedVariableValue>,
-    pub registered_values: HashMap<std::string::String, Rc<Value>>,
+    // Chromium StyleVariables shares immutable roots; writes detach only on
+    // change. Preserve that contract in the production typed side-table owner.
+    pub values: Rc<HashMap<std::string::String, ComputedVariableValue>>,
+    pub registered_values: Rc<HashMap<std::string::String, Rc<Value>>>,
     pub diagnostics: Vec<(std::string::String, VariableResolutionError)>,
     // cpp: style_cascade.cc:1470-1529 CascadeResolver::shorthand_cache_.
     shorthand_cache: RefCell<Option<(Rc<Value>, Vec<PropertyValue>)>>,
@@ -68,7 +69,33 @@ impl std::fmt::Debug for CustomProperties {
             .finish()
     }
 }
+pub(crate) fn ComputedVariablesEquivalent(a: &ComputedVariableValue, b: &ComputedVariableValue) -> bool {
+    match (a, b) {
+        (ComputedVariableValue::Invalid, ComputedVariableValue::Invalid)
+        | (ComputedVariableValue::Cyclic, ComputedVariableValue::Cyclic) => true,
+        (ComputedVariableValue::Data(a), ComputedVariableValue::Data(b)) => Rc::ptr_eq(a, b)
+            || a.original_text == b.original_text && a.features == b.features
+                && a.is_animation_tainted == b.is_animation_tainted && a.is_attr_tainted == b.is_attr_tainted,
+        _ => false,
+    }
+}
 impl CustomProperties {
+    // cpp: style_variables.h:99-165. Equality precedes copy-on-write, including
+    // resetting an already-initial non-inherited registered property.
+    pub(crate) fn SetData(&mut self, name: std::string::String, value: ComputedVariableValue) {
+        if self.values.get(&name).is_some_and(|old| ComputedVariablesEquivalent(old, &value)) { return; }
+        Rc::make_mut(&mut self.values).insert(name, value);
+    }
+    pub(crate) fn RemoveData(&mut self, name: &str) {
+        if self.values.contains_key(name) { Rc::make_mut(&mut self.values).remove(name); }
+    }
+    pub(crate) fn SetRegistered(&mut self, name: std::string::String, value: Rc<Value>) {
+        if self.registered_values.get(&name).is_some_and(|old| Rc::ptr_eq(old, &value) || old.as_ref() == value.as_ref()) { return; }
+        Rc::make_mut(&mut self.registered_values).insert(name, value);
+    }
+    pub(crate) fn RemoveRegistered(&mut self, name: &str) {
+        if self.registered_values.contains_key(name) { Rc::make_mut(&mut self.registered_values).remove(name); }
+    }
     /// `winners` must contain the winning declaration for each custom name.
     /// Cascade priority, origins, layers and revert are handled by the caller.
     pub fn Compute<'a>(
@@ -114,14 +141,18 @@ impl CustomProperties {
             crate::css_primitive_value::UnitType,
         ) -> Result<f64, VariableResolutionError>,
     ) -> Self {
-        let parent_values = parent.map_or_else(HashMap::new, |p| p.values.clone());
-        let mut inherited = parent_values.clone();
-        let mut registered_values =
-            parent.map_or_else(HashMap::new, |p| p.registered_values.clone());
+        let parent_values = parent.map_or_else(Rc::default, |p| p.values.clone());
+        let mut inherited = Self {
+            values: parent_values.clone(),
+            registered_values: parent.map_or_else(Rc::default, |p| p.registered_values.clone()),
+            ..Default::default()
+        };
         let mut initials = HashMap::new();
         let mut diagnostics = Vec::new();
         if let Some(registry) = registry {
-            registered_values.retain(|name, _| registry.Registration(name).is_some());
+            if inherited.registered_values.keys().any(|name| registry.Registration(name).is_none()) {
+                Rc::make_mut(&mut inherited.registered_values).retain(|name, _| registry.Registration(name).is_some());
+            }
             for (name, registration) in registry.Registrations() {
                 let initial = registration.initial.as_ref().and_then(|value| {
                     match crate::property_registry::ComputeRegisteredValue(value, length) {
@@ -141,11 +172,12 @@ impl CustomProperties {
                 let initial_data =
                     data.map_or(ComputedVariableValue::Invalid, ComputedVariableValue::Data);
                 initials.insert(name.to_owned(), initial_data.clone());
-                if !registration.inherits || !inherited.contains_key(name) {
-                    inherited.insert(name.to_owned(), initial_data);
-                    registered_values.remove(name);
+                if !registration.inherits || !inherited.values.contains_key(name) {
+                    inherited.SetData(name.to_owned(), initial_data);
                     if let Some(initial) = initial {
-                        registered_values.insert(name.to_owned(), initial);
+                        inherited.SetRegistered(name.to_owned(), initial);
+                    } else {
+                        inherited.RemoveRegistered(name);
                     }
                 }
             }
@@ -153,12 +185,12 @@ impl CustomProperties {
         let mut resolver = VariableResolver {
             registry,
             length,
-            parent_values: Cow::Owned(parent_values),
+            parent_values,
             initials,
-            registered_values: Cow::Owned(registered_values),
+            registered_values: inherited.registered_values,
             context,
             attribute_stack: Vec::new(),
-            inherited: Cow::Owned(inherited),
+            inherited: inherited.values,
             specified: HashMap::new(),
             computed: HashMap::new(),
             stack: Vec::new(),
@@ -177,14 +209,14 @@ impl CustomProperties {
         for name in names {
             resolver.ResolveName(&name);
         }
-        let mut values = resolver.inherited.into_owned();
-        values.extend(resolver.computed);
-        Self {
-            values,
-            registered_values: resolver.registered_values.into_owned(),
+        let mut result = Self {
+            values: resolver.inherited,
+            registered_values: resolver.registered_values,
             diagnostics: resolver.diagnostics,
             shorthand_cache: RefCell::default(),
-        }
+        };
+        for (name, value) in resolver.computed { result.SetData(name, value); }
+        result
     }
     pub fn Get(&self, name: &str) -> Option<&Rc<CSSVariableData>> {
         match self.values.get(name) {
@@ -225,12 +257,12 @@ impl CustomProperties {
             // computed style. Chromium's StyleCascade reads the retained map
             // while resolving ordinary declarations; it does not copy the
             // whole map for every var() use.
-            parent_values: Cow::Borrowed(&self.values),
+            parent_values: self.values.clone(),
             initials: HashMap::new(),
-            registered_values: Cow::Borrowed(&self.registered_values),
+            registered_values: self.registered_values.clone(),
             context,
             attribute_stack: Vec::new(),
-            inherited: Cow::Borrowed(&self.values),
+            inherited: self.values.clone(),
             specified: HashMap::new(),
             computed: HashMap::new(),
             stack: Vec::new(),
@@ -247,12 +279,12 @@ struct VariableResolver<'env> {
         f64,
         crate::css_primitive_value::UnitType,
     ) -> Result<f64, VariableResolutionError>,
-    parent_values: Cow<'env, HashMap<std::string::String, ComputedVariableValue>>,
+    parent_values: Rc<HashMap<std::string::String, ComputedVariableValue>>,
     initials: HashMap<std::string::String, ComputedVariableValue>,
-    registered_values: Cow<'env, HashMap<std::string::String, Rc<Value>>>,
+    registered_values: Rc<HashMap<std::string::String, Rc<Value>>>,
     // Attribute cycle nodes record the property stack position on entry.
     attribute_stack: Vec<(AtomicString, usize)>,
-    inherited: Cow<'env, HashMap<std::string::String, ComputedVariableValue>>,
+    inherited: Rc<HashMap<std::string::String, ComputedVariableValue>>,
     specified: HashMap<std::string::String, Rc<Value>>,
     computed: HashMap<std::string::String, ComputedVariableValue>,
     stack: Vec<std::string::String>,
@@ -390,9 +422,9 @@ impl VariableResolver<'_> {
                         Ok(typed) => {
                             let data =
                                 crate::property_registry::RegisteredVariableData(&typed, data);
-                            self.registered_values
-                                .to_mut()
-                                .insert(name.to_owned(), typed);
+                            if !self.registered_values.get(name).is_some_and(|old| Rc::ptr_eq(old, &typed) || old.as_ref() == typed.as_ref()) {
+                                Rc::make_mut(&mut self.registered_values).insert(name.to_owned(), typed);
+                            }
                             ComputedVariableValue::Data(data)
                         }
                         Err(error) => {
@@ -412,7 +444,7 @@ impl VariableResolver<'_> {
                     .cloned()
                     .unwrap_or(ComputedVariableValue::Invalid),
                 _ => {
-                    self.registered_values.to_mut().remove(name);
+                    if self.registered_values.contains_key(name) { Rc::make_mut(&mut self.registered_values).remove(name); }
                     value
                 }
             }

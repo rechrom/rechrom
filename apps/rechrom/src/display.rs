@@ -281,7 +281,9 @@ impl Display {
         // Submission activates this complete compositor frame; pending or
         // failed candidates never replace the last published frame.
         if let Some(diagnostic) = &self.diagnostic_output {
-            diagnostic.publish(output.readback_rgba(viewport)?);
+            let mut readback = output.readback_rgba(viewport)?;
+            readback.provenance = Some(provenance);
+            diagnostic.publish(readback);
         }
         let notify = self.notify.clone();
         let native_presentation = self.target.is_native();
@@ -330,6 +332,11 @@ impl Display {
             ],
         );
         if !native_presentation && self.diagnostic_output.is_some() {
+            if crate::engine::memory_diagnostics_enabled() {
+                eprintln!("pipeline-offscreen-published time_ns={} present={} tab={} generation={} sequence={} revision={}", crate::engine::diagnostic_time_ns(), sequence,
+                    provenance.document.0, provenance.document.1,
+                    provenance.content.map_or(0, |c| c.sequence), provenance.content.map_or(0, |c| c.recording_revision));
+            }
             // Pixels from this exact prepared candidate are now in the
             // screenshot mailbox and its offscreen swap completed. This is
             // neither an on-screen presentation timestamp nor FCP/LCP.
@@ -423,7 +430,8 @@ mod tests {
                 drag_regions: Vec::new(),
             });
             display.Submit(frame, false, &ack).unwrap();
-            assert!(mailbox.lock().unwrap().is_some());
+            assert_eq!(mailbox.lock().unwrap().as_ref().unwrap().provenance,
+                Some(compositor::FrameProvenance { document: (7, 4), content }));
             display.viz.DidReceiveSwapAck(SwapId(sequence));
         }
         browser_tracing::stop().unwrap();

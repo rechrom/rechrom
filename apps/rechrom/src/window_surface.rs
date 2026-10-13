@@ -200,6 +200,7 @@ fn readback_pixels(
     };
     let toolbar_height = viewport.toolbar_pixels();
     Ok(crate::engine::WindowFrame {
+        provenance: None,
         viewport,
         toolbar: rows(0, toolbar_height)?,
         content: rows(toolbar_height, viewport.height - toolbar_height)?,

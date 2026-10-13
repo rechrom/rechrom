@@ -14,6 +14,10 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
+#[path = "svg_use_instances.rs"]
+mod svg_use_instances;
+pub use svg_use_instances::SVGUseInstanceStatus;
+
 static NEXT_ARENA_ID: AtomicU64 = AtomicU64::new(1);
 
 // A C++ DOMNode* can name a document node in a different Document arena.
@@ -643,6 +647,8 @@ fn NativeStyleImageSources(style: &NativeComputedStyle, output: &mut Vec<String>
         let Some(image) = (unsafe { image.as_ref() }) else {
             return;
         };
+        let image = layoutng_style::style::style_mask_source_image::MaskSourceImage(image)
+            .and_then(|mask| mask.FetchedImage()).unwrap_or(image);
         if let Some(image) = FetchedImage(image) {
             output.push(image.SourceURL().to_owned());
         }
@@ -729,10 +735,17 @@ enum ImageResourceState {
 // Re-exported as dom::Document. The older parser's narrow tree is exposed
 // separately as dom::ParsedDocument until its callers migrate.
 pub struct PersistentDocument {
+    document_url: String,
     arena: Vec<DOMNode>,
     arena_id: u64,
     pub(crate) custom_elements: crate::custom_elements::CustomElementRegistry,
     collection_membership_revision: u64,
+    // Local SVG resource identity/content is owned by this document. Frames
+    // retain immutable graph Arcs; style replacement never rewrites them.
+    svg_clip_resources:
+        Option<std::sync::Arc<layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot>>,
+    svg_clip_resource_inputs: Option<(u64, u64)>,
+    resolved_style_revision: u64,
     root: usize,
     next_id: u64,
     compatibility: CompatibilityMode,
@@ -859,6 +872,9 @@ pub struct PersistentDocument {
     // instance-tree construction owns this relation; selector matching only
     // observes it. Ordinary SVG elements have no corresponding element.
     corresponding_svg_elements: HashMap<u64, u64>,
+    svg_use_instances: HashMap<usize, svg_use_instances::SVGUseInstancePlan>,
+    svg_use_instance_status: HashMap<usize, SVGUseInstanceStatus>,
+    svg_use_inputs_revision: Option<u64>,
 }
 
 impl PersistentDocument {
@@ -867,8 +883,12 @@ impl PersistentDocument {
         let mut document = Self {
             arena: Vec::new(),
             arena_id: NEXT_ARENA_ID.fetch_add(1, Ordering::Relaxed),
+            document_url: String::new(),
             custom_elements: Default::default(),
             collection_membership_revision: 0,
+            svg_clip_resources: None,
+            svg_clip_resource_inputs: None,
+            resolved_style_revision: 0,
             root: 0,
             next_id: 1,
             compatibility: CompatibilityMode::kNoQuirks,
@@ -924,6 +944,9 @@ impl PersistentDocument {
             svg_image_view_root: None,
             svg_image_view_spec: None,
             corresponding_svg_elements: HashMap::new(),
+            svg_use_instances: HashMap::new(),
+            svg_use_instance_status: HashMap::new(),
+            svg_use_inputs_revision: None,
         };
         document.root = document.Allocate(
             DOMNodeType::kDocument,
@@ -958,6 +981,74 @@ impl PersistentDocument {
     }
     fn BumpCollectionMembershipRevision(&mut self) {
         self.collection_membership_revision = self.collection_membership_revision.saturating_add(1);
+    }
+
+    /// Opaque, document-qualified OriginatingTreeScope identity. SVG use
+    /// instances resolve local resources in their corresponding element's
+    /// scope; generated pseudo styles are supplied their originating index.
+    pub fn SVGResourceScope(
+        &self,
+        index: usize,
+    ) -> layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope {
+        let origin = self.CorrespondingSVGElement(index).unwrap_or(index);
+        layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope {
+            document_id: self.arena_id,
+            tree_scope_id: self.arena[self.TreeScopeRoot(origin)].id,
+        }
+    }
+
+    fn SVGResourceInputKey(&self) -> Option<(u64, u64)> {
+        (self.collection_membership_revision != u64::MAX
+            && self.resolved_style_revision != u64::MAX)
+            .then_some((
+                self.collection_membership_revision,
+                self.resolved_style_revision,
+            ))
+    }
+
+    /// A targeted style update may use the catalog only after the document's
+    /// current DOM and computed styles were observed by the resource lifecycle.
+    pub fn DocumentURL(&self) -> &str { &self.document_url }
+
+    pub fn SetDocumentURL(&mut self, url: String) { self.document_url = url; }
+
+    pub fn SVGResources(
+        &self,
+    ) -> Option<&std::sync::Arc<layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot>>
+    {
+        let inputs = self.SVGResourceInputKey()?;
+        (self.svg_clip_resource_inputs == Some(inputs))
+            .then_some(self.svg_clip_resources.as_ref())
+            .flatten()
+    }
+
+    pub(crate) fn PublishSVGResources(
+        &mut self,
+        mut snapshot: std::sync::Arc<
+            layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot,
+        >,
+    ) -> bool {
+        self.svg_clip_resource_inputs = self.SVGResourceInputKey();
+        if self
+            .svg_clip_resources
+            .as_ref()
+            .is_some_and(|old| old.entries == snapshot.entries)
+        {
+            return false;
+        }
+        let revision = self.svg_clip_resources.as_ref().map_or(1, |old| {
+            old.version
+                .revision
+                .checked_add(1)
+                .expect("SVG resource revision exhausted")
+        });
+        std::sync::Arc::make_mut(&mut snapshot).version =
+            layoutng_assembly::internal::paint_input::SvgClipResourceVersion {
+                document_id: self.arena_id,
+                revision,
+            };
+        self.svg_clip_resources = Some(snapshot);
+        true
     }
     pub fn GetCompatibilityMode(&self) -> CompatibilityMode {
         self.compatibility
@@ -2708,8 +2799,10 @@ impl PersistentDocument {
         self.style_state
             .impact
             .Merge(crate::style_state::StyleUpdateImpact::TREE);
-        self.style_state.measurement_geometry_revision =
-            self.style_state.measurement_geometry_revision.wrapping_add(1);
+        self.style_state.measurement_geometry_revision = self
+            .style_state
+            .measurement_geometry_revision
+            .wrapping_add(1);
     }
 
     fn AttributeMayChangeFlatTree(&self, element: usize, name: &str, namespace: &str) -> bool {
@@ -2895,7 +2988,10 @@ impl PersistentDocument {
     // first slot of the same name in shadow-tree order. Manual slotting is a
     // separate retained owner below.
     pub fn AssignedSlot(&self, node: usize) -> Option<usize> {
-        if !matches!(self.arena[node].node_type, DOMNodeType::kElement | DOMNodeType::kText) {
+        if !matches!(
+            self.arena[node].node_type,
+            DOMNodeType::kElement | DOMNodeType::kText
+        ) {
             return None;
         }
         let host = self.arena[node].parent?;
@@ -3039,7 +3135,10 @@ impl PersistentDocument {
         let mut nodes = self.AssignedNodes(slot);
         if nodes.is_empty() {
             nodes.extend(self.arena[slot].children.iter().copied().filter(|&child| {
-                matches!(self.arena[child].node_type, DOMNodeType::kElement | DOMNodeType::kText)
+                matches!(
+                    self.arena[child].node_type,
+                    DOMNodeType::kElement | DOMNodeType::kText
+                )
             }));
         }
         let mut flattened = Vec::new();
@@ -3500,7 +3599,8 @@ impl PersistentDocument {
         if self.HasCustomElementDefinitions()
             && self.CustomElementDefinitionForElement(element).is_some()
         {
-            let old_value = existing.map(|index| self.arena[element].attributes[index].value.clone());
+            let old_value =
+                existing.map(|index| self.arena[element].attributes[index].value.clone());
             self.CustomElementAttributeWillChange(
                 element,
                 &attribute.local_name,
@@ -3572,7 +3672,8 @@ impl PersistentDocument {
         }
         let sibling_sensitive_before = self.NodeMayAffectSiblingSelectors(element);
         let descendant_sensitive_before = self.NodeMayAffectDescendantSelectors(element);
-        if self.AttributeMayChangeFlatTree(element, &attribute.local_name, &attribute.namespace_uri) {
+        if self.AttributeMayChangeFlatTree(element, &attribute.local_name, &attribute.namespace_uri)
+        {
             self.RecordFlatTreeChange();
         }
         self.BumpCollectionMembershipRevision();
@@ -3685,7 +3786,13 @@ impl PersistentDocument {
                     attribute.local_name == local_name && attribute.namespace_uri == namespace_uri
                 })
                 .map(|attribute| attribute.value.clone());
-            self.CustomElementAttributeWillChange(element, local_name, namespace_uri, old_value, None);
+            self.CustomElementAttributeWillChange(
+                element,
+                local_name,
+                namespace_uri,
+                old_value,
+                None,
+            );
         }
         let sibling_sensitive_before = self.NodeMayAffectSiblingSelectors(element);
         let descendant_sensitive_before = self.NodeMayAffectDescendantSelectors(element);
@@ -4107,6 +4214,8 @@ impl PersistentDocument {
     }
 
     pub fn SetCorrespondingSVGElement(&mut self, element: usize, corresponding: Option<usize>) {
+        self.BumpCollectionMembershipRevision();
+        self.InvalidateNodeStyle(element);
         let id = self.arena[element].id;
         if let Some(corresponding) = corresponding {
             self.corresponding_svg_elements
@@ -5519,6 +5628,7 @@ impl PersistentDocument {
         if self.ResolvedStyleFor(node) == Some(&style) {
             return;
         }
+        self.resolved_style_revision = self.resolved_style_revision.saturating_add(1);
         let new_sources = StyleImageSources(&style);
         let same_sources = self
             .ResolvedStyleFor(node)
@@ -5539,6 +5649,7 @@ impl PersistentDocument {
         let Some(style) = self.resolved_styles.remove(&self.arena[node].id) else {
             return;
         };
+        self.resolved_style_revision = self.resolved_style_revision.saturating_add(1);
         for source in StyleImageSources(&style) {
             if let Some(consumers) = self.style_image_consumers.get_mut(&source) {
                 consumers.remove(&node);
@@ -5562,6 +5673,13 @@ impl PersistentDocument {
     }
 
     // cpp: dom/document.h:132-132
+    /// Existing DOM connectivity semantics, sampled only by opt-in diagnostics.
+    pub fn MemoryDiagnostics(&self) -> DOMMemoryDiagnostics {
+        let connected = (0..self.arena.len()).filter(|&i| self.IsConnectedToDocument(i)).count();
+        DOMMemoryDiagnostics { arena_nodes: self.arena.len(), connected_nodes: connected,
+            detached_nodes: self.arena.len() - connected,
+            arena_slot_capacity_bytes: self.arena.capacity() * std::mem::size_of::<DOMNode>() }
+    }
     pub fn NodeCount(&self) -> usize {
         self.arena.len()
     }
@@ -6035,4 +6153,11 @@ mod collection_membership_epoch_tests {
         assert_eq!(b.collection_membership_revision, u64::MAX);
         assert!(b.CollectionMembershipKey().is_none());
     }
+}
+
+/// Partial DOM arena storage, excluding separately allocated node payloads/styles.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DOMMemoryDiagnostics {
+    pub arena_nodes: usize, pub connected_nodes: usize, pub detached_nodes: usize,
+    pub arena_slot_capacity_bytes: usize,
 }

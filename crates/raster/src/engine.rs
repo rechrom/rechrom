@@ -11,6 +11,20 @@ use layer_tile::{
 use skia::src::core::SkCanvas::RasterImageCache;
 use std::{collections::HashMap, io};
 
+/// Read-only component accounting; enabled explicitly for ownership diagnosis.
+/// Shared image owners may appear in more than one lane's accounting.
+pub(crate) fn memory_diagnostics_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("RECHROM_MEMORY_DIAGNOSTICS").is_some())
+}
+pub(crate) fn diagnostic_time_ns() -> u128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos())
+}
+pub(crate) fn next_memory_diagnostic_id() -> usize {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RasterStats {
     pub layers: usize,
@@ -169,6 +183,7 @@ struct PendingPrepaint {
 }
 
 pub struct RasterEngine {
+    memory_diagnostic_id: Option<usize>,
     layer_tree_id: Option<LayerTreeId>,
     prepared_frame_id: Option<u64>,
     prepared_damage_pixels: usize,
@@ -185,6 +200,7 @@ pub struct RasterEngine {
 impl Default for RasterEngine {
     fn default() -> Self {
         Self {
+            memory_diagnostic_id: memory_diagnostics_enabled().then(next_memory_diagnostic_id),
             layer_tree_id: None,
             prepared_frame_id: None,
             prepared_damage_pixels: 0,
@@ -222,6 +238,27 @@ impl RasterResourceProvider for RasterEngine {
 }
 
 impl RasterEngine {
+    fn report_memory(&self, phase: &str) {
+        let Some(id) = self.memory_diagnostic_id else {
+            return;
+        };
+        let tile_capacity: usize = self
+            .resources
+            .values()
+            .map(|r| {
+                r.rgba.capacity()
+                    + r.bgra.capacity() * std::mem::size_of::<u32>()
+                    + r.row_support.rows.capacity() * std::mem::size_of::<RowSupport>()
+                    + r.row_support.runs.capacity() * std::mem::size_of::<(usize, usize)>()
+            })
+            .sum();
+        eprintln!("raster-memory time_ns={} thread={:?} engine={} phase={} frame={} resources={} tile_capacity={} halo_capacity={} image_accounted={} clip_accounted={} thread_scratch={} glyphs={:?}",
+            diagnostic_time_ns(), std::thread::current().id(), id, phase, self.prepared_frame_id.unwrap_or(0), self.resources.len(), tile_capacity,
+            self.halo_scratch.capacity(), self.image_cache.resident_pixel_bytes(),
+            self.clip_cache.accounting().resident_requested_bytes,
+            skia::src::core::SkCanvas::RasterThreadScratchBytes(),
+            skia::src::core::SkCanvas::RasterThreadGlyphMemoryDiagnostics());
+    }
     pub fn stats(&self) -> RasterStats {
         self.stats
     }
@@ -574,6 +611,7 @@ impl RasterEngine {
         self.stats.raster_tasks = tasks.len();
         self.stats.reused_tiles = self.stats.tiles.saturating_sub(tasks.len());
         self.stats.resident_bytes = self.resources.values().map(resource_bytes).sum();
+        self.report_memory("prepared");
         Ok(RasterUpdate {
             mode: "tile-raster",
             reason: if tasks.is_empty() {
@@ -601,6 +639,7 @@ impl RasterEngine {
             self.resources.remove(tile);
         }
         self.stats.resident_bytes = self.resources.values().map(resource_bytes).sum();
+        self.report_memory("released");
         Ok(release.clone())
     }
 }

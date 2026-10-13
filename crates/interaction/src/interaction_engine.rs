@@ -121,7 +121,7 @@ fn HitGeometry(
     point: Offset,
     parent: Offset,
 ) -> Option<(Offset, Offset, bool)> {
-    if fragment.paint.hidden {
+    if fragment.paint.hidden || fragment.paint.svg_hidden_container {
         return None;
     }
     let (point, absolute) = LocalPoint(fragment, point, parent)?;
@@ -360,6 +360,9 @@ fn ControlPoint(
     parent: Offset,
     root_point: Offset,
 ) -> Option<(&FragmentNode, Offset)> {
+    if fragment.paint.svg_hidden_container {
+        return None;
+    }
     let (point, absolute) = LocalPoint(fragment, point, parent)?;
     if fragment.node_id == id && fragment.paint.text_control_caret_metrics.is_some() {
         return Some((

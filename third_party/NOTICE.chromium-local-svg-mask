@@ -1,0 +1,15 @@
+The local SVG mask native image, hidden resource kind, resource resolution and
+paint bridge are based on The Chromium Authors' BSD-licensed code.
+See LICENSE.chromium.
+
+Pinned revision: 6c1d401fcca5e1b0030563a90c2f2bba168e0c15
+Sources under third_party/blink/renderer/:
+core/css/resolver/element_style_resources.cc (LoadMaskSource)
+core/css/css_url_data.cc (IsLocal)
+core/css/css_image_value.cc (NormalizedFragmentIdentifier)
+core/style/style_mask_source_image.h
+core/style/style_mask_source_image.cc
+core/svg/svg_mask_element.cc
+core/layout/svg/layout_svg_resource_masker.h
+core/layout/svg/layout_svg_resource_masker.cc
+core/paint/svg_mask_painter.cc

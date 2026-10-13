@@ -119,3 +119,5 @@ pub mod timeline_inset;
 mod trace_value_policy;
 pub mod transform_origin;
 pub mod unzoomed_length;
+
+pub mod style_mask_source_image;

@@ -135,7 +135,24 @@ pub struct DOMJavaScriptBindings {
     selector_service: RefCell<style::persistent_selector::PersistentSelectorService>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DOMHostMemoryDiagnostics {
+    pub collections: usize, pub iterators: usize, pub result_records: usize,
+    pub record_fields: usize, pub listener_targets: usize, pub listener_entries: usize,
+    pub events: usize, pub event_identities: usize,
+}
 impl DOMJavaScriptBindings {
+    pub fn MemoryDiagnostics(&self) -> DOMHostMemoryDiagnostics {
+        let records = self.records.borrow();
+        let listeners = self.listeners.borrow();
+        let (events, event_identities) = self.services.MemoryCounts();
+        DOMHostMemoryDiagnostics {
+            collections: self.collections.borrow().len(), iterators: self.iterators.borrow().len(),
+            result_records: records.len(), record_fields: records.values().map(HashMap::len).sum(),
+            listener_targets: listeners.len(), listener_entries: listeners.values()
+                .flat_map(|kinds| kinds.values()).map(Vec::len).sum(), events, event_identities,
+        }
+    }
     fn selector_error(error: style::persistent_selector::PersistentSelectorError) -> HostResult {
         match error {
             style::persistent_selector::PersistentSelectorError::Syntax(error) => {

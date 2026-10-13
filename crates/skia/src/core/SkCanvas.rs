@@ -265,6 +265,34 @@ std::thread_local! {
     static LAYER_SCRATCH: std::cell::RefCell<LayerScratchPool> =
         std::cell::RefCell::new(LayerScratchPool::default());
 }
+/// Read-only accounting of the calling raster lane's retained layer scratch.
+/// It neither allocates nor evicts cached pixels.
+pub fn RasterThreadScratchBytes() -> usize {
+    LAYER_SCRATCH.try_with(|pool| pool.borrow().bytes).unwrap_or(0)
+}
+/// Per-calling-thread glyph cache observations. Identity bytes are exact Vec
+/// capacities. Strike charges exclude map spare capacity/allocator metadata;
+/// scan charges can overlap outline owners. Sampling never purges or prepares.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RasterThreadGlyphMemory {
+    pub font_identity_count: usize,
+    /// Privately copied identity payload; excludes shared backing.
+    pub font_identity_capacity_bytes: usize,
+    /// Referenced immutable backing bytes; overlaps across threads/resources.
+    pub font_identity_shared_bytes: usize,
+    pub font_identity_table_capacity_bytes: usize,
+    pub outline_strikes: usize,
+    pub outline_accounted_bytes: usize,
+    pub scan_strikes: usize,
+    pub scan_accounted_bytes: usize,
+}
+pub fn RasterThreadGlyphMemoryDiagnostics() -> RasterThreadGlyphMemory {
+    let (font_identity_count, font_identity_table_capacity_bytes, font_identity_capacity_bytes, outline_strikes,
+        outline_accounted_bytes, font_identity_shared_bytes) = crate::compat::glyph_paths::memory_diagnostics();
+    let (scan_strikes, scan_accounted_bytes) = crate::compat::glyph_rasters::memory_diagnostics();
+    RasterThreadGlyphMemory { font_identity_count, font_identity_capacity_bytes, font_identity_shared_bytes, font_identity_table_capacity_bytes,
+        outline_strikes, outline_accounted_bytes, scan_strikes, scan_accounted_bytes }
+}
 fn cleared_layer_pixmap(width: u32, height: u32) -> Pixmap {
     if let Some(mut pixmap) = LAYER_SCRATCH
         .try_with(|pool| pool.borrow_mut().take(width, height))
@@ -1200,6 +1228,17 @@ impl SkCanvas {
     }
 
     // cpp: skia_renderer/skia_renderer.cc:1074-1110
+
+    /// The current local-to-device matrix, in this affine CPU subset.
+    /// Source: SkCanvas::getLocalToDevice / setMatrix. Changing the matrix
+    /// leaves the already-materialized device-space clip untouched.
+    pub fn local_to_device(&self) -> Transform {
+        self.state.transform
+    }
+
+    pub fn set_matrix(&mut self, matrix: Transform) {
+        self.state.transform = matrix;
+    }
 
     pub(crate) fn concat(&mut self, matrix: [f64; 16]) {
         let transform = Transform::from_row(
@@ -2493,7 +2532,7 @@ impl SkCanvas {
         };
         let relative_top = top - item.text_blob_origin.y;
         let relative_bottom = bottom - item.text_blob_origin.y;
-        crate::compat::glyph_paths::with_paths(font.bytes, descriptor, |strike| {
+        crate::compat::glyph_paths::with_paths(font.bytes, font.shared_bytes(), descriptor, |strike| {
             let mut face_data = None;
             let mut intervals = Vec::new();
             for glyph in &item.glyphs {
@@ -2888,7 +2927,7 @@ impl SkCanvas {
         };
         // SkStrike keeps generated paths across full redraws. Their color, clip,
         // placement and framebuffer remain draw-local and are replayed each time.
-        crate::compat::glyph_paths::with_paths(font.bytes, descriptor, |strike| {
+        crate::compat::glyph_paths::with_paths(font.bytes, font.shared_bytes(), descriptor, |strike| {
             let mut face_data = None;
             let mut bitmap_face = None;
             for glyph in &item.glyphs {
@@ -3981,6 +4020,7 @@ mod readback_and_path_tests {
             resources: Some(ResourceCatalog {
                 fonts: vec![FontFace {
                     bytes: &bytes,
+                    bytes_owner: None,
                     face_index: 0,
                     family: "bitmap test",
                     native_family: "",
@@ -4040,6 +4080,7 @@ mod readback_and_path_tests {
             resources: Some(ResourceCatalog {
                 fonts: vec![FontFace {
                     bytes,
+                    bytes_owner: None,
                     face_index: 0,
                     family: "Roboto",
                     native_family: "",
@@ -4125,6 +4166,7 @@ mod readback_and_path_tests {
             resources: Some(ResourceCatalog {
                 fonts: vec![FontFace {
                     bytes,
+                    bytes_owner: None,
                     face_index: 0,
                     family: "Roboto",
                     native_family: "",
@@ -4711,6 +4753,7 @@ mod color_layout_tests {
             resources: Some(ResourceCatalog {
                 fonts: vec![FontFace {
                     bytes,
+                    bytes_owner: None,
                     face_index: 0,
                     family: "Roboto",
                     native_family: "",
@@ -5410,6 +5453,7 @@ mod conservative_glyph_damage_tests {
             weight: 400.,
             italic: false,
             bytes,
+            bytes_owner: None,
             face_index: 0,
             variations: Vec::new(),
         };
@@ -5874,6 +5918,7 @@ mod variable_glyph_damage_tests {
                             weight: 400.,
                             italic: false,
                             bytes,
+                            bytes_owner: None,
                             face_index: 0,
                             variations: axes,
                         }],
@@ -5949,5 +5994,37 @@ mod variable_glyph_damage_tests {
                 }
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+mod exact_matrix_clip_tests {
+    use super::*;
+
+    #[test]
+    fn exact_matrix_restore_keeps_device_clip_and_save_restore() {
+        let resources = ResourceContext::default();
+        let mut canvas = SkCanvas::new(&resources, 64, 64);
+        let base = Transform::from_row(1.25, 0.0, 0.0, 1.25, 3.5, 2.25);
+        canvas.set_matrix(base);
+        canvas.save();
+        canvas.set_matrix(base.pre_concat(Transform::from_rotate(37.0)));
+        canvas.replay_item(&DrawCommand {
+            r#type: CommandKind::kClipRect,
+            rect: PaintRect {x:4.0,y:2.0,width:24.0,height:28.0},
+            antialias:true,
+            ..Default::default()
+        }, &resources);
+        let clipped = canvas.state.clip.clone();
+        let encoding = format!("{:?}", canvas.state.clip_summary);
+        assert!(clipped.is_some());
+        canvas.set_matrix(base);
+        assert_eq!(canvas.local_to_device(), base);
+        assert!(std::sync::Arc::ptr_eq(canvas.state.clip.as_ref().unwrap(), clipped.as_ref().unwrap()));
+        assert_eq!(format!("{:?}", canvas.state.clip_summary), encoding);
+        canvas.restore();
+        assert_eq!(canvas.local_to_device(), base);
+        assert!(canvas.state.clip.is_none());
     }
 }

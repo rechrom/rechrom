@@ -192,6 +192,10 @@ struct HeapState {
     heap_bytes: usize,
     allocated_bytes_since_collection: usize,
     collection_requested: bool,
+    collections_completed: u64,
+    last_before_bytes: usize,
+    last_after_bytes: usize,
+    last_reclaimed_objects: usize,
     profile_collection: bool,
     profile_mark_edges: usize,
     profile_mark_cache_hits: usize,
@@ -220,6 +224,7 @@ impl HeapState {
             heap_bytes: 0,
             allocated_bytes_since_collection: 0,
             collection_requested: false,
+            collections_completed: 0, last_before_bytes: 0, last_after_bytes: 0, last_reclaimed_objects: 0,
             profile_collection: false,
             profile_mark_edges: 0,
             profile_mark_cache_hits: 0,
@@ -455,7 +460,9 @@ fn collect() {
             trace.set("roots", heap.roots.len() as f64);
         });
     }
+    let before_bytes = HEAP.with(|heap| heap.borrow().heap_bytes);
     let dead = HEAP.with(|heap| heap.borrow_mut().collect_marks());
+    let reclaimed_objects = dead.len();
     trace.set("reclaimed_objects", dead.len() as f64);
     SWEEPING.set(true);
     // Keep every allocation mapped while native destructors run. Destructors
@@ -487,6 +494,10 @@ fn collect() {
         heap.weak_roots.clear();
         heap.weak_backings.clear();
         heap.ephemerons.clear();
+        heap.collections_completed = heap.collections_completed.saturating_add(1);
+        heap.last_before_bytes = before_bytes;
+        heap.last_after_bytes = heap.heap_bytes;
+        heap.last_reclaimed_objects = reclaimed_objects;
         heap.collecting = false;
     });
     SWEEPING.set(false);
@@ -1497,5 +1508,98 @@ mod worklist_dispatch_lifecycle_tests {
         })
         .join()
         .unwrap();
+    }
+}
+
+/// Requested allocation storage, including uncollected garbage. Excludes
+/// separately owned Vec/String payloads and allocator metadata/resident pages.
+/// Root counts classify registered cells, not unique managed objects. Container
+/// bytes are requested capacities, excluding Arc cells and allocation-map nodes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayoutHeapMemoryDiagnostics {
+    pub allocated_requested_bytes: usize,
+    pub allocated_since_collection_bytes: usize,
+    pub allocations: usize,
+    pub root_registry_slots: usize,
+    pub root_registry_capacity_bytes: usize,
+    pub roots_expired: usize,
+    pub roots_strong_nonnull: usize,
+    pub roots_weak_nonnull: usize,
+    pub roots_cleared: usize,
+    pub worklist_capacity_bytes: usize,
+    pub weak_slots_capacity_bytes: usize,
+    pub weak_roots_capacity_bytes: usize,
+    pub weak_backings_capacity_bytes: usize,
+    pub ephemerons_capacity_bytes: usize,
+    pub collection_requested: bool,
+    pub active_scopes: usize,
+    pub collections_completed: u64,
+    pub last_before_bytes: usize,
+    pub last_after_bytes: usize,
+    pub last_reclaimed_objects: usize,
+}
+/// Read-only, opt-in O(registered roots) snapshot. Temporary Arc upgrades do not
+/// register, clear or retain roots, mark targets, request GC or prune capacity.
+pub fn LayoutHeapMemoryDiagnostics() -> LayoutHeapMemoryDiagnostics {
+    HEAP.with(|heap| {
+        let h = heap.borrow();
+        let mut result = LayoutHeapMemoryDiagnostics {
+            allocated_requested_bytes: h.heap_bytes,
+            allocated_since_collection_bytes: h.allocated_bytes_since_collection,
+            allocations: h.objects.len(),
+            root_registry_slots: h.roots.len(),
+            root_registry_capacity_bytes: h.roots.capacity() * std::mem::size_of::<Weak<dyn RootSlot>>(),
+            worklist_capacity_bytes: h.worklist.capacity() * std::mem::size_of::<TraceWorkItem>(),
+            weak_slots_capacity_bytes: h.weak_slots.capacity() * std::mem::size_of::<WeakSlot>(),
+            weak_roots_capacity_bytes: h.weak_roots.capacity() * std::mem::size_of::<Arc<dyn RootSlot>>(),
+            weak_backings_capacity_bytes: h.weak_backings.capacity() * std::mem::size_of::<WeakBacking>(),
+            ephemerons_capacity_bytes: h.ephemerons.capacity() * std::mem::size_of::<Ephemeron>(),
+            collection_requested: h.collection_requested,
+            active_scopes: h.scopes,
+            collections_completed: h.collections_completed,
+            last_before_bytes: h.last_before_bytes,
+            last_after_bytes: h.last_after_bytes,
+            last_reclaimed_objects: h.last_reclaimed_objects,
+            ..Default::default()
+        };
+        for slot in &h.roots {
+            match slot.upgrade() {
+                None => result.roots_expired += 1,
+                Some(root) if root.get().is_null() => result.roots_cleared += 1,
+                Some(root) if root.weak() => result.roots_weak_nonnull += 1,
+                Some(_) => result.roots_strong_nonnull += 1,
+            }
+        }
+        result
+    })
+}
+
+#[cfg(test)]
+mod memory_diagnostic_tests {
+    use super::*;
+    #[test]
+    fn registry_snapshot_classifies_cells_without_mutating_heap_or_roots() {
+        std::thread::spawn(|| {
+            let mut scope = LayoutHeapScope::new();
+            scope.DeferCollection();
+            let object = MakeGarbageCollected(17u32);
+            let root = Persistent::from_ptr(object);
+            let weak = WeakPersistent::from_ptr(object);
+            let mut cleared = root.clone();
+            cleared.Clear();
+            drop(root.clone());
+            drop(scope);
+            let before = LayoutHeapMemoryDiagnostics();
+            assert_eq!((before.roots_strong_nonnull, before.roots_weak_nonnull,
+                before.roots_cleared, before.roots_expired), (1, 1, 1, 1));
+            assert!(before.root_registry_capacity_bytes >= 4 * std::mem::size_of::<Weak<dyn RootSlot>>());
+            for _ in 0..4 { assert_eq!(before, LayoutHeapMemoryDiagnostics()); }
+            assert_eq!(unsafe { *root.Get() }, 17);
+            assert_eq!(weak.Get(), root.Get());
+            drop((root, weak, cleared));
+            RequestLayoutHeapCollection();
+            assert!(CollectLayoutHeapIfRequested());
+            assert_eq!(LayoutHeapMemoryDiagnostics().allocations, 0);
+        }).join().unwrap();
     }
 }

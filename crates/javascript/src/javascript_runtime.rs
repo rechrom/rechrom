@@ -387,7 +387,18 @@ pub struct JavaScriptModuleCompilation {
 }
 
 // cpp: javascript/javascript_runtime.h:215-267
+/// Read-only runtime accounting. Fields overlap; this is not an additive RSS total.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct JavaScriptMemoryDiagnostics {
+    pub malloc_bytes: i64, pub used_bytes: i64, pub objects: i64,
+    pub strings: i64, pub string_bytes: i64, pub atoms: i64,
+    pub properties: i64, pub property_bytes: i64, pub shapes: i64,
+    pub function_bytes: i64, pub code_bytes: i64, pub array_elements: i64,
+    pub binary_bytes: i64, pub host_wrappers: usize, pub host_identities: usize,
+    pub host_fallbacks: usize,
+}
 pub trait JavaScriptRuntime {
+    fn MemoryDiagnostics(&self, _realm: &JavaScriptRealm) -> Option<JavaScriptMemoryDiagnostics> { None }
     fn CreateRealm(&mut self, host: Rc<RefCell<dyn JavaScriptHostBindings>>) -> JavaScriptRealm;
     fn Evaluate(
         &mut self,

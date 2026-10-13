@@ -31,6 +31,12 @@ use std::cell::{OnceCell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 
+// cpp: element_style_resources.cc:374-390. One local/fetched mask decision
+// shared by the translated resource owner and the production typed bridge.
+pub(crate) fn LoadMaskSourceBranch<T>(
+    is_local: bool, local: impl FnOnce() -> T, external: impl FnOnce() -> T,
+) -> T { if is_local { local() } else { external() } }
+
 type ImageValue<B> =
     <<B as StyleResolverStateBackend>::ValueDispatch as CSSValueDispatch>::CSSImageValue;
 type ImageSetValue<B> =
@@ -284,13 +290,13 @@ impl<B: ElementStyleResourcesBackend> ElementStyleResources<B> {
             return None;
         };
         let document = self.backend.ResourceDocument(&self.element_);
-        if self.backend.ImageIsLocal(image_value, document) {
+        LoadMaskSourceBranch(self.backend.ImageIsLocal(image_value, document), || {
             let resource = self.backend.TreeScopeResourceForId(
                 &self.element_,
                 &self.backend.ImageNormalizedFragment(image_value),
             );
-            return Some(self.backend.NewLocalStyleMaskSourceImage(resource, value));
-        }
+            Some(self.backend.NewLocalStyleMaskSourceImage(resource, value.clone()))
+        }, || {
         let image = self.backend.ImageCacheImage(
             image_value,
             document,
@@ -300,8 +306,9 @@ impl<B: ElementStyleResourcesBackend> ElementStyleResources<B> {
         let resource = self.backend.ImageEnsureSVGResource(image_value);
         let result = self
             .backend
-            .NewFetchedStyleMaskSourceImage(image, resource, value);
+            .NewFetchedStyleMaskSourceImage(image, resource, value.clone());
         Some(result)
+        })
     }
     fn LoadResourcesForFilter(&self, operations: &FilterOperationVector) {
         for operation in operations.iter() {

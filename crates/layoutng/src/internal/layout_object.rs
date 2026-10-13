@@ -451,6 +451,9 @@ pub enum LayoutObjectClass {
     TextControlInnerEditor,
     Fieldset,
     SvgGroup,
+    SvgHiddenContainer,
+    SvgResourceClipper,
+    SvgResourceMasker,
     SvgViewportContainer,
     SvgShape,
     SvgRoot,
@@ -1539,6 +1542,10 @@ impl LayoutObject {
 
     pub fn SetNeedsTransformUpdate(&mut self) {
         self.CheckIsNotDestroyed();
+        // LayoutSVGHiddenContainer does not establish a painted transform.
+        if self.IsSVGHiddenContainer() {
+            return;
+        }
         unsafe { DispatchLayoutObjectSetNeedsTransformUpdate(self) }
     }
 
@@ -5329,6 +5336,9 @@ impl LayoutObject {
 impl LayoutObject {
     // cpp: layoutng/internal/layout_object.h:2102-2102
     pub fn Paint(&self, info: &PaintInfo) {
+        if self.IsSVGHiddenContainer() {
+            return;
+        }
         unsafe { LayoutObjectPaintProvider(self, info) }
     }
 
@@ -5380,6 +5390,9 @@ impl LayoutObject {
         accumulated_offset: &PhysicalOffset,
         phase: HitTestPhase,
     ) -> bool {
+        if self.IsSVGHiddenContainer() {
+            return false;
+        }
         unsafe {
             LayoutObjectNodeAtPointProvider(self, result, location, accumulated_offset, phase)
         }

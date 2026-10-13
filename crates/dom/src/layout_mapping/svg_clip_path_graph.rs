@@ -3,11 +3,100 @@ use crate::{persistent_document::DOMNamespace, Child, Element, ParsedDocument as
 use layoutng_assembly::internal::layout_input::{Offset, PaintPathCommand, PaintPathVerb};
 use layoutng_assembly::internal::paint_input::{
     SvgClipGeometry, SvgClipLength, SvgClipPathChild, SvgClipPathGraph, SvgClipPathUnits,
-    SvgClipPreserveAspectRatio, SvgClipText, SvgClipTextAnchor, SvgClipTextPath, SvgClipTransform,
-    SvgClipTransformStep, SvgClipViewport,
+    SvgClipResourceEntry, SvgClipResourceSnapshot, SvgClipResourceVersion, SvgClipText,
+    SvgClipTextAnchor, SvgClipTextPath, SvgClipTransform, SvgClipTransformStep,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+// A catalog is indexed by the first connected ID target in each TreeScope,
+// before checking the target's element type. Linked use/textPath references
+// resolve in the referencing element's originating scope, never arena order.
+struct GraphDocument<'a> {
+    document: &'a Document,
+    reference_scopes: Vec<u64>,
+    targets: HashMap<(u64, String), usize>,
+    ordered_targets: Vec<(u64, String, usize, u64)>,
+    computed_geometry: HashMap<usize, Result<Option<SvgClipGeometry>, String>>,
+    computed_use_offsets: HashMap<usize, Result<(SvgClipLength, SvgClipLength), String>>,
+    unavailable_targets: HashSet<usize>,
+    mask_graphs: HashMap<usize, Arc<layoutng_assembly::internal::paint_input::SvgMaskGraph>>,
+    use_instances: HashMap<usize, Result<Option<usize>, String>>,
+}
+
+impl std::ops::Deref for GraphDocument<'_> {
+    type Target = Document;
+    fn deref(&self) -> &Self::Target {
+        self.document
+    }
+}
+
+fn collect_tree_order(document: &Document, index: usize, output: &mut Vec<usize>) {
+    output.push(index);
+    for child in &document.elements[index].children {
+        if let Child::Element(child) = child {
+            collect_tree_order(document, *child, output);
+        }
+    }
+}
+
+impl<'a> GraphDocument<'a> {
+    fn new(document: &'a Document, reference_scopes: Vec<u64>) -> Self {
+        Self {
+            document,
+            reference_scopes,
+            targets: HashMap::new(),
+            ordered_targets: Vec::new(),
+            computed_geometry: HashMap::new(),
+            computed_use_offsets: HashMap::new(),
+            unavailable_targets: HashSet::new(),
+            mask_graphs: HashMap::new(),
+            use_instances: HashMap::new(),
+        }
+    }
+
+    fn index_target(&mut self, index: usize, scope: u64, node_id: u64) {
+        let element = &self.document.elements[index];
+        let Some(id) = attr(element, "id")
+            .or(element.id.as_deref())
+            .filter(|id| !id.is_empty())
+        else {
+            return;
+        };
+        let key = (scope, id.to_owned());
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.targets.entry(key.clone()) {
+            entry.insert(index);
+            self.ordered_targets.push((scope, key.1, index, node_id));
+        }
+    }
+
+    fn snapshot(&self, document_id: u64) -> Arc<SvgClipResourceSnapshot> {
+        Arc::new(SvgClipResourceSnapshot {
+            version: SvgClipResourceVersion {
+                document_id,
+                revision: 0,
+            },
+            entries: self
+                .ordered_targets
+                .iter()
+                .map(|(scope, id, index, node_id)| {
+                    let element = &self.document.elements[*index];
+                    SvgClipResourceEntry {
+                        scope_id: *scope,
+                        target_node_id: *node_id,
+                        id: id.clone(),
+                        mask_graph: (!self.unavailable_targets.contains(index))
+                            .then(|| self.mask_graphs.get(index).cloned()).flatten(),
+                        graph: (element.namespace == DOMNamespace::kSVG
+                            && element.tag == "clipPath"
+                            && !self.unavailable_targets.contains(index))
+                        .then(|| Arc::new(build_one(self, *index))),
+                    }
+                })
+                .collect(),
+        })
+    }
+}
 
 fn attr<'a>(element: &'a Element, name: &str) -> Option<&'a str> {
     element
@@ -87,6 +176,80 @@ fn svg_length_token(raw: &str) -> Result<SvgClipLength, String> {
         }
     })
 }
+// SVGLengthConversionData consumes canonical computed lengths. Preserve the
+// unresolved linear percentage part until Paint knows the reference viewport;
+// native fixed lengths carry effective zoom, while SVG resource units do not.
+fn native_clip_length(value: &foundation::Length, zoom: f32) -> Result<SvgClipLength, String> {
+    if value.IsAuto() {
+        return Ok(SvgClipLength::default());
+    }
+    let pair = if value.IsFixed() || value.IsPercent() {
+        value.GetPixelsAndPercent()
+    } else if value.IsCalculated() && !value.GetCalculationValue().IsExpression() {
+        value.GetCalculationValue().GetPixelsAndPercent()
+    } else {
+        return Err("unsupported computed SVG clip geometry length".into());
+    };
+    let length = SvgClipLength {
+        value: if pair.has_explicit_pixels {
+            f64::from(pair.pixels) / f64::from(zoom)
+        } else {
+            0.0
+        },
+        percentage: if pair.has_explicit_percent {
+            f64::from(pair.percent) / 100.0
+        } else {
+            0.0
+        },
+    };
+    if !length.value.is_finite() || !length.percentage.is_finite() {
+        return Err("non-finite computed SVG clip geometry length".into());
+    }
+    Ok(length)
+}
+
+fn native_shape_geometry(
+    tag: &str,
+    style: &layoutng_style::style::computed_style::ComputedStyle,
+) -> Result<Option<SvgClipGeometry>, String> {
+    let zoom = style.EffectiveZoom().max(f32::MIN_POSITIVE);
+    let length = |value: &foundation::Length| native_clip_length(value, zoom);
+    Ok(match tag {
+        "circle" => Some(SvgClipGeometry::kCircle {
+            cx: length(style.Cx())?,
+            cy: length(style.Cy())?,
+            r: length(style.R())?,
+        }),
+        "ellipse" => Some(SvgClipGeometry::kEllipse {
+            cx: length(style.Cx())?,
+            cy: length(style.Cy())?,
+            rx: length(if style.Rx().IsAuto() {
+                style.Ry()
+            } else {
+                style.Rx()
+            })?,
+            ry: length(if style.Ry().IsAuto() {
+                style.Rx()
+            } else {
+                style.Ry()
+            })?,
+        }),
+        "rect" => Some(SvgClipGeometry::kRect {
+            x: length(style.X())?,
+            y: length(style.Y())?,
+            width: length(style.Width())?,
+            height: length(style.Height())?,
+            rx: (!style.Rx().IsAuto())
+                .then(|| length(style.Rx()))
+                .transpose()?,
+            ry: (!style.Ry().IsAuto())
+                .then(|| length(style.Ry()))
+                .transpose()?,
+        }),
+        _ => None,
+    })
+}
+
 fn shape_geometry(element: &Element) -> Result<Option<SvgClipGeometry>, String> {
     Ok(match element.tag.as_str() {
         "circle" => Some(SvgClipGeometry::kCircle {
@@ -263,11 +426,12 @@ fn computed_css_transform(
         ApplyIndependentTransformProperties, ApplyMotionPath, ApplyTransformOperations,
         ApplyTransformOrigin,
     };
+    let zoom = style.EffectiveZoom().max(f32::MIN_POSITIVE);
     let apply = |width: f32, height: f32| {
         let mut matrix = foundation::gfx::Transform::default();
         let reference = foundation::gfx::RectF::new(
             foundation::gfx::PointF::new(0.0, 0.0),
-            foundation::gfx::SizeF::new(width, height),
+            foundation::gfx::SizeF::new(width * zoom, height * zoom),
         );
         style.ApplyTransformRectF::<()>(
             &mut matrix,
@@ -278,6 +442,12 @@ fn computed_css_transform(
             ApplyMotionPath::kExcludeMotionPath,
             ApplyIndependentTransformProperties::kIncludeIndependentTransformProperties,
         );
+        // TransformHelper computes against the zoomed reference box, then
+        // removes effective zoom to publish SVG user-space geometry. Scaling
+        // the input basis as well preserves percentage translation factors.
+        if zoom != 1.0 {
+            matrix.Zoom(1.0 / zoom);
+        }
         matrix.GetColMajor()
     };
     let zero = apply(0.0, 0.0);
@@ -303,7 +473,18 @@ fn computed_css_transform(
     ))
 }
 fn style_value<'a>(element: &'a Element, name: &str) -> Option<&'a str> {
+    let computed_name = match name {
+        "clip-rule" => Some("data-computed-clip-rule"),
+        "display" => Some("data-computed-display"),
+        "visibility" => Some("data-computed-visibility"),
+        "clip-path" => Some("data-computed-clip-path"),
+        _ => None,
+    };
+    if let Some(value) = computed_name.and_then(|name| attr(element, name)) {
+        return Some(value);
+    }
     attr(element, "style")
+        .or(element.inline_style.as_deref())
         .and_then(|style| {
             style.split(';').find_map(|item| {
                 let (key, value) = item.split_once(':')?;
@@ -311,61 +492,6 @@ fn style_value<'a>(element: &'a Element, name: &str) -> Option<&'a str> {
             })
         })
         .or_else(|| attr(element, name))
-}
-
-fn use_viewport_transform(
-    use_element: &Element,
-    target: &Element,
-) -> Result<Option<SvgClipViewport>, String> {
-    let Some(raw_view_box) = attr(target, "viewBox") else {
-        return Ok(None);
-    };
-    let view_box = numbers(raw_view_box)?;
-    if view_box.len() != 4 || view_box[2] <= 0.0 || view_box[3] <= 0.0 {
-        return Err("invalid SVG clip use viewBox".into());
-    }
-    let width = if attr(use_element, "width").is_some() {
-        svg_length(use_element, "width", view_box[2])?
-    } else {
-        svg_length(target, "width", view_box[2])?
-    };
-    let height = if attr(use_element, "height").is_some() {
-        svg_length(use_element, "height", view_box[3])?
-    } else {
-        svg_length(target, "height", view_box[3])?
-    };
-    let preserve = attr(use_element, "preserveAspectRatio")
-        .or_else(|| attr(target, "preserveAspectRatio"))
-        .unwrap_or("xMidYMid meet");
-    let parts = preserve.split_ascii_whitespace().collect::<Vec<_>>();
-    let align = parts.first().copied().unwrap_or("xMidYMid");
-    let align_x = if align.contains("xMax") {
-        1.0
-    } else if align.contains("xMid") {
-        0.5
-    } else {
-        0.0
-    };
-    let align_y = if align.contains("YMax") {
-        1.0
-    } else if align.contains("YMid") {
-        0.5
-    } else {
-        0.0
-    };
-    let preserve = if align == "none" {
-        SvgClipPreserveAspectRatio::kNone
-    } else if parts.get(1) == Some(&"slice") {
-        SvgClipPreserveAspectRatio::kSlice { align_x, align_y }
-    } else {
-        SvgClipPreserveAspectRatio::kMeet { align_x, align_y }
-    };
-    Ok(Some(SvgClipViewport {
-        view_box: view_box.try_into().unwrap(),
-        width,
-        height,
-        preserve,
-    }))
 }
 
 fn line_path(points: &[Offset], close: bool) -> Vec<PaintPathCommand> {
@@ -568,11 +694,11 @@ fn shape_commands(element: &Element) -> Result<Vec<PaintPathCommand>, String> {
         tag => return Err(format!("unsupported SVG clip child {tag}")),
     })
 }
-fn find_id(document: &Document, id: &str) -> Option<usize> {
+fn find_id(document: &GraphDocument<'_>, reference: usize, id: &str) -> Option<usize> {
     document
-        .elements
-        .iter()
-        .position(|element| attr(element, "id") == Some(id) || element.id.as_deref() == Some(id))
+        .targets
+        .get(&(document.reference_scopes[reference], id.to_owned()))
+        .copied()
 }
 fn length_list(element: &Element, name: &str) -> Result<Vec<SvgClipLength>, String> {
     attr(element, name)
@@ -592,7 +718,11 @@ fn normalize_svg_text(text: &str, preserve: bool) -> String {
         text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 }
-fn text_path(document: &Document, element: &Element) -> Result<Option<SvgClipTextPath>, String> {
+fn text_path(
+    document: &GraphDocument<'_>,
+    reference: usize,
+    element: &Element,
+) -> Result<Option<SvgClipTextPath>, String> {
     if element.tag != "textPath" {
         return Ok(None);
     }
@@ -602,8 +732,8 @@ fn text_path(document: &Document, element: &Element) -> Result<Option<SvgClipTex
     let id = href
         .strip_prefix('#')
         .ok_or_else(|| "external SVG clip textPath IRI".to_owned())?;
-    let index =
-        find_id(document, id).ok_or_else(|| "missing SVG clip textPath target".to_owned())?;
+    let index = find_id(document, reference, id)
+        .ok_or_else(|| "missing SVG clip textPath target".to_owned())?;
     let path = &document.elements[index];
     if path.namespace != DOMNamespace::kSVG || path.tag != "path" {
         return Err("SVG clip textPath target is not a path".into());
@@ -629,7 +759,8 @@ fn text_path(document: &Document, element: &Element) -> Result<Option<SvgClipTex
     }))
 }
 fn text_semantics(
-    document: &Document,
+    document: &GraphDocument<'_>,
+    reference: usize,
     element: &Element,
     text: String,
 ) -> Result<SvgClipText, String> {
@@ -670,11 +801,11 @@ fn text_semantics(
             Some("end") => SvgClipTextAnchor::kEnd,
             _ => SvgClipTextAnchor::kStart,
         },
-        text_path: text_path(document, element)?,
+        text_path: text_path(document, reference, element)?,
     })
 }
 fn collect_child(
-    document: &Document,
+    document: &GraphDocument<'_>,
     index: usize,
     stack: &mut HashSet<usize>,
     prefix: Vec<SvgClipTransformStep>,
@@ -693,7 +824,7 @@ fn collect_child(
         stack.remove(&index);
         return Ok(());
     }
-    if style_value(element, "clip-path").is_some() {
+    if style_value(element, "clip-path").is_some_and(|value| value != "none") {
         return Err("nested clip-path on clip content is unsupported".into());
     }
     let own = transform(element)?;
@@ -711,59 +842,64 @@ fn collect_child(
         _ => inherited_visible,
     };
     if element.tag == "use" {
-        let href = attr(element, "href")
-            .or_else(|| attr(element, "xlink:href"))
-            .ok_or_else(|| "SVG clip use missing href".to_owned())?;
-        let Some(id) = href.strip_prefix('#') else {
-            return Err("external SVG clip use IRI".into());
+        // The persistent document supplies the actual cloned target after
+        // its instance cascade and href precedence. Only the legacy static
+        // fixture adapter lacks the retained instance lifecycle.
+        let target = if let Some(instance) = document.use_instances.get(&index) {
+            instance.clone()?
+        } else {
+            let Some(href) = attr(element, "href").or_else(|| attr(element, "xlink:href")) else {
+                stack.remove(&index);
+                return Ok(());
+            };
+            let Some(id) = href.strip_prefix('#') else {
+                return Err("external SVG clip use IRI".into());
+            };
+            find_id(document, index, id)
         };
-        let target =
-            find_id(document, id).ok_or_else(|| "missing SVG clip use target".to_owned())?;
-        let use_x = svg_length(element, "x", 0.0)?;
-        let use_y = svg_length(element, "y", 0.0)?;
+        let Some(target) = target else {
+            stack.remove(&index);
+            return Ok(());
+        };
+        let target_element = &document.elements[target];
+        if target_element.namespace != DOMNamespace::kSVG
+            || !matches!(
+                target_element.tag.as_str(),
+                "path" | "rect" | "circle" | "ellipse" | "polygon" | "polyline" | "text"
+            )
+        {
+            stack.remove(&index);
+            return Ok(());
+        }
+        let (use_x, use_y) = match document.computed_use_offsets.get(&index) {
+            Some(offsets) => offsets.clone()?,
+            None => (
+                svg_length(element, "x", 0.0)?,
+                svg_length(element, "y", 0.0)?,
+            ),
+        };
         let mut translated = combined;
         translated.push(SvgClipTransformStep::kMatrix(SvgClipTransform {
             values: [1.0, 0.0, 0.0, 1.0, use_x.value, use_y.value],
             percentages: [use_x.percentage, 0.0, 0.0, use_y.percentage],
         }));
-        let target_element = &document.elements[target];
-        if matches!(target_element.tag.as_str(), "symbol" | "svg") {
-            if let Some(viewport) = use_viewport_transform(element, target_element)? {
-                translated.push(SvgClipTransformStep::kViewport(viewport));
-            }
-        }
         collect_child(
             document, target, stack, translated, even_odd, visible, output,
         )?
     } else if matches!(element.tag.as_str(), "g" | "a" | "symbol" | "svg") {
-        for child in &element.children {
-            match child {
-                Child::Element(child) => collect_child(
-                    document,
-                    *child,
-                    stack,
-                    combined.clone(),
-                    even_odd,
-                    visible,
-                    output,
-                )?,
-                Child::Text(text) if !document.texts[*text].trim().is_empty() => {
-                    return Err("SVG text clip content requires mask clipping".into())
-                }
-                Child::Text(_) => {}
-            }
-        }
+        // LayoutSVGResourceClipper::DetermineClipStrategy admits only direct
+        // shapes/text and restricted <use> targets, not group descendants.
     } else if matches!(element.tag.as_str(), "text" | "tspan" | "textPath") {
         let preserve = attr(element, "xml:space") == Some("preserve");
         for child in &element.children {
             match child {
-                Child::Text(index) => {
-                    let text = normalize_svg_text(&document.texts[*index], preserve);
+                Child::Text(text_index) => {
+                    let text = normalize_svg_text(&document.texts[*text_index], preserve);
                     if visible && !text.is_empty() {
                         output.push(SvgClipPathChild {
                             commands: Vec::new(),
                             geometry: None,
-                            text: Some(text_semantics(document, element, text)?),
+                            text: Some(text_semantics(document, index, element, text)?),
                             even_odd: false,
                             transforms: combined.clone(),
                         });
@@ -781,7 +917,10 @@ fn collect_child(
             }
         }
     } else {
-        let geometry = shape_geometry(element)?;
+        let geometry = match document.computed_geometry.get(&index) {
+            Some(geometry) => geometry.clone()?,
+            None => shape_geometry(element)?,
+        };
         let commands = if geometry.is_some() {
             Vec::new()
         } else {
@@ -800,7 +939,7 @@ fn collect_child(
     stack.remove(&index);
     Ok(())
 }
-fn build_one(document: &Document, index: usize, stack: &mut HashSet<usize>) -> SvgClipPathGraph {
+fn build_one(document: &GraphDocument<'_>, index: usize) -> SvgClipPathGraph {
     let element = &document.elements[index];
     let (resource_transform, transform_error) = match transform(element) {
         Ok(value) => (value, None),
@@ -818,45 +957,18 @@ fn build_one(document: &Document, index: usize, stack: &mut HashSet<usize>) -> S
         },
         transform: resource_transform,
         children: Vec::new(),
-        unsupported: transform_error,
+        unsupported: transform_error.or_else(|| {
+            style_value(element, "clip-path")
+                .is_some_and(|value| value != "none")
+                .then(|| "nested clip-path on clipPath resource is unsupported".into())
+        }),
     };
-    if !stack.insert(index) {
-        graph.unsupported = Some("recursive SVG clipPath href".into());
-        return graph;
-    }
     let local = element
         .children
         .iter()
         .any(|child| matches!(child, Child::Element(_)));
-    if let Some(href) = attr(element, "href").or_else(|| attr(element, "xlink:href")) {
-        if let Some(id) = href.strip_prefix('#') {
-            if let Some(base) = find_id(document, id) {
-                if document.elements[base].namespace != DOMNamespace::kSVG
-                    || document.elements[base].tag != "clipPath"
-                {
-                    graph.unsupported = Some("SVG clipPath href target is not a clipPath".into())
-                } else {
-                    let inherited = build_one(document, base, stack);
-                    if inherited.unsupported.is_some() {
-                        graph.unsupported = inherited.unsupported
-                    }
-                    if attr(element, "clipPathUnits").is_none() {
-                        graph.units = inherited.units
-                    }
-                    if attr(element, "transform").is_none() {
-                        graph.transform = inherited.transform
-                    }
-                    if !local {
-                        graph.children = inherited.children
-                    }
-                }
-            } else {
-                graph.unsupported = Some("missing SVG clipPath href target".into())
-            }
-        } else {
-            graph.unsupported = Some("external SVG clipPath href".into())
-        }
-    }
+    // SVGClipPathElement owns clipPathUnits and transform; unlike gradients,
+    // it has no href-based content inheritance.
     if local {
         let inherited_even_odd = matches!(
             style_value(element, "clip-rule"),
@@ -866,6 +978,23 @@ fn build_one(document: &Document, index: usize, stack: &mut HashSet<usize>) -> S
             let Child::Element(child) = child else {
                 continue;
             };
+            let content = &document.elements[*child];
+            if content.namespace != DOMNamespace::kSVG
+                || !matches!(
+                    content.tag.as_str(),
+                    "circle"
+                        | "ellipse"
+                        | "rect"
+                        | "polygon"
+                        | "polyline"
+                        | "line"
+                        | "path"
+                        | "text"
+                        | "use"
+                )
+            {
+                continue;
+            }
             if let Err(error) = collect_child(
                 document,
                 *child,
@@ -879,38 +1008,56 @@ fn build_one(document: &Document, index: usize, stack: &mut HashSet<usize>) -> S
                 break;
             }
         }
-        if graph.unsupported.is_none()
-            && element.children.iter().any(|child| {
-                matches!(child, Child::Text(text) if !document.texts[*text].trim().is_empty())
-            })
-        {
-            graph.unsupported = Some("SVG text clip content requires mask clipping".into())
-        }
     }
-    stack.remove(&index);
     graph
 }
-pub(super) fn build(document: &Document) -> Arc<Vec<SvgClipPathGraph>> {
-    Arc::new(
-        document
-            .elements
-            .iter()
-            .enumerate()
-            .filter(|(_, element)| {
-                element.namespace == DOMNamespace::kSVG && element.tag == "clipPath"
-            })
-            .map(|(index, _)| build_one(document, index, &mut HashSet::new()))
-            .collect(),
-    )
+fn raw_resource_display_suppressed(document: &Document, index: usize) -> bool {
+    if style_value(&document.elements[index], "display") == Some("contents") {
+        return true;
+    }
+    let mut ancestor = Some(index);
+    while let Some(node) = ancestor {
+        if style_value(&document.elements[node], "display") == Some("none") {
+            return true;
+        }
+        ancestor = document.elements[node].parent;
+    }
+    false
+}
+
+pub(super) fn build(document: &Document) -> Arc<SvgClipResourceSnapshot> {
+    let mut catalog = GraphDocument::new(document, vec![0; document.elements.len()]);
+    let mut order = Vec::new();
+    if let Some(root) = document.root {
+        collect_tree_order(document, root, &mut order);
+    } else {
+        for (index, element) in document.elements.iter().enumerate() {
+            if element.parent.is_none() {
+                collect_tree_order(document, index, &mut order);
+            }
+        }
+    }
+    for index in order {
+        let has_svg_parent = document.elements[index]
+            .parent
+            .is_some_and(|parent| document.elements[parent].namespace == DOMNamespace::kSVG);
+        if !has_svg_parent || raw_resource_display_suppressed(document, index) {
+            catalog.unavailable_targets.insert(index);
+        }
+        catalog.index_target(index, 0, index as u64 + 1);
+    }
+    catalog.snapshot(0)
 }
 
 /// Project the retained DOM into the same immutable resource snapshot used by
 /// the static adapter. Arena indices stay unchanged so local fragment links
 /// and mutation-driven rebuilds keep document identity semantics.
-pub(super) fn build_persistent(document: &crate::Document) -> Arc<Vec<SvgClipPathGraph>> {
+pub(super) fn build_persistent(document: &crate::Document) -> Arc<SvgClipResourceSnapshot> {
     use crate::persistent_document::DOMNodeType;
 
     let mut snapshot = Document::default();
+    let mut computed_geometry = HashMap::new();
+    let mut computed_use_offsets = HashMap::new();
     let mut text_indices = vec![None; document.NodeCount()];
     for (index, slot) in text_indices.iter_mut().enumerate() {
         let node = document.Node(index);
@@ -924,13 +1071,14 @@ pub(super) fn build_persistent(document: &crate::Document) -> Arc<Vec<SvgClipPat
         let mut attributes = node
             .Attributes()
             .iter()
+            .filter(|attribute| !attribute.local_name.starts_with("data-computed-"))
             .map(|attribute| (attribute.local_name.clone(), attribute.value.clone()))
             .collect::<Vec<_>>();
         if let Some(native) = document
             .ResolvedStyleFor(index)
             .and_then(|resolved| unsafe { resolved.native_style.Get().as_ref() })
         {
-            if native.HasTransform() {
+            {
                 match computed_css_transform(native) {
                     Ok(transform) => {
                         attributes.push(("data-computed-clip-transform".into(), transform))
@@ -941,6 +1089,18 @@ pub(super) fn build_persistent(document: &crate::Document) -> Arc<Vec<SvgClipPat
                 }
             }
             let zoom = native.EffectiveZoom().max(f32::MIN_POSITIVE);
+            if node.Namespace() == DOMNamespace::kSVG {
+                if matches!(node.Name(), "rect" | "circle" | "ellipse") {
+                    computed_geometry.insert(index, native_shape_geometry(node.Name(), native));
+                }
+                if node.Name() == "use" {
+                    computed_use_offsets.insert(
+                        index,
+                        native_clip_length(native.X(), zoom)
+                            .and_then(|x| native_clip_length(native.Y(), zoom).map(|y| (x, y))),
+                    );
+                }
+            }
             let font = native.GetFontDescription();
             attributes.push(("data-computed-font-family".into(), font.Family().ToString()));
             attributes.push((
@@ -982,14 +1142,14 @@ pub(super) fn build_persistent(document: &crate::Document) -> Arc<Vec<SvgClipPat
                 }
                 .into(),
             ));
-            // Resource children do not create normal layout objects, but their
-            // final inherited/presentation values still participate in clip
-            // geometry. Store the computed values in the immutable snapshot.
+            // Resource descendants retain native style/layout ownership. Their
+            // final cascade values are authoritative over raw inline text in
+            // this immutable geometry snapshot.
             attributes.retain(|(name, _)| {
                 !matches!(name.as_str(), "clip-rule" | "display" | "visibility")
             });
             attributes.push((
-                "clip-rule".into(),
+                "data-computed-clip-rule".into(),
                 if native.ClipRule() == foundation::WindRule::RULE_EVENODD {
                     "evenodd"
                 } else {
@@ -997,11 +1157,26 @@ pub(super) fn build_persistent(document: &crate::Document) -> Arc<Vec<SvgClipPat
                 }
                 .into(),
             ));
-            if native.Display() == foundation::EDisplay::kNone {
-                attributes.push(("display".into(), "none".into()));
-            }
             attributes.push((
-                "visibility".into(),
+                "data-computed-display".into(),
+                if native.Display() == foundation::EDisplay::kNone {
+                    "none"
+                } else {
+                    "rendered"
+                }
+                .into(),
+            ));
+            attributes.push((
+                "data-computed-clip-path".into(),
+                if native.ClipPath().is_some() {
+                    "reference-or-shape"
+                } else {
+                    "none"
+                }
+                .into(),
+            ));
+            attributes.push((
+                "data-computed-visibility".into(),
                 match native.Visibility() {
                     foundation::EVisibility::kVisible => "visible",
                     foundation::EVisibility::kHidden => "hidden",
@@ -1034,5 +1209,457 @@ pub(super) fn build_persistent(document: &crate::Document) -> Arc<Vec<SvgClipPat
             children,
         });
     }
-    build(&snapshot)
+    let reference_scopes = (0..document.NodeCount())
+        .map(|index| document.SVGResourceScope(index).tree_scope_id)
+        .collect();
+    let mut catalog = GraphDocument::new(&snapshot, reference_scopes);
+    catalog.mask_graphs = (0..document.NodeCount()).filter_map(|index| {
+        document.Node(index).IsElement("mask", DOMNamespace::kSVG)
+            .then(|| document.ResolvedStyleFor(index)?.style.paint.svg_mask_resource.clone().map(|g| (index,g))).flatten()
+    }).collect();
+    catalog.computed_geometry = computed_geometry;
+    catalog.computed_use_offsets = computed_use_offsets;
+    for index in 0..document.NodeCount() {
+        if document.Node(index).IsElement("use", DOMNamespace::kSVG) {
+            use crate::persistent_document::SVGUseInstanceStatus as Status;
+            let target = match document.SVGUseInstanceStatus(index) {
+                Some(Status::Ready | Status::MissingTarget | Status::DisallowedTarget | Status::CyclicReference) => Ok(document.SVGUseInstanceRoot(index)),
+                Some(status) => Err(format!("unsupported SVG clip use instance: {status:?}")),
+                None => Err("SVG clip use instance lifecycle was not updated".into()),
+            };
+            catalog.use_instances.insert(index, target);
+        }
+    }
+
+    for scope in document.ActiveTreeScopes() {
+        let mut order = Vec::new();
+        collect_tree_order(&snapshot, scope, &mut order);
+        let scope_id = document.Node(scope).Id();
+        for index in order {
+            if document.Node(index).Type() == DOMNodeType::kElement
+                && document.IsConnectedToDocument(index)
+            {
+                // SVGElement::LayoutObjectIsNeeded requires an SVG flat-tree
+                // parent and an attached own box. visibility:hidden does not
+                // suppress the resource container's existence.
+                let has_svg_parent = document
+                    .FlatTreeParentElement(index)
+                    .is_some_and(|parent| document.Node(parent).Namespace() == DOMNamespace::kSVG);
+                let suppressed = document
+                    .ResolvedStyleFor(index)
+                    .is_some_and(|resolved| !resolved.generates_box || !resolved.own_generates_box)
+                    || raw_resource_display_suppressed(&snapshot, index);
+                if !has_svg_parent || suppressed {
+                    catalog.unavailable_targets.insert(index);
+                }
+                catalog.index_target(index, scope_id, document.Node(index).Id());
+            }
+        }
+    }
+    catalog.snapshot(document.SVGResourceScope(document.Root()).document_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::persistent_document::{DOMAttribute, DOMShadowRootMode};
+
+    fn attr_value(name: &str, value: &str) -> DOMAttribute {
+        DOMAttribute {
+            local_name: name.into(),
+            value: value.into(),
+            ..Default::default()
+        }
+    }
+
+    fn add(
+        document: &mut crate::Document,
+        parent: usize,
+        name: &str,
+        attrs: &[(&str, &str)],
+    ) -> usize {
+        let node = document.CreateElement(
+            DOMNamespace::kSVG,
+            name.into(),
+            attrs
+                .iter()
+                .map(|(name, value)| attr_value(name, value))
+                .collect(),
+        );
+        document.AppendChild(parent, node);
+        node
+    }
+
+    fn root(owner: &mut crate::DOM) -> usize {
+        let document = owner.GetDocumentMut();
+        let parent = document.Root();
+        add(document, parent, "svg", &[])
+    }
+
+    fn clip_graph(
+        snapshot: &SvgClipResourceSnapshot,
+        scope: u64,
+        id: &str,
+    ) -> Arc<SvgClipPathGraph> {
+        snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.scope_id == scope && entry.id == id)
+            .and_then(|entry| entry.graph.clone())
+            .expect("clip graph")
+    }
+
+    fn rect_width(graph: &SvgClipPathGraph) -> f64 {
+        match graph
+            .children
+            .first()
+            .and_then(|child| child.geometry.as_ref())
+        {
+            Some(SvgClipGeometry::kRect { width, .. }) => width.value,
+            _ => panic!("expected rectangle clip"),
+        }
+    }
+
+    #[test]
+    fn svg_clip_catalog_selects_first_connected_tree_order_target_before_kind() {
+        let mut owner = crate::DOM::new();
+        let root = root(&mut owner);
+        let document = owner.GetDocumentMut();
+        let clip = document.CreateElement(
+            DOMNamespace::kSVG,
+            "clipPath".into(),
+            vec![attr_value("id", "clip")],
+        );
+        let wrong_kind = add(document, root, "rect", &[("id", "clip")]);
+        document.AppendChild(root, clip);
+        add(document, clip, "rect", &[("width", "10"), ("height", "10")]);
+        let snapshot = build_persistent(document);
+        let entry = snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.id == "clip")
+            .unwrap();
+        assert_eq!(entry.target_node_id, document.Node(wrong_kind).Id());
+        assert!(entry.graph.is_none());
+        document.Remove(wrong_kind);
+        let snapshot = build_persistent(document);
+        let entry = snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.id == "clip")
+            .unwrap();
+        assert_eq!(entry.target_node_id, document.Node(clip).Id());
+        assert_eq!(rect_width(entry.graph.as_ref().unwrap()), 10.0);
+        document.Remove(clip);
+        assert!(build_persistent(document)
+            .entries
+            .iter()
+            .all(|entry| entry.id != "clip"));
+    }
+
+    #[test]
+    fn svg_clip_catalog_resolves_use_in_its_connected_tree_scope() {
+        let mut owner = crate::DOM::new();
+        let root = root(&mut owner);
+        let document = owner.GetDocumentMut();
+        add(
+            document,
+            root,
+            "rect",
+            &[("id", "shape"), ("width", "10"), ("height", "10")],
+        );
+        let clip = add(document, root, "clipPath", &[("id", "clip")]);
+        add(document, clip, "use", &[("href", "#shape")]);
+        let host = document.CreateElementDefault(DOMNamespace::kHTML, "x-host".into());
+        document.AppendChild(root, host);
+        let shadow = document.AttachShadowRoot(host, DOMShadowRootMode::kOpen);
+        let shadow_svg = add(document, shadow, "svg", &[]);
+        add(
+            document,
+            shadow_svg,
+            "rect",
+            &[("id", "shape"), ("width", "20"), ("height", "10")],
+        );
+        let shadow_clip = add(document, shadow_svg, "clipPath", &[("id", "clip")]);
+        add(document, shadow_clip, "use", &[("href", "#shape")]);
+        let snapshot = build_persistent(document);
+        let document_scope = document.SVGResourceScope(root).tree_scope_id;
+        let shadow_scope = document.SVGResourceScope(shadow_clip).tree_scope_id;
+        assert_ne!(document_scope, shadow_scope);
+        assert_eq!(
+            rect_width(&clip_graph(&snapshot, document_scope, "clip")),
+            10.0
+        );
+        assert_eq!(
+            rect_width(&clip_graph(&snapshot, shadow_scope, "clip")),
+            20.0
+        );
+        document.Remove(host);
+        assert!(build_persistent(document)
+            .entries
+            .iter()
+            .all(|entry| entry.scope_id != shadow_scope));
+    }
+
+    #[test]
+    fn svg_clip_catalog_ignores_groups_and_nonexistent_href_inheritance() {
+        let mut owner = crate::DOM::new();
+        let root = root(&mut owner);
+        let document = owner.GetDocumentMut();
+        let base = add(document, root, "clipPath", &[("id", "base")]);
+        add(document, base, "rect", &[("width", "10"), ("height", "10")]);
+        let clip = add(
+            document,
+            root,
+            "clipPath",
+            &[("id", "clip"), ("href", "#base")],
+        );
+        let group = add(document, clip, "g", &[]);
+        add(
+            document,
+            group,
+            "rect",
+            &[("width", "20"), ("height", "20")],
+        );
+        add(document, clip, "use", &[("href", "#missing")]);
+        let graph = clip_graph(
+            &build_persistent(document),
+            document.SVGResourceScope(root).tree_scope_id,
+            "clip",
+        );
+        assert!(graph.children.is_empty());
+        assert!(graph.unsupported.is_none());
+    }
+
+    #[test]
+    fn svg_clip_cache_rejects_stale_inputs_and_keeps_old_frames_immutable() {
+        let mut owner = crate::DOM::new();
+        let root = root(&mut owner);
+        let document = owner.GetDocumentMut();
+        let clip = add(document, root, "clipPath", &[("id", "clip")]);
+        let rect = add(document, clip, "rect", &[("width", "10"), ("height", "10")]);
+        assert!(owner.UpdateSVGResources());
+        let old = owner.GetDocument().SVGResources().unwrap().clone();
+        let scope = owner.GetDocument().SVGResourceScope(root).tree_scope_id;
+        owner.DidCommitPaint();
+        owner
+            .GetDocumentMut()
+            .SetAttribute(rect, attr_value("width", "20"));
+        assert!(owner.GetDocument().SVGResources().is_none());
+        assert!(owner.UpdateSVGResources());
+        let current = owner.GetDocument().SVGResources().unwrap().clone();
+        assert_eq!(current.version.revision, old.version.revision + 1);
+        assert_eq!(rect_width(&clip_graph(&old, scope, "clip")), 10.0);
+        assert_eq!(rect_width(&clip_graph(&current, scope, "clip")), 20.0);
+        owner
+            .GetDocumentMut()
+            .SetAttribute(rect, attr_value("data-unused", "value"));
+        assert!(!owner.UpdateSVGResources());
+        assert!(Arc::ptr_eq(
+            &current,
+            owner.GetDocument().SVGResources().unwrap()
+        ));
+        owner.DidCommitPaint();
+        owner
+            .GetDocumentMut()
+            .SetAttribute(clip, attr_value("id", "replacement"));
+        assert!(owner.UpdateSVGResources());
+        assert!(owner.GetStyleImpact().paint);
+        assert!(!owner.GetStyleImpact().layout);
+        assert!(owner
+            .GetDocument()
+            .SVGResources()
+            .unwrap()
+            .entries
+            .iter()
+            .all(|entry| entry.id != "clip"));
+    }
+
+    #[test]
+    fn svg_clip_native_geometry_preserves_zoom_percent_and_linear_calc() {
+        use foundation::{CalculationValue, Length, LengthValueRange, PixelsAndPercent};
+        assert_eq!(
+            native_clip_length(&Length::Fixed(30.0), 3.0).unwrap(),
+            SvgClipLength {
+                value: 10.0,
+                percentage: 0.0
+            }
+        );
+        assert_eq!(
+            native_clip_length(&Length::Percent(40.0), 3.0).unwrap(),
+            SvgClipLength {
+                value: 0.0,
+                percentage: 0.4
+            }
+        );
+        let calculation = Length::from_calculation_value(CalculationValue::new(
+            PixelsAndPercent::new(30.0, 40.0, true, true),
+            LengthValueRange::kAll,
+        ));
+        assert_eq!(
+            native_clip_length(&calculation, 3.0).unwrap(),
+            SvgClipLength {
+                value: 10.0,
+                percentage: 0.4
+            }
+        );
+        assert!(native_clip_length(Length::MinContent(), 1.0).is_err());
+    }
+
+    #[test]
+    fn svg_clip_native_transform_unzooms_lengths_without_scaling_percentages() {
+        use foundation::{
+            CalculationValue, Length, LengthValueRange, PixelsAndPercent, TransformOperations,
+        };
+        use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+        let _heap = foundation::LayoutHeapScope::new();
+        let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
+        let mut builder = ComputedStyleBuilder::from_style(initial);
+        builder.SetEffectiveZoom(3.0);
+        let mut operations = TransformOperations::default();
+        operations.PushTranslate(
+            Length::from_calculation_value(CalculationValue::new(
+                PixelsAndPercent::new(30.0, 50.0, true, true),
+                LengthValueRange::kAll,
+            )),
+            Length::Fixed(60.0),
+        );
+        builder.SetTransform(&operations);
+        let native = unsafe { &*builder.TakeStyle() };
+        let transform = computed_css_transform(native).unwrap();
+        let values = numbers(
+            transform
+                .strip_prefix("matrix-affine(")
+                .unwrap()
+                .strip_suffix(')')
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(&values[..6], &[1.0, 0.0, 0.0, 1.0, 10.0, 20.0]);
+        assert_eq!(&values[6..], &[0.5, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn svg_clip_catalog_keeps_nested_resource_clip_explicitly_unsupported() {
+        let mut owner = crate::DOM::new();
+        let root = root(&mut owner);
+        let document = owner.GetDocumentMut();
+        let clip = add(
+            document,
+            root,
+            "clipPath",
+            &[("id", "clip"), ("clip-path", "url(#other)")],
+        );
+        add(document, clip, "rect", &[("width", "10"), ("height", "10")]);
+        let graph = clip_graph(
+            &build_persistent(document),
+            document.SVGResourceScope(root).tree_scope_id,
+            "clip",
+        );
+        assert!(graph
+            .unsupported
+            .as_deref()
+            .is_some_and(|error| error.contains("nested clip-path")));
+    }
+
+    #[test]
+    fn svg_clip_catalog_requires_layout_attachment_but_not_visible_resource() {
+        let mut owner = crate::DOM::new();
+        let root = root(&mut owner);
+        let document = owner.GetDocumentMut();
+        let clip = add(
+            document,
+            root,
+            "clipPath",
+            &[("id", "clip"), ("visibility", "hidden")],
+        );
+        add(
+            document,
+            clip,
+            "rect",
+            &[("width", "10"), ("height", "10"), ("visibility", "visible")],
+        );
+        let snapshot = build_persistent(document);
+        assert!(snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.id == "clip")
+            .unwrap()
+            .graph
+            .is_some());
+        document.SetAttribute(clip, attr_value("display", "none"));
+        let snapshot = build_persistent(document);
+        let entry = snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.id == "clip")
+            .unwrap();
+        assert_eq!(entry.target_node_id, document.Node(clip).Id());
+        assert!(entry.graph.is_none());
+        document.SetAttribute(clip, attr_value("display", "contents"));
+        assert!(build_persistent(document)
+            .entries
+            .iter()
+            .find(|entry| entry.id == "clip")
+            .unwrap()
+            .graph
+            .is_none());
+        document.SetAttribute(clip, attr_value("display", "inline"));
+        document.SetAttribute(root, attr_value("display", "none"));
+        assert!(build_persistent(document)
+            .entries
+            .iter()
+            .find(|entry| entry.id == "clip")
+            .unwrap()
+            .graph
+            .is_none());
+        document.SetAttribute(root, attr_value("display", "inline"));
+        let html_parent = document.CreateElementDefault(DOMNamespace::kHTML, "div".into());
+        document.AppendChild(root, html_parent);
+        document.AppendChild(html_parent, clip);
+        assert!(build_persistent(document)
+            .entries
+            .iter()
+            .find(|entry| entry.id == "clip")
+            .unwrap()
+            .graph
+            .is_none());
+    }
+}
+
+/// Canonical solid-shape resource geometry. Percent geometry needs a deferred
+/// resource viewport and is explicit unsupported in this recording slice.
+pub fn SVGMaskShape(document: &crate::Document, index: usize,
+    native: &layoutng_style::style::computed_style::ComputedStyle,
+) -> Result<Option<layoutng_assembly::internal::layout_input::SvgShapeData>, String> {
+    use layoutng_assembly::internal::layout_input::{SvgShapeData, SvgShapeGeometry};
+    let node = document.Node(index);
+    if node.Name() == "path" {
+        if !native.D().is_null() { return Err("CSS d resource geometry".into()); }
+        return Ok(super::layout_object_tree_builder::SVGShapeDataForResourceNode(node));
+    }
+    let fixed = |v: SvgClipLength| if v.percentage == 0.0 { Ok(v.value) }
+        else { Err("percentage mask child geometry".to_owned()) };
+    let mut shape = SvgShapeData::default();
+    match native_shape_geometry(node.Name(), native)? {
+        Some(SvgClipGeometry::kRect { x,y,width,height,rx,ry }) => {
+            shape.geometry=SvgShapeGeometry::kRectangle;
+            shape.bounds_offset=Offset{x:fixed(x)?,y:fixed(y)?};
+            shape.bounds_width=fixed(width)?.max(0.0);shape.bounds_height=fixed(height)?.max(0.0);
+            shape.rectangle_radius_x=rx.or(ry).map(fixed).transpose()?.unwrap_or(0.0).max(0.0).min(shape.bounds_width/2.0);
+            shape.rectangle_radius_y=ry.or(rx).map(fixed).transpose()?.unwrap_or(0.0).max(0.0).min(shape.bounds_height/2.0);
+        }
+        Some(SvgClipGeometry::kCircle {cx,cy,r}) => {
+            let radius=fixed(r)?.max(0.0);shape.geometry=SvgShapeGeometry::kEllipse;
+            shape.bounds_offset=Offset{x:fixed(cx)?-radius,y:fixed(cy)?-radius};
+            shape.bounds_width=2.0*radius;shape.bounds_height=2.0*radius;
+        }
+        Some(SvgClipGeometry::kEllipse {cx,cy,rx,ry}) => {
+            let (rx,ry)=(fixed(rx)?.max(0.0),fixed(ry)?.max(0.0));shape.geometry=SvgShapeGeometry::kEllipse;
+            shape.bounds_offset=Offset{x:fixed(cx)?-rx,y:fixed(cy)?-ry};
+            shape.bounds_width=2.0*rx;shape.bounds_height=2.0*ry;
+        }
+        _ => return Ok(None),
+    }
+    Ok(Some(shape))
 }

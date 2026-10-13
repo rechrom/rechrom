@@ -437,7 +437,8 @@ fn Expand(rect: PaintRect, amount: f64) -> PaintRect {
 // cpp: paint/pre_paint_tree_walk.cc:34-77
 pub(crate) fn SvgViewBoxTransform(fragment: &FragmentNode) -> Option<TransformMatrix> {
     (fragment.paint.source_kind == NodeKind::kSvgRoot)
-        .then(|| fragment.paint.svg_viewport.map(|v| v.content_transform)).flatten()
+        .then(|| fragment.paint.svg_viewport.map(|v| v.content_transform))
+        .flatten()
 }
 
 // Geometry shared by painting and DOM box queries. Clips, effects and logical
@@ -549,7 +550,9 @@ pub(crate) fn ResolveFragmentGeometry(
             );
             transforms.push(translation);
         }
-        if let Some(style) = style.filter(|style| style.transform.is_some() && fragment.paint.svg_local_transform.is_none()) {
+        if let Some(style) = style.filter(|style| {
+            style.transform.is_some() && fragment.paint.svg_local_transform.is_none()
+        }) {
             let transform = style.transform.as_ref().unwrap();
             // Blink snaps the layout paint offset in the current property
             // parent, whose ScrollTranslation remains a separate ancestor.
@@ -888,7 +891,8 @@ fn ClipsOverflow(node: &FragmentNode) -> bool {
         return node.paint.svg_viewport.is_some_and(|v| v.clip.is_some());
     }
     node.paint.svg_viewport.is_some_and(|v| v.disabled)
-        || node.paint.overflow_x != Overflow::kVisible || node.paint.overflow_y != Overflow::kVisible
+        || node.paint.overflow_x != Overflow::kVisible
+        || node.paint.overflow_y != Overflow::kVisible
 }
 
 // cpp: paint/pre_paint_tree_walk.cc:120-146
@@ -1920,6 +1924,7 @@ pub(crate) fn ResolveReferenceClipPath(
     paint_offset: Offset,
     effective_zoom: f64,
     svg_owner: bool,
+    resource_viewport: Option<Size>,
     fonts: &[layoutng_assembly::internal::layout_input::FontFace],
     runtime_error: &mut Option<String>,
     output: &mut Vec<PaintPathCommand>,
@@ -1956,13 +1961,21 @@ pub(crate) fn ResolveReferenceClipPath(
             } else {
                 effective_zoom.max(f64::MIN_POSITIVE)
             };
-            (reference.width / zoom, reference.height / zoom)
+            resource_viewport.map_or(
+                (reference.width / zoom, reference.height / zoom),
+                |viewport| (viewport.width, viewport.height),
+            )
         }
     };
-    let resource = MultiplyClipTransform(
-        unit,
-        ResolveClipTransformPercentages(graph.transform, geometry_size.0, geometry_size.1),
-    );
+    let resource_transform =
+        ResolveClipTransformPercentages(graph.transform, geometry_size.0, geometry_size.1);
+    // LayoutSVGResourceClipper::CalculateClipTransform starts with the
+    // resource transform, then applies the object-bounding-box translation
+    // and scale. User-space clips instead enter the consumer paint space.
+    let resource = match graph.units {
+        SvgClipPathUnits::kObjectBoundingBox => MultiplyClipTransform(resource_transform, unit),
+        SvgClipPathUnits::kUserSpaceOnUse => MultiplyClipTransform(unit, resource_transform),
+    };
     let mut bounds: Option<(f64, f64, f64, f64)> = None;
     let mut text_cursor = Offset::default();
     for child in &graph.children {
@@ -2356,18 +2369,42 @@ fn ResolveMaskLayers(
 ) -> Vec<DisplayMaskLayer> {
     let mut output = Vec::with_capacity(layers.len());
     for layer in layers {
+        if let Some(reason)=layer.source_error.as_ref() { std::panic::panic_any(foundation::UnsupportedLayout::new(format!("unsupported SVG mask resource: {reason}"))); }
+        if let Some(reference) = &layer.svg_reference {
+            let object=ClipPathReferenceRect(fragment,absolute_offset,if IsSvgEffectChild(fragment.paint.source_kind) {ClipPathReferenceBox::kFillBox} else {ClipPathReferenceBox::kBorderBox});
+            let mut resolved=DisplayMaskLayer {clip_rect:object,tile_rect:object,mode:layer.mode,composite:layer.composite,source_error:layer.source_error.clone(),..Default::default()};
+            if let Some(graph)=reference.graph.as_deref() {
+                use layoutng_assembly::internal::paint_input::SvgMaskUnits;
+                if IsSvgEffectChild(fragment.paint.source_kind) && fragment.paint.svg_shape.is_none()
+                    && (graph.mask_units==SvgMaskUnits::kObjectBoundingBox || graph.content_units==SvgMaskUnits::kObjectBoundingBox) {
+                    resolved.source_error=Some("SVG group object bounding box for local mask".into());
+                }
+                if resolved.source_error.is_none() {
+                    if let Some(viewport)=reference.viewport {
+                        let zoom=if IsSvgEffectChild(fragment.paint.source_kind) {1.0} else {f64::from(fragment.paint.effective_zoom)};
+                        let (region,shader)=crate::paint_shader_resolver::ResolveLocalSvgMask(graph,object,absolute_offset,zoom,viewport,fragment.paint.resources.as_deref());
+                        resolved.clip_rect=region;resolved.tile_rect=region;resolved.paint_shader=shader;
+                    } else {resolved.source_error=Some("missing SVG mask resource viewport".into());}
+                }
+            }
+            if let Some(reason)=resolved.source_error.as_ref() {
+                // Validate before culling: a zero-sized SVG group must not turn
+                // unsupported resource content into a successful empty mask.
+                std::panic::panic_any(foundation::UnsupportedLayout::new(format!("unsupported SVG mask resource: {reason}")));
+            }
+            output.push(resolved);continue;
+        }
         if !layer.image.position.x.is_finite() || !layer.image.position.y.is_finite() {
             panic!("mask position must be finite");
         }
         let positioning = MaskPositioningBox(fragment, absolute_offset, layer.image.origin);
         let clip = MaskBox(fragment, absolute_offset, layer.image.clip);
-        let image = if layer.image_state == PaintMaskImageState::kReady
-            && layer.image.shader.is_none()
-        {
-            Some(FindMaskImage(fragment, layer.image.resource_id))
-        } else {
-            None
-        };
+        let image =
+            if layer.image_state == PaintMaskImageState::kReady && layer.image.shader.is_none() {
+                Some(FindMaskImage(fragment, layer.image.resource_id))
+            } else {
+                None
+            };
         let tile_size = ResolveBackgroundTileSize(
             &layer.image,
             &positioning,
@@ -2403,10 +2440,7 @@ fn ResolveMaskLayers(
                         height: tile.height,
                     },
                     f64::from(fragment.paint.effective_zoom),
-                    fragment
-                        .paint
-                        .resources
-                        .as_deref(),
+                    fragment.paint.resources.as_deref(),
                     (!fragment.paint.style.color_scheme_flags_is_normal)
                         .then_some(u8::from(fragment.paint.style.used_dark_color_scheme)),
                 )
@@ -2664,9 +2698,15 @@ fn DetachLogicallyReparentedOutOfFlowNodes<'a>(
 // suppress the whole element until every image has finished loading. An error
 // is terminal and contributes transparent black through its retained mask layer.
 pub(crate) fn MaskAdjustedOpacity(style: &PaintStyleData) -> f32 {
-    let any_loading = style.mask_images.iter().any(|layer| layer.image_state == PaintMaskImageState::kLoading);
+    let any_loading = style
+        .mask_images
+        .iter()
+        .any(|layer| layer.image_state == PaintMaskImageState::kLoading);
     let all_invalid = !style.mask_images.is_empty()
-        && style.mask_images.iter().all(|layer| layer.image_state != PaintMaskImageState::kReady);
+        && style
+            .mask_images
+            .iter()
+            .all(|layer| layer.image_state != PaintMaskImageState::kReady);
     let has_backdrop = !style.backdrop_filters.is_empty() || style.backdrop_filter_has_reference;
     if any_loading || (has_backdrop && all_invalid) {
         0.0
@@ -3087,6 +3127,16 @@ fn SameSourceIdentity(a: &FragmentNode, b: &FragmentNode) -> bool {
         && a.paint.display_item_fragment == b.paint.display_item_fragment
 }
 
+// LayoutSVGHiddenContainer::Paint is a subtree boundary. Preserve its
+// descendants in immutable Layout snapshots for resource consumers, but do
+// not create ordinary paint owners, properties, or reparentable paint layers.
+fn OrdinaryPaintChildren(fragment: &FragmentNode) -> impl Iterator<Item = &FragmentNode> {
+    fragment
+        .children
+        .iter()
+        .filter(|child| !fragment.paint.svg_hidden_container && !child.paint.svg_hidden_container)
+}
+
 fn SamePhaseInputs(a: &FragmentNode, b: &FragmentNode) -> bool {
     let phase = |f: &FragmentNode| {
         (
@@ -3099,6 +3149,7 @@ fn SamePhaseInputs(a: &FragmentNode, b: &FragmentNode) -> bool {
             f.paint.scrollbars.is_some(),
             f.paint.display,
             f.paint.establishes_paint_state,
+            f.paint.svg_hidden_container,
             f.paint.style.visible,
             f.paint.style.outline_style,
             f.paint.style.outline_width,
@@ -3369,10 +3420,10 @@ impl PrePaintTreeWalk {
             return true;
         }
         let physical_children = cache.physical_children.clone();
-        if physical_children.len() != fragment.children.len()
+        if physical_children.len() != OrdinaryPaintChildren(fragment).count()
             || !physical_children
                 .iter()
-                .zip(&fragment.children)
+                .zip(OrdinaryPaintChildren(fragment))
                 .all(|(&pointer, source)| {
                     // These boxes remain owned even after logical reparenting.
                     // A failed topology proof returns before any box is removed.
@@ -3425,7 +3476,10 @@ impl PrePaintTreeWalk {
         if inherited.root {
             self.CaptureRootFixedPositionContext(&base);
         }
-        for (&pointer, child) in physical_children.iter().zip(&fragment.children) {
+        for (&pointer, child) in physical_children
+            .iter()
+            .zip(OrdinaryPaintChildren(fragment))
+        {
             let context = self.ContextForChild(child, &base);
             // Physical links form a tree independently of the logical owners;
             // each child allocation is uniquely updated along this traversal.
@@ -3540,10 +3594,10 @@ impl PrePaintTreeWalk {
             self.CaptureRootFixedPositionContext(&base);
         }
         let old_children = std::mem::take(&mut node.children);
-        let same_children = old_children.len() == fragment.children.len()
+        let same_children = old_children.len() == OrdinaryPaintChildren(fragment).count()
             && old_children
                 .iter()
-                .zip(&fragment.children)
+                .zip(OrdinaryPaintChildren(fragment))
                 .all(|(old, source)| SameSourceIdentity(old.fragment.as_deref().unwrap(), source));
         if !same_children {
             self.needs_post_update = true;
@@ -3551,7 +3605,7 @@ impl PrePaintTreeWalk {
         let mut previous_children = old_children.into_iter();
         let mut keys = own_keys;
         let mut nodes = 1;
-        for (index, child) in fragment.children.iter().enumerate() {
+        for (index, child) in OrdinaryPaintChildren(fragment).enumerate() {
             let previous = previous_children
                 .next()
                 .filter(|old| SameSourceIdentity(old.fragment.as_deref().unwrap(), child));
@@ -3614,7 +3668,9 @@ impl PrePaintTreeWalk {
             // Blink switches fixed-to-view descendants to the LayoutView's
             // fixed-position context. Its transform is above document scroll,
             // but its clip still excludes classic root scrollbar gutters.
-            let fixed = self.root_fixed_position.as_ref()
+            let fixed = self
+                .root_fixed_position
+                .as_ref()
                 .expect("root fixed-position context must precede descendants");
             return InheritedContext {
                 offset: Offset::default(),
@@ -3724,6 +3780,7 @@ impl PrePaintTreeWalk {
                     radii: PaintCornerRadii::default(),
                     clip_path: Vec::new(),
                     clip_path_children: Vec::new(),
+                    clip_path_is_empty: false,
                     clip_path_even_odd: false,
                     clip_path_error: None,
                     pixel_moving_filter: None,
@@ -4030,7 +4087,9 @@ impl PrePaintTreeWalk {
             {
                 source_roles.push(PaintPropertyRole::StickyTranslation);
             }
-            if style.is_some_and(|style| style.transform.is_some()) && fragment.paint.svg_local_transform.is_none() {
+            if style.is_some_and(|style| style.transform.is_some())
+                && fragment.paint.svg_local_transform.is_none()
+            {
                 source_roles.push(PaintPropertyRole::Transform);
             }
             if fragment.paint.svg_local_transform.is_some() {
@@ -4228,6 +4287,7 @@ impl PrePaintTreeWalk {
                             node.paint_offset,
                             f64::from(fragment.paint.effective_zoom),
                             IsSvgEffectChild(fragment.paint.source_kind),
+                            clip_path.reference_viewport,
                             fragment
                                 .paint
                                 .resources
@@ -4348,6 +4408,9 @@ impl PrePaintTreeWalk {
                             })
                             .collect(),
                         clip_path_even_odd: node.clip_path_even_odd,
+                        clip_path_is_empty: node.local_clip_path.is_empty()
+                            && node.local_clip_path_children.is_empty()
+                            && node.clip_path_error.is_none(),
                         clip_path_error: node.clip_path_error.clone(),
                         pixel_moving_filter: None,
                     });
@@ -4398,6 +4461,7 @@ impl PrePaintTreeWalk {
                     ),
                     clip_path: Vec::new(),
                     clip_path_children: Vec::new(),
+                    clip_path_is_empty: false,
                     clip_path_even_odd: false,
                     clip_path_error: None,
                     pixel_moving_filter: None,
@@ -4494,6 +4558,7 @@ impl PrePaintTreeWalk {
                 radii: PaintCornerRadii::default(),
                 clip_path: Vec::new(),
                 clip_path_children: Vec::new(),
+                clip_path_is_empty: false,
                 clip_path_even_odd: false,
                 clip_path_error: None,
                 pixel_moving_filter: None,
@@ -4538,6 +4603,7 @@ impl PrePaintTreeWalk {
                     radii: PaintCornerRadii::default(),
                     clip_path: Vec::new(),
                     clip_path_children: Vec::new(),
+                    clip_path_is_empty: false,
                     clip_path_even_odd: false,
                     clip_path_error: None,
                     pixel_moving_filter: None,
@@ -4611,6 +4677,7 @@ impl PrePaintTreeWalk {
                     radii: PaintCornerRadii::default(),
                     clip_path: Vec::new(),
                     clip_path_children: Vec::new(),
+                    clip_path_is_empty: false,
                     clip_path_even_odd: false,
                     clip_path_error: None,
                     pixel_moving_filter: Some(node.properties.nodes.effect.clone()),
@@ -4668,6 +4735,7 @@ impl PrePaintTreeWalk {
                 radii: PaintCornerRadii::default(),
                 clip_path: Vec::new(),
                 clip_path_children: Vec::new(),
+                clip_path_is_empty: false,
                 clip_path_even_odd: false,
                 clip_path_error: None,
                 pixel_moving_filter: None,
@@ -4730,11 +4798,18 @@ impl PrePaintTreeWalk {
             }
             if let Some(viewport) = fragment.paint.svg_viewport {
                 if let Some(clip) = viewport.clip {
-                    local = PaintRect { x: clip.offset.x, y: clip.offset.y, width: clip.size.width, height: clip.size.height };
+                    local = PaintRect {
+                        x: clip.offset.x,
+                        y: clip.offset.y,
+                        width: clip.size.width,
+                        height: clip.size.height,
+                    };
                 }
             }
             node.local_clip = Some(local);
-            if let Some(style) = style.filter(|_| fragment.paint.source_kind != NodeKind::kSvgViewportContainer) {
+            if let Some(style) =
+                style.filter(|_| fragment.paint.source_kind != NodeKind::kSvgViewportContainer)
+            {
                 if let Some(outsets) = fragment.paint.overflow_clip_margin_outsets {
                     node.local_clip_radii = ExpandCornerRadiiEdges(
                         ResolveCornerRadii(
@@ -4798,21 +4873,23 @@ impl PrePaintTreeWalk {
                 radii: node.local_clip_radii,
                 clip_path: Vec::new(),
                 clip_path_children: Vec::new(),
+                clip_path_is_empty: false,
                 clip_path_even_odd: false,
                 clip_path_error: None,
                 pixel_moving_filter: None,
             });
             node.applies_clip = true;
             node.applies_overflow_clip = true;
-            if fragment.paint.source_kind != NodeKind::kSvgViewportContainer && (fragment.paint.scroll_container.is_some()
-                || matches!(
-                    fragment.paint.overflow_x,
-                    Overflow::kScroll | Overflow::kAuto
-                )
-                || matches!(
-                    fragment.paint.overflow_y,
-                    Overflow::kScroll | Overflow::kAuto
-                ))
+            if fragment.paint.source_kind != NodeKind::kSvgViewportContainer
+                && (fragment.paint.scroll_container.is_some()
+                    || matches!(
+                        fragment.paint.overflow_x,
+                        Overflow::kScroll | Overflow::kAuto
+                    )
+                    || matches!(
+                        fragment.paint.overflow_y,
+                        Overflow::kScroll | Overflow::kAuto
+                    ))
             {
                 node.properties.scroll_id = self.next_property_id;
                 self.next_property_id += 1;

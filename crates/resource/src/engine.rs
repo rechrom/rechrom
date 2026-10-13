@@ -52,7 +52,21 @@ pub struct ResourceEngine {
     >,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ResourceMemoryDiagnostics {
+    pub cached_loads: usize, pub loading: usize, pub encoded_response_capacity: usize,
+}
 impl ResourceEngine {
+    pub fn MemoryDiagnostics(&self) -> ResourceMemoryDiagnostics {
+        let loads = self.loads.borrow();
+        let mut usage = ResourceMemoryDiagnostics { cached_loads: loads.len(), ..Default::default() };
+        for load in loads.values() {
+            let (loading, capacity) = load.borrow().MemoryUsage();
+            usage.loading += usize::from(loading);
+            usage.encoded_response_capacity = usage.encoded_response_capacity.saturating_add(capacity);
+        }
+        usage
+    }
     pub fn new(loader: Rc<RefCell<dyn URLLoader>>, document_url: String) -> Self {
         Self {
             loader,

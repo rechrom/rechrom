@@ -773,10 +773,10 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
         let mut custom = self.custom_properties.borrow_mut();
         match source.and_then(|source| source.values.get(name)).cloned() {
             Some(value) => {
-                custom.values.insert(name.to_owned(), value);
+                custom.SetData(name.to_owned(), value);
             }
             None => {
-                custom.values.remove(name);
+                custom.RemoveData(name);
             }
         }
         match source
@@ -784,10 +784,10 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
             .cloned()
         {
             Some(value) => {
-                custom.registered_values.insert(name.to_owned(), value);
+                custom.SetRegistered(name.to_owned(), value);
             }
             None => {
-                custom.registered_values.remove(name);
+                custom.RemoveRegistered(name);
             }
         }
     }
@@ -825,7 +825,7 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
                 .and_then(|registry| registry.Registration(&name))
                 .is_none()
             {
-                self.custom_properties.borrow_mut().values.insert(
+                self.custom_properties.borrow_mut().SetData(
                     name,
                     if value.IsCyclicVariableValue() {
                         production_style_builder::custom_properties::ComputedVariableValue::Cyclic
@@ -846,11 +846,11 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
             .and_then(|registry| registry.Registration(&name))
         else {
             let mut custom = self.custom_properties.borrow_mut();
-            custom.values.insert(
+            custom.SetData(
                 name.clone(),
                 production_style_builder::custom_properties::ComputedVariableValue::Data(data),
             );
-            custom.registered_values.remove(&name);
+            custom.RemoveRegistered(&name);
             return;
         };
         let typed = match registration.Syntax().ParseTokens(&data) {
@@ -885,8 +885,8 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
         };
         let data = crate::property_registry::RegisteredVariableData(&typed, &data);
         let mut custom = self.custom_properties.borrow_mut();
-        custom.registered_values.insert(name.clone(), typed);
-        custom.values.insert(
+        custom.SetRegistered(name.clone(), typed);
+        custom.SetData(
             name,
             production_style_builder::custom_properties::ComputedVariableValue::Data(data),
         );

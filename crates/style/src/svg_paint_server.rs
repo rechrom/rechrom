@@ -69,18 +69,13 @@ fn LocalFragment(reference: &str) -> Option<&str> {
     reference.strip_prefix('#').filter(|id| !id.is_empty())
 }
 
-fn FindById(document: &Document, id: &str) -> Option<usize> {
-    (0..document.NodeCount()).find(|&node| {
-        document
-            .Node(node)
-            .FindAttribute("id")
-            .is_some_and(|attribute| attribute.value == id)
-    })
+fn FindById(document: &Document, origin: usize, id: &str) -> Option<usize> {
+    document.FindSVGResourceById(origin, id)
 }
 
 fn ReferencedGradient(document: &Document, node: usize) -> Option<usize> {
     let href = Reference(document, node)?;
-    FindById(document, LocalFragment(href)?)
+    FindById(document, node, LocalFragment(href)?)
 }
 
 fn Reference(document: &Document, node: usize) -> Option<&str> {
@@ -164,7 +159,7 @@ fn PatternTextPath(
     }
     let reference = Reference(document, node).ok_or(PatternContentError::TextRequiresShaping)?;
     let id = LocalFragment(reference).ok_or(PatternContentError::TextRequiresShaping)?;
-    let target = FindById(document, id).ok_or(PatternContentError::TextRequiresShaping)?;
+    let target = FindById(document, node, id).ok_or(PatternContentError::TextRequiresShaping)?;
     if document.Node(target).Name() != "path" {
         return Err(PatternContentError::TextRequiresShaping);
     }
@@ -595,7 +590,7 @@ fn CollectPattern(document: &Document, start: usize) -> Option<CollectedPattern>
                 // External resource documents need their own lifecycle and
                 // security owner. Do not reinterpret them as local patterns.
                 let id = LocalFragment(reference)?;
-                Some(FindById(document, id)?)
+                Some(FindById(document, node, id)?)
             }
         };
     }
@@ -775,16 +770,6 @@ fn PatternClip(
         .ok_or(PatternContentError::ClipRequiresResourceGraph)
 }
 
-fn LocalMaskFragment(value: &str) -> Option<&str> {
-    let value = value.trim();
-    let reference =
-        if let Some(inner) = value.strip_prefix("url(").and_then(|v| v.strip_suffix(')')) {
-            inner.trim().trim_matches(['\'', '"'])
-        } else {
-            value
-        };
-    LocalFragment(reference)
-}
 
 fn PatternMaskLength(value: Option<String>, default: &str) -> Option<SvgClipLength> {
     let value = value.as_deref().unwrap_or(default).trim();
@@ -811,26 +796,20 @@ fn PatternMask(
     paint: &layoutng::internal::paint_input::PaintStyleData,
     resolving: &mut HashSet<usize>,
 ) -> Result<Option<Arc<SvgMaskGraph>>, PatternContentError> {
-    let attribute = Attribute(document, node, "mask");
-    let source = attribute.as_deref().or_else(|| {
-        (paint.mask_images.len() == 1).then(|| paint.mask_images[0].image.source_url.as_str())
-    });
-    let Some(source) = source else {
-        return if paint.mask_images.is_empty() {
-            Ok(None)
-        } else {
-            Err(PatternContentError::MaskRequiresResourceGraph)
-        };
-    };
-    if source.eq_ignore_ascii_case("none") && paint.mask_images.is_empty() {
-        return Ok(None);
-    }
-    if paint.mask_images.len() > 1 {
-        return Err(PatternContentError::MaskRequiresResourceGraph);
-    }
-    let id = LocalMaskFragment(source).ok_or(PatternContentError::MaskRequiresResourceGraph)?;
-    let target = FindById(document, id).ok_or(PatternContentError::MaskRequiresResourceGraph)?;
-    if !document.Node(target).IsElement("mask", DOMNamespace::kSVG) || !resolving.insert(target) {
+    // Consume the same native projection as ordinary Layout/Paint. The older
+    // layout-style projection intentionally omits effect/stroke/mask fields.
+    let canonical = Style(document,pending,node).and_then(|style|unsafe{style.native_style.Get().as_ref()})
+        .map(|style|layoutng::internal::boundary::native_paint_style::Export(style,None));
+    let paint = canonical.as_ref().unwrap_or(paint);
+    if paint.mask_images.is_empty() { return Ok(None); }
+    if paint.mask_images.len() != 1 { return Err(PatternContentError::MaskRequiresResourceGraph); }
+    let reference = paint.mask_images[0].svg_reference.as_ref()
+        .ok_or(PatternContentError::MaskRequiresResourceGraph)?;
+    let id = reference.id.as_str();
+    if reference.scope.document_id != document.SVGResourceScope(node).document_id {return Err(PatternContentError::MaskRequiresResourceGraph);}
+    let scope = document.FindNodeById(reference.scope.tree_scope_id).ok_or(PatternContentError::MaskRequiresResourceGraph)?;
+    let target = document.FindSVGResourceById(scope,id).ok_or(PatternContentError::MaskRequiresResourceGraph)?;
+    if !document.Node(target).IsElement("mask",DOMNamespace::kSVG) || !resolving.insert(target) {
         return Err(PatternContentError::MaskRequiresResourceGraph);
     }
     let mask_units = match Attribute(document, target, "maskUnits").as_deref() {
@@ -885,6 +864,19 @@ fn PatternPrimitives(
     context_paint: Option<&PaintStyleData>,
     context_bounds: Option<&SvgPaintServerReferenceBox>,
 ) -> Result<Vec<SvgPatternCommand>, PatternContentError> {
+    PatternPrimitivesWithShapes(document,pending,root,resolving,context_paint,context_bounds,None)
+}
+
+
+fn PatternPrimitivesWithShapes(
+    document: &Document,
+    pending: &HashMap<usize, ResolvedNodeStyle>,
+    root: usize,
+    resolving: &mut HashSet<usize>,
+    context_paint: Option<&PaintStyleData>,
+    context_bounds: Option<&SvgPaintServerReferenceBox>,
+    shapes: Option<&HashMap<usize, SvgShapeData>>,
+) -> Result<Vec<SvgPatternCommand>, PatternContentError> {
     fn append(
         document: &Document,
         pending: &HashMap<usize, ResolvedNodeStyle>,
@@ -896,21 +888,24 @@ fn PatternPrimitives(
         instance_root: bool,
         context_paint: Option<&PaintStyleData>,
         context_bounds: Option<&SvgPaintServerReferenceBox>,
+        shapes: Option<&HashMap<usize, SvgShapeData>>,
     ) -> Result<(), PatternContentError> {
         let element = document.Node(node);
         if !matches!(element.Namespace(), DOMNamespace::kSVG) {
             return Ok(());
         }
-        let local_transform = Attribute(document, node, "transform")
+        if Style(document,pending,node).and_then(|style| unsafe {style.native_style.Get().as_ref()})
+            .is_some_and(|style| style.Display()==foundation::EDisplay::kNone) {return Ok(());}
+        let local_transform = if shapes.is_some() { TransformMatrix::default() } else { Attribute(document, node, "transform")
             .as_deref()
             .and_then(ParseGradientTransform)
-            .unwrap_or_default();
+            .unwrap_or_default() };
         let transform = Multiply(&parent_transform, &local_transform);
         if element.Name() == "use" {
             let reference =
                 Reference(document, node).ok_or(PatternContentError::MissingUseTarget)?;
             let id = LocalFragment(reference).ok_or(PatternContentError::ExternalUse)?;
-            let target = FindById(document, id).ok_or(PatternContentError::MissingUseTarget)?;
+            let target = FindById(document, node, id).ok_or(PatternContentError::MissingUseTarget)?;
             if !instances.insert(target) {
                 return Err(PatternContentError::RecursiveUse);
             }
@@ -973,12 +968,13 @@ fn PatternPrimitives(
                 true,
                 context_paint,
                 context_bounds,
+                shapes,
             );
             instances.remove(&target);
             return result;
         }
         if let Some(shape) =
-            dom::layout_mapping::layout_object_tree_builder::SVGShapeDataForResourceNode(element)
+            shapes.map_or_else(|| dom::layout_mapping::layout_object_tree_builder::SVGShapeDataForResourceNode(element), |shapes| shapes.get(&node).cloned())
         {
             let Some(style) = Style(document, pending, node) else {
                 return Ok(());
@@ -1002,10 +998,10 @@ fn PatternPrimitives(
             let fill_opacity = native.map_or(1.0, |style| style.FillOpacity());
             let stroke_opacity = native.map_or(1.0, |style| style.StrokeOpacity());
             let mut fill_server = paint.svg_fill_reference.as_deref().and_then(|reference| {
-                ResolveInner(document, pending, reference, fill_opacity, resolving)
+                ResolveInner(document, node, pending, reference, fill_opacity, resolving)
             });
             let mut stroke_server = paint.svg_stroke_reference.as_deref().and_then(|reference| {
-                ResolveInner(document, pending, reference, stroke_opacity, resolving)
+                ResolveInner(document, node, pending, reference, stroke_opacity, resolving)
             });
             let mut fill = paint.svg_fill;
             let mut stroke = paint.svg_stroke;
@@ -1281,10 +1277,10 @@ fn PatternPrimitives(
                 let fill_opacity = native.FillOpacity();
                 let stroke_opacity = native.StrokeOpacity();
                 let fill_server = paint.svg_fill_reference.as_deref().and_then(|reference| {
-                    ResolveInner(document, pending, reference, fill_opacity, resolving)
+                    ResolveInner(document, node, pending, reference, fill_opacity, resolving)
                 });
                 let stroke_server = paint.svg_stroke_reference.as_deref().and_then(|reference| {
-                    ResolveInner(document, pending, reference, stroke_opacity, resolving)
+                    ResolveInner(document, node, pending, reference, stroke_opacity, resolving)
                 });
                 let anchor = match native.TextAnchor() {
                     foundation::ETextAnchor::kMiddle => SvgClipTextAnchor::kMiddle,
@@ -1350,6 +1346,7 @@ fn PatternPrimitives(
                 false,
                 context_paint,
                 context_bounds,
+                shapes,
             )?;
         }
         if has_mask {
@@ -1384,6 +1381,7 @@ fn PatternPrimitives(
             false,
             context_paint,
             context_bounds,
+            shapes,
         )?;
     }
     Ok(output)
@@ -1610,6 +1608,7 @@ fn MarkerOrient(value: Option<&str>, automatic: f64, reverse_start: bool) -> Opt
 
 fn ResolveMarkerResource(
     document: &Document,
+    origin: usize,
     pending: &HashMap<usize, ResolvedNodeStyle>,
     reference: &str,
     placement: MarkerPlacement,
@@ -1617,7 +1616,7 @@ fn ResolveMarkerResource(
     context_paint: &PaintStyleData,
     context_bounds: &SvgPaintServerReferenceBox,
 ) -> Option<SvgMarkerInstance> {
-    let target = FindById(document, LocalFragment(reference)?)?;
+    let target = FindById(document, origin, LocalFragment(reference)?)?;
     if !document
         .Node(target)
         .IsElement("marker", DOMNamespace::kSVG)
@@ -1742,6 +1741,7 @@ pub(crate) fn ResolveMarkers(
             }?;
             ResolveMarkerResource(
                 document,
+                node,
                 pending,
                 reference,
                 placement,
@@ -1758,12 +1758,14 @@ pub(crate) fn ResolveMarkers(
 /// SVGPaint fallback color/none semantics remain authoritative.
 pub(crate) fn Resolve(
     document: &Document,
+    origin: usize,
     pending: &HashMap<usize, ResolvedNodeStyle>,
     reference: &str,
     paint_opacity: f32,
 ) -> Option<PaintShader> {
     ResolveInner(
         document,
+        origin,
         pending,
         reference,
         paint_opacity,
@@ -1773,12 +1775,13 @@ pub(crate) fn Resolve(
 
 fn ResolveInner(
     document: &Document,
+    origin: usize,
     pending: &HashMap<usize, ResolvedNodeStyle>,
     reference: &str,
     paint_opacity: f32,
     resolving: &mut HashSet<usize>,
 ) -> Option<PaintShader> {
-    let target = FindById(document, LocalFragment(reference)?)?;
+    let target = FindById(document, origin, LocalFragment(reference)?)?;
     if !resolving.insert(target) {
         return None;
     }
@@ -1933,4 +1936,62 @@ fn ResolveElement(
         _ => unreachable!(),
     }
     Some(output)
+}
+
+/// LayoutSVGResourceMasker::CreatePaintRecord equivalent in the existing
+/// immutable resource recorder. Uses the same command recording traversal as
+/// patterns, fed canonical native shape/style inputs. Unsupported collaborators
+/// are retained on the graph, never reported as an empty successful mask.
+pub(crate) fn ResolveMaskDefinition(document:&Document, pending:&HashMap<usize,ResolvedNodeStyle>, target:usize) -> Arc<SvgMaskGraph> {
+    let style=Style(document,pending,target).and_then(|s|unsafe{s.native_style.Get().as_ref()});
+    let mut graph=SvgMaskGraph {
+        id:Attribute(document,target,"id").unwrap_or_default(),
+        mask_units:if Attribute(document,target,"maskUnits").as_deref()==Some("userSpaceOnUse") {SvgMaskUnits::kUserSpaceOnUse} else {SvgMaskUnits::kObjectBoundingBox},
+        content_units:if Attribute(document,target,"maskContentUnits").as_deref()==Some("objectBoundingBox") {SvgMaskUnits::kObjectBoundingBox} else {SvgMaskUnits::kUserSpaceOnUse},
+        x:SvgClipLength::default(),y:SvgClipLength::default(),width:SvgClipLength::default(),height:SvgClipLength::default(),
+        mode:if style.is_some_and(|s|s.MaskType()==foundation::EMaskType::kAlpha) {PaintMaskMode::kAlpha} else {PaintMaskMode::kLuminance},
+        commands:Vec::new(),content_transform:TransformMatrix::default(),resolved_clip:None,unsupported:None,
+    };
+    let result=(|| -> Result<Vec<SvgPatternCommand>,String> {
+        for name in ["maskUnits","maskContentUnits"] {if Attribute(document,target,name).is_some_and(|s|s!="userSpaceOnUse" && s!="objectBoundingBox") {return Err(format!("invalid {name}"));}}
+        if style.is_some_and(|s|s.ColorInterpolation()==foundation::EColorInterpolation::kLinearrgb) {return Err("linearRGB local mask color interpolation".into());}
+        graph.x=PatternMaskLength(Attribute(document,target,"x"),"-10%").ok_or("mask x")?;
+        graph.y=PatternMaskLength(Attribute(document,target,"y"),"-10%").ok_or("mask y")?;
+        graph.width=PatternMaskLength(Attribute(document,target,"width"),"120%").ok_or("mask width")?;
+        graph.height=PatternMaskLength(Attribute(document,target,"height"),"120%").ok_or("mask height")?;
+        fn collect(document:&Document,pending:&HashMap<usize,ResolvedNodeStyle>,node:usize,shapes:&mut HashMap<usize,SvgShapeData>,canonical:&mut HashMap<usize,ResolvedNodeStyle>)->Result<(),String> {
+            let element=document.Node(node);
+            if element.Type()!=DOMNodeType::kElement {return Ok(());}
+            let style=Style(document,pending,node).ok_or("unresolved mask content")?;
+            let native=unsafe{style.native_style.Get().as_ref()}.ok_or("missing native mask style")?;
+            if native.Display()==foundation::EDisplay::kNone {return Ok(());}
+            if !style.own_generates_box {return Err("mask content without its own layout box".into());}
+            let native_paint=layoutng::internal::boundary::native_paint_style::Export(native,None);
+            let paint=&native_paint;
+            let mut record_style=style.clone();*record_style.style.paint=native_paint.clone();canonical.insert(node,record_style);
+            if !matches!(native.FillPaint().paint_type, SVGPaintType::kColor | SVGPaintType::kNone)
+                || !matches!(native.StrokePaint().paint_type, SVGPaintType::kColor | SVGPaintType::kNone) {return Err("context/resource mask paint".into());}
+            if paint.svg_non_scaling_stroke || native.PaintOrder()!=layoutng_style::style::computed_style_constants::EPaintOrder::kPaintOrderNormal || element.FindAttribute("pathLength").is_some() {return Err("mask non-scaling stroke, paint order or pathLength".into());}
+            if !native.StrokeWidth().length().IsFixed() || !native.StrokeDashOffset().IsFixed()
+                || unsafe {native.StrokeDashArray().as_ref()}.is_some_and(|a|a.iter().any(|l|!l.IsFixed())) {return Err("mask percentage/expression stroke metrics".into());}
+            if native.EffectiveZoom()!=1.0 {return Err("zoomed mask content recording".into());}
+            if paint.transform.is_some() || native.HasOffset() {return Err("transformed mask content recording".into());}
+            if !paint.filters.is_empty() || paint.clip_path.is_some() || !paint.mask_images.is_empty() || !paint.backdrop_filters.is_empty() || paint.svg_fill_reference.is_some() || paint.svg_stroke_reference.is_some() || !native.MarkerStartResource().is_null() || !native.MarkerMidResource().is_null() || !native.MarkerEndResource().is_null() {return Err("mask content effect/paint-server collaborator".into());}
+            if element.Namespace()!=DOMNamespace::kSVG {return Err("non-SVG mask content".into());}
+            if element.Name()=="g" {
+                if !paint.visible {return Err("hidden mask group with descendant visibility overrides".into());}
+            } else {
+                let shape=dom::layout_mapping::SVGMaskShape(document,node,native)?.ok_or_else(||format!("unsupported mask child {}",element.Name()))?;
+                shapes.insert(node,shape);
+            }
+            for &child in element.Children() {collect(document,pending,child,shapes,canonical)?;}
+            Ok(())
+        }
+        let mut shapes=HashMap::new();
+        let mut canonical=pending.clone();
+        for &child in document.Node(target).Children() {collect(document,pending,child,&mut shapes,&mut canonical)?;}
+        PatternPrimitivesWithShapes(document,&canonical,target,&mut HashSet::new(),None,None,Some(&shapes)).map_err(|error|format!("mask content {error:?}"))
+    })();
+    match result {Ok(commands)=>graph.commands=commands,Err(error)=>graph.unsupported=Some(error)}
+    Arc::new(graph)
 }

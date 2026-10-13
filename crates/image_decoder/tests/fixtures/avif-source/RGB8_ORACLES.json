@@ -1,0 +1,17 @@
+{
+  "reference": "a0fa6329391922faca64955c1a7bf635ab87d833",
+  "source_url": "https://chromium.googlesource.com/libyuv/libyuv/+/a0fa6329391922faca64955c1a7bf635ab87d833",
+  "build": "g++ -O2 -fPIC; source list from upstream CMakeLists.txt ly_common_source_files; no LIBYUV_UNLIMITED defines; scalar CPU mask1 and automatic SIMD both exact",
+  "format": "repeated little-endian six u32: width,height,format400/420/422/444,matrix,full,alpha; tightly packed Y/U/V/A existing planes; width*height*4 expected straight RGBA",
+  "files": {
+    "libyuv-rgb8-oracle.bin": "aec6f16d66b1adcaafe8cea05bc542c13a8c8c03443b208d12807d04000fa9af",
+    "alpha-libyuv.bin": "c195e48ada648ffd7a31c861e5ef04fba487a25227fd99962ef3381827fed6b3",
+    "alpha-libyuv.png": "f85e07962c70735614bc93bb2d9126304dba756a0ee15521b38927235b10df20",
+    "reference/libyuv_oracle.cc": "1fe31c6b86b2f6253ef1c3c96a761669a3748c855005b2a036cb55aaedfd34df",
+    "reference/generate_input.py": "6fa5f8a88739b6e9d4097bbf802fd1a8f32b4f3f828b07437ac725d1699be2f6"
+  },
+  "synthetic_cases": 832,
+  "synthetic_pixels": 147968,
+  "alpha_input": "alpha.avif from existing MANIFEST.json; YUV plane bytes decoded using pinned Crabby+rav1d; RGB solely from pinned reference libyuv",
+  "limits": "conversion oracle, not independent AV1 decoding oracle; evidence-only build not a production/test dependency"
+}

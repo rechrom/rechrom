@@ -442,6 +442,11 @@ impl Drop for Context {
     }
 }
 impl Context {
+    pub(super) fn memory_usage(&self) -> JSMemoryUsage {
+        let mut usage: JSMemoryUsage = unsafe { std::mem::zeroed() };
+        unsafe { JS_ComputeMemoryUsage(self.owner.rt, &mut usage) };
+        usage
+    }
     pub fn new() -> Self {
         Self::with_native_stack_budget(1024 * 1024)
     }

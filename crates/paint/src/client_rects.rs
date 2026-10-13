@@ -71,7 +71,9 @@ fn Gather<'a>(
     nodes.push(GeometryNode {
         fragment,
         absolute_offset: geometry.absolute_offset,
-        rect: (fragment.kind == FragmentKind::kBox)
+        // LayoutSVGHiddenContainer overrides QuadsInAncestorInternal with
+        // no quads. Its descendants still expose their own SVG geometry.
+        rect: (fragment.kind == FragmentKind::kBox && !fragment.paint.svg_hidden_container)
             .then(|| {
                 MapRectToRoot(
                     PaintRect {
@@ -479,6 +481,26 @@ mod tests {
         node.paint.has_source = true;
         node.paint.establishes_paint_state = true;
         node
+    }
+
+    #[test]
+    fn hidden_svg_container_has_no_client_rect_but_keeps_descendant_geometry() {
+        let mut root = fragment(1, 1, 0.0, 0.0, 100.0, 100.0);
+        let mut hidden = fragment(2, 2, 0.0, 0.0, 0.0, 0.0);
+        hidden.paint.svg_hidden_container = true;
+        hidden.children.push(fragment(3, 3, 5.0, 7.0, 20.0, 30.0));
+        root.children.push(hidden);
+        let rects = CollectFragmentClientRects(&root);
+        assert!(!rects.contains_key(&2));
+        assert_eq!(
+            rects[&3],
+            vec![PaintRect {
+                x: 5.0,
+                y: 7.0,
+                width: 20.0,
+                height: 30.0
+            }]
+        );
     }
 
     fn PaintWalkRects(root: &FragmentNode) -> HashMap<u64, Vec<PaintRect>> {

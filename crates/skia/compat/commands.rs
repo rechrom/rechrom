@@ -745,8 +745,20 @@ pub struct FontFace<'a> {
     pub weight: f64,
     pub italic: bool,
     pub bytes: &'a [u8],
+    /// Optional retained immutable backing. Implementations must expose the same
+    /// stable immutable full slice for their lifetime. Its view must match `bytes`;
+    /// borrowed/reassigned views safely fall back to an owned exact-byte copy.
+    pub bytes_owner: Option<std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>>,
     pub face_index: u32,
     pub variations: Vec<FontVariation>,
+}
+impl FontFace<'_> {
+    pub(crate) fn shared_bytes(&self) -> Option<&std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>> {
+        self.bytes_owner.as_ref().filter(|owner| {
+            let view: &[u8] = owner.as_ref().as_ref();
+            view.as_ptr() == self.bytes.as_ptr() && view.len() == self.bytes.len()
+        })
+    }
 }
 // The raster cache outlives a borrowed resource snapshot. Keep exact source
 // bytes, not a pointer or family name, so data replacement and allocator address
@@ -850,6 +862,7 @@ mod font_identity_tests {
             weight: 400.0,
             italic: false,
             bytes,
+            bytes_owner: None,
             face_index: 0,
             variations: vec![],
         }

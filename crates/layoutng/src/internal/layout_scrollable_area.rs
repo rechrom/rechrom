@@ -59,6 +59,7 @@ pub struct PaintLayerScrollableArea {
     scroll_offset_: ScrollOffset,
     text_overflow_snapshot_: Member<TextOverflowPostLayoutSnapshot>,
     has_been_disposed_: bool,
+    needs_scroll_offset_clamp_: bool,
 }
 
 // cpp: layoutng/internal/layout_scrollable_area.h:141-144
@@ -85,6 +86,7 @@ impl PaintLayerScrollableArea {
             scroll_offset_: ScrollOffset::default(),
             text_overflow_snapshot_: Member::default(),
             has_been_disposed_: false,
+            needs_scroll_offset_clamp_: false,
         };
         let element = DynamicTo::<Element>(box_.GetNode());
         if !element.is_null() {
@@ -554,10 +556,57 @@ impl PaintLayerScrollableArea {
                 || (horizontal_changes && !box_.IsHorizontalWritingMode())
             {
                 box_.SetIntrinsicLogicalWidthsDirty(
-                    super::layout_object::MarkingBehavior::kMarkContainerChain);
+                    super::layout_object::MarkingBehavior::kMarkContainerChain,
+                );
             }
             self.UpdateScrollDimensions();
         }
+        self.DelayableClampScrollOffsetAfterOverflowChange();
+    }
+
+    // Chromium paint_layer_scrollable_area.cc:1202-1254, pinned
+    // 6c1d401fcca5e1b0030563a90c2f2bba168e0c15. Scrollbar relayouts
+    // share the existing DelayScrollOffsetClampScope; only final geometry clamps.
+    pub fn NeedsScrollOffsetClamp(&self) -> bool {
+        self.needs_scroll_offset_clamp_
+    }
+    pub fn SetNeedsScrollOffsetClamp(&mut self, value: bool) {
+        self.needs_scroll_offset_clamp_ = value;
+    }
+    fn DelayableClampScrollOffsetAfterOverflowChange(&mut self) {
+        if self.HasBeenDisposed() {
+            return;
+        }
+        use super::scroll_layout_scope::DelayScrollOffsetClampScope;
+        if DelayScrollOffsetClampScope::ClampingIsDelayed() {
+            DelayScrollOffsetClampScope::SetNeedsClamp(self);
+        } else {
+            self.ClampScrollOffsetAfterOverflowChange();
+        }
+    }
+    pub fn ClampScrollOffsetAfterOverflowChange(&mut self) {
+        if self.HasBeenDisposed() {
+            return;
+        }
+        self.UpdateScrollDimensions();
+        let before = self.GetScrollOffset();
+        let offset = self.ClampScrollOffset(&before);
+        if offset != before || self.ScrollOriginChanged() {
+            self.UpdateScrollOffset(offset);
+            let box_ = unsafe { &mut *self.GetLayoutBox() };
+            box_.SetNeedsPaintPropertyUpdate();
+            let node = box_.GetNode();
+            if !node.is_null() {
+                // Keep the immutable export coherent without re-entering this
+                // mutable scrollable-area owner through UpdateInputScrollOffset.
+                unsafe { &mut *node }.ReflectInputScrollOffset(super::layout_input::Offset {
+                    x: f64::from(offset.x()),
+                    y: f64::from(offset.y()),
+                });
+            }
+        }
+        self.SetNeedsScrollOffsetClamp(false);
+        self.ResetScrollOriginChanged();
     }
 
     // cpp: layoutng/internal/layout_scrollable_area.h:153-153

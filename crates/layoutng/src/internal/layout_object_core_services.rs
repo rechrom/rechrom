@@ -596,11 +596,17 @@ impl LayoutObject {
         while !ancestor.is_null() {
             let box_ = DynamicTo::<LayoutBox>(ancestor);
             if !box_.is_null() {
-                let style = unsafe { &*box_ }.StyleRef();
-                if (axis == PhysicalAxis::kVertical && style.IsOverflowValueScrollableY())
-                    || (axis == PhysicalAxis::kHorizontal && style.IsOverflowValueScrollableX())
+                let box_ = unsafe { &*box_ };
+                let style = box_.StyleRef();
+                // Chromium walks actual scroll owners before filtering axes.
+                // The merged html/LayoutView retains authored overflow; its
+                // native viewport ownership already includes propagation.
+                if box_.IsScrollContainer()
+                    && (box_.IsLayoutView()
+                        || (axis == PhysicalAxis::kVertical && style.IsOverflowValueScrollableY())
+                        || (axis == PhysicalAxis::kHorizontal && style.IsOverflowValueScrollableX()))
                 {
-                    return box_;
+                    return box_ as *const LayoutBox;
                 }
             }
             ancestor = unsafe { &*ancestor }.Parent();
@@ -777,6 +783,9 @@ impl LayoutObject {
     // cpp: layoutng/internal/layout_object_core_services.cc:560-563
     pub fn VisualRectInLocalSVGCoordinates(&self) -> gfx::RectF {
         self.CheckIsNotDestroyed();
+        if self.IsSVGHiddenContainer() {
+            return gfx::RectF::default();
+        }
         std::process::abort();
     }
 

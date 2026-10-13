@@ -42,7 +42,47 @@ fn UpdateFragmentPaintStyle(
     found: &mut bool,
 ) {
     if fragment.node_id == node_id {
-        fragment.paint.style = style.clone();
+        let mut current = style.clone();
+        if let Some(clip) = current
+            .clip_path
+            .as_mut()
+            .filter(|clip| clip.reference_target_id.is_some())
+        {
+            let Some(previous) = fragment.paint.style.clip_path.as_ref().filter(|previous| {
+                previous.reference_target_id == clip.reference_target_id
+                    && previous.reference_scope == clip.reference_scope
+            }) else {
+                // A newly selected resource needs the ordinary native export
+                // to establish its own viewport, even if box geometry is clean.
+                return;
+            };
+            clip.reference_viewport = previous.reference_viewport;
+        }
+        for (index, layer) in current.mask_images.iter_mut().enumerate() {
+            let Some(reference) = layer
+                .svg_reference
+                .as_mut()
+                .filter(|r| r.target_id.is_some())
+            else {
+                continue;
+            };
+            let Some(previous) = fragment
+                .paint
+                .style
+                .mask_images
+                .get(index)
+                .and_then(|l| l.svg_reference.as_ref())
+                .filter(|p| {
+                    p.target_id == reference.target_id
+                        && p.scope == reference.scope
+                        && p.id == reference.id
+                })
+            else {
+                return;
+            };
+            reference.viewport = previous.viewport;
+        }
+        fragment.paint.style = current;
         *found = true;
     }
     for child in &mut fragment.children {
@@ -61,6 +101,7 @@ pub enum LayoutMutation<'a> {
         node_id: u64,
         style: &'a NativeComputedStyle,
         projected: &'a crate::internal::paint_input::PaintStyleData,
+        clip_resource_version: crate::internal::paint_input::SvgClipResourceVersion,
     },
     ReplaceTree(LayoutObjectTree),
     ScrollOffset {
@@ -166,18 +207,20 @@ impl LayoutEngine {
                 node_id,
                 style,
                 projected,
+                clip_resource_version,
             } => {
                 let binding = self
                     .tree_
                     .as_mut()
-                    .and_then(|tree| tree.UpdatePaintStyle(node_id, style));
-                if let Some(binding) = binding {
+                    .and_then(|tree| tree.UpdatePaintStyle(node_id, style, clip_resource_version));
+                if let Some(binding) = binding.as_ref() {
                     if let Some(fragments) = &mut self.fragments {
                         let mut found = false;
                         let paint_style = crate::internal::boundary::native_paint_style::ExportStyleWithProjectedSvg(
                                 style,
                                 binding.image_resource_id,
                                 projected,
+                                &binding.svg_clip_resources,
                             );
                         UpdateFragmentPaintStyle(
                             Rc::make_mut(fragments),
@@ -642,12 +685,17 @@ impl LayoutEngine {
             unsafe { &*root_box }.ShouldSkipLayoutCache() as u8 as f64,
         );
         let algorithm = browser_tracing::span("layout", "LayoutEngine.NativeLayout");
+        // The extracted host publishes one complete root layout transaction.
+        // Delay provisional scrollbar clamps until all nested relayouts settle,
+        // then resolve them before sticky properties and fragments are exported.
+        let clamp_scope = crate::internal::scroll_layout_scope::DelayScrollOffsetClampScope::new();
         let result = native_root.Layout(
             &constraints,
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
         );
+        drop(clamp_scope);
         drop(algorithm);
         trace.set(
             "layout_result_reused",

@@ -3,13 +3,13 @@ use crate::svg_path_parser::ParseSVGPathDefault;
 use crate::{Child, Element, ParsedDocument as Document, UserInteractionState};
 use font_engine::text::native::character_break_iterator::LengthOfGraphemeCluster;
 use font_engine::text::native::unicode_category::Category;
-use foundation::{StringView, unicode};
+use foundation::{unicode, StringView};
 use layoutng_assembly::internal::form_control_types::FormControlType;
 use layoutng_assembly::internal::layout_input::{
     ComputedStyle, Display, DocumentRole, ElementData, ExtendedStyle, FrameDimension,
     FrameDimensionType, ListMarkerImage, ListStyleType, MathTokenKind, NodeKind, Offset,
     PaintPathCommand, PaintPathVerb, SvgLengthAdjust, SvgShapeData, SvgShapeGeometry,
-    SvgTextPathData, SvgViewBoxData, SvgViewportData, SvgViewportLength, TextAreaSizing,
+    SvgUseData, SvgTextPathData, SvgViewBoxData, SvgViewportData, SvgViewportLength, TextAreaSizing,
     TextFieldSizing, WhiteSpace,
 };
 use layoutng_assembly::internal::layout_object::LayoutObject;
@@ -238,6 +238,7 @@ pub(super) fn element_metadata_svg_viewport(node: &impl LayoutNodeView, data: &m
 // cpp: dom_to_layout/layout_object_tree_builder.cc:780-806
 pub(super) fn list_marker_style(item: &ComputedStyle) -> ComputedStyle {
     let mut marker = ComputedStyle::default();
+    marker.svg_clip_resources = item.svg_clip_resources.clone();
     marker.display = Display::kInlineBlock;
     marker.direction = item.direction;
     marker.writing_mode = item.writing_mode;
@@ -638,11 +639,19 @@ pub(super) fn is_single_line_text_control(control_type: FormControlType) -> bool
 }
 
 fn cpp_min(a: f64, b: f64) -> f64 {
-    if b < a { b } else { a }
+    if b < a {
+        b
+    } else {
+        a
+    }
 }
 
 pub(super) fn cpp_max(a: f64, b: f64) -> f64 {
-    if a < b { b } else { a }
+    if a < b {
+        b
+    } else {
+        a
+    }
 }
 
 // The namespace branch is selected by DOMNode::Namespace in C++. The
@@ -690,6 +699,10 @@ pub(super) fn element_metadata_svg(
     text_path: Option<SvgTextPathData>,
     data: &mut ElementData,
 ) {
+    if node.node_name() == "use" {
+        data.svg_use = Some(SvgUseData::UnbuiltInstance);
+    }
+
     // cpp: dom_to_layout/layout_object_tree_builder.cc:379-410
     if node.node_name() == "svg" {
         // LayoutSVGRoot::UnscaledNaturalSizingInfo reads SVGSVGElement's
@@ -940,6 +953,9 @@ fn element_kind(
                 }
             }
             "foreignObject" => NodeKind::kSvgForeignObject,
+            "defs" => NodeKind::kSvgHiddenContainer,
+            "clipPath" => NodeKind::kSvgResourceClipper,
+                "mask" => NodeKind::kSvgResourceMasker,
             "text" => NodeKind::kSvgText,
             // SVGTextPathElement::CreateLayoutObject preserves element identity
             // independently of href resolution. LayoutSVGTextPath::LayoutPath
@@ -1550,13 +1566,16 @@ fn append_pseudo_element(
         Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
     >,
     svg_clip_path_graphs: &std::sync::Arc<
-        Vec<layoutng_assembly::internal::paint_input::SvgClipPathGraph>,
+        layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot,
     >,
 ) {
     let Some(pseudo) = pseudo else { return };
     let box_bit = 1u64 << if before { 50 } else { 48 };
     let text_bit = 1u64 << if before { 49 } else { 47 };
     let name = if before { "::before" } else { "::after" };
+    let mut style = pseudo.style.clone();
+    style.paint.svg_filter_graphs = std::sync::Arc::clone(svg_filter_graphs);
+    resolve_svg_clip_path(&mut style, svg_clip_path_graphs, Default::default());
     if pseudo.display_contents {
         if !pseudo.text.is_empty() {
             tree.AddText(
@@ -1564,16 +1583,13 @@ fn append_pseudo_element(
                 originating_id | text_bit,
                 pseudo.text.clone(),
                 format!("{name}-text"),
-                &pseudo.style,
+                &style,
                 true,
                 std::ptr::null(),
             );
         }
         return;
     }
-    let mut style = pseudo.style.clone();
-    style.paint.svg_filter_graphs = std::sync::Arc::clone(svg_filter_graphs);
-    resolve_svg_clip_path(&mut style, svg_clip_path_graphs);
     let object = tree.AddBox(
         unsafe { &mut *parent },
         originating_id | box_bit,
@@ -1608,7 +1624,7 @@ fn append_children(
         Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
     >,
     svg_clip_path_graphs: &std::sync::Arc<
-        Vec<layoutng_assembly::internal::paint_input::SvgClipPathGraph>,
+        layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot,
     >,
     parent_index: usize,
     parent: *mut LayoutObject,
@@ -1620,9 +1636,9 @@ fn append_children(
                 let dom_parent = &document.elements[parent_index];
                 if node.namespace == DOMNamespace::kSVG
                     && node.tag == "textPath"
-                    && !svg_text_path_layout_needed(
-                        dom_parent.namespace, &dom_parent.tag, unsafe { &*parent },
-                    )
+                    && !svg_text_path_layout_needed(dom_parent.namespace, &dom_parent.tag, unsafe {
+                        &*parent
+                    })
                 {
                     continue;
                 }
@@ -1680,7 +1696,7 @@ fn append_children(
                 let mut style = styles[index].clone();
                 let element = element_metadata(document, index, interaction_state, &style);
                 style.paint.svg_filter_graphs = std::sync::Arc::clone(svg_filter_graphs);
-                resolve_svg_clip_path(&mut style, svg_clip_path_graphs);
+                resolve_svg_clip_path(&mut style, svg_clip_path_graphs, Default::default());
                 // cpp: dom_to_layout/layout_object_tree_builder.cc:1278-1285
                 if document.elements[index].tag == "img" {
                     if let Some(source) = attribute(&document.elements[index], "src") {
@@ -1803,26 +1819,15 @@ fn append_children(
 
 pub(super) fn resolve_svg_clip_path(
     style: &mut ComputedStyle,
-    graphs: &std::sync::Arc<Vec<layoutng_assembly::internal::paint_input::SvgClipPathGraph>>,
+    snapshot: &std::sync::Arc<layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot>,
+    scope: layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope,
 ) {
-    let Some(clip) = style.paint.clip_path.as_mut() else {
-        return;
+    // This is a resource binding, not a second representation of clip-path.
+    // Native ComputedStyle remains the sole owner of the actual operation.
+    style.svg_clip_resources = layoutng_assembly::internal::paint_input::SvgClipResourceBinding {
+        snapshot: std::sync::Arc::clone(snapshot),
+        scope,
     };
-    let Some(url) = clip.reference_url.as_deref() else {
-        return;
-    };
-    let Some(id) = url.strip_prefix('#') else {
-        clip.reference_error = Some("external clip-path IRI".into());
-        return;
-    };
-    if let Some(graph) = graphs.iter().find(|graph| graph.id == id) {
-        if let Some(error) = &graph.unsupported {
-            clip.reference_error = Some(error.clone())
-        }
-        clip.reference_graph = Some(std::sync::Arc::new(graph.clone()));
-    } else {
-        clip.reference_error = Some("missing local clipPath resource".into())
-    }
 }
 
 #[allow(non_snake_case)]
@@ -1837,7 +1842,7 @@ pub fn Build(
     let svg_clip_path_graphs = super::svg_clip_path_graph::build(document);
     let mut root_style = styles[root_index].clone();
     root_style.paint.svg_filter_graphs = std::sync::Arc::clone(&svg_filter_graphs);
-    resolve_svg_clip_path(&mut root_style, &svg_clip_path_graphs);
+    resolve_svg_clip_path(&mut root_style, &svg_clip_path_graphs, Default::default());
     let root = tree.CreateRoot(
         root_index as u64 + 1,
         &root_style,
@@ -2072,7 +2077,7 @@ pub fn BuildResolvedWithInteraction(
     let svg_clip_path_graphs = super::svg_clip_path_graph::build(document);
     let mut root_style = resolved.styles[root_index].clone();
     root_style.paint.svg_filter_graphs = std::sync::Arc::clone(&svg_filter_graphs);
-    resolve_svg_clip_path(&mut root_style, &svg_clip_path_graphs);
+    resolve_svg_clip_path(&mut root_style, &svg_clip_path_graphs, Default::default());
     assert!(
         resolved.generates_box[root_index],
         "document root needs a box"

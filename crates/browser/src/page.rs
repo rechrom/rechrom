@@ -187,6 +187,8 @@ impl PageRenderPipeline {
 // cpp: browser/browser.h:47-51
 pub struct PageFrame {
     pub sequence: u64,
+    /// Last compositor scroll delta reflected by this committed snapshot.
+    pub compositor_scroll_sequence: u64,
     pub fragments: Rc<FragmentNode>,
     pub display_items: Arc<paint::paint_engine::PaintArtifact>,
 }
@@ -668,9 +670,14 @@ impl PageState {
                 let viewport = measurement.as_ref()?;
                 let owner = viewport_scroll.document.borrow();
                 let tree = owner.GetDocument();
-                let root = tree.Node(tree.Root()).Children().iter().copied()
+                let root = tree
+                    .Node(tree.Root())
+                    .Children()
+                    .iter()
+                    .copied()
                     .find(|&index| tree.Node(index).IsHTMLElement("html"))?;
-                let native = tree.ResolvedStyleFor(root)
+                let native = tree
+                    .ResolvedStyleFor(root)
                     .map(|resolved| unsafe { &*resolved.native_style.Get() })?;
                 let range = viewport.paint.scroll_container;
                 Some(ViewportScrollState {
@@ -856,13 +863,14 @@ impl PageState {
         if self.styles_resolved.get() {
             return;
         }
-        {
+        let svg_resources_changed = {
             let interaction = *self.interaction.borrow();
             let mut style_engine = self.style_engine.borrow_mut();
             let mut document = self.document.borrow_mut();
             style_engine
                 .SetUserInteractionState(&mut document, interaction)
                 .expect("Page StyleEngine belongs to its retained Document");
+            document.GetDocumentMut().UpdateSVGUseInstances();
             crate::style_services::ResolveLayoutStylesWithEngineAndForcedColors(
                 &mut style_engine,
                 &mut document,
@@ -870,6 +878,16 @@ impl PageState {
                 self.preferred_color_scheme.get(),
                 self.forced_colors.get(),
             );
+            document.UpdateSVGResources()
+        };
+        if svg_resources_changed {
+            // Local SVG target/content changes invalidate consumers even when
+            // every consumer's canonical clip-path is unchanged. Revoke an
+            // animation-only paint proof before the retained-frame gate.
+            self.ApplyAnimationMutation(animation::AnimationMutation::InvalidatePaintBatch);
+            self.PreserveMeasurementGeometry();
+            self.scroll_only.set(false);
+            self.dirty.set(true);
         }
         {
             let document = self.document.borrow();
@@ -904,6 +922,8 @@ impl PageState {
                     &mut self.system_fonts.borrow_mut(),
                 );
                 if !self.style_engine.borrow().HasContainerQueries() {
+                    drop(layout);
+                    self.ReflectLayoutScrollOffsets();
                     return;
                 }
                 layout.ContainerQuerySizes()
@@ -914,6 +934,7 @@ impl PageState {
                 &sizes,
             );
             if !changed {
+                self.ReflectLayoutScrollOffsets();
                 return;
             }
             let signature = sizes
@@ -929,6 +950,53 @@ impl PageState {
         std::panic::panic_any(foundation::UnsupportedLayout::new(
             "container query style/layout did not converge (style_engine.cc:3865)",
         ));
+    }
+
+    // Layout owns clamping after overflow/scrollbar changes. Reflect only its
+    // final native values to Document and the existing scroll-event queue; this
+    // is not a new scroll request and must not invalidate the completed layout.
+    fn ReflectLayoutScrollOffsets(&self) {
+        fn collect(
+            node: &FragmentNode,
+            seen: &mut std::collections::HashSet<u64>,
+            out: &mut Vec<(u64, Offset)>,
+        ) {
+            if node.paint.has_source && node.node_id != 0 && seen.insert(node.node_id) {
+                out.push((node.node_id, node.paint.scroll_offset));
+            }
+            for child in &node.children {
+                collect(child, seen, out);
+            }
+        }
+        let mut offsets = Vec::new();
+        if let Some(fragments) = self.layout_engine.borrow().GetLayoutResult() {
+            collect(
+                fragments,
+                &mut std::collections::HashSet::new(),
+                &mut offsets,
+            );
+        }
+        offsets.retain(|(id, offset)| {
+            let owner = self.document.borrow();
+            let document = owner.GetDocument();
+            document.FindNodeById(*id).is_some_and(|index| {
+                document.Node(index).Type() == dom::persistent_document::DOMNodeType::kElement
+                    && document.ScrollOffsetFor(index) != *offset
+            })
+        });
+        for (node_id, offset) in offsets {
+            if let Some(effect) = self.document.ApplyScrollOffset(node_id, offset) {
+                // A synchronous geometry query can run before an older queued
+                // request reaches layout. Never restore that superseded offset.
+                self.scroll_updates
+                    .borrow_mut()
+                    .retain(|(id, _)| *id != node_id);
+                let mut targets = self.scroll_event_targets.borrow_mut();
+                if !targets.contains(&effect.event_target_node_id) {
+                    targets.push(effect.event_target_node_id);
+                }
+            }
+        }
     }
 
     // cpp: browser/browser.cc:932-939
@@ -1296,6 +1364,7 @@ pub struct Page {
     // gesture, after compositor scrolling has stopped moving content beneath
     // a stationary pointer.
     wheel_scroll_active: bool,
+    processed_compositor_scroll_sequence: u64,
     cursor: Cursor,
     // HitTestCache's point/DOM version proof, restricted to one clean committed
     // frame. No fragment Rc is retained; scroll/layout changes advance sequence.
@@ -1315,7 +1384,47 @@ pub struct Page {
     selection_revision: u64,
     editing_paint_dirty: bool,
 }
+/// Read-only copied owner statistics. Requested capacities overlap across
+/// shared owners and cannot be summed into process RSS.
+#[derive(Clone, Debug)]
+pub struct PageMemoryDiagnostics {
+    pub loading: bool,
+    pub dirty: bool,
+    pub styles_resolved: bool,
+    pub pending_scroll_updates: usize,
+    pub frame_sequence: Option<u64>,
+    pub recording_revision: Option<u64>,
+    pub dom: dom::persistent_document::DOMMemoryDiagnostics,
+    pub custom_properties: style::document_style_engine::CustomPropertyMemoryDiagnostics,
+    pub javascript: Option<javascript::javascript_runtime::JavaScriptMemoryDiagnostics>,
+    pub host: Option<webapi::dom_bindings::DOMHostMemoryDiagnostics>,
+    pub resources: resource::ResourceMemoryDiagnostics,
+    pub catalog_images: usize,
+    pub unique_bitmap_capacity: usize,
+}
 impl Page {
+    /// Does not advance lifecycle, execute JS, load resources or collect heaps.
+    pub fn MemoryDiagnostics(&self) -> PageMemoryDiagnostics {
+        let (javascript, host) = self.scripts.as_ref().map_or((None, None), |scripts| {
+            let (js, host) = scripts.MemoryDiagnostics(); (js, Some(host))
+        });
+        let constraints = self.state.constraints.borrow();
+        let mut seen = std::collections::HashSet::new();
+        let unique_bitmap_capacity = constraints.images.iter().filter_map(|image| {
+            if let image_resource::PaintImageContent::Bitmap(pixels) = &image.content {
+                seen.insert(Arc::as_ptr(pixels)).then_some(pixels.capacity())
+            } else { None }
+        }).sum();
+        PageMemoryDiagnostics {
+            loading: self.IsLoading(), dirty: self.state.dirty.get(), styles_resolved: self.state.styles_resolved.get(),
+            pending_scroll_updates: self.state.scroll_updates.borrow().len(), frame_sequence: self.frame.as_ref().map(|f| f.sequence),
+            recording_revision: self.frame.as_ref().map(|f| f.display_items.recording_revision),
+            dom: self.state.document.borrow().GetDocument().MemoryDiagnostics(),
+            custom_properties: self.state.style_engine.borrow().CustomPropertyMemoryDiagnostics(),
+            javascript, host, resources: self.resources.MemoryDiagnostics(),
+            catalog_images: constraints.images.len(), unique_bitmap_capacity,
+        }
+    }
     /// Publish HTMLImageElement's rendered auto-sizes width and run the same
     /// source reselection that ResizeObserver::OnResize triggers in Blink.
     /// The content-box width is unzoomed and rounded before it becomes the
@@ -1709,6 +1818,7 @@ impl Page {
             cursor_position: None,
             hover_state_dirty: false,
             wheel_scroll_active: false,
+            processed_compositor_scroll_sequence: 0,
             cursor: Cursor::kDefault,
             cursor_hit_test: None,
             wheel_event_regions: RefCell::new(Default::default()),
@@ -1725,10 +1835,10 @@ impl Page {
     /// Inject an embedding-owned platform font service. Discovery/opening run
     /// at the host boundary, never inside FontEngine or Layout computation.
     pub fn SetSystemFontProvider(&mut self, provider: Box<dyn font_engine::SystemFontProvider>) {
-        self.state.system_fonts.borrow_mut().SetProvider(
-            provider,
-            &mut self.state.constraints.borrow_mut(),
-        );
+        self.state
+            .system_fonts
+            .borrow_mut()
+            .SetProvider(provider, &mut self.state.constraints.borrow_mut());
         self.state.InvalidateMeasurement();
         self.state.document.borrow_mut().InvalidateLayout();
         self.state.dirty.set(true);
@@ -1739,9 +1849,10 @@ impl Page {
     /// change. Existing frames retain their immutable bytes; the next lifecycle
     /// re-resolves only the fonts actually requested by the document.
     pub fn SystemFontsChanged(&mut self) {
-        self.state.system_fonts.borrow_mut().EnvironmentChanged(
-            &mut self.state.constraints.borrow_mut(),
-        );
+        self.state
+            .system_fonts
+            .borrow_mut()
+            .EnvironmentChanged(&mut self.state.constraints.borrow_mut());
         self.state.InvalidateMeasurement();
         self.state.document.borrow_mut().InvalidateLayout();
         self.state.dirty.set(true);
@@ -2312,6 +2423,9 @@ impl Page {
             return Ok(());
         }
         if !self.state.dirty.get() {
+            if let Some(frame) = &mut self.frame {
+                frame.compositor_scroll_sequence = self.processed_compositor_scroll_sequence;
+            }
             trace.set("clean", 1.0);
             return Ok(());
         }
@@ -2387,6 +2501,7 @@ impl Page {
                 self.state.InstallMeasurement(frame.fragments.clone());
             }
             frame.sequence += 1;
+            frame.compositor_scroll_sequence = self.processed_compositor_scroll_sequence;
             self.state.scroll_only.set(false);
             self.state.dirty.set(false);
             if let Some(scripts) = &mut self.scripts {
@@ -2540,6 +2655,7 @@ impl Page {
             );
         }
         let frame = PageFrame {
+            compositor_scroll_sequence: self.processed_compositor_scroll_sequence,
             sequence: self.frame.as_ref().map_or(1, |f| f.sequence + 1),
             fragments,
             display_items,
@@ -2613,9 +2729,7 @@ fn cursor_hit_test_same_point_reuses_clean_frame_and_scroll_invalidates() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
-                &assembly,
-            ))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
             crate::CreateBrowserConstraints(320, 200),
             None,
             None,
@@ -2887,9 +3001,7 @@ pub fn OpenUrl(
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
-            &assembly,
-        ))),
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
         crate::CreateBrowserConstraints(width, height),
         Some(ScriptEnvironment {
             runtime: Box::new(

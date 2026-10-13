@@ -16,7 +16,6 @@ use layoutng::internal::layout_object::LayoutObject;
 #[cfg(not(feature = "replaced_extension"))]
 use layoutng::internal::layout_replaced::LayoutReplaced;
 use layoutng::internal::layout_text::LayoutText;
-use layoutng::internal::scroll_layout_scope::ScrollOffsetClampTarget;
 use layoutng_style::style::content_data::ContentData;
 use std::ffi::c_void;
 
@@ -36,7 +35,6 @@ excluded! {
     fn RotateTransformOperationEqual(a: &RotateTransformOperation, b: &RotateTransformOperation) -> bool;
     fn ScaleTransformOperationApply(operation: &ScaleTransformOperation, transform: &mut gfx::Transform, size: &gfx::SizeF) -> ();
     fn ScaleTransformOperationEqual(a: &ScaleTransformOperation, b: &ScaleTransformOperation) -> bool;
-    fn ScrollOffsetClampTargetClampScrollOffsetAfterOverflowChange(target: &mut ScrollOffsetClampTarget) -> ();
     fn ShapeResultViewDirection(view: &ShapeResultView) -> TextDirection;
     fn ShapeResultViewEndIndex(view: &ShapeResultView) -> u32;
     fn ShapeResultViewForEachGlyph(view: &ShapeResultView, advance: f32, callback: GlyphCallback, context: *mut c_void) -> f32;

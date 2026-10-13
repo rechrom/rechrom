@@ -107,14 +107,16 @@ fn translation(node: &Arc<TransformPaintPropertyNode>) -> Result<(f64, f64), Uns
         1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
     ];
     while let Some(node) = current {
-        for (index, value) in node.matrix.values.iter().enumerate() {
+        let projected = record_plane_transform(&node.matrix)
+            .ok_or(UnsupportedReason::NonTranslationTransform)?;
+        for (index, value) in projected.values.iter().enumerate() {
             if !value.is_finite() || (index != 12 && index != 13 && *value != identity[index]) {
                 transform_diagnostic(first, "non-translation-raster-anchor", node.id);
                 return Err(UnsupportedReason::NonTranslationTransform);
             }
         }
-        delta.0 += node.matrix.values[12];
-        delta.1 += node.matrix.values[13];
+        delta.0 += projected.values[12];
+        delta.1 += projected.values[13];
         current = node.parent.as_ref();
     }
     if !delta.0.is_finite() || !delta.1.is_finite() {
@@ -137,6 +139,65 @@ fn affine_2d(matrix: &TransformMatrix) -> bool {
         value.is_finite()
             && (matches!(index, 0 | 1 | 4 | 5 | 12 | 13) || *value == identity.values[index])
     })
+}
+
+/// Exact affine restriction of a property transform to the z=0 paint plane.
+/// GeometryMapper projects local planes; a CSS perspective node is not by
+/// itself a compositing boundary. Only accept matrices that keep that plane
+/// invariant, so composing these restrictions cannot lose depth interactions.
+/// General tilted/depth-translated planes and camera crossings remain outside
+/// this affine recording subset. Unit z scale also preserves the plane normal
+/// for backface handling. The native property matrix is never changed.
+pub(crate) fn record_plane_transform(matrix: &TransformMatrix) -> Option<TransformMatrix> {
+    if affine_2d(matrix) {
+        return Some(*matrix);
+    }
+    let m = &matrix.values;
+    if !m.iter().all(|v| v.is_finite())
+        || m[2] != 0.0 || m[6] != 0.0 || m[14] != 0.0
+        || m[3] != 0.0 || m[7] != 0.0 || m[10] != 1.0 || m[15] != 1.0
+        || paint::geometry_mapper::InvertTransform(matrix).is_none()
+    {
+        return None;
+    }
+    let mut projected = TransformMatrix::default();
+    for index in [0, 1, 4, 5, 12, 13] {
+        projected.values[index] = m[index];
+    }
+    affine_2d(&projected).then_some(projected)
+}
+
+// A perspective-only node can give the same paint plane a distinct identity.
+// Stay on the actual ancestor branch and prove every intervening projection
+// is identity; unrelated/equal-looking matrices are not interchangeable nodes.
+fn same_record_plane(
+    mut descendant: &Arc<TransformPaintPropertyNode>,
+    ancestor: &Arc<TransformPaintPropertyNode>,
+) -> bool {
+    loop {
+        if descendant.lifecycle.same_node(&ancestor.lifecycle) {
+            return true;
+        }
+        if descendant.origin != [0.0; 3]
+            || record_plane_transform(&descendant.matrix) != Some(TransformMatrix::default()) {
+            return false;
+        }
+        let Some(parent) = descendant.parent.as_ref() else { return false; };
+        descendant = parent;
+    }
+}
+
+fn backface_hidden(mut space: &Arc<TransformPaintPropertyNode>) -> bool {
+    use paint::paint_property_tree::PaintBackfaceVisibility;
+    loop {
+        match space.backface_visibility {
+            PaintBackfaceVisibility::Hidden => return true,
+            PaintBackfaceVisibility::Visible => return false,
+            PaintBackfaceVisibility::Inherited => {}
+        }
+        let Some(parent) = space.parent.as_ref() else { return false; };
+        space = parent;
+    }
 }
 
 fn multiply_4x4(left: TransformMatrix, right: TransformMatrix) -> TransformMatrix {
@@ -500,6 +561,7 @@ mod scroll_snapping_test {
             radii: PaintCornerRadii::default(),
             clip_path: vec![],
             clip_path_children: Vec::new(),
+            clip_path_is_empty: false,
             clip_path_even_odd: false,
             clip_path_error: None,
             pixel_moving_filter: None,
@@ -653,9 +715,9 @@ mod effect_admission_test {
     }
 }
 
-/// PendingLayer-style raster-space upcast for ordinary 2D affine local
-/// transforms, including SVG viewBox scaling and paint-offset translations.
-/// Stop at a real scroll/direct-compositing or 3D anchor. Return existing
+/// PendingLayer-style raster-space upcast for exact affine paint-plane
+/// projections, including non-composited perspective with z=0 descendants.
+/// Stop at a real scroll/direct-compositing or nonplanar 3D anchor. Return existing
 /// ancestor nodes, never replacement identities or modified native chunk
 /// properties. Renderer must bake omitted transforms and clips into its local
 /// PaintRecord.
@@ -679,9 +741,11 @@ pub fn raster_properties(
         // layers and changes the picture-layer tile/dither coordinate space.
         if composited_scroll
             || !ancestor.direct_compositing_reasons.is_empty()
-            || !affine_2d(&ancestor.matrix)
+            || record_plane_transform(&ancestor.matrix).is_none()
             || ancestor.rendering_context_id != 0
             || ancestor.parent.is_none()
+            || ancestor.parent.as_ref().is_some_and(|parent|
+                backface_hidden(&ancestor) != backface_hidden(parent))
         {
             break;
         }
@@ -690,9 +754,11 @@ pub fn raster_properties(
         // projections. Renderer retains the exact affine matrix in PaintRecord.
         // Current source builder folds pivots into matrix and exports origin
         // zero. Explicit nonzero affine pivots need their own correct mapping.
-        let scaled = ancestor.matrix.values[0] != 1.0 || ancestor.matrix.values[5] != 1.0;
-        let cross_axis = ancestor.matrix.values[1] != 0.0 || ancestor.matrix.values[4] != 0.0;
-        if !affine_2d(&ancestor.matrix) || ((scaled || cross_axis) && ancestor.origin != [0.0; 3]) {
+        let projected = record_plane_transform(&ancestor.matrix).unwrap();
+        let scaled = projected.values[0] != 1.0 || projected.values[5] != 1.0;
+        let cross_axis = projected.values[1] != 0.0 || projected.values[4] != 0.0;
+        if (!affine_2d(&ancestor.matrix) || scaled || cross_axis)
+            && ancestor.origin != [0.0; 3] {
             transform_diagnostic(
                 &state.transform,
                 "non-affine-omitted-transform-or-origin",
@@ -720,17 +786,27 @@ pub fn raster_properties(
         // later SwitchToTransform for the drawing. Our retained property tree
         // can express that directly, while one canonical PaintRecord cannot
         // remove an intermediate-transform clip without emitting the same
-        // transform-state switch. Only bake a clip when it already lives in
-        // the drawing's own transform space (or the retained raster anchor).
-        // Keeping all other clips external preserves Chromium's property-tree
-        // semantics instead of flattening them into the wrong local space.
-        let local_space_is_record = state
-            .transform
-            .lifecycle
-            .same_node(&clip.local_transform_space.lifecycle);
+        // transform-state switch. The drawing's own space, retained anchor,
+        // and a proven translation-only intermediate ancestor are expressible
+        // by the existing record prefix. Keep other intermediate affine spaces
+        // external rather than flattening a clip into the wrong coordinates.
+        let local_space_is_record = state.transform.lifecycle
+            .same_node(&clip.local_transform_space.lifecycle)
+            || (omitted.iter().any(|space| space.lifecycle
+                .same_node(&clip.local_transform_space.lifecycle))
+                && same_record_plane(&state.transform, &clip.local_transform_space));
         let local_space_is_anchor = ancestor
             .lifecycle
             .same_node(&clip.local_transform_space.lifecycle);
+        // A translation-only intermediate ancestor is already representable:
+        // recording canonicalizes its ClipOp into the retained layer before
+        // applying the drawing's affine prefix. Require an actually omitted
+        // ancestor, so this cannot cross a compositing/scroll boundary or admit
+        // an unrelated transform branch. Other intermediate affine spaces
+        // still need the full PaintChunksToCcLayer transform-state switch.
+        let local_space_is_omitted_translation = omitted.iter().any(|space| {
+            space.lifecycle.same_node(&clip.local_transform_space.lifecycle)
+        }) && translation(&clip.local_transform_space).is_ok();
         let mut effect = Some(&state.effect);
         let mut output_boundary = false;
         while let Some(current) = effect {
@@ -744,16 +820,25 @@ pub fn raster_properties(
             }
             effect = current.parent.as_ref();
         }
-        if (!local_space_is_record && !local_space_is_anchor) || output_boundary {
+        if (!local_space_is_record
+            && !local_space_is_anchor
+            && !local_space_is_omitted_translation)
+            || output_boundary
+        {
             break;
         }
         let Some(parent) = clip.parent.clone() else {
             break;
         };
-        // Path clips remain owned by the compositor's real A8 clip surface.
-        // Stop upcasting at this boundary instead of rejecting web content or
-        // replacing the path with its scheduling rectangle.
-        if !clip.clip_path.is_empty() || clip.pixel_moving_filter.is_some() {
+        // PaintChunksToCcLayer records a representable path clip inside the
+        // picture layer, just like an RRect. Only a union that cannot be
+        // represented by one ClipPathOp retains the synthesized mask boundary.
+        // The transform/effect checks above still prevent moving it across an
+        // unrelated coordinate space or an effect output clip.
+        if clip.clip_path_error.is_some()
+            || clip.clip_path_children.len() > 1
+            || clip.pixel_moving_filter.is_some()
+        {
             break;
         }
         if !valid_record_clip_shape(&clip) {
@@ -887,7 +972,10 @@ fn clip_chain_needs_mask(mut clip: Option<&Arc<ClipPaintPropertyNode>>) -> bool 
         let affine = crate::recording::clip_transform_state(&node.local_transform_space)
             .map(|state| state.cross_axis != (0.0, 0.0))
             .unwrap_or(true);
-        if affine || node.radii != PaintCornerRadii::default() || !node.clip_path.is_empty() {
+        if affine
+            || node.radii != PaintCornerRadii::default()
+            || (node.clip_path_is_empty || !node.clip_path.is_empty())
+        {
             return true;
         }
         clip = node.parent.as_ref();
@@ -905,11 +993,14 @@ fn project_axis_rect(
     let mut ty = 0.0;
     let mut node = Some(space);
     while let Some(current) = node {
-        let scaled = current.matrix.values[0] != 1.0 || current.matrix.values[5] != 1.0;
-        if !axis_aligned(&current.matrix) || (scaled && current.origin != [0.0; 3]) {
+        let projected = record_plane_transform(&current.matrix)
+            .ok_or(UnsupportedReason::UnsupportedClip)?;
+        let scaled = projected.values[0] != 1.0 || projected.values[5] != 1.0;
+        if !axis_aligned(&projected)
+            || ((!affine_2d(&current.matrix) || scaled) && current.origin != [0.0; 3]) {
             return Err(UnsupportedReason::UnsupportedClip);
         }
-        let m = &current.matrix.values;
+        let m = &projected.values;
         tx = m[0] * tx + m[12];
         ty = m[5] * ty + m[13];
         sx *= m[0];
@@ -1234,7 +1325,7 @@ fn intersect_clip_chain(
                 // not an additional clip operation. Its output clip stays on
                 // the effect surface and the renderer supplies blur padding.
                 node.rect.is_some()
-                    || !node.clip_path.is_empty()
+                    || (node.clip_path_is_empty || !node.clip_path.is_empty())
                     || effect.filters.is_empty()
                     || effect.filters.iter().any(|filter| {
                         filter.r#type != PaintFilterType::kBlur
@@ -1330,10 +1421,165 @@ fn clip_diagnostic(
         );
         current = space.parent.as_ref();
     }
-    if !node.clip_path.is_empty() {
+    if (node.clip_path_is_empty || !node.clip_path.is_empty()) {
         eprintln!(
             "[layer_tile clip path] node={} even_odd={} commands={:?}",
             node.id, node.clip_path_even_odd, node.clip_path
         );
+    }
+}
+
+
+#[cfg(test)]
+mod path_clip_upcast_tests {
+    use super::*;
+    use paint::paint_property_tree::{ClipPaintPropertyNode, EffectPaintPropertyNode};
+
+    #[test]
+    fn intermediate_translation_clip_upcasts_without_crossing_affine_or_effect_boundaries() {
+        let root = PropertyTreeState::default();
+        let space = |id, parent: Arc<TransformPaintPropertyNode>, sx, tx, ty, reasons| {
+            let mut matrix=TransformMatrix::default();
+            matrix.values[0]=sx;
+            matrix.values[5]=sx;
+            matrix.values[12]=tx;
+            matrix.values[13]=ty;
+            Arc::new(TransformPaintPropertyNode {
+                id, lifecycle:Default::default(), parent:Some(parent), matrix,
+                direct_compositing_reasons:reasons,
+                ..(*root.transform).clone()
+            })
+        };
+        let translated=space(81,root.transform.clone(),1.0,3.25,4.5,vec![]);
+        let drawing=space(82,translated.clone(),0.125,0.0,0.0,vec![]);
+        let clip=Arc::new(ClipPaintPropertyNode {
+            id:83, lifecycle:Default::default(),parent:Some(root.clip.clone()),
+            local_transform_space:translated.clone(),
+            rect:Some(PaintRect{x:0.125,y:0.25,width:19.5,height:23.25}),
+            ..(*root.clip).clone()
+        });
+        let state=PropertyTreeState{transform:drawing,clip:clip.clone(),effect:root.effect.clone()};
+        let lowered=raster_properties(&state).unwrap();
+        assert!(lowered.clip.lifecycle.same_node(&root.clip.lifecycle));
+        assert!(lowered.transform.lifecycle.same_node(&root.transform.lifecycle));
+        let scaled_anchor=space(84,root.transform.clone(),2.0,0.0,0.0,vec!["WillChangeTransform"]);
+        let translated_below_anchor=space(85,scaled_anchor.clone(),1.0,3.25,4.5,vec![]);
+        let scaled_state=PropertyTreeState{
+            transform:space(86,translated_below_anchor.clone(),0.125,0.0,0.0,vec![]),
+            clip:Arc::new(ClipPaintPropertyNode{local_transform_space:translated_below_anchor,..(*clip).clone()}),
+            effect:root.effect.clone(),
+        };
+        let lowered=raster_properties(&scaled_state).unwrap();
+        assert!(lowered.clip.lifecycle.same_node(&clip.lifecycle));
+        assert!(lowered.transform.lifecycle.same_node(&scaled_anchor.lifecycle));
+        let unrelated=PropertyTreeState{
+            clip:Arc::new(ClipPaintPropertyNode{local_transform_space:space(87,root.transform.clone(),1.0,3.25,4.5,vec![]),..(*clip).clone()}),
+            ..state.clone()
+        };
+        assert!(raster_properties(&unrelated).unwrap().clip.lifecycle.same_node(&clip.lifecycle));
+        let output=PropertyTreeState{
+            effect:Arc::new(EffectPaintPropertyNode{output_clip:Some(clip.clone()),..(*root.effect).clone()}),
+            ..state
+        };
+        assert!(raster_properties(&output).unwrap().clip.lifecycle.same_node(&clip.lifecycle));
+    }
+}
+
+#[cfg(test)]
+mod perspective_plane_tests {
+    use super::*;
+    use paint::paint_property_tree::{PaintBackfaceVisibility, ScrollPaintPropertyNode};
+
+    fn perspective() -> TransformMatrix {
+        let mut matrix = TransformMatrix::default();
+        matrix.values[8] = -0.0175;
+        matrix.values[9] = -0.00825;
+        matrix.values[11] = -0.001;
+        matrix
+    }
+    fn node(root: &PropertyTreeState, matrix: TransformMatrix) -> Arc<TransformPaintPropertyNode> {
+        Arc::new(TransformPaintPropertyNode {
+            lifecycle: Default::default(), id: 901, parent: Some(root.transform.clone()),
+            matrix, scroll: None, ..(*root.transform).clone()
+        })
+    }
+    #[test]
+    fn plane_projection_is_exact_and_never_discards_depth_interactions() {
+        let p = perspective();
+        assert_eq!(record_plane_transform(&p), Some(TransformMatrix::default()));
+        let mut affine = TransformMatrix::default();
+        affine.values[0] = 0.5;
+        affine.values[1] = 0.25;
+        affine.values[4] = -0.125;
+        affine.values[5] = 2.0;
+        affine.values[12] = 17.5;
+        affine.values[13] = 8.25;
+        let combined = multiply_4x4(p, affine);
+        assert_eq!(record_plane_transform(&combined), Some(affine));
+        for (index, value) in [(2, 0.5), (6, 0.5), (14, 20.0), (3, 0.01),
+            (7, -0.01), (15, 0.0), (15, -1.0), (15, 2.0), (10, 0.0), (10, -1.0), (10, 2.0),
+            (11, f64::NAN), (12, f64::INFINITY)] {
+            let mut invalid = p;
+            invalid.values[index] = value;
+            assert!(record_plane_transform(&invalid).is_none(), "index {index}={value}");
+        }
+        // Preserve the established singular 2D contract rather than changing
+        // old affine behavior while admitting a new property-plane subset.
+        affine.values[0] = 0.0;
+        affine.values[1] = 0.0;
+        assert_eq!(record_plane_transform(&affine), Some(affine));
+    }
+    #[test]
+    fn perspective_upcast_preserves_native_nodes_and_true_boundaries() {
+        let root = PropertyTreeState::default();
+        let plane = node(&root, perspective());
+        let clip = Arc::new(ClipPaintPropertyNode {
+            lifecycle: Default::default(), id: 902, parent: Some(root.clip.clone()),
+            local_transform_space: plane.clone(),
+            rect: Some(PaintRect { x: 0.5, y: 0.25, width: 60.0, height: 40.0 }),
+            ..(*root.clip).clone()
+        });
+        let state = PropertyTreeState { transform: plane.clone(), clip: clip.clone(), effect: root.effect.clone() };
+        let lowered = raster_properties(&state).unwrap();
+        assert!(lowered.transform.lifecycle.same_node(&root.transform.lifecycle));
+        assert!(lowered.clip.lifecycle.same_node(&root.clip.lifecycle));
+        assert_eq!(plane.matrix, perspective());
+        assert_eq!(compositor_transform_3d_with_scroll(&plane, 1.0, None).unwrap(), perspective());
+        for boundary in 0..4 {
+            let mut anchored = (*plane).clone();
+            match boundary {
+                0 => anchored.direct_compositing_reasons = vec!["WillChangeTransform"],
+                1 => anchored.rendering_context_id = 7,
+                2 => anchored.backface_visibility = PaintBackfaceVisibility::Hidden,
+                _ => anchored.scroll = Some(Arc::new(ScrollPaintPropertyNode {
+                    lifecycle: Default::default(), id: 903, user_scrollable_vertical: true,
+                    ..(**root.transform.scroll.as_ref().unwrap()).clone()
+                })),
+            }
+            let anchored = Arc::new(anchored);
+            let bounded = PropertyTreeState { transform: anchored.clone(), clip: root.clip.clone(), effect: root.effect.clone() };
+            assert!(raster_properties(&bounded).unwrap().transform.lifecycle.same_node(&anchored.lifecycle), "boundary {boundary}");
+        }
+        let mut depth = (*plane).clone();
+        depth.matrix.values[14] = 100.0;
+        let depth = Arc::new(depth);
+        let nonplanar = PropertyTreeState { transform: depth.clone(), clip: root.clip.clone(), effect: root.effect.clone() };
+        let retained = raster_properties(&nonplanar).unwrap();
+        assert!(retained.transform.lifecycle.same_node(&depth.lifecycle));
+        assert!(resolved_raster_properties(&retained, 1.0).is_err());
+    }
+    #[test]
+    fn equal_plane_clip_space_requires_actual_ancestor_and_identity_projection() {
+        let root = PropertyTreeState::default();
+        let parent = node(&root, TransformMatrix::default());
+        let child = Arc::new(TransformPaintPropertyNode { parent: Some(parent.clone()), ..(*node(&root, perspective())).clone() });
+        assert!(same_record_plane(&child, &parent));
+        assert!(!same_record_plane(&child, &node(&root, TransformMatrix::default())));
+        let mut shifted = (*child).clone();
+        shifted.matrix.values[12] = 0.5;
+        assert!(!same_record_plane(&Arc::new(shifted), &parent));
+        let mut state = crate::recording::State::default();
+        assert!(crate::recording::concatenate_affine(&mut state, &perspective()).is_err(),
+            "raw record ABI remains affine-only; property projection is explicit");
     }
 }

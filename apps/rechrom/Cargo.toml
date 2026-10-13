@@ -12,6 +12,7 @@ path = "src/main.rs"
 cc = "1"
 
 [features]
+allocation_diagnostics = ["browser_tracing/allocation_diagnostics"]
 profile_paint = ["raster/profiling"]
 profile_native = ["profile_paint", "raster/source_replay"]
 

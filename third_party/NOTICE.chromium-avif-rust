@@ -1,0 +1,17 @@
+Rechrom AVIF backend integration uses:
+
+CrabbyAvif, Copyright 2024 Google LLC, Apache License 2.0.
+Pinned revision 8f2b74b4d8be956395f527020c2190762e086f98, as pinned by Chromium
+6c1d401fcca5e1b0030563a90c2f2bba168e0c15.
+Source and license: vendor/crabby-avif/; local changes: RECHROM.md.
+Official test fixtures: crates/image_decoder/tests/fixtures/avif-source/.
+
+rav1d 1.1.0, BSD 2-Clause License, copyrights retained in vendor/rav1d/COPYING.
+Pinned package revision 782dab2135ea64a057c097088a13eb8ed3cc3320, with official
+upstream fixes 6c6f463785a546dea18fd9ca0f14634c2ee0557c and
+9d78516f3232fe8b9c2bfe9d9a7506163033aae6. Source mapping and hashes:
+vendor/rav1d/RECHROM.md. No default assembly or native AVIF codec is enabled.
+
+Blink AVIFImageDecoder settings/orientation adaptation derives from Chromium
+6c1d401fcca5e1b0030563a90c2f2bba168e0c15, Copyright The Chromium Authors,
+BSD-style license: https://chromium.googlesource.com/chromium/src/+/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/LICENSE
