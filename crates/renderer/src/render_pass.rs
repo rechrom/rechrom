@@ -1429,6 +1429,7 @@ impl RenderPassRenderer {
         target: &mut [u32],
         frame_view: TargetView,
         target_format: skia::PixelFormat,
+        destination_damage: SurfaceBounds,
     ) {
         #[cfg(feature = "compose_work_profile")]
         layer_compose_profile::class(5);
@@ -1553,16 +1554,10 @@ impl RenderPassRenderer {
         }
         if let Scope::DstIn(effect) = &group.scope {
             if group.dst_in_root {
-                let full = Some(SurfaceBounds {
-                    left: 0,
-                    top: 0,
-                    right: frame_view.stride,
-                    bottom: target.len() / frame_view.stride.max(1),
-                });
                 dst_in_effect_surface(
                     target,
                     &group.pixels,
-                    full,
+                    Some(destination_damage),
                     group.touched,
                     frame_view,
                     group.view,
@@ -1603,10 +1598,17 @@ impl RenderPassRenderer {
             );
             union_bounds(&mut parent.touched, written);
         } else {
+            // DirectRenderer applies the render-pass scissor to every final
+            // destination draw, including render-pass quads. Filter input and
+            // intermediate surfaces above remain complete; clipping them
+            // before filtering would discard samples outside the damage.
+            let touched = group
+                .touched
+                .and_then(|bounds| intersect_bounds(bounds, destination_damage));
             composite_effect_surface(
                 target,
                 &group.pixels,
-                group.touched,
+                touched,
                 frame_view,
                 group.view,
                 target_format,
@@ -1664,6 +1666,52 @@ impl RenderPassRenderer {
         row_stride: usize,
         render_pass_outputs: &HashMap<viz::RenderPassId, &[u32]>,
     ) -> io::Result<RenderUpdate> {
+        self.compose_with_output(
+            pass,
+            resources,
+            width,
+            height,
+            Some((buffer, row_stride)),
+            format,
+            render_pass_outputs,
+        )
+    }
+
+    /// Render an internal pass into its existing backing. Only root passes
+    /// need a copy into caller-owned presentation storage.
+    pub(crate) fn compose_retained(
+        &mut self,
+        pass: &AggregatedRenderPass,
+        resources: &dyn RasterResourceProvider,
+        width: u32,
+        height: u32,
+        render_pass_outputs: &HashMap<viz::RenderPassId, &[u32]>,
+    ) -> io::Result<RenderUpdate> {
+        self.compose_with_output(
+            pass,
+            resources,
+            width,
+            height,
+            None,
+            skia::PixelFormat::Rgba8888,
+            render_pass_outputs,
+        )
+    }
+
+    pub(crate) fn backing_pixels(&self) -> Option<&[u32]> {
+        self.composed_valid.then_some(self.composed_pixels.as_slice())
+    }
+
+    fn compose_with_output(
+        &mut self,
+        pass: &AggregatedRenderPass,
+        resources: &dyn RasterResourceProvider,
+        width: u32,
+        height: u32,
+        output: Option<(&mut [u32], usize)>,
+        format: skia::PixelFormat,
+        render_pass_outputs: &HashMap<viz::RenderPassId, &[u32]>,
+    ) -> io::Result<RenderUpdate> {
         let mut render_trace = browser_tracing::span("render", "LayerTilePaint");
         render_trace.set("frame_id", pass.SourceFrameId() as f64);
         if resources.prepared_frame_id() != Some(pass.SourceFrameId()) {
@@ -1673,11 +1721,12 @@ impl RenderPassRenderer {
         }
         let mut plan = CompositionPlan::from_pass(pass)?;
         self.stats = resources.stats();
-        let output_len = row_stride
-            .checked_mul(height as usize)
-            .filter(|&len| row_stride >= width as usize && buffer.len() == len)
-            .ok_or_else(|| io::Error::other("invalid layer output storage extent"))?;
-        debug_assert_eq!(output_len, buffer.len());
+        if let Some((buffer, row_stride)) = output.as_ref() {
+            row_stride
+                .checked_mul(height as usize)
+                .filter(|&len| *row_stride >= width as usize && buffer.len() == len)
+                .ok_or_else(|| io::Error::other("invalid layer output storage extent"))?;
+        }
         let retained_len = (width as usize)
             .checked_mul(height as usize)
             .filter(|&len| len > 0 && len <= isize::MAX as usize / 4)
@@ -1712,17 +1761,19 @@ impl RenderPassRenderer {
         );
         self.composed_pixels = composed;
         let result = result.map(|mut update| {
-            for (source, destination) in self
-                .composed_pixels
-                .chunks_exact(width as usize)
-                .zip(buffer.chunks_exact_mut(row_stride))
-            {
-                destination[..width as usize].copy_from_slice(source);
-                if row_stride > width as usize {
-                    destination[width as usize..].fill(0);
+            if let Some((buffer, row_stride)) = output {
+                for (source, destination) in self
+                    .composed_pixels
+                    .chunks_exact(width as usize)
+                    .zip(buffer.chunks_exact_mut(row_stride))
+                {
+                    destination[..width as usize].copy_from_slice(source);
+                    if row_stride > width as usize {
+                        destination[width as usize..].fill(0);
+                    }
                 }
+                update.copied_bytes = retained_len * std::mem::size_of::<u32>();
             }
-            update.copied_bytes = retained_len * std::mem::size_of::<u32>();
             update
         });
         // A failed draw may have modified part of the retained target. Never
@@ -2060,7 +2111,7 @@ impl RenderPassRenderer {
                     let group = groups.pop().expect("active effect group");
                     debug_assert!(suspended_groups.insert(run, group).is_none());
                 } else {
-                    self.finish_effect_group(&mut groups, buffer, frame_view, format);
+                    self.finish_effect_group(&mut groups, buffer, frame_view, format, compose_damage);
                 }
             }
             if let Some(cost) = &mut compose_costs {
@@ -2232,7 +2283,7 @@ impl RenderPassRenderer {
                     backdrop_coverage,
                     visible_polygon: layer.visible_polygon.clone(),
                 });
-                self.finish_effect_group(&mut groups, buffer, frame_view, format);
+                self.finish_effect_group(&mut groups, buffer, frame_view, format, compose_damage);
                 if let Some(cost) = &mut compose_costs {
                     cost.blit += blit_start.unwrap().elapsed();
                 }
@@ -2613,7 +2664,7 @@ impl RenderPassRenderer {
         debug_assert!(suspended_groups.is_empty());
         let close_start = compose_costs.as_ref().map(|_| std::time::Instant::now());
         while !groups.is_empty() {
-            self.finish_effect_group(&mut groups, buffer, frame_view, format);
+            self.finish_effect_group(&mut groups, buffer, frame_view, format, compose_damage);
         }
         for quad in &plan.solid_quads {
             compose_solid_color_quad(buffer, frame_view, format, quad, scale, compose_damage);

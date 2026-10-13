@@ -97,8 +97,9 @@ impl DisplayTarget {
                 target.present_prepared(frame, sequence, on_complete)
             }
             (Self::Offscreen, PreparedDisplayTarget::Offscreen { .. }) => {
-                // A memory swap completes synchronously. The caller queues its
-                // acknowledgement so Viz submission is recorded before ack.
+                // A memory swap completes synchronously. The caller registers
+                // the swap before presenting and posts its completion token to
+                // the Display owner, just like an asynchronous native target.
                 let now = std::time::Instant::now();
                 browser_tracing::instant(
                     "frame",

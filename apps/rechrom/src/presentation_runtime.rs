@@ -44,8 +44,30 @@ enum LocalMessage {
     Display(display::Message),
 }
 
-pub(crate) type MainThreadClient =
-    Arc<dyn Fn(compositor::MainThreadEvent<crate::begin_frame_source::NativeBeginFrame>) + Send + Sync>;
+enum DisplayMessage {
+    Command(display::Message),
+    SwapAckReady,
+}
+
+/// Completion is control input, not more draw work. Keep actual completion
+/// tokens outside the draw FIFO so already-queued Prepare/Submit commands do
+/// not run against an obsolete pending-swap count. Only the Display owner
+/// consumes these tokens, after its current Handle call has returned.
+pub(crate) fn ReceiveSwapAcks(
+    receiver: &mpsc::Receiver<u64>,
+    display: &mut Display,
+    post_swap_ack: &Arc<dyn Fn(u64) + Send + Sync>,
+) -> io::Result<Vec<display::Effect>> {
+    let mut effects = Vec::new();
+    while let Ok(sequence) = receiver.try_recv() {
+        effects.extend(display.Handle(display::Message::SwapAck(sequence), post_swap_ack)?);
+    }
+    Ok(effects)
+}
+
+pub(crate) type MainThreadClient = Arc<
+    dyn Fn(compositor::MainThreadEvent<crate::begin_frame_source::NativeBeginFrame>) + Send + Sync,
+>;
 
 pub(crate) fn Spawn(
     config: Config,
@@ -129,7 +151,8 @@ fn SpawnDedicated(
     capture_frames: bool,
     main_thread: MainThreadClient,
 ) -> io::Result<()> {
-    let (display_sender, display_receiver) = mpsc::channel::<display::Message>();
+    let (display_sender, display_receiver) = mpsc::channel::<DisplayMessage>();
+    let (ack_sender, ack_receiver) = mpsc::channel();
     let display_reply = display_sender.clone();
     let display_compositor = compositor_sender.clone();
     let display_frames = frame_source.clone();
@@ -141,17 +164,27 @@ fn SpawnDedicated(
             SetPresentationThreadPriority();
             let mut display = Display::New(target, display_output.clone(), capture_frames);
             let post_swap_ack: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |sequence| {
-                let _ = display_reply.send(display::Message::SwapAck(sequence));
+                if ack_sender.send(sequence).is_ok() {
+                    let _ = display_reply.send(DisplayMessage::SwapAckReady);
+                }
             });
             let _target = browser_tracing::scope(browser_tracing::Context {
                 target_id: 1,
                 ..Default::default()
             });
             while let Ok(message) = display_receiver.recv() {
-                if matches!(message, display::Message::Stop) {
+                if matches!(message, DisplayMessage::Command(display::Message::Stop)) {
                     break;
                 }
-                let effects = match display.Handle(message, &post_swap_ack) {
+                let result = ReceiveSwapAcks(&ack_receiver, &mut display, &post_swap_ack).and_then(
+                    |mut effects| {
+                        if let DisplayMessage::Command(message) = message {
+                            effects.extend(display.Handle(message, &post_swap_ack)?);
+                        }
+                        Ok(effects)
+                    },
+                );
+                let effects = match result {
                     Ok(effects) => effects,
                     Err(error) => {
                         (display_output.notify)(UserEvent::Fatal(crate::engine::FatalError::new(
@@ -203,7 +236,7 @@ fn SpawnDedicated(
 fn RunDedicatedCompositor(
     receiver: mpsc::Receiver<CompositorCommand>,
     raster_sender: mpsc::Sender<RasterJob>,
-    display_sender: mpsc::Sender<display::Message>,
+    display_sender: mpsc::Sender<DisplayMessage>,
     frame_source: Arc<dyn BeginFrameSource>,
     main_thread: MainThreadClient,
 ) -> io::Result<()> {
@@ -213,7 +246,7 @@ fn RunDedicatedCompositor(
         let timeout = PendingTimeout(&scheduler);
         match receiver.recv_timeout(timeout) {
             Ok(CompositorCommand::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = display_sender.send(display::Message::Stop);
+                let _ = display_sender.send(DisplayMessage::Command(display::Message::Stop));
                 return Ok(());
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -276,7 +309,7 @@ fn AdvanceCycle(
     compositor: &mut CompositorEngine,
     scheduler: &mut viz::DisplayScheduler<crate::begin_frame_source::NativeBeginFrame>,
     raster_sender: &mpsc::Sender<RasterJob>,
-    display_sender: &mpsc::Sender<display::Message>,
+    display_sender: &mpsc::Sender<DisplayMessage>,
     frame_source: &Arc<dyn BeginFrameSource>,
     main_thread: &MainThreadClient,
 ) -> io::Result<()> {
@@ -309,7 +342,7 @@ fn AdvanceCycle(
 fn RouteDedicated(
     effects: Vec<CompositorEffect>,
     raster_sender: &mpsc::Sender<RasterJob>,
-    display_sender: &mpsc::Sender<display::Message>,
+    display_sender: &mpsc::Sender<DisplayMessage>,
     frame_source: &Arc<dyn BeginFrameSource>,
     main_thread: &MainThreadClient,
 ) -> io::Result<()> {
@@ -319,27 +352,27 @@ fn RouteDedicated(
                 .send(job)
                 .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "raster owner stopped"))?,
             compositor::Effect::InstallRasterBundle(bundle) => display_sender
-                .send(display::Message::Install(bundle))
+                .send(DisplayMessage::Command(display::Message::Install(bundle)))
                 .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "display stopped"))?,
             compositor::Effect::FrameProduced {
                 frame,
                 submitted,
                 scroll_active,
             } => display_sender
-                .send(display::Message::Prepare {
+                .send(DisplayMessage::Command(display::Message::Prepare {
                     frame,
                     submitted,
                     scroll_active,
-                })
+                }))
                 .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "display stopped"))?,
             compositor::Effect::Submit {
                 frame,
                 scroll_active,
             } => display_sender
-                .send(display::Message::Submit {
+                .send(DisplayMessage::Command(display::Message::Submit {
                     frame,
                     scroll_active,
-                })
+                }))
                 .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "display stopped"))?,
             compositor::Effect::MainThread(event) => main_thread(event),
             compositor::Effect::RequestBeginFrame => frame_source.request_begin_frame(),
@@ -404,8 +437,8 @@ fn RunShared(
         wake_frames.request_begin_frame();
     });
     loop {
-        while let Ok(sequence) = ack_receiver.try_recv() {
-            local.push_back(LocalMessage::Display(display::Message::SwapAck(sequence)));
+        for effect in ReceiveSwapAcks(&ack_receiver, &mut display, &post_swap_ack)? {
+            RouteSharedDisplay(effect, &mut local, &frame_source);
         }
         if local.is_empty() {
             match receiver.recv_timeout(PendingTimeout(&scheduler)) {
@@ -418,6 +451,13 @@ fn RunShared(
             }
         }
         while let Some(message) = local.pop_front() {
+            // A synchronous completion can arrive while this local queue is
+            // non-empty. Apply it before the next command, just as in the
+            // dedicated executor. Draining cannot produce another swap: only
+            // Submit does that, and it is not executed by ReceiveSwapAcks.
+            for effect in ReceiveSwapAcks(&ack_receiver, &mut display, &post_swap_ack)? {
+                RouteSharedDisplay(effect, &mut local, &frame_source);
+            }
             match message {
                 LocalMessage::Compositor(CompositorCommand::DisplayBeginFrame(frame)) => {
                     if let Some(previous) = scheduler.BeginFrame(frame, FrameTiming(frame)) {
@@ -461,14 +501,7 @@ fn RunShared(
                 )?,
                 LocalMessage::Display(message) => {
                     for effect in display.Handle(message, &post_swap_ack)? {
-                        match effect {
-                            display::Effect::ReturnBundle(bundle) => local.push_back(
-                                LocalMessage::Compositor(CompositorCommand::SpareBundle(bundle)),
-                            ),
-                            display::Effect::RequestBeginFrame => {
-                                frame_source.request_begin_frame()
-                            }
-                        }
+                        RouteSharedDisplay(effect, &mut local, &frame_source);
                     }
                 }
             }
@@ -496,6 +529,19 @@ fn RunShared(
                 &main_thread,
             )?;
         }
+    }
+}
+
+fn RouteSharedDisplay(
+    effect: display::Effect,
+    local: &mut VecDeque<LocalMessage>,
+    frame_source: &Arc<dyn BeginFrameSource>,
+) {
+    match effect {
+        display::Effect::ReturnBundle(bundle) => local.push_back(LocalMessage::Compositor(
+            CompositorCommand::SpareBundle(bundle),
+        )),
+        display::Effect::RequestBeginFrame => frame_source.request_begin_frame(),
     }
 }
 

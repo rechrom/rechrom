@@ -9,6 +9,8 @@ The Chromium Authors' BSD-licensed code. See LICENSE.chromium.
   cc/trees/property_tree_layer_list_delegate.cc
   cc/trees/layer_tree_host_impl.cc
   components/viz/service/display/direct_renderer.cc
+  components/viz/service/display/display.cc
+  components/viz/service/display/display_scheduler.cc
   components/viz/service/display/software_renderer.cc
   components/viz/service/display/skia_renderer.cc
 

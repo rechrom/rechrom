@@ -179,8 +179,9 @@ fn complete_pass_graph_reconciles_churn_and_retains_undamaged_backings() {
         viz.SubmitFrame(SurfaceId(1), frame(&[child, 1], red, true))
             .unwrap();
         let current = aggregate(&viz, &[1]);
-        let (pixels, _) = render(&mut renderer, &current, skia::PixelFormat::Rgba8888);
+        let (pixels, update) = render(&mut renderer, &current, skia::PixelFormat::Rgba8888);
         check(&pixels, red);
+        assert_eq!(update.copied_bytes, W as usize * H as usize * 4);
         assert_eq!(renderer.BackingStats().passes, 2);
         assert_eq!(
             renderer.BackingStats().composed_capacity_bytes,
@@ -196,6 +197,7 @@ fn complete_pass_graph_reconciles_churn_and_retains_undamaged_backings() {
         );
         assert_eq!(pixels, retained);
         assert_eq!(update.damage_pixels, 0);
+        assert_eq!(update.copied_bytes, W as usize * H as usize * 4);
         assert_eq!(before, renderer.BackingStats());
     }
     let held = render(
@@ -270,6 +272,7 @@ fn nested_graph_surface_namespaces_and_explicit_invalidation_are_independent() {
     );
     check(&pixels, [255, 0, 0, 255]);
     assert_eq!(update.damage_pixels, 0);
+    assert_eq!(update.copied_bytes, W as usize * H as usize * 4);
     renderer.InvalidateSurface(SurfaceId(2));
     assert_eq!(renderer.BackingStats().passes, 1);
     let (pixels, update) = render(
@@ -279,6 +282,63 @@ fn nested_graph_surface_namespaces_and_explicit_invalidation_are_independent() {
     );
     check(&pixels, [255, 0, 0, 255]);
     assert_eq!(update.damage_pixels, 3 * W as usize * H as usize);
+}
+
+#[test]
+fn draw_errors_restore_child_and_root_owners_without_staging_copies() {
+    let mut renderer = Renderer::default();
+    let mut viz = viz::VizEngine::New();
+    let red = [255, 0, 0, 255];
+    viz.SubmitFrame(SurfaceId(1), frame(&[2, 1], red, true))
+        .unwrap();
+    let (original, _) = render(
+        &mut renderer,
+        &aggregate(&viz, &[1]),
+        skia::PixelFormat::Rgba8888,
+    );
+    let backing = renderer.BackingStats();
+    for broken in [0, 1] {
+        // Viz accepts these graphs, but composition rejects the child damage
+        // or duplicate parent quad after removing its owner for borrowing.
+        let mut invalid = frame(&[2, 1], red, false);
+        let expected_error = if broken == 0 {
+            invalid.render_pass_list[0].damage_rect = DeviceRect::new(W as i32, 0, 1, 1);
+            "damage is outside viewport"
+        } else {
+            let repeated = invalid.render_pass_list[1].quad_list[0].clone();
+            invalid.render_pass_list[1].quad_list.push(repeated);
+            "shared state mixes tile and surface quads"
+        };
+        viz.SubmitFrame(SurfaceId(1), invalid).unwrap();
+        let mut output = vec![0; (W * H) as usize];
+        let error = renderer
+            .Render(
+                &aggregate(&viz, &[1]),
+                &Resources::default(),
+                RenderTarget {
+                    width: W,
+                    height: H,
+                    pixels: &mut output,
+                    format: skia::PixelFormat::Rgba8888,
+                    row_stride: W as usize,
+                },
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains(expected_error));
+        assert_eq!(renderer.BackingStats(), backing);
+        // No damage deliberately keeps the previous red pixels. Losing an
+        // owner on the error path would recreate it and repaint these blue.
+        viz.SubmitFrame(SurfaceId(1), frame(&[2, 1], [0, 0, 255, 255], false))
+            .unwrap();
+        let (retained, update) = render(
+            &mut renderer,
+            &aggregate(&viz, &[1]),
+            skia::PixelFormat::Rgba8888,
+        );
+        assert_eq!(retained, original);
+        assert_eq!(update.damage_pixels, 0);
+        assert_eq!(update.copied_bytes, W as usize * H as usize * 4);
+    }
 }
 #[test]
 fn invalid_candidate_preserves_backings_and_new_format_cannot_reuse_old_pixels() {
@@ -314,4 +374,85 @@ fn invalid_candidate_preserves_backings_and_new_format_cannot_reuse_old_pixels()
     let (pixels, update) = render(&mut renderer, &candidate, skia::PixelFormat::Bgra8888);
     check(&pixels, [56, 34, 12, 255]);
     assert_eq!(update.damage_pixels, W as usize * H as usize);
+}
+
+#[test]
+fn translucent_child_does_not_reblend_outside_parent_damage() {
+    use layoutng_assembly::internal::paint_input::{PaintFilterOperation, PaintFilterType};
+    for blur in [false, true] {
+        let fixture = |damaged| {
+            let mut current = frame(&[2, 1], [255, 0, 0, 128], damaged);
+            if blur {
+                // The dirty output lies entirely outside this source rect.
+                // Blur must still sample the full child to regenerate it.
+                let source = PaintRect {
+                    x: 2.,
+                    y: 2.,
+                    width: 4.,
+                    height: 4.,
+                };
+                let DrawQuad::SolidColor(quad) = &mut current.render_pass_list[0].quad_list[0]
+                else {
+                    unreachable!()
+                };
+                quad.rect = source;
+                quad.visible_rect = source;
+                let mut effect = (*current.render_pass_list[0]
+                    .owner_effect
+                    .as_ref()
+                    .unwrap()
+                    .as_ref())
+                .clone();
+                effect.filters.push(PaintFilterOperation {
+                    r#type: PaintFilterType::kBlur,
+                    amount: 2.,
+                    ..Default::default()
+                });
+                let effect = Arc::new(effect);
+                current.render_pass_list[0].owner_effect = Some(effect.clone());
+                current.render_pass_list[1].shared_quad_state_list[0]
+                    .properties
+                    .effect = effect;
+            }
+            current
+        };
+        let mut renderer = Renderer::default();
+        let mut viz = viz::VizEngine::New();
+        viz.SubmitFrame(SurfaceId(1), fixture(true)).unwrap();
+        let (before, _) = render(
+            &mut renderer,
+            &aggregate(&viz, &[1]),
+            skia::PixelFormat::Rgba8888,
+        );
+        let mut partial = fixture(false);
+        let damage = if blur {
+            DeviceRect::new(6, 4, 2, 2)
+        } else {
+            DeviceRect::new(0, 0, 2, 2)
+        };
+        if blur {
+            assert_ne!(
+                before[4 * W as usize + 6],
+                u32::MAX,
+                "blur has a contribution outside source bounds"
+            );
+        }
+        partial.metadata.root_damage_rect = damage;
+        partial.render_pass_list[1].damage_rect = damage;
+        viz.SubmitFrame(SurfaceId(1), partial).unwrap();
+        let (after, update) = render(
+            &mut renderer,
+            &aggregate(&viz, &[1]),
+            skia::PixelFormat::Rgba8888,
+        );
+        assert_eq!(update.damage_pixels, 4);
+        let changed = before.iter().zip(&after).filter(|(a, b)| a != b).count();
+        assert_eq!(
+            changed,
+            0,
+            "blur={blur}, outside pixel before {:?}, after {:?}",
+            before[W as usize * 2 + 2].to_ne_bytes(),
+            after[W as usize * 2 + 2].to_ne_bytes()
+        );
+    }
 }

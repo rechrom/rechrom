@@ -187,65 +187,48 @@ impl Renderer {
         let mut damage_pixels = 0usize;
         let mut copied_bytes = 0usize;
         let mut all_retained = true;
-        let mut pass_outputs: HashMap<(SurfaceId, RenderPassId), Vec<u32>> = HashMap::new();
-        let mut temporary_output_bytes = 0usize;
+        let mut completed_children = HashSet::new();
         let mut temporary_output_peak = 0usize;
         for pass in frame.RenderPasses() {
             let destination = pass.Destination();
             let provider = resources.ResourcesFor(pass.Surface()).ok_or_else(|| {
                 io::Error::other("aggregated render pass has no raster resource provider")
             })?;
-            if !pass.IsRoot() {
-                let length = (destination.width as usize)
-                    .checked_mul(destination.height as usize)
-                    .ok_or_else(|| io::Error::other("render pass is too large"))?;
-                let mut scratch = vec![0u32; length];
-                let local_outputs: HashMap<_, _> = pass_outputs
+            let key = (pass.Surface(), pass.RenderPassId());
+            // SoftwareRenderer samples each child directly from its retained
+            // bitmap. Remove only the destination owner while borrowing the
+            // already-completed child backings; no viewport staging copy is
+            // needed, and children remain immutable throughout this draw.
+            let mut renderer = self.surfaces.remove(&key).unwrap_or_default();
+            let result = (|| {
+                let local_outputs: HashMap<_, _> = completed_children
                     .iter()
-                    .filter_map(|(&(surface, id), pixels)| {
-                        (surface == pass.Surface()).then_some((id, pixels.as_slice()))
+                    .filter_map(|&(surface, id)| {
+                        (surface == pass.Surface())
+                            .then(|| self.surfaces.get(&(surface, id)))
+                            .flatten()
+                            .and_then(RenderPassRenderer::backing_pixels)
+                            .map(|pixels| (id, pixels))
                     })
                     .collect();
-                let update = self
-                    .surfaces
-                    .entry((pass.Surface(), pass.RenderPassId()))
-                    .or_default()
-                    .compose(
+                if !pass.IsRoot() {
+                    return renderer.compose_retained(
                         pass,
                         provider,
                         destination.width,
                         destination.height,
-                        &mut scratch,
-                        skia::PixelFormat::Rgba8888,
-                        destination.width as usize,
                         &local_outputs,
-                    )?;
-                damage_pixels = damage_pixels.saturating_add(update.damage_pixels);
-                copied_bytes = copied_bytes.saturating_add(update.copied_bytes);
-                all_retained &= update.damage_pixels == 0;
-                temporary_output_bytes += scratch.capacity() * std::mem::size_of::<u32>();
-                temporary_output_peak = temporary_output_peak.max(temporary_output_bytes);
-                pass_outputs.insert((pass.Surface(), pass.RenderPassId()), scratch);
-                continue;
-            }
-            let local_outputs: HashMap<_, _> = pass_outputs
-                .iter()
-                .filter_map(|(&(surface, id), pixels)| {
-                    (surface == pass.Surface()).then_some((id, pixels.as_slice()))
-                })
-                .collect();
-            let update = if destination.x == 0 && destination.width == width {
-                let top = usize::try_from(destination.y)
-                    .map_err(|_| io::Error::other("negative surface destination"))?;
-                let bottom = top
-                    .checked_add(destination.height as usize)
-                    .filter(|&bottom| bottom <= height as usize)
-                    .ok_or_else(|| io::Error::other("surface destination exceeds target"))?;
-                let target = &mut buffer[top * row_stride..bottom * row_stride];
-                self.surfaces
-                    .entry((pass.Surface(), pass.RenderPassId()))
-                    .or_default()
-                    .compose(
+                    );
+                }
+                if destination.x == 0 && destination.width == width {
+                    let top = usize::try_from(destination.y)
+                        .map_err(|_| io::Error::other("negative surface destination"))?;
+                    let bottom = top
+                        .checked_add(destination.height as usize)
+                        .filter(|&bottom| bottom <= height as usize)
+                        .ok_or_else(|| io::Error::other("surface destination exceeds target"))?;
+                    let target = &mut buffer[top * row_stride..bottom * row_stride];
+                    renderer.compose(
                         pass,
                         provider,
                         destination.width,
@@ -254,17 +237,13 @@ impl Renderer {
                         format,
                         row_stride,
                         &local_outputs,
-                    )?
-            } else {
-                let length = (destination.width as usize)
-                    .checked_mul(destination.height as usize)
-                    .ok_or_else(|| io::Error::other("surface destination is too large"))?;
-                let mut scratch = vec![0u32; length];
-                let update = self
-                    .surfaces
-                    .entry((pass.Surface(), pass.RenderPassId()))
-                    .or_default()
-                    .compose(
+                    )
+                } else {
+                    let length = (destination.width as usize)
+                        .checked_mul(destination.height as usize)
+                        .ok_or_else(|| io::Error::other("surface destination is too large"))?;
+                    let mut scratch = vec![0u32; length];
+                    let update = renderer.compose(
                         pass,
                         provider,
                         destination.width,
@@ -274,18 +253,29 @@ impl Renderer {
                         destination.width as usize,
                         &local_outputs,
                     )?;
-                temporary_output_peak = temporary_output_peak
-                    .max(temporary_output_bytes + scratch.capacity() * std::mem::size_of::<u32>());
-                let left = usize::try_from(destination.x)
-                    .map_err(|_| io::Error::other("negative surface destination"))?;
-                let top = usize::try_from(destination.y)
-                    .map_err(|_| io::Error::other("negative surface destination"))?;
-                for (row, source) in scratch.chunks_exact(destination.width as usize).enumerate() {
-                    let start = (top + row) * row_stride + left;
-                    buffer[start..start + destination.width as usize].copy_from_slice(source);
+                    temporary_output_peak =
+                        temporary_output_peak.max(scratch.capacity() * std::mem::size_of::<u32>());
+                    let left = usize::try_from(destination.x)
+                        .map_err(|_| io::Error::other("negative surface destination"))?;
+                    let top = usize::try_from(destination.y)
+                        .map_err(|_| io::Error::other("negative surface destination"))?;
+                    for (row, source) in
+                        scratch.chunks_exact(destination.width as usize).enumerate()
+                    {
+                        let start = (top + row) * row_stride + left;
+                        buffer[start..start + destination.width as usize].copy_from_slice(source);
+                    }
+                    Ok(update)
                 }
-                update
-            };
+            })();
+            // Restore ownership before propagating any draw/validation error.
+            // A failed backing remains invalid according to compose's normal
+            // lifecycle; unrelated child and surface backings remain resident.
+            self.surfaces.insert(key, renderer);
+            let update = result?;
+            if !pass.IsRoot() {
+                completed_children.insert(key);
+            }
             damage_pixels = damage_pixels.saturating_add(update.damage_pixels);
             copied_bytes = copied_bytes.saturating_add(update.copied_bytes);
             all_retained &= update.damage_pixels == 0;

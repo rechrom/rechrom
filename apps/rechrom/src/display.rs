@@ -96,8 +96,16 @@ impl Display {
                 scroll_active,
             } => self.Submit(frame, scroll_active, post_swap_ack),
             Message::SwapAck(sequence) => {
-                self.viz.DidReceiveSwapAck(SwapId(sequence));
-                Ok(if self.prepared.is_some() {
+                let accepted = self.viz.DidReceiveSwapAck(SwapId(sequence));
+                browser_tracing::instant(
+                    "frame",
+                    "DisplaySwapAcknowledged",
+                    &[
+                        ("present_sequence", sequence as f64),
+                        ("accepted", accepted as u8 as f64),
+                    ],
+                );
+                Ok(if accepted && self.prepared.is_some() {
                     vec![Effect::RequestBeginFrame]
                 } else {
                     Vec::new()
@@ -264,6 +272,7 @@ impl Display {
         );
         if !self.viz.CanDrawAndSwap() {
             frame_trace.set("submitted", 0.0);
+            frame_trace.set("swap_throttled", 1.0);
             return Ok(vec![Effect::RequestBeginFrame]);
         }
         let Some(prepared) = self.prepared.take() else {
@@ -288,7 +297,13 @@ impl Display {
         let notify = self.notify.clone();
         let native_presentation = self.target.is_native();
         let post_swap_ack = post_swap_ack.clone();
-        self.target.present_prepared(
+        // Chromium Display::DrawAndSwap registers DidSwapBuffers before
+        // invoking SwapBuffers: software/native completion can be synchronous.
+        // The callback only posts its token; the Display owner consumes it.
+        self.viz
+            .DidSubmitSwap(SwapId(sequence))
+            .map_err(io::Error::other)?;
+        let presented = self.target.present_prepared(
             output,
             sequence,
             Box::new(move |_, _| {
@@ -297,10 +312,11 @@ impl Display {
                 }
                 (post_swap_ack)(sequence);
             }),
-        )?;
-        self.viz
-            .DidSubmitSwap(SwapId(sequence))
-            .map_err(io::Error::other)?;
+        );
+        if let Err(error) = presented {
+            self.viz.DidReceiveSwapAck(SwapId(sequence));
+            return Err(error);
+        }
         frame_trace.set("submitted", 1.0);
         frame_trace.set(
             "deadline_missed",
@@ -380,8 +396,141 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
+    fn prepared(sequence: u64, viewport: Viewport) -> PreparedDisplayFrame {
+        PreparedDisplayFrame {
+            output: PreparedDisplayTarget::Offscreen {
+                pixels: vec![0x0011_2233; viewport.width as usize * viewport.height as usize],
+                row_stride: viewport.width as usize,
+            },
+            provenance: compositor::FrameProvenance {
+                document: (7, 4),
+                content: Some(compositor::ContentFrameProvenance {
+                    sequence,
+                    recording_revision: 19,
+                }),
+            },
+            sequence,
+            viewport,
+            drag_regions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn completed_swap_is_received_before_queued_prepare_and_submit() {
+        use crate::presentation_runtime::ReceiveSwapAcks;
+        use std::{collections::VecDeque, sync::mpsc};
+        let source_id = browser_tracing::next_id();
+        let mailbox = Arc::new(Mutex::new(None));
+        let mut display = Display::New(
+            DisplayTarget::Offscreen,
+            Output {
+                mailbox: mailbox.clone(),
+                notify: Arc::new(|_| {}),
+            },
+            true,
+        );
+        let viewport = Viewport {
+            width: 2,
+            height: crate::engine::TOOLBAR_HEIGHT as u32 + 2,
+            scale: 1.0,
+        };
+        let now = Instant::now();
+        let frame = crate::begin_frame_source::NativeBeginFrame::from(
+            foundation::begin_frame::BeginFrameArgs {
+                source_id,
+                sequence_number: 1,
+                frame_time: now,
+                deadline: now + Duration::from_millis(16),
+                interval: Duration::from_millis(16),
+            },
+        );
+        let (ack_sender, ack_receiver) = mpsc::channel();
+        let ack: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |sequence| {
+            ack_sender.send(sequence).unwrap();
+        });
+        // These candidates already exist when swap 1 completes. The old FIFO
+        // would see Prepare(2), Submit(2), Prepare(3), Submit(3), then Ack(1).
+        let mut queued = VecDeque::from([prepared(2, viewport), prepared(3, viewport)]);
+        display.prepared = Some(prepared(1, viewport));
+        display.Submit(frame, true, &ack).unwrap();
+        assert!(!display.viz.CanDrawAndSwap());
+        for expected in [2, 3] {
+            ReceiveSwapAcks(&ack_receiver, &mut display, &ack).unwrap();
+            assert!(display.viz.CanDrawAndSwap());
+            display.prepared = queued.pop_front();
+            ReceiveSwapAcks(&ack_receiver, &mut display, &ack).unwrap();
+            display.Submit(frame, true, &ack).unwrap();
+            assert!(display.prepared.is_none());
+            assert_eq!(
+                mailbox
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .provenance
+                    .unwrap()
+                    .content
+                    .unwrap()
+                    .sequence,
+                expected
+            );
+        }
+        ReceiveSwapAcks(&ack_receiver, &mut display, &ack).unwrap();
+        assert!(display.viz.CanDrawAndSwap());
+    }
+
+    #[test]
+    fn delayed_swap_completion_keeps_throttle_and_stale_tokens_are_noops() {
+        use crate::presentation_runtime::ReceiveSwapAcks;
+        use std::sync::mpsc;
+        let mut display = Display::New(
+            DisplayTarget::Offscreen,
+            Output {
+                mailbox: Arc::new(Mutex::new(None)),
+                notify: Arc::new(|_| {}),
+            },
+            false,
+        );
+        let viewport = Viewport {
+            width: 2,
+            height: crate::engine::TOOLBAR_HEIGHT as u32 + 2,
+            scale: 1.0,
+        };
+        display.prepared = Some(prepared(42, viewport));
+        display.viz.DidSubmitSwap(SwapId(41)).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let ack: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(|_| {});
+        // Models a native callback which has not completed yet: owner turns
+        // alone do not free its slot or consume the prepared candidate.
+        assert!(ReceiveSwapAcks(&receiver, &mut display, &ack)
+            .unwrap()
+            .is_empty());
+        assert!(!display.viz.CanDrawAndSwap());
+        sender.send(40).unwrap();
+        assert!(ReceiveSwapAcks(&receiver, &mut display, &ack)
+            .unwrap()
+            .is_empty());
+        assert!(!display.viz.CanDrawAndSwap());
+        sender.send(41).unwrap();
+        assert!(matches!(
+            ReceiveSwapAcks(&receiver, &mut display, &ack)
+                .unwrap()
+                .as_slice(),
+            [Effect::RequestBeginFrame]
+        ));
+        assert!(display.viz.CanDrawAndSwap());
+        display.viz.DidSubmitSwap(SwapId(42)).unwrap();
+        sender.send(41).unwrap();
+        assert!(ReceiveSwapAcks(&receiver, &mut display, &ack)
+            .unwrap()
+            .is_empty());
+        assert!(!display.viz.CanDrawAndSwap());
+        assert_eq!(display.prepared.as_ref().unwrap().sequence, 42);
+    }
+
     #[test]
     fn offscreen_publication_traces_prepared_content_identity() {
+        let source_id = browser_tracing::next_id();
         let mailbox = Arc::new(Mutex::new(None));
         let output = Output {
             mailbox: mailbox.clone(),
@@ -396,7 +545,7 @@ mod tests {
         let now = Instant::now();
         let frame = crate::begin_frame_source::NativeBeginFrame::from(
             foundation::begin_frame::BeginFrameArgs {
-                source_id: 1,
+                source_id,
                 sequence_number: 1,
                 frame_time: now,
                 deadline: now + Duration::from_millis(16),
@@ -430,8 +579,13 @@ mod tests {
                 drag_regions: Vec::new(),
             });
             display.Submit(frame, false, &ack).unwrap();
-            assert_eq!(mailbox.lock().unwrap().as_ref().unwrap().provenance,
-                Some(compositor::FrameProvenance { document: (7, 4), content }));
+            assert_eq!(
+                mailbox.lock().unwrap().as_ref().unwrap().provenance,
+                Some(compositor::FrameProvenance {
+                    document: (7, 4),
+                    content
+                })
+            );
             display.viz.DidReceiveSwapAck(SwapId(sequence));
         }
         browser_tracing::stop().unwrap();
@@ -439,7 +593,9 @@ mod tests {
         let published: Vec<_> = snapshot
             .instants
             .iter()
-            .filter(|event| event.name == "OffscreenFramePublished")
+            .filter(|event| {
+                event.name == "OffscreenFramePublished" && event.context.source_id == source_id
+            })
             .collect();
         assert_eq!(published.len(), 2);
         assert_eq!(published[0].fields["has_content"], 0.0);
