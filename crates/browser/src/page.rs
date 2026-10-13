@@ -913,14 +913,27 @@ impl PageState {
             self.full_layout_lifecycles
                 .set(self.full_layout_lifecycles.get() + 1);
             let sizes = {
-                let mut layout = self.layout_engine.borrow_mut();
-                crate::font_session::LayoutWithSystemFonts(
-                    &mut layout,
-                    &mut self.document.borrow_mut(),
-                    &self.interaction.borrow(),
-                    &mut self.constraints.borrow_mut(),
-                    &mut self.system_fonts.borrow_mut(),
-                );
+                loop {
+                    crate::font_session::LayoutWithSystemFonts(
+                        &mut self.layout_engine.borrow_mut(),
+                        &mut self.document.borrow_mut(),
+                        &self.interaction.borrow(),
+                        &mut self.constraints.borrow_mut(),
+                        &mut self.system_fonts.borrow_mut(),
+                    );
+                    // Apply ready (including MemoryCache) font responses at
+                    // the host boundary before exposing provisional layout.
+                    // No layout/DOM borrow survives decoding or callbacks, and
+                    // an outstanding network load never waits here.
+                    let completed = self.resources.borrow().as_ref().map_or(0, |resources| {
+                        resources.PollPendingFonts(&mut LayoutFontResourceClient { state: self })
+                    });
+                    if completed == 0 {
+                        break;
+                    }
+                    self.layout_engine.borrow_mut().ReleaseLayoutResult();
+                }
+                let layout = self.layout_engine.borrow();
                 if !self.style_engine.borrow().HasContainerQueries() {
                     drop(layout);
                     self.ReflectLayoutScrollOffsets();
@@ -1307,6 +1320,14 @@ impl PageState {
                 self.dirty.set(true);
             }
             ResourceMutation::ResourceLoadFailed(m) => {
+                if m.kind == page_mutation::ResourceKind::kFont {
+                    // A failed face can expose an earlier overlapping face or
+                    // another family. Re-enter text selection to request it.
+                    self.InvalidateMeasurement();
+                    self.document.borrow_mut().InvalidateLayout();
+                    self.scroll_only.set(false);
+                    self.dirty.set(true);
+                }
                 if m.kind == page_mutation::ResourceKind::kImage {
                     if let Some(source) = m.source {
                         let changed = self
@@ -1782,6 +1803,30 @@ impl Page {
                 )
             },
         ));
+        let responsive_state = Rc::downgrade(&state);
+        resources.SetPreloadImageSelector(Rc::new(move |input, constraints, is_loaded| {
+            let state = responsive_state.upgrade()?;
+            crate::style_services::SelectResponsiveImageFromAttributes(
+                input,
+                constraints,
+                state.preferred_color_scheme.get(),
+                state.forced_colors.get(),
+                is_loaded,
+            )
+        }));
+        let responsive_state = Rc::downgrade(&state);
+        resources.SetPreloadMediaMatcher(Rc::new(move |query, constraints| {
+            let Some(state) = responsive_state.upgrade() else {
+                return false;
+            };
+            let media = crate::style_services::MediaValuesForLayout(
+                constraints,
+                state.preferred_color_scheme.get(),
+                state.forced_colors.get(),
+            );
+            let values = style::media_queries::MediaValuesCached::new(&media);
+            crate::style_services::ResponsiveMediaMatches(query, &values)
+        }));
         state.ConnectResources(resources.clone());
         let script_client: Rc<RefCell<dyn ScriptLoadClient>> =
             Rc::new(RefCell::new(ScriptClient(client, Rc::downgrade(&state))));
@@ -2378,7 +2423,8 @@ impl Page {
     fn FinishSuppliedDocumentResources(&mut self) -> io::Result<()> {
         self.state.ResolveStyles();
         self.resources.QueueReferencedImages()?;
-        self.resources.SelectUsedFontFaces();
+        self.resources.PrepareFontFaces();
+        self.state.EnsureMeasurement();
         self.resources.StartPendingFonts();
         let mut client = ResourceClient {
             state: self.state.clone(),
@@ -2796,6 +2842,19 @@ fn cursor_hit_test_same_point_reuses_clean_frame_and_scroll_invalidates() {
             "immediate mouse feedback remains forced"
         );
     });
+}
+// Font completion during a layout transaction cannot dispatch DOM listeners.
+struct LayoutFontResourceClient<'a> {
+    state: &'a PageState,
+}
+impl ResourceFetcherClient for LayoutFontResourceClient<'_> {
+    fn HasJavaScript(&self) -> bool { false }
+    fn ApplyResourceMutation(&mut self, mutation: ResourceMutation) {
+        self.state.ApplyResourceMutation(mutation);
+    }
+    fn DispatchImageEvent(&mut self, _: u64, _: bool) {
+        unreachable!("font completion cannot dispatch an image event");
+    }
 }
 struct ResourceClient<'a> {
     state: Rc<PageState>,

@@ -14,6 +14,7 @@ javascript = { path = "../javascript" }
 resource = { path = "../resource" }
 style = { path = "../style" }
 url_loader = { path = "../url_loader" }
+url = "2"
 webapi = { path = "../webapi" }
 
 [dev-dependencies]

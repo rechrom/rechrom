@@ -17,7 +17,7 @@ use std::future::Future;
 use std::io::{self, Read};
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -65,6 +65,9 @@ pub struct HTTPRequestData {
     pub method: String,
     pub url: String,
     pub referrer: String,
+    /// None preserves an existing caller-prepared referrer. Document resource
+    /// owners always supply Some(document policy), including explicit omission.
+    pub referrer_policy: Option<crate::ReferrerPolicy>,
     pub body: Vec<u8>,
     pub headers: Vec<(String, String)>,
     pub priority: HTTPRequestPriority,
@@ -83,11 +86,14 @@ pub struct HTTPResponseData {
     pub status: i64,
     pub final_url: String,
     pub mime_type: String,
+    pub referrer_policy: String,
+    pub content_security_policy: Vec<String>,
     pub body: Vec<u8>,
 }
 
 // cpp: http_transport/http_request.h:27-34
 pub trait HTTPRequestOperation {
+    fn SetPriority(&mut self, _priority: HTTPRequestPriority) {}
     fn Poll(&mut self) -> io::Result<Option<HTTPResponseData>>;
     fn SetWakeCallback(&mut self, _callback: crate::HTTPWakeCallback) {}
 }
@@ -436,6 +442,15 @@ pub(crate) async fn fetch_response(
     let method = Method::from_bytes(request.method.as_bytes()).map_err(protocol_error)?;
     let mut body = request.body.clone();
     let mut headers = build_headers(request, options)?;
+    let mut referrer_policy = request
+        .referrer_policy
+        .unwrap_or(crate::ReferrerPolicy::UnsafeUrl);
+    let mut referrer = headers
+        .get(header::REFERER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    referrer = referrer_policy.GenerateReferrer(&referrer, url.as_str());
     let mut implicit_content_type =
         (!body.is_empty() || method == Method::POST) && !headers.contains_key(header::CONTENT_TYPE);
     if implicit_content_type {
@@ -445,6 +460,13 @@ pub(crate) async fn fetch_response(
         );
     }
     for redirects in 0..=10 {
+        headers.remove(header::REFERER);
+        if !referrer.is_empty() {
+            headers.insert(
+                header::REFERER,
+                HeaderValue::from_str(&referrer).map_err(protocol_error)?,
+            );
+        }
         // Fragments and URL userinfo are not part of the HTTP request target.
         let mut target = url.clone();
         target.set_fragment(None);
@@ -541,6 +563,15 @@ pub(crate) async fn fetch_response(
                     headers.remove(header::COOKIE);
                 }
                 headers.remove(header::HOST);
+                // RedirectInfo::ComputeRedirectInfo updates policy from this
+                // response and further reduces the current request referrer.
+                // Never recover a path already stripped on an earlier hop.
+                let policy_header =
+                    response_header_values(response.headers(), "referrer-policy").join(",");
+                if let Some(policy) = crate::ReferrerPolicy::FromHeader(&policy_header) {
+                    referrer_policy = policy;
+                }
+                referrer = referrer_policy.GenerateReferrer(&referrer, next.as_str());
                 // Match libcurl's custom_request semantics: it retains the
                 // explicitly chosen method, but stops POST body replay for
                 // 301/302/303. 307/308 preserve both method and body.
@@ -573,11 +604,17 @@ pub(crate) async fn fetch_response(
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default()
             .to_owned();
+        let referrer_policy =
+            response_header_values(response.headers(), "referrer-policy").join(",");
+        let content_security_policy =
+            response_header_values(response.headers(), "content-security-policy");
         return Ok(ResponseStart {
             incoming: response.into_body(),
             status: i64::from(status.as_u16()),
             final_url: url.to_string(),
             mime_type,
+            referrer_policy,
+            content_security_policy,
             encodings,
             head_only: method == Method::HEAD,
         });
@@ -590,8 +627,20 @@ pub(crate) struct ResponseStart {
     pub(crate) status: i64,
     pub(crate) final_url: String,
     pub(crate) mime_type: String,
+    pub(crate) referrer_policy: String,
+    pub(crate) content_security_policy: Vec<String>,
     pub(crate) encodings: String,
     pub(crate) head_only: bool,
+}
+
+fn response_header_values(headers: &HeaderMap, name: &'static str) -> Vec<String> {
+    headers
+        .get_all(name)
+        .iter()
+        // Preserve even invalid/empty enforced CSP headers as a policy
+        // boundary. Their presence must not disappear from preload admission.
+        .map(|value| value.to_str().unwrap_or_default().to_owned())
+        .collect()
 }
 
 async fn transfer_traced(
@@ -605,6 +654,8 @@ async fn transfer_traced(
         status,
         final_url,
         mime_type,
+        referrer_policy,
+        content_security_policy,
         encodings,
         head_only,
     } = fetch_response(request, scheduler, trace, attempt).await?;
@@ -632,7 +683,10 @@ async fn transfer_traced(
     let encoded_bytes = received.len();
     trace.event(
         "HTTPNetworkBodyComplete",
-        &[("attempt", attempt as f64), ("encoded_bytes", encoded_bytes as f64)],
+        &[
+            ("attempt", attempt as f64),
+            ("encoded_bytes", encoded_bytes as f64),
+        ],
     );
     let body = if head_only || received.is_empty() {
         received
@@ -652,6 +706,8 @@ async fn transfer_traced(
         status,
         final_url,
         mime_type,
+        referrer_policy,
+        content_security_policy,
         body,
     })
 }
@@ -665,21 +721,32 @@ async fn transfer(
 }
 
 async fn execute(request: HTTPRequestData, state: Arc<State>) {
-    let _slot = if request.priority == HTTPRequestPriority::High {
-        if let Some(priority) = &state.scheduler.priority_slots {
-            tokio::select! {
-                biased;
-                permit = priority.clone().acquire_owned() => permit,
-                permit = state.scheduler.slots.clone().acquire_owned() => permit,
+    let _slot = loop {
+        let admission = async {
+            if state.priority.load(Ordering::Acquire) != 0 {
+                if let Some(priority) = &state.scheduler.priority_slots {
+                    tokio::select! {
+                        biased;
+                        permit = priority.clone().acquire_owned() => permit,
+                        permit = state.scheduler.slots.clone().acquire_owned() => permit,
+                    }
+                } else {
+                    state.scheduler.slots.clone().acquire_owned().await
+                }
+            } else {
+                state.scheduler.slots.clone().acquire_owned().await
             }
-        } else {
-            state.scheduler.slots.clone().acquire_owned().await
+        };
+        tokio::select! {
+            biased;
+            _ = state.priority_changed.notified() => continue,
+            permit = admission => break permit,
         }
-    } else {
-        state.scheduler.slots.clone().acquire_owned().await
     };
     let Ok(_slot) = _slot else {
-        state.trace.failed(0, &protocol_error("HTTP admission closed"), false);
+        state
+            .trace
+            .failed(0, &protocol_error("HTTP admission closed"), false);
         return;
     };
     state.trace.admitted();
@@ -697,7 +764,9 @@ async fn execute(request: HTTPRequestData, state: Arc<State>) {
             Ok(response) => {
                 let mut result = state.result.lock().expect("HTTP state poisoned");
                 result.response = Some(response);
-                state.trace.event("HTTPResponseReady", &[("attempt", attempt as f64)]);
+                state
+                    .trace
+                    .event("HTTPResponseReady", &[("attempt", attempt as f64)]);
                 return;
             }
             Err(error) => {
@@ -723,6 +792,8 @@ async fn execute(request: HTTPRequestData, state: Arc<State>) {
 }
 
 struct State {
+    priority: AtomicU8,
+    priority_changed: Notify,
     cancelled: AtomicBool,
     cancel: Notify,
     result: Mutex<WorkerResult>,
@@ -746,6 +817,8 @@ impl HTTPRequest {
         let executor = runtime()?;
         let trace = RequestTrace::queued(&request, false);
         let state = Arc::new(State {
+            priority: AtomicU8::new((request.priority == HTTPRequestPriority::High) as u8),
+            priority_changed: Notify::new(),
             cancelled: AtomicBool::new(false),
             cancel: Notify::new(),
             result: Mutex::new(WorkerResult::default()),
@@ -784,6 +857,14 @@ impl Drop for HTTPRequest {
 }
 
 impl HTTPRequestOperation for HTTPRequest {
+    fn SetPriority(&mut self, priority: HTTPRequestPriority) {
+        // Fetcher's coalesced parser consumer boosts an existing speculative
+        // load. A later async consumer must not demote the blocking consumer.
+        if priority == HTTPRequestPriority::High && self.state.priority.swap(1, Ordering::AcqRel) == 0 {
+            self.state.trace.event("HTTPRequestPriorityRaised", &[("priority", 1.)]);
+            self.state.priority_changed.notify_one();
+        }
+    }
     fn Poll(&mut self) -> io::Result<Option<HTTPResponseData>> {
         let mut result = self.state.result.lock().expect("HTTP state poisoned");
         if let Some(error) = &result.error {

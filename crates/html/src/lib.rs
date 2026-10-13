@@ -9,6 +9,7 @@ use parser::html_entity_parser::{ConsumeHTMLEntity, DecodedHTMLEntity};
 use parser::segmented_string::SegmentedString;
 
 pub mod diagnostic_scanner;
+pub mod preload_scanner;
 pub mod html_parser;
 pub mod html_parser_host;
 pub(crate) mod html_tag_names;

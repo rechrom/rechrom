@@ -1732,10 +1732,14 @@ fn record_damage(
         }
         let resource_changed = a.is_some_and(|a| resources.record_changed(a, b));
         let unchanged = a.is_some_and(|a| {
-            // Ink/accuracy/outset are allocation metadata. If the actual
-            // replay and referenced resources are identical, changing only
-            // that metadata cannot change already-rasterized pixels.
+            // Ink bounds, completeness, and effect outsets also decide which
+            // records are selected for a tile. Even with identical replay
+            // commands, changing this metadata must invalidate the old and
+            // new selection regions so retained edge tiles are rebuilt.
             a.draws_content == b.draws_content
+                && a.rect == b.rect
+                && a.complete == b.complete
+                && a.raster_effect_outset == b.raster_effect_outset
                 && !resource_changed
                 && !reordered
                 && (Arc::ptr_eq(&a.items, &b.items)

@@ -47,7 +47,7 @@ pub(super) fn ResolvePageStylesAndLoadResources(
         drop(image_discovery);
         images_discovered_done = elapsed();
         let font_discovery = browser_tracing::span("lifecycle", "Page.DiscoverFonts");
-        resources.SelectUsedFontFaces();
+        resources.PrepareFontFaces();
         resources.StartPendingFonts();
         drop(font_discovery);
         fonts_discovered_done = elapsed();

@@ -70,11 +70,12 @@ impl StringView {
             .expect("StringView range overflow");
         let units = source.Span16().unwrap_or_default();
         assert!(end <= units.len(), "StringView range exceeds string length");
+        let (units, latin1) = source.SharedViewStorage();
         Self {
-            units: Arc::from(&units[start..end]),
-            latin1: source.Span8().map(|bytes| Arc::from(&bytes[start..end])),
+            units,
+            latin1,
             null: source.IsNull(),
-            offset: 0,
+            offset: start,
             length: length as usize,
         }
     }
@@ -261,6 +262,27 @@ mod tests {
         let view = StringView::from(&text);
         assert_eq!(view.EncodeForDebugging().Utf8(), "\"A\\n\\uD83D\"");
         assert_eq!(view.ToString(), text);
+    }
+
+    #[test]
+    fn owning_string_ranges_share_source_storage_and_retain_its_lifetime() {
+        let backing = String::from_latin1(b"prefix-value-suffix");
+        let view = StringView::from_blink_string_range(&backing, 7, 5);
+        assert_eq!(view.Span8(), Some(b"value".as_slice()));
+        assert_eq!(view.Span16().as_ptr(), backing.Span16().unwrap()[7..].as_ptr());
+        assert_eq!(view.Span8().unwrap().as_ptr(), backing.Span8().unwrap()[7..].as_ptr());
+        let nested = view.Substring(1, 3);
+        drop(backing);
+        drop(view);
+        assert_eq!(nested.ToString().Utf8(), "alu");
+
+        let backing = String::from_utf16(&[b'x' as u16, 0xd83d, 0xde00, b'y' as u16]);
+        let view = StringView::from_blink_string_range(&backing, 1, 2);
+        assert_eq!(view.Span16().as_ptr(), backing.Span16().unwrap()[1..].as_ptr());
+        drop(backing);
+        assert_eq!(view.CodePointAt(0), 0x1f600);
+        assert_eq!(view.ToString().Utf8(), "😀");
+        assert!(StringView::from_blink_string_range(&String::default(), 0, 0).IsNull());
     }
 
     #[test]

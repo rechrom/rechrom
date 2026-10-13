@@ -80,6 +80,12 @@ the requested URL before handing the window to the user.
 
 ### Iteration speed
 
+Do not frequently add new tests during active implementation. Prefer reusing
+existing regression tests and reproduction fixtures. Finish a coherent round of
+fixes before validating it in one focused batch; do not add a new test for each
+small edit. Add a regression test only when an uncovered, concrete failure needs
+a durable guard.
+
 During active implementation, prioritize making coherent code changes over
 repeatedly running tests. Run only the focused checks needed to resolve a
 specific uncertainty, and defer broad or repeated test suites until the change

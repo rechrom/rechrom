@@ -40,6 +40,7 @@ impl FileURLStream {
                         status_code: 200,
                         mime_type: MimeTypeFor(&request).into(),
                         text_encoding: "utf-8".into(),
+                        ..URLResponseHead::default()
                     })))?;
                     let mut total = 0usize;
                     let mut chunk = [0u8; 16 * 1024];

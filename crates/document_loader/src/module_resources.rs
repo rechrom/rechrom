@@ -102,6 +102,7 @@ impl ModuleResources {
             url: url.to_owned(),
             referrer: referrer.to_owned(),
             destination: RequestDestination::kScript,
+            defer: url_loader::RequestDefer::Lazy,
             ..Default::default()
         });
         self.entries

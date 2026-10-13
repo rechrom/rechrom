@@ -1231,6 +1231,11 @@ fn AppendChildren<'a>(
         if node.Type() != DOMNodeType::kElement {
             continue;
         }
+        // HTMLNoScriptElement::LayoutObjectIsNeeded: preserve its DOM and
+        // canonical style, while script-enabled documents create no layout subtree.
+        if node.IsHTMLElement("noscript") && document.ScriptingEnabled() {
+            continue;
+        }
         if node.IsElement("textPath", DOMNamespace::kSVG)
             && !svg_text_path_layout_needed(dom_parent.Namespace(), dom_parent.Name(), unsafe {
                 &*parent
@@ -1765,13 +1770,22 @@ pub fn EmitLayoutMutations(
             .Children()
             .iter()
             .copied()
-            .find(|&i| document.Node(i).Type() == DOMNodeType::kElement)
-            .expect("document has no root element");
+            .find(|&i| document.Node(i).Type() == DOMNodeType::kElement);
+        // Blink creates the document's LayoutView before a document element
+        // exists. Synchronous geometry/scroll getters can enter this lifecycle
+        // while response bytes have not yet produced any HTML nodes.
+        let Some(index) = index else {
+            tree.CreateRootDefault(document.Node(document.Root()).Id(), &ComputedStyle::default());
+            return;
+        };
         let node = document.Node(index);
         let resolved = document
             .ResolvedStyleFor(index)
             .expect("computed styles must be installed before tree build");
-        assert!(resolved.generates_box, "document root has display:none");
+        if !resolved.generates_box {
+            tree.CreateRootDefault(document.Node(document.Root()).Id(), &ComputedStyle::default());
+            return;
+        }
         let mut root_style = resolved.style.clone();
         root_style.paint.svg_filter_graphs = std::sync::Arc::clone(&svg_filter_graphs);
         resolve_svg_clip_path(

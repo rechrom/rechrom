@@ -35,7 +35,11 @@ pub(crate) fn MediaValuesForLayout(
             as f32,
         layout_zoom_factor: constraints.layout_zoom_factor as f32,
         em_size: 16.0,
-        media_type: foundation::String::from("screen"),
+        media_type: foundation::String::from(if constraints.printing {
+            "print"
+        } else {
+            "screen"
+        }),
         preferred_color_scheme,
         forced_colors,
         scripting: Scripting::kEnabled,
@@ -43,7 +47,10 @@ pub(crate) fn MediaValuesForLayout(
     }
 }
 
-fn ResponsiveMediaMatches(query: &str, values: &style::media_queries::MediaValuesCached) -> bool {
+pub(crate) fn ResponsiveMediaMatches(
+    query: &str,
+    values: &style::media_queries::MediaValuesCached,
+) -> bool {
     if query.trim().is_empty() {
         return true;
     }
@@ -95,24 +102,77 @@ pub(crate) fn SelectResponsiveImage(
     forced_colors: style::media_queries::forced_colors::ForcedColors,
     is_loaded: &dyn Fn(&str) -> bool,
 ) -> Option<dom::persistent_document::ResponsiveImageSelection> {
+    let image = document.Node(index);
+    let attribute = |name| {
+        image
+            .FindAttribute(name)
+            .map(|attribute| attribute.value.clone())
+    };
+    let allows_auto_sizes = document.AllowsResponsiveImageAutoSizes(index);
+    let mut input = document_loader::ResponsiveImageInput {
+        src: attribute("src"),
+        srcset: attribute("srcset"),
+        sizes: attribute("sizes"),
+        allows_auto_sizes,
+        auto_size: allows_auto_sizes
+            .then(|| document.ResponsiveImageAutoSize(index))
+            .flatten(),
+        lazy: attribute("loading").is_some_and(|value| value.eq_ignore_ascii_case("lazy")),
+        ..Default::default()
+    };
+    if let Some(parent) = image
+        .Parent()
+        .filter(|parent| document.Node(*parent).IsHTMLElement("picture"))
+    {
+        for &child in document.Node(parent).Children() {
+            if child == index {
+                break;
+            }
+            let source = document.Node(child);
+            if !source.IsHTMLElement("source") {
+                continue;
+            }
+            let attribute = |name| {
+                source
+                    .FindAttribute(name)
+                    .map(|attribute| attribute.value.clone())
+            };
+            input
+                .picture_sources
+                .push(document_loader::ResponsiveImageSourceInput {
+                    srcset: attribute("srcset"),
+                    sizes: attribute("sizes"),
+                    media: attribute("media"),
+                    image_type: attribute("type"),
+                });
+        }
+    }
+    SelectResponsiveImageFromAttributes(
+        &input,
+        constraints,
+        preferred_color_scheme,
+        forced_colors,
+        is_loaded,
+    )
+}
+
+/// The native srcset/sizes/media path is shared by HTMLImageElement and the
+/// preload scanner, so speculation does not pick a different density/source.
+/// Loading policy is handled by the request owner; this entry only selects.
+pub(crate) fn SelectResponsiveImageFromAttributes(
+    input: &document_loader::ResponsiveImageInput,
+    constraints: &ConstraintSpace,
+    preferred_color_scheme: style::PreferredColorScheme,
+    forced_colors: style::media_queries::forced_colors::ForcedColors,
+    is_loaded: &dyn Fn(&str) -> bool,
+) -> Option<dom::persistent_document::ResponsiveImageSelection> {
     use style::media_queries::MediaValues;
 
     let media = MediaValuesForLayout(constraints, preferred_color_scheme, forced_colors);
     let values = style::media_queries::MediaValuesCached::new(&media);
-    let image = document.Node(index);
-    let fallback = image
-        .FindAttribute("src")
-        .map(|attribute| attribute.value.as_str());
-    let image_sizes = image
-        .FindAttribute("sizes")
-        .map(|attribute| attribute.value.as_str());
-    let allows_auto_sizes = document.AllowsResponsiveImageAutoSizes(index);
-    // SizesAttributeParser::EffectiveSize uses the last rendered content-box
-    // width after absolute-zoom adjustment. The first pre-layout selection has
-    // no stored width and therefore evaluates the explicit fallback/100vw.
-    let auto_size = allows_auto_sizes
-        .then(|| document.ResponsiveImageAutoSize(index))
-        .flatten();
+    let fallback = input.src.as_deref();
+    let image_sizes = input.sizes.as_deref();
+    let auto_size = input.allows_auto_sizes.then_some(input.auto_size).flatten();
     let source_size = |sizes: Option<&str>| {
         html::parser::sizes_attribute_parser::ParseSizesAttribute(
             sizes,
@@ -133,61 +193,37 @@ pub(crate) fn SelectResponsiveImage(
             },
         )
     };
-    if let Some(parent) = image
-        .Parent()
-        .filter(|parent| document.Node(*parent).IsHTMLElement("picture"))
-    {
-        for &child in document.Node(parent).Children() {
-            if child == index {
-                break;
-            }
-            let source = document.Node(child);
-            if !source.IsHTMLElement("source") {
-                continue;
-            }
-            if !ResponsiveMediaMatches(
-                source
-                    .FindAttribute("media")
-                    .map_or("", |attribute| &attribute.value),
-                &values,
-            ) || !SupportedResponsiveImageType(
-                source
-                    .FindAttribute("type")
-                    .map(|attribute| attribute.value.as_str()),
-            ) {
-                continue;
-            }
-            let Some(srcset) = source
-                .FindAttribute("srcset")
-                .filter(|attribute| !attribute.value.is_empty())
-            else {
-                continue;
-            };
-            let sizes = source
-                .FindAttribute("sizes")
-                .map(|attribute| attribute.value.as_str());
-            let sizes = if sizes.is_none() && allows_auto_sizes {
-                Some("auto")
-            } else {
-                sizes
-            };
-            if let Some(candidate) =
-                html::parser::html_srcset_parser::BestFitSourceForImageAttributesWithCache(
-                    values.DevicePixelRatio() as f64,
-                    source_size(sizes),
-                    None,
-                    Some(&srcset.value),
-                    is_loaded,
-                )
-            {
-                return Some(dom::persistent_document::ResponsiveImageSelection {
-                    source: candidate.source,
-                    density: Some(candidate.density),
-                });
-            }
+    for source in &input.picture_sources {
+        if !ResponsiveMediaMatches(source.media.as_deref().unwrap_or(""), &values)
+            || !SupportedResponsiveImageType(source.image_type.as_deref())
+        {
+            continue;
+        }
+        let Some(srcset) = source.srcset.as_deref().filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        let sizes = source.sizes.as_deref();
+        let sizes = if sizes.is_none() && input.allows_auto_sizes {
+            Some("auto")
+        } else {
+            sizes
+        };
+        if let Some(candidate) =
+            html::parser::html_srcset_parser::BestFitSourceForImageAttributesWithCache(
+                values.DevicePixelRatio() as f64,
+                source_size(sizes),
+                None,
+                Some(srcset),
+                is_loaded,
+            )
+        {
+            return Some(dom::persistent_document::ResponsiveImageSelection {
+                source: candidate.source,
+                density: Some(candidate.density),
+            });
         }
     }
-    let Some(srcset) = image.FindAttribute("srcset") else {
+    let Some(srcset) = input.srcset.as_deref() else {
         return fallback.filter(|source| !source.is_empty()).map(|source| {
             dom::persistent_document::ResponsiveImageSelection {
                 source: source.to_owned(),
@@ -199,7 +235,7 @@ pub(crate) fn SelectResponsiveImage(
         values.DevicePixelRatio() as f64,
         source_size(image_sizes),
         fallback,
-        Some(&srcset.value),
+        Some(srcset),
         is_loaded,
     )?;
     Some(dom::persistent_document::ResponsiveImageSelection {
@@ -240,12 +276,16 @@ pub(crate) fn FragmentMetric(root: &FragmentNode, id: u64, name: &str) -> f64 {
         // the common unfragmented offset-parent case.
         "offsetLeft" => unzoom(fragment.offset.x).round(),
         "offsetTop" => unzoom(fragment.offset.y).round(),
-        "clientWidth" => {
-            unzoom(p.client_size.map_or(fragment.content_size.width + p.padding.left + p.padding.right, |size| size.width)).round()
-        }
-        "clientHeight" => {
-            unzoom(p.client_size.map_or(fragment.content_size.height + p.padding.top + p.padding.bottom, |size| size.height)).round()
-        }
+        "clientWidth" => unzoom(p.client_size.map_or(
+            fragment.content_size.width + p.padding.left + p.padding.right,
+            |size| size.width,
+        ))
+        .round(),
+        "clientHeight" => unzoom(p.client_size.map_or(
+            fragment.content_size.height + p.padding.top + p.padding.bottom,
+            |size| size.height,
+        ))
+        .round(),
         "contentWidth" => unzoom(fragment.content_size.width),
         "contentHeight" => unzoom(fragment.content_size.height),
         "clientLeft" => unzoom(p.border.left).round(),
@@ -454,6 +494,76 @@ mod tests {
     }
 
     #[test]
+    fn preload_picture_selection_matches_dom_and_loaded_candidate_policy() {
+        let owner = html::html_parser::ParseHTML(
+            "<picture><source type='image/unsupported' srcset='unsupported.png 2x'>\
+             <source media='(max-width:600px)' srcset='small.png 2x'>\
+             <source type='image/png; codecs=example' sizes='50vw' \
+             srcset='one.png 400w, two.png 800w, cached.png 1600w'>\
+             <img src='fallback.png' srcset='fallback-2.png 2x'>\
+             <source srcset='after-image.png 4x'></picture>",
+        );
+        let document = owner.GetDocument();
+        let image = (0..document.NodeCount())
+            .find(|&node| document.Node(node).IsHTMLElement("img"))
+            .unwrap();
+        let input = document_loader::ResponsiveImageInput {
+            src: Some("fallback.png".into()),
+            srcset: Some("fallback-2.png 2x".into()),
+            picture_sources: vec![
+                document_loader::ResponsiveImageSourceInput {
+                    image_type: Some("image/unsupported".into()),
+                    srcset: Some("unsupported.png 2x".into()),
+                    ..Default::default()
+                },
+                document_loader::ResponsiveImageSourceInput {
+                    media: Some("(max-width:600px)".into()),
+                    srcset: Some("small.png 2x".into()),
+                    ..Default::default()
+                },
+                document_loader::ResponsiveImageSourceInput {
+                    image_type: Some("image/png; codecs=example".into()),
+                    sizes: Some("50vw".into()),
+                    srcset: Some("one.png 400w, two.png 800w, cached.png 1600w".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut constraints = ConstraintSpace::default();
+        constraints.available_size.width = 800.0;
+        constraints.available_size.height = 600.0;
+        constraints.device_pixel_ratio = 1.0;
+        constraints.layout_zoom_factor = 2.0;
+        for (loaded, expected_source, expected_density) in
+            [(false, "two.png", 2.0), (true, "cached.png", 4.0)]
+        {
+            let cache = |source: &str| loaded && source == "cached.png";
+            let speculative = SelectResponsiveImageFromAttributes(
+                &input,
+                &constraints,
+                style::PreferredColorScheme::kLight,
+                style::media_queries::forced_colors::ForcedColors::kNone,
+                &cache,
+            )
+            .unwrap();
+            let authoritative = SelectResponsiveImage(
+                document,
+                image,
+                &constraints,
+                style::PreferredColorScheme::kLight,
+                style::media_queries::forced_colors::ForcedColors::kNone,
+                &cache,
+            )
+            .unwrap();
+            assert_eq!(speculative.source, expected_source);
+            assert_eq!(speculative.density, Some(expected_density));
+            assert_eq!(authoritative.source, speculative.source);
+            assert_eq!(authoritative.density, speculative.density);
+        }
+    }
+
+    #[test]
     fn javascript_computed_style_reads_real_cascade_and_live_mutations() {
         let document = Rc::new(RefCell::new(html::html_parser::ParseHTML("<html><body><style>.old{font-size:20px;padding-left:3px}.new{font-size:30px;padding-left:7px}input:placeholder-shown{font-weight:600}input:not(:placeholder-shown){font-weight:800}</style><div id=box class=old></div><input id=search placeholder=search></body></html>")));
         let sheet=style::ParseCSS(".old{font-size:20px;padding-left:3px}.new{font-size:30px;padding-left:7px}input:placeholder-shown{font-weight:600}input:not(:placeholder-shown){font-weight:800}");
@@ -536,11 +646,9 @@ mod measurement_tests {
             .fonts
             .push(layoutng_assembly::internal::layout_input::FontFace {
                 family: "sans-serif".into(),
-                bytes: include_bytes!(
-                    "../../../assets/fonts/Roboto-Regular.ttf"
-                )
-                .as_slice()
-                .into(),
+                bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
+                    .as_slice()
+                    .into(),
                 ..Default::default()
             });
         space.viewport = Some(

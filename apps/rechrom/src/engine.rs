@@ -1144,6 +1144,24 @@ struct Client {
     started: Instant,
 }
 impl PageClient for Client {
+    fn DidFail(&mut self, message: &str) {
+        browser_tracing::instant_with_text(
+            "navigation",
+            "DocumentLoadFailed",
+            message,
+            &[
+                ("tab_id", self.tab_id as f64),
+                ("document_generation", self.document_generation as f64),
+                ("toolbar", self.toolbar as u8 as f64),
+            ],
+        );
+        if self.trace {
+            eprintln!(
+                "loading-failed ms={:.3} message={message}",
+                self.started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
     fn DidRequestNavigation(&mut self, request: &browser::page::NavigationRequest) {
         if !self.toolbar {
             self.pointer.navigations.borrow_mut().push_back((

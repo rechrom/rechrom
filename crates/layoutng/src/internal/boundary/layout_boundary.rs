@@ -4095,6 +4095,17 @@ fn RebindFontsFromConstraintSpace(root: &mut LayoutObject, only_dirty: bool) {
     let mut object = root_ptr;
     while !object.is_null() {
         let current = unsafe { &mut *object };
+        // A new font environment invalidates the old shaping generation, even
+        // when CSS and text are unchanged. Previous InlineItems refer to their
+        // LayoutObject's current style, so rebinding first would make an old
+        // fallback result appear reusable with the newly loaded face.
+        // Blink invalidates these results through FontSelector's version.
+        if !only_dirty {
+            let flow = DynamicTo::<LayoutBlockFlow>(object);
+            if !flow.is_null() {
+                unsafe { &mut *flow }.ClearInlineNodeData();
+            }
+        }
         let node = current.GetNode();
         // A parent's resolved font can change even when the child's source
         // style is unchanged (for example relative MathML font sizes).
@@ -4144,7 +4155,11 @@ fn RebindFontsFromConstraintSpace(root: &mut LayoutObject, only_dirty: bool) {
                 let text = unsafe { &mut *text };
                 text.InvalidateInlineItems();
                 text.SetNeedsCollectInlines();
-                text.SetNeedsLayoutAndIntrinsicWidthsRecalc(&raw const kFontsChanged);
+                // Font completion also changes glyph paint even when the
+                // text and its geometry are unchanged (LayoutText font updates).
+                text.SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
+                    &raw const kFontsChanged,
+                );
             }
         } else {
             let style = RebindFont(

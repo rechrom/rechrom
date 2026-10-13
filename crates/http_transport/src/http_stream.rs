@@ -24,6 +24,8 @@ pub enum HTTPStreamEvent {
         status: i64,
         final_url: String,
         content_type: String,
+        referrer_policy: String,
+        content_security_policy: Vec<String>,
     },
     Data(Vec<u8>),
     Finished,
@@ -231,11 +233,21 @@ fn decode(
         if size == 0 {
             trace.event(
                 "HTTPDecodeComplete",
-                &[("attempt", attempt as f64), ("decoded_bytes", reader.total as f64)],
+                &[
+                    ("attempt", attempt as f64),
+                    ("decoded_bytes", reader.total as f64),
+                ],
             );
             return Ok(reader.total);
         }
-        trace.event("HTTPDecodedBodyChunk", &[("attempt", attempt as f64), ("decoded_bytes", reader.total as f64), ("chunk_bytes", size as f64)]);
+        trace.event(
+            "HTTPDecodedBodyChunk",
+            &[
+                ("attempt", attempt as f64),
+                ("decoded_bytes", reader.total as f64),
+                ("chunk_bytes", size as f64),
+            ],
+        );
         tx.blocking_send(Ok(HTTPStreamEvent::Data(output[..size].to_vec())))
             .map_err(|_| io::Error::other("HTTP stream cancelled"))?;
         wake(&notify);
@@ -255,6 +267,8 @@ async fn transfer(
         status,
         final_url,
         mime_type,
+        referrer_policy,
+        content_security_policy,
         encodings,
         head_only,
     } = fetch_response(request, scheduler, trace, attempt).await?;
@@ -264,6 +278,8 @@ async fn transfer(
             status,
             final_url,
             content_type: mime_type,
+            referrer_policy,
+            content_security_policy,
         }),
         notify,
     )
@@ -423,7 +439,7 @@ impl HTTPRequestTransport {
                             && attempt < scheduler.options.max_retries =>
                     {
                         trace.failed(attempt, &error, true);
-                        continue
+                        continue;
                     }
                     Err(error) => {
                         trace.failed(attempt, &error, false);

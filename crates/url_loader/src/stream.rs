@@ -10,6 +10,8 @@ pub struct URLResponseHead {
     pub status_code: i64,
     pub mime_type: String,
     pub text_encoding: String,
+    pub referrer_policy: Option<crate::ReferrerPolicy>,
+    pub content_security_policy: Vec<String>,
 }
 #[derive(Debug)]
 pub enum URLLoadEvent {
@@ -30,6 +32,8 @@ impl URLResponse {
             status_code: self.status_code,
             mime_type: self.mime_type.clone(),
             text_encoding: self.text_encoding.clone(),
+            referrer_policy: self.referrer_policy,
+            content_security_policy: self.content_security_policy.clone(),
         }
     }
 }
@@ -93,5 +97,38 @@ impl URLStreamOperation for BufferedURLStream {
         } else {
             callback();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Ready(Option<URLResponse>);
+    impl URLLoadOperation for Ready {
+        fn Poll(&mut self) -> io::Result<Option<URLResponse>> {
+            Ok(self.0.take())
+        }
+    }
+
+    #[test]
+    fn buffered_adapter_delivers_policy_metadata_before_body() {
+        let policies = vec!["img-src 'self'".into(), "default-src https:".into()];
+        let response = URLResponse {
+            referrer_policy: Some(crate::ReferrerPolicy::NoReferrer),
+            content_security_policy: policies.clone(),
+            body: vec![42],
+            ..Default::default()
+        };
+        let mut stream = BufferedURLStream::new(Box::new(Ready(Some(response))));
+        let Some(URLLoadEvent::Response(head)) = stream.Poll(1).unwrap() else {
+            panic!("response headers must precede body");
+        };
+        assert_eq!(
+            head.referrer_policy,
+            Some(crate::ReferrerPolicy::NoReferrer)
+        );
+        assert_eq!(head.content_security_policy, policies);
+        assert!(matches!(stream.Poll(1).unwrap(), Some(URLLoadEvent::Data(data)) if data == [42]));
     }
 }

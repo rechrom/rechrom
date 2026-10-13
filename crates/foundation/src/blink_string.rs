@@ -137,6 +137,15 @@ impl BlinkString {
         self.units.as_deref()
     }
 
+    // StringView retains the same StringImpl lifetime in Rust. Creating a
+    // range must share storage rather than copy the whole source first.
+    pub(crate) fn SharedViewStorage(&self) -> (Arc<[u16]>, Option<Arc<[u8]>>) {
+        (
+            self.units.clone().unwrap_or_else(|| Arc::from([])),
+            self.latin1.clone(),
+        )
+    }
+
     pub fn Utf8(&self) -> std::string::String {
         self.projection.to_string()
     }

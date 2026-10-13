@@ -462,7 +462,22 @@ impl RasterEngine {
             width: width as f64 / scale,
             height: height as f64 / scale,
         };
-        if plan.config.viewport != expected {
+        // The compositor publishes the CSS viewport and the raster scale as
+        // independent values. Reconstructing the viewport from an integer
+        // target performs the same arithmetic in a different order, so a
+        // valid non-integral zoom/DPR pair may differ by one ULP. This is a
+        // protocol validation, not a request for bit-identical provenance.
+        let nearly_equal = |a: f64, b: f64| {
+            a.is_finite()
+                && b.is_finite()
+                && (a - b).abs()
+                    <= f64::EPSILON * 8.0 * a.abs().max(b.abs()).max(1.0)
+        };
+        if !nearly_equal(plan.config.viewport.x, expected.x)
+            || !nearly_equal(plan.config.viewport.y, expected.y)
+            || !nearly_equal(plan.config.viewport.width, expected.width)
+            || !nearly_equal(plan.config.viewport.height, expected.height)
+        {
             return Err(self.fail("raster-viewport-mismatch"));
         }
         if let Some(reason) = plan.unsupported {

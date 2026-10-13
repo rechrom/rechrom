@@ -11,12 +11,13 @@ use std::{
     sync::Arc,
     time::Instant,
 };
-use url_loader::{URLLoader, URLRequest, URLStreamOperation, URLWakeCallback};
+use url_loader::{ReferrerPolicy, URLLoader, URLRequest, URLStreamOperation, URLWakeCallback};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ResourceRequestKey {
     url: String,
     referrer: String,
+    referrer_policy: Option<ReferrerPolicy>,
     destination: u8,
     method: String,
     body: Vec<u8>,
@@ -28,6 +29,7 @@ impl From<&URLRequest> for ResourceRequestKey {
         Self {
             url: request.url.clone(),
             referrer: request.referrer.clone(),
+            referrer_policy: request.referrer_policy,
             destination: request.destination as u8,
             method: request.method.clone(),
             body: request.body.clone(),
@@ -44,6 +46,7 @@ pub struct ResourceEngine {
     loader: Rc<RefCell<dyn URLLoader>>,
     decode: Rc<DecodeEngine>,
     document_url: RefCell<String>,
+    document_referrer_policy: Cell<ReferrerPolicy>,
     active: Cell<bool>,
     wake_callback: RefCell<Option<URLWakeCallback>>,
     next_image_id: Cell<ImageId>,
@@ -72,6 +75,7 @@ impl ResourceEngine {
             loader,
             decode: Rc::new(DecodeEngine::new()),
             document_url: RefCell::new(document_url),
+            document_referrer_policy: Cell::new(ReferrerPolicy::default()),
             active: Cell::new(true),
             wake_callback: RefCell::new(None),
             next_image_id: Cell::new(1),
@@ -88,6 +92,7 @@ impl ResourceEngine {
             loader,
             decode,
             document_url: RefCell::new(document_url),
+            document_referrer_policy: Cell::new(ReferrerPolicy::default()),
             active: Cell::new(true),
             wake_callback: RefCell::new(None),
             next_image_id: Cell::new(1),
@@ -101,6 +106,33 @@ impl ResourceEngine {
 
     pub fn SetDocumentURL(&self, url: String) {
         *self.document_url.borrow_mut() = url;
+    }
+
+    pub fn SetReferrerPolicy(&self, policy: ReferrerPolicy) {
+        self.document_referrer_policy.set(policy);
+    }
+
+    pub fn ReferrerPolicy(&self) -> ReferrerPolicy {
+        self.document_referrer_policy.get()
+    }
+
+    fn NormalizeRequest(&self, mut request: URLRequest) -> URLRequest {
+        let policy = request
+            .referrer_policy
+            .unwrap_or_else(|| self.ReferrerPolicy());
+        let source = if request.referrer.is_empty() {
+            self.DocumentURL()
+        } else {
+            request.referrer.clone()
+        };
+        request.referrer = policy.GenerateReferrer(&source, &request.url);
+        request.referrer_policy = Some(policy);
+        // The explicit source/policy pair owns Referer. A caller-provided
+        // header must not bypass NoReferrer or acquire a different cache key.
+        request
+            .headers
+            .retain(|(name, _)| !name.eq_ignore_ascii_case("referer"));
+        request
     }
 
     pub fn GetDecodeEngine(&self) -> &DecodeEngine {
@@ -126,13 +158,11 @@ impl ResourceEngine {
         }
     }
 
-    pub fn Start(&self, mut request: URLRequest) -> ResourceLoader {
+    pub fn Start(&self, request: URLRequest) -> ResourceLoader {
         if !self.active.get() {
             return ResourceLoader::Failed("resource engine is cancelled");
         }
-        if request.referrer.is_empty() {
-            request.referrer = self.DocumentURL();
-        }
+        let request = self.NormalizeRequest(request);
         // Chromium's ResourceFetcher/MemoryCache coalesces identical in-flight
         // subresource loads. Keep that ownership here at the document resource
         // boundary: callers still receive independent handles, while one
@@ -142,10 +172,16 @@ impl ResourceEngine {
             let key = ResourceRequestKey::from(&request);
             if let Some(shared) = self.loads.borrow().get(&key).cloned() {
                 let mut resource = ResourceLoader::FromShared(shared);
-                browser_tracing::instant_with_text("resource", "ResourceRequestReused", &request.url, &[
-                    ("destination", request.destination as u8 as f64),
-                    ("status", resource.Status() as u8 as f64),
-                ]);
+                resource.SetDefer(request.defer);
+                browser_tracing::instant_with_text(
+                    "resource",
+                    "ResourceRequestReused",
+                    &request.url,
+                    &[
+                        ("destination", request.destination as u8 as f64),
+                        ("status", resource.Status() as u8 as f64),
+                    ],
+                );
                 if let Some(callback) = self.wake_callback.borrow().clone() {
                     resource.SetWakeCallback(callback);
                 }
@@ -168,10 +204,8 @@ impl ResourceEngine {
     /// MemoryCache::ResourceForURL(...)->IsLoaded() equivalent for a request
     /// owned by this document resource engine. This is intentionally a URL
     /// request query rather than a DOM/source-string cache.
-    pub fn HasLoaded(&self, mut request: URLRequest) -> bool {
-        if request.referrer.is_empty() {
-            request.referrer = self.DocumentURL();
-        }
+    pub fn HasLoaded(&self, request: URLRequest) -> bool {
+        let request = self.NormalizeRequest(request);
         let key = ResourceRequestKey::from(&request);
         self.loads.borrow().get(&key).is_some_and(|shared| {
             ResourceLoader::FromShared(shared.clone()).Status()
@@ -179,13 +213,11 @@ impl ResourceEngine {
         })
     }
 
-    pub fn StartStream(&self, mut request: URLRequest) -> io::Result<Box<dyn URLStreamOperation>> {
+    pub fn StartStream(&self, request: URLRequest) -> io::Result<Box<dyn URLStreamOperation>> {
         if !self.active.get() {
             return Err(io::Error::other("resource engine is cancelled"));
         }
-        if request.referrer.is_empty() {
-            request.referrer = self.DocumentURL();
-        }
+        let request = self.NormalizeRequest(request);
         let mut stream = self.loader.borrow_mut().LoadStream(&request)?;
         if let Some(callback) = self.wake_callback.borrow().clone() {
             stream.SetWakeCallback(callback);
@@ -390,5 +422,41 @@ mod tests {
         assert!(second.Poll());
         assert_eq!(first.TakeResult().response.unwrap().body, b"shared");
         assert_eq!(second.TakeResult().response.unwrap().body, b"shared");
+    }
+
+    #[test]
+    fn policy_normalization_is_shared_by_requests_cache_queries_and_streams() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let engine = ResourceEngine::new(
+            Rc::new(RefCell::new(ReadyLoader(requests.clone()))),
+            "https://user:secret@example.test/private?q=1#fragment".into(),
+        );
+        let request = URLRequest {
+            url: "https://other.test/image.png".into(),
+            destination: url_loader::RequestDestination::kImage,
+            ..Default::default()
+        };
+        let mut first = engine.Start(request.clone());
+        assert_eq!(requests.borrow()[0].referrer, "https://example.test/");
+        assert!(first.Poll());
+        assert!(engine.HasLoaded(request.clone()));
+        engine.SetReferrerPolicy(ReferrerPolicy::NoReferrer);
+        assert!(!engine.HasLoaded(request.clone()));
+        let mut omitted = engine.Start(request.clone());
+        assert!(omitted.Poll());
+        assert_eq!(requests.borrow()[1].referrer, "");
+        assert!(engine.HasLoaded(request.clone()));
+        let explicit_omit = URLRequest {
+            referrer_policy: Some(ReferrerPolicy::NoReferrer),
+            headers: vec![("Referer".into(), "https://must-not-leak.test/".into())],
+            ..request.clone()
+        };
+        engine.SetReferrerPolicy(ReferrerPolicy::UnsafeUrl);
+        assert!(engine.HasLoaded(explicit_omit.clone()));
+        let _same = engine.Start(explicit_omit.clone());
+        assert_eq!(requests.borrow().len(), 2);
+        let _stream = engine.StartStream(explicit_omit).unwrap();
+        assert_eq!(requests.borrow().last().unwrap().referrer, "");
+        assert!(requests.borrow().last().unwrap().headers.is_empty());
     }
 }

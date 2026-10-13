@@ -4,6 +4,7 @@
 //! Font selection, mask conversion, positioning and compositing remain Rust.
 use crate::src::core::SkStrike::SkStrike;
 use crate::src::core::SkStrikeCache::SkStrikeCache;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -117,9 +118,7 @@ extern "C" {
         external: bool,
     ) -> Ref;
     fn CFDataCreate(allocator: Ref, bytes: *const u8, length: isize) -> Ref;
-    #[cfg(test)]
     fn CFDataGetLength(data: Ref) -> isize;
-    #[cfg(test)]
     fn CFDataGetBytePtr(data: Ref) -> *const u8;
     fn CFArrayGetCount(array: Ref) -> isize;
     fn CFArrayGetValueAtIndex(array: Ref, index: isize) -> Ref;
@@ -146,8 +145,8 @@ extern "C" {
     fn CTFontCopyVariationAxes(font: Ref) -> Ref;
     fn CTFontCopyAttribute(font: Ref, attribute: Ref) -> Ref;
     fn CTFontGetSize(font: Ref) -> f64;
-    #[cfg(test)]
     fn CTFontCopyTable(font: Ref, tag: u32, options: u32) -> Ref;
+    fn CTFontCreateWithName(name: Ref, size: f64, matrix: *const Affine) -> Ref;
     fn CTFontCreateWithFontDescriptor(descriptor: Ref, size: f64, matrix: *const Affine) -> Ref;
     fn CTFontDescriptorCreateWithAttributes(attributes: Ref) -> Ref;
     fn CTFontCreateCopyWithAttributes(
@@ -221,6 +220,131 @@ unsafe fn dictionary(keys: &[Ref], values: &[Ref]) -> Owned {
         ptr::addr_of!(kCFTypeDictionaryKeyCallBacks).cast(),
         ptr::addr_of!(kCFTypeDictionaryValueCallBacks).cast(),
     ))
+}
+
+// SkTypeface_Mac::ctfont_from_skdata uses the singular descriptor API and
+// rejects nonzero collection indices. CoreText's plural descriptor array is
+// not an SFNT face directory: it can omit or reorder faces and expand variable
+// instances. Normalize the selected SFNT face before entering that same singular
+// path, so the native rasterizer consumes precisely the face used for shaping.
+// Table contents and glyph IDs survive unchanged; only directory offsets and
+// the standalone font's head.checkSumAdjustment depend on the new container.
+fn native_font_data<'a>(face: &FontFace<'a>) -> Option<Cow<'a, [u8]>> {
+    let index = face.face_index & 0xffff;
+    ttf_parser::RawFace::parse(face.bytes, index).ok()?;
+    if !face.bytes.starts_with(b"ttcf") {
+        return Some(Cow::Borrowed(face.bytes));
+    }
+    let index_at = 12usize.checked_add((index as usize).checked_mul(4)?)?;
+    let start =
+        u32::from_be_bytes(face.bytes.get(index_at..index_at + 4)?.try_into().ok()?) as usize;
+    let header = face.bytes.get(start..start.checked_add(12)?)?;
+    let count = usize::from(u16::from_be_bytes(header[4..6].try_into().ok()?));
+    let directory = face
+        .bytes
+        .get(start + 12..(start + 12).checked_add(count.checked_mul(16)?)?)?;
+    let mut output = Vec::from(header);
+    output.extend_from_slice(directory);
+    let mut head = None;
+    for (index, record) in directory.chunks_exact(16).enumerate() {
+        let start = u32::from_be_bytes(record[8..12].try_into().ok()?) as usize;
+        let length = u32::from_be_bytes(record[12..16].try_into().ok()?) as usize;
+        let table = face.bytes.get(start..start.checked_add(length)?)?;
+        output.resize(output.len().checked_add(3)? & !3, 0);
+        let offset = output.len();
+        output.extend_from_slice(table);
+        if &record[..4] == b"head" {
+            if length < 12 {
+                return None;
+            }
+            head = Some(offset);
+            output[offset + 8..offset + 12].fill(0);
+        }
+        let checksum = sfnt_checksum(&output[offset..]);
+        let at = 12 + index * 16;
+        output[at + 4..at + 8].copy_from_slice(&checksum.to_be_bytes());
+        output[at + 8..at + 12].copy_from_slice(&u32::try_from(offset).ok()?.to_be_bytes());
+    }
+    output.resize(output.len().checked_add(3)? & !3, 0);
+    if let Some(head) = head {
+        let adjustment = 0xb1b0_afbau32.wrapping_sub(sfnt_checksum(&output));
+        output[head + 8..head + 12].copy_from_slice(&adjustment.to_be_bytes());
+    }
+    Some(Cow::Owned(output))
+}
+
+fn sfnt_checksum(bytes: &[u8]) -> u32 {
+    bytes.chunks(4).fold(0u32, |sum, chunk| {
+        let mut word = [0u8; 4];
+        word[..chunk.len()].copy_from_slice(chunk);
+        sum.wrapping_add(u32::from_be_bytes(word))
+    })
+}
+
+// Apple's hvgl system faces cannot be instantiated from data. Recover their
+// exact PostScript identity from the already selected SFNT face (never from a
+// CSS family), and accept the native font only if its immutable source tables
+// match. CTFontCreateWithName may silently substitute an unavailable/private
+// name; the table check prevents that substitution from changing glyph IDs.
+unsafe fn exact_native_system_font(face: &FontFace<'_>, size: f32) -> Option<Owned> {
+    let raw = ttf_parser::RawFace::parse(face.bytes, face.face_index & 0xffff).ok()?;
+    let names = raw.table(ttf_parser::Tag::from_bytes(b"name"))?;
+    let count = usize::from(u16::from_be_bytes(names.get(2..4)?.try_into().ok()?));
+    let strings = usize::from(u16::from_be_bytes(names.get(4..6)?.try_into().ok()?));
+    let records = names.get(6..6usize.checked_add(count.checked_mul(12)?)?)?;
+    for record in records.chunks_exact(12) {
+        if u16::from_be_bytes(record[6..8].try_into().ok()?) != 6 {
+            continue;
+        }
+        let platform = u16::from_be_bytes(record[..2].try_into().ok()?);
+        let length = usize::from(u16::from_be_bytes(record[8..10].try_into().ok()?));
+        let offset = strings.checked_add(usize::from(u16::from_be_bytes(
+            record[10..12].try_into().ok()?,
+        )))?;
+        let name = names.get(offset..offset.checked_add(length)?)?;
+        let encoding = match platform {
+            0 | 3 => 0x1000_0100, // kCFStringEncodingUTF16BE
+            1 => 0,               // kCFStringEncodingMacRoman
+            _ => continue,
+        };
+        let name = CFStringCreateWithBytes(
+            ptr::null(),
+            name.as_ptr(),
+            name.len() as isize,
+            encoding,
+            false,
+        );
+        if name.is_null() {
+            continue;
+        }
+        let name = Owned::new(name);
+        let font = CTFontCreateWithName(name.get(), size.into(), ptr::null());
+        if font.is_null() {
+            continue;
+        }
+        let font = Owned::new(font);
+        let matches = [*b"name", *b"head", *b"maxp", *b"cmap"]
+            .into_iter()
+            .all(|tag| {
+                let Some(expected) = raw.table(ttf_parser::Tag::from_bytes(&tag)) else {
+                    return false;
+                };
+                let actual = CTFontCopyTable(font.get(), u32::from_be_bytes(tag), 0);
+                if actual.is_null() {
+                    return false;
+                }
+                let actual = Owned::new(actual);
+                let length = CFDataGetLength(actual.get());
+                let bytes = CFDataGetBytePtr(actual.get());
+                length >= 0
+                    && !bytes.is_null()
+                    && std::slice::from_raw_parts(bytes, length as usize) == expected
+            });
+        if matches {
+            return Some(font);
+        }
+    }
+    None
 }
 
 // Restricted translation of SkCTFontCreateExactCopy.cpp. Pinning optical size
@@ -918,40 +1042,23 @@ impl SkScalerContext_Mac {
                 // exact byte/index face, as SkTypeface_Mac::MakeFromStream
                 // does; matching a family again can change glyph identity.
                 let base = {
-                    let data = Owned::new(CFDataCreate(
-                        ptr::null(),
-                        face.bytes.as_ptr(),
-                        face.bytes.len() as isize,
-                    ));
-                    let index = (face.face_index & 0xffff) as isize;
-                    // SkTypeface_mac_ct.cpp::ctfont_from_skdata uses the
-                    // singular descriptor for face zero. The plural API can
-                    // create a default variable instance with missing outlines
-                    // on macOS; its min/max instances may still draw correctly.
-                    // Nonzero collection indices keep the existing plural path.
-                    let descriptor = if index == 0 {
-                        CTFontManagerCreateFontDescriptorFromData(data.get())
+                    let raw = ttf_parser::RawFace::parse(face.bytes, face.face_index & 0xffff)
+                        .expect("invalid selected paint font face");
+                    if raw.table(ttf_parser::Tag::from_bytes(b"hvgl")).is_some() {
+                        exact_native_system_font(face, source_size)
+                            .expect("native paint font does not match selected source face")
                     } else {
-                        ptr::null()
-                    };
-                    if !descriptor.is_null() {
-                        let descriptor = Owned::new(descriptor);
+                        let bytes =
+                            native_font_data(face).expect("invalid selected paint font face");
+                        let data = Owned::new(CFDataCreate(
+                            ptr::null(),
+                            bytes.as_ptr(),
+                            bytes.len() as isize,
+                        ));
+                        let descriptor =
+                            Owned::new(CTFontManagerCreateFontDescriptorFromData(data.get()));
                         Owned::new(CTFontCreateWithFontDescriptor(
                             descriptor.get(),
-                            source_size.into(),
-                            ptr::null(),
-                        ))
-                    } else {
-                        // Preserve the prior collection support and invalid
-                        // index assertion if the singular descriptor is absent.
-                        let descriptors =
-                            Owned::new(CTFontManagerCreateFontDescriptorsFromData(data.get()));
-                        assert!(
-                            index < CFArrayGetCount(descriptors.get()),
-                            "paint font collection index is out of bounds"
-                        );
-                        Owned::new(CTFontCreateWithFontDescriptor(
-                            CFArrayGetValueAtIndex(descriptors.get(), index),
                             source_size.into(),
                             ptr::null(),
                         ))
@@ -1562,6 +1669,47 @@ mod matrix_and_optical_size_tests {
         face.weight = 900.0;
         face.italic = true;
         assert_eq!(native, scaler.font(9, &face, 24.0, 24.0, &[]));
+    }
+
+    #[test]
+    fn collection_raster_fonts_preserve_exact_face_tables() {
+        for (path, indices, tags) in [
+            (
+                "/System/Library/Fonts/Helvetica.ttc",
+                &[0, 1][..],
+                &[*b"maxp", *b"cmap", *b"glyf"][..],
+            ),
+            (
+                "/System/Library/PrivateFrameworks/FontServices.framework/Versions/A/Resources/Reserved/PingFangUI.ttc",
+                &[16, 17][..],
+                &[*b"name", *b"head", *b"maxp", *b"cmap", *b"hvgl"][..],
+            ),
+        ] {
+            let Ok(bytes) = std::fs::read(path) else {
+                continue;
+            };
+            for &index in indices {
+                let mut face = test_face();
+                face.bytes = &bytes;
+                face.face_index = index;
+                face.family = "incorrect CSS family";
+                face.native_family = "Arial";
+                let mut scaler = SkScalerContext_Mac::default();
+                let native = scaler.font(0, &face, 24.0, 24.0, &[]);
+                let raw = ttf_parser::RawFace::parse(&bytes, index).unwrap();
+                for &tag in tags {
+                    let expected = raw.table(ttf_parser::Tag::from_bytes(&tag)).unwrap();
+                    unsafe {
+                        let actual = Owned::new(CTFontCopyTable(native, u32::from_be_bytes(tag), 0));
+                        let actual = std::slice::from_raw_parts(
+                            CFDataGetBytePtr(actual.get()),
+                            CFDataGetLength(actual.get()) as usize,
+                        );
+                        assert_eq!(actual, expected, "{path} face {index}, table {tag:?}");
+                    }
+                }
+            }
+        }
     }
 
     fn font_with_optical_axis() -> Vec<u8> {

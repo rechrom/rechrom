@@ -1818,13 +1818,26 @@ impl RenderPassRenderer {
         {
             return Err(io::Error::other("invalid compositor target storage extent"));
         }
-        if plan.viewport
-            != (PaintRect {
-                x: 0.0,
-                y: 0.0,
-                width: width as f64 / scale,
-                height: height as f64 / scale,
-            })
+        let expected_viewport = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: width as f64 / scale,
+            height: height as f64 / scale,
+        };
+        // Target allocation and aggregation reconstruct the same CSS-space
+        // viewport through a different floating-point operation order. Keep
+        // the contract strict while accepting the one-ULP drift produced by
+        // non-integral zoom and DPR values.
+        let nearly_equal = |a: f64, b: f64| {
+            a.is_finite()
+                && b.is_finite()
+                && (a - b).abs()
+                    <= f64::EPSILON * 8.0 * a.abs().max(b.abs()).max(1.0)
+        };
+        if !nearly_equal(plan.viewport.x, expected_viewport.x)
+            || !nearly_equal(plan.viewport.y, expected_viewport.y)
+            || !nearly_equal(plan.viewport.width, expected_viewport.width)
+            || !nearly_equal(plan.viewport.height, expected_viewport.height)
         {
             return Err(io::Error::other(
                 "aggregated render-pass viewport does not match target",

@@ -143,6 +143,12 @@ impl ResourceLoader {
         true
     }
 
+    pub(crate) fn SetDefer(&mut self, defer: url_loader::RequestDefer) {
+        if let Some(operation) = self.shared.borrow_mut().operation.as_mut() {
+            operation.SetDefer(defer);
+        }
+    }
+
     pub fn SetWakeCallback(&mut self, callback: url_loader::URLWakeCallback) {
         if self.cancelled {
             return;

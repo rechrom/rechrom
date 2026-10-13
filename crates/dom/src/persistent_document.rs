@@ -752,6 +752,7 @@ pub struct PersistentDocument {
     // cpp: Settings::GetTextAreasAreResizable. Resize::ApplyValue consumes
     // this document setting for the UA-only -internal-textarea-auto value.
     text_areas_are_resizable: bool,
+    scripting_enabled: bool,
     // cpp: Settings::GetDefaultFontSize, consumed by
     // LayoutThemeFontProvider::DefaultFontSize for system-font shorthands.
     default_font_size: f32,
@@ -893,6 +894,7 @@ impl PersistentDocument {
             next_id: 1,
             compatibility: CompatibilityMode::kNoQuirks,
             text_areas_are_resizable: true,
+            scripting_enabled: false,
             default_font_size: 16.0,
             document_types: HashMap::new(),
             template_contents: HashMap::new(),
@@ -1055,6 +1057,13 @@ impl PersistentDocument {
     }
 
     // cpp: settings.json5 TextAreasAreResizable; Settings getter/setter.
+    /// Execution-context setting used by HTMLNoScriptElement::LayoutObjectIsNeeded.
+    pub fn ScriptingEnabled(&self) -> bool {
+        self.scripting_enabled
+    }
+    pub fn SetScriptingEnabled(&mut self, value: bool) {
+        self.scripting_enabled = value;
+    }
     pub fn TextAreasAreResizable(&self) -> bool {
         self.text_areas_are_resizable
     }

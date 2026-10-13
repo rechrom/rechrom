@@ -22,6 +22,7 @@ pub enum FontSelector {}
 /// The source retains every returned face for at least its own lifetime.
 pub trait FontFallbackSource {
     fn FontDataAt(&self, index: usize) -> *const SimpleFontData;
+    fn WillUseFontData(&self, _text: &[u16], _fallback: bool) {}
     fn Trace(&self, _visitor: &mut Visitor<'_>) {}
     fn ReportMissing(&self, _text: &[u16], _priority: FontFallbackPriority) {}
     /// Query-specific ranks without platform I/O. None uses the caller's
@@ -193,6 +194,17 @@ impl Font {
             source.FontDataAt(index)
         } else {
             self.fallback_fonts_[index].Get()
+        }
+    }
+
+    pub fn WillUseFontData(&self, text: &[u16]) {
+        if let Some(source) = &self.fallback_source_ {
+            source.WillUseFontData(text, false);
+        }
+    }
+    pub(crate) fn WillUseFallbackFontData(&self, text: &[u16]) {
+        if let Some(source) = &self.fallback_source_ {
+            source.WillUseFontData(text, true);
         }
     }
 

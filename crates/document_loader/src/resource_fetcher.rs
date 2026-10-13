@@ -27,7 +27,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use url_loader::{RequestDestination, URLRequest};
+use url_loader::{ReferrerPolicy, RequestDestination, URLRequest};
 
 /// These calls are Page::ApplyMutation and Page's native image-event delivery.
 /// They are required; absent callbacks cannot silently complete a resource.
@@ -55,6 +55,7 @@ struct PendingImage {
 struct DeferredImage {
     source: String,
     url: String,
+    referrer_policy: Option<ReferrerPolicy>,
 }
 
 struct ImageEventSubtrees {
@@ -67,6 +68,37 @@ struct ImageEventSubtrees {
 fn SVGImageViewSpecification(source: &str) -> &str {
     source.rsplit_once('#').map_or("", |(_, fragment)| fragment)
 }
+
+/// HTML image attributes in document order. The parser's speculative scanner
+/// can supply these without creating DOM nodes or borrowing Style internals.
+#[derive(Clone, Debug, Default)]
+pub struct ResponsiveImageSourceInput {
+    pub srcset: Option<String>,
+    pub sizes: Option<String>,
+    pub media: Option<String>,
+    pub image_type: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ResponsiveImageInput {
+    pub src: Option<String>,
+    pub srcset: Option<String>,
+    pub sizes: Option<String>,
+    /// Only source siblings preceding the image in its parent picture.
+    pub picture_sources: Vec<ResponsiveImageSourceInput>,
+    pub allows_auto_sizes: bool,
+    /// Last rendered content-box width after absolute-zoom adjustment. A
+    /// speculative image has no rendered width and leaves this unset.
+    pub auto_size: Option<f64>,
+    pub lazy: bool,
+}
+
+pub type PreloadImageSelector =
+    dyn Fn(
+        &ResponsiveImageInput,
+        &ConstraintSpace,
+        &dyn Fn(&str) -> bool,
+    ) -> Option<dom::persistent_document::ResponsiveImageSelection>;
 
 pub type ResponsiveImageSelector =
     dyn Fn(
@@ -92,7 +124,8 @@ pub struct ResourceFetcher {
     deferred_images: RefCell<Vec<DeferredImage>>,
     document_image_sources: RefCell<HashMap<u64, String>>,
     responsive_image_selector: RefCell<Option<Rc<ResponsiveImageSelector>>>,
-    loaded_font_urls: RefCell<HashSet<String>>,
+    preload_image_selector: RefCell<Option<Rc<PreloadImageSelector>>>,
+    preload_media_matcher: RefCell<Option<Rc<dyn Fn(&str, &ConstraintSpace) -> bool>>>,
     pending_fonts: RefCell<Vec<PendingFontFace>>,
 }
 impl ResourceFetcher {
@@ -118,7 +151,8 @@ impl ResourceFetcher {
             deferred_images: RefCell::new(Vec::new()),
             document_image_sources: RefCell::new(HashMap::new()),
             responsive_image_selector: RefCell::new(None),
-            loaded_font_urls: RefCell::new(HashSet::new()),
+            preload_image_selector: RefCell::new(None),
+            preload_media_matcher: RefCell::new(None),
             pending_fonts: RefCell::new(Vec::new()),
         }
     }
@@ -138,24 +172,81 @@ impl ResourceFetcher {
     pub fn SetResponsiveImageSelector(&self, selector: Rc<ResponsiveImageSelector>) {
         *self.responsive_image_selector.borrow_mut() = Some(selector);
     }
+    pub fn SetPreloadImageSelector(&self, selector: Rc<PreloadImageSelector>) {
+        *self.preload_image_selector.borrow_mut() = Some(selector);
+    }
+    pub fn SetPreloadMediaMatcher(&self, matcher: Rc<dyn Fn(&str, &ConstraintSpace) -> bool>) {
+        *self.preload_media_matcher.borrow_mut() = Some(matcher);
+    }
+    pub fn PreloadMediaMatches(&self, query: &str) -> bool {
+        if query.trim().is_empty() {
+            return true;
+        }
+        self.preload_media_matcher
+            .borrow()
+            .as_ref()
+            .is_some_and(|matcher| matcher(query, &self.constraints.borrow()))
+    }
+    /// Select using the scanner's predicted base without borrowing the DOM:
+    /// the authoritative parser may currently own its arena. Cache reuse must
+    /// resolve against this same base as the eventual speculative request.
+    pub fn SelectPreloadImage(
+        &self,
+        input: &ResponsiveImageInput,
+        base_url_for_cache: &str,
+    ) -> Option<dom::persistent_document::ResponsiveImageSelection> {
+        let selector = self.preload_image_selector.borrow().clone()?;
+        let constraints = self.constraints.borrow();
+        let is_loaded = |source: &str| {
+            let Ok(url) = ResolveUrl(base_url_for_cache, source) else {
+                return false;
+            };
+            self.engine.HasLoaded(URLRequest {
+                url,
+                destination: RequestDestination::kImage,
+                ..Default::default()
+            })
+        };
+        selector(input, &constraints, &is_loaded)
+    }
+    /// The parser lends its authoritative arena while handling the element;
+    /// selection therefore must not borrow ResourceFetcher's DOM facade.
+    pub fn SelectResponsiveImageInDocument(
+        &self,
+        document: &Document,
+        node: usize,
+    ) -> Option<dom::persistent_document::ResponsiveImageSelection> {
+        if !document.Node(node).IsHTMLElement("img") {
+            return None;
+        }
+        let Some(selector) = self.responsive_image_selector.borrow().clone() else {
+            return document
+                .Node(node)
+                .FindAttribute("src")
+                .filter(|attribute| !attribute.value.is_empty())
+                .map(
+                    |attribute| dom::persistent_document::ResponsiveImageSelection {
+                        source: attribute.value.clone(),
+                        density: None,
+                    },
+                );
+        };
+        let constraints = self.constraints.borrow();
+        let is_loaded = |source: &str| {
+            document.ImageResourceFor(source).is_some() || self.IsLoadedImageSource(source)
+        };
+        selector(document, node, &constraints, &is_loaded)
+    }
     /// Run HTMLImageElement's responsive selector for one connected element.
     /// Parser/DOM mutation discovery calls this before starting the request so
     /// `currentSrc` and the queued URL are never temporarily pinned to `src`.
     pub fn UpdateResponsiveImageSelection(&self, node: usize) -> Option<String> {
-        let selector = self.responsive_image_selector.borrow().clone();
         let selection = {
             let owner = self.document.borrow();
             if !owner.GetDocument().Node(node).IsHTMLElement("img") {
                 return None;
             }
-            let constraints = self.constraints.borrow();
-            let is_loaded = |source: &str| {
-                owner.GetDocument().ImageResourceFor(source).is_some()
-                    || self.IsLoadedImageSource(source)
-            };
-            selector
-                .as_ref()
-                .and_then(|selector| selector(owner.GetDocument(), node, &constraints, &is_loaded))
+            self.SelectResponsiveImageInDocument(owner.GetDocument(), node)
         };
         let changed = self
             .document
@@ -267,6 +358,7 @@ impl ResourceFetcher {
                 && f.metadata.weight == metadata.weight
                 && f.metadata.italic == metadata.italic
                 && f.metadata.urls == metadata.urls
+                && f.metadata.unicode_ranges == metadata.unicode_ranges
         }) {
             return Ok(());
         }
@@ -274,62 +366,45 @@ impl ResourceFetcher {
             metadata,
             next_url: 0,
             loaded: false,
-            // Standalone callers may explicitly queue and poll a face. The
-            // document lifecycle narrows this after computed-style discovery.
-            selected: true,
+            // Fetch only after FontEngine reports actual text demand.
+            selected: false,
             resource: None,
         });
         Ok(())
     }
-    // Keep @font-face definitions resident. A stylesheet can arrive before the
-    // rule which first references its family (or vice versa), and Blink's
-    // FontFaceSet can activate such a face after a later style recalc. Removing
-    // an unused definition here made that later activation impossible.
+    // Register immutable face descriptors with FontEngine before LayoutText
+    // and shaping report actual text demand. Keep dormant definitions resident
+    // so later text/style mutations can activate them without another sheet.
     // cpp: core/css/font_face_set_document.cc; core/css/css_font_selector.cc
-    pub fn SelectUsedFontFaces(&self) {
-        if self.pending_fonts.borrow().is_empty() {
-            return;
-        }
-        let mut used = HashSet::new();
-        fn style(s: &ComputedStyle, used: &mut HashSet<String>) {
-            if let Some(e) = &s.extended {
-                for family in &e.font_families {
-                    used.insert(family.to_ascii_lowercase());
-                }
-            }
-        }
-        fn node(d: &Document, i: usize, used: &mut HashSet<String>) {
-            if let Some(r) = d.ResolvedStyleFor(i) {
-                style(&r.style, used);
-                for pseudo in [&r.before, &r.after, &r.first_letter].into_iter().flatten() {
-                    style(&pseudo.style, used);
-                }
-            }
-            for &c in d.Node(i).Children() {
-                node(d, c, used);
-            }
-        }
-        let owner = self.document.borrow();
-        let d = owner.GetDocument();
-        node(d, d.Root(), &mut used);
-        for face in &mut *self.pending_fonts.borrow_mut() {
-            face.selected = used.contains(&face.metadata.family.to_ascii_lowercase());
-        }
+    pub fn PrepareFontFaces(&self) {
+        let faces = self.pending_fonts.borrow();
+        let metadata = faces.iter().enumerate().map(|(index, face)| font_engine::WebFontFace {
+            rule_id: index as u64,
+            family: face.metadata.family.clone(),
+            weight: face.metadata.weight,
+            italic: face.metadata.italic,
+            unicode_ranges: face.metadata.unicode_ranges.clone(),
+            loaded: face.loaded,
+            failed: !face.loaded && face.resource.is_none() && face.next_url == face.metadata.urls.len(),
+        }).collect();
+        self.constraints.borrow_mut().font_queries.get_or_insert_with(Default::default)
+            .RegisterWebFonts(metadata);
     }
     // cpp: browser/browser.cc:1198-1208
     pub fn StartPendingFonts(&self) {
+        self.PrepareFontFaces();
+        if let Some(queries) = &self.constraints.borrow().font_queries {
+            let requested = queries.DrainWebFontRequests();
+            let mut faces = self.pending_fonts.borrow_mut();
+            for id in requested {
+                if let Some(face) = faces.get_mut(id as usize) {
+                    face.selected = true;
+                }
+            }
+        }
         for face in &mut *self.pending_fonts.borrow_mut() {
             if face.resource.is_some() || !face.selected {
                 continue;
-            }
-            while !face.loaded
-                && face.next_url < face.metadata.urls.len()
-                && self
-                    .loaded_font_urls
-                    .borrow()
-                    .contains(&face.metadata.urls[face.next_url])
-            {
-                face.next_url += 1;
             }
             if face.loaded || face.next_url == face.metadata.urls.len() {
                 continue;
@@ -346,7 +421,6 @@ impl ResourceFetcher {
         &self,
         face: &mut PendingFontFace,
         result: ResourceLoadResult,
-        loaded: &RefCell<HashSet<String>>,
         client: &mut dyn ResourceFetcherClient,
     ) {
         let url = face.metadata.urls[face.next_url].clone();
@@ -383,7 +457,6 @@ impl ResourceFetcher {
                         },
                     },
                 ));
-                loaded.borrow_mut().insert(url);
                 face.loaded = true;
             }
             Err(e) => fail(e.to_string(), client),
@@ -403,6 +476,18 @@ impl ResourceFetcher {
         source: &str,
         resolved: Option<&str>,
         blocks_load: bool,
+    ) -> io::Result<()> {
+        self.QueueImageWithPolicy(source, resolved, blocks_load, None)
+    }
+
+    /// Keep the element's explicit policy through deferred admission so the
+    /// authoritative request can coalesce with the scanner's same image.
+    pub fn QueueImageWithPolicy(
+        &self,
+        source: &str,
+        resolved: Option<&str>,
+        blocks_load: bool,
+        referrer_policy: Option<ReferrerPolicy>,
     ) -> io::Result<()> {
         let url = match resolved {
             Some(url) => url.into(),
@@ -428,6 +513,7 @@ impl ResourceFetcher {
                     let image = self.deferred_images.borrow_mut().remove(index);
                     let resource = self.engine.Start(URLRequest {
                         url: image.url.clone(),
+                        referrer_policy: image.referrer_policy,
                         destination: RequestDestination::kImage,
                         ..Default::default()
                     });
@@ -445,11 +531,13 @@ impl ResourceFetcher {
             self.deferred_images.borrow_mut().push(DeferredImage {
                 source: source.into(),
                 url,
+                referrer_policy,
             });
             return Ok(());
         }
         let resource = self.engine.Start(URLRequest {
             url: url.clone(),
+            referrer_policy,
             destination: RequestDestination::kImage,
             ..Default::default()
         });
@@ -474,6 +562,7 @@ impl ResourceFetcher {
             let image = self.deferred_images.borrow_mut().remove(0);
             let resource = self.engine.Start(URLRequest {
                 url: image.url.clone(),
+                referrer_policy: image.referrer_policy,
                 destination: RequestDestination::kImage,
                 ..Default::default()
             });
@@ -767,16 +856,17 @@ impl ResourceFetcher {
             source: &str,
             resolve: bool,
             blocks_load: bool,
+            referrer_policy: Option<ReferrerPolicy>,
             admitted: &HashSet<String>,
             seen: &mut HashSet<String>,
-            requests: &mut Vec<(String, bool, bool)>,
+            requests: &mut Vec<(String, bool, bool, Option<ReferrerPolicy>)>,
         ) {
             // QueueImage uses this exact source key for admission. Keep the
             // first occurrence, without cloning/resolving every repeated owner.
             // CSS sources already carry their stylesheet base via ResolveCSSURLs;
             // distinct DOM/CSS source strings remain distinct requests.
             if !admitted.contains(source) && seen.insert(source.to_owned()) {
-                requests.push((source.to_owned(), resolve, blocks_load));
+                requests.push((source.to_owned(), resolve, blocks_load, referrer_policy));
             } else if blocks_load {
                 if let Some(request) = requests.iter_mut().find(|request| request.0 == source) {
                     request.2 = true;
@@ -791,7 +881,7 @@ impl ResourceFetcher {
             is_loaded: &dyn Fn(&str) -> bool,
             admitted: &HashSet<String>,
             seen: &mut HashSet<String>,
-            requests: &mut Vec<(String, bool, bool)>,
+            requests: &mut Vec<(String, bool, bool, Option<ReferrerPolicy>)>,
             selections: &mut Vec<(
                 usize,
                 Option<dom::persistent_document::ResponsiveImageSelection>,
@@ -816,7 +906,18 @@ impl ResourceFetcher {
                         let lazy = n
                             .FindAttribute("loading")
                             .is_some_and(|loading| loading.value.eq_ignore_ascii_case("lazy"));
-                        request(&selection.source, false, !lazy, admitted, seen, requests);
+                        let policy = n
+                            .FindAttribute("referrerpolicy")
+                            .and_then(|attribute| ReferrerPolicy::FromString(&attribute.value));
+                        request(
+                            &selection.source,
+                            false,
+                            !lazy,
+                            policy,
+                            admitted,
+                            seen,
+                            requests,
+                        );
                     }
                 }
                 selections.push((i, selection));
@@ -824,7 +925,7 @@ impl ResourceFetcher {
             if let Some(r) = d.ResolvedStyleFor(i) {
                 for source in r.ReferencedStyleImageSources() {
                     if !source.is_empty() {
-                        request(&source, true, true, admitted, seen, requests);
+                        request(&source, true, true, None, admitted, seen, requests);
                     }
                 }
             }
@@ -893,13 +994,13 @@ impl ResourceFetcher {
             }
             selection_changed
         };
-        for (source, resolve, blocks_load) in requests {
+        for (source, resolve, blocks_load, referrer_policy) in requests {
             let url = if resolve {
                 Some(ResolveUrl(&self.base_url.borrow(), &source)?)
             } else {
                 None
             };
-            self.QueueImageWithLoadBlocking(&source, url.as_deref(), blocks_load)?;
+            self.QueueImageWithPolicy(&source, url.as_deref(), blocks_load, referrer_policy)?;
         }
         Ok(selection_changed)
     }
@@ -1138,11 +1239,12 @@ impl ResourceFetcher {
                 (face, result)
             };
             let mut face = face;
-            self.ApplyFontResult(&mut face.0, face.1, &self.loaded_font_urls, client);
+            self.ApplyFontResult(&mut face.0, face.1, client);
             self.pending_fonts.borrow_mut().insert(index, face.0);
             index += 1;
             completed += 1;
         }
+        self.PrepareFontFaces();
         if std::env::var_os("BROWSER_TRACE_LOADING_STATE").is_some() {
             eprintln!(
                 "font-loading-state completed={completed} pending={}",
@@ -1173,6 +1275,7 @@ impl ResourceFetcher {
                 std::thread::sleep(Duration::from_millis(1));
             }
         }
-        self.pending_fonts.borrow_mut().clear();
+        // Keep dormant and completed faces available for later text demand.
+        // Resource handles are released by PollPendingFonts at completion.
     }
 }

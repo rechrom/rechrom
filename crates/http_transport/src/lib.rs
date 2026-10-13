@@ -3,6 +3,8 @@ pub mod http_transport_options;
 mod proxy_connector;
 mod static_get;
 mod request_trace;
+mod referrer_policy;
+pub use referrer_policy::ReferrerPolicy;
 
 pub use http_request::{
     HTTPRequestData, HTTPRequestOperation, HTTPRequestPriority, HTTPRequestTransport,

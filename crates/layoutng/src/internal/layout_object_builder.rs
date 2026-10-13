@@ -197,6 +197,9 @@ impl LayoutObjectTreeStorage {
 
     fn Place(&mut self, parent: *mut LayoutObject, object: *mut LayoutObject, node: *mut Node) {
         if parent.is_null() {
+            assert!(self.root.Get().is_null() || self.root.Get() == object,
+                "A LayoutObjectTree has exactly one root");
+            self.root.Assign(object);
             return;
         }
         let parent_node = unsafe { &*parent }.GetNode().cast::<ContainerNode>();
@@ -609,11 +612,6 @@ impl LayoutObjectTreeStorage {
                 unsafe { &mut *layout_inline }.SetIsInLayoutNGInlineFormattingContext(true);
                 unsafe { &mut *layout_inline }.SetShouldCreateBoxFragmentDefault();
             }
-        } else {
-            if !self.root.Get().is_null() && self.root.Get() != object {
-                panic!("A LayoutObjectTree has exactly one root");
-            }
-            self.root.Assign(object);
         }
         object
     }
@@ -708,6 +706,10 @@ impl LayoutObjectTree {
         // mem::take would allocate managed afresh and drop pending's capacity.
         debug_assert!(storage.pending.is_empty());
         std::mem::swap(&mut storage.pending, &mut storage.managed);
+        // The previous projection's root remains owned by pending/objects.
+        // Select exactly one root for this projection, which can replace an
+        // empty document view when its document element is attached later.
+        storage.root = Persistent::from_ptr(std::ptr::null_mut());
         storage.occurrences.clear();
         storage.last_child.clear();
         storage.stats = LayoutTreeUpdateStats::default();

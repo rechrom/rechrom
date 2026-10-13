@@ -11,6 +11,7 @@ use std::io;
 pub(crate) struct HTTPURLLoad {
     request: Box<dyn HTTPRequestOperation>,
     mime: String,
+    destination: crate::RequestDestination,
 }
 
 impl HTTPURLLoad {
@@ -22,18 +23,23 @@ impl HTTPURLLoad {
             method: request.method.clone(),
             url: request.url.clone(),
             referrer: request.referrer.clone(),
+            referrer_policy: request.referrer_policy,
             body: request.body.clone(),
             headers: request.headers.clone(),
-            priority: PriorityFor(request.destination),
+            priority: PriorityFor(request.destination, request.defer),
         })?;
         Ok(Self {
             request: request_operation,
             mime: MimeTypeFor(request).to_owned(),
+            destination: request.destination,
         })
     }
 }
 
 impl URLLoadOperation for HTTPURLLoad {
+    fn SetDefer(&mut self, defer: crate::RequestDefer) {
+        self.request.SetPriority(PriorityFor(self.destination, defer));
+    }
     fn Poll(&mut self) -> io::Result<Option<URLResponse>> {
         let Some(response) = self.request.Poll()? else {
             return Ok(None);
@@ -43,6 +49,8 @@ impl URLLoadOperation for HTTPURLLoad {
             status_code: response.status,
             mime_type: self.mime.clone(),
             body: response.body,
+            referrer_policy: crate::ReferrerPolicy::FromHeader(&response.referrer_policy),
+            content_security_policy: response.content_security_policy,
             ..URLResponse::default()
         };
         if !response.mime_type.is_empty() {
@@ -75,20 +83,23 @@ impl HTTPURLStream {
                 method: request.method.clone(),
                 url: request.url.clone(),
                 referrer: request.referrer.clone(),
+                referrer_policy: request.referrer_policy,
                 body: request.body.clone(),
                 headers: request.headers.clone(),
-                priority: PriorityFor(request.destination),
+                priority: PriorityFor(request.destination, request.defer),
             })?,
             fallback_mime: MimeTypeFor(request).to_owned(),
         })
     }
 }
 
-fn PriorityFor(destination: crate::RequestDestination) -> HTTPRequestPriority {
+fn PriorityFor(destination: crate::RequestDestination, defer: crate::RequestDefer) -> HTTPRequestPriority {
     match destination {
         crate::RequestDestination::kDocument
         | crate::RequestDestination::kStyleSheet
         | crate::RequestDestination::kImage => HTTPRequestPriority::High,
+        crate::RequestDestination::kScript if defer == crate::RequestDefer::None =>
+            HTTPRequestPriority::High,
         _ => HTTPRequestPriority::Normal,
     }
 }
@@ -101,12 +112,16 @@ impl crate::URLStreamOperation for HTTPURLStream {
                 status,
                 final_url,
                 content_type,
+                referrer_policy,
+                content_security_policy,
             } => {
                 let mut head = URLResponseHead {
                     final_url,
                     status_code: status,
                     mime_type: self.fallback_mime.clone(),
                     text_encoding: "utf-8".into(),
+                    referrer_policy: crate::ReferrerPolicy::FromHeader(&referrer_policy),
+                    content_security_policy,
                 };
                 if !content_type.is_empty() {
                     ParseContentType(&content_type, &mut head.mime_type, &mut head.text_encoding);

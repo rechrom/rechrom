@@ -13,8 +13,98 @@ use crate::parser::html_token::{HTMLToken, TokenType};
 use crate::parser::html_tokenizer::HTMLTokenizer;
 use crate::parser::literal_buffer::UCharLiteralBuffer;
 use crate::parser::segmented_string::{PrependType, SegmentedString};
+use crate::preload_scanner::{HTMLPreloadScanner, PreloadScanResult};
 use dom::error::{invalid_argument, logic_error};
 use std::pin::Pin;
+
+/// Main scanner survives parser/script resumes. Script insertion has its own
+/// tokenizer/input lifetime and is never appended to the main network scanner.
+struct ParserPreloadScanning {
+    scripting: bool,
+    main: HTMLPreloadScanner,
+    insertions: Vec<HTMLPreloadScanner>,
+    active_insertion: Option<usize>,
+    stopped_for_csp: bool,
+}
+impl ParserPreloadScanning {
+    fn new(scripting: bool) -> Self {
+        Self {
+            scripting,
+            main: HTMLPreloadScanner::new(scripting, false),
+            insertions: Vec::new(),
+            active_insertion: None,
+            stopped_for_csp: false,
+        }
+    }
+    fn Insert(&mut self, text: &BlinkString) {
+        if self.stopped_for_csp || text.empty() {
+            return;
+        }
+        let index = match self.active_insertion {
+            Some(index) => index,
+            None => {
+                self.insertions
+                    .push(HTMLPreloadScanner::new(self.scripting, true));
+                let index = self.insertions.len() - 1;
+                self.active_insertion = Some(index);
+                index
+            }
+        };
+        self.insertions[index].AppendDecoded(text);
+    }
+    fn EndInsertion(&mut self) {
+        if let Some(index) = self.active_insertion.take() {
+            self.insertions[index].FinishInput();
+        }
+    }
+    fn Scan(&mut self, token_budget: usize) -> PreloadScanResult {
+        if self.stopped_for_csp {
+            return PreloadScanResult {
+                stopped_for_csp: true,
+                ..PreloadScanResult::default()
+            };
+        }
+        let mut result = PreloadScanResult {
+            finished: true,
+            ..PreloadScanResult::default()
+        };
+        // Inserted source precedes the next network segment at the parser's
+        // insertion point. A CSP meta in a write must stop all future scans,
+        // including the main network scanner, until the policy owner can
+        // publish an applied checkpoint.
+        for scanner in &mut self.insertions {
+            let mut insertion = scanner.Scan(token_budget);
+            result.candidates.append(&mut insertion.candidates);
+            result.work_pending |= insertion.work_pending;
+            result.finished &= insertion.finished;
+            result.stopped_for_csp |= insertion.stopped_for_csp;
+            if result.stopped_for_csp {
+                break;
+            }
+        }
+        if !result.stopped_for_csp {
+            let mut main = self.main.Scan(token_budget);
+            result.candidates.append(&mut main.candidates);
+            result.work_pending |= main.work_pending;
+            result.finished &= main.finished;
+            result.stopped_for_csp = main.stopped_for_csp;
+        }
+        if result.stopped_for_csp {
+            self.stopped_for_csp = true;
+            self.insertions.clear();
+            self.active_insertion = None;
+            result.work_pending = false;
+        } else if self.active_insertion.is_none()
+            && self
+                .insertions
+                .iter_mut()
+                .all(|scanner| scanner.Scan(0).finished)
+        {
+            self.insertions.clear();
+        }
+        result
+    }
+}
 
 // cpp: html/html_parser.h:17-22
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -432,6 +522,7 @@ struct DocumentTreeBuilder<'a> {
     body_: Option<usize>,
     active_formatting_elements_: Vec<Option<usize>>,
     head_closed_: bool,
+    scripting_flag_: bool,
     frameset_document_: bool,
     last_start_tag_was_html_: bool,
     current_script_start_: Option<HTMLSourcePosition>,
@@ -461,6 +552,7 @@ impl<'a> DocumentTreeBuilder<'a> {
             body_: None,
             active_formatting_elements_: Vec::new(),
             head_closed_: false,
+            scripting_flag_: false,
             frameset_document_: false,
             last_start_tag_was_html_: true,
             current_script_start_: None,
@@ -1532,7 +1624,7 @@ impl<'a> DocumentTreeBuilder<'a> {
                 &name,
                 &[
                     "base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style",
-                    "title",
+                    "title", "noscript",
                 ],
             )
         {
@@ -1576,7 +1668,7 @@ impl<'a> DocumentTreeBuilder<'a> {
                 &name,
                 &[
                     "base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style",
-                    "title",
+                    "title", "noscript",
                 ],
             )
         {
@@ -1860,7 +1952,12 @@ impl<'a> DocumentTreeBuilder<'a> {
             IsOneOf(
                 self.site_.OwnerDocument().Node(current).Name(),
                 &["title", "style", "script", "noframes"],
-            )
+            ) || (self.scripting_flag_
+                && self
+                    .site_
+                    .OwnerDocument()
+                    .Node(current)
+                    .IsHTMLElement("noscript"))
         }) {
             self.site_.InsertText(data);
             return;
@@ -1950,6 +2047,7 @@ struct HTMLDocumentParserContinuation {
     waiting_for_script: bool,
     finished: bool,
     current_script: Option<ParserScript>,
+    preload_scanning: Option<ParserPreloadScanning>,
 }
 struct DocumentTreeBuilderState {
     open_elements: Vec<usize>,
@@ -1958,6 +2056,7 @@ struct DocumentTreeBuilderState {
     body_: Option<usize>,
     active_formatting_elements_: Vec<Option<usize>>,
     head_closed_: bool,
+    scripting_flag_: bool,
     frameset_document_: bool,
     last_start_tag_was_html_: bool,
     current_script_start_: Option<HTMLSourcePosition>,
@@ -2022,11 +2121,20 @@ impl HTMLDocumentParserState {
     }
     pub fn Append(&mut self, text: &str) {
         let storage = self.storage_.as_mut().expect("parser continuation exists");
-        AppendParserInput(&mut storage.input, storage.input_finished, text.as_bytes());
+        let decoded = BlinkString::FromUtf8(text.as_bytes());
+        AppendDecodedParserInput(&mut storage.input, storage.input_finished, &decoded);
+        if let Some(scanning) = &mut storage.preload_scanning {
+            if !scanning.stopped_for_csp {
+                scanning.main.AppendDecoded(&decoded);
+            }
+        }
     }
     pub fn FinishInput(&mut self) {
         let storage = self.storage_.as_mut().expect("parser continuation exists");
         FinishParserInput(&mut storage.input, &mut storage.input_finished);
+        if let Some(scanning) = &mut storage.preload_scanning {
+            scanning.main.FinishInput();
+        }
     }
     /// Pump one bounded turn, releasing the DOM borrow before returning.
     pub fn Pump(
@@ -2072,15 +2180,63 @@ impl HTMLDocumentParserState {
         }
         storage.waiting_for_script = false;
         storage.current_script = None;
+        if let Some(scanning) = &mut storage.preload_scanning {
+            scanning.EndInsertion();
+        }
     }
     pub fn InsertFromScript(&mut self, text: &str) {
         let storage = self.storage_.as_mut().expect("parser continuation exists");
         InsertParserInput(&mut storage.input, storage.waiting_for_script, text);
+        if let Some(scanning) = &mut storage.preload_scanning {
+            scanning.Insert(&BlinkString::FromUtf8(text.as_bytes()));
+        }
+    }
+    /// Configure before the first network input. Fragment parsers cannot
+    /// speculate document resources. The native parser and scanner use the same
+    /// scripting option, including the conditional noscript tokenizer state.
+    pub fn EnablePreloadScanning(&mut self, scripting: bool) {
+        let storage = self.storage_.as_mut().expect("parser continuation exists");
+        assert!(
+            storage.tree.fragment_context_.is_none(),
+            "fragment preload scanning is unsupported"
+        );
+        assert!(
+            storage.input.IsEmpty()
+                && storage.input.NumberOfCharactersConsumed() == 0
+                && !storage.input_finished,
+            "enable scanning before first parser input"
+        );
+        storage.tree.scripting_flag_ = scripting;
+        storage.tokenizer = HTMLTokenizer::new(HTMLParserOptions {
+            scripting_flag: scripting,
+            ..HTMLParserOptions::default()
+        });
+        storage.preload_scanning = Some(ParserPreloadScanning::new(scripting));
+    }
+    pub fn ScanPreloads(&mut self, token_budget: usize) -> PreloadScanResult {
+        self.storage_
+            .as_mut()
+            .expect("parser continuation exists")
+            .preload_scanning
+            .as_mut()
+            .map_or_else(PreloadScanResult::default, |scanning| {
+                scanning.Scan(token_budget)
+            })
+    }
+    pub fn DisablePreloadScanning(&mut self) {
+        self.storage_
+            .as_mut()
+            .expect("parser continuation exists")
+            .preload_scanning = None;
     }
     /// Read-only input extent, used to invalidate diagnostic-only observations
     /// when a scoped script adapter inserts input at the parser insertion point.
     pub fn BufferedInputCharacters(&self) -> usize {
-        self.storage_.as_ref().expect("parser continuation exists").input.length() as usize
+        self.storage_
+            .as_ref()
+            .expect("parser continuation exists")
+            .input
+            .length() as usize
     }
     pub fn IsPaused(&self) -> bool {
         self.storage_
@@ -2100,8 +2256,14 @@ fn AppendParserInput(input: &mut SegmentedString, finished: bool, html: &[u8]) {
     if finished {
         logic_error("cannot append HTML after FinishInput");
     }
-    if !html.is_empty() {
-        input.Append(&SegmentedString::from_string(&BlinkString::FromUtf8(html)));
+    AppendDecodedParserInput(input, finished, &BlinkString::FromUtf8(html));
+}
+fn AppendDecodedParserInput(input: &mut SegmentedString, finished: bool, html: &BlinkString) {
+    if finished {
+        logic_error("cannot append HTML after FinishInput");
+    }
+    if !html.empty() {
+        input.Append(&SegmentedString::from_string(html));
     }
 }
 fn FinishParserInput(input: &mut SegmentedString, finished: &mut bool) {
@@ -2134,6 +2296,7 @@ struct HTMLDocumentParserStorage<'a> {
     waiting_for_script: bool,
     finished: bool,
     current_script: Option<ParserScript>,
+    preload_scanning: Option<ParserPreloadScanning>,
 }
 
 impl<'a> HTMLDocumentParserStorage<'a> {
@@ -2151,6 +2314,7 @@ impl<'a> HTMLDocumentParserStorage<'a> {
             waiting_for_script: false,
             finished: false,
             current_script: None,
+            preload_scanning: None,
         }
     }
 }
@@ -2178,6 +2342,7 @@ impl<'a> HTMLDocumentParser<'a> {
             waiting_for_script,
             finished,
             current_script,
+            preload_scanning,
         } = *self.storage_;
         let DocumentTreeBuilder {
             site_,
@@ -2186,6 +2351,7 @@ impl<'a> HTMLDocumentParser<'a> {
             body_,
             active_formatting_elements_,
             head_closed_,
+            scripting_flag_,
             frameset_document_,
             last_start_tag_was_html_,
             current_script_start_,
@@ -2204,6 +2370,7 @@ impl<'a> HTMLDocumentParser<'a> {
                     body_,
                     active_formatting_elements_,
                     head_closed_,
+                    scripting_flag_,
                     frameset_document_,
                     last_start_tag_was_html_,
                     current_script_start_,
@@ -2217,6 +2384,7 @@ impl<'a> HTMLDocumentParser<'a> {
                 waiting_for_script,
                 finished,
                 current_script,
+                preload_scanning,
             }),
         }
     }
@@ -2242,6 +2410,7 @@ impl<'a> HTMLDocumentParser<'a> {
             waiting_for_script,
             finished,
             current_script,
+            preload_scanning,
         } = state;
         let DocumentTreeBuilderState {
             open_elements,
@@ -2250,6 +2419,7 @@ impl<'a> HTMLDocumentParser<'a> {
             body_,
             active_formatting_elements_,
             head_closed_,
+            scripting_flag_,
             frameset_document_,
             last_start_tag_was_html_,
             current_script_start_,
@@ -2266,6 +2436,7 @@ impl<'a> HTMLDocumentParser<'a> {
                     body_,
                     active_formatting_elements_,
                     head_closed_,
+                    scripting_flag_,
                     frameset_document_,
                     last_start_tag_was_html_,
                     current_script_start_,
@@ -2279,6 +2450,7 @@ impl<'a> HTMLDocumentParser<'a> {
                 waiting_for_script,
                 finished,
                 current_script,
+                preload_scanning,
             }),
         }
     }
@@ -2316,13 +2488,26 @@ impl<'a> HTMLDocumentParser<'a> {
     // std::string_view in the source can contain malformed UTF-8; BlinkString
     // performs the conversion from bytes after the parser receives the input.
     pub fn AppendBytes(&mut self, html: &[u8]) {
-        AppendParserInput(&mut self.storage_.input, self.storage_.input_finished, html);
+        let decoded = BlinkString::FromUtf8(html);
+        AppendDecodedParserInput(
+            &mut self.storage_.input,
+            self.storage_.input_finished,
+            &decoded,
+        );
+        if let Some(scanning) = &mut self.storage_.preload_scanning {
+            if !scanning.stopped_for_csp {
+                scanning.main.AppendDecoded(&decoded);
+            }
+        }
     }
 
     // cpp: html/html_parser.h:56
     // cpp: html/html_parser.cc:1169-1177
     pub fn FinishInput(&mut self) {
         FinishParserInput(&mut self.storage_.input, &mut self.storage_.input_finished);
+        if let Some(scanning) = &mut self.storage_.preload_scanning {
+            scanning.main.FinishInput();
+        }
     }
 
     // cpp: html/html_parser.h:57
@@ -2413,6 +2598,9 @@ impl<'a> HTMLDocumentParser<'a> {
         }
         self.storage_.waiting_for_script = false;
         self.storage_.current_script = None;
+        if let Some(scanning) = &mut self.storage_.preload_scanning {
+            scanning.EndInsertion();
+        }
     }
 
     // Borrow the paused parser's persistent DOM for a synchronous script task.
@@ -2441,6 +2629,9 @@ impl<'a> HTMLDocumentParser<'a> {
             self.storage_.waiting_for_script,
             html,
         );
+        if let Some(scanning) = &mut self.storage_.preload_scanning {
+            scanning.Insert(&BlinkString::FromUtf8(html.as_bytes()));
+        }
     }
 
     // cpp: html/html_parser.h:61

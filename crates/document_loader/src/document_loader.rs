@@ -6,6 +6,10 @@ use html::html_parser::{
 use html::HTMLParserHost;
 use resource::ResourceEngine;
 use std::{cell::RefCell, io, rc::Rc};
+// Bound unread decoded input while scripts block the tree builder. The stream
+// can continue delivery and preload discovery without unbounded parser storage.
+const MAX_BUFFERED_INPUT_CHARACTERS: usize = 1024 * 1024;
+
 use url_loader::{
     RequestDestination, URLLoadEvent, URLLoader, URLRequest, URLResponseHead, URLStreamOperation,
     URLWakeCallback,
@@ -46,6 +50,9 @@ impl From<usize> for DocumentLoadBudget {
 pub struct DocumentLoadProgress {
     pub body_finished: bool,
     pub made_progress: bool,
+    /// Appending speculative input while paused makes loading progress but
+    /// does not change DOM or invalidate the rendering lifecycle.
+    pub parser_made_progress: bool,
     /// The parser still has buffered tokens, or the byte budget was exhausted
     /// while the stream remained readable. The embedder can run another
     /// parser task before spending a rendering opportunity on the partial DOM.
@@ -66,6 +73,7 @@ pub struct DocumentLoader {
     needs_input: bool,
     failure: Option<(io::ErrorKind, String)>,
     wake: Option<URLWakeCallback>,
+    preload_scripting: Option<bool>,
     diagnostic_scripting: Option<bool>,
     diagnostic: Option<crate::diagnostic_read_ahead::DiagnosticReadAhead>,
 }
@@ -87,9 +95,16 @@ impl DocumentLoader {
             needs_input: true,
             failure: None,
             wake: None,
+            preload_scripting: None,
             diagnostic_scripting: None,
             diagnostic: None,
         }
+    }
+    /// The embedding supplies the same scripting flag as the document parser.
+    /// HTML owns speculative tokenization; the parser host owns resource admission.
+    pub fn EnablePreloadScanning(&mut self, scripting: bool) {
+        assert!(self.parser.is_none(), "configure preloads before parsing");
+        self.preload_scripting = Some(scripting);
     }
     /// Explicit embedding-only diagnostic. Disabled by default and never admits
     /// a speculative resource. Configure before BeginParsing.
@@ -149,6 +164,9 @@ impl DocumentLoader {
                 if head.final_url.is_empty() {
                     head.final_url = self.requested_url.clone();
                 }
+                if let Some(policy) = head.referrer_policy {
+                    self.resources.SetReferrerPolicy(policy);
+                }
                 self.response = Some(head.clone());
                 self.status = DocumentLoaderStatus::kResponseReady;
                 Ok(Some(head))
@@ -174,15 +192,35 @@ impl DocumentLoader {
         ) {
             return Err(io::Error::other("document is not ready to begin parsing"));
         }
+        if let Some(scripting) = self.preload_scripting {
+            document.SetScriptingEnabled(scripting);
+        }
         let mut parser = HTMLDocumentParserState::new(document, host);
         if let Some(head) = &self.response {
             if let Err(error) = parser.SetTextEncoding(&head.text_encoding) {
                 return self.Fail(error);
             }
         }
+        // Until a CSP owner can admit speculative requests, do not speculate
+        // past HTTP policy. The scanner similarly stops at a meta CSP boundary.
+        if let Some(scripting) = self.preload_scripting {
+            parser.EnablePreloadScanning(scripting);
+            if self
+                .response
+                .as_ref()
+                .is_some_and(|head| !head.content_security_policy.is_empty())
+            {
+                parser.DisablePreloadScanning();
+            }
+        }
         if let Some(scripting) = self.diagnostic_scripting {
-            let encoding = self.response.as_ref().map_or("utf-8", |head| head.text_encoding.as_str());
-            self.diagnostic = Some(crate::diagnostic_read_ahead::DiagnosticReadAhead::new(encoding, scripting)?);
+            let encoding = self
+                .response
+                .as_ref()
+                .map_or("utf-8", |head| head.text_encoding.as_str());
+            self.diagnostic = Some(crate::diagnostic_read_ahead::DiagnosticReadAhead::new(
+                encoding, scripting,
+            )?);
         }
         self.parser = Some(parser);
         self.status = DocumentLoaderStatus::kParsing;
@@ -208,6 +246,7 @@ impl DocumentLoader {
             return Ok(DocumentLoadProgress {
                 body_finished: self.body_finished,
                 made_progress: false,
+                parser_made_progress: false,
                 immediate_work_pending: false,
                 parser: HTMLParserResult {
                     status: HTMLParserStatus::kFinished,
@@ -218,21 +257,38 @@ impl DocumentLoader {
         self.Parser()?;
         let mut made_progress = !self.needs_input && !self.parser.as_ref().unwrap().IsPaused();
         let mut body_budget_exhausted = false;
-        // Production input remains demand-driven. The explicit diagnostic can
-        // retain a bounded FIFO without advancing authoritative parser input.
-        if self.parser.as_ref().unwrap().IsPaused() {
+        let parser_paused = self.parser.as_ref().unwrap().IsPaused();
+        let allow_paused_read = parser_paused && self.preload_scripting.is_some();
+        if parser_paused && !allow_paused_read {
             if let (Some(diagnostic), Some(stream)) = (&mut self.diagnostic, &mut self.stream) {
                 if diagnostic.read_ahead(stream.as_mut()) {
-                    if let Some(wake) = &self.wake { wake(); }
+                    if let Some(wake) = &self.wake {
+                        wake();
+                    }
                 }
             }
         }
-        if self.needs_input && !self.body_finished && self.stream.is_some() {
-            let mut remaining = budget.body_bytes;
+        let room = MAX_BUFFERED_INPUT_CHARACTERS
+            .saturating_sub(self.parser.as_ref().unwrap().BufferedInputCharacters());
+        // HTMLDocumentParser::Append continues network input while paused.
+        // Only AppendBytes and speculative tokenization run here; the tree
+        // builder still waits for its blocking script, including at EOF.
+        if (self.needs_input || allow_paused_read)
+            && room != 0
+            && !self.body_finished
+            && self.stream.is_some()
+        {
+            let mut remaining = budget.body_bytes.min(room);
             while remaining > 0 {
-                let queued = self.diagnostic.as_mut().and_then(|d| d.poll_queued(remaining));
+                let queued = self
+                    .diagnostic
+                    .as_mut()
+                    .and_then(|d| d.poll_queued(remaining));
                 let from_stream = queued.is_none();
-                let event = match queued.map(|event| event.map(Some)).unwrap_or_else(|| self.stream.as_mut().unwrap().Poll(remaining)) {
+                let event = match queued
+                    .map(|event| event.map(Some))
+                    .unwrap_or_else(|| self.stream.as_mut().unwrap().Poll(remaining))
+                {
                     Ok(event) => event,
                     Err(error) => return self.Fail(error),
                 };
@@ -249,7 +305,9 @@ impl DocumentLoader {
                         body_bytes += bytes.len();
                         made_progress = true;
                         if let Some(diagnostic) = &mut self.diagnostic {
-                            if from_stream { diagnostic.observe(&bytes, false); }
+                            if from_stream {
+                                diagnostic.observe(&bytes, parser_paused);
+                            }
                             diagnostic.appended += bytes.len();
                         }
                         if let Err(error) = self.parser.as_mut().unwrap().AppendBytes(&bytes) {
@@ -275,6 +333,18 @@ impl DocumentLoader {
             }
             body_budget_exhausted = remaining == 0 && self.stream.is_some();
         }
+        let scan = self
+            .parser
+            .as_mut()
+            .unwrap()
+            .ScanPreloads(budget.parser_tokens);
+        for candidate in &scan.candidates {
+            host.HandlePreloadCandidate(candidate);
+        }
+        let preload_work_pending = scan.work_pending;
+        if scan.stopped_for_csp {
+            self.parser.as_mut().unwrap().DisablePreloadScanning();
+        }
         let result = self
             .parser
             .as_mut()
@@ -285,13 +355,16 @@ impl DocumentLoader {
             self.status = DocumentLoaderStatus::kFinished;
         }
         if result.status == HTMLParserStatus::kYielded
-            || (self.needs_input && made_progress && self.stream.is_some())
+            || preload_work_pending
+            || (body_budget_exhausted && (self.needs_input || allow_paused_read))
         {
             if let Some(wake) = &self.wake {
                 wake();
             }
         }
-        if let Some(diagnostic) = &self.diagnostic { diagnostic.report(); }
+        if let Some(diagnostic) = &self.diagnostic {
+            diagnostic.report();
+        }
         trace.set("body_bytes", body_bytes as f64);
         trace.set("parser_status", result.status as u8 as f64);
         trace.set("script_node", result.script.map_or(0, |s| s.node_id) as f64);
@@ -301,8 +374,13 @@ impl DocumentLoader {
         Ok(DocumentLoadProgress {
             body_finished: self.body_finished,
             made_progress,
+            parser_made_progress: made_progress && !parser_paused,
             immediate_work_pending: result.status == HTMLParserStatus::kYielded
-                || (self.needs_input && body_budget_exhausted),
+                || preload_work_pending
+                || ((self.needs_input || allow_paused_read)
+                    && body_budget_exhausted
+                    && self.parser.as_ref().unwrap().BufferedInputCharacters()
+                        < MAX_BUFFERED_INPUT_CHARACTERS),
             parser: result,
         })
     }
@@ -372,10 +450,19 @@ impl DocumentLoader {
             .as_mut()
             .ok_or_else(|| io::Error::other("document parser is not active"))?;
         let was_paused = parser.IsPaused();
-        let input_before = self.diagnostic.as_ref().map(|_| parser.BufferedInputCharacters());
+        let input_before = self
+            .diagnostic
+            .as_ref()
+            .map(|_| parser.BufferedInputCharacters());
         let result = parser.WithParser(document, host, task);
-        if was_paused && input_before.is_some_and(|before| !parser.IsPaused() || parser.BufferedInputCharacters() != before) {
-            if let Some(diagnostic) = &mut self.diagnostic { diagnostic.cancel_scan(1); }
+        if was_paused
+            && input_before.is_some_and(|before| {
+                !parser.IsPaused() || parser.BufferedInputCharacters() != before
+            })
+        {
+            if let Some(diagnostic) = &mut self.diagnostic {
+                diagnostic.cancel_scan(1);
+            }
         }
         if parser.IsFinished() {
             self.status = DocumentLoaderStatus::kFinished;
@@ -389,12 +476,16 @@ impl DocumentLoader {
         Ok(result)
     }
     pub fn InsertFromScript(&mut self, text: &str) -> io::Result<()> {
-        if let Some(diagnostic) = &mut self.diagnostic { diagnostic.cancel_scan(2); }
+        if let Some(diagnostic) = &mut self.diagnostic {
+            diagnostic.cancel_scan(2);
+        }
         self.Parser()?.InsertFromScript(text);
         Ok(())
     }
     pub fn ResumeAfterScript(&mut self) -> io::Result<()> {
-        if let Some(diagnostic) = &mut self.diagnostic { diagnostic.cancel_scan(1); }
+        if let Some(diagnostic) = &mut self.diagnostic {
+            diagnostic.cancel_scan(1);
+        }
         self.Parser()?.ResumeAfterScript();
         self.needs_input = false;
         if let Some(wake) = &self.wake {

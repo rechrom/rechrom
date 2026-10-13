@@ -244,6 +244,7 @@ impl DynamicScriptTasks {
             url: ResolveUrl(&self.base_url.borrow(), src)?,
             referrer: self.current_url.clone(),
             destination: RequestDestination::kScript,
+            defer: url_loader::RequestDefer::Lazy,
             ..Default::default()
         };
         let pending = self.resource_engine.Start(request);

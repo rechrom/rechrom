@@ -28,6 +28,7 @@ impl MemoryURLs {
             mime_type,
             text_encoding,
             body,
+            ..URLResponse::default()
         };
         match self.responses.entry(url) {
             std::collections::hash_map::Entry::Vacant(entry) => {

@@ -218,7 +218,7 @@ fn body() {
         .unwrap();
     crate::style_services::ResolveLayoutStyles(&mut document.borrow_mut(), &constraints.borrow());
     resources.QueueReferencedImages().unwrap();
-    resources.SelectUsedFontFaces();
+    resources.PrepareFontFaces();
     resources.StartPendingFonts();
     resources.LoadPendingImages(&mut client);
     resources.LoadPendingFonts(&mut client);

@@ -756,6 +756,7 @@ impl HarfBuzzShaper {
         let description = font_ref.GetFontDescription();
         let text = self.text_.clone();
         let units = text.Span16().expect("non-null shape text");
+        font_ref.WillUseFontData(&units[start as usize..end as usize]);
         let fallback_priority = ApplyFontVariantEmojiOnFallbackPriority(
             segment.font_fallback_priority,
             description.VariantEmoji(),

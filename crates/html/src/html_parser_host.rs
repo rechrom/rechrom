@@ -33,6 +33,9 @@ impl<'a> ParserElementEvent<'a> {
 pub trait HTMLParserHost {
     fn HandleParserElement(&mut self, event: ParserElementEvent<'_>);
 
+    /// Speculative source description. The host owns policy and resource admission.
+    fn HandlePreloadCandidate(&mut self, _candidate: &crate::preload_scanner::PreloadCandidate) {}
+
     // Rust arena adapter: source DOMNode children are pointers, while Rust
     // children are indices. Hosts inspect the node synchronously at this event.
     fn HandleParserElementInDocument(

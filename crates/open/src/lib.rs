@@ -7,6 +7,7 @@
 //! adapters; rendering remains downstream and independent.
 
 mod connected_resources;
+mod preload;
 #[cfg(test)]
 mod dom_mutation;
 pub mod dynamic_scripts;

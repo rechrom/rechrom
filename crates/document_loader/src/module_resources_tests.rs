@@ -84,6 +84,7 @@ fn respond(replies: &Replies, url: &str, final_url: &str, source: &str) {
         text_encoding: "utf-8".into(),
         mime_type: "text/javascript".into(),
         status_code: 200,
+        ..Default::default()
     }));
 }
 fn assert_js(runtime: &mut QuickJsJavaScriptRuntime, realm: &JavaScriptRealm, source: &str) {

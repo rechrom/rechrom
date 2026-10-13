@@ -2487,6 +2487,7 @@ dependencies = [
  "javascript",
  "resource",
  "style",
+ "url",
  "url_loader",
  "webapi",
  "xhr_transport",

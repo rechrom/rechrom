@@ -254,6 +254,9 @@ impl<'a> FontFallbackIterator<'a> {
                 FallbackStage::OutOfLuck => return None,
                 FallbackStage::FontGroupFonts => {
                     if self.group_index == self.font.FontGroupLength() {
+                        // Remaining text has exhausted the available family
+                        // faces; activate CSS faces in later fallback families.
+                        self.font.WillUseFallbackFontData(text);
                         self.stage = if IsNonTextFallbackPriority(self.priority) {
                             FallbackStage::FallbackPriorityFonts
                         } else {

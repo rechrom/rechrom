@@ -74,9 +74,7 @@ fn create(scripting: bool) -> (Page, Events, Responses, Rc<Cell<usize>>) {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
-            &assembly,
-        ))),
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
         crate::CreateBrowserConstraints(320, 200),
         scripts,
         Some(Rc::new(RefCell::new(Client(finished.clone())))),
@@ -89,6 +87,7 @@ fn response() -> URLLoadEvent {
         mime_type: "text/html".into(),
         text_encoding: "utf-8".into(),
         status_code: 200,
+        ..Default::default()
     })
 }
 fn has_id(page: &Page, id: &str) -> bool {
@@ -149,6 +148,7 @@ fn script_response(resources: &Responses, url: &str, source: &str) {
         mime_type: "text/javascript".into(),
         text_encoding: "utf-8".into(),
         body: source.as_bytes().to_vec(),
+        ..Default::default()
     });
 }
 fn compilation_wakes(page: &mut Page) -> std::sync::mpsc::Receiver<()> {
@@ -812,9 +812,7 @@ fn real_http() {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
-            &assembly,
-        ))),
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
         crate::CreateBrowserConstraints(320, 200),
         None,
         None,
@@ -908,9 +906,7 @@ fn real_http_module_dependency_wait_keeps_page_frames_and_tasks_running() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
-                &assembly,
-            ))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
             crate::CreateBrowserConstraints(320, 200),
             Some(ScriptEnvironment {
                 runtime: Box::new(
@@ -979,7 +975,8 @@ fn resource_completion_after_load_is_polled_without_another_dom_edit() {
             mime_type: "image/svg+xml".into(),
             text_encoding: "utf-8".into(),
             body: br#"<svg xmlns="http://www.w3.org/2000/svg" width="7" height="11"><rect width="7" height="11" fill="red"/></svg>"#.to_vec(),
-        });
+        ..Default::default()
+});
         for _ in 0..5 {
             page.RunTask().unwrap();
         }
@@ -1055,13 +1052,11 @@ fn resource_turn_budget_is_shared_by_loading_lifecycle_and_no_script_page() {
                     mime_type: if font { "font/ttf" } else { "image/svg+xml" }.into(),
                     text_encoding: "utf-8".into(),
                     body: if font {
-                        include_bytes!(
-                            "../../../assets/fonts/Roboto-Regular.ttf"
-                        )
-                        .to_vec()
+                        include_bytes!("../../../assets/fonts/Roboto-Regular.ttf").to_vec()
                     } else {
                         br#"<svg xmlns="http://www.w3.org/2000/svg" width="7" height="11"><rect width="7" height="11"/></svg>"#.to_vec()
                     },
+                    ..Default::default()
                 },
             );
         }
@@ -1119,7 +1114,8 @@ fn image_completion_and_timer_have_separate_turns_with_complete_checkpoints() {
             final_url: "https://stream.test/first.svg".into(), status_code: 200,
             mime_type: "image/svg+xml".into(), text_encoding: "utf-8".into(),
             body: br#"<svg xmlns="http://www.w3.org/2000/svg" width="7" height="11"><rect width="7" height="11" fill="red"/></svg>"#.to_vec(),
-        });
+        ..Default::default()
+});
         for _ in 0..5 {
             assert_script(&mut page, "turnRuns=0;");
             page.RunTask().unwrap();
@@ -1157,6 +1153,7 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
             mime_type: "image/svg+xml".into(),
             text_encoding: "utf-8".into(),
             body: svg.to_vec(),
+            ..Default::default()
         });
         finish(&mut page);
         let first = page
@@ -1221,6 +1218,7 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
             mime_type: "image/svg+xml".into(),
             text_encoding: "utf-8".into(),
             body: svg.to_vec(),
+            ..Default::default()
         });
         fresh.Open("https://stream.test/", 4096, 4096).unwrap();
         finish(&mut fresh);
@@ -1266,7 +1264,8 @@ fn image_dom_tasks_defer_load_error_and_cancel_replaced_requests() {
             final_url: "https://stream.test/good.svg".into(), status_code: 200,
             mime_type: "image/svg+xml".into(), text_encoding: "utf-8".into(),
             body: br#"<svg xmlns="http://www.w3.org/2000/svg" width="7" height="11"><rect width="7" height="11" fill="red"/></svg>"#.to_vec(),
-        });
+        ..Default::default()
+});
         page.RunTask().unwrap();
         assert_script(
             &mut page,
@@ -1285,6 +1284,7 @@ fn image_dom_tasks_defer_load_error_and_cancel_replaced_requests() {
             mime_type: "image/png".into(),
             text_encoding: "utf-8".into(),
             body: b"invalid image".to_vec(),
+            ..Default::default()
         });
         page.RunTask().unwrap();
         assert_script(
@@ -1334,7 +1334,8 @@ pub(crate) fn check_cached_image_external_apply_dom_tasks() {
         final_url: "https://stream.test/good.svg".into(), status_code: 200,
         mime_type: "image/svg+xml".into(), text_encoding: "utf-8".into(),
         body: br#"<svg xmlns="http://www.w3.org/2000/svg" width="7" height="11"><rect width="7" height="11"/></svg>"#.to_vec(),
-    });
+    ..Default::default()
+});
     finish(&mut page);
     assert_script(&mut page, "var order=[];var host=document.createElement('img');host.onload=()=>{order.push('host');Promise.resolve().then(()=>order.push('mhost'))};host.src='good.svg';document.body.appendChild(host);order.push('returned');if(order.join(',')!=='returned')throw Error('host mutation fired load synchronously');");
     page.RunTask().unwrap();

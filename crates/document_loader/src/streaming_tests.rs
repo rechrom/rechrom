@@ -83,6 +83,7 @@ fn head() -> URLLoadEvent {
         mime_type: "text/html".into(),
         text_encoding: "utf-8".into(),
         status_code: 200,
+        ..Default::default()
     })
 }
 fn text(owner: &DOM) -> String {
@@ -251,34 +252,135 @@ fn malformed_stream_order_and_truncated_utf8_fail_without_finishing_parser() {
 }
 
 #[test]
+fn production_preloads_continue_input_while_script_blocks_without_mutating_dom() {
+    use html::preload_scanner::PreloadCandidate;
+    #[derive(Default)]
+    struct PreloadHost(Vec<PreloadCandidate>);
+    impl HTMLParserHost for PreloadHost {
+        fn HandleParserElement(&mut self, _: ParserElementEvent<'_>) {}
+        fn HandlePreloadCandidate(&mut self, candidate: &PreloadCandidate) {
+            self.0.push(candidate.clone());
+        }
+    }
+    let (mut loader, events, _, _) = setup();
+    loader.EnablePreloadScanning(true);
+    events.borrow_mut().push_back(head());
+    loader.PollResponse().unwrap();
+    let mut owner = DOM::new();
+    let mut host = PreloadHost::default();
+    loader
+        .BeginParsing(owner.GetDocumentMut(), &mut host)
+        .unwrap();
+    events.borrow_mut().push_back(URLLoadEvent::Data(
+        b"<body>before<script>hold()</script>".to_vec(),
+    ));
+    let budget = DocumentLoadBudget {
+        body_bytes: 4096,
+        parser_tokens: 4096,
+    };
+    assert_eq!(
+        loader
+            .Pump(owner.GetDocumentMut(), &mut host, budget)
+            .unwrap()
+            .parser
+            .status,
+        HTMLParserStatus::kWaitingForScript
+    );
+    let before = text(&owner);
+    events.borrow_mut().extend([
+        URLLoadEvent::Data("<img src='你好.png'>after</body>".as_bytes().to_vec()),
+        URLLoadEvent::Finished,
+    ]);
+    let progress = loader
+        .Pump(owner.GetDocumentMut(), &mut host, budget)
+        .unwrap();
+    assert!(progress.made_progress && progress.body_finished);
+    assert!(!progress.parser_made_progress);
+    assert_eq!(loader.Status(), DocumentLoaderStatus::kParsing);
+    assert_eq!(
+        text(&owner),
+        before,
+        "speculation cannot advance the tree builder"
+    );
+    assert!(host.0.iter().any(|candidate| candidate
+        .attributes
+        .iter()
+        .any(|(name, value)| name == "src" && value == "你好.png")));
+    loader.InsertFromScript("<b>written</b>").unwrap();
+    loader.ResumeAfterScript().unwrap();
+    let result = loader
+        .Pump(owner.GetDocumentMut(), &mut host, budget)
+        .unwrap();
+    assert_eq!(result.parser.status, HTMLParserStatus::kFinished);
+    assert!(result.parser_made_progress);
+    assert_eq!(text(&owner), "beforehold()writtenafter");
+}
+
+#[test]
 fn diagnostic_read_ahead_holds_eof_and_preserves_script_insertion_order() {
     let (mut loader, events, polls, _) = setup();
     loader.EnableDiagnosticReadAhead(true);
     events.borrow_mut().push_back(head());
     loader.PollResponse().unwrap();
     let mut owner = DOM::new();
-    loader.BeginParsing(owner.GetDocumentMut(), &mut Host).unwrap();
+    loader
+        .BeginParsing(owner.GetDocumentMut(), &mut Host)
+        .unwrap();
     let prefix = b"<body>before<script>hold()</script>";
-    events.borrow_mut().push_back(URLLoadEvent::Data(prefix.to_vec()));
-    let budget = DocumentLoadBudget { body_bytes: prefix.len(), parser_tokens: 4096 };
-    assert_eq!(loader.Pump(owner.GetDocumentMut(), &mut Host, budget).unwrap().parser.status,
-        HTMLParserStatus::kWaitingForScript);
+    events
+        .borrow_mut()
+        .push_back(URLLoadEvent::Data(prefix.to_vec()));
+    let budget = DocumentLoadBudget {
+        body_bytes: prefix.len(),
+        parser_tokens: 4096,
+    };
+    assert_eq!(
+        loader
+            .Pump(owner.GetDocumentMut(), &mut Host, budget)
+            .unwrap()
+            .parser
+            .status,
+        HTMLParserStatus::kWaitingForScript
+    );
     events.borrow_mut().extend([
-        URLLoadEvent::Data("<p>世界😀</p><img src='later.png'>after</body>".as_bytes().to_vec()),
+        URLLoadEvent::Data(
+            "<p>世界😀</p><img src='later.png'>after</body>"
+                .as_bytes()
+                .to_vec(),
+        ),
         URLLoadEvent::Finished,
     ]);
     let count = polls.get();
     let before = text(&owner);
-    let progress = loader.Pump(owner.GetDocumentMut(), &mut Host, budget).unwrap();
+    let progress = loader
+        .Pump(owner.GetDocumentMut(), &mut Host, budget)
+        .unwrap();
     assert!(polls.get() > count);
     assert!(!progress.made_progress);
-    assert!(!progress.body_finished, "diagnostic EOF must not finish authoritative input");
+    assert!(
+        !progress.body_finished,
+        "diagnostic EOF must not finish authoritative input"
+    );
     assert_eq!(text(&owner), before, "read-ahead must not build DOM");
     loader.InsertFromScript("<b>written</b>").unwrap();
     loader.ResumeAfterScript().unwrap();
     for _ in 0..100 {
-        if loader.Pump(owner.GetDocumentMut(), &mut Host,
-            DocumentLoadBudget { body_bytes: 1, parser_tokens: 4 }).unwrap().parser.status == HTMLParserStatus::kFinished { break; }
+        if loader
+            .Pump(
+                owner.GetDocumentMut(),
+                &mut Host,
+                DocumentLoadBudget {
+                    body_bytes: 1,
+                    parser_tokens: 4,
+                },
+            )
+            .unwrap()
+            .parser
+            .status
+            == HTMLParserStatus::kFinished
+        {
+            break;
+        }
     }
     assert_eq!(loader.Status(), DocumentLoaderStatus::kFinished);
     assert_eq!(text(&owner), "beforehold()written世界😀after");
@@ -291,16 +393,37 @@ fn diagnostic_read_ahead_cap_restores_backpressure_and_stop_drops_queue() {
     events.borrow_mut().push_back(head());
     loader.PollResponse().unwrap();
     let mut owner = DOM::new();
-    loader.BeginParsing(owner.GetDocumentMut(), &mut Host).unwrap();
+    loader
+        .BeginParsing(owner.GetDocumentMut(), &mut Host)
+        .unwrap();
     let prefix = b"<body>before<script>hold()</script>";
-    events.borrow_mut().push_back(URLLoadEvent::Data(prefix.to_vec()));
-    let budget = DocumentLoadBudget { body_bytes: prefix.len(), parser_tokens: 4096 };
-    loader.Pump(owner.GetDocumentMut(), &mut Host, budget).unwrap();
-    events.borrow_mut().push_back(URLLoadEvent::Data(vec![b'x'; 2 * 1024 * 1024]));
-    for _ in 0..80 { loader.Pump(owner.GetDocumentMut(), &mut Host, budget).unwrap(); }
+    events
+        .borrow_mut()
+        .push_back(URLLoadEvent::Data(prefix.to_vec()));
+    let budget = DocumentLoadBudget {
+        body_bytes: prefix.len(),
+        parser_tokens: 4096,
+    };
+    loader
+        .Pump(owner.GetDocumentMut(), &mut Host, budget)
+        .unwrap();
+    events
+        .borrow_mut()
+        .push_back(URLLoadEvent::Data(vec![b'x'; 2 * 1024 * 1024]));
+    for _ in 0..80 {
+        loader
+            .Pump(owner.GetDocumentMut(), &mut Host, budget)
+            .unwrap();
+    }
     let count = polls.get();
-    loader.Pump(owner.GetDocumentMut(), &mut Host, budget).unwrap();
-    assert_eq!(polls.get(), count, "bounded diagnostic must resume backpressure");
+    loader
+        .Pump(owner.GetDocumentMut(), &mut Host, budget)
+        .unwrap();
+    assert_eq!(
+        polls.get(),
+        count,
+        "bounded diagnostic must resume backpressure"
+    );
     assert!(!events.borrow().is_empty());
     assert_eq!(text(&owner), "beforehold()");
     loader.StopLoading();

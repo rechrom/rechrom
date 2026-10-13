@@ -272,6 +272,11 @@ struct ResolvedFontSource {
 }
 
 impl FontFallbackSource for ResolvedFontSource {
+    fn WillUseFontData(&self, text: &[u16], fallback: bool) {
+        if let Some(queries) = self.queries.borrow().as_ref() {
+            queries.RequestWebFonts(&self.description, text, fallback);
+        }
+    }
     fn FontDataAt(&self, position: usize) -> *const SimpleFontData {
         self.fonts[position]
             .get_or_init(|| {
@@ -745,7 +750,7 @@ impl FontResolver {
 // Blink FontSelectionAlgorithm / CSS Fonts weight matching is directional.
 // Above 500, prefer a heavier face before searching lighter weights; between
 // 400 and 500, first search upward through 500, then downward, then above 500.
-fn FontWeightRank(candidate: f64, requested: f64) -> (u8, f64) {
+pub(crate) fn FontWeightRank(candidate: f64, requested: f64) -> (u8, f64) {
     if requested < 400.0 {
         if candidate <= requested {
             (0, requested - candidate)

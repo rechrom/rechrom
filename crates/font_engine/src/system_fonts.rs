@@ -91,6 +91,7 @@ pub struct FontQueryCollector(std::sync::Arc<std::sync::Mutex<FontQueryState>>);
 #[derive(Default)]
 struct FontQueryState {
     revision: u64,
+    web_fonts: crate::web_fonts::WebFontRegistry,
     queries: Vec<SystemFontQuery>,
     matches: Vec<(SystemFontQuery, Vec<SystemFontFaceId>)>,
     unavailable_faces: Vec<SystemFontFaceId>,
@@ -103,6 +104,21 @@ struct FontQueryState {
     )>,
 }
 impl FontQueryCollector {
+    pub fn RegisterWebFonts(&self, faces: Vec<crate::WebFontFace>) {
+        let mut state = self.0.lock().expect("font query outbox poisoned");
+        if state.web_fonts.faces != faces {
+            state.web_fonts.faces = faces;
+            state.revision = state.revision.wrapping_add(1);
+        }
+    }
+    pub fn RequestWebFonts(&self, description: &crate::FontDescription, text: &[u16], fallback: bool) {
+        self.0.lock().expect("font query outbox poisoned").web_fonts.WillUse(description, text, fallback);
+    }
+    /// Pure resource effects, drained by the document resource owner after
+    /// Layout. No fetch or document callback occurs inside font computation.
+    pub fn DrainWebFontRequests(&self) -> Vec<u64> {
+        std::mem::take(&mut self.0.lock().expect("font query outbox poisoned").web_fonts.requests)
+    }
     pub fn Push(&self, query: SystemFontQuery) {
         let mut queries = self.0.lock().expect("font query outbox poisoned");
         if !queries.queries.contains(&query) {

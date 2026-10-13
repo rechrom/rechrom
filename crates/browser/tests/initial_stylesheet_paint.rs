@@ -71,9 +71,7 @@ fn page() -> (Page, Events, Responses) {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(
-            &assembly,
-        ))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
         browser::CreateBrowserConstraints(320, 200),
         None,
         None,
@@ -87,6 +85,7 @@ fn response() -> URLLoadEvent {
         mime_type: "text/html".into(),
         text_encoding: "utf-8".into(),
         status_code: 200,
+        ..Default::default()
     })
 }
 

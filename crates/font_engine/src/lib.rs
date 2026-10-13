@@ -4,6 +4,8 @@ pub mod engine;
 pub mod resolver;
 pub use resolver::{FontFace, FontUnicodeRange, FontSmoothing};
 pub mod system_fonts;
+mod web_fonts;
+pub use web_fonts::WebFontFace;
 pub use engine::{FontEngine, FontMutation, FontCompute, FontPending, FontError, FontRule, FontFaceState, FontShapeRequest, RetainedShapeResult};
 pub use system_fonts::*;
 pub mod clip_text_outline;

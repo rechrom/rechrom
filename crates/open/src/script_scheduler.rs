@@ -85,6 +85,9 @@ struct ParserResources {
     dynamic: Option<std::rc::Weak<DynamicScriptTasks>>,
     modules: Rc<document_loader::ModuleResources>,
     supports_modules: bool,
+    scripting: bool,
+    preloads: crate::preload::Preloads,
+    preload_csp_seen: bool,
 }
 struct ParserHost(Rc<RefCell<ParserResources>>);
 impl HTMLParserHost for ParserHost {
@@ -94,10 +97,29 @@ impl HTMLParserHost for ParserHost {
         let attr = |name| node.FindAttribute(name).map_or("", |a| a.value.as_str());
         let mut resources = self.0.borrow_mut();
         if event.phase == ParserElementPhase::kInserted {
-            if node.IsHTMLElement("base") && !resources.base_seen && !attr("href").is_empty() {
-                resources.base_url = ResolveUrl(&resources.current_url, attr("href"))
-                    .expect("source URL resolution");
+            if node.IsHTMLElement("meta") {
+                if attr("http-equiv").eq_ignore_ascii_case("content-security-policy") {
+                    resources.preload_csp_seen = true;
+                }
+                if attr("name").eq_ignore_ascii_case("referrer") {
+                    if let Some(policy) =
+                        html::preload_scanner::NormalizeMetaReferrer(attr("content"))
+                            .and_then(url_loader::ReferrerPolicy::FromString)
+                    {
+                        resources.resources.SetReferrerPolicy(policy);
+                    }
+                }
+            }
+            if node.IsHTMLElement("base")
+                && !resources.base_seen
+                && node.FindAttribute("href").is_some()
+            {
+                // Document::ProcessBaseElement picks the first href even if
+                // invalid or empty; later elements cannot replace its fallback.
                 resources.base_seen = true;
+                resources.base_url =
+                    crate::preload::AcceptedBase(&resources.current_url, attr("href"))
+                        .unwrap_or_else(|| resources.current_url.clone());
                 if let Some(dynamic) = resources.dynamic.as_ref().and_then(|d| d.upgrade()) {
                     dynamic.SetBaseURL(resources.base_url.clone());
                 }
@@ -121,18 +143,24 @@ impl HTMLParserHost for ParserHost {
                 let request = URLRequest {
                     url: url.clone(),
                     referrer: resources.current_url.clone(),
+                    referrer_policy: url_loader::ReferrerPolicy::FromString(attr("referrerpolicy")),
                     destination: RequestDestination::kStyleSheet,
                     ..Default::default()
                 };
                 let resource = resources.resources.Start(request);
                 let render_blocking = !resources.rendering_has_begun && !disposition.alternate;
-                browser_tracing::instant_with_text("loading", "ParserStyleSheetQueued", &url, &[
-                    ("owner_node", node.Id() as f64),
-                    ("external", 1.),
-                    ("render_blocking", render_blocking as u8 as f64),
-                    ("alternate", disposition.alternate as u8 as f64),
-                    ("pending_sheets", (resources.styles.len() + 1) as f64),
-                ]);
+                browser_tracing::instant_with_text(
+                    "loading",
+                    "ParserStyleSheetQueued",
+                    &url,
+                    &[
+                        ("owner_node", node.Id() as f64),
+                        ("external", 1.),
+                        ("render_blocking", render_blocking as u8 as f64),
+                        ("alternate", disposition.alternate as u8 as f64),
+                        ("pending_sheets", (resources.styles.len() + 1) as f64),
+                    ],
+                );
                 resources.styles.push_back(PendingStyle::External {
                     url,
                     resource,
@@ -144,23 +172,6 @@ impl HTMLParserHost for ParserHost {
                         media: attr("media").to_owned(),
                     },
                 });
-            }
-            if node.IsHTMLElement("img") && !attr("src").is_empty() {
-                if std::env::var_os("BROWSER_TRACE_LOADING_STATE").is_some() {
-                    eprintln!(
-                        "parser-image src={} page={}",
-                        attr("src"),
-                        resources.page.is_some()
-                    );
-                }
-                if let Some(page) = &resources.page {
-                    page.QueueImageWithLoadBlocking(
-                        attr("src"),
-                        None,
-                        !attr("loading").eq_ignore_ascii_case("lazy"),
-                    )
-                    .expect("source URL resolution");
-                }
             }
             if node.IsHTMLElement("link")
                 && attr("rel")
@@ -177,12 +188,16 @@ impl HTMLParserHost for ParserHost {
         } else if node.IsHTMLElement("style") {
             let base = resources.base_url.clone();
             let render_blocking = !resources.rendering_has_begun;
-            browser_tracing::instant("loading", "ParserStyleSheetQueued", &[
-                ("owner_node", node.Id() as f64),
-                ("external", 0.),
-                ("render_blocking", render_blocking as u8 as f64),
-                ("pending_sheets", (resources.styles.len() + 1) as f64),
-            ]);
+            browser_tracing::instant(
+                "loading",
+                "ParserStyleSheetQueued",
+                &[
+                    ("owner_node", node.Id() as f64),
+                    ("external", 0.),
+                    ("render_blocking", render_blocking as u8 as f64),
+                    ("pending_sheets", (resources.styles.len() + 1) as f64),
+                ],
+            );
             resources.styles.push_back(PendingStyle::Inline {
                 node: node.Id(),
                 base,
@@ -198,12 +213,48 @@ impl HTMLParserHost for ParserHost {
         }
     }
 
+    fn HandlePreloadCandidate(&mut self, candidate: &html::preload_scanner::PreloadCandidate) {
+        let mut resources = self.0.borrow_mut();
+        if resources.preload_csp_seen {
+            return;
+        }
+        let engine = resources.resources.clone();
+        let page = resources.page.clone();
+        let current_url = resources.current_url.clone();
+        let base_url = resources.base_url.clone();
+        let base_seen = resources.base_seen;
+        let scripting = resources.scripting;
+        let modules = resources.supports_modules;
+        resources.preloads.Start(
+            candidate,
+            &engine,
+            page.as_deref(),
+            &current_url,
+            &base_url,
+            base_seen,
+            scripting,
+            modules,
+        );
+    }
+
     fn HandleParserElementInDocument(
         &mut self,
         document: &mut Document,
         element: usize,
         phase: ParserElementPhase,
     ) {
+        // Template contents are inert. Meta/base do not affect the outer
+        // document from a shadow TreeScope; connected shadow images/styles
+        // retain their normal resource lifetime.
+        if !document.IsConnectedToDocument(element) {
+            return;
+        }
+        let node = document.Node(element);
+        if (node.IsHTMLElement("meta") || node.IsHTMLElement("base"))
+            && document.TreeScopeRoot(element) != document.Root()
+        {
+            return;
+        }
         // Source snapshots the style text at children-finished, before later
         // scripts can mutate/remove it while preceding CSS is still pending.
         let sheet = if phase == ParserElementPhase::kChildrenFinished
@@ -225,6 +276,25 @@ impl HTMLParserHost for ParserHost {
             element: document.Node(element),
             phase,
         });
+        if phase == ParserElementPhase::kInserted && document.Node(element).IsHTMLElement("img") {
+            let page = self.0.borrow().page.clone();
+            if let Some(page) = page {
+                let selection = page.SelectResponsiveImageInDocument(document, element);
+                let source = selection.as_ref().map(|s| s.source.clone());
+                document.SetResponsiveImageSelection(element, selection);
+                if let Some(source) = source {
+                    let image = document.Node(element);
+                    let attr = |name| image.FindAttribute(name).map_or("", |a| a.value.as_str());
+                    page.QueueImageWithPolicy(
+                        &source,
+                        None,
+                        !attr("loading").eq_ignore_ascii_case("lazy"),
+                        url_loader::ReferrerPolicy::FromString(attr("referrerpolicy")),
+                    )
+                    .expect("source URL resolution");
+                }
+            }
+        }
         if let Some(sheet) = sheet {
             let mut resources = self.0.borrow_mut();
             let Some(PendingStyle::Inline { sheet: stored, .. }) = resources.styles.back_mut()
@@ -306,11 +376,18 @@ fn PollParserStyleSheets(
                 metadata,
             } => {
                 if !resource.Poll() {
-                    browser_tracing::instant("loading", "ParserStyleSheetWait", &[
-                        ("owner_node", metadata.owner_node_id as f64),
-                        ("render_blocking", render_blocking as u8 as f64),
-                        ("pending_sheets", (resources.borrow().styles.len() + 1) as f64),
-                    ]);
+                    browser_tracing::instant(
+                        "loading",
+                        "ParserStyleSheetWait",
+                        &[
+                            ("owner_node", metadata.owner_node_id as f64),
+                            ("render_blocking", render_blocking as u8 as f64),
+                            (
+                                "pending_sheets",
+                                (resources.borrow().styles.len() + 1) as f64,
+                            ),
+                        ],
+                    );
                     resources
                         .borrow_mut()
                         .styles
@@ -323,8 +400,12 @@ fn PollParserStyleSheets(
                     return Ok(false);
                 }
                 let owner_node = metadata.owner_node_id;
-                browser_tracing::instant_with_text("loading", "ParserStyleSheetResponse", &url,
-                    &[("owner_node", owner_node as f64)]);
+                browser_tracing::instant_with_text(
+                    "loading",
+                    "ParserStyleSheetResponse",
+                    &url,
+                    &[("owner_node", owner_node as f64)],
+                );
                 match RequireResponse(resource.TakeResult()).and_then(|response| {
                     let base = if response.final_url.is_empty() {
                         url.clone()
@@ -341,8 +422,12 @@ fn PollParserStyleSheets(
                 }) {
                     Ok(loaded) => loaded,
                     Err(error) => {
-                        browser_tracing::instant_with_text("loading", "ParserStyleSheetFailed", &url,
-                            &[("owner_node", owner_node as f64)]);
+                        browser_tracing::instant_with_text(
+                            "loading",
+                            "ParserStyleSheetFailed",
+                            &url,
+                            &[("owner_node", owner_node as f64)],
+                        );
                         client.DidFailResource(&url, &error.to_string());
                         continue;
                     }
@@ -367,10 +452,15 @@ fn PollParserStyleSheets(
         } else {
             apply(document.borrow_mut().GetDocumentMut())?;
         }
-        browser_tracing::instant_with_text("loading", "ParserStyleSheetApplied", &base, &[
-            ("owner_node", owner_node as f64),
-            ("pending_sheets", resources.borrow().styles.len() as f64),
-        ]);
+        browser_tracing::instant_with_text(
+            "loading",
+            "ParserStyleSheetApplied",
+            &base,
+            &[
+                ("owner_node", owner_node as f64),
+                ("pending_sheets", resources.borrow().styles.len() as f64),
+            ],
+        );
         client.DidApplyStyleSheet(&base);
     }
     Ok(resources.borrow().styles.is_empty())
@@ -384,6 +474,7 @@ struct ScriptDescriptor {
     asynchronous: bool,
     deferred: bool,
     nomodule: bool,
+    referrer_policy: Option<url_loader::ReferrerPolicy>,
     source: String,
 }
 
@@ -458,6 +549,9 @@ impl ScriptScheduler {
                 dynamic: None,
                 modules,
                 supports_modules: false,
+                scripting: true,
+                preloads: Default::default(),
+                preload_csp_seen: false,
             })),
             script_resources: HashMap::new(),
             async_scripts: Vec::new(),
@@ -561,6 +655,9 @@ impl ScriptScheduler {
                 asynchronous: element.FindAttribute("async").is_some(),
                 deferred: element.FindAttribute("defer").is_some(),
                 nomodule: element.FindAttribute("nomodule").is_some(),
+                referrer_policy: url_loader::ReferrerPolicy::FromString(&attribute(
+                    "referrerpolicy",
+                )),
                 source,
             })
         };
@@ -629,14 +726,25 @@ impl ScriptScheduler {
         let request = URLRequest {
             url: ResolveUrl(&resources.base_url, &descriptor.src)?,
             referrer: resources.current_url.clone(),
+            referrer_policy: descriptor.referrer_policy,
             destination: RequestDestination::kScript,
+            defer: if descriptor.asynchronous || descriptor.deferred {
+                url_loader::RequestDefer::Lazy
+            } else {
+                url_loader::RequestDefer::None
+            },
             ..Default::default()
         };
-        browser_tracing::instant_with_text("loading", "ParserScriptRequest", &request.url, &[
-            ("script_node", script.node_id as f64),
-            ("async", descriptor.asynchronous as u8 as f64),
-            ("defer", descriptor.deferred as u8 as f64),
-        ]);
+        browser_tracing::instant_with_text(
+            "loading",
+            "ParserScriptRequest",
+            &request.url,
+            &[
+                ("script_node", script.node_id as f64),
+                ("async", descriptor.asynchronous as u8 as f64),
+                ("defer", descriptor.deferred as u8 as f64),
+            ],
+        );
         self.script_resources
             .insert(script.node_id, resources.resources.Start(request));
         Ok(())
@@ -1025,6 +1133,7 @@ impl ScriptScheduler {
         }
         self.resources.borrow_mut().supports_modules = runtime.SupportsModules();
         let mut host = ParserHost(self.resources.clone());
+        loader.EnablePreloadScanning(true);
         loader.BeginParsing(self.document.borrow_mut().GetDocumentMut(), &mut host)?;
         self.document_started = true;
         Ok(())
@@ -1042,11 +1151,12 @@ impl ScriptScheduler {
         if self.remaining_script_tasks.is_none() {
             self.PumpModules(runtime, realm, 16);
         }
+        self.resources.borrow_mut().preloads.Poll();
         PollParserStyleSheets(&self.resources, &self.document, None, client)?;
         let mut arena = ParserArena::Take(self.document.clone());
         let mut host = ParserHost(self.resources.clone());
         let progress = loader.Pump(arena.owner.GetDocumentMut(), &mut host, budget)?;
-        if progress.made_progress {
+        if progress.parser_made_progress {
             client.DidPumpParser();
         }
         loader.WithParser(arena.owner.GetDocumentMut(), &mut host, |parser| {
@@ -1086,7 +1196,7 @@ impl ScriptScheduler {
                             let styles_ready = PollParserStyleSheets(&self.resources, &self.document, Some(parser), client)?;
                             // Preserve the existing short-circuit readiness policy.
                             let script_ready = styles_ready && self.script_ready(script, &descriptor);
-                            browser_tracing::instant("loading", "ParserScriptReadiness", &[
+                            browser_tracing::instant_with_text("loading", "ParserScriptReadiness", &descriptor.src, &[
                                 ("script_node", script.node_id as f64),
                                 ("styles_ready", styles_ready as u8 as f64),
                                 ("script_ready_checked", styles_ready as u8 as f64),
@@ -1362,6 +1472,9 @@ impl ParserResourceDiscovery {
                 dynamic: None,
                 modules,
                 supports_modules: false,
+                scripting: false,
+                preloads: Default::default(),
+                preload_csp_seen: false,
             })),
             import_map: HashMap::new(),
         }
@@ -1374,6 +1487,7 @@ impl ParserResourceDiscovery {
     }
     pub fn BeginDocumentLoader(&mut self, loader: &mut DocumentLoader) -> io::Result<()> {
         let mut host = ParserHost(self.resources.clone());
+        loader.EnablePreloadScanning(false);
         loader.BeginParsing(self.document.borrow_mut().GetDocumentMut(), &mut host)
     }
     pub fn PumpDocumentLoader(
@@ -1382,12 +1496,13 @@ impl ParserResourceDiscovery {
         budget: document_loader::DocumentLoadBudget,
         client: &mut dyn ScriptLoadClient,
     ) -> io::Result<document_loader::DocumentLoadProgress> {
+        self.resources.borrow_mut().preloads.Poll();
         PollParserStyleSheets(&self.resources, &self.document, None, client)?;
         let document = self.document.clone();
         let mut owner = document.borrow_mut();
         let mut host = ParserHost(self.resources.clone());
         let progress = loader.Pump(owner.GetDocumentMut(), &mut host, budget)?;
-        if progress.made_progress {
+        if progress.parser_made_progress {
             client.DidPumpParser();
         }
         if progress.parser.status == HTMLParserStatus::kWaitingForScript {

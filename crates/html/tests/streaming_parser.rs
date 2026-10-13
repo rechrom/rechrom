@@ -386,3 +386,100 @@ fn borrowed_and_resident_interfaces_share_the_same_parser_semantics() {
         snapshot(baseline.GetDocument())
     );
 }
+
+#[test]
+fn production_preload_scanner_shares_decoder_and_survives_scoped_script_insertion() {
+    let mut owner = DOM::new();
+    let mut host = Host::default();
+    let mut parser = HTMLDocumentParserState::new(owner.GetDocumentMut(), &mut host);
+    parser.EnablePreloadScanning(true);
+    parser.SetTextEncoding("windows-1252").unwrap();
+    parser
+        .AppendBytes(b"<body><script src=blocking.js></script><img src='\x80.png'>")
+        .unwrap();
+    assert_eq!(
+        parser.Pump(owner.GetDocumentMut(), &mut host, 64).status,
+        HTMLParserStatus::kWaitingForScript
+    );
+    let ahead = parser.ScanPreloads(64);
+    assert_eq!(ahead.candidates.len(), 2);
+    assert!(ahead.candidates[1]
+        .attributes
+        .iter()
+        .any(|(n, v)| n == "src" && v == "€.png"));
+    parser.WithParser(owner.GetDocumentMut(), &mut host, |borrowed| {
+        borrowed.InsertFromScript("<img src='written&amp;.png'>");
+        borrowed.ResumeAfterScript();
+    });
+    let written = parser.ScanPreloads(64);
+    assert_eq!(written.candidates.len(), 1);
+    assert!(written.candidates[0].from_insertion);
+    assert!(written.candidates[0]
+        .attributes
+        .iter()
+        .any(|(n, v)| n == "src" && v == "written&.png"));
+    assert!(parser.ScanPreloads(64).candidates.is_empty());
+    parser.AppendBytes(b"<img src=tail.png>").unwrap();
+    parser.FinishBytes().unwrap();
+    let tail = parser.ScanPreloads(64);
+    assert_eq!(tail.candidates.len(), 1);
+    assert!(!tail.candidates[0].from_insertion);
+    assert!(tail.finished);
+}
+
+#[test]
+fn inserted_csp_stops_future_main_preloads_across_script_resume() {
+    let mut owner = DOM::new();
+    let mut host = Host::default();
+    let mut parser = HTMLDocumentParserState::new(owner.GetDocumentMut(), &mut host);
+    parser.EnablePreloadScanning(true);
+    parser.Append("<body><script></script>");
+    assert_eq!(
+        parser.Pump(owner.GetDocumentMut(), &mut host, 64).status,
+        HTMLParserStatus::kWaitingForScript
+    );
+    parser.ScanPreloads(64);
+    parser.WithParser(owner.GetDocumentMut(), &mut host, |borrowed| {
+        borrowed.InsertFromScript(
+            "<img src=before><meta http-equiv=content-security-policy><img src=blocked>",
+        );
+        borrowed.ResumeAfterScript();
+    });
+    parser.Append("<img src=network-after>");
+    let result = parser.ScanPreloads(64);
+    assert!(result.stopped_for_csp);
+    assert_eq!(result.candidates.len(), 1);
+    assert!(result.candidates[0]
+        .attributes
+        .iter()
+        .any(|(n, v)| n == "src" && v == "before"));
+    parser.Append("<img src=later>");
+    assert!(parser.ScanPreloads(64).candidates.is_empty());
+}
+
+#[test]
+fn scripted_noscript_stays_raw_in_head_across_parser_turns() {
+    let mut owner = DOM::new();
+    let mut host = Host::default();
+    let mut parser = HTMLDocumentParserState::new(owner.GetDocumentMut(), &mut host);
+    parser.EnablePreloadScanning(true);
+    parser.Append("<head id=h><noscript id=n><meta http-equiv=refresh content=0></noscript><title>T</title></head><body id=b><p id=p>visible</p>");
+    parser.FinishInput();
+    finish(&mut parser, &mut owner, &mut host);
+    let document = owner.GetDocument();
+    let head = find(document, "h").unwrap();
+    let noscript = find(document, "n").unwrap();
+    assert!(document.Node(head).Children().contains(&noscript));
+    let children = document.Node(noscript).Children();
+    assert_eq!(children.len(), 1);
+    assert_eq!(document.Node(children[0]).Type(), DOMNodeType::kText);
+    assert_eq!(
+        document.Node(children[0]).Data(),
+        "<meta http-equiv=refresh content=0>"
+    );
+    let body = find(document, "b").unwrap();
+    assert!(document
+        .Node(body)
+        .Children()
+        .contains(&find(document, "p").unwrap()));
+}
