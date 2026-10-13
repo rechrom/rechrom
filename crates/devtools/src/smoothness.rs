@@ -682,6 +682,7 @@ mod tests {
         fields: &[(&str, f64)],
     ) -> RecordedSpan {
         RecordedSpan {
+            text: None,
             id,
             parent_id: 0,
             thread_id: 1,

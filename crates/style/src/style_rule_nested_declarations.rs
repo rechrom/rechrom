@@ -14,12 +14,12 @@ use crate::style_rule::{RuleType, StyleRule, StyleRuleDependencies};
 use std::rc::Rc;
 
 // cpp: style_rule_nested_declarations.h:27-74
-// This wrapper intentionally owns its non-observable inner StyleRule. The
+// This wrapper retains the identity of its non-observable inner StyleRule. The
 // latter is what RuleSet receives; the wrapper only preserves whether it was
 // produced by regular nesting or @scope for later re-nesting.
 pub struct StyleRuleNestedDeclarations<D: StyleRuleDependencies> {
     nesting_type_: CSSNestingType,
-    style_rule_: StyleRule<D>,
+    style_rule_: Rc<StyleRule<D>>,
 }
 
 impl<D: StyleRuleDependencies> StyleRuleNestedDeclarations<D> {
@@ -27,7 +27,7 @@ impl<D: StyleRuleDependencies> StyleRuleNestedDeclarations<D> {
     pub fn new(nesting_type: CSSNestingType, style_rule: StyleRule<D>) -> Self {
         Self {
             nesting_type_: nesting_type,
-            style_rule_: style_rule,
+            style_rule_: Rc::new(style_rule),
         }
     }
 
@@ -37,7 +37,7 @@ impl<D: StyleRuleDependencies> StyleRuleNestedDeclarations<D> {
     pub fn NestingType(&self) -> CSSNestingType {
         self.nesting_type_
     }
-    pub fn InnerStyleRule(&self) -> &StyleRule<D> {
+    pub fn InnerStyleRule(&self) -> &Rc<StyleRule<D>> {
         &self.style_rule_
     }
 
@@ -51,7 +51,7 @@ impl<D: StyleRuleDependencies> StyleRuleNestedDeclarations<D> {
 
     /// Consumes the wrapper when the caller needs the same allocation-like
     /// ownership transfer used by StyleRuleBase::Clone.
-    pub fn IntoInnerStyleRule(self) -> StyleRule<D> {
+    pub fn IntoInnerStyleRule(self) -> Rc<StyleRule<D>> {
         self.style_rule_
     }
 }

@@ -2,7 +2,6 @@
 mod native_test_thread;
 
 use browser::page::Page;
-use document_image::SVGImageDecoder;
 use image_decoder::skia_image_decoder::SkiaImageDecoder;
 use interaction::input_event::{
     InputEvent, MouseButton, MouseEvent, MouseEventType, WheelEvent, WheelPhase,
@@ -36,7 +35,7 @@ fn fixture(body: &'static [u8]) -> Page {
     let mut page = Page::Create(
         Rc::new(RefCell::new(FixtureLoader(body))),
         Rc::new(RefCell::new(SkiaImageDecoder)),
-        Rc::new(RefCell::new(SVGImageDecoder::new(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
         browser::CreateBrowserConstraints(320, 200),
         None,
         None,

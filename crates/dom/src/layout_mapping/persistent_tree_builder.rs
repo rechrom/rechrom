@@ -1,8 +1,10 @@
 #![allow(non_snake_case)]
 use crate::layout_mapping::layout_object_tree_builder::*;
-use crate::persistent_document::{DOMNamespace, DOMNodeType, PseudoContent, PseudoElement};
+use crate::persistent_document::{
+    DOMNamespace, DOMNodeType, DOMShadowRootMode, PseudoContent, PseudoElement,
+};
 use crate::svg_path_parser::ParseSVGPathDefault;
-use crate::{Document, UserInteractionState, DOM};
+use crate::{DOM, Document, UserInteractionState};
 use layoutng_assembly::internal::form_control_types::FormControlType;
 use layoutng_assembly::internal::layout_input::*;
 use layoutng_assembly::internal::layout_object::LayoutObject;
@@ -148,6 +150,12 @@ fn ElementMetadata(
                     matrix.values[13] = f;
                     view_box.view_transform = Some(matrix);
                 }
+            }
+            if !svg_has_outermost_parent(node.Parent().map(|parent| {
+                let parent = document.Node(parent);
+                (parent.Namespace(), parent.Name())
+            })) {
+                element_metadata_svg_viewport(node, &mut data);
             }
         }
     }
@@ -357,10 +365,22 @@ fn ElementKind(
     let node = document.Node(index);
     match node.Namespace() {
         DOMNamespace::kSVG => match node.Name() {
-            "svg" => NodeKind::kSvgRoot,
+            "svg" => {
+                if svg_has_outermost_parent(node.Parent().map(|parent| {
+                    let parent = document.Node(parent);
+                    (parent.Namespace(), parent.Name())
+                })) {
+                    NodeKind::kSvgRoot
+                } else {
+                    NodeKind::kSvgViewportContainer
+                }
+            }
             "foreignObject" => NodeKind::kSvgForeignObject,
             "text" => NodeKind::kSvgText,
-            "textPath" if element.svg_text_path.is_some() => NodeKind::kSvgTextPath,
+            // SVGTextPathElement::CreateLayoutObject preserves element identity
+            // independently of href resolution. LayoutSVGTextPath::LayoutPath
+            // represents an unresolved or empty resource with None.
+            "textPath" => NodeKind::kSvgTextPath,
             "tspan" => NodeKind::kSvgTSpan,
             "a" if {
                 let mut ancestor = node.Parent();
@@ -504,6 +524,21 @@ fn DefaultListMarkerText(document: &Document, index: usize, style: &ComputedStyl
     }
     format!("{value}. ")
 }
+// Author shadow attachment consumes DOM's single active flat-tree view. UA
+// controls still have specialized owners below (native file nodes, synthesized
+// editor/slider/menu, and host-painted meter/progress). Preserve that existing
+// projection until each adapter migrates together with its native shadow tree;
+// entering a UA root here would duplicate content or native theme painting.
+fn AttachmentChildren(document: &Document, index: usize) -> std::borrow::Cow<'_, [usize]> {
+    if document
+        .ShadowRoot(index)
+        .is_some_and(|root| document.ShadowRootMode(root) == Some(DOMShadowRootMode::kUserAgent))
+    {
+        return std::borrow::Cow::Borrowed(document.Node(index).Children());
+    }
+    document.FlatTreeChildren(index)
+}
+
 // cpp: dom_to_layout/layout_object_tree_builder.cc:870-902
 fn SuppressesCollapsibleWhitespaceChildren(
     document: &Document,
@@ -534,7 +569,7 @@ fn SuppressesCollapsibleWhitespaceChildren(
                 return !tree.NeedsCollapsibleWhitespace(parent);
             }
         }
-        node = document.Node(i).Parent();
+        node = document.FlatTreeParentElement(i);
     }
     false
 }
@@ -647,7 +682,7 @@ fn FindFirstLetterContent<'a>(
 ) {
     let resolved = document.ResolvedStyleFor(index);
     ConsiderGeneratedFirstLetter(resolved.and_then(|r| r.before.as_ref()), search);
-    for &child in document.Node(index).Children() {
+    for &child in AttachmentChildren(document, index).iter() {
         if search.stopped {
             return;
         }
@@ -1138,7 +1173,9 @@ fn AppendChildren<'a>(
     >,
 ) {
     let dom_parent = document.Node(index);
-    for &child in dom_parent.Children() {
+    // The original host/slot remains the inheritance and attachment context;
+    // its ShadowRoot fragment is a carrier, never a styled layout parent.
+    for &child in AttachmentChildren(document, index).iter() {
         let node = document.Node(child);
         if node.Type() == DOMNodeType::kText {
             // SVG character data creates layout text only in SVG text-content
@@ -1177,6 +1214,13 @@ fn AppendChildren<'a>(
             continue;
         }
         if node.Type() != DOMNodeType::kElement {
+            continue;
+        }
+        if node.IsElement("textPath", DOMNamespace::kSVG)
+            && !svg_text_path_layout_needed(
+                dom_parent.Namespace(), dom_parent.Name(), unsafe { &*parent },
+            )
+        {
             continue;
         }
         if node.Namespace() == DOMNamespace::kSVG
@@ -1927,6 +1971,76 @@ mod tests {
         n!(d.svg_length_adjust as i32);
         values
     }
+    #[test]
+    fn nested_svg_metadata_preserves_viewport_lengths_and_parent_boundaries() {
+        let mut owner = crate::test_html::html_parser::ParseHTML(
+            "<html><body><svg id='outer' width='200' height='100'>\
+             <g><svg id='nested' x='10%' y='2.54cm' width='50%' height='20' \
+             viewBox='0 0 100 0' preserveAspectRatio='none'></svg></g>\
+             <svg id='defaults'></svg>\
+             <foreignObject><svg id='foreign' width='40' height='30'></svg></foreignObject>\
+             </svg></body></html>",
+        );
+        let ids: BTreeMap<_, _> = (0..owner.GetDocument().NodeCount())
+            .filter_map(|index| {
+                owner
+                    .GetDocument()
+                    .Node(index)
+                    .FindAttribute("id")
+                    .map(|attr| (attr.value.clone(), index))
+            })
+            .collect();
+        let interaction = UserInteractionState::default();
+        let style = ComputedStyle::default();
+        let document = owner.GetDocument();
+        for id in ["outer", "foreign"] {
+            let data = ElementMetadata(document, ids[id], &interaction, true);
+            assert_eq!(
+                ElementKind(document, ids[id], &data, &style),
+                NodeKind::kSvgRoot
+            );
+            assert!(data.natural_width.is_some());
+            assert!(data.svg_viewport.is_none());
+        }
+        let nested = ElementMetadata(document, ids["nested"], &interaction, true);
+        assert_eq!(
+            ElementKind(document, ids["nested"], &nested, &style),
+            NodeKind::kSvgViewportContainer
+        );
+        assert_eq!(nested.natural_width, None);
+        assert_eq!(nested.natural_height, None);
+        assert_eq!(nested.natural_aspect_ratio, None);
+        assert_eq!(
+            nested.svg_viewport,
+            Some(SvgViewportData {
+                x: SvgViewportLength::kPercentage(10.0),
+                y: SvgViewportLength::kUserUnits(96.0),
+                width: SvgViewportLength::kPercentage(50.0),
+                height: SvgViewportLength::kUserUnits(20.0),
+            })
+        );
+        assert_eq!(nested.svg_view_box.unwrap().height, 0.0);
+        assert!(nested.svg_view_box.unwrap().preserve_none);
+        let defaults = ElementMetadata(document, ids["defaults"], &interaction, true);
+        assert_eq!(defaults.svg_viewport, Some(SvgViewportData::default()));
+        let nested_id = document.Node(ids["nested"]).Id();
+        owner
+            .ApplyMutation(&crate::dom_mutation::DOMMutation {
+                mutation_type: crate::dom_mutation::DOMMutationType::kSetAttribute,
+                target_node_id: nested_id,
+                name: "width".into(),
+                value: "75%".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let changed = ElementMetadata(owner.GetDocument(), ids["nested"], &interaction, true);
+        assert_eq!(
+            changed.svg_viewport.unwrap().width,
+            SvgViewportLength::kPercentage(75.0)
+        );
+        assert!(nested != changed);
+    }
+
     #[test]
     fn svg_root_absolute_dimensions_are_natural_dimensions_not_viewbox_dimensions() {
         let owner = crate::test_html::html_parser::ParseHTML(

@@ -375,6 +375,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         box_fragment_is_inline_box,
         display_item_raster_effect_outset,
         display_item_client_id,
+        paint_layer_state_is_native,
         paint_layer_client_id,
         paint_layer_client_is_cacheable,
         paint_layer_client_is_just_created,
@@ -415,6 +416,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         overflow_clip_margin_outsets,
         scroll_offset,
         scroll_size,
+        client_size: _,
         scroll_container,
         writing_mode,
         direction,
@@ -443,6 +445,8 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         text_control_caret_metrics,
         svg_shape,
         svg_view_box,
+        svg_local_transform,
+        svg_viewport,
         svg_text,
         table_cell_column,
         sticky_constraint,
@@ -459,6 +463,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && box_fragment_is_inline_box == &b.box_fragment_is_inline_box
         && display_item_raster_effect_outset == &b.display_item_raster_effect_outset
         && display_item_client_id == &b.display_item_client_id
+        && paint_layer_state_is_native == &b.paint_layer_state_is_native
         && paint_layer_client_id == &b.paint_layer_client_id
         && paint_layer_client_is_cacheable == &b.paint_layer_client_is_cacheable
         && paint_layer_client_is_just_created == &b.paint_layer_client_is_just_created
@@ -526,6 +531,8 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && text_control_caret_metrics == &b.text_control_caret_metrics
         && svg_shape == &b.svg_shape
         && svg_view_box == &b.svg_view_box
+        && svg_local_transform == &b.svg_local_transform
+        && svg_viewport == &b.svg_viewport
         && svg_text == &b.svg_text
         && table_cell_column == &b.table_cell_column
         && sticky_constraint == &b.sticky_constraint
@@ -586,11 +593,13 @@ fn resources_equal(
             fonts,
             images,
             device_pixel_ratio,
+            preferred_color_scheme,
             layout_zoom_factor,
             paints_opaque_base_background,
             viewport,
         } = &**a;
         *device_pixel_ratio == b.device_pixel_ratio
+            && *preferred_color_scheme == b.preferred_color_scheme
             && *layout_zoom_factor == b.layout_zoom_factor
             && *paints_opaque_base_background == b.paints_opaque_base_background
             && *viewport == b.viewport

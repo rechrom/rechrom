@@ -27,16 +27,13 @@ use super::text_overflow_post_layout_snapshot::TextOverflowPostLayoutSnapshot;
 
 // cpp: layoutng/internal/layout_scrollable_area.cc:127-151
 fn ResolveScrollbarModes(box_: &LayoutBox) -> (ScrollbarMode, ScrollbarMode) {
-    let mut style: &ComputedStyle = box_.StyleRef();
     if box_.IsLayoutView() {
-        let viewport = box_.ViewportDefiningElementForLayout();
-        if !viewport.is_null() {
-            let viewport_object = unsafe { &*viewport }.GetLayoutObject();
-            if !viewport_object.is_null() {
-                style = unsafe { &*viewport_object }.StyleRef();
-            }
-        }
+        let view = unsafe { &*(box_ as *const LayoutBox as *const super::layout_view::LayoutView) };
+        let (mut horizontal, mut vertical) = (ScrollbarMode::kAuto, ScrollbarMode::kAuto);
+        view.CalculateScrollbarModes(&mut horizontal, &mut vertical, None, None);
+        return (horizontal, vertical);
     }
+    let style: &ComputedStyle = box_.StyleRef();
     let resolve = |overflow: EOverflow| match overflow {
         EOverflow::kScroll => ScrollbarMode::kAlwaysOn,
         EOverflow::kHidden | EOverflow::kClip | EOverflow::kVisible => ScrollbarMode::kAlwaysOff,
@@ -411,7 +408,8 @@ impl PaintLayerScrollableArea {
     ) {
         let box_ = unsafe { &*self.GetLayoutBox() };
         if box_.InputOwnerForLayout().InputPrinting()
-            || box_.ViewportDefiningElementForLayout() as *mut Node == box_.GetNode()
+            || (!box_.IsLayoutView()
+                && box_.ViewportDefiningElementForLayout() as *mut Node == box_.GetNode())
             || box_.IsFieldset()
             || box_.IsFrameSet()
             || box_.StyleRef().UsedScrollbarWidth() == EScrollbarWidth::kNone
@@ -548,6 +546,17 @@ impl PaintLayerScrollableArea {
             self.SetHasHorizontalScrollbar(needs_horizontal_scrollbar);
             self.SetHasVerticalScrollbar(needs_vertical_scrollbar);
             self.UpdateScrollOrigin();
+            // Blink invalidates intrinsic inline contributions when the inline
+            // scrollbar strut changes, then refreshes dimensions before the
+            // caller's existing scrollbar-change relayout/freeze loop.
+            let box_ = unsafe { &mut *self.GetLayoutBox() };
+            if (vertical_changes && box_.IsHorizontalWritingMode())
+                || (horizontal_changes && !box_.IsHorizontalWritingMode())
+            {
+                box_.SetIntrinsicLogicalWidthsDirty(
+                    super::layout_object::MarkingBehavior::kMarkContainerChain);
+            }
+            self.UpdateScrollDimensions();
         }
     }
 

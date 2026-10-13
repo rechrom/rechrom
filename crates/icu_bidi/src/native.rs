@@ -50,4 +50,14 @@ unsafe extern "C" {
     // cpp: icu_bidi/unicode/uchar.h:3573-3573
     #[link_name = concat!("u_charDirection_", env!("ICU_MAJOR"))]
     pub fn u_charDirection(ch: i32) -> i32;
+    // ICU unicode/ustring.h: full, locale-independent Unicode case folding.
+    #[link_name = concat!("u_strFoldCase_", env!("ICU_MAJOR"))]
+    pub fn u_strFoldCase(
+        destination: *mut u16,
+        capacity: i32,
+        source: *const u16,
+        source_length: i32,
+        options: u32,
+        status: *mut i32,
+    ) -> i32;
 }

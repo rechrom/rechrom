@@ -15,9 +15,16 @@ use javascript::javascript_runtime::{
 };
 use layoutng_assembly::internal::layout_input::PaintPathVerb;
 
+#[path = "dom_custom_elements.rs"]
+mod custom_elements;
+#[path = "dom_attributes.rs"]
+mod attributes;
 #[path = "dom_services.rs"]
 mod services;
 pub use services::DOMBindingsHost;
+#[path = "viewport_scroll.rs"]
+mod viewport_scroll;
+pub use viewport_scroll::ViewportScrollState;
 #[path = "dom_mutation_notification.rs"]
 mod mutation_notifications;
 pub use mutation_notifications::MutationNotification;
@@ -108,7 +115,7 @@ pub type ScopedDOMMutationEmitter = Rc<dyn Fn(&DOMMutation, &mut dyn JavaScriptH
 pub struct DOMJavaScriptBindings {
     document: Rc<RefCell<DOM>>,
     services: services::DOMServices,
-    emit_mutation: DOMMutationEmitter,
+    emit_mutation: Rc<RefCell<DOMMutationEmitter>>,
     scoped_emit_mutation: Option<ScopedDOMMutationEmitter>,
     prototypes: HashMap<String, JavaScriptValue>,
     method_wrappers: HashMap<String, JavaScriptFunction>,
@@ -124,6 +131,7 @@ pub struct DOMJavaScriptBindings {
     next_collection_id: Cell<HostObjectId>,
     listeners: RefCell<HashMap<HostObjectId, HashMap<String, Vec<Listener>>>>,
     mutation_observers_active: bool,
+    custom_element_backup_queued: bool,
     selector_service: RefCell<style::persistent_selector::PersistentSelectorService>,
 }
 
@@ -182,7 +190,7 @@ impl DOMJavaScriptBindings {
         Self {
             services: services::DOMServices::new(host),
             document,
-            emit_mutation,
+            emit_mutation: Rc::new(RefCell::new(emit_mutation)),
             scoped_emit_mutation: None,
             prototypes: HashMap::new(),
             method_wrappers: HashMap::new(),
@@ -198,6 +206,7 @@ impl DOMJavaScriptBindings {
             next_collection_id: Cell::new(1 << 62),
             listeners: RefCell::new(HashMap::new()),
             mutation_observers_active: false,
+            custom_element_backup_queued: false,
             selector_service: RefCell::new(Default::default()),
         }
     }
@@ -655,7 +664,7 @@ impl DOMJavaScriptBindings {
             };
             let value = *value;
             drop(owner);
-            (self.emit_mutation)(&DOMMutation {
+            (self.emit_mutation.borrow_mut())(&DOMMutation {
                 mutation_type: DOMMutationType::kSetControlChecked,
                 target_node_id: receiver,
                 bool_value: value,
@@ -672,7 +681,7 @@ impl DOMJavaScriptBindings {
             };
             let value = *value;
             drop(owner);
-            (self.emit_mutation)(&DOMMutation {
+            (self.emit_mutation.borrow_mut())(&DOMMutation {
                 mutation_type: DOMMutationType::kSetControlIndeterminate,
                 target_node_id: receiver,
                 bool_value: value,
@@ -728,7 +737,7 @@ impl DOMJavaScriptBindings {
         drop(owner);
         let mut trace = browser_tracing::span("dom", "DOMMutationHost");
         trace.set("mutation_type", mutation_type as u8 as f64);
-        (self.emit_mutation)(&DOMMutation {
+        (self.emit_mutation.borrow_mut())(&DOMMutation {
             mutation_type,
             target_node_id: receiver,
             name: match member {
@@ -749,6 +758,9 @@ impl DOMJavaScriptBindings {
         member: &str,
         arguments: &[HostValue],
     ) -> HostResult {
+        if matches!(member, "__domHasInterface" | "__domAttributeGet" | "__domAttributeSet") {
+            return self.NativeAttributeCall(receiver, member, arguments);
+        }
         if member == "__domCollectionBrand" {
             return self.collections.borrow().get(&receiver).map_or_else(
                 || Self::type_error("Illegal invocation"),
@@ -763,6 +775,9 @@ impl DOMJavaScriptBindings {
                     ))
                 },
             );
+        }
+        if let Some(result) = self.CallViewportScroll(receiver, member, arguments) {
+            return result;
         }
         if let Some(result) = self.CallDOMService(receiver, member, arguments) {
             return result;
@@ -954,6 +969,11 @@ impl DOMJavaScriptBindings {
         // cpp: webapi/dom_bindings.cc:737-759
         if receiver == 0 {
             return match member {
+                "hasAttributes" | "getAttributeNames" | "__validateImportNode" | "importNode"
+                | "__slotBrand" | "__slotName" | "__setSlotName" | "assignedNodes"
+                | "assignedElements" | "assign" => {
+                    Self::type_error("Illegal invocation")
+                }
                 "__domInstall" => {
                     if let [HostValue::String(name), HostValue::JavaScriptValue(value), ..] =
                         arguments
@@ -1010,6 +1030,9 @@ impl DOMJavaScriptBindings {
                 );
             }
         }
+        if member.starts_with("__ce") {
+            return self.CustomElementCall(receiver, member, arguments);
+        }
         let owner = self.document.borrow();
         let document = owner.GetDocument();
         let Some(index) = document.FindNodeById(receiver) else {
@@ -1017,6 +1040,18 @@ impl DOMJavaScriptBindings {
         };
         let node = document.Node(index);
         match member {
+            "__htmlConstructionBrand" => {
+                let Some(HostValue::String(tag)) = arguments.first() else {
+                    return Self::type_error("Invalid HTML constructor interface");
+                };
+                let compatible = node.Type() == DOMNodeType::kElement
+                    && node.Namespace() == DOMNamespace::kHTML
+                    && if tag.is_empty() {
+                        dom::custom_elements::IsValidCustomElementName(node.Name())
+                    } else { node.Name() == tag };
+                if !compatible { return Self::type_error("Illegal HTML constructor interface"); }
+                HostResult::default()
+            }
             "getTotalLength"
                 if node.Type() == DOMNodeType::kElement
                     && node.Namespace() == DOMNamespace::kSVG
@@ -1201,6 +1236,104 @@ impl DOMJavaScriptBindings {
                 serialize_node(document, index, &mut output);
                 Self::value(HostValue::String(output))
             }
+            "__slotBrand" | "__slotName" | "__setSlotName" | "assignedNodes"
+            | "assignedElements" | "assign" => {
+                if !node.IsHTMLElement("slot") {
+                    return Self::type_error("HTMLSlotElement method requires a slot receiver");
+                }
+                if member == "__slotBrand" {
+                    return HostResult::default();
+                }
+                if member == "__slotName" {
+                    return Self::value(HostValue::String(
+                        node.FindAttribute("name").map_or("", |a| a.value.as_str()).into(),
+                    ));
+                }
+                if member == "__setSlotName" {
+                    let Some(HostValue::String(value)) = arguments.first() else {
+                        return Self::type_error("slot name requires a DOMString");
+                    };
+                    let mutation = DOMMutation {
+                        mutation_type: DOMMutationType::kSetAttribute,
+                        target_node_id: receiver,
+                        name: "name".into(),
+                        value: value.clone(),
+                        ..Default::default()
+                    };
+                    drop(owner);
+                    (self.emit_mutation.borrow_mut())(&mutation);
+                    return HostResult::default();
+                }
+                if member == "assign" {
+                    // Web IDL converts the entire variadic union before any mutation.
+                    let mut node_ids = Vec::with_capacity(arguments.len());
+                    for argument in arguments {
+                        let HostValue::Object(object) = argument else {
+                            return Self::type_error("assign accepts only Element or Text nodes");
+                        };
+                        let Some(child) = document.FindNodeById(object.id) else {
+                            return Self::type_error("assign accepts only Element or Text nodes");
+                        };
+                        if !matches!(document.Node(child).Type(), DOMNodeType::kElement | DOMNodeType::kText) {
+                            return Self::type_error("assign accepts only Element or Text nodes");
+                        }
+                        node_ids.push(object.id);
+                    }
+                    let mutation = DOMMutation {
+                        mutation_type: DOMMutationType::kAssignSlotNodes,
+                        target_node_id: receiver,
+                        node_ids,
+                        ..Default::default()
+                    };
+                    drop(owner);
+                    (self.emit_mutation.borrow_mut())(&mutation);
+                    return HostResult::default();
+                }
+                let nodes = if matches!(arguments.first(), Some(HostValue::Boolean(true))) {
+                    document.FlattenedAssignedNodes(index)
+                } else {
+                    document.AssignedNodes(index)
+                };
+                let nodes: Vec<_> = nodes.into_iter().filter(|&child| {
+                    member != "assignedElements" || document.Node(child).Type() == DOMNodeType::kElement
+                }).collect();
+                let mut fields = Vec::with_capacity(nodes.len() + 1);
+                fields.push(("length".into(), HostValue::Number(nodes.len() as f64)));
+                fields.extend(nodes.into_iter().enumerate().map(|(position, child)| {
+                    (position.to_string(), HostValue::Object(HostObjectRef { id: document.Node(child).Id() }))
+                }));
+                Self::value(HostValue::Record(fields))
+            }
+            "hasAttributes" | "getAttributeNames" => {
+                if node.Type() != DOMNodeType::kElement {
+                    return Self::type_error("attribute methods require an element receiver");
+                }
+                // Blink Element::hasAttributes / getAttributeNamesForBindings.
+                // Read canonical attribute order and qualified names directly;
+                // the snapshot crosses the existing immutable value boundary.
+                if member == "hasAttributes" {
+                    return Self::value(HostValue::Boolean(!node.Attributes().is_empty()));
+                }
+                let mut fields = Vec::with_capacity(node.Attributes().len() + 1);
+                fields.push((
+                    "length".into(),
+                    HostValue::Number(node.Attributes().len() as f64),
+                ));
+                fields.extend(
+                    node.Attributes()
+                        .iter()
+                        .enumerate()
+                        .map(|(position, attribute)| {
+                            let name = if attribute.prefix.is_empty() {
+                                attribute.local_name.clone()
+                            } else {
+                                format!("{}:{}", attribute.prefix, attribute.local_name)
+                            };
+                            (position.to_string(), HostValue::String(name))
+                        }),
+                );
+                Self::value(HostValue::Record(fields))
+            }
             "attributeList" => {
                 if node.Type() != DOMNodeType::kElement {
                     return Self::type_error("attributes requires an element receiver");
@@ -1252,6 +1385,37 @@ impl DOMJavaScriptBindings {
                 self.records.borrow_mut().insert(list, fields);
                 Self::value(HostValue::Object(HostObjectRef { id: list }))
             }
+            "importNode" | "__validateImportNode" => {
+                if node.Type() != DOMNodeType::kDocument {
+                    return Self::type_error("importNode requires a document receiver");
+                }
+                let Some(HostValue::Object(source)) = arguments.first() else {
+                    return Self::type_error("importNode requires a Node");
+                };
+                let Some(source_index) = document.FindNodeById(source.id) else {
+                    return Self::type_error("importNode requires a Node");
+                };
+                let supported = document.Node(source_index).Type() != DOMNodeType::kDocument
+                    && document.ShadowHost(source_index).is_none();
+                if member == "__validateImportNode" {
+                    return Self::value(HostValue::Boolean(supported));
+                }
+                if !supported {
+                    return Self::type_error("Document and ShadowRoot nodes cannot be imported");
+                }
+                let mutation = DOMMutation {
+                    mutation_type: DOMMutationType::kImportNode,
+                    target_node_id: receiver,
+                    source_node_id: source.id,
+                    child_node_id: document.NextNodeId(),
+                    bool_value: matches!(arguments.get(1), Some(HostValue::Boolean(true))),
+                    ..Default::default()
+                };
+                let id = mutation.child_node_id;
+                drop(owner);
+                (self.emit_mutation.borrow_mut())(&mutation);
+                Self::value(HostValue::Object(HostObjectRef { id }))
+            }
             // cpp: webapi/dom_bindings.cc:805-811,817-827
             "createHTMLDocument" | "cloneNode" => {
                 let mut mutation = DOMMutation {
@@ -1274,7 +1438,7 @@ impl DOMJavaScriptBindings {
                 }
                 let id = mutation.child_node_id;
                 drop(owner);
-                (self.emit_mutation)(&mutation);
+                (self.emit_mutation.borrow_mut())(&mutation);
                 Self::value(HostValue::Object(HostObjectRef { id }))
             }
             "hasFocus" => Self::value(HostValue::Boolean(true)),
@@ -1303,7 +1467,7 @@ impl DOMJavaScriptBindings {
                 };
                 let id = mutation.child_node_id;
                 drop(owner);
-                (self.emit_mutation)(&mutation);
+                (self.emit_mutation.borrow_mut())(&mutation);
                 Self::value(HostValue::Object(HostObjectRef { id }))
             }
             // cpp: webapi/dom_bindings.cc:861-883
@@ -1359,7 +1523,7 @@ impl DOMJavaScriptBindings {
                 }
                 let id = mutation.child_node_id;
                 drop(owner);
-                (self.emit_mutation)(&mutation);
+                (self.emit_mutation.borrow_mut())(&mutation);
                 Self::value(HostValue::Object(HostObjectRef { id }))
             }
             // cpp: webapi/dom_bindings.cc:884-898
@@ -1390,7 +1554,7 @@ impl DOMJavaScriptBindings {
                 };
                 drop(owner);
                 if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    (self.emit_mutation)(&mutation)
+                    (self.emit_mutation.borrow_mut())(&mutation)
                 })) {
                     if let Some(error) = payload.downcast_ref::<dom::error::DOMException>() {
                         return Self::type_error(error.message);
@@ -1435,7 +1599,7 @@ impl DOMJavaScriptBindings {
                     })
                     .collect::<String>();
                 drop(owner);
-                (self.emit_mutation)(&DOMMutation {
+                (self.emit_mutation.borrow_mut())(&DOMMutation {
                     mutation_type: DOMMutationType::kSetAttribute,
                     target_node_id: receiver,
                     name: "style".into(),
@@ -1538,7 +1702,7 @@ impl DOMJavaScriptBindings {
                 };
                 drop(owner);
                 if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    (self.emit_mutation)(&mutation)
+                    (self.emit_mutation.borrow_mut())(&mutation)
                 })) {
                     if let Some(error) = payload.downcast_ref::<dom::error::DOMException>() {
                         return Self::type_error(error.message);
@@ -1569,7 +1733,7 @@ impl DOMJavaScriptBindings {
                 };
                 drop(owner);
                 if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    (self.emit_mutation)(&mutation)
+                    (self.emit_mutation.borrow_mut())(&mutation)
                 })) {
                     if let Some(error) = payload.downcast_ref::<dom::error::DOMException>() {
                         return Self::type_error(error.message);
@@ -1580,13 +1744,13 @@ impl DOMJavaScriptBindings {
             }
             // cpp: webapi/dom_bindings.cc:950-962
             "getElementById" => {
-                if node.Type() != DOMNodeType::kDocument {
-                    return Self::type_error("getElementById requires a document receiver");
+                if !matches!(node.Type(), DOMNodeType::kDocument | DOMNodeType::kDocumentFragment) {
+                    return Self::type_error("getElementById requires a document or fragment receiver");
                 }
                 let Some(HostValue::String(id)) = arguments.first() else {
                     return Self::type_error("getElementById requires a string");
                 };
-                let found = find_element_by_id(document, document.Root(), id);
+                let found = find_element_by_id(document, index, id);
                 found.map_or_else(
                     || Self::value(HostValue::Null(JavaScriptNull)),
                     |found| {
@@ -1649,7 +1813,7 @@ impl DOMJavaScriptBindings {
                         DOMMutationType::kRemoveAttribute as u8 as f64
                     },
                 );
-                (self.emit_mutation)(&DOMMutation {
+                (self.emit_mutation.borrow_mut())(&DOMMutation {
                     mutation_type: if member == "setAttribute" {
                         DOMMutationType::kSetAttribute
                     } else {
@@ -1675,6 +1839,11 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         if call.symbol != HostSymbol::kNone || call.operation == HostOperation::kGet {
             return None;
         }
+        // Ordinary properties are resolved by the JavaScript engine. Do not
+        // prepare a native mutation until an installed IDL setter is selected.
+        if call.operation == HostOperation::kSet && self.UsesOrdinaryNodeProperties(call.receiver) {
+            return None;
+        }
         let (id, member) = if call.operation == HostOperation::kCall
             && call.receiver == 0
             && call.member == "__domInvoke"
@@ -1687,9 +1856,25 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         } else {
             (call.receiver, call.member)
         };
+        if call.operation == HostOperation::kCall && member == "__ceIsProxy" {
+            let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
+                &call.arguments[2..]
+            } else { call.arguments };
+            let value = arguments.first().cloned().unwrap_or_default();
+            return Some(Box::new(move |runtime| Self::value(HostValue::Boolean(runtime.IsProxy(&value)))));
+        }
+        if call.operation == HostOperation::kCall && member == "__ceReportException" {
+            let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
+                &call.arguments[2..]
+            } else { call.arguments };
+            let thrown = arguments.first().cloned().unwrap_or_default();
+            return Some(Box::new(move |runtime| runtime.ReportException(&thrown)));
+        }
         // This internal getter only reads the tree. Validate its receiver in
         // call(), without a second node lookup or preparing a mutation emitter.
-        if call.operation == HostOperation::kCall && member == "__sibling" {
+        if call.operation == HostOperation::kCall
+            && matches!(member, "__sibling" | "__domHasInterface" | "__domAttributeGet")
+        {
             return None;
         }
         // cpp: webapi/dom_bindings.cc:634-653
@@ -1718,6 +1903,7 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         if call.operation == HostOperation::kCall
             && matches!(member, "setAttribute" | "removeAttribute")
             && !self.mutation_observers_active
+            && !self.document.borrow().GetDocument().HasCustomElementDefinitions()
         {
             let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
                 &call.arguments[2..]
@@ -1767,7 +1953,24 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                 HostResult::default()
             }));
         }
-        let emitter = self.scoped_emit_mutation.clone()?;
+        let custom_elements_active = self.document.borrow().GetDocument().HasCustomElementDefinitions();
+        // CEReactions is an attribute of the selected IDL accessor, not of the
+        // general host setter bridge (checked/indeterminate/data have no scope).
+        let has_reaction_scope = member != "__domAttributeSet" || {
+            let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
+                &call.arguments[2..]
+            } else { call.arguments };
+            matches!(arguments.get(3), Some(HostValue::Boolean(true)))
+        };
+        let reactions = (custom_elements_active && has_reaction_scope).then(|| self.method_wrappers.get("__customElementReactions").cloned()).flatten();
+        let emitter = match self.scoped_emit_mutation.clone() {
+            Some(emitter) => emitter,
+            None if reactions.is_some() => {
+                let emitter = self.emit_mutation.clone();
+                Rc::new(move |mutation: &DOMMutation, _: &mut dyn JavaScriptHostRuntime| (emitter.borrow_mut())(mutation))
+            }
+            None => return None,
+        };
         let emits = match call.operation {
             HostOperation::kSet => matches!(
                 member,
@@ -1782,8 +1985,10 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
             ),
             HostOperation::kCall => matches!(
                 member,
-                "createHTMLDocument"
+                "__domAttributeSet"
+                    | "createHTMLDocument"
                     | "cloneNode"
+                    | "importNode"
                     | "createElement"
                     | "createElementNS"
                     | "createTextNode"
@@ -1796,6 +2001,8 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                     | "setStyle"
                     | "setAttribute"
                     | "removeAttribute"
+                    | "__setSlotName"
+                    | "assign"
                     | "showModal"
                     | "close"
                     | "showPopover"
@@ -1816,13 +2023,13 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         let pending = mutation.clone();
         let original = std::mem::replace(
             &mut self.emit_mutation,
-            Box::new(move |m| {
+            Rc::new(RefCell::new(Box::new(move |m: &DOMMutation| {
                 assert!(
                     pending.borrow().is_none(),
                     "a DOM host invocation emits one mutation"
                 );
                 *pending.borrow_mut() = Some(m.clone());
-            }),
+            }))),
         );
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.Invoke(call)));
         self.emit_mutation = original;
@@ -1837,7 +2044,12 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                 | "requestFullscreen"
                 | "exitFullscreen"
         );
+        let document = self.document.clone();
         Some(Box::new(move |runtime| {
+            if reactions.is_some() {
+                document.borrow_mut().GetDocumentMut().PushCustomElementReactionScope();
+            }
+            let mut outcome = result;
             if let Some(mutation) = mutation {
                 let emitted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     emitter(&mutation, runtime);
@@ -1845,16 +2057,22 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                 if let Err(error) = emitted {
                     if catches_errors {
                         if let Some(error) = error.downcast_ref::<dom::error::DOMException>() {
-                            return Self::type_error(error.message);
-                        }
-                        if let Some(error) = error.downcast_ref::<std::io::Error>() {
-                            return Self::type_error(&error.to_string());
-                        }
-                    }
-                    std::panic::resume_unwind(error);
+                            outcome = Self::type_error(error.message);
+                        } else if let Some(error) = error.downcast_ref::<std::io::Error>() {
+                            outcome = Self::type_error(&error.to_string());
+                        } else { std::panic::resume_unwind(error); }
+                    } else { std::panic::resume_unwind(error); }
                 }
             }
-            result
+            if let Some(callback) = reactions {
+                let invoked = runtime.Call(&callback, &HostValue::default(), &[]);
+                let popped = document.borrow_mut().GetDocumentMut().PopCustomElementReactionScope();
+                assert!(popped, "CEReactions scope must be drained before pop");
+                if let Some(error) = invoked.exception {
+                    return HostResult {exception: Some(error), ..HostResult::default()};
+                }
+            }
+            outcome
         }))
     }
     // cpp: webapi/dom_bindings.cc:243-264
@@ -1863,6 +2081,15 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
     }
 
     fn Invoke(&mut self, call: &HostCall<'_>) -> HostResult {
+        // Blink installs regular IDL attributes/methods on interface prototypes.
+        // The wrapper's existing Reflect path must select the own/inherited
+        // descriptor and carry the actual ECMAScript receiver. Only genuine
+        // exotic records, collections, bound events and globals use projection.
+        if matches!(call.operation, HostOperation::kGet | HostOperation::kSet)
+            && self.UsesOrdinaryNodeProperties(call.receiver)
+        {
+            return Self::unhandled();
+        }
         if call.symbol != HostSymbol::kNone {
             if call.operation == HostOperation::kGet
                 && call.symbol == HostSymbol::kIterator
@@ -1936,6 +2163,7 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                     "img" => "HTMLImageElement",
                     "canvas" => "HTMLCanvasElement",
                     "template" => "HTMLTemplateElement",
+                    "slot" => "HTMLSlotElement",
                     "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "HTMLHeadingElement",
                     "a" => "HTMLAnchorElement",
                     "video" => "HTMLVideoElement",
@@ -1951,6 +2179,8 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
             },
             DOMNodeType::kText => "Text",
             DOMNodeType::kComment => "Comment",
+            DOMNodeType::kProcessingInstruction => "CharacterData",
+            DOMNodeType::kDocumentFragment if document.ShadowHost(index).is_some() => "ShadowRoot",
             DOMNodeType::kDocumentFragment => "DocumentFragment",
             _ => "Node",
         };
@@ -2836,7 +3066,11 @@ mod tests {
         const fragment=document.createDocumentFragment();fragment.appendChild(c);
         check(kids.length===1 && fragment.children.item(0)===c,'reparent roots');
         fragment.appendChild(document.createTextNode('text'));check(fragment.childNodes.length===2,'text child membership');
-        c.appendChild(a);check(tags.length===1 && fragment.getElementsByTagName('P').length===2,'detached subtree insertion');
+        // getElementsByTagName is an Element/Document operation, not a
+        // DocumentFragment member. Warm the detached Element's live collection
+        // and retain the original two-descendant assertion through ParentNode.
+        const detachedTags=c.getElementsByTagName('P');check(detachedTags.length===0,'warm detached membership');
+        c.appendChild(a);check(tags.length===1 && detachedTags.length===1 && fragment.querySelectorAll('p').length===2,'detached subtree insertion');
         check(snap.length===2 && snap[0]===a && snap[1]===b,'fixed snapshot identity retains detached nodes');
         root.textContent='new';check(kids.length===0 && nodes.length===1 && nodes[0].nodeType===3,'text replacement');
         let coercion=false;try{kids.item({valueOf(){throw Error('coercion')}})}catch(e){coercion=e.message==='coercion'}

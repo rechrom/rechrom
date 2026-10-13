@@ -19,6 +19,35 @@ pub fn ClassifyFragmentPaintLayer(
     is_root: bool,
     is_flex_or_grid_item: bool,
 ) -> PaintLayerClassification {
+    // The native Layout owner decides both presence and absence. SVG children
+    // deliberately have no CSS PaintLayer; their transforms/effects are scoped
+    // in SVGContainerPainter's sibling-order walk. Treating zero client id as
+    // unknown promoted transformed SVG siblings above later untransformed ones.
+    // The existing mask recorder still requires a synthetic layer scope and
+    // promotes it in PrePaint after classification. Until mask effect scopes
+    // are independent of CSS layers, retain that adapter for native no-layer
+    // fragments here too so Interaction keeps the same inverse paint order.
+    let requires_mask_recording_scope = fragment.paint.has_source
+        && (!fragment.paint.style.mask_images.is_empty()
+            || fragment.paint.style.mask_box_image.is_some());
+    if fragment.paint.paint_layer_state_is_native
+        && (fragment.paint.paint_layer_client_id != 0 || !requires_mask_recording_scope)
+    {
+        let is_paint_layer = fragment.kind == FragmentKind::kBox
+            && fragment.paint.establishes_paint_state
+            && fragment.paint.paint_layer_client_id != 0
+            && fragment.paint.paint_layer_is_self_painting;
+        return PaintLayerClassification {
+            is_paint_layer,
+            is_stacking_context: is_paint_layer
+                && (is_root || fragment.paint.paint_layer_is_stacking_context),
+            stacking_level: if is_paint_layer {
+                fragment.paint.paint_layer_stacking_level
+            } else {
+                0
+            },
+        };
+    }
     let style = fragment.paint.has_source.then_some(&*fragment.paint.style);
     let establishes = fragment.paint.establishes_paint_state;
     let position = if fragment.paint.has_source {
@@ -85,5 +114,53 @@ pub fn ClassifyFragmentPaintLayer(
         is_paint_layer,
         is_stacking_context,
         stacking_level,
+    }
+}
+
+#[cfg(test)]
+mod native_layer_ownership_tests {
+    use super::*;
+
+    #[test]
+    fn known_absence_and_presence_do_not_use_standalone_style_fallback() {
+        let mut fragment = FragmentNode::default();
+        fragment.kind = FragmentKind::kBox;
+        fragment.paint.has_source = true;
+        fragment.paint.establishes_paint_state = true;
+        fragment.paint.style.transform = Some(Default::default());
+        assert!(ClassifyFragmentPaintLayer(&fragment, false, false).is_paint_layer);
+
+        fragment.paint.paint_layer_state_is_native = true;
+        assert_eq!(
+            ClassifyFragmentPaintLayer(&fragment, false, false),
+            PaintLayerClassification::default()
+        );
+
+        fragment.paint.style.mask_images.push(Default::default());
+        let mask = ClassifyFragmentPaintLayer(&fragment, false, false);
+        assert!(mask.is_paint_layer && mask.is_stacking_context);
+        fragment.paint.style.mask_images.clear();
+        assert_eq!(
+            ClassifyFragmentPaintLayer(&fragment, false, false),
+            PaintLayerClassification::default()
+        );
+
+        fragment.paint.paint_layer_client_id = 91;
+        fragment.paint.paint_layer_is_self_painting = true;
+        fragment.paint.paint_layer_is_stacking_context = true;
+        fragment.paint.paint_layer_stacking_level = -2;
+        assert_eq!(
+            ClassifyFragmentPaintLayer(&fragment, false, false),
+            PaintLayerClassification {
+                is_paint_layer: true,
+                is_stacking_context: true,
+                stacking_level: -2,
+            }
+        );
+        fragment.paint.paint_layer_is_self_painting = false;
+        assert_eq!(
+            ClassifyFragmentPaintLayer(&fragment, false, false),
+            PaintLayerClassification::default()
+        );
     }
 }

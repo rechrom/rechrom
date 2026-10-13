@@ -113,8 +113,9 @@ pub struct StyleState {
     pub append_affected_subtrees: HashSet<usize>,
     pub impact: StyleUpdateImpact,
     pub stats: StyleUpdateStats,
-    /// Geometry-query inputs changed during actual style resolution. Paint-only
-    /// changes still retain their ordinary layout/paint impact.
+    /// Geometry-query inputs changed during native style resolution or DOM
+    /// flat-tree attachment. Equal-style redistribution still revokes geometry;
+    /// paint-only changes retain their ordinary layout/paint impact.
     pub measurement_geometry_revision: u64,
 }
 

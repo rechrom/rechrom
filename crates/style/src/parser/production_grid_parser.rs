@@ -147,8 +147,8 @@ pub(super) fn ConsumeAreas<T: TokenStreamTokenizer>(
     }
     Ok(Areas(map, rows, columns))
 }
-// cpp: css_parsing_utils.cc:6903-6923,6950-6979. This is the existing plain
-// track consumer moved here for use by both longhands and shorthands.
+// cpp: css_parsing_utils.cc:6997-7035. Track functions retain typed values;
+// their arguments are breadths, not recursively nested track functions.
 fn ConsumeTrackSize<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
@@ -157,15 +157,71 @@ fn ConsumeTrackSize<T: TokenStreamTokenizer>(
     if stream.Peek().Id() == CSSValueID::kSubgrid {
         return Err(unsupported(id, "ConsumeGridTrackList subgrid"));
     }
-    if matches!(
-        stream.Peek().FunctionId(),
-        Some(CSSValueID::kRepeat | CSSValueID::kMinmax | CSSValueID::kFitContent)
-    ) {
+    if stream.Peek().FunctionId() == Some(CSSValueID::kMinmax) {
+        let result;
+        {
+            let mut args = RestoringBlockGuard::new(stream);
+            args.ConsumeWhitespace();
+            let min = ConsumeGridBreadth(id, &mut args, mode)?.ok_or_else(|| invalid(id))?;
+            if matches!(min.Payload(), CSSValuePayload::kNumericLiteralClass(n) if n.GetType() == UnitType::kFlex)
+                || args.Peek().GetType() != kCommaToken
+            {
+                return Err(invalid(id));
+            }
+            args.ConsumeIncludingWhitespace();
+            let max = ConsumeGridBreadth(id, &mut args, mode)?.ok_or_else(|| invalid(id))?;
+            if !args.AtEnd() || !args.Release() {
+                return Err(invalid(id));
+            }
+            result = values::function(CSSValueID::kMinmax, vec![min, max]);
+        }
+        stream.ConsumeWhitespace();
+        return Ok(Some(result));
+    }
+    // cpp: css_parsing_utils.cc:6926-6944,7031-7034. fit-content()
+    // carries one nonnegative length-percentage, not a grid breadth. Keep
+    // its typed function so the existing native track constructor retains
+    // the fit-content limit independently from its intrinsic min/max sizes.
+    if stream.Peek().FunctionId() == Some(CSSValueID::kFitContent) {
+        let result;
+        {
+            let mut args = RestoringBlockGuard::new(stream);
+            args.ConsumeWhitespace();
+            let length = ConsumeLiteral(
+                id,
+                &mut args,
+                mode,
+                Grammar::Length {
+                    percent: true,
+                    nonnegative: true,
+                    quirks: true,
+                    keywords: &[],
+                },
+            )?;
+            if !args.AtEnd() || !args.Release() {
+                return Err(invalid(id));
+            }
+            result = values::function(CSSValueID::kFitContent, vec![length]);
+        }
+        stream.ConsumeWhitespace();
+        return Ok(Some(result));
+    }
+    if stream.Peek().FunctionId() == Some(CSSValueID::kRepeat) {
         return Err(unsupported(
             id,
             "ConsumeGridTrackSize/repeat typed function values",
         ));
     }
+    ConsumeGridBreadth(id, stream, mode)
+}
+
+// cpp: css_parsing_utils.cc:6903-6923. Shared by plain tracks and both
+// minmax arguments, including nonnegative math and the unitless-zero rule.
+fn ConsumeGridBreadth<T: TokenStreamTokenizer>(
+    id: CSSPropertyID,
+    stream: &mut Stream<T>,
+    mode: CSSParserMode,
+) -> Result<Option<Rc<Value>>, PropertyParseError> {
     if stream.Peek().GetType() == kDimensionToken && stream.Peek().GetUnitType() == UnitType::kFlex
     {
         let number = stream.Peek().NumericValue();

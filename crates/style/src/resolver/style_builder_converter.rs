@@ -298,6 +298,13 @@ pub trait StyleBuilderConverterBackend: StyleResolverStateBackend {
 
 pub struct StyleBuilderConverter;
 pub struct StyleBuilderConverterBase;
+// The production cascade and generic converter share the source constructor
+// dispatch after their respective typed value/length conversion boundaries.
+pub(super) enum GridTrackSizeInput {
+    Breadth(Length),
+    MinMax(Length, Length),
+    FitContent(Length),
+}
 impl StyleBuilderConverter {
     // cc:199-221
     pub fn ConvertBoxReflect<B: StyleBuilderConverterBackend>(
@@ -948,20 +955,30 @@ impl StyleBuilderConverter {
         s: &StyleResolverState<B>,
         v: &ResolverValue<B>,
     ) -> GridTrackSize {
-        if v.IsPrimitiveValue() || b.Identifier(v).is_some() {
-            return GridTrackSize::from_length(&ConvertGridTrackBreadth(b, s, v));
-        }
-        let list = b.List(v).expect("grid sizing function");
-        if b.FunctionType(v) == CSSValueID::kFitContent {
-            GridTrackSize::new(
-                &ConvertGridTrackBreadth(b, s, list[0]),
-                GridTrackSizeType::kFitContentTrackSizing,
-            )
+        let input = if v.IsPrimitiveValue() || b.Identifier(v).is_some() {
+            GridTrackSizeInput::Breadth(ConvertGridTrackBreadth(b, s, v))
         } else {
-            GridTrackSize::new_minmax(
-                &ConvertGridTrackBreadth(b, s, list[0]),
-                &ConvertGridTrackBreadth(b, s, list[1]),
-            )
+            let list = b.List(v).expect("grid sizing function");
+            if b.FunctionType(v) == CSSValueID::kFitContent {
+                GridTrackSizeInput::FitContent(ConvertGridTrackBreadth(b, s, list[0]))
+            } else {
+                GridTrackSizeInput::MinMax(
+                    ConvertGridTrackBreadth(b, s, list[0]),
+                    ConvertGridTrackBreadth(b, s, list[1]),
+                )
+            }
+        };
+        Self::ConvertGridTrackSizeFromBreadths(input)
+    }
+    // cpp: style_builder_converter.cc:1618-1635. One constructor dispatch for
+    // both callers; no string projection or replacement track-sizing algorithm.
+    pub(super) fn ConvertGridTrackSizeFromBreadths(input: GridTrackSizeInput) -> GridTrackSize {
+        match input {
+            GridTrackSizeInput::Breadth(length) => GridTrackSize::from_length(&length),
+            GridTrackSizeInput::MinMax(min, max) => GridTrackSize::new_minmax(&min, &max),
+            GridTrackSizeInput::FitContent(length) => {
+                GridTrackSize::new(&length, GridTrackSizeType::kFitContentTrackSizing)
+            }
         }
     }
     pub fn ConvertLength<B: StyleBuilderConverterBackend>(

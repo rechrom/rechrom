@@ -75,10 +75,10 @@ struct ParserResources {
     current_url: String,
     base_url: String,
     base_seen: bool,
-    // Blink's StyleEngine decides whether a parser-inserted sheet blocks
-    // rendering from rendering_has_begun_, not from whether the parser has
-    // crossed the <body> token. Component sheets are commonly emitted in the
-    // body before the first paint and must still participate in that barrier.
+    // Rechrom currently keeps parser sheets in the initial rendering barrier.
+    // Chromium separately tracks pre-body render blockers and post-body parser
+    // blockers. Do not change this flag alone without translating that parser
+    // pause; see docs/baidu-render-blocking-timeline.md for the source review.
     rendering_has_begun: bool,
     styles: VecDeque<PendingStyle>,
     page: Option<Rc<document_loader::ResourceFetcher>>,
@@ -126,6 +126,13 @@ impl HTMLParserHost for ParserHost {
                 };
                 let resource = resources.resources.Start(request);
                 let render_blocking = !resources.rendering_has_begun && !disposition.alternate;
+                browser_tracing::instant_with_text("loading", "ParserStyleSheetQueued", &url, &[
+                    ("owner_node", node.Id() as f64),
+                    ("external", 1.),
+                    ("render_blocking", render_blocking as u8 as f64),
+                    ("alternate", disposition.alternate as u8 as f64),
+                    ("pending_sheets", (resources.styles.len() + 1) as f64),
+                ]);
                 resources.styles.push_back(PendingStyle::External {
                     url,
                     resource,
@@ -170,6 +177,12 @@ impl HTMLParserHost for ParserHost {
         } else if node.IsHTMLElement("style") {
             let base = resources.base_url.clone();
             let render_blocking = !resources.rendering_has_begun;
+            browser_tracing::instant("loading", "ParserStyleSheetQueued", &[
+                ("owner_node", node.Id() as f64),
+                ("external", 0.),
+                ("render_blocking", render_blocking as u8 as f64),
+                ("pending_sheets", (resources.styles.len() + 1) as f64),
+            ]);
             resources.styles.push_back(PendingStyle::Inline {
                 node: node.Id(),
                 base,
@@ -199,6 +212,9 @@ impl HTMLParserHost for ParserHost {
             let mut css = String::new();
             AppendText(document, element, &mut css);
             let base = self.0.borrow().base_url.clone();
+            let mut trace = browser_tracing::span("loading", "ParseInlineStyleSheet");
+            trace.set("owner_node", document.Node(element).Id() as f64);
+            trace.set("bytes", css.len() as f64);
             let mut sheet = style::ParseCSSWithBase(&css, &base);
             sheet.owner_node_id = document.Node(element).Id();
             Some(sheet)
@@ -290,6 +306,11 @@ fn PollParserStyleSheets(
                 metadata,
             } => {
                 if !resource.Poll() {
+                    browser_tracing::instant("loading", "ParserStyleSheetWait", &[
+                        ("owner_node", metadata.owner_node_id as f64),
+                        ("render_blocking", render_blocking as u8 as f64),
+                        ("pending_sheets", (resources.borrow().styles.len() + 1) as f64),
+                    ]);
                     resources
                         .borrow_mut()
                         .styles
@@ -301,12 +322,18 @@ fn PollParserStyleSheets(
                         });
                     return Ok(false);
                 }
+                let owner_node = metadata.owner_node_id;
+                browser_tracing::instant_with_text("loading", "ParserStyleSheetResponse", &url,
+                    &[("owner_node", owner_node as f64)]);
                 match RequireResponse(resource.TakeResult()).and_then(|response| {
                     let base = if response.final_url.is_empty() {
                         url.clone()
                     } else {
                         response.final_url.clone()
                     };
+                    let mut trace = browser_tracing::span("loading", "ParseExternalStyleSheet");
+                    trace.set("owner_node", owner_node as f64);
+                    trace.set("bytes", response.body.len() as f64);
                     let css = DecodeText(&response)?;
                     let mut sheet = style::ParseCSSWithBase(&css, &base);
                     metadata.Apply(&mut sheet);
@@ -314,12 +341,15 @@ fn PollParserStyleSheets(
                 }) {
                     Ok(loaded) => loaded,
                     Err(error) => {
+                        browser_tracing::instant_with_text("loading", "ParserStyleSheetFailed", &url,
+                            &[("owner_node", owner_node as f64)]);
                         client.DidFailResource(&url, &error.to_string());
                         continue;
                     }
                 }
             }
         };
+        let owner_node = sheet.owner_node_id;
         let page = resources.borrow().page.clone();
         if page.is_none() {
             ResolveCSSStyleSheetURLs(&mut sheet, &base)?;
@@ -337,6 +367,10 @@ fn PollParserStyleSheets(
         } else {
             apply(document.borrow_mut().GetDocumentMut())?;
         }
+        browser_tracing::instant_with_text("loading", "ParserStyleSheetApplied", &base, &[
+            ("owner_node", owner_node as f64),
+            ("pending_sheets", resources.borrow().styles.len() as f64),
+        ]);
         client.DidApplyStyleSheet(&base);
     }
     Ok(resources.borrow().styles.is_empty())
@@ -598,6 +632,11 @@ impl ScriptScheduler {
             destination: RequestDestination::kScript,
             ..Default::default()
         };
+        browser_tracing::instant_with_text("loading", "ParserScriptRequest", &request.url, &[
+            ("script_node", script.node_id as f64),
+            ("async", descriptor.asynchronous as u8 as f64),
+            ("defer", descriptor.deferred as u8 as f64),
+        ]);
         self.script_resources
             .insert(script.node_id, resources.resources.Start(request));
         Ok(())
@@ -843,6 +882,11 @@ impl ScriptScheduler {
         let started = std::env::var_os("BROWSER_PROFILE_INPUT")
             .is_some()
             .then(std::time::Instant::now);
+        let mut trace = browser_tracing::span("loading", "ParserScriptExecute");
+        trace.set("script_node", script.node_id as f64);
+        trace.set("parser_blocking", parser_blocking as u8 as f64);
+        trace.set("bytes", source.len() as f64);
+        trace.set("external", (!current.src.is_empty()) as u8 as f64);
         let result = if module {
             let modules = self.resources.borrow().modules.clone();
             self.tasks.ExecuteModule(
@@ -1039,8 +1083,18 @@ impl ScriptScheduler {
                             self.started_scripts.borrow_mut().insert(script.node_id);
                             self.deferred_scripts.push(script);
                         } else {
-                            if !PollParserStyleSheets(&self.resources, &self.document, Some(parser), client)?
-                                || !self.script_ready(script, &descriptor) { return Ok::<_, io::Error>(()); }
+                            let styles_ready = PollParserStyleSheets(&self.resources, &self.document, Some(parser), client)?;
+                            // Preserve the existing short-circuit readiness policy.
+                            let script_ready = styles_ready && self.script_ready(script, &descriptor);
+                            browser_tracing::instant("loading", "ParserScriptReadiness", &[
+                                ("script_node", script.node_id as f64),
+                                ("styles_ready", styles_ready as u8 as f64),
+                                ("script_ready_checked", styles_ready as u8 as f64),
+                                ("script_ready", script_ready as u8 as f64),
+                                ("external", (!descriptor.src.is_empty()) as u8 as f64),
+                                ("pending_sheets", self.resources.borrow().styles.len() as f64),
+                            ]);
+                            if !script_ready { return Ok::<_, io::Error>(()); }
                             self.run_script(Some(parser), script, false, true, runtime, realm, client)?;
                         }
                     } else { client.DidSkipScript(script, &descriptor.script_type); }

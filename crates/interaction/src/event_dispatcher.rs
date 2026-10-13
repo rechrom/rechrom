@@ -76,46 +76,27 @@ impl<'a> EventDispatcher<'a> {
     }
     // cpp: interaction/event_dispatcher.cc:22-132
     pub fn Dispatch(&self, event: &mut Event, target: u64) -> DispatchEventResult {
-        if target == 0 {
-            for capture in [true, false] {
-                let listener = self.listeners.borrow().clone();
-                if let Some(listener) = listener {
-                    let focused = self.state.borrow().focused_node_id;
-                    let invocation = EventListenerInvocation {
-                        event,
-                        target_node_id: 0,
-                        current_target_node_id: 0,
-                        phase: EventPhase::kAtTarget,
-                        capture_listeners: capture,
-                        // Window events preserve the document's focus just as
-                        // node events do. Bindings synchronize activeElement
-                        // from this snapshot before invoking listeners.
-                        focused_node_id: focused,
-                    };
-                    let result = listener(&invocation, &self.document, &self.emit);
-                    event.default_prevented |= result.prevent_default && event.cancelable;
-                    event.propagation_stopped |= result.stop_propagation;
-                    event.immediate_propagation_stopped |= result.stop_immediate_propagation;
-                    if event.immediate_propagation_stopped {
-                        break;
-                    }
-                }
-            }
-            return DispatchEventResult {
-                target_node_id: Some(0),
-                default_prevented: event.default_prevented,
-                propagation_stopped: event.propagation_stopped,
-                ..Default::default()
+        let path = if target == 0 {
+            EventPath::Window()
+        } else {
+            let Some(path) = ReadNode(&self.document, target, |d, _, i| {
+                EventPath::new(d, i, event)
+            }) else {
+                return DispatchEventResult::default();
             };
-        }
-        let Some(path) = ReadNode(&self.document, target, |d, _, i| EventPath::new(d, i)) else {
-            return DispatchEventResult::default();
+            path
+        };
+        let path = Rc::new(path);
+        *event.dispatch_state.borrow_mut() = crate::event_path::EventDispatchState {
+            path: Some(path.clone()),
+            final_target: None,
+            finished: false,
         };
         event.target_node_id = target;
         let handler = DefaultEventHandler::new(self.Context());
         let mut activation_target = None;
         if event.r#type == EventType::kClick {
-            for &node in path.Nodes() {
+            for node in path.Nodes().filter(|&node| node != 0) {
                 if handler.HasActivationBehavior(node) {
                     activation_target = Some(node);
                     break;
@@ -127,21 +108,43 @@ impl<'a> EventDispatcher<'a> {
         }
         let activation_state =
             activation_target.and_then(|n| handler.LegacyPreActivationBehavior(n, event));
-        for &node in path.Nodes().iter().skip(1).rev() {
-            self.Invoke(event, target, node, EventPhase::kCapturing, true);
+        // Blink EventDispatcher::DispatchEventAtCapturing/AtBubbling. A shadow
+        // host whose adjusted target is itself is AT_TARGET in both passes,
+        // including the noncapture pass of a nonbubbling composed event.
+        for entry in path.Entries().iter().rev() {
+            let phase = if entry.invocation_target == entry.shadow_adjusted_target {
+                EventPhase::kAtTarget
+            } else {
+                EventPhase::kCapturing
+            };
+            self.Invoke(
+                event,
+                entry.shadow_adjusted_target,
+                entry.invocation_target,
+                phase,
+                true,
+            );
             if event.propagation_stopped {
                 break;
             }
         }
         if !event.propagation_stopped {
-            self.Invoke(event, target, target, EventPhase::kAtTarget, true);
-            if !event.immediate_propagation_stopped {
-                self.Invoke(event, target, target, EventPhase::kAtTarget, false)
-            }
-        }
-        if !event.propagation_stopped && event.bubbles {
-            for &node in path.Nodes().iter().skip(1) {
-                self.Invoke(event, target, node, EventPhase::kBubbling, false);
+            for entry in path.Entries() {
+                let at_target = entry.invocation_target == entry.shadow_adjusted_target;
+                if !at_target && !event.bubbles {
+                    continue;
+                }
+                self.Invoke(
+                    event,
+                    entry.shadow_adjusted_target,
+                    entry.invocation_target,
+                    if at_target {
+                        EventPhase::kAtTarget
+                    } else {
+                        EventPhase::kBubbling
+                    },
+                    false,
+                );
                 if event.propagation_stopped {
                     break;
                 }
@@ -156,7 +159,7 @@ impl<'a> EventDispatcher<'a> {
         if !event.default_prevented && !event.default_handled {
             handler.Handle(target, event);
             if !event.default_prevented && !event.default_handled && event.bubbles {
-                for &node in path.Nodes().iter().skip(1) {
+                for node in path.Nodes().skip(1).filter(|&node| node != 0) {
                     handler.Handle(node, event);
                     if event.default_prevented || event.default_handled {
                         break;
@@ -164,10 +167,18 @@ impl<'a> EventDispatcher<'a> {
                 }
             }
         }
+        *event.dispatch_state.borrow_mut() = crate::event_path::EventDispatchState {
+            path: None,
+            final_target: path.PostDispatchTarget(),
+            finished: true,
+        };
+        let propagation_stopped = event.propagation_stopped;
+        event.propagation_stopped = false;
+        event.immediate_propagation_stopped = false;
         DispatchEventResult {
             target_node_id: Some(target),
             default_prevented: event.default_prevented,
-            propagation_stopped: event.propagation_stopped,
+            propagation_stopped,
             default_handled: event.default_handled,
         }
     }

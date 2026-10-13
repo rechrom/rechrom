@@ -82,6 +82,10 @@ use std::{
 
 use crate::element_rule_collector::SearchTextRequest;
 
+#[cfg(test)]
+#[path = "document_style_selector_service_test.rs"]
+mod selector_service_tests;
+
 // cpp: style_cascade.cc:2351-2390,2924-2930.  Environment lookup is supplied
 // by the document host, while the style bits always belong to the current
 // builder.  Keeping these per-cascade flags here prevents an environment owner
@@ -153,7 +157,7 @@ impl production_style_builder::URLImageResolver for DocumentURLImageResolver<'_>
         value: &crate::production_css_value::CSSImageValue,
         override_resolution: f32,
     ) -> Result<production_style_builder::FetchedImageBinding, LonghandApplicationError> {
-        let source = value.url.Utf8();
+        let source = value.url_data.resolved_url.Utf8();
         let resource = self.document.ImageResourceFor(&source);
         let id = resource.map_or(0, |resource| resource.id);
         let natural_size = resource.map(|resource| {
@@ -169,19 +173,20 @@ impl production_style_builder::URLImageResolver for DocumentURLImageResolver<'_>
             eprintln!("style-image-resolved source={source} resource_id={id}");
         }
         let fetched = foundation::MakeGarbageCollected(StyleFetchedImage::new(
-            source,
+            value.url_data.clone(),
             id,
             natural_size,
             resource_resolution,
             override_resolution,
             is_document_image,
             resource.map_or_else(Default::default, |resource| resource.orientation),
+            self.document.ImageResourceFailedFor(&source),
         ));
         let image = std::ptr::NonNull::new(fetched.cast::<StyleImage>()).unwrap();
         if let Some(id) = std::num::NonZeroU64::new(id) {
             unsafe { production_style_builder::FetchedImageBinding::FromResource(id, image) }
         } else {
-            unsafe { production_style_builder::FetchedImageBinding::FromPending(image) }
+            unsafe { production_style_builder::FetchedImageBinding::FromUnpublished(image) }
         }
     }
 }
@@ -823,7 +828,7 @@ impl ResolverDependencyState {
 // Structural errors keep all previously rooted document styles.
 pub struct DocumentStyleEngine {
     document: DOMOwnerHandle,
-    selectors: PersistentSelectorService,
+    selectors: Rc<RefCell<PersistentSelectorService>>,
     diagnostics: Vec<DocumentStyleError>,
     active_sheets: Arc<Vec<(CSSStyleSheet, CascadeOrigin)>>,
     /// TreeScope owner aligned with `active_sheets`; UA entries have no
@@ -843,6 +848,9 @@ pub struct DocumentStyleEngine {
     matched_properties_cache:
         crate::resolver::production_style_resolver::ProductionMatchedPropertiesCache,
     resolver_dependencies: ResolverDependencyState,
+    // Immutable per-family font inputs are derived from this Style-owned
+    // document-author registry, never from Layout or a Page-side CSS scan.
+    font_feature_values: crate::font_feature_values_registry::FontFeatureValuesRegistry,
     translated_rule_set_environment: Option<MediaValuesCachedData>,
     translated_rule_shadow_stats: TranslatedRuleShadowStats,
     sheet_revision: Option<u64>,
@@ -893,6 +901,7 @@ impl DocumentStyleEngine {
             translated_rule_routing: HashMap::new(),
             matched_properties_cache: Default::default(),
             resolver_dependencies: Default::default(),
+            font_feature_values: Default::default(),
             translated_rule_set_environment: None,
             translated_rule_shadow_stats: Default::default(),
             sheet_revision: None,
@@ -1052,10 +1061,10 @@ impl DocumentStyleEngine {
         if owner.GetDocument().RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
         }
-        if self.selectors.interaction == state {
+        if self.selectors.borrow().interaction == state {
             return Ok(false);
         }
-        self.selectors.interaction = state;
+        self.selectors.borrow_mut().interaction = state;
         owner.GetDocumentMut().StyleStateMut().all_dirty = true;
         Ok(true)
     }
@@ -1101,7 +1110,7 @@ impl DocumentStyleEngine {
         let state = owner.GetDocument().StyleState();
         // Chromium's StyleFetchedImage retains identity while its
         // ImageResourceContent changes underneath it, so a matched-properties
-        // cache hit observes the completed resource. Rechrom publishes an
+        // cache hit observes the completed or failed resource. Rechrom publishes an
         // immutable StyleFetchedImage snapshot across the style boundary.
         // Resource invalidation must therefore reject cached snapshots before
         // rebuilding the affected paint clients.
@@ -1161,6 +1170,12 @@ impl DocumentStyleEngine {
         // revision or media environment changes; advanced recalc contexts
         // remain explicit compatibility-collector fallbacks.
         self.SynchronizeTranslatedRuleSets(&active_sheets, media);
+        let font_features_changed = self.SynchronizeFontFeatureValues(
+            document,
+            media,
+            &active_sheets,
+            active_sheet_scopes.as_slice(),
+        );
         let function_registry = {
             let evaluator =
                 crate::production_style_sheet::ProductionMediaQueryEvaluator::FromCachedData(media);
@@ -1181,14 +1196,15 @@ impl DocumentStyleEngine {
             .property_registry
             .UpdateDeclaredProperties(&active_sheets, &DocumentMediaValues::new(document, media));
         let environment = (media.clone(), document.GetCompatibilityMode());
-        let all_dirty = registry_changed || document.StyleState().all_dirty || self.environment.as_ref() != Some(&environment)
+        let all_dirty = font_features_changed || registry_changed || document.StyleState().all_dirty || self.environment.as_ref() != Some(&environment)
             // Container ancestry, scope activation and computed custom values are query inputs.
             // Until per-container dependency sets are retained, any DOM/style
             // mutation revisits conditional-rule subjects against current ancestors.
             || (active_sheets.iter().any(|(s,_)|s.rules.iter().any(|r|!r.container_conditions.is_empty() || !r.scope_conditions.is_empty()))
                 && !document.StyleState().changes.is_empty());
         let sheet_changes = ChangedSheets(&self.active_sheets, &active_sheets);
-        if registry_changed
+        if font_features_changed
+            || registry_changed
             || self.environment.as_ref() != Some(&environment)
             || !sheet_changes.is_empty()
             || environment_variables.is_some()
@@ -1301,7 +1317,7 @@ impl DocumentStyleEngine {
                     // ImageResourceContent in place. Rechrom publishes an
                     // immutable fetched-image snapshot across this package
                     // boundary, so replace only the affected paint client when
-                    // the resource owner publishes its stable id/geometry.
+                    // the resource owner publishes its id, geometry or error.
                     StyleChange::Resource(index) => {
                         dirty.insert(index);
                     }
@@ -1737,7 +1753,8 @@ impl DocumentStyleEngine {
                             collaborators.transitions = transition_interpolations.as_ref();
                             collaborators.matched_properties_cache =
                                 Some(self.matched_properties_cache.clone());
-                            collaborators.interaction = self.selectors.interaction;
+                            collaborators.selectors = Some(self.selectors.clone());
+                            collaborators.interaction = self.selectors.borrow().interaction;
                             let may_apply = (animation_samples.is_empty()
                                 || animation_interpolations.is_some())
                                 && (transition_samples.is_empty()
@@ -1964,6 +1981,14 @@ impl DocumentStyleEngine {
                             ..Default::default()
                         },
                     );
+                    if !translated_resolver_applied {
+                        // The compatibility cascade publishes the same native
+                        // style and must run the same StyleAdjuster branch.
+                        crate::resolver::style_adjuster::AdjustStyleForZIndex(
+                            &mut builder,
+                            display_parent,
+                        );
+                    }
                     // cpp: Element::RecalcHighlightStyles (element.cc:6747-6828)
                     // and StyleResolver::StyleForHighlightPseudoElement
                     // (style_resolver.cc:10642-10652). Highlight pseudos are
@@ -1972,6 +1997,7 @@ impl DocumentStyleEngine {
                     // inherits highlight properties from the parent's matching
                     // highlight style and initializes the remaining properties
                     // from this element's ordinary originating style.
+                    self.ResolveFontFeatureValues(&mut builder);
                     let ordinary_style =
                         Persistent::from_ptr(builder.TakeStyle() as *mut ComputedStyle);
                     let originating_style = unsafe { &*ordinary_style.Get() };
@@ -2144,7 +2170,8 @@ impl DocumentStyleEngine {
                                     collaborators.function_registry = Some(&function_registry);
                                     collaborators.matched_properties_cache =
                                         Some(self.matched_properties_cache.clone());
-                                    collaborators.interaction = self.selectors.interaction;
+                                    collaborators.selectors = Some(self.selectors.clone());
+                                    collaborators.interaction = self.selectors.borrow().interaction;
                                     match crate::resolver::production_style_resolver::ApplyBaseStyleForElement(
                                         crate::resolver::production_style_resolver::ProductionBaseStyleInputs {
                                             matching: crate::resolver::production_style_resolver::ProductionRuleMatchingInputs {
@@ -2186,6 +2213,7 @@ impl DocumentStyleEngine {
                                                 .ApplyState(&mut resolved_highlight);
                                             resolver_attribute_state
                                                 .ApplyState(&mut resolved_highlight);
+                                            self.ResolveFontFeatureValues(&mut resolved_highlight);
                                             let resolved_highlight = Rc::new(Persistent::from_ptr(
                                                 resolved_highlight.TakeStyle()
                                                     as *mut ComputedStyle,
@@ -2665,6 +2693,82 @@ impl DocumentStyleEngine {
         }
     }
 
+    // cpp: ScopedStyleResolver::AddFontFeatureValuesRules, CSSFontSelector::
+    // GetFontData, and StyleEngine::ApplyRuleSetChanges. At the pinned source
+    // revision these aliases are document-author scoped; shadow/user-sheet
+    // table fusion remains a source TODO. Owner media is outside RuleSet.
+    fn SynchronizeFontFeatureValues(
+        &mut self,
+        document: &Document,
+        media: &MediaValuesCachedData,
+        sheets: &[(CSSStyleSheet, CascadeOrigin)],
+        sheet_scopes: &[Option<usize>],
+    ) -> bool {
+        let values = DocumentMediaValues::new(document, media);
+        let evaluator = MediaQueryEvaluator::<MediaQueryValueBackend>::ForMediaValues(&values);
+        let mut active = Vec::new();
+        for (index, (sheet, origin)) in sheets.iter().enumerate() {
+            if *origin != CascadeOrigin::kAuthor
+                || sheet_scopes.get(index).copied().flatten() != Some(document.Root())
+            {
+                continue;
+            }
+            if !sheet.owner_media_conditions.iter().all(|condition| {
+                let query = self
+                    .media_query_cache
+                    .entry(condition.clone())
+                    .or_insert_with(|| Rc::new(ParseMediaQuerySet(condition)))
+                    .clone();
+                evaluator.Eval(query.as_ref())
+            }) {
+                continue;
+            }
+            // A CSSOM projection without authoritative backing cannot provide
+            // feature-value rules. SynchronizeTypedSheets deliberately refuses
+            // stale source; retain that boundary instead of reparsing it here.
+            if let Some(rules) = self.translated_rule_sets.get(&(sheet.Identity(), sheet.Revision())) {
+                active.push(crate::active_style_sheets::ActiveStyleSheet::new(
+                    Rc::new(()), Some(rules.clone()),
+                ));
+            }
+        }
+        let layers = crate::cascade_layer_map::CascadeLayerMap::new(&active);
+        let mut next = crate::font_feature_values_registry::FontFeatureValuesRegistry::default();
+        for sheet in &active {
+            next.AddRules(sheet.rule_set.as_ref().unwrap().FontFeatureValuesRules(), Some(&layers));
+        }
+        let changed = self.font_feature_values != next;
+        self.font_feature_values = next;
+        changed
+    }
+
+    // CSSFontSelector resolves a copy of the description independently for each
+    // requested CSS family before selecting a face. The immutable family map
+    // expresses that semantic boundary without exposing Style's registry or
+    // live callbacks to FontEngine. The symbolic alternates remain canonical.
+    fn ResolveFontFeatureValues(&self, builder: &mut ComputedStyleBuilder) {
+        let mut description = builder.GetFontDescription().clone();
+        let mut resolved = Vec::new();
+        if let Some(alternates) = description.FontVariantAlternatesValue() {
+            let mut family = Some(description.Family());
+            while let Some(current) = family {
+                let storage = self.font_feature_values.FontFeatureValuesForFamily(current.FamilyName());
+                let alternate = alternates.Resolve(
+                    |name| storage.map_or_else(Vec::new, |s| s.ResolveStylistic(name)),
+                    |name| storage.map_or_else(Vec::new, |s| s.ResolveStyleset(name)),
+                    |name| storage.map_or_else(Vec::new, |s| s.ResolveCharacterVariant(name)),
+                    |name| storage.map_or_else(Vec::new, |s| s.ResolveSwash(name)),
+                    |name| storage.map_or_else(Vec::new, |s| s.ResolveOrnaments(name)),
+                    |name| storage.map_or_else(Vec::new, |s| s.ResolveAnnotation(name)),
+                );
+                resolved.push((current.FamilyName().clone(), alternate.GetResolvedFontFeatures().clone()));
+                family = unsafe { current.Next().as_ref() };
+            }
+        }
+        description.SetResolvedFontFeaturesForFamilies(resolved.into());
+        production_style_builder::StageFontDescription(builder, &description);
+    }
+
     /// Assemble the exact active RuleSet owners consumed by
     /// StyleResolver::MatchAllRules. Owner-level media is outside
     /// StyleSheetContents in Chromium, so it is filtered here before the
@@ -2865,7 +2969,7 @@ impl DocumentStyleEngine {
         custom: Option<&HashMap<usize, Rc<CustomProperties>>>,
         environment_variables: Option<&dyn EnvironmentVariableResolver>,
     ) -> Vec<(usize, u32, u32)> {
-        let selector_session = self.selectors.StyleMatchSession(document);
+        let selector_session = self.selectors.borrow_mut().StyleMatchSession(document);
         let values = DocumentMediaValues::new(document, media);
         let evaluator = MediaQueryEvaluator::<MediaQueryValueBackend>::ForMediaValues(&values);
         let mut matches = vec![];
@@ -3179,7 +3283,7 @@ impl DocumentStyleEngine {
                     &inputs,
                     document,
                     index,
-                    &mut self.selectors,
+                    &mut self.selectors.borrow_mut(),
                     origin,
                     &pseudo_request,
                     Some(&container_runtime),
@@ -3302,7 +3406,7 @@ impl DocumentStyleEngine {
                             &inputs,
                             document,
                             shadow_matching_index,
-                            &mut self.selectors,
+                            &mut self.selectors.borrow_mut(),
                             scope_root,
                             &pass,
                             Some(&container_runtime),
@@ -3390,7 +3494,7 @@ impl DocumentStyleEngine {
                             &inputs,
                             document,
                             index,
-                            &mut self.selectors,
+                            &mut self.selectors.borrow_mut(),
                             CascadeOrigin::kAuthor,
                             &pseudo_request,
                             Some(&container_runtime),
@@ -3412,7 +3516,7 @@ impl DocumentStyleEngine {
                 }
             }
         }
-        let selector_session = self.selectors.StyleMatchSession(document);
+        let selector_session = self.selectors.borrow_mut().StyleMatchSession(document);
         let mut result = vec![];
         let mut layer_names = HashMap::<(u8, String), u16>::new();
         for &(sheet, origin) in sheets {
@@ -3640,8 +3744,10 @@ impl DocumentStyleEngine {
         // svg/svg_transformable_element.cc:45-53. SVG presentation
         // attributes are author-cascade input below ordinary author rules.
         if pseudo.is_none() && document.Node(index).Namespace() == DOMNamespace::kSVG {
-            let declarations = SVGPresentationAttributeDeclarations(document.Node(index));
-            if !declarations.is_empty() {
+            let properties = crate::svg_presentation_attributes::CollectPresentationAttributes(
+                document.Node(index),
+            );
+            if !properties.is_empty() {
                 result.push(MatchedRule {
                     specificity: 0,
                     proximity: 0,
@@ -3651,13 +3757,7 @@ impl DocumentStyleEngine {
                     layer: u16::MAX,
                     valid_property_filter: ValidPropertyFilter::kNoFilter,
                     retained_properties: None,
-                    properties: Rc::new(Parse(
-                        document,
-                        index,
-                        &declarations,
-                        CSSParserMode::kSVGAttributeMode,
-                        &mut self.diagnostics,
-                    )),
+                    properties: Rc::new(properties),
                     tree_scope_root: None,
                     transferred: None,
                 });
@@ -3817,7 +3917,7 @@ impl DocumentStyleEngine {
                         session.MatchingCompiledSpecificity(index, &selector.compiled_subject)
                     })
                     .unwrap_or_else(|| {
-                        self.selectors.MatchingCompiledSpecificity(
+                        self.selectors.borrow_mut().MatchingCompiledSpecificity(
                             document,
                             index,
                             &selector.compiled_subject,
@@ -3826,6 +3926,7 @@ impl DocumentStyleEngine {
                     .map(|_| u32::MAX))
             } else {
                 self.selectors
+                    .borrow_mut()
                     .MatchingScopedSpecificity(
                         document,
                         index,
@@ -4066,6 +4167,8 @@ impl DocumentStyleEngine {
             builder.SetWhiteSpace(EWhiteSpace::kPre);
         }
         AdjustComputedDisplayForLayout(&mut builder, parent, &DisplayAdjustmentContext::default());
+        crate::resolver::style_adjuster::AdjustStyleForZIndex(&mut builder, parent);
+        self.ResolveFontFeatureValues(&mut builder);
         let mut style = Persistent::from_ptr(builder.TakeStyle() as *mut ComputedStyle);
         let native = unsafe { &*style.Get() };
         // cpp: Element::GetCachedPseudoElementStyle (element.cc:10376-10458).
@@ -4152,6 +4255,8 @@ impl DocumentStyleEngine {
             builder.SetWhiteSpace(EWhiteSpace::kPre);
         }
         AdjustComputedDisplayForLayout(&mut builder, parent, &DisplayAdjustmentContext::default());
+        crate::resolver::style_adjuster::AdjustStyleForZIndex(&mut builder, parent);
+        self.ResolveFontFeatureValues(&mut builder);
         let mut style = Persistent::from_ptr(builder.TakeStyle() as *mut ComputedStyle);
         let native = unsafe { &*style.Get() };
         if let Some(old) =
@@ -4991,189 +5096,6 @@ fn Parse(
     parsed.properties
 }
 
-fn SVGPresentationAttributeDeclarations(node: &dom::persistent_document::DOMNode) -> String {
-    // Geometry-only SVG attributes remain owned by DOM/Layout metadata. These
-    // names are the CSS-facing animated presentation properties collected by
-    // SVGElement and its graphics-element subclasses in Chromium.
-    const PROPERTIES: &[&str] = &[
-        "alignment-baseline",
-        "baseline-shift",
-        "clip-path",
-        "clip-rule",
-        "color",
-        "color-interpolation",
-        "cursor",
-        "display",
-        "dominant-baseline",
-        "fill",
-        "fill-opacity",
-        "fill-rule",
-        "filter",
-        "flood-color",
-        "flood-opacity",
-        "font-family",
-        "font-size",
-        "font-style",
-        "font-weight",
-        "image-rendering",
-        "marker-end",
-        "marker-mid",
-        "marker-start",
-        "mask",
-        "opacity",
-        "overflow",
-        "paint-order",
-        "pointer-events",
-        "shape-rendering",
-        "stop-color",
-        "stop-opacity",
-        "stroke",
-        "stroke-dasharray",
-        "stroke-dashoffset",
-        "stroke-linecap",
-        "stroke-linejoin",
-        "stroke-miterlimit",
-        "stroke-opacity",
-        "stroke-width",
-        "text-anchor",
-        "text-decoration",
-        "transform",
-        "transform-origin",
-        "vector-effect",
-        "visibility",
-        "white-space",
-    ];
-    let mut declarations = String::new();
-    for attribute in node.Attributes() {
-        if !attribute.namespace_uri.is_empty()
-            || !PROPERTIES.contains(&attribute.local_name.as_str())
-        {
-            continue;
-        }
-        let value = if attribute.local_name == "transform" {
-            NormalizeSVGTransform(&attribute.value)
-        } else {
-            attribute.value.clone()
-        };
-        declarations.push_str(&attribute.local_name);
-        declarations.push(':');
-        declarations.push_str(&value);
-        declarations.push(';');
-    }
-    declarations
-}
-
-fn NormalizeSVGTransform(value: &str) -> String {
-    // SVGTransformList has SVG-specific argument grammar (including optional
-    // rotate centers). Chromium exposes the concatenated AffineTransform to
-    // style. Lowering to matrix() preserves that exact boundary and avoids
-    // pretending the attribute itself used CSS transform-function syntax.
-    type Matrix = [f64; 6];
-    fn multiply(left: Matrix, right: Matrix) -> Matrix {
-        [
-            left[0] * right[0] + left[2] * right[1],
-            left[1] * right[0] + left[3] * right[1],
-            left[0] * right[2] + left[2] * right[3],
-            left[1] * right[2] + left[3] * right[3],
-            left[0] * right[4] + left[2] * right[5] + left[4],
-            left[1] * right[4] + left[3] * right[5] + left[5],
-        ]
-    }
-    fn operation(name: &str, arguments: &[f64]) -> Option<Matrix> {
-        match name.to_ascii_lowercase().as_str() {
-            "matrix" if arguments.len() == 6 => arguments.try_into().ok(),
-            "translate" if (1..=2).contains(&arguments.len()) => Some([
-                1.0,
-                0.0,
-                0.0,
-                1.0,
-                arguments[0],
-                arguments.get(1).copied().unwrap_or(0.0),
-            ]),
-            "scale" if (1..=2).contains(&arguments.len()) => Some([
-                arguments[0],
-                0.0,
-                0.0,
-                arguments.get(1).copied().unwrap_or(arguments[0]),
-                0.0,
-                0.0,
-            ]),
-            "rotate" if arguments.len() == 1 || arguments.len() == 3 => {
-                let radians = arguments[0].to_radians();
-                let rotation = [
-                    radians.cos(),
-                    radians.sin(),
-                    -radians.sin(),
-                    radians.cos(),
-                    0.0,
-                    0.0,
-                ];
-                if arguments.len() == 1 {
-                    Some(rotation)
-                } else {
-                    let to_center = [1.0, 0.0, 0.0, 1.0, arguments[1], arguments[2]];
-                    let from_center = [1.0, 0.0, 0.0, 1.0, -arguments[1], -arguments[2]];
-                    Some(multiply(multiply(to_center, rotation), from_center))
-                }
-            }
-            "skewx" if arguments.len() == 1 => {
-                Some([1.0, 0.0, arguments[0].to_radians().tan(), 1.0, 0.0, 0.0])
-            }
-            "skewy" if arguments.len() == 1 => {
-                Some([1.0, arguments[0].to_radians().tan(), 0.0, 1.0, 0.0, 0.0])
-            }
-            _ => None,
-        }
-    }
-
-    let bytes = value.as_bytes();
-    let mut cursor = 0;
-    let mut result = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-    let mut count = 0;
-    while cursor < bytes.len() {
-        while cursor < bytes.len() && (bytes[cursor].is_ascii_whitespace() || bytes[cursor] == b',')
-        {
-            cursor += 1;
-        }
-        let name_start = cursor;
-        while cursor < bytes.len() && bytes[cursor].is_ascii_alphabetic() {
-            cursor += 1;
-        }
-        let name = &value[name_start..cursor];
-        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
-            cursor += 1;
-        }
-        if name.is_empty() || bytes.get(cursor) != Some(&b'(') {
-            return value.to_owned();
-        }
-        cursor += 1;
-        let arguments_start = cursor;
-        while cursor < bytes.len() && bytes[cursor] != b')' {
-            cursor += 1;
-        }
-        if cursor == bytes.len() {
-            return value.to_owned();
-        }
-        let arguments: Option<Vec<f64>> = value[arguments_start..cursor]
-            .split(|character: char| character == ',' || character.is_ascii_whitespace())
-            .filter(|argument| !argument.is_empty())
-            .map(|argument| argument.parse().ok())
-            .collect();
-        let Some(matrix) = arguments.and_then(|arguments| operation(name, &arguments)) else {
-            return value.to_owned();
-        };
-        result = multiply(result, matrix);
-        count += 1;
-        cursor += 1;
-    }
-    if count == 0 {
-        return value.to_owned();
-    }
-    format!(
-        "matrix({},{},{},{},{},{})",
-        result[0], result[1], result[2], result[3], result[4], result[5]
-    )
-}
 // The layout boundary rebinds the native font to ConstraintSpace's font faces.
 // It must receive the computed description from the same native style.
 // cpp: text_control_inner_elements.cc:133-222. The retained inner editor is a
@@ -5755,7 +5677,7 @@ fn StyleImpact(old: Option<&ResolvedNodeStyle>, new: &ResolvedNodeStyle) -> Styl
                     unsafe { &*old.native_style.Get() },
                     unsafe { &*new.native_style.Get() },
                 );
-                let layout = fields & FieldDifference::kLayout.bits() != 0
+                let layout = fields & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits()) != 0
                     || !old.style.LayoutEquivalent(&new.style);
                 pseudo_impact.layout |= layout;
                 pseudo_impact.paint |= layout || fields != 0 || old.style.paint != new.style.paint;
@@ -5776,8 +5698,11 @@ fn StyleImpact(old: Option<&ResolvedNodeStyle>, new: &ResolvedNodeStyle) -> Styl
     let new_native = unsafe { &*new.native_style.Get() };
     let native_difference = ComputedStyle::ComputeDifference(old_native, new_native);
     let fields = ComputedStyleBase::FieldInvalidationDiff(old_native, new_native);
+    // cpp: ComputedStyle::VisualInvalidationDiff, computed_style.cc:753-757.
+    // A reshape changes intrinsic advances and therefore requires layout even
+    // when the projected font size/family/weight fields remain unchanged.
     let layout =
-        fields & FieldDifference::kLayout.bits() != 0 || !old.style.LayoutEquivalent(&new.style);
+        fields & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits()) != 0 || !old.style.LayoutEquivalent(&new.style);
     StyleUpdateImpact {
         reattach: false,
         layout: pseudo_impact.layout || layout,

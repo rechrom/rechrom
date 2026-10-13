@@ -57,6 +57,7 @@ mod user_agent_styles;
 pub fn CreateLayoutAssembly() -> LayoutAssembly {
     let mut assembly = LayoutAssembly::default();
     InstallBlockAlgorithm(&mut assembly);
+    layoutng_multicol::assembly::InstallMulticolAlgorithm(&mut assembly);
     InstallFlexAlgorithm(&mut assembly);
     layoutng_grid::assembly::InstallGridAlgorithm(&mut assembly);
     layoutng_table::assembly::InstallTableAlgorithm(&mut assembly);
@@ -74,6 +75,24 @@ pub fn CreateLayoutAssembly() -> LayoutAssembly {
     InstallLayoutBoundary(&mut assembly);
 
     assembly
+}
+
+/// Assemble an isolated SVG document with the browser's retained UA rules.
+pub fn CreateSVGImageDecoder(assembly: &LayoutAssembly) -> document_image::SVGImageDecoder {
+    // The image container replaces this placeholder viewport before Layout.
+    // Reuse the existing immutable browser font/theme inputs rather than the
+    // empty generic ConstraintSpace, which is not a complete browser host.
+    CreateSVGImageDecoderWithConstraints(assembly, &CreateBrowserConstraints(0, 0))
+}
+
+/// SVG image documents share the embedding's platform constraints and UA rules,
+/// while retaining their own container, style, layout and paint lifecycle.
+pub fn CreateSVGImageDecoderWithConstraints(
+    assembly: &LayoutAssembly,
+    constraints: &ConstraintSpace,
+) -> document_image::SVGImageDecoder {
+    let user_agent = user_agent_styles::UserAgentStyleSheets::new();
+    document_image::SVGImageDecoder::new_with_constraints(assembly, constraints, user_agent.Sheets())
 }
 
 /// Host viewport, system fonts and theme inputs shared by static and live DOM layout.

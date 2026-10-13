@@ -42,7 +42,7 @@ use std::{
 pub use style::{media_queries::forced_colors::ForcedColors, PreferredColorScheme};
 use url_loader::{URLLoader, URLRequest, URLWakeCallback};
 use webapi::{
-    dom_bindings::{DOMBindingsHost, DOMJavaScriptBindings},
+    dom_bindings::{DOMBindingsHost, DOMJavaScriptBindings, ViewportScrollState},
     web_api_engine::{WebApiEffect, WebApiEngine, WebApiMutation},
     window_bindings::WindowJavaScriptBindings,
 };
@@ -296,6 +296,11 @@ impl PageState {
     ) -> Rc<Self> {
         let style_engine = style::StyleEngine::new(&document.borrow());
         let connected_resources = open::ConnectedResourceDiscovery::new(document.Handle());
+        let preferred_color_scheme = if constraints.preferred_color_scheme == 1 {
+            PreferredColorScheme::kDark
+        } else {
+            PreferredColorScheme::kLight
+        };
         Rc::new(Self {
             document,
             style_engine: RefCell::new(style_engine),
@@ -327,7 +332,7 @@ impl PageState {
             scroll_updates: RefCell::new(Vec::new()),
             animation_engine: RefCell::new(animation::AnimationEngine::new()),
             animation_begin_frame_requested: Cell::new(false),
-            preferred_color_scheme: Cell::new(PreferredColorScheme::kLight),
+            preferred_color_scheme: Cell::new(preferred_color_scheme),
             forced_colors: Cell::new(ForcedColors::kNone),
         })
     }
@@ -384,6 +389,7 @@ impl PageState {
                 fonts: constraints.fonts.clone(),
                 images: constraints.images.clone(),
                 device_pixel_ratio: constraints.device_pixel_ratio,
+                preferred_color_scheme: constraints.preferred_color_scheme,
                 layout_zoom_factor: constraints.layout_zoom_factor,
                 paints_opaque_base_background: !constraints.printing,
                 viewport: constraints.viewport,
@@ -612,6 +618,7 @@ impl PageState {
         let metric = state.clone();
         let geometry = state.clone();
         let scroll = state.clone();
+        let viewport_scroll = state.clone();
         let stylesheet = state.clone();
         let animation = state.clone();
         let host = DOMBindingsHost {
@@ -652,6 +659,29 @@ impl PageState {
                         base_url: base,
                     },
                 ));
+            })),
+            read_viewport_scroll: Some(Box::new(move || {
+                // Assembly only: Layout supplies its viewport range, DOM owns
+                // the latest offset, and canonical Style supplies scroll policy.
+                viewport_scroll.EnsureMeasurement();
+                let measurement = viewport_scroll.measurement.borrow();
+                let viewport = measurement.as_ref()?;
+                let owner = viewport_scroll.document.borrow();
+                let tree = owner.GetDocument();
+                let root = tree.Node(tree.Root()).Children().iter().copied()
+                    .find(|&index| tree.Node(index).IsHTMLElement("html"))?;
+                let native = tree.ResolvedStyleFor(root)
+                    .map(|resolved| unsafe { &*resolved.native_style.Get() })?;
+                let range = viewport.paint.scroll_container;
+                Some(ViewportScrollState {
+                    target_node_id: tree.Node(root).Id(),
+                    offset: tree.ScrollOffsetFor(root),
+                    minimum: range.map_or(Offset::default(), |range| range.minimum_scroll_offset),
+                    maximum: range.map_or(Offset::default(), |range| range.maximum_scroll_offset),
+                    layout_zoom_factor: viewport_scroll.constraints.borrow().layout_zoom_factor,
+                    smooth_behavior: native.GetScrollBehavior().value() == 2,
+                    snap: !native.GetScrollSnapType().is_none,
+                })
             })),
             read_metric: Some(Box::new(move |id, name| {
                 metric.EnsureMeasurement();
@@ -1037,12 +1067,23 @@ impl PageState {
                     dom::error::invalid_argument("viewport size must be positive");
                 }
                 let mut constraints = self.constraints.borrow_mut();
+                let viewport_changed = constraints.available_size != m.size
+                    || constraints.viewport.is_some_and(|viewport| {
+                        viewport.size.width != m.size.width.round() as i32
+                            || viewport.size.height != m.size.height.round() as i32
+                    });
                 constraints.available_size = m.size;
                 if let Some(viewport) = &mut constraints.viewport {
                     viewport.size = IntSize {
                         width: m.size.width.round() as i32,
                         height: m.size.height.round() as i32,
                     };
+                }
+                drop(constraints);
+                // A changed initial containing block requires layout even
+                // when no viewport-dependent computed style changes.
+                if viewport_changed {
+                    self.document.borrow_mut().InvalidateLayout();
                 }
                 self.InvalidateStyle();
             }
@@ -1198,6 +1239,23 @@ impl PageState {
                 self.dirty.set(true);
             }
             ResourceMutation::ResourceLoadFailed(m) => {
+                if m.kind == page_mutation::ResourceKind::kImage {
+                    if let Some(source) = m.source {
+                        let changed = self
+                            .document
+                            .borrow_mut()
+                            .GetDocumentMut()
+                            .SetImageResourceFailed(source);
+                        if changed {
+                            // Mirror successful completion: the document marks
+                            // actual image clients for immutable-style refresh.
+                            self.InvalidateMeasurement();
+                            self.styles_resolved.set(false);
+                            self.scroll_only.set(false);
+                            self.dirty.set(true);
+                        }
+                    }
+                }
                 self.client.borrow_mut().DidFailResource(&m.url, &m.error)
             }
         }
@@ -1382,6 +1440,13 @@ impl Page {
             }
         }
         fn install_resources(node: &mut FragmentNode, resources: &Arc<PaintResources>) {
+            if node.paint.resources.as_deref() != Some(resources.as_ref()) {
+                // Resource fulfillment happens after Layout certified this
+                // snapshot. Revoke that certificate so retained PrePaint nodes
+                // cannot keep stale image payloads or embedding preferences.
+                node.pre_paint_revision = 0;
+                node.pre_paint_subtree_revision = 0;
+            }
             node.paint.resources = Some(resources.clone());
             for child in &mut node.children {
                 install_resources(child, resources);
@@ -1404,16 +1469,12 @@ impl Page {
             );
             requirements
         };
-        if requirements.is_empty() {
-            return Ok(());
-        }
         let resources = self.resources.clone();
         let state = self.state.clone();
         let mut client = ResourceClient {
             state,
             scripts: self.scripts.as_deref_mut(),
         };
-        let mut changed = false;
         for (resource_id, requirements) in requirements {
             for container in requirements {
                 let already_published = self
@@ -1432,7 +1493,7 @@ impl Page {
                 if already_published {
                     continue;
                 }
-                changed |= resources.ConfigureDocumentImageContainer(
+                resources.ConfigureDocumentImageContainer(
                     resource_id,
                     container,
                     preferred_color_scheme,
@@ -1440,12 +1501,18 @@ impl Page {
                 )?;
             }
         }
-        if changed {
+        // Paint-only fragment export can retain an earlier resource catalog.
+        // Rebind the current immutable catalog even when every container was
+        // already published (or there are only background-image clients).
+        // Otherwise a resize back to a retained variant or a host preference
+        // change would record against stale resources despite exact fulfillment.
+        {
             let constraints = self.state.constraints.borrow();
             let resources = Arc::new(PaintResources {
                 fonts: constraints.fonts.clone(),
                 images: constraints.images.clone(),
                 device_pixel_ratio: constraints.device_pixel_ratio,
+                preferred_color_scheme: constraints.preferred_color_scheme,
                 layout_zoom_factor: constraints.layout_zoom_factor,
                 paints_opaque_base_background: !constraints.printing,
                 viewport: constraints.viewport,
@@ -1508,11 +1575,16 @@ impl Page {
                 fonts: constraints.fonts.clone(),
                 images: constraints.images.clone(),
                 device_pixel_ratio: constraints.device_pixel_ratio,
+                preferred_color_scheme: constraints.preferred_color_scheme,
                 layout_zoom_factor: constraints.layout_zoom_factor,
                 paints_opaque_base_background: !constraints.printing,
                 viewport: constraints.viewport,
             });
             fn install(node: &mut FragmentNode, resources: &Arc<PaintResources>) {
+                if node.paint.resources.as_deref() != Some(resources.as_ref()) {
+                    node.pre_paint_revision = 0;
+                    node.pre_paint_subtree_revision = 0;
+                }
                 node.paint.resources = Some(resources.clone());
                 for child in &mut node.children {
                     install(child, resources);
@@ -1681,6 +1753,8 @@ impl Page {
             scripts.SetPreferredColorScheme(preference);
         }
         if self.state.preferred_color_scheme.replace(preference) != preference {
+            self.state.constraints.borrow_mut().preferred_color_scheme =
+                u8::from(preference == PreferredColorScheme::kDark);
             self.state.InvalidateMeasurement();
             self.state.InvalidateStyle();
         }
@@ -1698,6 +1772,9 @@ impl Page {
     /// Start navigation without waiting for headers, body or parser completion.
     /// The host event loop drives `RunTask`; later failures reach DidFail and
     /// that task's result. IsLoading includes pending document resources/scripts.
+    pub fn EnableDiagnosticReadAhead(&mut self, scripting: bool) {
+        self.open_engine.EnableDiagnosticReadAhead(scripting);
+    }
     pub fn Open(&mut self, url: &str, chunk_size: usize, token_budget: usize) -> io::Result<()> {
         self.OpenRequest(
             &URLRequest {
@@ -2536,7 +2613,7 @@ fn cursor_hit_test_same_point_reuses_clean_frame_and_scroll_invalidates() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
                 &assembly,
             ))),
             crate::CreateBrowserConstraints(320, 200),
@@ -2781,51 +2858,13 @@ fn DispatchListeners(
     runtime: &mut dyn JavaScriptRuntime,
     realm: &JavaScriptRealm,
 ) -> interaction::event::EventListenerResult {
-    let at_document = {
-        let owner = state.document.borrow();
-        invocation.current_target_node_id
-            == owner.GetDocument().Node(owner.GetDocument().Root()).Id()
-    };
-    let window = EventListenerInvocation {
-        current_target_node_id: 0,
-        ..*invocation
-    };
-    let connects_window = crate::interaction_services::NodeEventReachesWindow(invocation.event);
-    let mut result = interaction::event::EventListenerResult::default();
-    let mut dispatch = |invocation: &EventListenerInvocation<'_>| {
-        DOMJavaScriptBindings::DispatchEventListeners(
-            bindings,
-            invocation,
-            runtime,
-            realm,
-            &mut |error| state.client.borrow_mut().DidReportScriptError(error),
-        )
-    };
-    if at_document && connects_window && invocation.capture_listeners {
-        result = dispatch(&window);
-        if result.stop_propagation || result.stop_immediate_propagation {
-            return result;
-        }
-    }
-    fn merge(
-        result: &mut interaction::event::EventListenerResult,
-        next: interaction::event::EventListenerResult,
-    ) {
-        result.prevent_default |= next.prevent_default;
-        result.stop_propagation |= next.stop_propagation;
-        result.stop_immediate_propagation |= next.stop_immediate_propagation;
-    }
-    merge(&mut result, dispatch(invocation));
-    if at_document
-        && connects_window
-        && !invocation.capture_listeners
-        && invocation.event.bubbles
-        && !result.stop_propagation
-        && !result.stop_immediate_propagation
-    {
-        merge(&mut result, dispatch(&window));
-    }
-    result
+    DOMJavaScriptBindings::DispatchEventListeners(
+        bindings,
+        invocation,
+        runtime,
+        realm,
+        &mut |error| state.client.borrow_mut().DidReportScriptError(error),
+    )
 }
 
 // cpp: browser/browser.cc:1859-1877
@@ -2848,7 +2887,7 @@ pub fn OpenUrl(
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
             &assembly,
         ))),
         crate::CreateBrowserConstraints(width, height),

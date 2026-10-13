@@ -351,6 +351,7 @@ impl ResourceFetcher {
         let fail = |message: String, client: &mut dyn ResourceFetcherClient| {
             client.ApplyResourceMutation(ResourceMutation::ResourceLoadFailed(ResourceLoadFailed {
                 kind: ResourceKind::kFont,
+                source: None,
                 url: url.clone(),
                 error: message,
             }))
@@ -493,6 +494,7 @@ impl ResourceFetcher {
             client.ApplyResourceMutation(ResourceMutation::ResourceLoadFailed(
                 ResourceLoadFailed {
                     kind: ResourceKind::kImage,
+                    source: Some(image.source.clone()),
                     url: image.url,
                     error: result.error,
                 },
@@ -621,6 +623,7 @@ impl ResourceFetcher {
                 client.ApplyResourceMutation(ResourceMutation::ResourceLoadFailed(
                     ResourceLoadFailed {
                         kind: ResourceKind::kImage,
+                        source: Some(image.source.clone()),
                         url: image.url,
                         error: e.to_string(),
                     },
@@ -682,7 +685,7 @@ impl ResourceFetcher {
                     if !nodes.insert(a) {
                         break;
                     }
-                    ancestor = d.Node(a).Parent();
+                    ancestor = d.Node(a).Parent().or_else(|| d.ShadowHost(a));
                 }
             }
             *cached = Some(ImageEventSubtrees { key, ancestors });
@@ -733,13 +736,17 @@ impl ResourceFetcher {
             if let Some(id) = id {
                 resources.DispatchImageEvent(id, loaded, client);
             }
-            let children = resources
-                .document
-                .borrow()
-                .GetDocument()
-                .Node(i)
-                .Children()
-                .to_vec();
+            let children = {
+                let owner = resources.document.borrow();
+                let document = owner.GetDocument();
+                // Shadow-including order visits the shadow subtree before the
+                // host's light children. Capture after the callback, as above.
+                document
+                    .ShadowRoot(i)
+                    .into_iter()
+                    .chain(document.Node(i).Children().iter().copied())
+                    .collect::<Vec<_>>()
+            };
             for c in children {
                 visit(resources, c, source, loaded, client);
             }
@@ -817,6 +824,24 @@ impl ResourceFetcher {
                         request(&source, true, true, admitted, seen, requests);
                     }
                 }
+            }
+            // Blink resolves pending resources for shadow descendants as it
+            // resolves their native style. Ordinary DOM Children excludes this
+            // edge; shadow-including order visits it before light children.
+            // Do not use flat-tree children: unassigned light-DOM images load
+            // too, and slot assignment must not discover a consumer twice.
+            if let Some(shadow_root) = d.ShadowRoot(i) {
+                node(
+                    d,
+                    shadow_root,
+                    constraints,
+                    selector,
+                    is_loaded,
+                    admitted,
+                    seen,
+                    requests,
+                    selections,
+                );
             }
             for &c in n.Children() {
                 node(

@@ -191,10 +191,10 @@ impl FetchedImageBinding {
             image,
         })
     }
-    /// Bind an admitted URL whose resource request has not completed yet.
-    /// The concrete image still has fetched-image semantics and carries the
-    /// URL used by the resource owner; only its published resource id is absent.
-    pub unsafe fn FromPending(
+    /// Bind an admitted URL with no published renderable resource. Pending
+    /// and failed requests keep fetched-image identity and the resource owner's
+    /// URL; their concrete StyleImage carries the distinct lifecycle state.
+    pub unsafe fn FromUnpublished(
         image: std::ptr::NonNull<layoutng_style::style::style_image::StyleImage>,
     ) -> std::result::Result<Self, LonghandApplicationError> {
         if !unsafe { image.as_ref() }.IsImageResource() {

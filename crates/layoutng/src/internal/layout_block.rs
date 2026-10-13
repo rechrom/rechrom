@@ -127,7 +127,8 @@ impl LayoutBlock {
     pub fn RespectsCSSOverflow(&self) -> bool {
         self.CheckIsNotDestroyed();
         let element = DynamicTo::<Element>(self.GetNode());
-        element.is_null() || !unsafe { &*element }.InputIsViewportDefining()
+        self.IsLayoutView() || element.is_null()
+            || element != self.ViewportDefiningElementForLayout()
     }
 
     // cpp: layoutng/internal/layout_block.h:133-134

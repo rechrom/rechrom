@@ -173,6 +173,7 @@ impl WindowJavaScriptBindings {
             "__cancelRequest",
             "__urlParts",
             "__historyUpdate",
+            "__queueScrollCompletion",
             "__randomHex",
             "__mediaQueryMatches",
             "setTimeout",
@@ -444,6 +445,25 @@ impl WindowJavaScriptBindings {
             } else {
                 unhandled()
             };
+        }
+        if receiver == 0 && name == "__queueScrollCompletion" {
+            if call.operation == HostOperation::kGet {
+                return method(0, name);
+            }
+            if call.operation == HostOperation::kCall {
+                let Some(HostValue::JavaScriptFunction(resolve)) = args.first() else {
+                    return error("Scroll completion requires a resolver");
+                };
+                let resolve = resolve.clone();
+                // ScrollPromiseResolver posts instant completion after the
+                // synchronous native offset write, using the host task source.
+                self.EnqueueTaskWithRuntime(Box::new(move |runtime, realm| {
+                    let _ = runtime.Call(realm, &resolve, &HostValue::default(), &[
+                        HostValue::Record(vec![("interrupted".into(), HostValue::Boolean(false))]),
+                    ]);
+                }), None);
+                return HostResult::default();
+            }
         }
         if receiver == 0 && matches!(name, "__urlParts" | "__historyUpdate") {
             if call.operation == HostOperation::kGet {

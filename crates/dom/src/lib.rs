@@ -17,8 +17,11 @@ pub(crate) use test_html::{html_parser_host, html_tag_names, parser, text_decode
 
 pub mod user_interaction_state;
 pub use user_interaction_state::{InteractionStateMutation, UserInteractionState};
+pub mod custom_elements;
 pub mod dom_mutation;
 pub mod error;
+pub mod event_path;
+pub use event_path::{DOMEventPath, DOMEventPathEntry};
 pub mod image_resource;
 pub mod persistent_document;
 pub mod resolved_styles;

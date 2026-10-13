@@ -16,3 +16,9 @@ pub mod svg_length_functions;
 pub mod svg_text_layout_algorithm;
 pub mod svg_text_layout_attributes_builder;
 pub mod svg_text_scale;
+
+pub mod layout_svg_viewport_container;
+mod svg_container_layout;
+mod svg_viewport;
+
+mod svg_text_visual_rect;

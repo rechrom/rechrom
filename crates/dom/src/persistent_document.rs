@@ -717,12 +717,21 @@ pub enum CompatibilityMode {
     kQuirks,
 }
 
+// ImageResourceContent's terminal state is published by the resource owner.
+// No entry means the request has not completed; errors retain the source key
+// without manufacturing renderable image metadata.
+enum ImageResourceState {
+    Loaded(ImageResourceMetadata),
+    Failed,
+}
+
 // cpp: dom/document.h:207-232
 // Re-exported as dom::Document. The older parser's narrow tree is exposed
 // separately as dom::ParsedDocument until its callers migrate.
 pub struct PersistentDocument {
     arena: Vec<DOMNode>,
     arena_id: u64,
+    pub(crate) custom_elements: crate::custom_elements::CustomElementRegistry,
     collection_membership_revision: u64,
     root: usize,
     next_id: u64,
@@ -799,7 +808,7 @@ pub struct PersistentDocument {
     // the document TreeScope here. Constructed sheets use CSSOM's separate
     // adopted relation and are never inferred from owner_node_id == 0.
     ownerless_style_sheet_scopes: HashMap<u64, usize>,
-    image_resources: HashMap<String, ImageResourceMetadata>,
+    image_resources: HashMap<String, ImageResourceState>,
     // SVGImage/ImageResourceContent type is resource-owned metadata. Style
     // needs it to apply image-set resolution only to bitmap images, matching
     // StyleFetchedImage::ApplyImageResolution without depending on Decode.
@@ -858,6 +867,7 @@ impl PersistentDocument {
         let mut document = Self {
             arena: Vec::new(),
             arena_id: NEXT_ARENA_ID.fetch_add(1, Ordering::Relaxed),
+            custom_elements: Default::default(),
             collection_membership_revision: 0,
             root: 0,
             next_id: 1,
@@ -1564,6 +1574,31 @@ impl PersistentDocument {
 
     // cpp: dom/document.cc:111-135
     pub fn CloneNode(&mut self, source: usize, deep: bool) -> usize {
+        self.CloneNodeWithOwner(source, deep, self.arena[source].owner_document_handle)
+    }
+
+    // Blink Document::importNode -> Node::Clone(factory, cloning_data).
+    // The receiving document is the cloning factory, including descendants.
+    pub fn ImportNode(&mut self, source: usize, document: usize, deep: bool) -> usize {
+        if self.arena[document].node_type != DOMNodeType::kDocument
+            || self.arena[source].node_type == DOMNodeType::kDocument
+            || self.ShadowHost(source).is_some()
+        {
+            invalid_argument("invalid node import");
+        }
+        let owner = DOMOwnerHandle {
+            arena_id: self.arena_id,
+            node_id: self.arena[document].id,
+        };
+        self.CloneNodeWithOwner(source, deep, Some(owner))
+    }
+
+    fn CloneNodeWithOwner(
+        &mut self,
+        source: usize,
+        deep: bool,
+        owner: Option<DOMOwnerHandle>,
+    ) -> usize {
         let original = self.arena[source].clone();
         let clone = self.Allocate(
             original.node_type,
@@ -1572,7 +1607,7 @@ impl PersistentDocument {
             original.data,
             original.attributes,
         );
-        if let Some(owner_document) = original.owner_document_handle {
+        if let Some(owner_document) = owner {
             self.AdoptNodeByHandle(clone, owner_document);
         }
         self.SyncPartNamesMap(clone, false);
@@ -1582,7 +1617,7 @@ impl PersistentDocument {
                 if deep {
                     let children = self.arena[contents].children.clone();
                     for child in children {
-                        let cloned_child = self.CloneNode(child, true);
+                        let cloned_child = self.CloneNodeWithOwner(child, true, owner);
                         self.AppendChild(cloned_contents, cloned_child);
                     }
                 }
@@ -1596,7 +1631,7 @@ impl PersistentDocument {
         if deep {
             let children = self.arena[source].children.clone();
             for child in children {
-                let cloned_child = self.CloneNode(child, true);
+                let cloned_child = self.CloneNodeWithOwner(child, true, owner);
                 self.AppendChild(clone, cloned_child);
             }
         }
@@ -2504,6 +2539,9 @@ impl PersistentDocument {
             return existing;
         }
         let fragment = self.CreateDocumentFragment();
+        if let Some(owner) = self.arena[template_element].owner_document_handle {
+            self.AdoptNodeByHandle(fragment, owner);
+        }
         self.template_contents
             .insert(self.arena[template_element].id, fragment);
         fragment
@@ -2532,9 +2570,16 @@ impl PersistentDocument {
             invalid_argument("a shadow root is already attached");
         }
         let root = self.CreateDocumentFragment();
+        if let Some(owner) = self.arena[host].owner_document_handle {
+            self.AdoptNodeByHandle(root, owner);
+        }
         self.shadow_roots
             .insert(host, (root, mode, slot_assignment));
         self.shadow_hosts.insert(root, host);
+        // cpp: Element::CreateAndAttachShadowRoot; Node::RemovedFromFlatTree.
+        // Even an empty root removes the old light children from layout. This
+        // changes attachment/geometry independently of computed-style equality.
+        self.RecordFlatTreeChange();
         self.RecomputeDirectionality();
         self.InvalidateNodeStyle(host);
         self.style_state.all_dirty = true;
@@ -2625,6 +2670,55 @@ impl PersistentDocument {
             return Some(parent);
         }
         self.ShadowHost(parent)
+    }
+
+    /// Direct active flat-tree children, retaining slot elements as attachment
+    /// and inheritance parents. This is not assignedNodes({flatten:true}).
+    /// cpp: Element::AttachLayoutTree; HTMLSlotElement::RecalcFlatTreeChildren.
+    pub fn FlatTreeChildren(&self, node: usize) -> std::borrow::Cow<'_, [usize]> {
+        if let Some(root) = self.ShadowRoot(node) {
+            return std::borrow::Cow::Borrowed(self.arena[root].Children());
+        }
+        if self.IsSlotSupportingAssignment(node) {
+            let assigned = self.AssignedNodes(node);
+            if !assigned.is_empty() {
+                return std::borrow::Cow::Owned(assigned);
+            }
+            return std::borrow::Cow::Owned(
+                self.arena[node]
+                    .children
+                    .iter()
+                    .copied()
+                    .filter(|&child| {
+                        matches!(
+                            self.arena[child].node_type,
+                            DOMNodeType::kElement | DOMNodeType::kText
+                        )
+                    })
+                    .collect(),
+            );
+        }
+        std::borrow::Cow::Borrowed(self.arena[node].Children())
+    }
+
+    // cpp: Node::FlatTreeParentChanged / RemovedFromFlatTree. Reattachment
+    // revokes query geometry even when all newly inherited CSS values compare
+    // equal; Page and Style consume these existing document-owned facts.
+    fn RecordFlatTreeChange(&mut self) {
+        self.style_state
+            .impact
+            .Merge(crate::style_state::StyleUpdateImpact::TREE);
+        self.style_state.measurement_geometry_revision =
+            self.style_state.measurement_geometry_revision.wrapping_add(1);
+    }
+
+    fn AttributeMayChangeFlatTree(&self, element: usize, name: &str, namespace: &str) -> bool {
+        namespace.is_empty()
+            && ((name == "slot"
+                && self.arena[element]
+                    .parent
+                    .is_some_and(|parent| self.ShadowRoot(parent).is_some()))
+                || (name == "name" && self.IsSlotSupportingAssignment(element)))
     }
 
     pub fn IsInShadowTree(&self, node: usize) -> bool {
@@ -2801,6 +2895,9 @@ impl PersistentDocument {
     // first slot of the same name in shadow-tree order. Manual slotting is a
     // separate retained owner below.
     pub fn AssignedSlot(&self, node: usize) -> Option<usize> {
+        if !matches!(self.arena[node].node_type, DOMNodeType::kElement | DOMNodeType::kText) {
+            return None;
+        }
         let host = self.arena[node].parent?;
         let root = self.ShadowRoot(host)?;
         if self.ShadowRootSlotAssignment(root) == Some(DOMSlotAssignmentMode::kManual) {
@@ -2903,6 +3000,9 @@ impl PersistentDocument {
     }
 
     pub fn AssignedNodes(&self, slot: usize) -> Vec<usize> {
+        if !self.IsSlotSupportingAssignment(slot) {
+            return Vec::new();
+        }
         let Some(root) = self.ContainingShadowRoot(slot) else {
             return Vec::new();
         };
@@ -2927,6 +3027,30 @@ impl PersistentDocument {
                 .collect(),
             None => Vec::new(),
         }
+    }
+
+    /// Blink HTMLSlotElement::FlattenedAssignedNodes / CollectFlattenedAssignedNodes.
+    /// Assignment and fallback are resolved in their native owner, never in a
+    /// script wrapper or a second layout-specific distribution algorithm.
+    pub fn FlattenedAssignedNodes(&self, slot: usize) -> Vec<usize> {
+        if !self.IsSlotSupportingAssignment(slot) {
+            return Vec::new();
+        }
+        let mut nodes = self.AssignedNodes(slot);
+        if nodes.is_empty() {
+            nodes.extend(self.arena[slot].children.iter().copied().filter(|&child| {
+                matches!(self.arena[child].node_type, DOMNodeType::kElement | DOMNodeType::kText)
+            }));
+        }
+        let mut flattened = Vec::new();
+        for node in nodes {
+            if self.IsSlotSupportingAssignment(node) {
+                flattened.extend(self.FlattenedAssignedNodes(node));
+            } else {
+                flattened.push(node);
+            }
+        }
+        flattened
     }
 
     pub fn IsSlotSupportingAssignment(&self, node: usize) -> bool {
@@ -3141,6 +3265,7 @@ impl PersistentDocument {
         let Some(parent) = self.arena[child].parent else {
             return;
         };
+        self.CustomElementSubtreeWillBeRemoved(child);
         // HTMLSelectElement::OptionRemoved runs while OwnerSelectElement is
         // still observable. Capture associations that this detach breaks;
         // removing an entire select keeps its internal option ownership.
@@ -3268,6 +3393,7 @@ impl PersistentDocument {
         if let Some(owner) = owner {
             self.AdoptNodeByHandle(child, owner);
         }
+        self.CustomElementSubtreeInserted(child);
     }
 
     // cpp: dom/document.cc:177-193
@@ -3314,6 +3440,7 @@ impl PersistentDocument {
         if let Some(owner) = owner {
             self.AdoptNodeByHandle(child, owner);
         }
+        self.CustomElementSubtreeInserted(child);
     }
 
     // cpp: dom/document.cc:195-204
@@ -3368,6 +3495,20 @@ impl PersistentDocument {
             candidate.local_name == attribute.local_name
                 && candidate.namespace_uri == attribute.namespace_uri
         });
+        // Element::WillModifyAttribute queues a callback even for equal
+        // values. The style-only no-change return below must not bypass it.
+        if self.HasCustomElementDefinitions()
+            && self.CustomElementDefinitionForElement(element).is_some()
+        {
+            let old_value = existing.map(|index| self.arena[element].attributes[index].value.clone());
+            self.CustomElementAttributeWillChange(
+                element,
+                &attribute.local_name,
+                &attribute.namespace_uri,
+                old_value,
+                Some(attribute.value.clone()),
+            );
+        }
         let option_selectedness_changed = existing.is_none()
             && attribute.local_name == "selected"
             && attribute.namespace_uri.is_empty()
@@ -3420,8 +3561,20 @@ impl PersistentDocument {
         if !changed {
             return;
         }
+        // cpp: HTMLStyleElement::ParseAttribute. Media changes refresh the
+        // owner's sheet conditions; type changes reprocess its contents. Feed
+        // both through the existing stylesheet synchronization dirty queue.
+        if attribute.namespace_uri.is_empty()
+            && matches!(attribute.local_name.as_str(), "media" | "type")
+            && self.arena[element].IsHTMLElement("style")
+        {
+            self.MarkStyleElementTextDirty(element);
+        }
         let sibling_sensitive_before = self.NodeMayAffectSiblingSelectors(element);
         let descendant_sensitive_before = self.NodeMayAffectDescendantSelectors(element);
+        if self.AttributeMayChangeFlatTree(element, &attribute.local_name, &attribute.namespace_uri) {
+            self.RecordFlatTreeChange();
+        }
         self.BumpCollectionMembershipRevision();
         let affects_metadata = !matches!(attribute.local_name.as_str(), "style" | "class" | "id");
         let selector_only = if attribute.local_name == "style" && attribute.namespace_uri.is_empty()
@@ -3522,8 +3675,23 @@ impl PersistentDocument {
         {
             return;
         }
+        if self.HasCustomElementDefinitions()
+            && self.CustomElementDefinitionForElement(element).is_some()
+        {
+            let old_value = self.arena[element]
+                .attributes
+                .iter()
+                .find(|attribute| {
+                    attribute.local_name == local_name && attribute.namespace_uri == namespace_uri
+                })
+                .map(|attribute| attribute.value.clone());
+            self.CustomElementAttributeWillChange(element, local_name, namespace_uri, old_value, None);
+        }
         let sibling_sensitive_before = self.NodeMayAffectSiblingSelectors(element);
         let descendant_sensitive_before = self.NodeMayAffectDescendantSelectors(element);
+        if self.AttributeMayChangeFlatTree(element, local_name, namespace_uri) {
+            self.RecordFlatTreeChange();
+        }
         let option_selectedness_before = (local_name == "selected"
             && namespace_uri.is_empty()
             && self.arena[element].IsElement("option", DOMNamespace::kHTML))
@@ -3567,6 +3735,14 @@ impl PersistentDocument {
         self.arena[element].attributes.retain(|attribute| {
             attribute.local_name != local_name || attribute.namespace_uri != namespace_uri
         });
+        // Removal restores the same owner defaults as HTMLStyleElement's
+        // ParseAttribute with a null new value.
+        if namespace_uri.is_empty()
+            && matches!(local_name, "media" | "type")
+            && self.arena[element].IsHTMLElement("style")
+        {
+            self.MarkStyleElementTextDirty(element);
+        }
         if default_button_may_change {
             self.InvalidateDefaultPseudoCandidates();
         }
@@ -4804,18 +4980,52 @@ impl PersistentDocument {
     ) -> impl Iterator<Item = &CSSStyleSheet> {
         let adopted = self.AdoptedStyleSheetsForTreeScope(scope);
         let preferred_set_name = self.PreferredStyleSheetSetName();
-        self.cssom
+        let mut sheets = self
+            .cssom
             .GetStyleSheets(None)
             .iter()
             .filter(move |sheet| {
                 sheet.CanBeActivated(preferred_set_name)
                     && self.StyleSheetTreeScope(sheet) == Some(scope)
             })
-            .chain(
-                adopted
-                    .into_iter()
-                    .filter(move |sheet| sheet.CanBeActivated(preferred_set_name)),
-            )
+            .collect::<Vec<_>>();
+        // cpp: StyleSheetCollection::PrepareUpdateActiveStyleSheets. Candidate
+        // nodes are a TreeOrderedList, not CSSOM's registration/completion order.
+        // Derive each candidate's position from the DOM owner so subtree moves
+        // and asynchronously completed link sheets use the same source order.
+        // Ordinary Parent links deliberately do not cross a ShadowRoot's host.
+        sheets.sort_by_cached_key(|sheet| {
+            if sheet.owner_node_id == 0 {
+                // AppendStyleSheet explicitly attaches ownerless sheets to the
+                // Document. They occupy the injected-author prefix, preserving
+                // their append order; constructed sheets are appended below.
+                return None;
+            }
+            let mut node = self
+                .FindNodeById(sheet.owner_node_id)
+                .expect("an active stylesheet must have a retained owner");
+            let mut path = Vec::new();
+            while node != scope {
+                let parent = self.arena[node]
+                    .parent
+                    .expect("an active stylesheet owner must belong to its tree scope");
+                path.push(
+                    self.arena[parent]
+                        .children
+                        .iter()
+                        .position(|&child| child == node)
+                        .expect("DOM parent/child links are inconsistent"),
+                );
+                node = parent;
+            }
+            path.reverse();
+            Some(path)
+        });
+        sheets.into_iter().chain(
+            adopted
+                .into_iter()
+                .filter(move |sheet| sheet.CanBeActivated(preferred_set_name)),
+        )
     }
 
     pub fn ActiveStyleSheetsAllScopes(&self) -> impl Iterator<Item = &CSSStyleSheet> {
@@ -4899,13 +5109,12 @@ impl PersistentDocument {
             .unwrap_or_else(|| EMPTY.get_or_init(BTreeMap::new))
     }
 
-    // cpp: dom/document.cc:366-378
-    pub fn SetImageResource(&mut self, source: String, metadata: ImageResourceMetadata) {
-        // Image completion changes the resource and intrinsic geometry, not
-        // selector matching across the entire document. Our style adapter
-        // embeds background/mask ids, so refresh only their actual consumers;
+    fn InvalidateImageResourceConsumers(&mut self, source: &str) {
+        // Completion changes resource state and intrinsic geometry, not
+        // selector matching across the entire document. Immutable style-image
+        // snapshots must be refreshed only for their actual consumers;
         // replaced-image metadata is synchronized by the layout tree builder.
-        if let Some(consumers) = self.style_image_consumers.get(&source) {
+        if let Some(consumers) = self.style_image_consumers.get(source) {
             let consumers: Vec<_> = consumers.iter().copied().collect();
             for index in consumers {
                 self.RecordStyleChange(crate::style_state::StyleChange::Resource(index));
@@ -4914,17 +5123,39 @@ impl PersistentDocument {
         self.style_state
             .impact
             .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
-        match self.image_resources.entry(source) {
-            std::collections::hash_map::Entry::Vacant(slot) => {
-                slot.insert(metadata);
-            }
-            std::collections::hash_map::Entry::Occupied(_) => {
-                invalid_argument("image source must be unique");
-            }
+    }
+    // cpp: dom/document.cc:366-378
+    pub fn SetImageResource(&mut self, source: String, metadata: ImageResourceMetadata) {
+        if self.ImageResourceFor(&source).is_some() {
+            invalid_argument("image source must be unique");
         }
+        self.InvalidateImageResourceConsumers(&source);
+        self.image_resources
+            .insert(source, ImageResourceState::Loaded(metadata));
+    }
+    pub fn SetImageResourceFailed(&mut self, source: String) -> bool {
+        // This completes a pending binding. Repeated failures are idempotent,
+        // and a stale failure must not revoke an already-published resource or
+        // allow a second successful publication of the same loaded source.
+        if self.image_resources.contains_key(&source) {
+            return false;
+        }
+        self.InvalidateImageResourceConsumers(&source);
+        self.image_resources
+            .insert(source, ImageResourceState::Failed);
+        true
     }
     pub fn ImageResourceFor(&self, source: &str) -> Option<&ImageResourceMetadata> {
-        self.image_resources.get(source)
+        match self.image_resources.get(source) {
+            Some(ImageResourceState::Loaded(metadata)) => Some(metadata),
+            _ => None,
+        }
+    }
+    pub fn ImageResourceFailedFor(&self, source: &str) -> bool {
+        matches!(
+            self.image_resources.get(source),
+            Some(ImageResourceState::Failed)
+        )
     }
     pub fn SetImageResourceIsDocument(&mut self, id: u64, is_document_image: bool) {
         if is_document_image {
@@ -5007,19 +5238,12 @@ impl PersistentDocument {
         source: &str,
         metadata: ImageResourceMetadata,
     ) -> bool {
-        if let Some(consumers) = self.style_image_consumers.get(source) {
-            let consumers: Vec<_> = consumers.iter().copied().collect();
-            for index in consumers {
-                self.RecordStyleChange(crate::style_state::StyleChange::Resource(index));
-            }
-        }
-        let Some(resource) = self.image_resources.get_mut(source) else {
+        let Some(ImageResourceState::Loaded(resource)) = self.image_resources.get_mut(source)
+        else {
             return false;
         };
         *resource = metadata;
-        self.style_state
-            .impact
-            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+        self.InvalidateImageResourceConsumers(source);
         true
     }
 
@@ -5121,9 +5345,7 @@ impl PersistentDocument {
         self.BumpCollectionMembershipRevision();
         self.MarkStyleElementTextDirty(parent);
         self.RecordStyleChange(crate::style_state::StyleChange::Children(parent));
-        self.style_state
-            .impact
-            .Merge(crate::style_state::StyleUpdateImpact::TREE);
+        self.RecordFlatTreeChange();
         if self.arena[parent].IsElement("fieldset", DOMNamespace::kHTML) {
             self.InvalidateFormDisabledDescendants(parent);
         }
@@ -5628,6 +5850,90 @@ mod task_ownership_tests {
             document.StyleState().changes,
             [StyleChange::Resource(first)].into_iter().collect()
         );
+    }
+
+    #[test]
+    fn image_failure_updates_only_consumers_and_preserves_terminal_state() {
+        use crate::style_state::StyleChange;
+        use layoutng_assembly::internal::paint_input::{BackgroundImageLayer, PaintMaskLayer};
+        fn reset(document: &mut PersistentDocument) {
+            let state = document.StyleStateMut();
+            state.all_dirty = false;
+            state.changes.clear();
+            state.impact = Default::default();
+        }
+        let mut document = PersistentDocument::new();
+        let consumer = document.CreateElementDefault(DOMNamespace::kHTML, "div".into());
+        let unrelated = document.CreateElementDefault(DOMNamespace::kHTML, "div".into());
+        for node in [consumer, unrelated] {
+            document.AppendChild(document.Root(), node);
+        }
+        let mut pseudo = PseudoElement::default();
+        pseudo.style.paint.mask_images.push(PaintMaskLayer {
+            image: BackgroundImageLayer {
+                source_url: "mask.svg#icon".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let mut style = ResolvedNodeStyle::default();
+        style.before = Some(pseudo);
+        document.SetResolvedStyle(consumer, style);
+        document.SetResolvedStyle(unrelated, Default::default());
+        reset(&mut document);
+        assert!(document.ImageResourceFor("mask.svg#icon").is_none());
+        assert!(!document.ImageResourceFailedFor("mask.svg#icon"));
+        assert!(document.SetImageResourceFailed("mask.svg#icon".into()));
+        assert!(document.ImageResourceFailedFor("mask.svg#icon"));
+        assert!(document.ImageResourceFor("mask.svg#icon").is_none());
+        assert_eq!(
+            document.StyleState().changes,
+            [StyleChange::Resource(consumer)].into_iter().collect()
+        );
+        assert!(document.StyleState().impact.layout);
+        assert!(!document.ImageResourceFailedFor("mask.svg"));
+        reset(&mut document);
+        assert!(!document.SetImageResourceFailed("mask.svg#icon".into()));
+        assert!(!document.UpdateImageResourceIntrinsicSize("mask.svg#icon", Default::default()));
+        assert!(document.ImageResourceFailedFor("mask.svg#icon"));
+        assert!(document.StyleState().changes.is_empty());
+        assert!(!document.StyleState().impact.layout);
+        document.SetImageResource(
+            "mask.svg#icon".into(),
+            ImageResourceMetadata {
+                id: 7,
+                ..Default::default()
+            },
+        );
+        assert!(!document.ImageResourceFailedFor("mask.svg#icon"));
+        assert_eq!(document.ImageResourceFor("mask.svg#icon").unwrap().id, 7);
+        assert!(document.UpdateImageResourceIntrinsicSize(
+            "mask.svg#icon",
+            ImageResourceMetadata {
+                id: 7,
+                natural_width: 40.0,
+                natural_height: 20.0,
+                ..Default::default()
+            }
+        ));
+        assert_eq!(
+            document
+                .ImageResourceFor("mask.svg#icon")
+                .unwrap()
+                .natural_width,
+            40.0
+        );
+        let duplicate = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            document.SetImageResource("mask.svg#icon".into(), Default::default());
+        }));
+        assert!(duplicate.is_err(), "loaded source publication stays unique");
+        assert_eq!(document.ImageResourceFor("mask.svg#icon").unwrap().id, 7);
+        reset(&mut document);
+        assert!(!document.SetImageResourceFailed("mask.svg#icon".into()));
+        assert!(!document.ImageResourceFailedFor("mask.svg#icon"));
+        assert_eq!(document.ImageResourceFor("mask.svg#icon").unwrap().id, 7);
+        assert!(document.StyleState().changes.is_empty());
+        assert!(!document.StyleState().impact.layout);
     }
 
     #[test]

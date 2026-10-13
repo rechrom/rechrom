@@ -32,6 +32,7 @@ pub mod css_value_clamping_utils;
 pub mod css_value_keywords;
 pub mod element_rule_collector;
 pub mod fixed_size_cache;
+pub mod font_feature_values_registry;
 pub mod hash_tools;
 pub mod if_condition;
 pub mod invalidation;
@@ -113,6 +114,9 @@ mod document_style_engine_test;
 #[cfg(test)]
 mod document_style_retained_pipeline_test;
 mod svg_paint_server;
+mod svg_presentation_attributes;
+#[cfg(test)]
+mod svg_presentation_pipeline_test;
 
 pub mod container_query;
 

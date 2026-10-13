@@ -60,6 +60,28 @@
 // the canonical ComputedStyle Element ABI. State and builder are the existing
 // StyleResolverState and layoutng_style::ComputedStyleBuilder, respectively.
 
+// cpp: style_adjuster.cc:402-408,1261-1268. Share this source branch with
+// production publication instead of reconstructing stacking from paint's
+// projected z-index. Call after display/position adjustment on the canonical
+// builder. The resolver initializes non-inherited flags before this branch;
+// other context-forcing reasons remain owned by the surrounding adjustment.
+pub(crate) fn AdjustStyleForZIndex(
+    builder: &mut ComputedStyleBuilder,
+    layout_parent: &ComputedStyle,
+) {
+    if builder.GetPosition() != EPosition::kStatic
+        || layout_parent.IsDisplayFlex()
+        || layout_parent.IsDisplayWebkitBox()
+        || layout_parent.IsDisplayGrid()
+        || layout_parent.IsDisplayGridLanes()
+    {
+        builder.SetAllowsZIndex(true);
+        if !builder.HasAutoZIndex() {
+            builder.SetForcesStackingContext(true);
+        }
+    }
+}
+
 use super::style_resolver::StyleResolver;
 use super::style_resolver_state::{StyleResolverState, StyleResolverStateBackend};
 use crate::PreferredColorScheme;
@@ -640,13 +662,6 @@ impl<'a, B: StyleAdjusterBackend> StyleAdjuster<'a, B> {
             || builder.HasOutOfFlowPosition()
             || self.IsOutermostSVGElement(element)
             || builder.Display() == EDisplay::kRubyText
-    }
-    // cpp: style_adjuster.cc:402-408
-    fn LayoutParentStyleForcesZIndexToCreateStackingContext(style: &ComputedStyle) -> bool {
-        style.IsDisplayFlex()
-            || style.IsDisplayWebkitBox()
-            || style.IsDisplayGrid()
-            || style.IsDisplayGridLanes()
     }
     // cpp: style_adjuster.cc:410-431
     pub fn AdjustStyleForEditing(
@@ -1333,14 +1348,7 @@ impl<'a, B: StyleAdjusterBackend> StyleAdjuster<'a, B> {
         if element.is_some_and(|e| b.CanvasForDrawingExists(e)) {
             builder.SetIsolation(EIsolation::kIsolate);
         }
-        if builder.GetPosition() != EPosition::kStatic
-            || Self::LayoutParentStyleForcesZIndexToCreateStackingContext(layout_parent)
-        {
-            builder.SetAllowsZIndex(true);
-            if !builder.HasAutoZIndex() {
-                builder.SetForcesStackingContext(true);
-            }
-        }
+        AdjustStyleForZIndex(builder, layout_parent);
         let replaced_video = self.Feature(StyleAdjustmentFeature::StackingContextIsNotStacked)
             && self.Is(element, ElementType::kHTMLVideoElement)
             && builder.GetPosition() == EPosition::kStatic
@@ -1756,5 +1764,48 @@ impl<'a, B: StyleAdjusterBackend> StyleAdjuster<'a, B> {
             | ElementType::kHTMLMicrophoneElement => ElementType::kHTMLDivElement,
         };
         ElementTypeForCache { element_type }
+    }
+}
+
+#[cfg(test)]
+mod z_index_adjustment_tests {
+    use super::*;
+
+    #[test]
+    fn source_parent_predicates_include_inline_legacy_and_grid_lanes_displays() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
+        for display in [EDisplay::kFlex, EDisplay::kInlineFlex,
+                        EDisplay::kWebkitBox, EDisplay::kWebkitInlineBox,
+                        EDisplay::kGrid, EDisplay::kInlineGrid,
+                        EDisplay::kGridLanes, EDisplay::kInlineGridLanes] {
+            let mut parent = ComputedStyleBuilder::from_style(initial);
+            parent.SetDisplay(display);
+            let parent = unsafe { &*parent.TakeStyle() };
+            let mut child = ComputedStyleBuilder::from_style(initial);
+            child.SetZIndex(3);
+            AdjustStyleForZIndex(&mut child, parent);
+            assert!(child.AllowsZIndex(), "{display:?}");
+            assert!(child.ForcesStackingContext(), "{display:?}");
+            let mut auto = ComputedStyleBuilder::from_style(initial);
+            AdjustStyleForZIndex(&mut auto, parent);
+            assert!(auto.AllowsZIndex());
+            assert!(!auto.ForcesStackingContext());
+        }
+    }
+
+    #[test]
+    fn ordinary_static_box_does_not_gain_z_index_or_lose_other_context_reason() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
+        let mut builder = ComputedStyleBuilder::from_style(initial);
+        builder.SetZIndex(9);
+        AdjustStyleForZIndex(&mut builder, initial);
+        assert!(!builder.AllowsZIndex());
+        assert!(!builder.ForcesStackingContext());
+        builder.SetForcesStackingContext(true);
+        AdjustStyleForZIndex(&mut builder, initial);
+        assert!(!builder.AllowsZIndex());
+        assert!(builder.ForcesStackingContext());
     }
 }

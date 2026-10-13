@@ -2,6 +2,7 @@
 
 use crate::http_transport_options::HTTPTransportOptions;
 use crate::proxy_connector::EnvironmentConnector;
+use crate::request_trace::RequestTrace;
 use base64::Engine;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -427,6 +428,8 @@ fn decode_body(mut body: Vec<u8>, encodings: &str, limit: usize) -> Result<Vec<u
 pub(crate) async fn fetch_response(
     request: &HTTPRequestData,
     scheduler: &Scheduler,
+    trace: RequestTrace,
+    attempt: usize,
 ) -> Result<ResponseStart, TransferError> {
     let options = &scheduler.options;
     let mut url = http_url(&request.url)?;
@@ -472,6 +475,10 @@ pub(crate) async fn fetch_response(
         if options.trace_requests {
             eprintln!("HTTP {} {}", method, url);
         }
+        trace.event(
+            "HTTPRequestStart",
+            &[("attempt", attempt as f64), ("redirect", redirects as f64)],
+        );
         let response = with_stall_timeout(
             async {
                 scheduler
@@ -492,6 +499,34 @@ pub(crate) async fn fetch_response(
             );
         }
         let status = response.status();
+        trace.event(
+            "HTTPResponseHeaders",
+            &[
+                ("attempt", attempt as f64),
+                ("redirect", redirects as f64),
+                ("status_code", status.as_u16() as f64),
+                (
+                    "protocol",
+                    match response.version() {
+                        hyper::Version::HTTP_09 => 9.0,
+                        hyper::Version::HTTP_10 => 10.0,
+                        hyper::Version::HTTP_11 => 11.0,
+                        hyper::Version::HTTP_2 => 20.0,
+                        hyper::Version::HTTP_3 => 30.0,
+                        _ => 0.0,
+                    },
+                ),
+                (
+                    "content_length",
+                    response
+                        .headers()
+                        .get(header::CONTENT_LENGTH)
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .map_or(-1.0, |length| length as f64),
+                ),
+            ],
+        );
         if matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308) {
             if let Some(location) = response.headers().get(header::LOCATION) {
                 if redirects == 10 {
@@ -559,9 +594,11 @@ pub(crate) struct ResponseStart {
     pub(crate) head_only: bool,
 }
 
-async fn transfer(
+async fn transfer_traced(
     request: &HTTPRequestData,
     scheduler: &Scheduler,
+    trace: RequestTrace,
+    attempt: usize,
 ) -> Result<HTTPResponseData, TransferError> {
     let ResponseStart {
         mut incoming,
@@ -570,7 +607,7 @@ async fn transfer(
         mime_type,
         encodings,
         head_only,
-    } = fetch_response(request, scheduler).await?;
+    } = fetch_response(request, scheduler, trace, attempt).await?;
     let options = &scheduler.options;
     let mut received = Vec::new();
     while let Some(frame) = with_stall_timeout(
@@ -592,17 +629,39 @@ async fn transfer(
             received.extend_from_slice(&chunk);
         }
     }
+    let encoded_bytes = received.len();
+    trace.event(
+        "HTTPNetworkBodyComplete",
+        &[("attempt", attempt as f64), ("encoded_bytes", encoded_bytes as f64)],
+    );
     let body = if head_only || received.is_empty() {
         received
     } else {
         decode_body(received, &encodings, options.max_response_bytes)?
     };
+    trace.event(
+        "HTTPBodyComplete",
+        &[
+            ("attempt", attempt as f64),
+            ("encoded_bytes", encoded_bytes as f64),
+            ("decoded_bytes", body.len() as f64),
+            ("network_eof", 1.0),
+        ],
+    );
     Ok(HTTPResponseData {
         status,
         final_url,
         mime_type,
         body,
     })
+}
+
+#[cfg(test)]
+async fn transfer(
+    request: &HTTPRequestData,
+    scheduler: &Scheduler,
+) -> Result<HTTPResponseData, TransferError> {
+    transfer_traced(request, scheduler, RequestTrace::default(), 0).await
 }
 
 async fn execute(request: HTTPRequestData, state: Arc<State>) {
@@ -620,11 +679,13 @@ async fn execute(request: HTTPRequestData, state: Arc<State>) {
         state.scheduler.slots.clone().acquire_owned().await
     };
     let Ok(_slot) = _slot else {
+        state.trace.failed(0, &protocol_error("HTTP admission closed"), false);
         return;
     };
+    state.trace.admitted();
     let options = &state.scheduler.options;
     for attempt in 0.. {
-        let future = transfer(&request, &state.scheduler);
+        let future = transfer_traced(&request, &state.scheduler, state.trace, attempt);
         let result = if options.timeout_ms > 0 {
             tokio::time::timeout(Duration::from_millis(options.timeout_ms as u64), future)
                 .await
@@ -634,15 +695,20 @@ async fn execute(request: HTTPRequestData, state: Arc<State>) {
         };
         match result {
             Ok(response) => {
-                state.result.lock().expect("HTTP state poisoned").response = Some(response);
+                let mut result = state.result.lock().expect("HTTP state poisoned");
+                result.response = Some(response);
+                state.trace.event("HTTPResponseReady", &[("attempt", attempt as f64)]);
                 return;
             }
             Err(error) => {
                 if state.cancelled.load(Ordering::Relaxed) {
+                    state.trace.event("HTTPRequestCancelled", &[]);
                     return;
                 }
                 let idempotent = request.method == "GET" || request.method == "HEAD";
-                if idempotent && error.retryable && attempt < options.max_retries {
+                let retry = idempotent && error.retryable && attempt < options.max_retries;
+                state.trace.failed(attempt, &error, retry);
+                if retry {
                     if options.trace_requests {
                         eprintln!("HTTP retry {}", request.url);
                     }
@@ -662,6 +728,7 @@ struct State {
     result: Mutex<WorkerResult>,
     wake: Mutex<Option<HTTPWakeCallback>>,
     scheduler: Arc<Scheduler>,
+    trace: RequestTrace,
 }
 
 #[derive(Default)]
@@ -676,19 +743,24 @@ struct HTTPRequest {
 
 impl HTTPRequest {
     fn new(request: HTTPRequestData, scheduler: Arc<Scheduler>) -> io::Result<Self> {
+        let executor = runtime()?;
+        let trace = RequestTrace::queued(&request, false);
         let state = Arc::new(State {
             cancelled: AtomicBool::new(false),
             cancel: Notify::new(),
             result: Mutex::new(WorkerResult::default()),
             wake: Mutex::new(None),
             scheduler,
+            trace,
         });
         let worker_state = state.clone();
-        runtime()?.spawn(async move {
+        executor.spawn(async move {
+            let mut trace_guard = trace.guard();
             tokio::select! {
                 biased;
                 _ = worker_state.cancel.notified() => {},
                 _ = execute(request, worker_state.clone()) => {
+                    trace_guard.finish();
                     let callback = worker_state
                         .wake
                         .lock()
@@ -717,7 +789,11 @@ impl HTTPRequestOperation for HTTPRequest {
         if let Some(error) = &result.error {
             return Err(io::Error::other(error.clone()));
         }
-        Ok(result.response.take())
+        let response = result.response.take();
+        if response.is_some() {
+            self.state.trace.event("HTTPResponseDelivered", &[]);
+        }
+        Ok(response)
     }
 
     fn SetWakeCallback(&mut self, callback: HTTPWakeCallback) {

@@ -32,7 +32,12 @@ pub fn next_id() -> u64 {
     IDS.fetch_add(1, Ordering::Relaxed)
 }
 pub fn enabled() -> bool {
-    ACTIVE.load(Ordering::Relaxed) != 0
+    active_recording_id() != 0
+}
+/// A producer may retain this ID to keep asynchronous completions associated
+/// with the recording in which their request was observed.
+pub fn active_recording_id() -> u64 {
+    ACTIVE.load(Ordering::Relaxed)
 }
 
 #[derive(Clone, Copy, Default, Debug, Serialize, Deserialize)]
@@ -210,6 +215,7 @@ struct Event {
     context: Context,
     fields: [Field; 8],
     len: usize,
+    text: Option<Arc<str>>,
     kind: Kind,
 }
 fn timestamp(r: &Recording, t: Instant) -> u64 {
@@ -307,6 +313,7 @@ pub fn span(category: &'static str, name: &'static str) -> Span {
             context: c,
             fields: [Field::default(); 8],
             len: 0,
+            text: None,
             kind: Kind::Begin,
         };
         push(&r, &b, e.clone());
@@ -342,7 +349,7 @@ impl Drop for Span {
     }
 }
 pub fn instant(category: &'static str, name: &'static str, fields: &[(&'static str, f64)]) {
-    emit(category, name, Instant::now(), None, fields);
+    emit(category, name, Instant::now(), None, fields, None);
 }
 pub fn instant_at(
     category: &'static str,
@@ -350,7 +357,7 @@ pub fn instant_at(
     at: Instant,
     fields: &[(&'static str, f64)],
 ) {
-    emit(category, name, at, None, fields);
+    emit(category, name, at, None, fields, None);
 }
 pub fn interval(
     category: &'static str,
@@ -359,7 +366,17 @@ pub fn interval(
     end: Instant,
     fields: &[(&'static str, f64)],
 ) {
-    emit(category, name, start, Some(end), fields);
+    emit(category, name, start, Some(end), fields, None);
+}
+/// Opt-in textual event metadata, such as a request URL. Text is copied only
+/// while a recording is active; engine behavior must never depend on tracing.
+pub fn instant_with_text(
+    category: &'static str,
+    name: &'static str,
+    text: &str,
+    fields: &[(&'static str, f64)],
+) {
+    emit(category, name, Instant::now(), None, fields, Some(text));
 }
 fn emit(
     category: &'static str,
@@ -367,6 +384,7 @@ fn emit(
     at: Instant,
     end: Option<Instant>,
     fields: &[(&'static str, f64)],
+    text: Option<&str>,
 ) {
     if !enabled() {
         return;
@@ -382,6 +400,7 @@ fn emit(
             context: c,
             fields: [Field::default(); 8],
             len: 0,
+            text: text.map(Arc::from),
             kind: end
                 .map(|t| Kind::Interval(timestamp(&r, t)))
                 .unwrap_or(Kind::Instant),
@@ -408,6 +427,8 @@ pub struct RecordedSpan {
     pub incomplete: bool,
     pub context: Context,
     pub fields: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -430,6 +451,7 @@ fn recorded(e: &Event, end: u64, incomplete: bool) -> RecordedSpan {
         duration_ns: end.saturating_sub(e.at),
         incomplete,
         context: e.context,
+        text: e.text.as_deref().map(str::to_owned),
         fields: e.fields[..e.len]
             .iter()
             .map(|f| (f.key.into(), f.value))
@@ -504,6 +526,9 @@ pub fn chrome_trace(s: &Snapshot) -> serde_json::Value {
     for e in s.spans.iter().chain(s.instants.iter()) {
         let mut args = serde_json::to_value(&e.fields).unwrap();
         args["context"] = serde_json::to_value(e.context).unwrap();
+        if let Some(text) = &e.text {
+            args["text"] = serde_json::json!(text);
+        }
         args["incomplete"] = serde_json::json!(e.incomplete);
         events.push(serde_json::json!({"name":e.name,"cat":e.category,"ph":if e.duration_ns==0 {"i"}else{"X"},"s":"t","pid":e.context.target_id,"tid":e.thread_id,"ts":e.start_ns as f64/1000.,"dur":e.duration_ns as f64/1000.,"args":args}));
     }
@@ -524,6 +549,7 @@ mod tests {
         });
         let mut outer = span("test", "outer");
         outer.set("tiles", 10.);
+        instant_with_text("test", "request", "https://example.test/style.css", &[("request_id", 7.)]);
         let nested = span("test", "nested");
         drop(nested);
         let live = snapshot(Some(id)).unwrap();
@@ -541,6 +567,10 @@ mod tests {
         let done = snapshot(Some(id)).unwrap();
         assert!(!done.active);
         assert_eq!(done.dropped_events, 0);
+        let request = done.instants.iter().find(|e| e.name == "request").unwrap();
+        assert_eq!(request.text.as_deref(), Some("https://example.test/style.css"));
+        assert_eq!(request.fields["request_id"], 7.);
+        assert!(chrome_trace(&done)["traceEvents"].as_array().unwrap().iter().any(|e| e["args"]["text"] == "https://example.test/style.css"));
         assert_eq!(
             done.spans
                 .iter()

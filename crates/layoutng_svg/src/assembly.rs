@@ -34,6 +34,7 @@ use crate::layout_svg_text::{
 };
 use crate::layout_svg_text_path::LayoutSVGTextPath;
 use crate::layout_svg_tspan::LayoutSVGTSpan;
+use crate::layout_svg_viewport_container::LayoutSVGViewportContainer;
 use crate::svg_length_functions::ValueForLengthWithStyle;
 use crate::svg_text_layout_algorithm::SvgTextLayoutAlgorithm;
 use crate::svg_text_layout_attributes_builder::SvgTextLayoutAttributesBuilder;
@@ -51,6 +52,9 @@ fn CreateSvgObject(node: &mut Node, _style: &ComputedStyle) -> *mut LayoutObject
     }
     let element = To::<Element>(node as *mut Node);
     match node.InputKind() {
+        NodeKind::kSvgViewportContainer => {
+            MakeGarbageCollected(LayoutSVGViewportContainer::new(element)).cast()
+        }
         NodeKind::kSvgRoot => MakeGarbageCollected(LayoutSVGRoot::new(element)).cast(),
         NodeKind::kSvgGroup => MakeGarbageCollected(LayoutSVGGroup::new(element)).cast(),
         NodeKind::kSvgForeignObject => {
@@ -115,8 +119,16 @@ fn LayoutSvgText(
 // uses the runtime class to select the translated derived method.
 fn UpdateSvgObjectLayout(object: &mut LayoutObject, info: &SVGLayoutInfo) -> SVGLayoutResult {
     match object.RuntimeClass() {
-        LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgForeignObject => {
+        LayoutObjectClass::SvgViewportContainer => {
+            unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGViewportContainer>() }
+                .UpdateSVGLayout(info)
+        }
+        LayoutObjectClass::SvgGroup => {
             unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGGroup>() }
+                .UpdateSVGLayout(info)
+        }
+        LayoutObjectClass::SvgForeignObject => {
+            unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGForeignObject>() }
                 .UpdateSVGLayout(info)
         }
         LayoutObjectClass::SvgShape => {
@@ -137,7 +149,7 @@ fn SvgIsChildAllowed(
     style: &ComputedStyle,
 ) -> bool {
     match object.RuntimeClass() {
-        LayoutObjectClass::SvgGroup => {
+        LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer => {
             unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGGroup>() }
                 .IsChildAllowed(child, style)
         }
@@ -176,6 +188,8 @@ pub fn InstallSvgModule(assembly: &mut LayoutAssembly) {
     assembly.objects.svg_block_text_scale = Some(SquaredLocalSvgTextScale);
     assembly.objects.update_svg_block_style = Some(UpdateSvgBlockStyle);
     assembly.objects.svg_group_add_child = Some(SvgGroupAddChild);
+    assembly.objects.svg_container_style_did_change =
+        Some(crate::layout_svg_group::SvgContainerStyleDidChange);
     assembly.objects.svg_is_child_allowed = Some(SvgIsChildAllowed);
     assembly.objects.svg_text_add_child = Some(SvgTextAddChild);
     assembly.objects.svg_text_remove_child = Some(SvgTextRemoveChild);
@@ -189,12 +203,71 @@ pub fn InstallSvgModule(assembly: &mut LayoutAssembly) {
     assembly.objects.svg_root_remove_child = Some(SvgRootRemoveChild);
     assembly.objects.svg_root_children = Some(SvgRootChildren);
     assembly.algorithms.svg_support.update_object = Some(UpdateSvgObjectLayout);
+    assembly.algorithms.svg_support.local_to_parent_transform = Some(SvgLocalToParentTransform);
+    assembly.algorithms.svg_support.paint_geometry = Some(SvgPaintGeometry);
+    assembly.algorithms.svg_support.text_visual_rect =
+        Some(crate::svg_text_visual_rect::VisualRectInLocalSVGCoordinates);
+    assembly.algorithms.svg_support.viewport_size = Some(crate::svg_viewport::ResolveViewport);
     assembly.algorithms.svg_support.root_natural_dimensions = Some(SvgRootNaturalDimensions);
     assembly.algorithms.svg_support.root_sizing_info = Some(QuerySvgRootSizing);
+    assembly.algorithms.svg_support.set_root_container_size =
+        Some(crate::layout_svg_root::SvgRootSetContainerSize);
     assembly.algorithms.svg_support.layout_root = Some(SvgRootLayout);
     assembly.algorithms.svg_support.compute_scaled_font = Some(ComputeScaledSvgFont);
     assembly.algorithms.svg_support.screen_font_scale = Some(CalculateScreenFontSizeScalingFactor);
     assembly.algorithms.svg_support.resolve_length = Some(ResolveSvgLength);
     assembly.algorithms.svg_support.build_text_attributes = Some(BuildSvgTextAttributes);
     assembly.algorithms.svg_support.layout_text = Some(LayoutSvgText);
+}
+
+fn SvgLocalToParentTransform(
+    object: &LayoutObject,
+) -> foundation::blink_geometry::transforms::affine_transform::AffineTransform {
+    match object.RuntimeClass() {
+        LayoutObjectClass::SvgViewportContainer => {
+            unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGViewportContainer>() }
+                .LocalToSVGParentTransform()
+        }
+        LayoutObjectClass::SvgGroup => {
+            unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGGroup>() }
+                .LocalToSVGParentTransform()
+        }
+        LayoutObjectClass::SvgRoot => {
+            unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGRoot>() }.ContentTransform()
+        }
+        _ => object.LocalToSVGParentTransformBase(),
+    }
+}
+fn SvgPaintGeometry(
+    object: &LayoutObject,
+) -> (
+    Option<layoutng_assembly::internal::layout_input::TransformMatrix>,
+    Option<layoutng_assembly::fragment_tree::SvgViewportGeometry>,
+) {
+    match object.RuntimeClass() {
+        LayoutObjectClass::SvgViewportContainer => {
+            let viewport =
+                unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGViewportContainer>() };
+            (
+                Some(crate::svg_viewport::Matrix(
+                    viewport.LocalToSVGParentTransform(),
+                )),
+                Some(viewport.PaintGeometry()),
+            )
+        }
+        LayoutObjectClass::SvgGroup => (
+            Some(crate::svg_viewport::Matrix(SvgLocalToParentTransform(
+                object,
+            ))),
+            None,
+        ),
+        LayoutObjectClass::SvgRoot => (
+            None,
+            Some(
+                unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGRoot>() }
+                    .PaintGeometry(),
+            ),
+        ),
+        _ => (None, None),
+    }
 }

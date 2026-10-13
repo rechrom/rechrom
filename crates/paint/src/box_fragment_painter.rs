@@ -165,7 +165,11 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if fragment.paint.source_kind == NodeKind::kFrameSet {
             return;
         }
+        // SVGContainerPainter paints content/effects/outline, never CSS box
+        // decoration. The LayoutBox fragment storage ABI does not make a
+        // nested SVG viewport into a CSS border/background box.
         if IsBackgroundPhase(phase)
+            && !matches!(fragment.paint.source_kind, NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer)
             && fragment.kind == FragmentKind::kBox
             && fragment.paint.establishes_paint_state
         {
@@ -1235,6 +1239,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     phase,
                 )
             };
+            self.context.borrow_mut().BeginEscapableGeometry(self.node, None);
             let _drawing = DrawingRecorder::with_client(
                 self.context,
                 self.node,
@@ -1259,6 +1264,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 );
             }
             drop(_drawing);
+            self.context.borrow_mut().EndEscapableGeometry(self.node);
             drop(properties);
         }
         for (layer_index, layer) in style.background_images.iter().enumerate().rev() {
@@ -1323,6 +1329,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             } else {
                 DisplayItemIdType::kDocumentBackground
             };
+            if !fixed {
+                self.context.borrow_mut().BeginEscapableGeometry(self.node, None);
+            }
             let drawing = DrawingRecorder::with_client(
                 self.context,
                 self.node,
@@ -1354,6 +1363,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 true,
             );
             drop(drawing);
+            if !fixed {
+                self.context.borrow_mut().EndEscapableGeometry(self.node);
+            }
             drop(properties);
             if layer_effect.is_some() && layer.blend_mode != PaintBlendMode::kNormal {
                 self.context.borrow_mut().Append(
@@ -1555,6 +1567,13 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         } else {
             DisplayItemIdType::kDocumentBackground
         };
+        // ViewPainter records a scrolling canvas in ContentsProperties.
+        // The layer's self-background is painted before its descendant clip,
+        // so enter the same native overflow clip in the flat record wrapper.
+        // Fixed canvas layers retain border-box properties and their clip.
+        if !fixed {
+            self.context.borrow_mut().BeginEscapableGeometry(self.node, None);
+        }
         let _drawing = DrawingRecorder::with_client(
             self.context,
             self.node,
@@ -1623,6 +1642,11 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.node,
             );
         }
+        drop(_drawing);
+        if !fixed {
+            self.context.borrow_mut().EndEscapableGeometry(self.node);
+        }
+
     }
 
     // box_painter_base.cc:1563-1605.  A text-clipped background is an
@@ -2019,9 +2043,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 fragment
                     .paint
                     .resources
-                    .as_ref()
-                    .map_or(1.0, |resources| resources.device_pixel_ratio),
-                paint_style,
+                    .as_deref(),
+                (!paint_style.color_scheme_flags_is_normal)
+                    .then_some(u8::from(paint_style.used_dark_color_scheme)),
             )
         });
         let opens_attachment_clip = !already_clipped || local_outer_clip.is_some();
@@ -3351,7 +3375,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 bounds.y -= blur_outset;
                 bounds.width += 2.0 * blur_outset;
                 bounds.height += 2.0 * blur_outset;
-                if IsVisible(self.node, &bounds) {
+                let cull_bounds = if svg.is_some() {
+                    FragmentVisualRect(self.node)
+                } else {
+                    bounds
+                };
+                if IsVisible(self.node, &cull_bounds) {
                     self.context.borrow_mut().Append(shadow_item, self.node);
                 }
             }
@@ -3361,7 +3390,14 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 width: fragment.size.width,
                 height: fragment.size.height,
             };
-            if IsVisible(self.node, &rect) {
+            // SVG glyphs are positioned by a record-local textPath transform.
+            // Their unrotated baseline box is not a visibility bound.
+            let cull_bounds = if svg.is_some() {
+                FragmentVisualRect(self.node)
+            } else {
+                rect
+            };
+            if IsVisible(self.node, &cull_bounds) {
                 if text_clip {
                     // text_painter.cc:683-694: kTextClip forces every paint
                     // color opaque black, drops shadows and resets paint-order
@@ -4090,9 +4126,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             fragment
                 .paint
                 .resources
-                .as_ref()
-                .map_or(1.0, |resources| resources.device_pixel_ratio),
-            &style.style,
+                .as_deref(),
+            (!style.style.color_scheme_flags_is_normal)
+                .then_some(u8::from(style.style.used_dark_color_scheme)),
         );
         let needs_clipping = clips_to_content_box
             && (destination.x < content_box.x
@@ -4586,6 +4622,16 @@ fn FragmentVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
+    // core/paint/text_fragment_painter.cc:422-431. Layout owns the parent SVG
+    // visual bound, already including glyph transforms, stroke and shadow.
+    if let Some(svg) = &fragment.paint.svg_text {
+        return node.EnclosingRect(PaintRect {
+            x: node.paint_offset.x + svg.visual_rect.offset.x,
+            y: node.paint_offset.y + svg.visual_rect.offset.y,
+            width: svg.visual_rect.size.width,
+            height: svg.visual_rect.size.height,
+        });
+    }
     let mut paint_offset = node.paint_offset;
     // text_fragment_painter.cc:98-99 shares this physical-line snap with the
     // text origin; moving the glyphs must move their visual rect as well.

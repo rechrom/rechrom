@@ -249,3 +249,61 @@ fn malformed_stream_order_and_truncated_utf8_fail_without_finishing_parser() {
         .is_err());
     assert_eq!(loader.Status(), DocumentLoaderStatus::kFailed);
 }
+
+#[test]
+fn diagnostic_read_ahead_holds_eof_and_preserves_script_insertion_order() {
+    let (mut loader, events, polls, _) = setup();
+    loader.EnableDiagnosticReadAhead(true);
+    events.borrow_mut().push_back(head());
+    loader.PollResponse().unwrap();
+    let mut owner = DOM::new();
+    loader.BeginParsing(owner.GetDocumentMut(), &mut Host).unwrap();
+    let prefix = b"<body>before<script>hold()</script>";
+    events.borrow_mut().push_back(URLLoadEvent::Data(prefix.to_vec()));
+    let budget = DocumentLoadBudget { body_bytes: prefix.len(), parser_tokens: 4096 };
+    assert_eq!(loader.Pump(owner.GetDocumentMut(), &mut Host, budget).unwrap().parser.status,
+        HTMLParserStatus::kWaitingForScript);
+    events.borrow_mut().extend([
+        URLLoadEvent::Data("<p>世界😀</p><img src='later.png'>after</body>".as_bytes().to_vec()),
+        URLLoadEvent::Finished,
+    ]);
+    let count = polls.get();
+    let before = text(&owner);
+    let progress = loader.Pump(owner.GetDocumentMut(), &mut Host, budget).unwrap();
+    assert!(polls.get() > count);
+    assert!(!progress.made_progress);
+    assert!(!progress.body_finished, "diagnostic EOF must not finish authoritative input");
+    assert_eq!(text(&owner), before, "read-ahead must not build DOM");
+    loader.InsertFromScript("<b>written</b>").unwrap();
+    loader.ResumeAfterScript().unwrap();
+    for _ in 0..100 {
+        if loader.Pump(owner.GetDocumentMut(), &mut Host,
+            DocumentLoadBudget { body_bytes: 1, parser_tokens: 4 }).unwrap().parser.status == HTMLParserStatus::kFinished { break; }
+    }
+    assert_eq!(loader.Status(), DocumentLoaderStatus::kFinished);
+    assert_eq!(text(&owner), "beforehold()written世界😀after");
+}
+
+#[test]
+fn diagnostic_read_ahead_cap_restores_backpressure_and_stop_drops_queue() {
+    let (mut loader, events, polls, dropped) = setup();
+    loader.EnableDiagnosticReadAhead(true);
+    events.borrow_mut().push_back(head());
+    loader.PollResponse().unwrap();
+    let mut owner = DOM::new();
+    loader.BeginParsing(owner.GetDocumentMut(), &mut Host).unwrap();
+    let prefix = b"<body>before<script>hold()</script>";
+    events.borrow_mut().push_back(URLLoadEvent::Data(prefix.to_vec()));
+    let budget = DocumentLoadBudget { body_bytes: prefix.len(), parser_tokens: 4096 };
+    loader.Pump(owner.GetDocumentMut(), &mut Host, budget).unwrap();
+    events.borrow_mut().push_back(URLLoadEvent::Data(vec![b'x'; 2 * 1024 * 1024]));
+    for _ in 0..80 { loader.Pump(owner.GetDocumentMut(), &mut Host, budget).unwrap(); }
+    let count = polls.get();
+    loader.Pump(owner.GetDocumentMut(), &mut Host, budget).unwrap();
+    assert_eq!(polls.get(), count, "bounded diagnostic must resume backpressure");
+    assert!(!events.borrow().is_empty());
+    assert_eq!(text(&owner), "beforehold()");
+    loader.StopLoading();
+    assert!(dropped.get());
+    assert_eq!(loader.Status(), DocumentLoaderStatus::kCancelled);
+}

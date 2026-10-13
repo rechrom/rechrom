@@ -37,6 +37,7 @@ use crate::element_rule_collector::{
     AddRuleSetToRuleSetGroupList, ElementRuleCollector, ElementRuleCollectorBackend, MatchRequest,
     RuleSetGroup,
 };
+use crate::font_feature_values_registry::FontFeatureValuesRegistry;
 use crate::resolver::cascade_origin::CascadeOrigin;
 use crate::resolver::media_query_result::MediaQueryResultFlags;
 use crate::rule_set::{
@@ -128,7 +129,6 @@ pub trait ScopedStyleResolverRegistryBackend: ScopedStyleResolverSheetBackend {
     fn KeyframesName(rule: &Self::StyleRuleKeyframes) -> AtomicString;
     fn KeyframesVendorPrefixed(rule: &Self::StyleRuleKeyframes) -> bool;
     fn PositionTryName(rule: &Self::StyleRulePositionTry) -> AtomicString;
-    fn FoldCase(string: &String) -> String;
     fn PageCollectorMatchRules(
         collector: &mut Self::PageRuleCollector,
         rules: &Rc<RuleSet<Self>>,
@@ -187,8 +187,7 @@ pub struct ScopedStyleResolver<B: ScopedStyleResolverBackend> {
     keyframes_rule_map_: RefCell<KeyframesRuleMap<B>>,
     position_try_rule_map_: RefCell<PositionTryRuleMap<B>>,
     function_rule_map_: RefCell<FunctionRuleMap<B>>,
-    font_feature_values_storage_map_: RefCell<HashMap<String, FontFeatureValuesStorage>>,
-    font_feature_values_rule_map_: RefCell<HashMap<String, Vec<Rc<StyleRuleFontFeatureValues>>>>,
+    font_feature_values_registry_: RefCell<FontFeatureValuesRegistry>,
     counter_style_map_: RefCell<Option<Rc<B::CounterStyleMap>>>,
     cascade_layer_map_: RefCell<Option<Rc<CascadeLayerMap>>>,
     has_unresolved_keyframes_rule_: Cell<bool>,
@@ -206,8 +205,7 @@ impl<B: ScopedStyleResolverBackend> ScopedStyleResolver<B> {
             keyframes_rule_map_: RefCell::new(HashMap::new()),
             position_try_rule_map_: RefCell::new(HashMap::new()),
             function_rule_map_: RefCell::new(HashMap::new()),
-            font_feature_values_storage_map_: RefCell::new(HashMap::new()),
-            font_feature_values_rule_map_: RefCell::new(HashMap::new()),
+            font_feature_values_registry_: RefCell::new(FontFeatureValuesRegistry::default()),
             counter_style_map_: RefCell::new(None),
             cascade_layer_map_: RefCell::new(None),
             has_unresolved_keyframes_rule_: Cell::new(false),
@@ -364,8 +362,7 @@ impl<B: ScopedStyleResolverBackend> ScopedStyleResolver<B> {
         self.media_query_result_flags_.borrow_mut().Clear();
         self.keyframes_rule_map_.borrow_mut().clear();
         self.position_try_rule_map_.borrow_mut().clear();
-        self.font_feature_values_storage_map_.borrow_mut().clear();
-        self.font_feature_values_rule_map_.borrow_mut().clear();
+        self.font_feature_values_registry_.borrow_mut().Clear();
         self.function_rule_map_.borrow_mut().clear();
         if let Some(map) = self.GetCounterStyleMap() {
             B::CounterMapDispose(&map);
@@ -527,40 +524,9 @@ impl<B: ScopedStyleResolverBackend> ScopedStyleResolver<B> {
             return;
         }
         let layers = self.GetCascadeLayerMap();
-        for layered in rules.FontFeatureValuesRules() {
-            for family in layered.value.GetFamilies() {
-                let order = layers
-                    .as_ref()
-                    .zip(layered.layer.as_ref())
-                    .map_or(CascadeLayerMap::kImplicitOuterLayerOrder, |(map, layer)| {
-                        map.GetLayerOrder(layer)
-                    });
-                let key = B::FoldCase(&String::from_utf16(
-                    family.utf16_units().unwrap_or_default(),
-                ));
-                {
-                    let mut storage = self.font_feature_values_storage_map_.borrow_mut();
-                    match storage.entry(key.clone()) {
-                        std::collections::hash_map::Entry::Vacant(entry) => {
-                            let mut value = layered.value.Storage().clone();
-                            value.SetLayerOrder(order);
-                            entry.insert(value);
-                            self.font_feature_values_rule_map_
-                                .borrow_mut()
-                                .insert(key.clone(), Vec::new());
-                        }
-                        std::collections::hash_map::Entry::Occupied(mut entry) => entry
-                            .get_mut()
-                            .FuseUpdate(layered.value.Storage(), order as u32),
-                    }
-                }
-                self.font_feature_values_rule_map_
-                    .borrow_mut()
-                    .get_mut(&key)
-                    .expect("font feature family")
-                    .push(layered.value.clone());
-            }
-        }
+        self.font_feature_values_registry_
+            .borrow_mut()
+            .AddRules(rules.FontFeatureValuesRules(), layers.as_deref());
     }
     // cpp: scoped_style_resolver.cc:391-399
     pub fn PositionTryForName(&self, name: &AtomicString) -> Option<Rc<B::StyleRulePositionTry>> {
@@ -586,14 +552,8 @@ impl<B: ScopedStyleResolverBackend> ScopedStyleResolver<B> {
         &self,
         family: AtomicString,
     ) -> Option<Ref<'_, FontFeatureValuesStorage>> {
-        if self.font_feature_values_storage_map_.borrow().is_empty() || family.empty() {
-            return None;
-        }
-        let key = B::FoldCase(&String::from_utf16(
-            family.utf16_units().unwrap_or_default(),
-        ));
-        Ref::filter_map(self.font_feature_values_storage_map_.borrow(), |map| {
-            map.get(&key)
+        Ref::filter_map(self.font_feature_values_registry_.borrow(), |registry| {
+            registry.FontFeatureValuesForFamily(&family)
         })
         .ok()
     }
@@ -602,14 +562,8 @@ impl<B: ScopedStyleResolverBackend> ScopedStyleResolver<B> {
         &self,
         family: AtomicString,
     ) -> Option<Ref<'_, Vec<Rc<StyleRuleFontFeatureValues>>>> {
-        if self.font_feature_values_rule_map_.borrow().is_empty() || family.empty() {
-            return None;
-        }
-        let key = B::FoldCase(&String::from_utf16(
-            family.utf16_units().unwrap_or_default(),
-        ));
-        Ref::filter_map(self.font_feature_values_rule_map_.borrow(), |map| {
-            map.get(&key)
+        Ref::filter_map(self.font_feature_values_registry_.borrow(), |registry| {
+            registry.FontFeatureValuesRulesForFamily(&family)
         })
         .ok()
     }

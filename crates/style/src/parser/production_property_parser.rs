@@ -1693,15 +1693,10 @@ fn ConsumeLonghandWithAlias<T: TokenStreamTokenizer>(
         return ConsumeLiteral(id, stream, mode, Grammar::Number { nonnegative: true });
     }
     if id == CSSPropertyID::kFontFamily {
-        let mut families = Vec::new();
-        loop {
-            families.push(ConsumeFamily(id, stream)?);
-            if stream.Peek().GetType() != kCommaToken {
-                break;
-            }
-            stream.ConsumeIncludingWhitespace();
-        }
-        return Ok(values::list(families, values::ListSeparator::Comma));
+        return Ok(values::list(
+            ConsumeFontFamily(stream)?,
+            values::ListSeparator::Comma,
+        ));
     }
     // cpp: css_parsing_utils.cc:6481-6523, element font-style permits one angle.
     if id == CSSPropertyID::kFontStyle
@@ -2139,6 +2134,59 @@ fn ConsumeMath<T: TokenStreamTokenizer>(
     }
     Ok(values::math(expression, range))
 }
+// cpp: css_parsing_utils.cc:1219-1252, ConsumeIntegerOrNumberCalc.
+// Feature-value declarations need the same typed number math as properties,
+// including computation-time rounding and nonnegative range clamping.
+pub(crate) fn ConsumeNonNegativeIntegerOrNumberCalc<T: TokenStreamTokenizer>(
+    stream: &mut Stream<T>,
+) -> Result<Rc<Value>, PropertyParseError> {
+    let id = CSSPropertyID::kFontVariantAlternates;
+    if IsMathFunction(stream) {
+        // Unlike an element property, feature-value math is consumed and
+        // resolved immediately. Reuse the native expression parser without
+        // the unrelated property-application capability gate.
+        let expression =
+            crate::css_math_expression_node::ConsumeMathFunction(stream).map_err(|error| {
+                use crate::css_math_expression_node::MathError;
+                match error {
+                    MathError::UnsupportedFunction => {
+                        unsupported(id, "CSSMathExpressionNode extended math functions")
+                    }
+                    MathError::UnsupportedTypedArithmetic => {
+                        unsupported(id, "CSSMathType typed exponent arithmetic")
+                    }
+                    _ => invalid(id),
+                }
+            })?;
+        if expression.Category()
+            != crate::css_math_expression_node::CalculationResultCategory::Number
+        {
+            return Err(invalid(id));
+        }
+        if expression.GetValueIfKnown().is_none() {
+            return Err(unsupported(
+                id,
+                "font feature context-dependent numeric evaluation",
+            ));
+        }
+        return Ok(values::math(
+            expression,
+            crate::css_math_function_value::ValueRange::NonNegativeInteger,
+        ));
+    }
+    let token = stream.Peek();
+    if token.GetType() != kNumberToken
+        || token.GetNumericValueType() != NumericValueType::kIntegerValueType
+        || token.NumericValue() < 0.0
+    {
+        return Err(invalid(id));
+    }
+    Ok(values::numeric(
+        stream.ConsumeIncludingWhitespace().NumericValue(),
+        UnitType::kInteger,
+    ))
+}
+
 // cpp: numeric CalcParser consumers restore a category mismatch. Reuse the
 // shared typed math parser so a shorthand number can reach iteration-count
 // after the time consumer, and linear() percentages can follow its number probe.
@@ -4978,8 +5026,23 @@ fn ConsumeFontSettings<T: TokenStreamTokenizer>(
 }
 
 // cpp: css_parsing_utils.cc ConsumeFontFamily / ConsumeFamilyName.
-// Each family is a real CSSFontFamilyValue or generic identifier. The calling
-// ConsumeFontFamily slice places these elements in a comma-separated list.
+// Share the typed family-list grammar with @font-feature-values. That at-rule
+// rejects generic identifiers after parsing, while font-family retains them.
+pub(crate) fn ConsumeFontFamily<T: TokenStreamTokenizer>(
+    stream: &mut Stream<T>,
+) -> Result<Vec<Rc<Value>>, PropertyParseError> {
+    let mut families = Vec::new();
+    loop {
+        families.push(ConsumeFamily(CSSPropertyID::kFontFamily, stream)?);
+        if stream.Peek().GetType() != kCommaToken {
+            break;
+        }
+        stream.ConsumeIncludingWhitespace();
+    }
+    Ok(families)
+}
+
+// Each family is a real CSSFontFamilyValue or generic identifier.
 fn ConsumeFamily<T: TokenStreamTokenizer>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
@@ -4989,23 +5052,18 @@ fn ConsumeFamily<T: TokenStreamTokenizer>(
         stream.ConsumeIncludingWhitespace();
         token.Value().ToString()
     } else if token.GetType() == kIdentToken {
-        if matches(
+        // ConsumeGenericFamily uses the pinned kSerif..=kMath keyword
+        // range. Spellings absent from that table remain named families.
+        if matches!(
             token.Id(),
-            &[
-                "serif",
-                "sans-serif",
-                "monospace",
-                "cursive",
-                "fantasy",
-                "system-ui",
-                "ui-serif",
-                "ui-sans-serif",
-                "ui-monospace",
-                "ui-rounded",
-                "math",
-                "fangsong",
-                "-webkit-body",
-            ],
+            CSSValueID::kSerif
+                | CSSValueID::kSansSerif
+                | CSSValueID::kCursive
+                | CSSValueID::kFantasy
+                | CSSValueID::kMonospace
+                | CSSValueID::kSystemUi
+                | CSSValueID::kWebkitBody
+                | CSSValueID::kMath
         ) {
             stream.ConsumeIncludingWhitespace();
             return Ok(values::identifier(token.Id()));
@@ -5776,7 +5834,20 @@ fn ParseShorthand<T: TokenStreamTokenizer>(
             items.push(ConsumeGridLine(id, stream, mode)?);
         }
         while items.len() < longhands.len() {
-            items.push(values::identifier(CSSValueID::kAuto));
+            // GridArea copies row-start into omitted column-start/row-end,
+            // and column-start into omitted column-end. Axis shorthands copy
+            // their start into the omitted end. Only a bare custom ident is
+            // copied; numeric and span lists retain an automatic end.
+            let start = if id == CSSPropertyID::kGridArea && items.len() == 3 {
+                &items[1]
+            } else {
+                &items[0]
+            };
+            items.push(if start.IsCustomIdentValue() {
+                start.clone()
+            } else {
+                values::identifier(CSSValueID::kAuto)
+            });
         }
         for (&longhand, value) in longhands.iter().zip(items) {
             out.push(make_expanded(longhand, id, value, false));

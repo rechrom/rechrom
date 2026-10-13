@@ -42,7 +42,8 @@ impl LayoutBox {
     // cpp: layoutng/internal/layout_box_layout.cc:29-37
     pub fn CanSkipComputeScrollbars(&self) -> bool {
         self.CheckIsNotDestroyed();
-        (self.StyleRef().IsOverflowVisibleAlongBothAxes() || !self.HasNonVisibleOverflow() || {
+        ((!self.IsLayoutView()
+            && (self.StyleRef().IsOverflowVisibleAlongBothAxes() || !self.HasNonVisibleOverflow())) || {
             let scrollable_area = self.GetScrollableArea();
             !scrollable_area.is_null()
                 && !unsafe { &*scrollable_area }.HasHorizontalScrollbar()

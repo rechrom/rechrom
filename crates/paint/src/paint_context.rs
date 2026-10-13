@@ -10,7 +10,7 @@ use crate::paint_engine::{
     RecordedDisplayItem, RecordedDisplayItemKind,
 };
 use crate::paint_property_tree::PropertyTreeState;
-use crate::pre_paint_tree_walk::{EnclosingRectInPropertySpace, PaintTreeNode};
+use crate::pre_paint_tree_walk::{EnclosingRectInPropertySpace, MaskAdjustedOpacity, PaintTreeNode};
 use crate::PaintRect;
 use layoutng_assembly::internal::layout_input::Offset;
 
@@ -624,7 +624,7 @@ impl<'o> PaintContext<'o> {
                     node_id: fragment.node_id,
                     blend_mode: style.blend_mode,
                     opacity: if node.applies_opacity {
-                        style.opacity
+                        MaskAdjustedOpacity(style)
                     } else {
                         1.0
                     },
@@ -644,7 +644,7 @@ impl<'o> PaintContext<'o> {
                     r#type: DisplayItemType::kSaveLayerAlpha,
                     phase: PaintPhase::kForeground,
                     node_id: fragment.node_id,
-                    opacity: style.opacity,
+                    opacity: MaskAdjustedOpacity(style),
                     ..Default::default()
                 },
                 node,

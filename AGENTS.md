@@ -203,8 +203,11 @@ URL/input
   thread.
 - `dom` and `cssom`: input is typed DOM/CSSOM mutation; output is retained
   document state and the minimal invalidation/mutation facts consumed by Page,
-  Style, Layout, and Script bindings. DOM does not directly call downstream
-  engines and does not own computed layout or pixels.
+  Style, Layout, and Script bindings. DOM also supplies immutable event-path
+  snapshots from its existing tree/slot owner, including per-scope retargeting
+  and closed-root visibility; Interaction owns dispatch lifetime and Window
+  routing, and Script bindings only project those values. DOM does not directly
+  call downstream engines and does not own computed layout or pixels.
 - `javascript`/`webapi`: input is an explicit task, event, or host binding call;
   output is script-visible values and typed DOM/CSSOM/resource effects. The
   runtime does not own rendering lifecycle, Layout, Paint, or presentation.

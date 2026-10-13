@@ -1,0 +1,51 @@
+Chromium/Blink CSS grid fit-content source notices
+Revision: 6c1d401fcca5e1b0030563a90c2f2bba168e0c15
+
+This bounded translation completes typed fit-content track parsing and connects
+the existing native GridTrackSize::kFitContentTrackSizing constructor.
+
+See LICENSE.chromium. Original source-specific copyright and license notices
+are preserved below. This notice does not relicense the rest of Rechrom or
+assert completion of every possible redistribution requirement.
+
+
+third_party/blink/renderer/core/css/properties/css_parsing_utils.cc
+https://github.com/chromium/chromium/blob/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/third_party/blink/renderer/core/css/properties/css_parsing_utils.cc
+Relevant source lines: ConsumeFitContent: 6926-6944; ConsumeGridTrackSize: 6997-7035
+Git blob SHA-1: b8b523f44f276dc90f5336fff167a1454a8f8b84
+Full-file SHA-256: 1d531a527ad09f8e5c8d7a827bf511331963d944bdc60cc148c6258bb2b2e7d5
+// Copyright 2017 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+
+third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
+https://github.com/chromium/chromium/blob/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
+Relevant source lines: ConvertGridTrackBreadth: 123-143; ConvertGridTrackSize: 1618-1635
+Git blob SHA-1: 6acdae63ef23c9b1faea35b0ac4ba118704b8d18
+Full-file SHA-256: ba19e74ce18efb340fecbb10f848fa663fb4184a0b8eed10ec41832ce65ca64d
+/*
+ * Copyright (C) 2013 Google Inc. All rights reserved.
+ *
+ *     * Redistributions of source code must retain the above copyright
+ * notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above
+ * copyright notice, this list of conditions and the following disclaimer
+ * in the documentation and/or other materials provided with the
+ * distribution.
+ *     * Neither the name of Google Inc. nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */

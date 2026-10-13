@@ -19,6 +19,8 @@ pub struct LayoutSVGRoot {
     replaced: LayoutReplaced,
     children: LayoutObjectChildList,
     container_size: PhysicalSize,
+    viewport: foundation::gfx::RectF,
+    content_transform: foundation::blink_geometry::transforms::affine_transform::AffineTransform,
 }
 
 impl LayoutSVGRoot {
@@ -30,6 +32,8 @@ impl LayoutSVGRoot {
             replaced,
             children: LayoutObjectChildList::default(),
             container_size: PhysicalSize::default(),
+            viewport: Default::default(),
+            content_transform: Default::default(),
         }
     }
 
@@ -48,6 +52,19 @@ impl LayoutSVGRoot {
     }
     pub fn GetContainerSize(&self) -> PhysicalSize {
         self.container_size
+    }
+    // core/layout/svg/layout_svg_root.h: SVGImage supplies this before layout.
+    pub fn SetContainerSize(&mut self, size: PhysicalSize) {
+        if self.container_size == size {
+            return;
+        }
+        self.container_size = size;
+        self.SetNeedsLayoutAndFullPaintInvalidation(
+            &raw const layoutng_assembly::internal::layout_invalidation_reason::kSizeChanged,
+        );
+    }
+    pub fn ViewportSize(&self) -> foundation::gfx::SizeF {
+        self.viewport.size()
     }
     pub fn GetName(&self) -> &'static str {
         "LayoutSVGRoot"
@@ -118,8 +135,44 @@ impl LayoutSVGRoot {
     }
 
     // cpp: layoutng_svg/svg_layout_objects_layout.cc:15-34
+    pub fn ContentTransform(
+        &self,
+    ) -> foundation::blink_geometry::transforms::affine_transform::AffineTransform {
+        self.content_transform
+    }
+    pub fn PaintGeometry(&self) -> layoutng_assembly::fragment_tree::SvgViewportGeometry {
+        crate::svg_viewport::Geometry(self, self.viewport, self.content_transform, false)
+    }
     pub fn LayoutRoot(&mut self, content_rect: &PhysicalRect) {
-        self.container_size = content_rect.size;
+        self.viewport = foundation::gfx::RectF::new(
+            foundation::gfx::PointF::new(
+                content_rect.offset.left.ToFloat(),
+                content_rect.offset.top.ToFloat(),
+            ),
+            foundation::gfx::SizeF::new(
+                content_rect.size.width.ToFloat(),
+                content_rect.size.height.ToFloat(),
+            ),
+        );
+        self.content_transform =
+            foundation::blink_geometry::transforms::affine_transform::AffineTransform::new(
+                1.0,
+                0.0,
+                0.0,
+                1.0,
+                self.viewport.x() as f64,
+                self.viewport.y() as f64,
+            );
+        if crate::svg_viewport::ViewBox(self).is_some() {
+            self.content_transform
+                .PreConcat(crate::svg_viewport::ViewBoxTransform(
+                    crate::svg_viewport::ViewBox(self),
+                    self.viewport.size(),
+                ));
+        } else {
+            let zoom = self.StyleRef().EffectiveZoom() as f64;
+            self.content_transform.Scale(zoom, zoom);
+        }
         let mut object = (self as *mut Self).cast::<LayoutObject>();
         while !object.is_null() {
             let box_model = DynamicTo::<LayoutBoxModelObject>(object);
@@ -184,6 +237,10 @@ pub fn SvgRootNaturalDimensions(object: &LayoutObject) -> PhysicalNaturalSizingI
 }
 pub fn SvgRootLayout(object: &mut LayoutObject, rect: &PhysicalRect) {
     unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGRoot>() }.LayoutRoot(rect);
+}
+pub fn SvgRootSetContainerSize(object: &mut LayoutObject, size: PhysicalSize) {
+    unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGRoot>() }
+        .SetContainerSize(size);
 }
 pub fn QuerySvgRootSizing(object: &LayoutObject) -> SvgRootSizingInfo {
     let root = unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGRoot>() };

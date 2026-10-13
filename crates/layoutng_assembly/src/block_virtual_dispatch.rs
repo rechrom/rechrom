@@ -117,7 +117,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsBox(object: *const LayoutObject) -> b
             | LayoutObjectClass::Fieldset
             | LayoutObjectClass::TableCell
             | LayoutObjectClass::TableCaption
-            | LayoutObjectClass::SvgGroup
+            | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
@@ -149,7 +149,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutBlock(object: *const LayoutObje
             | LayoutObjectClass::Fieldset
             | LayoutObjectClass::TableCell
             | LayoutObjectClass::TableCaption
-            | LayoutObjectClass::SvgGroup
+            | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
@@ -172,7 +172,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutBlockFlow(object: *const Layout
             | LayoutObjectClass::Fieldset
             | LayoutObjectClass::TableCell
             | LayoutObjectClass::TableCaption
-            | LayoutObjectClass::SvgGroup
+            | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
@@ -276,7 +276,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsTableSection(object: *const LayoutObj
 pub extern "Rust" fn DispatchLayoutObjectIsSVG(object: *const LayoutObject) -> bool {
     matches!(
         class(object),
-        LayoutObjectClass::SvgGroup
+        LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgRoot
             | LayoutObjectClass::SvgForeignObject
@@ -292,7 +292,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVG(object: *const LayoutObject) -> b
 pub extern "Rust" fn DispatchLayoutObjectIsSVGContainer(object: *const LayoutObject) -> bool {
     matches!(
         class(object),
-        LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgForeignObject
+        LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer | LayoutObjectClass::SvgForeignObject
     )
 }
 
@@ -334,6 +334,12 @@ pub extern "Rust" fn DispatchLayoutObjectLocalToSVGParentTransform(
     object: *const LayoutObject,
 ) -> AffineTransform {
     class(object);
+    if matches!(class(object), LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer | LayoutObjectClass::SvgRoot) {
+        let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
+        if let Some(query) = unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.local_to_parent_transform) {
+            return query(unsafe { &*object });
+        }
+    }
     unsafe { &*object }.LocalToSVGParentTransformBase()
 }
 
@@ -366,7 +372,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGTransformableContainer(
 ) -> bool {
     matches!(
         class(object),
-        LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgForeignObject
+        LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer | LayoutObjectClass::SvgForeignObject
     )
 }
 
@@ -448,7 +454,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsChildAllowed(
 
     match class(object) {
         LayoutObjectClass::SvgRoot
-        | LayoutObjectClass::SvgGroup
+        | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgInline
         | LayoutObjectClass::SvgTSpan
@@ -564,7 +570,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsEligibleForPaintOrLayoutContainment(
             | LayoutObjectClass::Fieldset
             | LayoutObjectClass::TableCell
             | LayoutObjectClass::TableCaption
-            | LayoutObjectClass::SvgGroup
+            | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
@@ -588,7 +594,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsInitialLetterBox(object: *const Layou
         | LayoutObjectClass::Fieldset
         | LayoutObjectClass::TableCell
         | LayoutObjectClass::TableCaption
-        | LayoutObjectClass::SvgGroup
+        | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
         | LayoutObjectClass::SvgText
@@ -623,7 +629,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsValidColumnSpannerInTree(
         | LayoutObjectClass::Fieldset
         | LayoutObjectClass::TableCell
         | LayoutObjectClass::TableCaption
-        | LayoutObjectClass::SvgGroup
+        | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
         | LayoutObjectClass::SvgText
@@ -682,7 +688,7 @@ pub extern "Rust" fn DispatchLayoutObjectAddChild(
                 before_child,
             );
         }
-        LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgForeignObject => {
+        LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer | LayoutObjectClass::SvgForeignObject => {
             let objects = LayoutObjectFactoryScope::Objects();
             let insert = unsafe { objects.as_ref() }
                 .and_then(|objects| objects.svg_group_add_child)
@@ -769,7 +775,7 @@ pub extern "Rust" fn DispatchLayoutObjectVirtualChildren(
         | LayoutObjectClass::Fieldset
         | LayoutObjectClass::TableCell
         | LayoutObjectClass::TableCaption
-        | LayoutObjectClass::SvgGroup
+        | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
         | LayoutObjectClass::SvgText
@@ -819,6 +825,7 @@ pub extern "Rust" fn DispatchLayoutObjectGetName(object: *const LayoutObject) ->
         LayoutObjectClass::TextControlMultiLine => "LayoutTextControlMultiLine",
         LayoutObjectClass::TextControlInnerEditor => "LayoutTextControlInnerEditor",
         LayoutObjectClass::SvgGroup => "LayoutSVGGroup",
+        LayoutObjectClass::SvgViewportContainer => "LayoutSVGViewportContainer",
         LayoutObjectClass::SvgForeignObject => "LayoutSVGForeignObject",
         LayoutObjectClass::SvgShape => "LayoutSVGShape",
         LayoutObjectClass::SvgRoot => "LayoutSVGRoot",
@@ -868,7 +875,7 @@ pub extern "Rust" fn DispatchLayoutBlockFlowCreatesNewFormattingContext(
             | LayoutObjectClass::Fieldset
             | LayoutObjectClass::TableCell
             | LayoutObjectClass::TableCaption
-            | LayoutObjectClass::SvgGroup
+            | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
@@ -901,7 +908,7 @@ pub extern "Rust" fn LayoutBoxCreatesNewFormattingContextProvider(box_: &LayoutB
         | LayoutObjectClass::Fieldset
         | LayoutObjectClass::TableCell
         | LayoutObjectClass::TableCaption
-        | LayoutObjectClass::SvgGroup
+        | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
         | LayoutObjectClass::SvgText => true,
@@ -936,7 +943,7 @@ pub extern "Rust" fn LayoutBoxIsFragmentationContextRootProvider(box_: &LayoutBo
         | LayoutObjectClass::TableCaption => {
             unsafe { &*object.cast::<LayoutBlockFlow>() }.IsFragmentationContextRootBase()
         }
-        LayoutObjectClass::SvgGroup
+        LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
         | LayoutObjectClass::SvgText => {
@@ -1076,7 +1083,7 @@ pub extern "Rust" fn DispatchLayoutObjectRecalcScrollableOverflow(
             | LayoutObjectClass::Fieldset
             | LayoutObjectClass::TableCell
             | LayoutObjectClass::TableCaption
-            | LayoutObjectClass::SvgGroup
+            | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
@@ -1309,8 +1316,13 @@ pub extern "Rust" fn DispatchLayoutObjectStyleDidChange(
         | LayoutObjectClass::TextControlMultiLine
         | LayoutObjectClass::Fieldset => unsafe { &mut *object.cast::<LayoutBlockFlow>() }
             .StyleDidChange(difference, old_style, new_style, context),
-        LayoutObjectClass::SvgGroup
-        | LayoutObjectClass::SvgForeignObject
+        LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer => {
+            let factories = LayoutObjectFactoryScope::Objects();
+            let update = unsafe { factories.as_ref() }.and_then(|f| f.svg_container_style_did_change)
+                .expect("SVG container style lifecycle is not installed");
+            update(unsafe { &mut *object.cast::<LayoutBlockFlow>() }, difference, old_style, new_style, context);
+        }
+        LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
         | LayoutObjectClass::SvgText => unsafe { &mut *object.cast::<LayoutBlockFlow>() }
             .StyleDidChange(difference, old_style, new_style, context),
@@ -1381,7 +1393,7 @@ pub extern "Rust" fn DispatchLayoutObjectWillBeDestroyed(object: *mut LayoutObje
         | LayoutObjectClass::Fieldset
         | LayoutObjectClass::TableCell
         | LayoutObjectClass::TableCaption
-        | LayoutObjectClass::SvgGroup
+        | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
         | LayoutObjectClass::SvgText
@@ -1446,7 +1458,7 @@ pub extern "Rust" fn DispatchLayoutObjectRemoveChild(
         | LayoutObjectClass::Fieldset
         | LayoutObjectClass::TableCell
         | LayoutObjectClass::TableCaption
-        | LayoutObjectClass::SvgGroup
+        | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
         | LayoutObjectClass::View => {
@@ -1482,7 +1494,7 @@ pub extern "Rust" fn DispatchLayoutBoxModelObjectCanMergeWith(
         | LayoutObjectClass::Fieldset
         | LayoutObjectClass::TableCell
         | LayoutObjectClass::TableCaption
-        | LayoutObjectClass::SvgGroup
+        | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
         | LayoutObjectClass::SvgText
@@ -1517,7 +1529,7 @@ pub extern "Rust" fn LayoutBoxCreateAnonymousBoxWithSameTypeAsProvider(
         | LayoutObjectClass::Fieldset
         | LayoutObjectClass::TableCell
         | LayoutObjectClass::TableCaption
-        | LayoutObjectClass::SvgGroup
+        | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
         | LayoutObjectClass::SvgText
@@ -1617,7 +1629,7 @@ fn is_box_class(class: LayoutObjectClass) -> bool {
             | LayoutObjectClass::Fieldset
             | LayoutObjectClass::TableCell
             | LayoutObjectClass::TableCaption
-            | LayoutObjectClass::SvgGroup
+            | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
@@ -1657,7 +1669,7 @@ pub extern "Rust" fn DispatchLayoutBoxModelUpdateFromStyle(object: *mut LayoutBo
         | LayoutObjectClass::Fieldset => {
             unsafe { &mut *object.cast::<LayoutBox>() }.UpdateFromStyle()
         }
-        LayoutObjectClass::SvgGroup
+        LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
         | LayoutObjectClass::SvgText => {
@@ -1840,7 +1852,7 @@ pub extern "Rust" fn DispatchLayoutObjectRespectsCSSOverflow(object: &LayoutObje
         | LayoutObjectClass::TextControlSingleLine
         | LayoutObjectClass::TextControlMultiLine
         | LayoutObjectClass::TextControlInnerEditor
-        | LayoutObjectClass::SvgGroup
+        | LayoutObjectClass::SvgGroup | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
         | LayoutObjectClass::SvgText
@@ -1960,4 +1972,9 @@ pub extern "Rust" fn LayoutBoxAdjustOutOfFlowContainingBlockForAnchorProvider(
     } else {
         *padding
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectIsSVGViewportContainer(object: *const LayoutObject) -> bool {
+    class(object) == LayoutObjectClass::SvgViewportContainer
 }

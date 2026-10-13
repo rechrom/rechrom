@@ -74,7 +74,7 @@ fn create(scripting: bool) -> (Page, Events, Responses, Rc<Cell<usize>>) {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
             &assembly,
         ))),
         crate::CreateBrowserConstraints(320, 200),
@@ -812,7 +812,7 @@ fn real_http() {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
             &assembly,
         ))),
         crate::CreateBrowserConstraints(320, 200),
@@ -908,7 +908,7 @@ fn real_http_module_dependency_wait_keeps_page_frames_and_tasks_running() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
                 &assembly,
             ))),
             crate::CreateBrowserConstraints(320, 200),

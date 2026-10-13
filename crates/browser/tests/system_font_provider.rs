@@ -203,7 +203,7 @@ fn page_settles_system_font_requests_before_publishing_glyphs() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(
                 &assembly,
             ))),
             constraints,

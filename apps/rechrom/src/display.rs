@@ -39,6 +39,7 @@ pub(crate) enum Effect {
 
 struct PreparedDisplayFrame {
     output: PreparedDisplayTarget,
+    provenance: compositor::FrameProvenance,
     sequence: u64,
     viewport: Viewport,
     drag_regions: Vec<crate::chrome::DragRegion>,
@@ -174,8 +175,10 @@ impl Display {
             submitted.viewport,
             sequence,
         )?;
+        let provenance = submitted.provenance;
         self.prepared = Some(PreparedDisplayFrame {
             output,
+            provenance,
             sequence,
             viewport: submitted.viewport,
             drag_regions: submitted.metadata,
@@ -185,6 +188,17 @@ impl Display {
             "CompositorCandidateReady",
             &[
                 ("present_sequence", sequence as f64),
+                ("tab_id", provenance.document.0 as f64),
+                ("document_generation", provenance.document.1 as f64),
+                ("has_content", provenance.content.is_some() as u8 as f64),
+                (
+                    "content_sequence",
+                    provenance.content.map_or(0, |c| c.sequence) as f64,
+                ),
+                (
+                    "content_recording_revision",
+                    provenance.content.map_or(0, |c| c.recording_revision) as f64,
+                ),
                 (
                     "prepare_phase_ms",
                     Instant::now()
@@ -258,6 +272,7 @@ impl Display {
         };
         let PreparedDisplayFrame {
             output,
+            provenance,
             sequence,
             viewport,
             drag_regions,
@@ -301,8 +316,42 @@ impl Display {
                 ("present_sequence", sequence as f64),
                 ("source_id", frame.source_id as f64),
                 ("frame_id", frame.sequence_number as f64),
+                ("tab_id", provenance.document.0 as f64),
+                ("document_generation", provenance.document.1 as f64),
+                ("has_content", provenance.content.is_some() as u8 as f64),
+                (
+                    "content_sequence",
+                    provenance.content.map_or(0, |c| c.sequence) as f64,
+                ),
+                (
+                    "content_recording_revision",
+                    provenance.content.map_or(0, |c| c.recording_revision) as f64,
+                ),
             ],
         );
+        if !native_presentation && self.diagnostic_output.is_some() {
+            // Pixels from this exact prepared candidate are now in the
+            // screenshot mailbox and its offscreen swap completed. This is
+            // neither an on-screen presentation timestamp nor FCP/LCP.
+            browser_tracing::instant(
+                "frame",
+                "OffscreenFramePublished",
+                &[
+                    ("present_sequence", sequence as f64),
+                    ("tab_id", provenance.document.0 as f64),
+                    ("document_generation", provenance.document.1 as f64),
+                    ("has_content", provenance.content.is_some() as u8 as f64),
+                    (
+                        "content_sequence",
+                        provenance.content.map_or(0, |c| c.sequence) as f64,
+                    ),
+                    (
+                        "content_recording_revision",
+                        provenance.content.map_or(0, |c| c.recording_revision) as f64,
+                    ),
+                ],
+            );
+        }
         if native_presentation {
             browser_tracing::instant(
                 "frame",
@@ -315,5 +364,86 @@ impl Display {
         } else {
             Vec::new()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    #[test]
+    fn offscreen_publication_traces_prepared_content_identity() {
+        let mailbox = Arc::new(Mutex::new(None));
+        let output = Output {
+            mailbox: mailbox.clone(),
+            notify: Arc::new(|_| {}),
+        };
+        let mut display = Display::New(DisplayTarget::Offscreen, output, true);
+        let viewport = Viewport {
+            width: 2,
+            height: crate::engine::TOOLBAR_HEIGHT as u32 + 2,
+            scale: 1.0,
+        };
+        let now = Instant::now();
+        let frame = crate::begin_frame_source::NativeBeginFrame::from(
+            foundation::begin_frame::BeginFrameArgs {
+                source_id: 1,
+                sequence_number: 1,
+                frame_time: now,
+                deadline: now + Duration::from_millis(16),
+                interval: Duration::from_millis(16),
+            },
+        );
+        let ack: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(|_| {});
+        let recording = browser_tracing::start(Default::default()).unwrap();
+        for (sequence, content) in [
+            None,
+            Some(compositor::ContentFrameProvenance {
+                sequence: 1,
+                recording_revision: 19,
+            }),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let sequence = sequence as u64 + 1;
+            display.prepared = Some(PreparedDisplayFrame {
+                output: PreparedDisplayTarget::Offscreen {
+                    pixels: vec![0x0011_2233; viewport.width as usize * viewport.height as usize],
+                    row_stride: viewport.width as usize,
+                },
+                provenance: compositor::FrameProvenance {
+                    document: (7, 4),
+                    content,
+                },
+                sequence,
+                viewport,
+                drag_regions: Vec::new(),
+            });
+            display.Submit(frame, false, &ack).unwrap();
+            assert!(mailbox.lock().unwrap().is_some());
+            display.viz.DidReceiveSwapAck(SwapId(sequence));
+        }
+        browser_tracing::stop().unwrap();
+        let snapshot = browser_tracing::snapshot(Some(recording)).unwrap();
+        let published: Vec<_> = snapshot
+            .instants
+            .iter()
+            .filter(|event| event.name == "OffscreenFramePublished")
+            .collect();
+        assert_eq!(published.len(), 2);
+        assert_eq!(published[0].fields["has_content"], 0.0);
+        assert_eq!(published[0].fields["content_sequence"], 0.0);
+        assert_eq!(published[1].fields["has_content"], 1.0);
+        assert_eq!(published[1].fields["tab_id"], 7.0);
+        assert_eq!(published[1].fields["document_generation"], 4.0);
+        assert_eq!(published[1].fields["content_sequence"], 1.0);
+        assert_eq!(published[1].fields["content_recording_revision"], 19.0);
+        assert!(!snapshot
+            .instants
+            .iter()
+            .any(|event| event.name == "FramePresentedToNative"));
     }
 }

@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use document_image::SVGImageDecoder;
 use image_resource::{
     ContainerKey, DocumentImageDecoder, DocumentImageEffect, DocumentImageMutation,
 };
@@ -22,7 +21,7 @@ fn document_image_timeline_publishes_immutable_changed_records_only() {
         let mut host = crate::CreateBrowserConstraints(64, 32);
         host.device_pixel_ratio = 2.0;
         host.layout_zoom_factor = 2.0;
-        let mut decoder = SVGImageDecoder::new_with_constraints(&assembly, &host);
+        let mut decoder = crate::CreateSVGImageDecoderWithConstraints(&assembly, &host);
         let container = ContainerKey::new(64, 32, 1.0, 2.0);
         let mut created = decoder
             .create(17, Arc::from(ANIMATED_SVG), "image/svg+xml", &container)
@@ -84,7 +83,7 @@ fn document_image_timeline_publishes_immutable_changed_records_only() {
 fn document_image_container_is_part_of_the_published_snapshot() {
     crate::native_test_thread::run(|| {
         let assembly = crate::CreateLayoutAssembly();
-        let mut decoder = SVGImageDecoder::new(&assembly);
+        let mut decoder = crate::CreateSVGImageDecoder(&assembly);
         let original = ContainerKey::new(64, 32, 1.0, 1.0);
         let mut created = decoder
             .create(23, Arc::from(ANIMATED_SVG), "image/svg+xml", &original)

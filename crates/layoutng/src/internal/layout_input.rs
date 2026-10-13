@@ -2,6 +2,7 @@
 
 use layoutng_style::style::appearance::AppearanceValue;
 use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
+use layoutng_style::style::computed_style_base::{ComputedStyleBase, FieldDifference};
 
 use super::form_control_types::{AutofillState, FormControlType};
 use super::layout_input_types::{Color, ControlThemeMetrics, IntSize, ScrollbarThemeMetrics};
@@ -117,6 +118,7 @@ pub enum NodeKind {
     kSliderThumb,
     kMarquee,
     kMathTable,
+    kSvgViewportContainer,
 }
 
 // cpp: layoutng/internal/layout_input.h:54-57
@@ -1519,6 +1521,38 @@ pub struct SvgViewBoxData {
     pub view_transform: Option<TransformMatrix>,
 }
 
+// cpp: core/svg/svg_viewport_container_element.cc (Chromium
+// 6c1d401fcca5e1b0030563a90c2f2bba168e0c15). Nested SVG viewport geometry is
+// SVGLength input, independent of the CSS replaced sizing used by an SVG root.
+// The supported literal subset is user units, CSS absolute lengths normalized
+// to user units, and percentages. Relative units and expressions must reach an
+// explicit unsupported-layout path rather than losing their units in DOM.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SvgViewportLength {
+    kUserUnits(f64),
+    kPercentage(f64),
+    kUnsupported,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SvgViewportData {
+    pub x: SvgViewportLength,
+    pub y: SvgViewportLength,
+    pub width: SvgViewportLength,
+    pub height: SvgViewportLength,
+}
+
+impl Default for SvgViewportData {
+    fn default() -> Self {
+        Self {
+            x: SvgViewportLength::kUserUnits(0.0),
+            y: SvgViewportLength::kUserUnits(0.0),
+            width: SvgViewportLength::kPercentage(100.0),
+            height: SvgViewportLength::kPercentage(100.0),
+        }
+    }
+}
+
 // cpp: layoutng/internal/layout_input.h:734-754
 // The concrete PaintStyleData is defined by paint_input.h in this package.
 // Mutable dereference detaches shared storage, as the C++ accessors do.
@@ -1649,6 +1683,7 @@ pub struct ElementData {
     pub svg_rotate: Vec<f64>,
     pub svg_shape: Option<SvgShapeData>,
     pub svg_view_box: Option<SvgViewBoxData>,
+    pub svg_viewport: Option<SvgViewportData>,
     pub svg_text_length: Option<f64>,
     pub svg_text_path: Option<SvgTextPathData>,
     pub svg_length_adjust: SvgLengthAdjust,
@@ -1726,6 +1761,7 @@ impl PartialEq for ElementData {
             && (self.svg_rotate == other.svg_rotate)
             && (self.svg_shape == other.svg_shape)
             && (self.svg_view_box == other.svg_view_box)
+            && (self.svg_viewport == other.svg_viewport)
             && (self.svg_text_length == other.svg_text_length)
             && (self.svg_text_path == other.svg_text_path)
             && (self.svg_length_adjust == other.svg_length_adjust)
@@ -1811,6 +1847,7 @@ impl Default for ElementData {
             svg_rotate: Vec::new(),
             svg_shape: None,
             svg_view_box: None,
+            svg_viewport: None,
             svg_text_length: None,
             svg_text_path: None,
             svg_length_adjust: SvgLengthAdjust::kSpacing,
@@ -1905,6 +1942,27 @@ impl ComputedStyle {
         if self == other {
             return true;
         }
+        // Chromium ComputedStyle::VisualInvalidationDiff/ DiffNeedsFullLayout
+        // consume the generated FieldInvalidationDiff kLayout/kReshape bits. Native
+        // styles are canonical at this boundary; the minimal projection does
+        // not repeat every geometry property (for example text-align). Keep
+        // the translated invalidation owner in this comparison so retained
+        // LayoutObjects cannot mistake such changes for paint-only updates.
+        if self.native_style != other.native_style {
+            // Native styles are immutable and retained by the input owner for
+            // the layout tree update, just as in PrepareNativeStyle.
+            let (Some(old), Some(new)) = (unsafe { self.native_style.as_ref() }, unsafe {
+                other.native_style.as_ref()
+            }) else {
+                return false;
+            };
+            if ComputedStyleBase::FieldInvalidationDiff(old, new)
+                & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits())
+                != 0
+            {
+                return false;
+            }
+        }
         // Adding/removing a background can change whether an inline needs a
         // physical box fragment, even though its CSS dimensions are unchanged.
         if (self.paint.background_color.alpha > 0.0) != (other.paint.background_color.alpha > 0.0) {
@@ -1935,10 +1993,8 @@ impl ComputedStyle {
         }
         let mut normalized = self.clone();
         normalized.paint = other.paint.clone();
-        // The native pointer is an identity/revision signal for the complete
-        // input comparison above.  It is not independently a geometry change:
-        // the projected fields decide LayoutEquivalent until native style
-        // difference calculation owns this boundary end-to-end.
+        // The native difference above decides geometry, not pointer identity.
+        // Distinct immutable styles with only paint changes remain equivalent.
         normalized.native_style = other.native_style;
         normalized == *other
     }
@@ -1948,6 +2004,78 @@ impl ComputedStyle {
 mod computed_style_layout_equivalence_tests {
     use super::*;
     use crate::internal::paint_input::{PaintTransform, PaintTransformOperation};
+    use layoutng_style::style::computed_style::ComputedStyleBuilder;
+
+    #[test]
+    fn native_only_alignment_changes_require_layout() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let initial = unsafe { &*NativeComputedStyle::GetInitialStyleSingleton() };
+        let mut builder = ComputedStyleBuilder::from_style(initial);
+        builder.SetTextAlign(foundation::ETextAlign::kCenter);
+        let centered = builder.TakeStyle();
+        let mut builder = ComputedStyleBuilder::from_style(unsafe { &*centered });
+        builder.SetTextAlign(foundation::ETextAlign::kRight);
+        let right = builder.TakeStyle();
+        let old = ComputedStyle {
+            native_style: centered,
+            ..Default::default()
+        };
+        let mut new = old.clone();
+        new.native_style = right;
+        assert!(!old.LayoutEquivalent(&new));
+        assert!(!new.LayoutEquivalent(&old));
+    }
+
+    #[test]
+    fn native_only_resolved_font_features_require_layout_and_keep_old_description() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let initial = unsafe { &*NativeComputedStyle::GetInitialStyleSingleton() };
+        let make_style = |value| {
+            let mut builder = ComputedStyleBuilder::from_style(initial);
+            let mut description = initial.GetFontDescription().clone();
+            description.SetResolvedFontFeaturesForFamilies(
+                vec![(
+                    foundation::AtomicString::from_str("Example"),
+                    vec![font_engine::fonts::shaping::font_features::FontFeatureValue {
+                        tag: u32::from_be_bytes(*b"ss02"), value,
+                    }],
+                )].into(),
+            );
+            builder.SetFont(foundation::Member::from_ptr(foundation::MakeGarbageCollected(
+                font_engine::Font::new(description),
+            )));
+            builder.TakeStyle()
+        };
+        let first = make_style(1);
+        let same = make_style(1);
+        let second = make_style(0);
+        let old = ComputedStyle { native_style: first, ..Default::default() };
+        let equivalent = ComputedStyle { native_style: same, ..Default::default() };
+        let changed = ComputedStyle { native_style: second, ..Default::default() };
+        assert!(old.LayoutEquivalent(&equivalent));
+        assert!(!old.LayoutEquivalent(&changed));
+        assert!(!changed.LayoutEquivalent(&old));
+        assert_eq!(unsafe { &*first }.GetFontDescription()
+            .ResolvedFontFeaturesForFamilies()[0].1[0].value, 1);
+    }
+
+    #[test]
+    fn native_paint_only_changes_preserve_layout_equivalence() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let initial = unsafe { &*NativeComputedStyle::GetInitialStyleSingleton() };
+        let mut builder = ComputedStyleBuilder::from_style(initial);
+        builder.SetOpacity(0.5);
+        let transparent = builder.TakeStyle();
+        let old = ComputedStyle {
+            native_style: initial,
+            ..Default::default()
+        };
+        let mut new = old.clone();
+        new.native_style = transparent;
+        new.paint.opacity = 0.5;
+        assert!(old.LayoutEquivalent(&new));
+        assert!(new.LayoutEquivalent(&old));
+    }
 
     #[test]
     fn opacity_and_existing_transform_value_are_paint_only() {
@@ -2140,6 +2268,14 @@ pub trait TextTransformProvider {
     ) -> TextTransformResult;
 }
 
+/// Explicit viewport for the isolated SVG document image's root. Ordinary
+/// inline SVG roots never receive this SVGImage::SetContainerSize input.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DocumentImageContainer {
+    pub root_node_id: u64,
+    pub size: Size,
+}
+
 // cpp: layoutng/internal/layout_input.h:1114-1145
 #[derive(Clone)]
 pub struct ConstraintSpace {
@@ -2151,6 +2287,10 @@ pub struct ConstraintSpace {
     pub scrollbar_theme: Option<ScrollbarThemeMetrics>,
     pub minimum_font_physical_size: Option<f32>,
     pub device_pixel_ratio: f64,
+    /// Immutable host preference for SVG embedding, forwarded to Paint.
+    /// Uses ContainerKey encoding: 0 is light, 1 is dark.
+    pub preferred_color_scheme: u8,
+    pub document_image_container: Option<DocumentImageContainer>,
     /// Page/layout zoom in Blink's layout coordinate space. This is distinct
     /// from the host device scale factor even when both happen to be 2.
     pub layout_zoom_factor: f64,
@@ -2178,6 +2318,8 @@ impl Default for ConstraintSpace {
             scrollbar_theme: None,
             minimum_font_physical_size: None,
             device_pixel_ratio: 1.0,
+            preferred_color_scheme: 0,
+            document_image_container: None,
             layout_zoom_factor: 1.0,
             canvas_draw_element_enabled: false,
             viewport: None,

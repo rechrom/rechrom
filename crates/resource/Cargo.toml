@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+browser_tracing = { path = "../tracing" }
 url_loader = { path = "../url_loader" }
 decode = { path = "../decode" }
 image_resource = { path = "../image_resource" }

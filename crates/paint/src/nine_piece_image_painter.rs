@@ -419,9 +419,9 @@ impl NinePieceImagePainter {
                 fragment
                     .paint
                     .resources
-                    .as_ref()
-                    .map_or(1.0, |resources| resources.device_pixel_ratio),
-                &fragment.paint.style,
+                    .as_deref(),
+                (!fragment.paint.style.color_scheme_flags_is_normal)
+                    .then_some(u8::from(fragment.paint.style.used_dark_color_scheme)),
             )
         });
         let shader = image.shader.as_ref().map(|shader| {
@@ -620,9 +620,9 @@ impl NinePieceImagePainter {
                 fragment
                     .paint
                     .resources
-                    .as_ref()
-                    .map_or(1.0, |resources| resources.device_pixel_ratio),
-                &fragment.paint.style,
+                    .as_deref(),
+                (!fragment.paint.style.color_scheme_flags_is_normal)
+                    .then_some(u8::from(fragment.paint.style.used_dark_color_scheme)),
             )
         });
         let generated_shader = border_image.shader.as_ref().map(|shader| {

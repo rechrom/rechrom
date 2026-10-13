@@ -365,7 +365,19 @@ impl PageScripts {
             flush();
         }
     }
+    fn ScheduleCustomElementBackupReactions(&self) {
+        let callback = self.web_api.DOMBindings().borrow_mut().TakeCustomElementBackupCallback();
+        if let Some(callback) = callback {
+            let mut script = self.script.borrow_mut();
+            let (runtime, realm) = script.RuntimeAndRealm();
+            let result = runtime.EnqueueMicrotask(realm, &callback);
+            if let Some(error) = result.exception {
+                self.state.client.borrow_mut().DidReportScriptError(&error);
+            }
+        }
+    }
     fn Checkpoint(&mut self) {
+        self.ScheduleCustomElementBackupReactions();
         let errors = self.script.borrow_mut().Checkpoint();
         self.ReportCheckpointEffects(errors);
     }
@@ -386,6 +398,7 @@ impl PageScripts {
         source: &str,
         source_name: &str,
     ) -> io::Result<JavaScriptResult> {
+        self.ScheduleCustomElementBackupReactions();
         let execution = self.script.borrow_mut().Evaluate(source, source_name);
         if let Some(error) = &execution.result.exception {
             self.state.client.borrow_mut().DidReportScriptError(error);
@@ -440,6 +453,7 @@ impl PageScripts {
     }
 
     pub(super) fn RunHostTaskTurn(&mut self, milliseconds: f64) -> io::Result<()> {
+        self.ScheduleCustomElementBackupReactions();
         let client = self.state.client.clone();
         let mut script = self.script.borrow_mut();
         let (runtime, realm) = script.RuntimeAndRealm();
@@ -452,7 +466,8 @@ impl PageScripts {
                 self.script_client.borrow_mut().DidReportScriptError(&error);
             }
         }
-        self.FlushTasks();
+        drop(script);
+        self.Checkpoint();
         Ok(())
     }
     // cpp: browser/browser.cc:922-929
@@ -500,6 +515,7 @@ impl PageScripts {
         } else {
             self.state.ApplyMutation(mutation);
         }
+        self.ScheduleCustomElementBackupReactions();
         self.FlushTasks();
         Ok(())
     }

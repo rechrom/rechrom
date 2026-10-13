@@ -141,6 +141,51 @@ impl BlinkString {
         self.projection.to_string()
     }
 
+    /// Unicode default case folding, matching WTF String::FoldCase.
+    /// Work on UTF-16 directly so embedded NULs and unpaired surrogates survive.
+    pub fn FoldCase(&self) -> Self {
+        if self.empty() {
+            return self.clone();
+        }
+        let source = self.Span16().expect("nonempty string has code units");
+        let source_length = i32::try_from(source.len()).expect("ICU string length overflow");
+        let mut status = 0;
+        // SAFETY: preflighting permits a null destination with zero capacity;
+        // source is valid for the explicit number of UTF-16 code units.
+        let required = unsafe {
+            icu_bidi::native::u_strFoldCase(
+                std::ptr::null_mut(),
+                0,
+                source.as_ptr(),
+                source_length,
+                0, // U_FOLD_CASE_DEFAULT, independent of the current locale.
+                &mut status,
+            )
+        };
+        // U_BUFFER_OVERFLOW_ERROR is the expected preflight result.
+        assert!(
+            status <= 0 || status == 15,
+            "ICU case-fold preflight: {status}"
+        );
+        let mut output = vec![0; usize::try_from(required).expect("ICU case-fold length")];
+        status = 0;
+        // SAFETY: output has the capacity returned by preflighting the same
+        // source/options. ICU writes at most that many code units.
+        let written = unsafe {
+            icu_bidi::native::u_strFoldCase(
+                output.as_mut_ptr(),
+                required,
+                source.as_ptr(),
+                source_length,
+                0,
+                &mut status,
+            )
+        };
+        assert!(status <= 0, "ICU case folding: {status}");
+        assert_eq!(written, required);
+        Self::Create8BitIfPossible(&output)
+    }
+
     pub fn as_str(&self) -> &str {
         &self.projection
     }
@@ -235,5 +280,20 @@ mod tests {
     fn invalid_utf8_is_null_but_empty_utf8_is_not() {
         assert!(BlinkString::FromUtf8(&[0xff]).IsNull());
         assert!(!BlinkString::FromUtf8(b"").IsNull());
+    }
+
+    #[test]
+    fn full_case_folding_expands_and_is_locale_independent() {
+        let text = BlinkString::FromUtf8("Straße Σςσ İI 𐐀 ﬃ".as_bytes());
+        assert_eq!(text.FoldCase().Utf8(), "strasse σσσ i\u{307}i 𐐨 ffi");
+    }
+
+    #[test]
+    fn case_folding_preserves_null_empty_and_non_scalar_code_units() {
+        assert!(BlinkString::default().FoldCase().IsNull());
+        assert_eq!(BlinkString::from("").FoldCase(), BlinkString::from(""));
+        let units = [0xd800, b'A' as u16, 0, 0xdc00, b'Z' as u16];
+        let folded = BlinkString::from_utf16(&units).FoldCase();
+        assert_eq!(folded.Span16(), Some(&[0xd800, 0x61, 0, 0xdc00, 0x7a][..]));
     }
 }

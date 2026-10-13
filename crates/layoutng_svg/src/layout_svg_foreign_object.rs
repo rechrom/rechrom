@@ -16,6 +16,31 @@ pub struct LayoutSVGForeignObject {
 }
 
 impl LayoutSVGForeignObject {
+    pub fn UpdateSVGLayout(
+        &mut self,
+        _info: &layoutng_assembly::internal::svg_layout_info::SVGLayoutInfo,
+    ) -> layoutng_assembly::internal::svg_layout_info::SVGLayoutResult {
+        use layoutng_assembly::internal::{
+            block_node::BlockNode, constraint_space_builder::ConstraintSpaceBuilder,
+        };
+        let style = self.StyleRef();
+        let mut builder = ConstraintSpaceBuilder::new_without_parent_space(
+            style.GetWritingMode(),
+            style.GetWritingDirection(),
+            true,
+            true,
+            false,
+        );
+        builder.SetAvailableSize(layoutng_geometry::geometry::logical_size::LogicalSize::default());
+        BlockNode::new((self as *mut Self).cast()).Layout(
+            &builder.ToConstraintSpace(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+        layoutng_assembly::internal::svg_layout_info::SVGLayoutResult::new(true, true)
+    }
+
     // cpp: layoutng_svg/layout_svg_foreign_object.cc:5-6
     pub fn new(element: *mut Element) -> Self {
         let group = LayoutSVGGroup::new(element);

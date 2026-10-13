@@ -113,7 +113,7 @@ pub enum GeneratedGradientData {
     Conic(ConicGradientData),
 }
 impl GeneratedGradientData {
-    fn Hash(&self) -> u32 {
+    pub(crate) fn Hash(&self) -> u32 {
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         format!("{self:?}").hash(&mut hash);
         hash.finish() as u32
@@ -132,35 +132,10 @@ impl GeneratedGradientData {
     }
 }
 
-#[repr(C)]
-pub struct CSSValue {
-    class_type: CSSValueClass,
-}
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CSSValueClass {
-    LinearGradient,
-    RadialGradient,
-    ConicGradient,
-}
-impl CSSValue {
-    fn gradient(&self) -> &CSSGeneratedGradientValue {
-        unsafe { &*(self as *const Self).cast() }
-    }
-    pub fn Hash(&self) -> u32 {
-        self.gradient().data.Hash()
-    }
-    pub fn IsImageGeneratorValue(&self) -> bool {
-        true
-    }
-    pub fn MayContainUrl(&self) -> bool {
-        false
-    }
-}
-impl PartialEq for CSSValue {
-    fn eq(&self, other: &Self) -> bool {
-        self.class_type == other.class_type && self.gradient().data == other.gradient().data
-    }
-}
+// Retain the existing import path while the native CSS value class dispatch
+// is shared with fetched image values.
+pub use crate::css::css_value::CSSValue;
+use crate::css::css_value::CSSValueClass;
 
 pub struct GradientGeneratedImage {
     pub data: GeneratedGradientData,
@@ -195,7 +170,7 @@ pub struct CSSImageGeneratorValue {
 impl CSSImageGeneratorValue {
     fn new(class_type: CSSValueClass) -> Self {
         Self {
-            value: CSSValue { class_type },
+            value: CSSValue::new(class_type),
             clients: RefCell::new(HashMap::new()),
             sizes: RefCell::new(HashMap::new()),
             images: RefCell::new(HashMap::new()),

@@ -32,7 +32,7 @@ fn zoom_contract() {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(document_image::SVGImageDecoder::new(&a))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&a))),
         s,
         None,
         Some(Rc::new(RefCell::new(C))),

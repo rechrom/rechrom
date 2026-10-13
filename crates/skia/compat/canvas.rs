@@ -1840,6 +1840,12 @@ impl SkCanvas {
         // combines source with the already accumulated destination.
         for index in (0..layers.len()).rev() {
             let layer = &layers[index];
+            // BoxPainterBase::PaintFillLayer returns before compositing when
+            // an image cannot render. Native layer position still determines
+            // whether its operation is ignored as the bottommost layer.
+            if layer.resource_id == 0 && layer.paint_shader.is_none() {
+                continue;
+            }
             self.internalSaveLayer(&DrawCommand::default(), false);
             self.save();
             self.replay_item(
@@ -1933,9 +1939,9 @@ impl SkCanvas {
                     source[target_y as usize * width + target_x as usize] = alpha;
                 }
             }
-            if !has_layer {
+            has_layer = true;
+            if index + 1 == layers.len() {
                 combined = source;
-                has_layer = true;
                 continue;
             }
             for (destination, source) in combined.iter_mut().zip(source) {

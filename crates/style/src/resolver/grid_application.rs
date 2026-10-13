@@ -4,7 +4,7 @@
 use super::*;
 use crate::production_css_value::ListSeparator;
 use crate::resolver::position_repeat_application::ConvertLength;
-use crate::resolver::style_builder_converter::StyleBuilderConverter;
+use crate::resolver::style_builder_converter::{GridTrackSizeInput, StyleBuilderConverter};
 use foundation::{MakeGarbageCollected, Member};
 use layoutng_style::style::{
     computed_grid_template_areas::ComputedGridTemplateAreas,
@@ -101,13 +101,13 @@ fn List(
     }
 }
 // cpp: style_builder_converter.cc ConvertGridTrackBreadth:123-143.
-fn Track(
+fn Breadth(
     id: CSSPropertyID,
     b: &ComputedStyleBuilder,
     v: &Value,
     root: f32,
     media: &MediaValuesCachedData,
-) -> std::result::Result<GridTrackSize, LonghandApplicationError> {
+) -> std::result::Result<Length, LonghandApplicationError> {
     let breadth = match v.Payload() {
         CSSValuePayload::kIdentifierClass(k) => match k.0 {
             CSSValueID::kAuto => Length::Auto().clone(),
@@ -129,7 +129,35 @@ fn Track(
         }
         _ => return Err(LonghandApplicationError::Unsupported(id)),
     };
-    Ok(GridTrackSize::from_length(&breadth))
+    Ok(breadth)
+}
+
+// cpp: style_builder_converter.cc:1618-1635. Production typed values enter the
+// same native constructor dispatch as the generic converter.
+fn Track(
+    id: CSSPropertyID,
+    b: &ComputedStyleBuilder,
+    v: &Value,
+    root: f32,
+    media: &MediaValuesCachedData,
+) -> std::result::Result<GridTrackSize, LonghandApplicationError> {
+    let input = if let CSSValuePayload::kFunctionClass(function) = v.Payload() {
+        match (function.function_id, function.arguments.values.as_slice()) {
+            (CSSValueID::kFitContent, [length]) => {
+                GridTrackSizeInput::FitContent(Breadth(id, b, length, root, media)?)
+            }
+            (CSSValueID::kMinmax, [min, max]) => GridTrackSizeInput::MinMax(
+                Breadth(id, b, min, root, media)?,
+                Breadth(id, b, max, root, media)?,
+            ),
+            _ => return Err(LonghandApplicationError::Unsupported(id)),
+        }
+    } else {
+        GridTrackSizeInput::Breadth(Breadth(id, b, v, root, media)?)
+    };
+    Ok(StyleBuilderConverter::ConvertGridTrackSizeFromBreadths(
+        input,
+    ))
 }
 
 // cpp: style_builder_converter.cc:1682-1833 ConvertGridTrackList, plain-track
@@ -625,11 +653,6 @@ mod tests {
             (
                 CSSPropertyID::kGridTemplate,
                 "subgrid / 1fr",
-                PropertyParseErrorKind::Unsupported,
-            ),
-            (
-                CSSPropertyID::kGridTemplate,
-                "minmax(0,1fr) / 1fr",
                 PropertyParseErrorKind::Unsupported,
             ),
         ] {

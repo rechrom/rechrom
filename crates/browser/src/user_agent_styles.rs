@@ -56,6 +56,10 @@ impl UserAgentStyleSheets {
         }
     }
 
+    pub(crate) fn Sheets(&self) -> &[CSSStyleSheet] {
+        &self.sheets_
+    }
+
     // cpp: browser/user_agent_styles.cc:49-52
     pub fn For(&self, _document: &ParsedDocument) -> &[CSSStyleSheet] {
         self.sheets_.as_slice()

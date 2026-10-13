@@ -40,6 +40,8 @@ pub struct FontResourceReady {
 #[derive(Clone, Default)]
 pub struct ResourceLoadFailed {
     pub kind: ResourceKind,
+    /// Document binding identity, which may differ from the transport URL.
+    pub source: Option<String>,
     pub url: String,
     pub error: String,
 }

@@ -118,14 +118,18 @@ impl ShadowData {
         self.opacity_
     }
 
-    // cpp: layoutng_style/style/shadow_data.h:98-100
-    // No definition is supplied in this package.
+    // Chromium core/style/shadow_data.cc:32-42.
     pub fn RectOutsets(&self) -> gfx::OutsetsF {
-        unsafe { ShadowDataRectOutsets(self) }
+        let blur_and_spread = (3.0 * self.BlurAsSigma()).ceil() + self.Spread();
+        gfx::OutsetsF::new(
+            blur_and_spread - self.Y(),
+            blur_and_spread + self.X(),
+            blur_and_spread + self.Y(),
+            blur_and_spread - self.X(),
+        )
     }
 }
 
 unsafe extern "Rust" {
     fn ShadowDataNeutralValue() -> ShadowData;
-    fn ShadowDataRectOutsets(value: &ShadowData) -> gfx::OutsetsF;
 }

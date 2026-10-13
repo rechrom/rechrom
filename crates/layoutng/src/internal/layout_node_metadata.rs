@@ -422,7 +422,19 @@ impl Node {
         self.input_data_.vertical_scroll_enforced = input.vertical_scroll_enforced;
         self.input_data_.device_pixel_ratio = input.device_pixel_ratio;
         self.input_data_.canvas_draw_element_enabled = input.canvas_draw_element_enabled;
-        self.input_data_.viewport = input.viewport;
+        // Host viewport inputs are CSS pixels. Native constraints and layout
+        // objects use layout-zoom coordinates; convert once at this boundary,
+        // independently of device scale, just like PrepareNativeConstraints.
+        self.input_data_.viewport = input.viewport.map(|mut viewport| {
+            let scaled = |size: IntSize| IntSize {
+                width: (size.width as f64 * input.layout_zoom_factor).round() as i32,
+                height: (size.height as f64 * input.layout_zoom_factor).round() as i32,
+            };
+            viewport.size = scaled(viewport.size);
+            viewport.root_scroller_visible_size = viewport.root_scroller_visible_size.map(scaled);
+            viewport.transition_snapshot_size = viewport.transition_snapshot_size.map(scaled);
+            viewport
+        });
         self.has_first_line_styles_ = has_first_line_styles;
         self.input_data_.minimum_font_physical_size = input.minimum_font_physical_size;
         self.input_data_.scrollbar_theme = input.scrollbar_theme;
@@ -1083,11 +1095,9 @@ fn validate_element_input_prefix(input: &NativeNodeConstructionData) -> Result<(
     if input.kind == NodeKind::kText || !input.text.is_empty() {
         return Err("Element metadata requires an element input; text needs a Text node");
     }
-    if input.kind == NodeKind::kSvgTextPath
-        && !data.is_some_and(|data| data.svg_text_path.is_some())
-    {
-        return Err("An SVG textPath node requires resolved path geometry");
-    }
+    // SVGTextPathElement creates LayoutSVGTextPath before its referenced
+    // geometry necessarily exists. Missing geometry is a normal LayoutPath
+    // result; present geometry still receives the typed validation below.
     if let Some(data) = data {
         if let Some(shape) = data.svg_shape.as_ref() {
             if input.kind != NodeKind::kSvgShape {

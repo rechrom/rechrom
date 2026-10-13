@@ -94,7 +94,9 @@ fn ValidateShape(shape: &SvgShapeData) {
     {
         panic!("SVG path must start with move-to");
     }
-    let mut has_geometry = false;
+    // A move-only path is valid, even though fill/stroke replay produces no
+    // pixels. Keep it distinct from move+close and zero-length drawing verbs:
+    // those can produce round/square stroke caps in Skia.
     for command in &shape.path {
         match command.verb {
             PaintPathVerb::kMoveTo => {
@@ -106,26 +108,20 @@ fn ValidateShape(shape: &SvgShapeData) {
                 if !Finite(command.point) {
                     panic!("SVG path coordinates must be finite");
                 }
-                has_geometry = true;
             }
             PaintPathVerb::kQuadraticTo | PaintPathVerb::kConicTo => {
                 if !Finite(command.control1) || !Finite(command.point) {
                     panic!("SVG path coordinates must be finite");
                 }
-                has_geometry = true;
             }
             PaintPathVerb::kCubicTo => {
                 if !Finite(command.control1) || !Finite(command.control2) || !Finite(command.point)
                 {
                     panic!("SVG path coordinates must be finite");
                 }
-                has_geometry = true;
             }
-            PaintPathVerb::kClose => has_geometry = true,
+            PaintPathVerb::kClose => {}
         }
-    }
-    if !has_geometry {
-        panic!("SVG path has no drawable geometry");
     }
 }
 

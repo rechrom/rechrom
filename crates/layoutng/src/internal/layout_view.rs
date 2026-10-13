@@ -556,8 +556,15 @@ impl LayoutView {
     ) {
         self.CheckIsNotDestroyed();
         assert_eq!(overflow_x.is_some(), overflow_y.is_some());
-        let x = overflow_x.unwrap_or_else(|| self.StyleRef().OverflowX());
-        let y = overflow_y.unwrap_or_else(|| self.StyleRef().OverflowY());
+        let viewport = self.ViewportDefiningElementForLayout();
+        let viewport_object = if viewport.is_null() { std::ptr::null_mut() } else {
+            unsafe { &*viewport }.GetLayoutObject()
+        };
+        let style = if viewport_object.is_null() { self.StyleRef() } else {
+            unsafe { &*viewport_object }.StyleRef()
+        };
+        let x = overflow_x.unwrap_or_else(|| style.OverflowX());
+        let y = overflow_y.unwrap_or_else(|| style.OverflowY());
         let mode = |overflow: EOverflow| match overflow {
             EOverflow::kScroll => ScrollbarMode::kAlwaysOn,
             EOverflow::kHidden | EOverflow::kClip => ScrollbarMode::kAlwaysOff,

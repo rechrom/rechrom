@@ -2777,6 +2777,7 @@ impl CSSSelectorParser {
                         | kPseudoHasDatalist
                         | kPseudoListBox
                         | kPseudoMultiSelectFocus
+                        | kPseudoSpatialNavigationFocus
                         | kPseudoIsHtml
                         | kPseudoSelectContainsInput
                         | kPseudoSelectHasSlottedButton

@@ -241,10 +241,10 @@ pub(crate) fn FragmentMetric(root: &FragmentNode, id: u64, name: &str) -> f64 {
         "offsetLeft" => unzoom(fragment.offset.x).round(),
         "offsetTop" => unzoom(fragment.offset.y).round(),
         "clientWidth" => {
-            unzoom(fragment.content_size.width + p.padding.left + p.padding.right).round()
+            unzoom(p.client_size.map_or(fragment.content_size.width + p.padding.left + p.padding.right, |size| size.width)).round()
         }
         "clientHeight" => {
-            unzoom(fragment.content_size.height + p.padding.top + p.padding.bottom).round()
+            unzoom(p.client_size.map_or(fragment.content_size.height + p.padding.top + p.padding.bottom, |size| size.height)).round()
         }
         "contentWidth" => unzoom(fragment.content_size.width),
         "contentHeight" => unzoom(fragment.content_size.height),

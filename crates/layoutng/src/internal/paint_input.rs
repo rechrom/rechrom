@@ -987,8 +987,19 @@ pub enum PaintMaskComposite {
     kIntersect,
     kExclude,
 }
+/// Immutable StyleImage lifecycle needed by mask painting. A failed or `none`
+/// layer still participates as transparent black; a loading layer suppresses
+/// the complete masked element until the resource reaches a terminal state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaintMaskImageState {
+    #[default]
+    kReady,
+    kLoading,
+    kInvalid,
+}
 #[derive(Clone, PartialEq)]
 pub struct PaintMaskLayer {
+    pub image_state: PaintMaskImageState,
     pub image: BackgroundImageLayer,
     pub mode: PaintMaskMode,
     pub composite: PaintMaskComposite,
@@ -997,6 +1008,7 @@ impl Default for PaintMaskLayer {
     fn default() -> Self {
         Self {
             image: BackgroundImageLayer::default(),
+            image_state: PaintMaskImageState::kReady,
             mode: PaintMaskMode::kAlpha,
             composite: PaintMaskComposite::kAdd,
         }

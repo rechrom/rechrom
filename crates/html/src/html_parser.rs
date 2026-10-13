@@ -2077,6 +2077,11 @@ impl HTMLDocumentParserState {
         let storage = self.storage_.as_mut().expect("parser continuation exists");
         InsertParserInput(&mut storage.input, storage.waiting_for_script, text);
     }
+    /// Read-only input extent, used to invalidate diagnostic-only observations
+    /// when a scoped script adapter inserts input at the parser insertion point.
+    pub fn BufferedInputCharacters(&self) -> usize {
+        self.storage_.as_ref().expect("parser continuation exists").input.length() as usize
+    }
     pub fn IsPaused(&self) -> bool {
         self.storage_
             .as_ref()

@@ -84,6 +84,7 @@ pub struct Event {
     pub input_type: String,
     pub repeat: bool,
     pub identity: u64,
+    pub dispatch_state: std::rc::Rc<std::cell::RefCell<crate::event_path::EventDispatchState>>,
 }
 impl Default for Event {
     fn default() -> Self {
@@ -112,6 +113,7 @@ impl Default for Event {
             input_type: String::new(),
             repeat: false,
             identity: NextEventIdentity(),
+            dispatch_state: Default::default(),
         }
     }
 }

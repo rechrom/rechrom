@@ -5,6 +5,7 @@
 extern crate layoutng_replaced;
 
 mod document_loader;
+mod diagnostic_read_ahead;
 mod import_map;
 mod module_resources;
 mod resource_fetcher;

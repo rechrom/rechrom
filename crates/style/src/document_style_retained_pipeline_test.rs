@@ -1513,3 +1513,28 @@ fn user_agent_pseudo_rules_use_translated_context_aware_collector() {
         "{stats:?}"
     );
 }
+
+#[test]
+fn retained_nested_declarations_keep_ua_and_author_cascade_owners() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><button id=target style='color:white'>Search</button>",
+    );
+    let ua = ParseUserAgentCSS(
+        "button {color:red; @supports not blink-feature(AppearanceBase) {text-align:center}}",
+    );
+    owner.GetDocumentMut().AppendStyleSheet(ParseCSS(
+        "button {width:90px; @media screen {width:108px} height:44px}",
+    ));
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(800.0), &[ua]).unwrap();
+    let index = node(&owner, "target");
+    let resolved = owner.GetDocument().ResolvedStyleFor(index).unwrap();
+    let native = unsafe { &*resolved.native_style.Get() };
+    assert_eq!(native.GetTextAlign(), foundation::ETextAlign::kCenter);
+    assert_eq!(native.Width().Pixels(), 108.0);
+    assert_eq!(native.Height().Pixels(), 44.0);
+    let stats = engine.TranslatedRuleShadowStats();
+    assert!(stats.translated_style_resolver_applied >= 3, "{stats:?}");
+    assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+}

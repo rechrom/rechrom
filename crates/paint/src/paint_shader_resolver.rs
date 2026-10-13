@@ -159,25 +159,15 @@ fn ResolvePatternImage(
             image.destination_height = fitted_height;
         }
     }
-    if let image_resource::PaintImageContent::Document(content) = &resource.content {
-        let zoom = resources.layout_zoom_factor.max(f64::MIN_POSITIVE);
-        let mut key = image_resource::ContainerKey::new(
-            container_width.round().max(1.0) as u32,
-            container_height.round().max(1.0) as u32,
-            zoom,
-            resources.device_pixel_ratio,
-        );
-        if !image.color_scheme_flags_is_normal {
-            key.preferred_color_scheme = u8::from(image.used_dark_color_scheme);
-            key.preferred_color_scheme_is_explicit = true;
-        }
-        if let Some(current) = &resource.document_container_key {
-            key.view_specification = current.view_specification.clone();
-        } else if let Some(initial) = content.variants().first() {
-            key.view_specification = initial.container_key.view_specification.clone();
-        }
-        image.document_container_key = Some(key);
-    }
+    let zoom = resources.layout_zoom_factor.max(f64::MIN_POSITIVE);
+    image.document_container_key = crate::paint_engine::ResolveDocumentImageContainerKey(
+        resource,
+        Size { width: container_width * zoom, height: container_height * zoom },
+        zoom,
+        Some(resources),
+        (!image.color_scheme_flags_is_normal)
+            .then_some(u8::from(image.used_dark_color_scheme)),
+    );
 }
 
 fn PatternOutlineBounds(
@@ -1636,5 +1626,51 @@ mod tests {
         );
         assert_eq!(conic.center, Offset { x: 57.0, y: 79.0 });
         assert_eq!(conic.rotation_angle, 45.0);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn pattern_document_container_uses_embedding_environment_not_last_resource_use() {
+    use std::sync::Arc;
+    use image_resource::{ContainerKey, DocumentPaintContent, PaintImageContent};
+    use layoutng_assembly::internal::{layout_input::PaintImage, paint_input::SvgPatternImage};
+
+    let mut previous = ContainerKey::new(20, 40, 1.0, 1.0);
+    previous.preferred_color_scheme_is_explicit = true;
+    previous.view_specification = "retained-view".into();
+    let resources = PaintResources {
+        preferred_color_scheme: 1,
+        device_pixel_ratio: 2.0,
+        layout_zoom_factor: 2.0,
+        images: vec![PaintImage {
+            id: 7,
+            width: 20,
+            height: 40,
+            document_container_key: Some(previous.clone()),
+            content: PaintImageContent::Document(Arc::new(DocumentPaintContent::new(
+                previous, Arc::new(0_u8),
+            ))),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    for (normal, used_dark, expected) in [(true, false, 1), (false, false, 0), (false, true, 1)] {
+        let mut image = SvgPatternImage {
+            resource_id: 7,
+            destination_width: 40.0,
+            destination_height: 80.0,
+            color_scheme_flags_is_normal: normal,
+            used_dark_color_scheme: used_dark,
+            ..Default::default()
+        };
+        ResolvePatternImage(&mut image, Some(&resources));
+        let key = image.document_container_key.unwrap();
+        assert_eq!((key.width, key.height), (40, 80));
+        assert_eq!(key.zoom(), 2.0);
+        assert_eq!(key.device_pixel_ratio(), 2.0);
+        assert_eq!(key.view_specification, "retained-view");
+        assert_eq!(key.preferred_color_scheme, expected);
+        assert!(key.preferred_color_scheme_is_explicit);
     }
 }

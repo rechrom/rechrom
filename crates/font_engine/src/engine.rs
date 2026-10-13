@@ -1,6 +1,6 @@
 //! Pure, retained font computation. Platform discovery and byte acquisition are
 //! explicit effects, completed by the embedding through `ApplyMutation`.
-use crate::resolver::{FontFace, FontRequest, FontResolver, FontSmoothing};
+use crate::resolver::{EqualFamilyName, FontFace, FontRequest, FontResolver, FontSmoothing};
 use crate::system_fonts::*;
 use crate::{
     Font, FontBackendFactory, FontDescription, FontMetrics, FontVariation, HarfBuzzShaper,
@@ -301,7 +301,7 @@ impl FontEngine {
         for rule in &self.rules {
             if families
                 .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(&rule.family))
+                .any(|(name, _)| EqualFamilyName(name, &rule.family))
             {
                 if let FontFaceState::Loading { resource_id } = rule.state {
                     pending.resource_ids.push(resource_id);
@@ -316,9 +316,9 @@ impl FontEngine {
                 if self
                     .faces
                     .iter()
-                    .any(|f| f.family.eq_ignore_ascii_case(family))
+                    .any(|f| EqualFamilyName(&f.family, family))
                     || self.rules.iter().any(|r| {
-                        r.family.eq_ignore_ascii_case(family)
+                        EqualFamilyName(&r.family, family)
                             && matches!(r.state, FontFaceState::Ready(_))
                     })
                 {
@@ -618,6 +618,36 @@ mod tests {
             _ => panic!("expected pending"),
         }
     }
+    #[test]
+    fn unicode_family_matching_is_shared_by_loading_and_discovery() {
+        let version = FontContextVersion(0);
+        let mut engine = FontEngine::new(version, None);
+        let mut native = face();
+        native.family = "Straße Σ".into();
+        engine
+            .ApplyMutation(FontMutation::SetFaces(vec![native]))
+            .unwrap();
+        let mut description = description();
+        description.SetFamily(&crate::FontFamily::new(
+            AtomicString::FromUtf8("STRASSE ς".as_bytes()),
+            crate::FontFamilyType::kFamilyName,
+            None,
+        ));
+        let ready = engine.Prepare(&description, version).unwrap();
+        assert!(ready.system_queries.is_empty());
+        assert!(ready.resource_ids.is_empty());
+        engine
+            .ApplyMutation(FontMutation::SetRules(vec![FontRule {
+                id: 1,
+                family: "Straße Σ".into(),
+                state: FontFaceState::Loading { resource_id: 91 },
+            }]))
+            .unwrap();
+        let waiting = engine.Prepare(&description, version).unwrap();
+        assert_eq!(waiting.resource_ids, vec![91]);
+        assert!(waiting.system_queries.is_empty());
+    }
+
     fn cjk_face(family: &str) -> FontFace {
         let mut bytes = crate::minimal_font::Build(false, 0, 0x6f22, false, false);
         let parsed = ttf_parser::Face::parse(&bytes, 0).unwrap();

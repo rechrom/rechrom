@@ -301,12 +301,14 @@ impl NativeNodeMetadataRelations {
 
         let mut document_elements = 0u32;
         let mut bodies = 0u32;
+        let mut document_element = std::ptr::null_mut::<Node>();
+        let mut body_element = std::ptr::null_mut::<Node>();
         let mut viewport_defining_element: *mut Element = std::ptr::null_mut();
         for &node in &nodes {
             match unsafe { &*node }.InputDocumentRole() {
                 DocumentRole::kNone => {}
-                DocumentRole::kDocumentElement => document_elements += 1,
-                DocumentRole::kBody => bodies += 1,
+                DocumentRole::kDocumentElement => { document_elements += 1; document_element = node; }
+                DocumentRole::kBody => { bodies += 1; body_element = node; }
                 DocumentRole::kDocumentElementAndBody => {
                     document_elements += 1;
                     bodies += 1;
@@ -330,8 +332,42 @@ impl NativeNodeMetadataRelations {
                 }
             }
         }
+        // Document::ViewportDefiningElement: primary body overflow propagates
+        // only when html is visible on both axes and neither applies containment.
+        // At this boundary the complete native tree and canonical styles exist.
+        if !document_element.is_null() && !body_element.is_null() {
+            let root_object = unsafe { &*document_element }.GetLayoutObject();
+            let body_object = unsafe { &*body_element }.GetLayoutObject();
+            if !root_object.is_null() && !body_object.is_null()
+                && unsafe { &*root_object }.StyleRef().IsOverflowVisibleAlongBothAxes()
+                && !unsafe { &*root_object }.ShouldApplyAnyContainment()
+                && !unsafe { &*body_object }.ShouldApplyAnyContainment()
+            {
+                viewport_defining_element = body_element.cast::<Element>();
+            }
+        }
+        let previous_viewport = root.InputViewportDefiningElement();
         for &node in &nodes {
             unsafe { &mut *node }.set_viewport_defining_element(viewport_defining_element);
+        }
+        if previous_viewport != viewport_defining_element {
+            // The former and new propagated owners change clipping/area
+            // ownership even if their authored styles are unchanged.
+            for &node in &nodes {
+                if node == document_element || node == previous_viewport.cast::<Node>()
+                    || node == viewport_defining_element.cast::<Node>()
+                {
+                    let object = unsafe { &*node }.GetLayoutObject();
+                    let box_ = foundation::DynamicTo::<super::super::layout_box::LayoutBox>(object);
+                    if !box_.is_null() {
+                        unsafe { &mut *box_ }.UpdateFromStyle();
+                        let axes = unsafe { &*box_ }.ComputeOverflowClipAxes();
+                        unsafe { &mut *box_ }.SetOverflowClipAxes(axes);
+                        unsafe { &mut *box_ }.SetNeedsLayoutAndIntrinsicWidthsRecalc(
+                            &raw const crate::internal::layout_invalidation_reason::kStyleChange);
+                    }
+                }
+            }
         }
 
         // Resolve stable public IDs only after all nodes exist.

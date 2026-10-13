@@ -21,6 +21,7 @@ pub enum DOMMutationType {
     kCreateFragment,
     kAttachShadowRoot,
     kCloneNode,
+    kImportNode,
     kAppendChild,
     kInsertBefore,
     kRemoveChild,
@@ -36,6 +37,7 @@ pub enum DOMMutationType {
     kSetPopoverOpen,
     kRequestFullscreen,
     kExitFullscreen,
+    kAssignSlotNodes,
 }
 
 // cpp: dom/dom_mutation.h:40-51
@@ -48,7 +50,11 @@ pub struct DOMMutation {
     pub namespace_uri: String,
     pub bool_value: bool,
     pub child_node_id: u64,
+    /// Source node for an import into target_node_id (the destination document).
+    pub source_node_id: u64,
     pub before_node_id: u64,
+    /// Ordered native identities for atomic HTMLSlotElement.assign().
+    pub node_ids: Vec<u64>,
 }
 
 // cpp: dom/dom_mutation.h:53-54
@@ -98,6 +104,38 @@ pub(crate) fn ValidateDOMMutation(
                 return Err(DOMException {
                     kind: DOMExceptionKind::InvalidArgument,
                     message: "invalid shadow root attachment",
+                });
+            }
+        }
+        DOMMutationType::kAssignSlotNodes => {
+            if !document.Node(target).IsHTMLElement("slot")
+                || mutation.node_ids.iter().any(|&id| {
+                    document.FindNodeById(id).is_none_or(|node| {
+                        !matches!(
+                            document.Node(node).Type(),
+                            DOMNodeType::kElement | DOMNodeType::kText
+                        )
+                    })
+                })
+            {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "invalid manual slot assignment",
+                });
+            }
+        }
+        DOMMutationType::kImportNode => {
+            let source = document.FindNodeById(mutation.source_node_id);
+            if document.Node(target).Type() != DOMNodeType::kDocument
+                || mutation.child_node_id != document.NextNodeId()
+                || source.is_none_or(|source| {
+                    document.Node(source).Type() == DOMNodeType::kDocument
+                        || document.ShadowHost(source).is_some()
+                })
+            {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "invalid node import mutation",
                 });
             }
         }
@@ -331,8 +369,26 @@ pub fn TryApplyDOMMutations(
                     document.AttachShadowRootWithSlotAssignment(target, mode, slot_assignment);
                 debug_assert_eq!(document.Node(root).Id(), mutation.child_node_id);
             }
+            DOMMutationType::kAssignSlotNodes => {
+                let nodes = mutation
+                    .node_ids
+                    .iter()
+                    .map(|&id| {
+                        document
+                            .FindNodeById(id)
+                            .expect("validated assigned node must exist")
+                    })
+                    .collect();
+                document.AssignSlotNodes(target, nodes);
+            }
             DOMMutationType::kCloneNode => {
                 document.CloneNode(target, mutation.bool_value);
+            }
+            DOMMutationType::kImportNode => {
+                let source = document
+                    .FindNodeById(mutation.source_node_id)
+                    .expect("validated import source must exist");
+                document.ImportNode(source, target, mutation.bool_value);
             }
             DOMMutationType::kAppendChild | DOMMutationType::kInsertBefore => {
                 let child = document
@@ -438,6 +494,7 @@ pub fn DOMMutationTypeName(mutation_type: DOMMutationType) -> &'static str {
         DOMMutationType::kCreateFragment => "create-fragment",
         DOMMutationType::kAttachShadowRoot => "attach-shadow-root",
         DOMMutationType::kCloneNode => "clone-node",
+        DOMMutationType::kImportNode => "import-node",
         DOMMutationType::kAppendChild => "append-child",
         DOMMutationType::kInsertBefore => "insert-before",
         DOMMutationType::kRemoveChild => "remove-child",
@@ -452,34 +509,39 @@ pub fn DOMMutationTypeName(mutation_type: DOMMutationType) -> &'static str {
         DOMMutationType::kSetPopoverOpen => "set-popover-open",
         DOMMutationType::kRequestFullscreen => "request-fullscreen",
         DOMMutationType::kExitFullscreen => "exit-fullscreen",
+        DOMMutationType::kAssignSlotNodes => "assign-slot-nodes",
     }
 }
 
 // cpp: dom/dom_mutation.cc:175-175
 pub fn DOMMutationTypeNameRaw(value: u8) -> &'static str {
-    match value {
-        0 => "parse-document",
-        1 => "create-document",
-        2 => "create-element",
-        3 => "create-text",
-        4 => "create-comment",
-        5 => "create-fragment",
-        6 => "attach-shadow-root",
-        7 => "clone-node",
-        8 => "append-child",
-        9 => "insert-before",
-        10 => "remove-child",
-        11 => "set-attribute",
-        12 => "remove-attribute",
-        13 => "set-text-content",
-        14 => "set-inner-html",
-        15 => "set-control-checked",
-        16 => "set-control-value",
-        17 => "set-control-indeterminate",
-        18 => "set-dialog-modal",
-        19 => "set-popover-open",
-        20 => "request-fullscreen",
-        21 => "exit-fullscreen",
-        _ => "unknown",
-    }
+    [
+        DOMMutationType::kParseDocument,
+        DOMMutationType::kCreateDocument,
+        DOMMutationType::kCreateElement,
+        DOMMutationType::kCreateText,
+        DOMMutationType::kCreateComment,
+        DOMMutationType::kCreateFragment,
+        DOMMutationType::kAttachShadowRoot,
+        DOMMutationType::kCloneNode,
+        DOMMutationType::kImportNode,
+        DOMMutationType::kAppendChild,
+        DOMMutationType::kInsertBefore,
+        DOMMutationType::kRemoveChild,
+        DOMMutationType::kSetAttribute,
+        DOMMutationType::kRemoveAttribute,
+        DOMMutationType::kSetTextContent,
+        DOMMutationType::kSetInnerHTML,
+        DOMMutationType::kSetControlChecked,
+        DOMMutationType::kSetControlValue,
+        DOMMutationType::kSetControlIndeterminate,
+        DOMMutationType::kSetDialogModal,
+        DOMMutationType::kSetPopoverOpen,
+        DOMMutationType::kRequestFullscreen,
+        DOMMutationType::kExitFullscreen,
+        DOMMutationType::kAssignSlotNodes,
+    ]
+    .into_iter()
+    .find(|kind| *kind as u8 == value)
+    .map_or("unknown", DOMMutationTypeName)
 }

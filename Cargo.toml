@@ -14,6 +14,7 @@ members = [
     "crates/layoutng_assembly",
     "crates/layoutng_inline_assembly",
     "crates/layoutng_block",
+    "crates/layoutng_multicol",
     "crates/layoutng_flex",
     "crates/layoutng_grid",
     "crates/layoutng_table",

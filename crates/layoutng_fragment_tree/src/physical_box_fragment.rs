@@ -718,8 +718,11 @@ impl PhysicalBoxFragment {
             FragmentType::kFragmentBox,
             box_type as u32,
         );
-        debug_assert!(!base.GetLayoutObject().is_null());
-        debug_assert!(unsafe { &*base.GetLayoutObject() }.IsBoxModelObject());
+        // Chromium reads layout_object_ here, which also owns anonymous
+        // fragmentainers. GetLayoutObject() intentionally excludes them.
+        let layout_object = base.GetSelfOrContainerLayoutObject();
+        debug_assert!(!layout_object.is_null());
+        debug_assert!(unsafe { &*layout_object }.IsBoxModelObject());
         debug_assert!(
             builder.break_token_.is_null() || unsafe { &*builder.break_token_ }.IsBlockType()
         );
@@ -810,8 +813,8 @@ impl PhysicalBoxFragment {
             builder.is_math_operator_,
         );
 
-        let allow_baseline = !unsafe { &*base.GetLayoutObject() }.ShouldApplyLayoutContainment()
-            || unsafe { &*base.GetLayoutObject() }.IsTableCell();
+        let allow_baseline = !unsafe { &*layout_object }.ShouldApplyLayoutContainment()
+            || unsafe { &*layout_object }.IsTableCell();
         let first_baseline = if allow_baseline {
             builder.first_baseline_
         } else {
@@ -898,9 +901,9 @@ impl PhysicalBoxFragment {
         if has_line_boxes || has_inlines {
             debug_assert!(self.IsInlineFormattingContext());
         }
-        let object = self.GetLayoutObject();
+        let object = self.GetSelfOrContainerLayoutObject();
         debug_assert!(!object.is_null());
-        if ContentLockBlocksChildLayout(unsafe { &*object }.GetNode()) {
+        if !object.is_null() && ContentLockBlocksChildLayout(unsafe { &*object }.GetNode()) {
             return;
         }
         if has_line_boxes {
@@ -1341,14 +1344,14 @@ impl PhysicalBoxFragment {
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:497
     // cpp: layoutng_fragment_tree/physical_box_fragment.cc:864-869
     pub fn GetMutableForStyleRecalc(&self) -> MutableForStyleRecalc<'_> {
-        debug_assert!(!self.GetLayoutObject().is_null());
+        debug_assert!(!self.GetSelfOrContainerLayoutObject().is_null());
         MutableForStyleRecalc { fragment_: self }
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:511
     // cpp: layoutng_fragment_tree/physical_box_fragment.cc:892-897
     pub fn GetMutableForContainerLayout(&self) -> MutableForContainerLayout<'_> {
-        debug_assert!(!self.GetLayoutObject().is_null());
+        debug_assert!(!self.GetSelfOrContainerLayoutObject().is_null());
         MutableForContainerLayout { fragment_: self }
     }
 
@@ -1425,7 +1428,8 @@ impl PhysicalBoxFragment {
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.cc:77-79
     pub fn IsPaginatedRoot(&self) -> bool {
-        self.IsFragmentationContextRoot() && unsafe { &*self.GetLayoutObject() }.IsLayoutView()
+        self.IsFragmentationContextRoot()
+            && unsafe { &*self.GetSelfOrContainerLayoutObject() }.IsLayoutView()
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:453-463
@@ -1513,7 +1517,7 @@ impl PhysicalBoxFragment {
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.cc:62-64
     pub fn CanUseFragmentsForInkOverflow(&self) -> bool {
-        !unsafe { &*self.GetLayoutObject() }.IsLayoutReplaced()
+        !unsafe { &*self.GetSelfOrContainerLayoutObject() }.IsLayoutReplaced()
     }
 
     // cpp: layoutng_fragment_tree/physical_box_fragment.h:368-377

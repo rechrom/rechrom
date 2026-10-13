@@ -157,6 +157,32 @@ pub struct PersistentStyleScopeActivations {
     vector: Vec<Rc<PersistentStyleScopeActivation>>,
     flags: MatchFlags,
 }
+
+/// Admitted frame setting for spatial-navigation selector matching.
+///
+/// cpp: core/frame/settings.json5:397-402 defaults spatialNavigationEnabled
+/// to false. Rechrom has no spatial-navigation controller/active-selection-end
+/// producer yet, so enabling it must be rejected at this input boundary rather
+/// than represented by fabricated focus state or a negative selector result.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpatialNavigationPolicy {
+    #[default]
+    Disabled,
+}
+
+impl TryFrom<bool> for SpatialNavigationPolicy {
+    type Error = PersistentSelectorError;
+
+    fn try_from(enabled: bool) -> Result<Self, Self::Error> {
+        if enabled {
+            Err(PersistentSelectorError::Unsupported(
+                "enabled spatial navigation requires its interaction controller and listbox active-selection-end owner".into(),
+            ))
+        } else {
+            Ok(Self::Disabled)
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScopedSelectorMatch {
     pub specificity: u32,
@@ -166,6 +192,7 @@ pub(crate) struct PersistentSelectorBackend<'d> {
     document: &'d Document,
     nodes: Rc<Vec<Rc<usize>>>,
     interaction: UserInteractionState,
+    spatial_navigation_policy: SpatialNavigationPolicy,
     forced: HashMap<u64, Vec<PseudoType>>,
     frame_active: bool,
     slot_assignment_dirty: HashSet<u64>,
@@ -184,6 +211,7 @@ impl<'d> PersistentSelectorBackend<'d> {
         document: &'d Document,
         nodes: Rc<Vec<Rc<usize>>>,
         interaction: UserInteractionState,
+        spatial_navigation_policy: SpatialNavigationPolicy,
         forced: HashMap<u64, Vec<PseudoType>>,
         frame_active: bool,
         slot_assignment_dirty: HashSet<u64>,
@@ -193,6 +221,7 @@ impl<'d> PersistentSelectorBackend<'d> {
             document,
             nodes,
             interaction,
+            spatial_navigation_policy,
             forced,
             frame_active,
             slot_assignment_dirty,
@@ -1426,7 +1455,24 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         Rc::new(PersistentStyleScopeActivations { vector, flags })
     }
     fn SpatialNavigationFocused(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: SpatialNavigationFocused")
+        // cpp: html_option_element.cc:670-674. The association belongs to DOM;
+        // focus is the immutable input supplied by the interaction owner.
+        let Some(select) = self.document.OptionOwnerSelect(*e) else {
+            return false;
+        };
+        if !self.IsFocused(&select) {
+            return false;
+        }
+        // cpp: SelectType::SpatialNavigationFocusedOption (select_type.cc:
+        // 2145-2147) returns null for menu lists. ListBoxSelectType's disabled
+        // branch (1673-1675) also returns null. Only admitted policies reach
+        // this matcher; an enabled request fails before constructing one.
+        if self.document.SelectUsesMenuList(select) {
+            return false;
+        }
+        match self.spatial_navigation_policy {
+            SpatialNavigationPolicy::Disabled => false,
+        }
     }
     fn HasDatalist(&self, e: &Self::Element) -> bool {
         self.document.InputHasDataList(*e)
@@ -1708,6 +1754,7 @@ pub struct PersistentSelectorService {
     owner: Option<(DOMOwnerHandle, CompatibilityMode)>,
     nodes: Rc<Vec<Rc<usize>>>,
     pub interaction: UserInteractionState,
+    pub spatial_navigation_policy: SpatialNavigationPolicy,
     pub forced_pseudo_states: HashMap<u64, Vec<PseudoType>>,
     pub frame_focused_and_active: bool,
     pub slot_assignment_dirty: HashSet<u64>,
@@ -1733,6 +1780,7 @@ impl Default for PersistentSelectorService {
             owner: None,
             nodes: Rc::new(vec![]),
             interaction: Default::default(),
+            spatial_navigation_policy: Default::default(),
             forced_pseudo_states: HashMap::new(),
             frame_focused_and_active: true,
             slot_assignment_dirty: HashSet::new(),
@@ -1758,6 +1806,7 @@ impl PersistentSelectorService {
             document,
             self.nodes.clone(),
             self.interaction,
+            self.spatial_navigation_policy,
             self.forced_pseudo_states.clone(),
             self.frame_focused_and_active,
             self.slot_assignment_dirty.clone(),

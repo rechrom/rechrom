@@ -1159,6 +1159,20 @@ struct HostRuntime<'a> {
     state: &'a Rc<RefCell<State>>,
 }
 impl JavaScriptHostRuntime for HostRuntime<'_> {
+    fn IsProxy(&mut self, value: &HostValue) -> bool {
+        to_js(self.context, self.state, value)
+            .is_ok_and(|value| self.context.is_proxy(&value))
+    }
+    fn ReportException(&mut self, value: &HostValue) -> HostResult {
+        let value = match to_js(self.context, self.state, value) {
+            Ok(value) => value,
+            Err(value) => value,
+        };
+        let location = self.context.error_creation_location(&value);
+        let reported = exception_at(self.context, &value, "", location);
+        self.state.borrow().hooks.exceptions.borrow_mut().push(reported);
+        HostResult::default()
+    }
     fn Call(
         &mut self,
         callback: &JavaScriptFunction,

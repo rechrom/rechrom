@@ -1222,7 +1222,7 @@ pub fn AddScrollbarFreeze(
 // cpp: layoutng/internal/length_utils.h:581-581
 pub fn ComputeScrollbarsForNonAnonymous(node: &BlockNode) -> BoxStrut {
     let style = node.Style();
-    if !style.IsScrollContainer() && style.IsScrollbarGutterAuto() {
+    if !node.IsView() && !style.IsScrollContainer() && style.IsScrollbarGutterAuto() {
         return BoxStrut::default();
     }
     unsafe { &*node.GetLayoutBox() }.ComputeLogicalScrollbars()
@@ -2205,7 +2205,7 @@ pub fn ComputeReplacedSize(
 ) -> LogicalSize {
     debug_assert!(node.IsReplaced());
     let box_ = unsafe { &*node.GetLayoutBox() };
-    if !box_.IsSVGRoot() || !box_.IsDocumentElement() {
+    if !box_.IsSVGRoot() {
         return ComputeReplacedSizeInternal(node, space, border_padding, mode);
     }
     let algorithms = LayoutPassScope::Algorithms();
@@ -2223,6 +2223,12 @@ pub fn ComputeReplacedSize(
         size.inline_size += border_padding.InlineSum();
         size.block_size += border_padding.BlockSum();
         return size;
+    }
+    // The isolated SVG parser currently has an inert HTML wrapper. Its typed
+    // root container above identifies the image document element explicitly;
+    // ordinary inline SVG still follows the standard replaced-element path.
+    if !box_.IsDocumentElement() {
+        return ComputeReplacedSizeInternal(node, space, border_padding, mode);
     }
     if svg_root.embedded_through_frame {
         let mut size = space.AvailableSize();

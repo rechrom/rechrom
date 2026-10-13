@@ -276,6 +276,11 @@ pub trait JavaScriptHostBindings {
 }
 
 pub trait JavaScriptHostRuntime {
+    /// Report an author exception through the realm's existing error channel,
+    /// without throwing it from a host algorithm that invokes callbacks.
+    fn ReportException(&mut self, value: &HostValue) -> HostResult;
+    /// Native object classification used by Web IDL sequence conversion.
+    fn IsProxy(&mut self, value: &HostValue) -> bool;
     // The current context is already executing a host continuation. Source
     // Page::Checkpoint must drain/report without borrowing its realm again.
     fn PerformMicrotaskCheckpoint(&mut self) -> Vec<JavaScriptException>;

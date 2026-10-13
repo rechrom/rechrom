@@ -1066,6 +1066,15 @@ impl PageClient for Client {
         }
     }
     fn DidCommit(&mut self, url: &str) {
+        browser_tracing::instant(
+            "navigation",
+            "DocumentCommitted",
+            &[
+                ("tab_id", self.tab_id as f64),
+                ("document_generation", self.document_generation as f64),
+                ("toolbar", self.toolbar as u8 as f64),
+            ],
+        );
         if self.trace {
             eprintln!(
                 "loading-commit ms={:.3} url={url}",
@@ -1074,6 +1083,21 @@ impl PageClient for Client {
         }
     }
     fn DidPresentFrame(&mut self, frame: &browser::page::PageFrame) {
+        // This callback publishes immutable paint input, not pixels. Keep the
+        // artifact identity so Display's completed output can be correlated
+        // without treating the document lifecycle as a presentation event.
+        browser_tracing::instant(
+            "paint",
+            "DocumentPaintArtifact",
+            &[
+                ("tab_id", self.tab_id as f64),
+                ("document_generation", self.document_generation as f64),
+                ("toolbar", self.toolbar as u8 as f64),
+                ("content_sequence", frame.sequence as f64),
+                ("content_recording_revision", frame.display_items.recording_revision as f64),
+                ("display_items", frame.display_items.items.len() as f64),
+            ],
+        );
         if std::env::var_os("BROWSER_APP_TRACE_INPUT").is_some() {
             if let Some(caret) = frame.display_items.caret {
                 eprintln!(
@@ -1092,6 +1116,15 @@ impl PageClient for Client {
         }
     }
     fn DidFinishLoad(&mut self) {
+        browser_tracing::instant(
+            "navigation",
+            "DocumentLoadFinished",
+            &[
+                ("tab_id", self.tab_id as f64),
+                ("document_generation", self.document_generation as f64),
+                ("toolbar", self.toolbar as u8 as f64),
+            ],
+        );
         if self.trace {
             eprintln!(
                 "loading-finish ms={:.3}",
@@ -1112,6 +1145,20 @@ impl PageClient for Client {
         }
     }
 }
+fn configure_scrollbar_mode(
+    metrics: &mut layoutng_assembly::internal::layout_input_types::ScrollbarThemeMetrics,
+    mode: Option<&str>,
+) -> io::Result<()> {
+    match mode {
+        None => {},
+        Some("classic") => metrics.uses_overlay_scrollbars = false,
+        Some("overlay") => metrics.uses_overlay_scrollbars = true,
+        Some(_) => return Err(io::Error::new(io::ErrorKind::InvalidInput,
+            "RECHROM_SCROLLBAR_MODE must be classic or overlay")),
+    }
+    Ok(())
+}
+
 fn create_page(
     width: f64,
     height: f64,
@@ -1137,6 +1184,17 @@ fn create_page(
     let assembly = browser::CreateLayoutAssembly();
     let mut constraints =
         browser::CreateBrowserConstraints(width.ceil() as u32, height.ceil() as u32);
+    // The host selects a theme; pure layout receives only immutable metrics.
+    // Leave the established overlay default unchanged unless explicitly asked.
+    let scrollbar_mode = std::env::var("RECHROM_SCROLLBAR_MODE")
+        .map(Some).or_else(|error| match error {
+            std::env::VarError::NotPresent => Ok(None),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid RECHROM_SCROLLBAR_MODE")),
+        })?;
+    configure_scrollbar_mode(
+        constraints.scrollbar_theme.as_mut().expect("browser scrollbar metrics"),
+        scrollbar_mode.as_deref(),
+    )?;
     constraints.available_size = Size { width, height };
     constraints.device_pixel_ratio = scale;
     // The embedder supplies the viewport in CSS pixels. Device scale belongs
@@ -1148,7 +1206,7 @@ fn create_page(
     // this boundary and reserves layout_zoom_factor for actual page zoom.
     constraints.layout_zoom_factor = 1.0;
     let document_images = Rc::new(RefCell::new(
-        document_image::SVGImageDecoder::new_with_constraints(&assembly, &constraints),
+        browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints),
     ));
     let environment = if scripting {
         Some(browser::page::ScriptEnvironment {
@@ -1161,7 +1219,7 @@ fn create_page(
     } else {
         None
     };
-    Ok(Page::Create(
+    let mut page = Page::Create(
         loader,
         images,
         document_images,
@@ -1175,7 +1233,11 @@ fn create_page(
             trace: scripting && std::env::var_os("BROWSER_APP_TRACE_LOADING").is_some(),
             started: Instant::now(),
         }))),
-    ))
+    );
+    if !toolbar && std::env::var("RECHROM_DIAGNOSTIC_READ_AHEAD").as_deref() == Ok("1") {
+        page.EnableDiagnosticReadAhead(scripting);
+    }
+    Ok(page)
 }
 struct ChromePopup {
     page: Page,
@@ -7508,5 +7570,24 @@ mod tests {
             Some(&Cursor::kWait),
             "fresh input must reassert cached feedback after a native cursor reset"
         );
+    }
+}
+
+#[cfg(test)]
+mod scrollbar_theme_tests {
+    #[test]
+    fn host_mode_preserves_injected_dimensions_and_default() {
+        let mut theme = layoutng_assembly::internal::layout_input_types::ScrollbarThemeMetrics {
+            auto_thickness: 23, thin_thickness: 11, uses_overlay_scrollbars: true,
+            ..Default::default()
+        };
+        super::configure_scrollbar_mode(&mut theme,None).unwrap();
+        assert!(theme.uses_overlay_scrollbars);
+        super::configure_scrollbar_mode(&mut theme,Some("classic")).unwrap();
+        assert!(!theme.uses_overlay_scrollbars);
+        assert_eq!((theme.auto_thickness,theme.thin_thickness),(23,11));
+        super::configure_scrollbar_mode(&mut theme,Some("overlay")).unwrap();
+        assert!(theme.uses_overlay_scrollbars);
+        assert!(super::configure_scrollbar_mode(&mut theme,Some("invalid")).is_err());
     }
 }

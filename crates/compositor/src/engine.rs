@@ -95,6 +95,34 @@ pub struct ArtifactSnapshot<V, M> {
     pub blocking_wheel_regions: BlockingWheelEventRegions,
 }
 
+/// Identity of the document pixels actually selected for a submitted frame.
+/// This follows the activated snapshot, which may precede a newer navigation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameProvenance {
+    pub document: (u64, u64),
+    /// A content surface can be empty or background-only; presence does not
+    /// imply a contentful paint or physical presentation.
+    pub content: Option<ContentFrameProvenance>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContentFrameProvenance {
+    pub sequence: u64,
+    pub recording_revision: u64,
+}
+
+impl<V, M> ArtifactSnapshot<V, M> {
+    fn Provenance(&self) -> FrameProvenance {
+        FrameProvenance {
+            document: self.document,
+            content: self.content.as_ref().map(|artifact| ContentFrameProvenance {
+                sequence: self.signature.1,
+                recording_revision: artifact.recording_revision,
+            }),
+        }
+    }
+}
+
 pub enum Command<V, F, M> {
     Snapshot(ArtifactSnapshot<V, M>),
     InputBeginFrame(F),
@@ -138,6 +166,7 @@ pub struct PlannedFrame<V, M> {
 }
 
 pub struct SubmittedFrame<V, M> {
+    pub provenance: FrameProvenance,
     pub viewport: V,
     pub toolbar: CompositorFrame,
     pub content: Option<CompositorFrame>,
@@ -716,6 +745,7 @@ where
             self.overlay_scrollbar_damage = None;
         }
         let submitted = SubmittedFrame {
+            provenance: planned.snapshot.Provenance(),
             viewport: planned.snapshot.viewport,
             toolbar,
             content,
@@ -740,6 +770,19 @@ where
     M: Clone,
 {
     let mut trace = browser_tracing::span("raster", "RasterPendingTree");
+    let provenance = snapshot.Provenance();
+    trace.set("tab_id", provenance.document.0 as f64);
+    trace.set("document_generation", provenance.document.1 as f64);
+    trace.set("has_content", provenance.content.is_some() as u8 as f64);
+    trace.set(
+        "content_sequence",
+        provenance.content.map_or(0, |c| c.sequence) as f64,
+    );
+    trace.set(
+        "content_recording_revision",
+        provenance.content.map_or(0, |c| c.recording_revision) as f64,
+    );
+    trace.set("succeeded", 0.0);
     let artifact_scale = |artifact: &PaintArtifact| {
         artifact
             .resources
@@ -1177,4 +1220,52 @@ fn ordinary_effect_is_drawn(properties: &paint::paint_property_tree::PropertyTre
         effect = node.parent.as_deref();
     }
     true
+}
+
+#[cfg(test)]
+mod provenance_tests {
+    use super::*;
+
+    fn snapshot(generation: u64, content: bool) -> ArtifactSnapshot<(), ()> {
+        ArtifactSnapshot {
+            document: (7, generation),
+            viewport: (),
+            toolbar_height: 0.0,
+            frame_time: Instant::now(),
+            signature: (3, 1, ()),
+            toolbar: Arc::new(PaintArtifact::default()),
+            content: content.then(|| {
+                Arc::new(PaintArtifact {
+                    recording_revision: 19,
+                    ..Default::default()
+                })
+            }),
+            metadata: (),
+            async_root_scroll: false,
+            blocking_wheel_regions: Default::default(),
+        }
+    }
+
+    #[test]
+    fn toolbar_only_snapshot_has_no_content_provenance() {
+        let provenance = snapshot(4, false).Provenance();
+        assert_eq!(provenance.document, (7, 4));
+        assert_eq!(provenance.content, None);
+    }
+
+    #[test]
+    fn retained_snapshot_keeps_its_generation_when_content_sequences_restart() {
+        let active = snapshot(4, true);
+        let replacement = snapshot(5, true);
+        let retained_provenance = active.Provenance();
+        assert_eq!(retained_provenance.document, (7, 4));
+        assert_eq!(
+            retained_provenance.content,
+            Some(ContentFrameProvenance {
+                sequence: 1,
+                recording_revision: 19,
+            })
+        );
+        assert_ne!(retained_provenance, replacement.Provenance());
+    }
 }

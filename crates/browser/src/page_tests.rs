@@ -1,5 +1,4 @@
 use crate::page::{Page, PageClient, PageFrame};
-use document_image::SVGImageDecoder;
 use dom::Document;
 use image_decoder::skia_image_decoder::SkiaImageDecoder;
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
@@ -259,7 +258,7 @@ fn create_page(
     Page::Create(
         Rc::new(RefCell::new(Loader(root.to_path_buf(), trace.clone()))),
         Rc::new(RefCell::new(SkiaImageDecoder)),
-        Rc::new(RefCell::new(SVGImageDecoder::new(&assembly))),
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
         space,
         Some(crate::page::ScriptEnvironment {
             runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
@@ -394,7 +393,7 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
         let mut page = Page::Create(
             Rc::new(RefCell::new(Loader(root.clone(), trace.clone()))),
             Rc::new(RefCell::new(SkiaImageDecoder)),
-            Rc::new(RefCell::new(SVGImageDecoder::new(&assembly))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
             crate::CreateBrowserConstraints(160, 96),
             None,
             Some(Rc::new(RefCell::new(Client { trace, frames }))),
@@ -428,7 +427,7 @@ fn css_semibold_font_selection_matches_repository_chromium() {
         let mut page = Page::Create(
             Rc::new(RefCell::new(Loader(root.clone(), trace.clone()))),
             Rc::new(RefCell::new(SkiaImageDecoder)),
-            Rc::new(RefCell::new(SVGImageDecoder::new(&assembly))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
             crate::CreateBrowserConstraints(160, 96),
             Some(crate::page::ScriptEnvironment {
                 runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(
@@ -1115,7 +1114,7 @@ fn without_javascript(mode: &str) {
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader(root.clone(), trace.clone()))),
         Rc::new(RefCell::new(SkiaImageDecoder)),
-        Rc::new(RefCell::new(SVGImageDecoder::new(&assembly))),
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
         space,
         None,
         Some(Rc::new(RefCell::new(Client {
@@ -1235,7 +1234,7 @@ fn without_javascript(mode: &str) {
     let mut silent = Page::Create(
         Rc::new(RefCell::new(Loader(root, trace))),
         Rc::new(RefCell::new(SkiaImageDecoder)),
-        Rc::new(RefCell::new(SVGImageDecoder::new(&assembly))),
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
         crate::CreateBrowserConstraints(160, 96),
         None,
         None,
@@ -1732,7 +1731,7 @@ fn profile_qq_loading_stall() {
         let mut page = Page::Create(
             loader,
             Rc::new(RefCell::new(SkiaImageDecoder)),
-            Rc::new(RefCell::new(SVGImageDecoder::new(&assembly))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
             crate::CreateBrowserConstraints(1216, 704),
             Some(crate::page::ScriptEnvironment {
                 runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(

@@ -42,7 +42,7 @@ use crate::internal::{
         BackgroundRepeatRule, BackgroundSizeMode, NinePieceImagePaint, PaintBlendMode,
         PaintColorInterpolationSpace, PaintColorStop, PaintCornerRadii, PaintCornerRadius,
         PaintFilterOperation, PaintFilterType, PaintHueInterpolationMethod, PaintImageTileRule,
-        PaintMaskComposite, PaintMaskLayer, PaintMaskMode, PaintRadialExtent, PaintRadialShape,
+        PaintMaskComposite, PaintMaskImageState, PaintMaskLayer, PaintMaskMode, PaintRadialExtent, PaintRadialShape,
         PaintReflectionDirection, PaintShader, PaintShaderKind, PaintSpreadMethod, PaintStyleData,
         PaintTransform, PaintTransformOperation, PaintTransformOperationKind, PaintTransformOrigin,
         PaintTransformReferenceBox, SvgPaintComponent, SvgStrokeLineCap, SvgStrokeLineJoin,
@@ -572,6 +572,11 @@ fn BackgroundLayer(style: &ComputedStyle, layer: &FillLayer) -> Option<Backgroun
     } else {
         return None;
     }
+    BackgroundLayerGeometry(layer, &mut output);
+    Some(output)
+}
+
+fn BackgroundLayerGeometry(layer: &FillLayer, output: &mut BackgroundImageLayer) {
     output.origin = BoxValue(layer.Origin());
     output.clip = BoxValue(layer.Clip());
     output.attachment = match layer.Attachment() {
@@ -632,7 +637,6 @@ fn BackgroundLayer(style: &ComputedStyle, layer: &FillLayer) -> Option<Backgroun
             output.height_percentage = (height.1 != 0.0).then_some(height.1 / 100.0);
         }
     }
-    Some(output)
 }
 
 fn Backgrounds(style: &ComputedStyle) -> Vec<BackgroundImageLayer> {
@@ -662,14 +666,34 @@ fn MaskComposite(value: CompositingOperator) -> Option<PaintMaskComposite> {
 /// Background and mask layers share image geometry in Blink, but mask mode and
 /// compositing live on FillLayer and must cross the paint boundary as well.
 fn Masks(style: &ComputedStyle) -> Vec<PaintMaskLayer> {
+    // A sole `none` means no mask, but `none` inside an active layer list is a
+    // non-drawing slot that preserves the original bottom-layer identity.
+    if !style.MaskLayers().AnyLayerHasImage() {
+        return Vec::new();
+    }
     let mut output = Vec::new();
     let mut layer = style.MaskLayers() as *const FillLayer;
     while let Some(current) = unsafe { layer.as_ref() } {
-        let image = BackgroundLayer(style, current);
+        let native_image = unsafe { current.GetImage().as_ref() };
+        let image_state = match native_image {
+            Some(image) if !image.IsLoaded() && !image.ErrorOccurred() => {
+                PaintMaskImageState::kLoading
+            },
+            Some(image) if image.CanRender() => PaintMaskImageState::kReady,
+            _ => PaintMaskImageState::kInvalid,
+        };
+        let image = BackgroundLayer(style, current).or_else(|| {
+            native_image.is_none().then(|| {
+                let mut image = BackgroundImageLayer::default();
+                BackgroundLayerGeometry(current, &mut image);
+                image
+            })
+        });
         let composite = MaskComposite(current.CompositingOperator());
         if let (Some(image), Some(composite)) = (image, composite) {
             output.push(PaintMaskLayer {
                 image,
+                image_state,
                 mode: match current.MaskMode() {
                     EFillMaskMode::kLuminance => PaintMaskMode::kLuminance,
                     // CSS generated images and ordinary images use alpha for

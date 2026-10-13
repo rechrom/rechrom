@@ -334,15 +334,30 @@ impl Parser {
         self.previous_command = command;
     }
     fn AddMove(&mut self, point: Offset) {
-        if self.have_subpath {
-            self.result.single_subpath = false;
+        // Blink's SVGPathBuilder resolves relative coordinates before forwarding
+        // to SkPathBuilder::moveTo. Consecutive moves replace the last point;
+        // the abandoned move has no segment and must not reach either the
+        // retained commands or the flattened text-path/bounds projection.
+        // A move following a close or any drawing verb starts another contour.
+        if self
+            .result
+            .commands
+            .last()
+            .is_some_and(|last| last.verb == PaintPathVerb::kMoveTo)
+        {
+            self.result.commands.last_mut().unwrap().point = point;
+            *self.result.flattened_points.last_mut().unwrap() = point;
+        } else {
+            if self.have_subpath {
+                self.result.single_subpath = false;
+            }
+            self.result.commands.push(PaintPathCommand {
+                verb: PaintPathVerb::kMoveTo,
+                point,
+                ..PaintPathCommand::default()
+            });
+            self.result.flattened_points.push(point);
         }
-        self.result.commands.push(PaintPathCommand {
-            verb: PaintPathVerb::kMoveTo,
-            point,
-            ..PaintPathCommand::default()
-        });
-        self.result.flattened_points.push(point);
         self.current = point;
         self.subpath_start = point;
         self.have_subpath = true;

@@ -578,9 +578,9 @@ fn PaintColumnStyle(
                 table_fragment
                     .paint
                     .resources
-                    .as_ref()
-                    .map_or(1.0, |resources| resources.device_pixel_ratio),
-                style,
+                    .as_deref(),
+                (!style.color_scheme_flags_is_normal)
+                    .then_some(u8::from(style.used_dark_color_scheme)),
             )
         });
         if let Some(shader) = layer.shader.as_ref() {

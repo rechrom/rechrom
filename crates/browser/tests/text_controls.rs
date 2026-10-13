@@ -1,7 +1,6 @@
 #[path = "../src/native_test_thread.rs"]
 mod native_test_thread;
 use browser::page::Page;
-use document_image::SVGImageDecoder;
 use image_decoder::skia_image_decoder::SkiaImageDecoder;
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
 use std::{cell::RefCell, io, rc::Rc};
@@ -48,7 +47,7 @@ fn editing_fixture() -> Page {
     let mut page = Page::Create(
         Rc::new(RefCell::new(FixtureLoader)),
         Rc::new(RefCell::new(SkiaImageDecoder)),
-        Rc::new(RefCell::new(SVGImageDecoder::new(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(

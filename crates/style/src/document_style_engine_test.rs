@@ -857,6 +857,58 @@ fn internal_multi_select_focus_uses_non_contiguous_interaction_owner() {
 }
 
 #[test]
+fn internal_spatial_navigation_focus_is_disabled_for_ordinary_selects() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><select id=menu><option id=menu-option>one</option></select>\
+         <select id=list size=4><option id=list-option>two</option></select>\
+         <select id=multiple multiple><optgroup label=group>\
+         <option id=multiple-option>three</option></optgroup></select>\
+         <option id=unowned>four</option>",
+    );
+    let ua =
+        crate::ParseUserAgentCSS("option:-internal-spatial-navigation-focus { opacity:.41 }");
+    let mut engine = StyleEngine::new(&owner);
+    for focus in [None, Some("menu"), Some("list"), Some("multiple")] {
+        let focused_node_id = focus.map(|id| owner.GetDocument().Node(node(&owner, id)).Id());
+        engine
+            .SetUserInteractionState(
+                &mut owner,
+                dom::UserInteractionState {
+                    focused_node_id,
+                    focus_visible_node_id: focused_node_id,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
+        for id in ["menu-option", "list-option", "multiple-option", "unowned"] {
+            assert_eq!(
+                unsafe { (&*native_pointer(&owner, node(&owner, id))).Opacity() },
+                1.0,
+                "{id}, focus={focus:?}"
+            );
+        }
+        let stats = engine.TranslatedRuleShadowStats();
+        assert_eq!(stats.skipped_unsupported_selector, 0, "{stats:?}");
+        assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+    }
+}
+
+#[test]
+fn spatial_navigation_policy_rejects_unimplemented_enabled_mode() {
+    use crate::persistent_selector::{PersistentSelectorError, SpatialNavigationPolicy};
+    assert_eq!(
+        SpatialNavigationPolicy::try_from(false).unwrap(),
+        SpatialNavigationPolicy::Disabled
+    );
+    assert!(matches!(
+        SpatialNavigationPolicy::try_from(true),
+        Err(PersistentSelectorError::Unsupported(_))
+    ));
+}
+
+#[test]
 fn hover_and_active_follow_flat_tree_chain_label_and_top_layer_boundary() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
@@ -1605,8 +1657,10 @@ fn mixed_sheet_keeps_ordinary_collector_output_as_final_cascade_input() {
         stats.skipped_scope, 0,
         "explicit @scope is owned by the translated collector: {stats:?}"
     );
-    assert_eq!(stats.translated_style_cascade_attempts, 1, "{stats:?}");
-    assert_eq!(stats.translated_style_cascade_applied, 1, "{stats:?}");
+    // The @scope wrapper's retained nested declarations now enter routing
+    // alongside the ordinary rule rather than being silently omitted.
+    assert_eq!(stats.translated_style_cascade_attempts, 2, "{stats:?}");
+    assert_eq!(stats.translated_style_cascade_applied, 2, "{stats:?}");
     assert_eq!(stats.translated_style_cascade_fallbacks, 0, "{stats:?}");
     let native = unsafe {
         &*owner
@@ -4426,4 +4480,423 @@ fn translated_element_resolution_retains_dynamic_pseudo_markers() {
         style.before.as_ref().map(|pseudo| pseudo.text.as_str()),
         Some("marker")
     );
+}
+
+#[test]
+fn fetched_background_css_values_reach_native_fill_layer_cache() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><div id=pending></div><div id=loaded></div><div id=local></div><div id=data></div><div id=gradient></div><div id=relative></div>",
+    );
+    owner
+        .GetDocumentMut()
+        .AppendStyleSheet(crate::ParseCSSWithBase(
+            "#pending{background-image:url(https://example.test/pending.svg)}\
+         #loaded{background-image:url(https://example.test/loaded.png)}\
+         #local{background-image:url(#icon)}\
+         #data{background-image:url(\"data:image/svg+xml,%3Csvg/%3E\")}\
+         #gradient{background-image:linear-gradient(red,blue)}\
+         #relative{background-image:url(../image.svg)}",
+            "https://example.test/css/main.css",
+        ));
+    owner.GetDocumentMut().SetImageResource(
+        "https://example.test/loaded.png".into(),
+        dom::ImageResourceMetadata {
+            id: 104,
+            natural_width: 100.0,
+            natural_height: 100.0,
+            resolution_scale: 1.0,
+            orientation: Default::default(),
+        },
+    );
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
+    assert_eq!(
+        engine
+            .TranslatedRuleShadowStats()
+            .translated_style_resolver_fallbacks,
+        0
+    );
+    for (id, url) in [
+        ("pending", Some("https://example.test/pending.svg")),
+        ("loaded", Some("https://example.test/loaded.png")),
+        ("local", Some("#icon")),
+        ("data", Some("data:image/svg+xml,%3Csvg/%3E")),
+        ("gradient", None),
+        ("relative", Some("https://example.test/image.svg")),
+    ] {
+        let native = unsafe {
+            &*owner
+                .GetDocument()
+                .ResolvedStyleFor(node(&owner, id))
+                .unwrap()
+                .native_style
+                .Get()
+        };
+        let layers = native.BackgroundLayers();
+        let image = layers.GetImage();
+        assert!(!image.is_null(), "{id}");
+        let value = unsafe { &*image }.CssValue();
+        assert!(!value.is_null(), "{id}");
+        assert!(layers.AnyLayerHasImage(), "{id}");
+        assert_eq!(layers.AnyLayerHasUrlImage(), url.is_some(), "{id}");
+        if let Some(url) = url {
+            let value = unsafe { &*value }.AsImageValue().unwrap();
+            assert_eq!(value.CachedImage(), image);
+            assert_eq!(value.UrlData().unresolved_url.as_ref(), url);
+        } else {
+            assert!(unsafe { &*value }.IsImageGeneratorValue());
+        }
+    }
+}
+
+#[test]
+fn html_hidden_presentation_hint_uses_native_display_and_author_hint_origin() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><style>#override { display:block } #contents {display:contents}</style>\
+         <div id=empty hidden></div><span id=invalid hidden=false></span>\
+         <slot id=slot hidden></slot><div id=override hidden></div>\
+         <div id=contents hidden></div><div id=inline hidden style='display:flex'></div>\
+         <div id=direction hidden dir=rtl></div>",
+    );
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    for (name, expected) in [
+        ("empty", EDisplay::kNone),
+        ("invalid", EDisplay::kNone),
+        ("slot", EDisplay::kNone),
+        ("override", EDisplay::kBlock),
+        ("contents", EDisplay::kContents),
+        ("inline", EDisplay::kFlex),
+        ("direction", EDisplay::kNone),
+    ] {
+        let index = node(&owner, name);
+        let resolved = owner.GetDocument().ResolvedStyleFor(index).unwrap();
+        assert_eq!(
+            unsafe { &*resolved.native_style.Get() }.Display(),
+            expected,
+            "{name}"
+        );
+        assert_eq!(
+            resolved.display_contents,
+            expected == EDisplay::kContents,
+            "{name}"
+        );
+        assert_eq!(
+            resolved.generates_box,
+            !matches!(expected, EDisplay::kNone | EDisplay::kContents),
+            "{name}"
+        );
+    }
+    let rtl = node(&owner, "direction");
+    assert_eq!(
+        unsafe {
+            &*owner
+                .GetDocument()
+                .ResolvedStyleFor(rtl)
+                .unwrap()
+                .native_style
+                .Get()
+        }
+        .Direction(),
+        foundation::TextDirection::kRtl
+    );
+    assert_eq!(
+        engine
+            .TranslatedRuleShadowStats()
+            .translated_style_resolver_fallbacks,
+        0
+    );
+}
+
+#[test]
+fn html_hidden_until_found_uses_content_visibility_and_attribute_mutations_recompute() {
+    use foundation::EContentVisibility;
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><div id=target hidden=until-found></div>\
+         <div id=upper hidden=UNTIL-FOUND></div><div id=space hidden=' until-found'></div>\
+         <div id=override hidden=until-found style='content-visibility:visible'></div>",
+    );
+    let target = node(&owner, "target");
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    for name in ["target", "upper"] {
+        let resolved = owner
+            .GetDocument()
+            .ResolvedStyleFor(node(&owner, name))
+            .unwrap();
+        let native = unsafe { &*resolved.native_style.Get() };
+        assert_ne!(native.Display(), EDisplay::kNone, "{name}");
+        assert_eq!(
+            native.ContentVisibility(),
+            EContentVisibility::kHidden,
+            "{name}"
+        );
+    }
+    let spaced = owner
+        .GetDocument()
+        .ResolvedStyleFor(node(&owner, "space"))
+        .unwrap();
+    assert_eq!(
+        unsafe { &*spaced.native_style.Get() }.Display(),
+        EDisplay::kNone
+    );
+    let over = owner
+        .GetDocument()
+        .ResolvedStyleFor(node(&owner, "override"))
+        .unwrap();
+    assert_eq!(
+        unsafe { &*over.native_style.Get() }.ContentVisibility(),
+        EContentVisibility::kVisible
+    );
+    for value in ["", "until-found", "false", "UNTIL-FOUND"] {
+        set_attribute(&mut owner, target, "hidden", value);
+        engine.Update(&mut owner, &media(), &[]).unwrap();
+        let native = unsafe {
+            &*owner
+                .GetDocument()
+                .ResolvedStyleFor(target)
+                .unwrap()
+                .native_style
+                .Get()
+        };
+        let until_found = value.eq_ignore_ascii_case("until-found");
+        assert_eq!(native.Display() == EDisplay::kNone, !until_found, "{value}");
+        assert_eq!(
+            native.ContentVisibility(),
+            if until_found {
+                EContentVisibility::kHidden
+            } else {
+                EContentVisibility::kVisible
+            },
+            "{value}"
+        );
+    }
+    owner.GetDocumentMut().RemoveAttribute(target, "hidden", "");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let native = unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(target)
+            .unwrap()
+            .native_style
+            .Get()
+    };
+    assert_ne!(native.Display(), EDisplay::kNone);
+    assert_eq!(native.ContentVisibility(), EContentVisibility::kVisible);
+    assert_eq!(
+        engine
+            .TranslatedRuleShadowStats()
+            .translated_style_resolver_fallbacks,
+        0
+    );
+}
+
+#[test]
+fn html_hidden_hint_does_not_apply_to_foreign_elements_or_namespaced_attributes() {
+    use dom::persistent_document::{DOMAttribute, DOMNamespace};
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML("<!doctype html><div id=host></div>");
+    let host = node(&owner, "host");
+    let mut cases = Vec::new();
+    for namespace in [
+        DOMNamespace::kSVG,
+        DOMNamespace::kMathML,
+        DOMNamespace::kNone,
+        DOMNamespace::kHTML,
+    ] {
+        let name = match namespace {
+            DOMNamespace::kSVG => "svg",
+            DOMNamespace::kMathML => "math",
+            _ => "div",
+        };
+        let index = owner
+            .GetDocumentMut()
+            .CreateElementDefault(namespace, name.into());
+        owner.GetDocumentMut().SetAttribute(
+            index,
+            DOMAttribute {
+                namespace_uri: if namespace == DOMNamespace::kHTML {
+                    "urn:test".into()
+                } else {
+                    String::new()
+                },
+                local_name: "hidden".into(),
+                value: String::new(),
+                ..Default::default()
+            },
+        );
+        owner.GetDocumentMut().AppendChild(host, index);
+        cases.push(index);
+    }
+    let mut engine = StyleEngine::new(&owner);
+    // Match the production embedding's admitted namespace RuleSet inputs.
+    let sheets = [
+        crate::ParseUserAgentCSSWithRole("", cssom::CSSUserAgentStyleSheetRole::kSVG),
+        crate::ParseUserAgentCSSWithRole("", cssom::CSSUserAgentStyleSheetRole::kMathML),
+    ];
+    engine.Update(&mut owner, &media(), &sheets).unwrap();
+    for index in &cases {
+        let native = unsafe {
+            &*owner
+                .GetDocument()
+                .ResolvedStyleFor(*index)
+                .unwrap()
+                .native_style
+                .Get()
+        };
+        assert_ne!(
+            native.Display(),
+            EDisplay::kNone,
+            "namespace {:?}",
+            owner.GetDocument().Node(*index).Namespace()
+        );
+        assert_eq!(
+            native.ContentVisibility(),
+            foundation::EContentVisibility::kVisible
+        );
+    }
+    assert_eq!(
+        engine
+            .TranslatedRuleShadowStats()
+            .translated_style_resolver_fallbacks,
+        0
+    );
+    // An earlier namespaced twin cannot mask the real unqualified attribute.
+    let html = *cases.last().unwrap();
+    set_attribute(&mut owner, html, "hidden", "until-found");
+    engine.Update(&mut owner, &media(), &sheets).unwrap();
+    let native = unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(html)
+            .unwrap()
+            .native_style
+            .Get()
+    };
+    assert_ne!(native.Display(), EDisplay::kNone);
+    assert_eq!(
+        native.ContentVisibility(),
+        foundation::EContentVisibility::kHidden
+    );
+    set_attribute(&mut owner, html, "hidden", "");
+    engine.Update(&mut owner, &media(), &sheets).unwrap();
+    let native = unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(html)
+            .unwrap()
+            .native_style
+            .Get()
+    };
+    assert_eq!(native.Display(), EDisplay::kNone);
+    assert_eq!(
+        engine
+            .TranslatedRuleShadowStats()
+            .translated_style_resolver_fallbacks,
+        0
+    );
+}
+
+#[test]
+fn production_fit_content_tracks_preserve_typed_limits_and_inheritance() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML("<!doctype html><div id=parent style='font-size:10px;grid-template-columns:fit-content(2em) fit-content(25%);grid-template-rows:fit-content(calc(10px + 20%));grid-auto-columns:fit-content(32px)'><div id=target style='grid-template-columns:inherit;grid-template-rows:inherit;grid-auto-columns:inherit'></div></div>");
+    let target = node(&owner, "target");
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(
+        engine.Diagnostics().is_empty(),
+        "{:?}",
+        engine.Diagnostics()
+    );
+    let style = owner
+        .GetDocument()
+        .ResolvedStyleFor(target)
+        .unwrap()
+        .native_style
+        .clone();
+    let style = unsafe { &*style.Get() };
+    let columns = unsafe { &*style.SpecifiedGridTemplateColumns().Get() }.GetTrackList();
+    assert!(columns.RepeatTrackSize(0, 0).IsFitContent());
+    assert_eq!(
+        columns
+            .RepeatTrackSize(0, 0)
+            .FitContentTrackBreadth()
+            .Pixels(),
+        20.0
+    );
+    assert_eq!(
+        columns
+            .RepeatTrackSize(1, 0)
+            .FitContentTrackBreadth()
+            .PercentValue(),
+        25.0
+    );
+    let rows = unsafe { &*style.SpecifiedGridTemplateRows().Get() }.GetTrackList();
+    assert!(rows.RepeatTrackSize(0, 0).IsFitContent());
+    assert!(rows
+        .RepeatTrackSize(0, 0)
+        .FitContentTrackBreadth()
+        .IsCalculated());
+    assert!(style.GridAutoColumns().RepeatTrackSize(0, 0).IsFitContent());
+    assert_eq!(
+        style
+            .GridAutoColumns()
+            .RepeatTrackSize(0, 0)
+            .FitContentTrackBreadth()
+            .Pixels(),
+        32.0
+    );
+}
+
+#[test]
+fn production_fit_content_rejects_invalid_arguments_without_losing_prior_declaration() {
+    let _heap = foundation::LayoutHeapScope::new();
+    for argument in [
+        "",
+        "auto",
+        "min-content",
+        "max-content",
+        "1fr",
+        "-1px",
+        "-1%",
+        "12",
+        "1px,2px",
+        "1px 2px",
+        "fit-content(10px)",
+        "minmax(0,10px)",
+    ] {
+        let mut owner = html::html_parser::ParseHTML("<!doctype html><div id=target></div>");
+        owner
+            .GetDocumentMut()
+            .AppendStyleSheet(crate::ParseCSS(&format!(
+            "#target{{grid-template-columns:17px;grid-template-columns:fit-content({argument})}}"
+        )));
+        let target = node(&owner, "target");
+        let mut engine = StyleEngine::new(&owner);
+        engine.Update(&mut owner, &media(), &[]).unwrap();
+        let style = owner
+            .GetDocument()
+            .ResolvedStyleFor(target)
+            .unwrap()
+            .native_style
+            .clone();
+        let style = unsafe { &*style.Get() };
+        assert!(
+            !style.SpecifiedGridTemplateColumns().Get().is_null(),
+            "{argument}"
+        );
+        let columns = unsafe { &*style.SpecifiedGridTemplateColumns().Get() }.GetTrackList();
+        let track = columns.RepeatTrackSize(0, 0);
+        assert!(!track.IsFitContent(), "{argument}");
+        assert_eq!(track.MaxTrackBreadth().Pixels(), 17.0, "{argument}");
+    }
 }

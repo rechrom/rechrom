@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+browser_tracing = { path = "../tracing" }
 cssom = { path = "../cssom" }
 document_loader = { path = "../document_loader" }
 dom = { path = "../dom" }

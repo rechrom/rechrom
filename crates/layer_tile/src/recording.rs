@@ -126,7 +126,10 @@ fn validate_mask(item: &DisplayItem) -> Result<(), ReplayUnsupported> {
             layer.clip_radii.bottom_right,
             layer.clip_radii.bottom_left,
         ];
-        let valid = source_count == 1
+        // Zero sources is a canonical non-renderable mask slot (none or a
+        // pending/failed image), retained for native bottom-layer semantics.
+        // Ready image identities were validated by PrePaint before publication.
+        let valid = source_count <= 1
             && finite_rect(layer.clip_rect)
             && finite_rect(layer.source_rect)
             && finite_rect(layer.tile_rect)

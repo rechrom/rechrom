@@ -3,13 +3,14 @@ use crate::svg_path_parser::ParseSVGPathDefault;
 use crate::{Child, Element, ParsedDocument as Document, UserInteractionState};
 use font_engine::text::native::character_break_iterator::LengthOfGraphemeCluster;
 use font_engine::text::native::unicode_category::Category;
-use foundation::{unicode, StringView};
+use foundation::{StringView, unicode};
 use layoutng_assembly::internal::form_control_types::FormControlType;
 use layoutng_assembly::internal::layout_input::{
     ComputedStyle, Display, DocumentRole, ElementData, ExtendedStyle, FrameDimension,
     FrameDimensionType, ListMarkerImage, ListStyleType, MathTokenKind, NodeKind, Offset,
     PaintPathCommand, PaintPathVerb, SvgLengthAdjust, SvgShapeData, SvgShapeGeometry,
-    SvgTextPathData, SvgViewBoxData, TextAreaSizing, TextFieldSizing, WhiteSpace,
+    SvgTextPathData, SvgViewBoxData, SvgViewportData, SvgViewportLength, TextAreaSizing,
+    TextFieldSizing, WhiteSpace,
 };
 use layoutng_assembly::internal::layout_object::LayoutObject;
 use layoutng_assembly::layout_engine::LayoutTreeUpdate;
@@ -110,6 +111,128 @@ pub(super) fn svg_number_list(element: &impl LayoutNodeView, name: &str) -> Vec<
         cursor += consumed;
     }
     values
+}
+
+// cpp: SVGElement::IsOutermostSVGSVGElement, core/svg/svg_element.cc:116-139
+// (Chromium 6c1d401fcca5e1b0030563a90c2f2bba168e0c15). This is a direct-parent
+// test: an intervening SVG group is still inside the SVG coordinate system,
+// whereas foreignObject and non-SVG parents establish an HTML/SVG boundary.
+pub(super) fn svg_has_outermost_parent(parent: Option<(DOMNamespace, &str)>) -> bool {
+    parent
+        .is_none_or(|(namespace, name)| namespace != DOMNamespace::kSVG || name == "foreignObject")
+}
+
+// cpp: SVGTextPathElement::LayoutObjectIsNeeded, LayoutTreeBuilder::CreateLayoutObject,
+// and LayoutSVGInline::IsChildAllowed at the pinned Chromium revision.
+// Resolve DOM eligibility before requesting construction. Anchor inline objects
+// delegate this child's admission to their actual layout parent; tspan/textPath
+// and non-text containers reject it. Geometry availability is not eligibility.
+pub(super) fn svg_text_path_layout_needed(
+    parent_namespace: DOMNamespace,
+    parent_name: &str,
+    parent: &LayoutObject,
+) -> bool {
+    if parent_namespace != DOMNamespace::kSVG || !matches!(parent_name, "text" | "a") {
+        return false;
+    }
+    let mut current = parent;
+    loop {
+        if current.IsSVGText() {
+            return true;
+        }
+        if current.RuntimeClass()
+            != layoutng_assembly::internal::layout_object::LayoutObjectClass::SvgInline
+        {
+            return false;
+        }
+        let Some(ancestor) = (unsafe { current.Parent().as_ref() }) else {
+            return false;
+        };
+        current = ancestor;
+    }
+}
+
+// cpp: SVGLength::SetValueAsString and SVGViewportContainerElement's initial
+// lengths at the same Chromium revision. Do not use strtod's permissive
+// numeric prefix here: it accepts non-CSS values such as hexadecimal numbers,
+// and stripping an unknown unit would change the authored viewport geometry.
+// This adapter deliberately supports only numeric user units, percentages,
+// and CSS absolute lengths. Other syntax remains explicitly unsupported.
+fn svg_viewport_length(value: &str) -> SvgViewportLength {
+    let value = value.trim_matches(|c: char| c.is_ascii_whitespace());
+    let bytes = value.as_bytes();
+    let mut cursor = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let integer_start = cursor;
+    while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+        cursor += 1;
+    }
+    let mut has_digits = cursor > integer_start;
+    if bytes.get(cursor) == Some(&b'.') && bytes.get(cursor + 1).is_some_and(u8::is_ascii_digit) {
+        cursor += 1;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+            cursor += 1;
+        }
+        has_digits = true;
+    }
+    if !has_digits {
+        return SvgViewportLength::kUnsupported;
+    }
+    if matches!(bytes.get(cursor), Some(b'e' | b'E')) {
+        let exponent_start = cursor;
+        cursor += 1;
+        if matches!(bytes.get(cursor), Some(b'+' | b'-')) {
+            cursor += 1;
+        }
+        let digits_start = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+            cursor += 1;
+        }
+        if cursor == digits_start {
+            cursor = exponent_start;
+        }
+    }
+    let Ok(number) = value[..cursor].parse::<f64>() else {
+        return SvgViewportLength::kUnsupported;
+    };
+    if !number.is_finite() {
+        return SvgViewportLength::kUnsupported;
+    }
+    let unit = value[cursor..].to_ascii_lowercase();
+    if unit == "%" {
+        return SvgViewportLength::kPercentage(number);
+    }
+    let scale = match unit.as_str() {
+        "" | "px" => 1.0,
+        "in" => 96.0,
+        "cm" => 96.0 / 2.54,
+        "mm" => 96.0 / 25.4,
+        "q" => 96.0 / 101.6,
+        "pt" => 96.0 / 72.0,
+        "pc" => 16.0,
+        _ => return SvgViewportLength::kUnsupported,
+    };
+    let resolved = number * scale;
+    if resolved.is_finite() {
+        SvgViewportLength::kUserUnits(resolved)
+    } else {
+        SvgViewportLength::kUnsupported
+    }
+}
+
+pub(super) fn element_metadata_svg_viewport(node: &impl LayoutNodeView, data: &mut ElementData) {
+    let initial = SvgViewportData::default();
+    let length = |name, fallback| attribute(node, name).map_or(fallback, svg_viewport_length);
+    data.svg_viewport = Some(SvgViewportData {
+        x: length("x", initial.x),
+        y: length("y", initial.y),
+        width: length("width", initial.width),
+        height: length("height", initial.height),
+    });
+    // An inner SVG is a viewport container, not a replaced element with
+    // intrinsic sizing. Its viewBox is retained independently below.
+    data.natural_width = None;
+    data.natural_height = None;
+    data.natural_aspect_ratio = None;
 }
 
 // cpp: dom_to_layout/layout_object_tree_builder.cc:780-806
@@ -515,19 +638,11 @@ pub(super) fn is_single_line_text_control(control_type: FormControlType) -> bool
 }
 
 fn cpp_min(a: f64, b: f64) -> f64 {
-    if b < a {
-        b
-    } else {
-        a
-    }
+    if b < a { b } else { a }
 }
 
 pub(super) fn cpp_max(a: f64, b: f64) -> f64 {
-    if a < b {
-        b
-    } else {
-        a
-    }
+    if a < b { b } else { a }
 }
 
 // The namespace branch is selected by DOMNode::Namespace in C++. The
@@ -593,7 +708,9 @@ pub(super) fn element_metadata_svg(
         data.natural_width = intrinsic_length("width");
         data.natural_height = intrinsic_length("height");
         let view_box = svg_number_list(node, "viewBox");
-        if view_box.len() == 4 && view_box[2] > 0.0 && view_box[3] > 0.0 {
+        // SVGFitToViewBox::HasValidViewBox retains zero dimensions. An empty
+        // valid viewBox disables painting; it is not equivalent to absence.
+        if view_box.len() == 4 && view_box[2] >= 0.0 && view_box[3] >= 0.0 {
             let mut resolved = SvgViewBoxData {
                 x: view_box[0],
                 y: view_box[1],
@@ -632,7 +749,9 @@ pub(super) fn element_metadata_svg(
                 }
             }
             data.svg_view_box = Some(resolved);
-            data.natural_aspect_ratio = Some(view_box[2] / view_box[3]);
+            if view_box[2] > 0.0 && view_box[3] > 0.0 {
+                data.natural_aspect_ratio = Some(view_box[2] / view_box[3]);
+            }
         }
         if let (Some(width), Some(height)) = (data.natural_width, data.natural_height) {
             if width > 0.0 && height > 0.0 {
@@ -780,6 +899,14 @@ fn element_metadata(
         DOMNamespace::kSVG => {
             let mut data = ElementData::default();
             element_metadata_svg(node, resolve_svg_text_path(document, node), &mut data);
+            if node.tag == "svg"
+                && !svg_has_outermost_parent(node.parent.map(|parent| {
+                    let parent = &document.elements[parent];
+                    (parent.namespace, parent.tag.as_str())
+                }))
+            {
+                element_metadata_svg_viewport(node, &mut data);
+            }
             data
         }
         DOMNamespace::kMathML => {
@@ -802,10 +929,22 @@ fn element_kind(
     let node = &document.elements[index];
     match node.namespace {
         DOMNamespace::kSVG => match node.tag.as_str() {
-            "svg" => NodeKind::kSvgRoot,
+            "svg" => {
+                if svg_has_outermost_parent(node.parent.map(|parent| {
+                    let parent = &document.elements[parent];
+                    (parent.namespace, parent.tag.as_str())
+                })) {
+                    NodeKind::kSvgRoot
+                } else {
+                    NodeKind::kSvgViewportContainer
+                }
+            }
             "foreignObject" => NodeKind::kSvgForeignObject,
             "text" => NodeKind::kSvgText,
-            "textPath" if element.svg_text_path.is_some() => NodeKind::kSvgTextPath,
+            // SVGTextPathElement::CreateLayoutObject preserves element identity
+            // independently of href resolution. LayoutSVGTextPath::LayoutPath
+            // represents an unresolved or empty resource with None.
+            "textPath" => NodeKind::kSvgTextPath,
             "tspan" => NodeKind::kSvgTSpan,
             "a" if node.parent.is_some_and(|parent| {
                 let ancestor = &document.elements[parent];
@@ -1049,12 +1188,12 @@ pub(super) fn element_kind_html(
         "br" => return NodeKind::kLineBreak,
         "wbr" => return NodeKind::kWordBreak,
         "img" | "canvas" | "video" | "audio" | "iframe" | "embed" | "object" => {
-            return NodeKind::kReplaced
+            return NodeKind::kReplaced;
         }
         "fieldset" => return NodeKind::kFieldset,
         "legend" => return NodeKind::kLegend,
         "input" if element.form_control_type == Some(FormControlType::kInputImage) => {
-            return NodeKind::kReplaced
+            return NodeKind::kReplaced;
         }
         "input" | "button" | "select" | "textarea" => return NodeKind::kFormControl,
         "frameset" => return NodeKind::kFrameSet,
@@ -1477,6 +1616,16 @@ fn append_children(
     for child in &document.elements[parent_index].children {
         match *child {
             Child::Element(index) => {
+                let node = &document.elements[index];
+                let dom_parent = &document.elements[parent_index];
+                if node.namespace == DOMNamespace::kSVG
+                    && node.tag == "textPath"
+                    && !svg_text_path_layout_needed(
+                        dom_parent.namespace, &dom_parent.tag, unsafe { &*parent },
+                    )
+                {
+                    continue;
+                }
                 if document.elements[index].namespace == DOMNamespace::kSVG
                     && matches!(
                         document.elements[index].tag.as_str(),
@@ -1733,6 +1882,140 @@ mod svg_text_path_tests {
                 .collect(),
             parent: None,
             children,
+        }
+    }
+
+    #[test]
+    fn svg_viewport_lengths_preserve_units_and_reject_numeric_prefixes() {
+        use SvgViewportLength::{kPercentage, kUnsupported, kUserUnits};
+        for (input, expected) in [
+            ("0", kUserUnits(0.0)),
+            ("-12.5", kUserUnits(-12.5)),
+            (" +.5e2PX ", kUserUnits(50.0)),
+            ("-25%", kPercentage(-25.0)),
+            ("1in", kUserUnits(96.0)),
+            ("2.54cm", kUserUnits(96.0)),
+            ("25.4mm", kUserUnits(96.0)),
+            ("101.6Q", kUserUnits(96.0)),
+            ("72pt", kUserUnits(96.0)),
+            ("6pc", kUserUnits(96.0)),
+            ("1em", kUnsupported),
+            ("1ex", kUnsupported),
+            ("1vw", kUnsupported),
+            ("calc(50% - 1px)", kUnsupported),
+            ("12nonsense", kUnsupported),
+            ("12 px", kUnsupported),
+            ("12% trailing", kUnsupported),
+            ("0x10", kUnsupported),
+            ("NaN", kUnsupported),
+            ("inf", kUnsupported),
+            ("1e999", kUnsupported),
+            ("", kUnsupported),
+        ] {
+            assert_eq!(svg_viewport_length(input), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn svg_identity_uses_the_direct_parent_and_nested_geometry_is_not_intrinsic() {
+        let style = ComputedStyle::default();
+        let interaction = UserInteractionState::default();
+        for (parent_namespace, parent_name, expected_kind) in [
+            (DOMNamespace::kSVG, "svg", NodeKind::kSvgViewportContainer),
+            (DOMNamespace::kSVG, "g", NodeKind::kSvgViewportContainer),
+            (DOMNamespace::kSVG, "foreignObject", NodeKind::kSvgRoot),
+            (DOMNamespace::kHTML, "div", NodeKind::kSvgRoot),
+            (DOMNamespace::kHTML, "svg", NodeKind::kSvgRoot),
+        ] {
+            let mut parent = svg_element(parent_name, vec![], vec![Child::Element(1)]);
+            parent.namespace = parent_namespace;
+            let mut child = svg_element(
+                "svg",
+                vec![
+                    ("x", "10%"),
+                    ("y", "-3px"),
+                    ("width", "50"),
+                    ("height", "20"),
+                    ("viewBox", "0 0 100 100"),
+                ],
+                vec![],
+            );
+            child.parent = Some(0);
+            let document = Document {
+                elements: vec![parent, child],
+                ..Default::default()
+            };
+            let data = element_metadata(&document, 1, &interaction, &style);
+            assert_eq!(element_kind(&document, 1, &data, &style), expected_kind);
+            assert_eq!(data.svg_view_box.unwrap().width, 100.0);
+            if expected_kind == NodeKind::kSvgViewportContainer {
+                assert_eq!(data.natural_width, None);
+                assert_eq!(data.natural_height, None);
+                assert_eq!(data.natural_aspect_ratio, None);
+                assert_eq!(
+                    data.svg_viewport,
+                    Some(SvgViewportData {
+                        x: SvgViewportLength::kPercentage(10.0),
+                        y: SvgViewportLength::kUserUnits(-3.0),
+                        width: SvgViewportLength::kUserUnits(50.0),
+                        height: SvgViewportLength::kUserUnits(20.0),
+                    })
+                );
+                let mut changed = data.clone();
+                changed.svg_viewport.as_mut().unwrap().width = SvgViewportLength::kPercentage(50.0);
+                assert!(
+                    data != changed,
+                    "viewport attributes participate in invalidation"
+                );
+            } else {
+                assert_eq!(data.natural_width, Some(50.0));
+                assert_eq!(data.natural_height, Some(20.0));
+                assert_eq!(data.svg_viewport, None);
+            }
+        }
+        let detached = Document {
+            elements: vec![svg_element("svg", vec![], vec![])],
+            ..Default::default()
+        };
+        let data = element_metadata(&detached, 0, &interaction, &style);
+        assert_eq!(
+            element_kind(&detached, 0, &data, &style),
+            NodeKind::kSvgRoot
+        );
+        assert_eq!(data.svg_viewport, None);
+    }
+
+    #[test]
+    fn svg_viewport_defaults_and_valid_empty_viewboxes_are_preserved() {
+        let node = svg_element("svg", vec![], vec![]);
+        let mut data = ElementData::default();
+        element_metadata_svg_viewport(&node, &mut data);
+        assert_eq!(data.svg_viewport, Some(SvgViewportData::default()));
+        for view_box in ["0 0 0 100", "0 0 100 0", "0 0 0 0"] {
+            let node = svg_element(
+                "svg",
+                vec![
+                    ("viewBox", view_box),
+                    ("preserveAspectRatio", "xMaxYMin slice"),
+                ],
+                vec![],
+            );
+            let mut data = ElementData::default();
+            element_metadata_svg(&node, None, &mut data);
+            let view = data
+                .svg_view_box
+                .expect("a zero dimension remains a valid viewBox");
+            assert!(view.width == 0.0 || view.height == 0.0);
+            assert_eq!(view.align_x, 1);
+            assert_eq!(view.align_y, -1);
+            assert!(view.slice);
+            assert_eq!(data.natural_aspect_ratio, None);
+        }
+        for view_box in ["0 0 -1 100", "0 0 100 -1", "0 0 NaN 100", "0 0 100"] {
+            let node = svg_element("svg", vec![("viewBox", view_box)], vec![]);
+            let mut data = ElementData::default();
+            element_metadata_svg(&node, None, &mut data);
+            assert!(data.svg_view_box.is_none(), "{view_box}");
         }
     }
 

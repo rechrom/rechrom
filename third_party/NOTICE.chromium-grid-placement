@@ -1,0 +1,25 @@
+Chromium/Blink CSS grid placement shorthand source notices
+Revision: 6c1d401fcca5e1b0030563a90c2f2bba168e0c15
+
+This bounded translation completes omitted custom-ident inference in the
+existing shared production grid-area/grid-row/grid-column shorthand consumer.
+
+See LICENSE.chromium. Original source-specific copyright/license notices are
+preserved below. This notice does not relicense the rest of Rechrom or assert
+completion of every possible redistribution requirement.
+
+third_party/blink/renderer/core/css/properties/shorthands/shorthands_custom.cc
+https://github.com/chromium/chromium/blob/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/third_party/blink/renderer/core/css/properties/shorthands/shorthands_custom.cc
+Relevant source: GridArea::ParseShorthand, lines3613-3683
+Git blob SHA-1: 67ee01e4493eead38aed4c025e934aed5cd90ab5
+// Copyright 2019 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+third_party/blink/renderer/core/css/properties/css_parsing_utils.cc
+https://github.com/chromium/chromium/blob/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/third_party/blink/renderer/core/css/properties/css_parsing_utils.cc
+Relevant source: ConsumeGridItemPositionShorthand, lines7578-7606
+Git blob SHA-1: b8b523f44f276dc90f5336fff167a1454a8f8b84
+// Copyright 2017 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.

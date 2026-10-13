@@ -71,7 +71,7 @@ fn page() -> (Page, Events, Responses) {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(document_image::SVGImageDecoder::new(
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(
             &assembly,
         ))),
         browser::CreateBrowserConstraints(320, 200),

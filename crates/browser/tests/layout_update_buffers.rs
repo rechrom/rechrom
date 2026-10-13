@@ -124,6 +124,7 @@ fn complete_tree_updates_survive_reorder_removal_and_failed_build() {
 #[test]
 fn complete_dom_projection_matches_fresh_after_input_changes() {
     native_test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
         use dom::persistent_document::{DOMAttribute, DOMNamespace};
         let mut owner = html::html_parser::ParseHTML(
             "<html><head><style>p::before{content:'prefix';color:red} \
@@ -177,7 +178,9 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
                     id,
                     width,
                     height,
-                    rgba8: color.repeat((width * height) as usize).into(),
+                    content: image_resource::PaintImageContent::Bitmap(
+                        color.repeat((width * height) as usize).into(),
+                    ),
                     ..Default::default()
                 });
         }

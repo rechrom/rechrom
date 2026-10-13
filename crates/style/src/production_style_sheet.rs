@@ -287,6 +287,7 @@ pub struct SourceRange {
     pub body_end: u32,
     pub rule_type: RuleType,
     pub declaration_end: u32,
+    pub font_feature_type: Option<crate::style_rule_font_feature_values::FontFeatureType>,
 }
 struct SourceFrame {
     range: SourceRange,
@@ -315,6 +316,13 @@ impl CSSParserImplObserver for SourceObserver {
                 CSSAtRuleID::kCSSAtRuleMedia
                     | CSSAtRuleID::kCSSAtRuleLayer
                     | CSSAtRuleID::kCSSAtRuleFontFace
+                    | CSSAtRuleID::kCSSAtRuleFontFeatureValues
+                    | CSSAtRuleID::kCSSAtRuleStylistic
+                    | CSSAtRuleID::kCSSAtRuleStyleset
+                    | CSSAtRuleID::kCSSAtRuleCharacterVariant
+                    | CSSAtRuleID::kCSSAtRuleSwash
+                    | CSSAtRuleID::kCSSAtRuleOrnaments
+                    | CSSAtRuleID::kCSSAtRuleAnnotation
                     | CSSAtRuleID::kCSSAtRuleKeyframes
                     | CSSAtRuleID::kCSSAtRuleWebkitKeyframes
                     | CSSAtRuleID::kCSSAtRuleContainer
@@ -349,6 +357,7 @@ impl CSSParserImplRuleObserver for SourceObserver {
                 body_end: offset,
                 rule_type,
                 declaration_end: offset,
+                font_feature_type: None,
             },
             body: false,
             properties: Vec::new(),
@@ -437,6 +446,7 @@ impl CSSParserImplRuleObserver for SourceObserver {
             body_end: end,
             declaration_end: end,
             rule_type: RuleType::kNestedDeclarations,
+            font_feature_type: None,
         };
         frame
             .children
@@ -467,9 +477,12 @@ impl CSSParserImplRuleObserver for SourceObserver {
     }
     fn ObserveFontFeatureType(
         &mut self,
-        _: crate::style_rule_font_feature_values::FontFeatureType,
+        feature: crate::style_rule_font_feature_values::FontFeatureType,
     ) {
-        unavailable("font feature source observer")
+        if let Some(frame) = self.stack.last_mut() {
+            debug_assert_eq!(frame.range.rule_type, RuleType::kFontFeature);
+            frame.range.font_feature_type = Some(feature);
+        }
     }
 }
 impl RuleSetStyleScope for Unavailable {
@@ -685,8 +698,8 @@ impl ProductionStyleSheet {
 
     /// Maps translated RuleSet ownership back to the CSSOM projection without
     /// serializing or reparsing selector text. Ordinary StyleRule ingestion
-    /// retains this exact `Rc`; synthesized nested-declaration and mixin rules
-    /// deliberately return `None` and stay on the compatibility collector.
+    /// retains this exact `Rc`, including the inner StyleRule owned by nested
+    /// declarations. Mixin clones are routed separately through their bindings.
     pub(crate) fn ProjectedRuleIndexForRetainedStyleRule(
         &self,
         retained: &Rc<StyleRule<Backend>>,
@@ -720,7 +733,9 @@ impl ProductionStyleSheet {
                 let properties = rule.Properties();
                 let identity = match rule {
                     ProductionProjectionRule::Style(rule) => Some(Rc::as_ptr(&rule.rule) as usize),
-                    ProductionProjectionRule::NestedDeclarations(_) => None,
+                    ProductionProjectionRule::NestedDeclarations(rule) => {
+                        Some(Rc::as_ptr(rule.rule.InnerStyleRule()) as usize)
+                    }
                 };
                 (
                     identity,
@@ -1421,6 +1436,11 @@ fn Flatten(
                 }
             }
         }
+        StyleRuleBase::FontFeatureValues(_) | StyleRuleBase::FontFeature(_) => {
+            // The native parser-owned rules are ingested by RuleSet and the
+            // document font-feature registry. They have no independent flat
+            // style-rule projection; do not classify retained rules as missing.
+        }
         StyleRuleBase::ApplyMixin(_)
         | StyleRuleBase::Contents(_)
         | StyleRuleBase::Result(_)
@@ -1492,6 +1512,15 @@ impl CSSParserImplBackend for Backend {
             }
             CSSAtRuleID::kCSSAtRuleNamespace => parser.ConsumeNamespaceRule(stream),
             CSSAtRuleID::kCSSAtRuleFontFace => parser.ConsumeFontFaceRule(stream),
+            CSSAtRuleID::kCSSAtRuleFontFeatureValues => parser.ConsumeFontFeatureValuesRule(stream),
+            CSSAtRuleID::kCSSAtRuleStylistic
+            | CSSAtRuleID::kCSSAtRuleStyleset
+            | CSSAtRuleID::kCSSAtRuleCharacterVariant
+            | CSSAtRuleID::kCSSAtRuleSwash
+            | CSSAtRuleID::kCSSAtRuleOrnaments
+            | CSSAtRuleID::kCSSAtRuleAnnotation => parser
+                .ConsumeFontFeatureRule(id, stream)
+                .map(|rule| Rc::new(StyleRuleBase::FontFeature(Rc::new(rule)))),
             CSSAtRuleID::kCSSAtRuleKeyframes => parser.ConsumeKeyframesRule(false, stream),
             CSSAtRuleID::kCSSAtRuleWebkitKeyframes => parser.ConsumeKeyframesRule(true, stream),
             CSSAtRuleID::kCSSAtRuleFunction => parser.ConsumeFunctionRule(stream),
@@ -2575,23 +2604,41 @@ fn NewFunctionDeclarationsRule(properties: Rc<CSSPropertyValueSet<Self::ValueBac
         stream: &mut CSSParserTokenStream<'_, T>,
         context: &CSSParserContext<Self::Platform>,
     ) -> Option<Vec<Rc<crate::css_value::CSSValue<Self::ValueBackend>>>> {
-        unavailable("CSSParserImplRuleBackend::ConsumeFontFamily")
+        crate::parser::production_property_parser::ConsumeFontFamily(stream).ok()
     }
     fn FontFamilyValue(
         value: &<Self::ValueBackend as crate::css_value::CSSValueDispatch>::CSSFontFamilyValue,
     ) -> AtomicString {
-        unavailable("CSSParserImplRuleBackend::FontFamilyValue")
+        AtomicString::from_utf16(StringView::from(&value.0).Span16())
     }
     fn ConsumeNonNegativeIntegerOrNumberCalc<T: TokenStreamTokenizer>(
         stream: &mut CSSParserTokenStream<'_, T>,
         context: &CSSParserContext<Self::Platform>,
     ) -> Option<Rc<crate::css_value::CSSValue<Self::ValueBackend>>> {
-        unavailable("CSSParserImplRuleBackend::ConsumeNonNegativeIntegerOrNumberCalc")
+        let start = stream.LookAheadOffset();
+        match crate::parser::production_property_parser::ConsumeNonNegativeIntegerOrNumberCalc(
+            stream,
+        ) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                if error.kind == crate::parser::production_property_parser::PropertyParseErrorKind::Unsupported {
+                    ValueDiagnostic(DiagnosticKind::Unsupported, start, error.operation, error.source_line);
+                }
+                None
+            }
+        }
     }
     fn PrimitiveNumberValueIfKnown(
         value: &crate::css_value::CSSValue<Self::ValueBackend>,
     ) -> Option<f64> {
-        unavailable("CSSParserImplRuleBackend::PrimitiveNumberValueIfKnown")
+        match value.Payload() {
+            CSSValuePayload::kNumericLiteralClass(number) => number.GetValueIfKnown(),
+            CSSValuePayload::kMathFunctionClass(math) => math
+                .expression
+                .GetValueIfKnown()
+                .map(|number| math.ClampToPermittedRange(number)),
+            _ => None,
+        }
     }
     fn StartsCustomPropertyDeclaration<T: TokenStreamTokenizer>(
         stream: &mut CSSParserTokenStream<'_, T>,
@@ -3348,12 +3395,10 @@ impl RuleSetIngestionBackend for Backend {
     fn NestedDeclarationsInnerStyleRule(
         rule: &Self::StyleRuleNestedDeclarations,
     ) -> Rc<StyleRule<Self>> {
-        let inner = rule.InnerStyleRule();
-        Rc::new(StyleRule::Create(
-            inner.Selectors().clone(),
-            inner.Properties(),
-            inner.GetMixinParameterBindings().cloned(),
-        ))
+        // Chromium's StyleRuleNestedDeclarations::InnerStyleRule returns its
+        // retained member, not a copy. Routing, invalidation and RuleSet diff
+        // filters all compare this identity with the stylesheet's owner.
+        rule.InnerStyleRule().clone()
     }
     fn FunctionDeclarationValues(
         rule: &Self::StyleRuleFunctionDeclarations,
@@ -3590,6 +3635,312 @@ mod tests {
             CSSParserMode::kHTMLStandardMode,
         )
     }
+    fn feature_values_rule(
+        sheet: &ProductionStyleSheet,
+        index: usize,
+    ) -> Rc<crate::style_rule_font_feature_values::StyleRuleFontFeatureValues> {
+        let rule = sheet.contents.RuleAt(index);
+        let StyleRuleBase::FontFeatureValues(rule) = rule.as_ref() else {
+            panic!("expected parser-owned @font-feature-values")
+        };
+        rule.clone()
+    }
+
+    #[test]
+    fn font_feature_values_retain_all_types_families_and_duplicate_alias_order() {
+        let sheet = parse(
+            r#"@font-feature-values "Quoted, Face", Unquoted Face, Esc\61 ped, "serif" {
+                @stylistic { named: 1; }
+                @styleset { readable: 1 2 3; readable: 4 5; Readable: 6; retained: 7; }
+                @character-variant { single: 8; pair: 9 10; }
+                @swash { named: 11; }
+                @ornaments { named: 12; }
+                @annotation { named: 13; }
+                @styleset { readable: 14 15; }
+            } tail { width: 17px; }"#,
+        );
+        assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
+        assert_eq!(sheet.contents.RuleCount(), 2);
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sheet.rules[0].selector_source.Utf8(), "tail ");
+        let rule = feature_values_rule(&sheet, 0);
+        assert_eq!(
+            rule.GetFamilies()
+                .iter()
+                .map(AtomicString::Utf8)
+                .collect::<Vec<_>>(),
+            vec!["Quoted, Face", "Unquoted Face", "Escaped", "serif"],
+        );
+        let storage = rule.Storage();
+        let named = AtomicString::from_str("named");
+        assert_eq!(storage.ResolveStylistic(&named), vec![1]);
+        assert_eq!(
+            storage.ResolveStyleset(&AtomicString::from_str("readable")),
+            vec![14, 15]
+        );
+        assert_eq!(
+            storage.ResolveStyleset(&AtomicString::from_str("Readable")),
+            vec![6]
+        );
+        assert_eq!(
+            storage.ResolveStyleset(&AtomicString::from_str("retained")),
+            vec![7]
+        );
+        assert_eq!(
+            storage.ResolveCharacterVariant(&AtomicString::from_str("single")),
+            vec![8]
+        );
+        assert_eq!(
+            storage.ResolveCharacterVariant(&AtomicString::from_str("pair")),
+            vec![9, 10]
+        );
+        assert_eq!(storage.ResolveSwash(&named), vec![11]);
+        assert_eq!(storage.ResolveOrnaments(&named), vec![12]);
+        assert_eq!(storage.ResolveAnnotation(&named), vec![13]);
+        let set = sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::default());
+        assert_eq!(set.FontFeatureValuesRules().len(), 1);
+        assert!(Rc::ptr_eq(&set.FontFeatureValuesRules()[0].value, &rule));
+    }
+
+    #[test]
+    fn font_feature_values_reject_generic_and_invalid_family_preludes() {
+        for family in [
+            "serif",
+            "sans-serif",
+            "monospace",
+            "cursive",
+            "fantasy",
+            "system-ui",
+            "math",
+            "-webkit-body",
+            "inherit",
+            "initial",
+            "unset",
+            "revert",
+            "revert-layer",
+            "default",
+            "Named, serif",
+            "Named,",
+            "",
+            "12px",
+        ] {
+            let sheet = parse(&format!(
+                "@font-feature-values {family} {{ @styleset {{ readable: 2; }} }} tail {{width:1px}}"
+            ));
+            assert_eq!(sheet.contents.RuleCount(), 1, "{family}");
+            assert_eq!(sheet.rules.len(), 1, "{family}");
+            assert!(!sheet.diagnostics.is_empty(), "{family}");
+            assert!(
+                sheet
+                    .diagnostics
+                    .iter()
+                    .all(|d| d.kind == DiagnosticKind::Invalid),
+                "{family}: {:?}",
+                sheet.diagnostics
+            );
+        }
+        // CSS-wide words are permitted as part of a multi-word family name.
+        // The pinned keyword table has no ui-* or fangsong generic IDs, so
+        // these spellings are ordinary named families in this source slice.
+        let sheet = parse(
+            "@font-feature-values inherit Font, default Face, ui-serif, ui-sans-serif, \
+             ui-monospace, ui-rounded, fangsong { @styleset { readable:2 } }",
+        );
+        assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
+        assert_eq!(feature_values_rule(&sheet, 0).GetFamilies().len(), 7);
+    }
+
+    #[test]
+    fn font_feature_values_number_math_rounds_clamps_and_retains_zero() {
+        let sheet = parse(
+            "@font-feature-values Face { @styleset {
+                values: 0 calc(1 + 1) calc(2.5) calc(-3) min(8, 4) max(1, 5) clamp(1, 6, 9) 999999999999;
+                advanced: abs(-2) pow(2, 3) sqrt(9) mod(8, 3) sin(90deg) round(up, 2.1) calc(abs(-4) + 1);
+            } @character-variant { pair: calc(2.49) calc(3.5); } }",
+        );
+        assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
+        let rule = feature_values_rule(&sheet, 0);
+        assert_eq!(
+            rule.Storage()
+                .ResolveStyleset(&AtomicString::from_str("values")),
+            vec![0, 2, 3, 0, 4, 5, 6, i32::MAX as u32],
+        );
+        assert_eq!(
+            rule.Storage()
+                .ResolveCharacterVariant(&AtomicString::from_str("pair")),
+            vec![2, 4],
+        );
+        assert_eq!(
+            rule.Storage()
+                .ResolveStyleset(&AtomicString::from_str("advanced")),
+            vec![2, 8, 3, 2, 1, 3, 5],
+        );
+    }
+
+    #[test]
+    fn font_feature_values_invalid_blocks_are_discarded_and_following_blocks_recover() {
+        for block in [
+            "@styleset { prior: 1; broken: -1; }",
+            "@styleset { prior: 1; broken: 1.5; }",
+            "@styleset { prior: 1; broken: calc(2px); }",
+            "@styleset { prior: 1; broken: calc(20%); }",
+            "@styleset { prior: 1; broken: var(--index); }",
+            "@styleset { prior: 1; broken: ; }",
+            "@styleset { prior: 1; broken: 1!important; }",
+            "@styleset { prior: 1; broken 2; }",
+            "@styleset { prior: 1; \"broken\": 2; }",
+            "@stylistic { prior: 1; broken: 2 3; }",
+            "@character-variant { prior: 1; broken: 2 3 4; }",
+            "@swash { prior: 1; broken: 2 3; }",
+            "@ornaments { prior: 1; broken: 2 3; }",
+            "@annotation { prior: 1; broken: 2 3; }",
+        ] {
+            let sheet = parse(&format!(
+                "@font-feature-values Face {{ {block} @styleset {{ good:2 }} }} tail {{width:1px}}"
+            ));
+            assert_eq!(sheet.contents.RuleCount(), 2, "{block}");
+            assert_eq!(sheet.rules.len(), 1, "{block}");
+            assert!(!sheet.diagnostics.is_empty(), "{block}");
+            assert!(
+                sheet
+                    .diagnostics
+                    .iter()
+                    .all(|d| d.kind == DiagnosticKind::Invalid),
+                "{block}: {:?}",
+                sheet.diagnostics
+            );
+            let rule = feature_values_rule(&sheet, 0);
+            let storage = rule.Storage();
+            assert_eq!(
+                storage.ResolveStyleset(&AtomicString::from_str("good")),
+                vec![2],
+                "{block}"
+            );
+            let prior = AtomicString::from_str("prior");
+            assert!(storage.ResolveStyleset(&prior).is_empty(), "{block}");
+            assert!(storage.ResolveStylistic(&prior).is_empty(), "{block}");
+            assert!(
+                storage.ResolveCharacterVariant(&prior).is_empty(),
+                "{block}"
+            );
+            assert!(storage.ResolveSwash(&prior).is_empty(), "{block}");
+            assert!(storage.ResolveOrnaments(&prior).is_empty(), "{block}");
+            assert!(storage.ResolveAnnotation(&prior).is_empty(), "{block}");
+        }
+    }
+
+    #[test]
+    fn font_feature_values_unsupported_numeric_evaluation_is_explicit_and_recovers() {
+        for value in ["sign(1em)", "calc(1em / 1px)", "sibling-index()"] {
+            let sheet = parse(&format!(
+                "@font-feature-values Face {{ @styleset {{ prior:1; unsupported:{value}; }} @styleset {{ good:2 }} }}"
+            ));
+            assert!(
+                sheet
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.kind == DiagnosticKind::Unsupported),
+                "{value}: {:?}",
+                sheet.diagnostics
+            );
+            let rule = feature_values_rule(&sheet, 0);
+            assert!(rule
+                .Storage()
+                .ResolveStyleset(&AtomicString::from_str("prior"))
+                .is_empty());
+            assert_eq!(
+                rule.Storage()
+                    .ResolveStyleset(&AtomicString::from_str("good")),
+                vec![2]
+            );
+        }
+    }
+
+    #[test]
+    fn font_feature_values_native_ingestion_respects_layers_media_and_supports() {
+        let sheet = parse(
+            "@layer typography { @media screen and (min-width:600px) {
+                @font-feature-values Face { @styleset { wide:2 } }
+            }} @media print { @font-feature-values Print { @styleset { print:3 } } }
+            @supports (unknown:x) { @font-feature-values Hidden { @styleset { hidden:4 } } }
+            @font-feature-values Always { @styleset { always:5 } }",
+        );
+        assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
+        assert!(sheet.rules.is_empty());
+        let wide = sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0));
+        assert_eq!(wide.FontFeatureValuesRules().len(), 2);
+        let layered = &wide.FontFeatureValuesRules()[0];
+        assert_eq!(layered.value.GetFamilies()[0].Utf8(), "Face");
+        assert_eq!(
+            layered.layer.as_ref().unwrap().GetName().Utf8(),
+            "typography"
+        );
+        assert!(wide.FontFeatureValuesRules()[1].layer.is_none());
+        let narrow = sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(400.0, 600.0));
+        assert_eq!(narrow.FontFeatureValuesRules().len(), 1);
+        assert_eq!(
+            narrow.FontFeatureValuesRules()[0].value.GetFamilies()[0].Utf8(),
+            "Always"
+        );
+    }
+
+    #[test]
+    fn font_feature_values_observer_records_nested_feature_type_and_eof_recovers() {
+        use crate::style_rule_font_feature_values::FontFeatureType;
+        let seed = parse("");
+        let context = seed.contents.ParserContext().clone();
+        let mut contents =
+            StyleSheetContents::<Backend>::new(context.clone(), String::default(), None);
+        let text = String::from(
+            "@font-feature-values Face { @stylistic {a:1} @styleset {a:2} \
+             @character-variant {a:3} @swash {a:4} @ornaments {a:5} @annotation {a:6} }",
+        );
+        let mut observer = SourceObserver {
+            source: text.clone(),
+            ..SourceObserver::default()
+        };
+        CSSParserImpl::<Backend>::ParseStyleSheetForInspector(
+            &text,
+            Some(&context),
+            &mut contents,
+            &mut observer,
+        );
+        assert!(observer.diagnostics.is_empty());
+        assert!(observer.stack.is_empty());
+        assert_eq!(observer.ranges.len(), 7);
+        assert_eq!(
+            observer
+                .ranges
+                .iter()
+                .filter_map(|range| range.font_feature_type)
+                .collect::<Vec<_>>(),
+            vec![
+                FontFeatureType::kStylistic,
+                FontFeatureType::kStyleset,
+                FontFeatureType::kCharacterVariant,
+                FontFeatureType::kSwash,
+                FontFeatureType::kOrnaments,
+                FontFeatureType::kAnnotation,
+            ],
+        );
+        assert_eq!(
+            observer.ranges.last().unwrap().rule_type,
+            RuleType::kFontFeatureValues
+        );
+
+        let sheet = parse("@font-feature-values Face { @styleset { readable:2");
+        assert!(sheet.diagnostics.is_empty(), "{:?}", sheet.diagnostics);
+        assert_eq!(
+            feature_values_rule(&sheet, 0)
+                .Storage()
+                .ResolveStyleset(&AtomicString::from_str("readable")),
+            vec![2]
+        );
+        let empty = parse("@font-feature-values Face {} tail{width:1px}");
+        assert!(empty.diagnostics.is_empty(), "{:?}", empty.diagnostics);
+        assert_eq!(empty.contents.RuleCount(), 2);
+    }
+
     #[test]
     fn native_rule_selector_and_value_allocations_preserve_original_ranges() {
         let sheet = parse(
@@ -4047,6 +4398,18 @@ mod tests {
         assert!(sheet
             .TypedDeclarationsForProjectedRule(projected.rules.len())
             .is_none());
+
+        let nested = &sheet.nested_declarations[0].rule;
+        let retained = Backend::NestedDeclarationsInnerStyleRule(nested);
+        assert!(Rc::ptr_eq(&retained, nested.InnerStyleRule()));
+        assert!(Rc::ptr_eq(
+            &retained,
+            &Backend::NestedDeclarationsInnerStyleRule(nested)
+        ));
+        assert_eq!(
+            sheet.ProjectedRuleIndexForRetainedStyleRule(&retained),
+            Some(2)
+        );
 
         let nested_range = sheet.nested_declarations[0].source_range.clone();
         sheet.diagnostics.push(Diagnostic {

@@ -1070,12 +1070,12 @@ impl<D: StyleRuleDependencies> StyleRule<D> {
         Rc::clone(self.properties_.borrow().as_ref().unwrap())
     }
     // cpp: style_rule.cc:542-548
-    pub fn MutableProperties(&mut self) -> Rc<D::CSSPropertyValueSet> {
+    pub fn MutableProperties(&self) -> Rc<D::CSSPropertyValueSet> {
         let properties = self.Properties();
         if !properties.IsMutable() {
-            *self.properties_.get_mut() = Some(properties.MutableCopy());
+            *self.properties_.borrow_mut() = Some(properties.MutableCopy());
         }
-        let properties = Rc::clone(self.properties_.get_mut().as_ref().unwrap());
+        let properties = Rc::clone(self.properties_.borrow().as_ref().unwrap());
         debug_assert!(properties.IsMutable());
         properties
     }

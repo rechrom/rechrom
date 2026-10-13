@@ -47,6 +47,9 @@ pub struct PaintResources {
     pub fonts: Vec<FontFace>,
     pub images: Vec<PaintImage>,
     pub device_pixel_ratio: f64,
+    /// Embedding document preference, not the last use of an image resource.
+    /// Uses ContainerKey encoding: 0 is light, 1 is dark.
+    pub preferred_color_scheme: u8,
     /// CSS pixels to the retained Layout/Paint coordinate space. Blink calls
     /// this LocalFrame::LayoutZoomFactor. Rechrom keeps device scale as the
     /// separate raster input above, so this value contains page/browser zoom
@@ -66,6 +69,7 @@ impl Default for PaintResources {
             fonts: Vec::new(),
             images: Vec::new(),
             device_pixel_ratio: 1.0,
+            preferred_color_scheme: 0,
             layout_zoom_factor: 1.0,
             paints_opaque_base_background: true,
             viewport: None,
@@ -443,6 +447,8 @@ impl Default for FormControlPaintData {
 // cpp: layoutng_fragment_tree/fragment_tree.h:273-280
 #[derive(Clone, PartialEq)]
 pub struct SvgTextPaintData {
+    /// Parent SVG visual bounds relative to this fragment, after textPath/rotate.
+    pub visual_rect: FragmentPaintRect,
     pub glyph_origin: Offset,
     pub untransformed_size: Size,
     pub local_transform: TransformMatrix,
@@ -454,6 +460,7 @@ pub struct SvgTextPaintData {
 impl Default for SvgTextPaintData {
     fn default() -> Self {
         Self {
+            visual_rect: FragmentPaintRect::default(),
             glyph_origin: Offset::default(),
             untransformed_size: Size::default(),
             local_transform: TransformMatrix::default(),
@@ -577,6 +584,16 @@ impl BackgroundPaintLocation {
     }
 }
 
+/// Native SVG viewport geometry, in SVG user coordinates. Layout owns length
+/// resolution and viewBox transforms; Paint consumes these immutable values.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SvgViewportGeometry {
+    pub viewport: FragmentPaintRect,
+    pub content_transform: TransformMatrix,
+    pub clip: Option<FragmentPaintRect>,
+    pub disabled: bool,
+}
+
 #[derive(Clone, PartialEq)]
 pub struct PaintProperties {
     // None means native ink overflow has not been computed. Never substitute
@@ -598,6 +615,9 @@ pub struct PaintProperties {
     pub display_item_client_id: u64,
     // A distinct persistent native PaintLayer DisplayItemClient, when present.
     // cpp: core/paint/paint_layer.h:168-171
+    /// Native layer ownership was queried, including the authoritative no-layer result.
+    /// False is reserved for standalone fragments without a native Layout owner.
+    pub paint_layer_state_is_native: bool,
     pub paint_layer_client_id: u64,
     pub paint_layer_client_is_cacheable: bool,
     pub paint_layer_client_is_just_created: bool,
@@ -661,6 +681,8 @@ pub struct PaintProperties {
     pub overflow_clip_margin_outsets: Option<Edges>,
     pub scroll_offset: Offset,
     pub scroll_size: Size,
+    /// Native CSSOM client dimensions, excluding classic scrollbar gutters.
+    pub client_size: Option<Size>,
     // Native scrollable area, including viewport-propagated overflow. CSS
     // input overflow alone does not identify the LayoutView's scrolling owner.
     pub scroll_container: Option<ScrollContainerPaintData>,
@@ -693,6 +715,8 @@ pub struct PaintProperties {
     pub text_control_caret_metrics: Option<TextControlCaretMetrics>,
     pub svg_shape: Option<Arc<SvgShapeData>>,
     pub svg_view_box: Option<SvgViewBoxData>,
+    pub svg_local_transform: Option<TransformMatrix>,
+    pub svg_viewport: Option<SvgViewportGeometry>,
     pub svg_text: Option<Arc<SvgTextPaintData>>,
     pub table_cell_column: Option<usize>,
 }
@@ -708,6 +732,7 @@ impl Default for PaintProperties {
             box_fragment_is_inline_box: false,
             display_item_raster_effect_outset: RasterEffectOutset::kNone,
             display_item_client_id: 0,
+            paint_layer_state_is_native: false,
             paint_layer_client_id: 0,
             paint_layer_client_is_cacheable: false,
             paint_layer_client_is_just_created: false,
@@ -753,6 +778,7 @@ impl Default for PaintProperties {
             overflow_clip_margin_outsets: None,
             scroll_offset: Offset::default(),
             scroll_size: Size::default(),
+            client_size: None,
             scroll_container: None,
             writing_mode: WritingMode::kHorizontalTb,
             direction: TextDirection::kLtr,
@@ -781,6 +807,8 @@ impl Default for PaintProperties {
             text_control_caret_metrics: None,
             svg_shape: None,
             svg_view_box: None,
+            svg_local_transform: None,
+            svg_viewport: None,
             svg_text: None,
             table_cell_column: None,
         }

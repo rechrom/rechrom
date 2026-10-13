@@ -2,7 +2,8 @@
 
 use std::ops::{Deref, DerefMut};
 
-use foundation::{DowncastFrom, Traceable, Visitor};
+use foundation::{gfx, DowncastFrom, Traceable, Visitor};
+use layoutng_assembly::inline_cursor::InlineCursor;
 use layoutng_assembly::internal::layout_box_model_object::PaintLayerType;
 use layoutng_assembly::internal::layout_inline::LayoutInline;
 use layoutng_assembly::internal::layout_node_metadata::Element;
@@ -37,6 +38,35 @@ impl LayoutSVGInline {
     }
     pub fn IsSVGInline(&self) -> bool {
         true
+    }
+
+    // Chromium layout_svg_inline.cc:76-105. Union the canonical, repositioned
+    // fragment bounds in SVG user coordinates. The immutable export requests
+    // this after layout; do not derive bounds from the unrotated inline box.
+    pub fn ObjectBoundingBox(&self) -> gfx::RectF {
+        let mut bounds = gfx::RectF::default();
+        if !self.IsInLayoutNGInlineFormattingContext() {
+            return bounds;
+        }
+        let mut cursor = InlineCursor::default();
+        cursor.MoveToIncludingCulledInline(self);
+        while cursor.IsNotNull() {
+            let item = unsafe { &*cursor.CurrentItem() };
+            if item.IsSvgText() {
+                bounds.Union(cursor.Current().ObjectBoundingBox(&cursor));
+            } else {
+                let mut descendants = cursor.CursorForDescendants();
+                while descendants.IsNotNull() {
+                    let item = unsafe { &*descendants.CurrentItem() };
+                    if item.IsSvgText() {
+                        bounds.Union(descendants.Current().ObjectBoundingBox(&descendants));
+                    }
+                    descendants.MoveToNext();
+                }
+            }
+            cursor.MoveToNextForSameLayoutObject();
+        }
+        bounds
     }
 
     // cpp: layoutng_svg/layout_svg_inline.cc:13-24

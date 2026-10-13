@@ -6,7 +6,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cssom::{CSSDeclaration, CSSKeyframesRule};
+use cssom::{CSSDeclaration, CSSKeyframesRule, CSSStyleSheet};
 use dom::persistent_document::{
     DOMNamespace, DOMNode, PersistentDocument, SVGImagePreserveAspectRatio, SVGImageViewSpec, DOM,
 };
@@ -39,6 +39,11 @@ fn PreferredScheme(value: u8) -> PreferredColorScheme {
 pub struct SVGImageDecoder {
     assembly_: LayoutAssembly,
     host_constraints_: layoutng_assembly::internal::layout_input::ConstraintSpace,
+    // SVGImage's isolated document uses the same namespace-specific UA rules
+    // as any other document (StyleResolver::ForEachUARulesForElement). Keep
+    // the embedding's typed, parser-backed sheets rather than reconstructing
+    // defaults in Layout or Paint.
+    user_agent_sheets_: Vec<CSSStyleSheet>,
 }
 
 #[derive(Clone)]
@@ -62,6 +67,7 @@ struct SVGDocumentAnimation {
     resource_id: ImageId,
     document: DOM,
     style_engine: style::StyleEngine,
+    user_agent_sheets: Vec<CSSStyleSheet>,
     engine: layoutng_assembly::layout_engine::LayoutEngine,
     paint_engine: paint::paint_engine::PaintEngine,
     constraints: layoutng_assembly::internal::layout_input::ConstraintSpace,
@@ -517,21 +523,17 @@ struct AnimationSampleBatch {
 }
 
 impl SVGImageDecoder {
-    // cpp: image_decoder/svg_image_decoder.h:12-13
-    pub fn new(assembly: &LayoutAssembly) -> Self {
-        Self {
-            assembly_: *assembly,
-            host_constraints_: Default::default(),
-        }
-    }
-
+    /// The embedding supplies complete host constraints and retained UA sheets,
+    /// including SVG defaults. Container geometry is applied during creation.
     pub fn new_with_constraints(
         assembly: &LayoutAssembly,
         constraints: &layoutng_assembly::internal::layout_input::ConstraintSpace,
+        user_agent_sheets: &[CSSStyleSheet],
     ) -> Self {
         Self {
             assembly_: *assembly,
             host_constraints_: constraints.clone(),
+            user_agent_sheets_: user_agent_sheets.to_vec(),
         }
     }
 
@@ -653,7 +655,7 @@ impl SVGImageDecoder {
         let media = ImageMediaData(&container);
         let mut style_engine = style::StyleEngine::new(&document);
         style_engine
-            .Update(&mut document, &media, &[])
+            .Update(&mut document, &media, &self.user_agent_sheets_)
             .map_err(|error| io::Error::other(error.to_string()))?;
         let environment = MediaValuesCached::new(&media);
         let animations = CollectAnimations(document.GetDocument(), &environment)?;
@@ -666,7 +668,16 @@ impl SVGImageDecoder {
         // container owns that coordinate space; inheriting the outer page's
         // scale while publishing an unscaled record size makes raster replay
         // apply the DPR a second time.
+        let root = FindSVG(document.GetDocument(), document.GetDocument().Root())
+            .expect("prepared SVG document has its root");
+        constraints.document_image_container = Some(
+            layoutng_assembly::internal::layout_input::DocumentImageContainer {
+                root_node_id: document.GetDocument().Node(root).Id(),
+                size: constraints.available_size,
+            },
+        );
         constraints.device_pixel_ratio = container.device_pixel_ratio();
+        constraints.preferred_color_scheme = container.preferred_color_scheme;
         constraints.layout_zoom_factor = 1.0;
         constraints.viewport = Some(ViewportGeometry {
             size: IntSize {
@@ -679,6 +690,7 @@ impl SVGImageDecoder {
             resource_id,
             document,
             style_engine,
+            user_agent_sheets: self.user_agent_sheets_.clone(),
             engine: layoutng_assembly::layout_engine::LayoutEngine::new(&self.assembly_),
             paint_engine: paint::paint_engine::PaintEngine::new(),
             constraints,
@@ -700,7 +712,11 @@ impl SVGDocumentAnimation {
             width: f64::from(self.container.width),
             height: f64::from(self.container.height),
         };
+        self.constraints.document_image_container.as_mut()
+            .expect("SVG image retains its root container input")
+            .size = self.constraints.available_size;
         self.constraints.device_pixel_ratio = self.container.device_pixel_ratio();
+        self.constraints.preferred_color_scheme = self.container.preferred_color_scheme;
         // The nested PaintArtifact is replayed through the outer image draw,
         // whose transform already maps record_size into the destination. Keep
         // its layout coordinate space independent from the host page's DSF.
@@ -746,7 +762,11 @@ impl SVGDocumentAnimation {
             );
         }
         self.style_engine
-            .Update(&mut self.document, &ImageMediaData(&self.container), &[])
+            .Update(
+                &mut self.document,
+                &ImageMediaData(&self.container),
+                &self.user_agent_sheets,
+            )
             .map_err(|error| io::Error::other(error.to_string()))?;
         self.document
             .EmitConstraints(&self.constraints, |mutation| {

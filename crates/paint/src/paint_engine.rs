@@ -22,8 +22,8 @@ pub(crate) fn ResolveDocumentImageContainerKey(
     image: &layoutng_assembly::internal::layout_input::PaintImage,
     target_size: Size,
     effective_zoom: f64,
-    device_pixel_ratio: f64,
-    embedding_style: &layoutng_assembly::internal::paint_input::PaintStyleData,
+    resources: Option<&PaintResources>,
+    embedding_color_scheme: Option<u8>,
 ) -> Option<image_resource::ContainerKey> {
     let image_resource::PaintImageContent::Document(content) = &image.content else {
         return None;
@@ -31,11 +31,16 @@ pub(crate) fn ResolveDocumentImageContainerKey(
     let zoom = effective_zoom.max(f64::MIN_POSITIVE);
     let width = (target_size.width / zoom).round().max(1.0) as u32;
     let height = (target_size.height / zoom).round().max(1.0) as u32;
-    let mut key = image_resource::ContainerKey::new(width, height, zoom, device_pixel_ratio);
-    if !embedding_style.color_scheme_flags_is_normal {
-        key.preferred_color_scheme = u8::from(embedding_style.used_dark_color_scheme);
-        key.preferred_color_scheme_is_explicit = true;
-    }
+    let mut key = image_resource::ContainerKey::new(
+        width, height, zoom, resources.map_or(1.0, |resources| resources.device_pixel_ratio),
+    );
+    // StyleFetchedImage::GetImage / StyleEngine::ResolveColorSchemeForEmbedding:
+    // normal uses the embedding document preference; an authored color-scheme
+    // uses the computed used scheme. Resolve before recording resource identity,
+    // so Page publishes exactly the same key consumed by raster.
+    key.preferred_color_scheme = embedding_color_scheme
+        .unwrap_or_else(|| resources.map_or(0, |resources| resources.preferred_color_scheme));
+    key.preferred_color_scheme_is_explicit = true;
     if let Some(current) = &image.document_container_key {
         key.view_specification = current.view_specification.clone();
     } else if let Some(initial) = content.variants().first() {
@@ -797,6 +802,34 @@ impl PaintArtifact {
                 }
             }
         }
+        // Reflection masks live on effect nodes rather than display items.
+        // They use the same per-container SVG records and must be fulfilled
+        // before the second recording snapshots their resource payloads.
+        let mut visited = std::collections::HashSet::new();
+        for chunk in &self.chunks {
+            let mut effect = Some(chunk.properties.effect.as_ref());
+            while let Some(node) = effect {
+                if !visited.insert(node as *const _) {
+                    break;
+                }
+                for filter in node.filters.iter().chain(&node.backdrop_filters) {
+                    for layer in &filter.reflection_mask_layers {
+                        if let (Some(image), Some(key)) =
+                            (&layer.image, &layer.document_image_container_key)
+                        {
+                            let pair = (image.id, key.clone());
+                            if image.id != 0 && !output.contains(&pair) {
+                                output.push(pair);
+                            }
+                        }
+                        if let Some(shader) = &layer.paint_shader {
+                            pattern_requirements(shader, &mut output);
+                        }
+                    }
+                }
+                effect = node.parent.as_deref();
+            }
+        }
         output
     }
 }
@@ -985,6 +1018,7 @@ pub fn FragmentClientRectsByNode(
 #[cfg(feature = "translation_in_progress")]
 fn SameReplayResources(a: &PaintResources, b: &PaintResources) -> bool {
     if a.device_pixel_ratio != b.device_pixel_ratio
+        || a.preferred_color_scheme != b.preferred_color_scheme
         || a.layout_zoom_factor != b.layout_zoom_factor
         || a.viewport != b.viewport
         || a.fonts.len() != b.fonts.len()

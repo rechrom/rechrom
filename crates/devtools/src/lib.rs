@@ -722,6 +722,7 @@ mod tests {
             fields: BTreeMap<String, f64>,
         ) -> browser_tracing::RecordedSpan {
             browser_tracing::RecordedSpan {
+                text: None,
                 id: frame,
                 parent_id: 0,
                 thread_id: 1,

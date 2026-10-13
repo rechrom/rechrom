@@ -132,6 +132,7 @@ pub struct LayoutObjectFactorySet {
     pub svg_block_text_scale: Option<SvgBlockTextScale>,
     pub update_svg_block_style: Option<SvgBlockStyleUpdater>,
     pub svg_group_add_child: Option<SvgGroupChildInserter>,
+    pub svg_container_style_did_change: Option<InnerEditorStyleUpdater>,
     pub svg_is_child_allowed: Option<SvgChildAllowed>,
     pub svg_text_add_child: Option<SvgTextChildChange>,
     pub svg_text_remove_child: Option<SvgTextChildRemoval>,

@@ -2,7 +2,7 @@
 
 use dom::{InteractionStateMutation, UserInteractionState, DOM};
 use interaction::{
-    event::{Event, EventListenerInvocation, EventListenerResult, EventType},
+    event::{EventListenerInvocation, EventListenerResult},
     input_event::{FocusEvent, FocusEventType, InputEvent},
     Interaction, InteractionOutput,
 };
@@ -278,84 +278,15 @@ fn ApplyInteractionStateMutation(
     }
 }
 
-// cpp: browser/browser.cc:702-734
-// Document capture/bubble also invokes Window in source order, using the same
-// event identity and accumulated flags.
-// Blink WindowEventContext does not connect a node's load event to Window,
-// even during capture. Navigation load is dispatched directly to Window.
-pub(crate) fn NodeEventReachesWindow(event: &Event) -> bool {
-    if event.custom_type.is_empty() {
-        event.r#type != EventType::kLoad
-    } else {
-        event.custom_type != "load"
-    }
-}
-
+// Interaction supplies the complete DOM/Window path and listener phase.
 pub(crate) fn DispatchPageListeners(
     bindings: &Rc<RefCell<DOMJavaScriptBindings>>,
-    document: &Rc<RefCell<DOM>>,
+    _document: &Rc<RefCell<DOM>>,
     invocation: &EventListenerInvocation<'_>,
     runtime: &mut dyn JavaScriptHostRuntime,
     report_error: &mut dyn FnMut(&JavaScriptException),
 ) -> EventListenerResult {
-    let at_document = {
-        let owner = document.borrow();
-        invocation.current_target_node_id
-            == owner.GetDocument().Node(owner.GetDocument().Root()).Id()
-    };
-    let window = EventListenerInvocation {
-        event: invocation.event,
-        target_node_id: invocation.target_node_id,
-        current_target_node_id: 0,
-        phase: invocation.phase,
-        capture_listeners: invocation.capture_listeners,
-        focused_node_id: invocation.focused_node_id,
-    };
-    let mut result = EventListenerResult::default();
-    let connects_window = NodeEventReachesWindow(invocation.event);
-    if at_document && connects_window && invocation.capture_listeners {
-        result = DOMJavaScriptBindings::DispatchEventListenersScoped(
-            bindings,
-            &window,
-            runtime,
-            report_error,
-        );
-        if result.stop_propagation || result.stop_immediate_propagation {
-            return result;
-        }
-    }
-    fn merge(result: &mut EventListenerResult, next: EventListenerResult) {
-        result.prevent_default |= next.prevent_default;
-        result.stop_propagation |= next.stop_propagation;
-        result.stop_immediate_propagation |= next.stop_immediate_propagation;
-    }
-    merge(
-        &mut result,
-        DOMJavaScriptBindings::DispatchEventListenersScoped(
-            bindings,
-            invocation,
-            runtime,
-            report_error,
-        ),
-    );
-    if at_document
-        && connects_window
-        && !invocation.capture_listeners
-        && invocation.event.bubbles
-        && !result.stop_propagation
-        && !result.stop_immediate_propagation
-    {
-        merge(
-            &mut result,
-            DOMJavaScriptBindings::DispatchEventListenersScoped(
-                bindings,
-                &window,
-                runtime,
-                report_error,
-            ),
-        );
-    }
-    result
+    DOMJavaScriptBindings::DispatchEventListenersScoped(bindings, invocation, runtime, report_error)
 }
 
 #[cfg(test)]

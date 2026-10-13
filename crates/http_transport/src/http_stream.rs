@@ -5,6 +5,7 @@ use crate::http_request::{
     fetch_response, network_error, protocol_error, runtime, with_stall_timeout, HTTPRequestData,
     HTTPRequestTransport, ResponseStart, Scheduler, TransferError,
 };
+use crate::request_trace::RequestTrace;
 use http_body_util::BodyExt;
 use std::{
     io::{self, BufRead, Read},
@@ -54,6 +55,7 @@ struct Stream {
     offset: usize,
     wake: Wake,
     terminal: bool,
+    trace: RequestTrace,
 }
 impl Drop for Stream {
     fn drop(&mut self) {
@@ -91,6 +93,9 @@ impl HTTPStreamOperation for Stream {
             }
             Ok(Ok(event)) => {
                 self.terminal = matches!(event, HTTPStreamEvent::Finished);
+                if self.terminal {
+                    self.trace.event("HTTPStreamDelivered", &[]);
+                }
                 Ok(Some(event))
             }
             Ok(Err(error)) => {
@@ -162,7 +167,9 @@ fn decode(
     limit: usize,
     tx: mpsc::Sender<Event>,
     notify: Wake,
-) -> io::Result<()> {
+    trace: RequestTrace,
+    attempt: usize,
+) -> io::Result<usize> {
     let mut reader: Box<dyn Read + Send> = Box::new(input);
     for encoding in encodings
         .split(',')
@@ -222,8 +229,13 @@ fn decode(
     loop {
         let size = reader.read(&mut output)?;
         if size == 0 {
-            return Ok(());
+            trace.event(
+                "HTTPDecodeComplete",
+                &[("attempt", attempt as f64), ("decoded_bytes", reader.total as f64)],
+            );
+            return Ok(reader.total);
         }
+        trace.event("HTTPDecodedBodyChunk", &[("attempt", attempt as f64), ("decoded_bytes", reader.total as f64), ("chunk_bytes", size as f64)]);
         tx.blocking_send(Ok(HTTPStreamEvent::Data(output[..size].to_vec())))
             .map_err(|_| io::Error::other("HTTP stream cancelled"))?;
         wake(&notify);
@@ -235,6 +247,8 @@ async fn transfer(
     tx: &mpsc::Sender<Event>,
     notify: &Wake,
     published: &mut bool,
+    trace: RequestTrace,
+    attempt: usize,
 ) -> Result<(), TransferError> {
     let ResponseStart {
         mut incoming,
@@ -243,7 +257,7 @@ async fn transfer(
         mime_type,
         encodings,
         head_only,
-    } = fetch_response(request, scheduler).await?;
+    } = fetch_response(request, scheduler, trace, attempt).await?;
     send(
         tx,
         Ok(HTTPStreamEvent::Response {
@@ -269,9 +283,12 @@ async fn transfer(
             limit,
             output_tx,
             output_wake,
+            trace,
+            attempt,
         )
     });
     let mut encoded_bytes = 0usize;
+    let mut network_eof = false;
     let received = async {
         loop {
             // Wait for decoder input space before beginning a network read.
@@ -299,11 +316,21 @@ async fn transfer(
                 }
                 error
             })?;
-            let Some(frame) = frame else { break; };
+            let Some(frame) = frame else {
+                network_eof = true;
+                trace.event(
+                    "HTTPNetworkBodyComplete",
+                    &[("attempt", attempt as f64), ("encoded_bytes", encoded_bytes as f64)],
+                );
+                break;
+            };
             if let Ok(chunk) = frame.into_data() {
                 encoded_bytes = encoded_bytes
                     .checked_add(chunk.len())
                     .ok_or_else(|| protocol_error("response size overflow"))?;
+                // Bytes returned by Hyper Incoming, before decoder-queue wait.
+                // This is transport consumption, not a wire-arrival timestamp.
+                trace.event("HTTPNetworkBodyChunk", &[("attempt", attempt as f64), ("encoded_bytes", encoded_bytes as f64), ("chunk_bytes", chunk.len() as f64)]);
                 if encoded_bytes > limit {
                     return Err(protocol_error("resource exceeds configured size limit"));
                 }
@@ -324,11 +351,23 @@ async fn transfer(
         let _ = input_tx.send(Err(error.message.clone())).await;
     }
     drop(input_tx);
-    codec
+    let decoded_bytes = codec
         .await
         .map_err(protocol_error)?
         .map_err(protocol_error)?;
     received?;
+    trace.event(
+        "HTTPBodyComplete",
+        &[
+            ("attempt", attempt as f64),
+            ("encoded_bytes", encoded_bytes as f64),
+            ("decoded_bytes", decoded_bytes as f64),
+            ("network_eof", u8::from(network_eof) as f64),
+        ],
+    );
+    // Producer completion precedes publishing the terminal marker, which may
+    // itself wait for the consumer to free space in the bounded output queue.
+    trace.event("HTTPStreamComplete", &[("attempt", attempt as f64)]);
     send(tx, Ok(HTTPStreamEvent::Finished), notify).await
 }
 impl HTTPRequestTransport {
@@ -336,18 +375,32 @@ impl HTTPRequestTransport {
         &mut self,
         request: &HTTPRequestData,
     ) -> io::Result<Box<dyn HTTPStreamOperation>> {
+        let executor = runtime()?;
+        let trace = RequestTrace::queued(request, true);
         let (tx, receiver) = mpsc::channel(QUEUE_CHUNKS);
         let notify: Wake = Arc::new(Mutex::new(None));
         let worker_wake = notify.clone();
         let request = request.clone();
         let scheduler = self.scheduler.clone();
-        let task = runtime()?.spawn(async move {
+        let task = executor.spawn(async move {
+            let mut trace_guard = trace.guard();
             let Ok(_slot) = scheduler.slots.clone().acquire_owned().await else {
+                trace.failed(0, &protocol_error("HTTP admission closed"), false);
+                trace_guard.finish();
                 return;
             };
+            trace.admitted();
             let mut published = false;
             for attempt in 0.. {
-                let future = transfer(&request, &scheduler, &tx, &worker_wake, &mut published);
+                let future = transfer(
+                    &request,
+                    &scheduler,
+                    &tx,
+                    &worker_wake,
+                    &mut published,
+                    trace,
+                    attempt,
+                );
                 let result = if scheduler.options.timeout_ms > 0 {
                     tokio::time::timeout(
                         Duration::from_millis(scheduler.options.timeout_ms as u64),
@@ -359,22 +412,28 @@ impl HTTPRequestTransport {
                     future.await
                 };
                 match result {
-                    Ok(()) => return,
+                    Ok(()) => {
+                        trace_guard.finish();
+                        return;
+                    }
                     Err(error)
                         if !published
                             && matches!(request.method.as_str(), "GET" | "HEAD")
                             && error.retryable
                             && attempt < scheduler.options.max_retries =>
                     {
+                        trace.failed(attempt, &error, true);
                         continue
                     }
                     Err(error) => {
+                        trace.failed(attempt, &error, false);
                         let _ = send(
                             &tx,
                             Err(format!("{}: {}", request.url, error.message)),
                             &worker_wake,
                         )
                         .await;
+                        trace_guard.finish();
                         return;
                     }
                 }
@@ -387,6 +446,7 @@ impl HTTPRequestTransport {
             offset: 0,
             wake: notify,
             terminal: false,
+            trace,
         }))
     }
 }
@@ -532,6 +592,8 @@ mod tests {
                         limit,
                         out,
                         Arc::new(Mutex::new(None)),
+                        RequestTrace::default(),
+                        0,
                     )
                 });
                 runtime().unwrap().block_on(async {

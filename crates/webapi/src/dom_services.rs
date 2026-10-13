@@ -25,6 +25,7 @@ pub struct DOMBindingsHost {
     pub update_style: Option<Box<dyn FnMut()>>,
     pub emit_style_sheet: Option<Box<dyn FnMut(cssom::CSSStyleSheet)>>,
     pub read_metric: Option<Box<dyn FnMut(HostObjectId, &str) -> f64>>,
+    pub read_viewport_scroll: Option<Box<dyn FnMut() -> Option<ViewportScrollState>>>,
     pub read_geometry: Option<Box<dyn FnMut(HostObjectId) -> Vec<paint::PaintRect>>>,
     pub write_scroll:
         Option<Box<dyn FnMut(HostObjectId, layoutng_assembly::internal::layout_input::Offset)>>,
@@ -46,16 +47,24 @@ struct BoundEvent {
     delta_y: f64,
 }
 
+fn event_path_value(event: &Event, current_target: HostObjectId) -> HostValue {
+    let state = event.dispatch_state.borrow();
+    let nodes = state.path.as_ref().map_or_else(Vec::new,
+        |path| path.ComposedPath(current_target));
+    let mut values = Vec::with_capacity(nodes.len() + 1);
+    values.push(("length".into(), HostValue::Number(nodes.len() as f64)));
+    values.extend(nodes.into_iter().enumerate().map(|(index, id)|
+        (index.to_string(), HostValue::Object(HostObjectRef { id }))));
+    HostValue::Record(values)
+}
+
 // cpp: webapi/dom_bindings.h:139-141
-// Action flags share ownership with the active host continuation, avoiding an
-// aliased mutable Event reference while Interaction lends it to a listener.
+// Constructed JS Events retain their realm identity while sharing the native
+// bound-event state used for path, phase and action flags during dispatch.
 #[derive(Clone)]
 struct SyntheticDispatch {
     identity: u64,
     handle: HostValue,
-    cancelable: bool,
-    passive: bool,
-    flags: EventListenerResult,
 }
 
 pub(super) struct DOMServices {
@@ -233,8 +242,7 @@ impl DOMJavaScriptBindings {
                     .unwrap()
                     .passive_listener = listener.passive;
             }
-            if let Some((state, _)) = &synthetic {
-                state.borrow_mut().as_mut().unwrap().passive = listener.passive;
+            if synthetic.is_some() {
                 let update = bindings
                     .borrow()
                     .method_wrappers
@@ -254,6 +262,7 @@ impl DOMJavaScriptBindings {
                             }),
                             HostValue::Number(invocation.phase as u8 as f64),
                             HostValue::Boolean(listener.passive),
+                            HostValue::Object(HostObjectRef { id: event_id }),
                         ],
                     );
                 }
@@ -288,17 +297,6 @@ impl DOMJavaScriptBindings {
             if let Some(error) = result.exception {
                 report_error(&error);
             }
-            if let Some((state, _)) = &synthetic {
-                let flags = state.borrow().as_ref().unwrap().flags;
-                let mut this = bindings.borrow_mut();
-                let bound = this.services.events.get_mut(&event_id).unwrap();
-                bound.event.default_prevented =
-                    flags.prevent_default || invocation.event.default_prevented;
-                bound.stop_propagation =
-                    flags.stop_propagation || invocation.event.propagation_stopped;
-                bound.stop_immediate_propagation = flags.stop_immediate_propagation
-                    || invocation.event.immediate_propagation_stopped;
-            }
             if bindings.borrow().services.events[&event_id].stop_immediate_propagation {
                 break;
             }
@@ -329,7 +327,7 @@ impl DOMJavaScriptBindings {
 
     // cpp: webapi/dom_bindings.cc:634-653
     pub(super) fn PrepareSyntheticDispatch(
-        &self,
+        &mut self,
         receiver: HostObjectId,
         arguments: &[HostValue],
     ) -> HostContinuation {
@@ -347,6 +345,23 @@ impl DOMJavaScriptBindings {
         };
         if !self.runtime_realm.IsValid() {
             return invalid();
+        }
+        // Redispatch a retained native wrapper through its original identity.
+        // Constructed JS Events use the synthetic handle projection below.
+        if let HostValue::Object(object) = handle {
+            if let Some(bound) = self.services.events.get_mut(&object.id) {
+                if bound.dispatching {
+                    return invalid();
+                }
+                bound.event.trusted = false;
+                let mut event = bound.event.clone();
+                event.propagation_stopped = false;
+                event.immediate_propagation_stopped = false;
+                return Box::new(move |runtime| {
+                    dispatch(&mut event, receiver, runtime);
+                    Self::value(HostValue::Boolean(!event.default_prevented))
+                });
+            }
         }
         let mut event = Event {
             r#type: EventType::kCustom,
@@ -405,15 +420,9 @@ impl DOMJavaScriptBindings {
         let handle = handle.clone();
         let event_state = self.services.event_state.clone();
         Box::new(move |runtime| {
-            let passive = state.borrow().as_ref().is_some_and(|active| active.passive);
             let previous = state.borrow_mut().replace(SyntheticDispatch {
                 identity: event.identity,
                 handle: handle.clone(),
-                cancelable: event.cancelable,
-                // Source preserves the prior listener's passive flag until
-                // entering the first listener of this dispatch.
-                passive,
-                flags: EventListenerResult::default(),
             });
             dispatch(&mut event, receiver, runtime);
             let update = event_state.borrow().clone();
@@ -423,17 +432,17 @@ impl DOMJavaScriptBindings {
                     &HostValue::Object(HostObjectRef { id: 0 }),
                     &[
                         handle,
-                        HostValue::Object(HostObjectRef { id: receiver }),
+                        event.dispatch_state.borrow().final_target.map_or(HostValue::Null(JavaScriptNull),
+                            |id| HostValue::Object(HostObjectRef { id })),
                         HostValue::Null(JavaScriptNull),
                         HostValue::Number(0.0),
                         HostValue::Boolean(false),
                     ],
                 );
             }
-            let flags = state.borrow().as_ref().unwrap().flags;
             *state.borrow_mut() = previous;
             Self::value(HostValue::Boolean(
-                !(event.default_prevented || flags.prevent_default),
+                !event.default_prevented,
             ))
         })
     }
@@ -459,7 +468,13 @@ impl DOMJavaScriptBindings {
             } else {
                 event.custom_type.clone()
             }),
-            "target" => HostValue::Object(HostObjectRef { id: bound.target }),
+            "target" => {
+                let state = event.dispatch_state.borrow();
+                if state.finished {
+                    state.final_target.map_or(HostValue::Null(JavaScriptNull),
+                        |id| HostValue::Object(HostObjectRef { id }))
+                } else { HostValue::Object(HostObjectRef { id: bound.target }) }
+            },
             "currentTarget" => {
                 if bound.dispatching {
                     HostValue::Object(HostObjectRef {
@@ -504,6 +519,23 @@ impl DOMJavaScriptBindings {
         member: &str,
         arguments: &[HostValue],
     ) -> Option<HostResult> {
+        if member == "__eventAttribute" {
+            let Some(HostValue::String(name)) = arguments.first() else {
+                return Some(Self::type_error("Illegal invocation"));
+            };
+            if !matches!(name.as_str(), "target" | "currentTarget" | "eventPhase") || !self.services.IsEvent(receiver) {
+                return Some(Self::type_error("Illegal invocation"));
+            }
+            return self.GetBoundEvent(receiver, name);
+        }
+        if member == "__eventComposedPath" {
+            let Some(bound) = self.services.events.get(&receiver) else {
+                return Some(Self::type_error("Illegal invocation"));
+            };
+            return Some(Self::value(if bound.dispatching {
+                event_path_value(&bound.event, bound.current_target)
+            } else { HostValue::Record(vec![("length".into(), HostValue::Number(0.0))]) }));
+        }
         if member == "mutationObserverState" {
             let [HostValue::Number(count)] = arguments else {
                 return Some(Self::type_error("Invalid mutation observer state"));
@@ -529,24 +561,6 @@ impl DOMJavaScriptBindings {
             trace.set("declarations", declarations.len() as f64);
             if let Some(sample) = self.services.host.sample_animation.as_mut() {
                 sample(receiver, *effect as u64, *time, declarations);
-            }
-            return Some(HostResult::default());
-        }
-        // cpp: webapi/dom_bindings.cc:622-632
-        if receiver == 0 && member == "__eventAction" {
-            if let (Some(active), Some(HostValue::String(action))) = (
-                self.services.synthetic.borrow_mut().as_mut(),
-                arguments.first(),
-            ) {
-                if action == "prevent" && active.cancelable && !active.passive {
-                    active.flags.prevent_default = true;
-                }
-                if action == "stop" || action == "immediate" {
-                    active.flags.stop_propagation = true;
-                }
-                if action == "immediate" {
-                    active.flags.stop_immediate_propagation = true;
-                }
             }
             return Some(HostResult::default());
         }

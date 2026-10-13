@@ -1,5 +1,5 @@
 // Untranslated engine classes remain pointer-facing opaque declarations.
-// Image and CSSValue have a real resolved-gradient implementation below.
+// Image and CSSValue have concrete native value implementations below.
 
 // cpp: layoutng_style/style/computed_style.h:99-101
 pub use super::css_timing_data::{CSSAnimationData, CSSTransitionData};
@@ -43,11 +43,14 @@ pub struct Node {
     _private: [u8; 0],
 }
 
-// C++ declares this enum with its default int underlying type; its values
-// come from the external CSS package.
-#[repr(transparent)]
+// cpp: core/css/properties/css_property.h:28-36
+#[repr(i32)]
 #[derive(Clone, Copy)]
-pub struct CSSValuePhase(i32);
+#[allow(non_camel_case_types)]
+pub enum CSSValuePhase {
+    kComputedValue,
+    kResolvedValue,
+}
 
 // cpp: layoutng_style/style/content_data.h:39-45
 #[repr(C)]
@@ -94,7 +97,7 @@ pub struct SVGResource {
 // The AMT stores pointers to these externally defined values. Hash and deep
 // equality are required by that source algorithm, but their definitions are
 // absent from this checkout, so those calls remain link-time requirements.
-pub use super::generated_gradient_image::CSSValue;
+pub use crate::css::css_value::CSSValue;
 
 #[repr(C)]
 pub struct CSSVariableData {

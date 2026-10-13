@@ -668,6 +668,7 @@ pub(crate) fn CreateLayoutObject(
         NodeKind::kFieldset => return require(factories.forms, "forms", node),
         NodeKind::kFrameSet => return require(factories.frameset, "frameset", node),
         NodeKind::kSvgRoot
+        | NodeKind::kSvgViewportContainer
         | NodeKind::kSvgGroup
         | NodeKind::kSvgForeignObject
         | NodeKind::kSvgText
@@ -901,6 +902,9 @@ fn ExportPaintProperties(
                 };
         }
     }
+    // A native object with no PaintLayer is a known result, not permission for
+    // Paint to reconstruct a layer from flattened style (notably SVG children).
+    output.paint_layer_state_is_native = true;
     // PaintLayerPainter uses the layer's own client, distinct from this box.
     // cpp: core/paint/paint_layer_painter.cc:452-454,484-486,730-732
     let box_model = DynamicTo::<LayoutBoxModelObject>(object);
@@ -1083,35 +1087,22 @@ fn ExportPaintProperties(
         }
         output.svg_view_box = element_data.svg_view_box;
     }
-    // SVGResources::ReferenceBoxForEffects resolves `view-box` against the
-    // nearest viewport-establishing SVG ancestor. Carry that typed viewport
-    // on SVG child fragments so PrePaint need not reach back into DOM/Layout.
-    if output.svg_view_box.is_none()
-        && matches!(
-            output.source_kind,
-            NodeKind::kSvgGroup
-                | NodeKind::kSvgText
-                | NodeKind::kSvgInline
-                | NodeKind::kSvgTSpan
-                | NodeKind::kSvgTextPath
-                | NodeKind::kSvgShape
-        )
-    {
-        let mut ancestor = source.parentNode().cast::<Node>();
-        while !ancestor.is_null() {
-            let node = unsafe { &*ancestor };
-            if node.IsElementNode() {
-                let element = unsafe { &*(node as *const Node as *const Element) };
-                if let Some(view_box) = element
-                    .InputElementData()
-                    .as_ref()
-                    .and_then(|data| data.svg_view_box)
-                {
-                    output.svg_view_box = Some(view_box);
-                    break;
-                }
-            }
-            ancestor = node.parentNode().cast();
+    if !object.is_null() && unsafe { &*object }.IsSVG() {
+        let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
+        if let Some(query) = unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.paint_geometry) {
+            (output.svg_local_transform, output.svg_viewport) = query(unsafe { &*object });
+        }
+    }
+    // SVGResources::ReferenceBoxForEffects(kViewBox) uses (0,0) and the
+    // nearest viewport's resolved dimensions. Stop at a nested viewport even
+    // when it has no viewBox; Paint does not discover Layout/DOM ancestors.
+    if !object.is_null() && unsafe { &*object }.IsSVGChild() {
+        let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
+        if let Some(resolve) = unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.viewport_size) {
+            let size = resolve(unsafe { &*object });
+            output.svg_view_box = Some(crate::internal::layout_input::SvgViewBoxData {
+                width: size.width() as f64, height: size.height() as f64, ..Default::default()
+            });
         }
     }
     // Preserve the real editor identity rather than reconstructing its synthetic id.
@@ -1647,7 +1638,26 @@ fn ExportSvgTextPaintData(
     let scaling_factor = item.SvgScalingFactor();
     assert!(scaling_factor.is_finite() && scaling_factor > 0.0);
     assert!(svg.length_adjust_scale.is_finite() && svg.length_adjust_scale > 0.0);
+    // TextFragmentPainter uses the parent SVG visual rect, not this inline
+    // fragment's pre-textPath box (core/paint/text_fragment_painter.cc:422-431).
+    let parent = unsafe { &*item.GetLayoutObject() }.Parent();
+    assert!(!parent.is_null());
+    let algorithms = LayoutPassScope::Algorithms();
+    let visual_rect =
+        unsafe { algorithms.as_ref() }
+            .and_then(|algorithms| algorithms.svg_support.text_visual_rect)
+            .expect("SVG text visual bounds query is not installed")(unsafe { &*parent });
     let mut output = SvgTextPaintData {
+        visual_rect: FragmentPaintRect {
+            offset: Offset {
+                x: f64::from(visual_rect.x()) - Number(fragment_rect.offset.left),
+                y: f64::from(visual_rect.y()) - Number(fragment_rect.offset.top),
+            },
+            size: Size {
+                width: f64::from(visual_rect.width()),
+                height: f64::from(visual_rect.height()),
+            },
+        },
         glyph_origin: Offset {
             x: svg.rect.x() as f64 - Number(fragment_rect.offset.left),
             y: svg.rect.y() as f64 - Number(fragment_rect.offset.top),
@@ -1754,6 +1764,20 @@ fn ExportBoxPaintGeometry(box_fragment: &PhysicalBoxFragment, paint: &mut PaintP
             width: Number(layout_box.ScrollWidth()),
             height: Number(layout_box.ScrollHeight()),
         };
+        // CSSOM View client geometry is not FragmentNode's paint content size.
+        // Element::clientWidth/Height read the layout viewport for the root,
+        // otherwise the native padding box (which excludes classic bars).
+        let client_size = if layout_box.IsLayoutView() {
+            let view = unsafe { &*To::<LayoutView>(box_fragment.GetLayoutObject()) };
+            let size = view.GetLayoutSize(
+                crate::internal::scroll_types::IncludeScrollbarsInRect::kExcludeScrollbars);
+            Size { width: size.width() as f64, height: size.height() as f64 }
+        } else {
+            let size = if layout_box.IsTable() { layout_box.StitchedSize() }
+                else { layout_box.PhysicalPaddingBoxRect().size };
+            Size { width: Number(size.width), height: Number(size.height) }
+        };
+        paint.client_size = Some(client_size);
         // Export the native scroll owner, not the unpropagated input CSS.
         // Blink's UpdateScrollNode/UpdateScrollTranslation use this same area.
         let area = layout_box.GetScrollableArea();
@@ -2574,7 +2598,7 @@ fn ExportCollapsedTablePaintData(
 }
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:1704-1734
-fn AppendSVGRootChildren(
+fn AppendSVGChildren(
     object: *const LayoutObject,
     output: &mut Vec<FragmentNode>,
     sources: &SourceMap,
@@ -2586,9 +2610,9 @@ fn AppendSVGRootChildren(
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
 ) {
-    if object.is_null() || !unsafe { &*object }.IsSVGRoot() {
-        return;
-    }
+    if object.is_null() { return; }
+    let owner = unsafe { &*object };
+    if !(owner.IsSVGRoot() || (owner.IsSVGContainer() && !owner.IsSVGForeignObject())) { return; }
     // SVG children are owned by child LayoutBoxes, not linked into the root
     // replaced box's PhysicalBoxFragment::Children().
     let mut child = unsafe { &*object }.SlowFirstChild();
@@ -2794,7 +2818,7 @@ fn ExportInlineItem(
     // cpp: core/paint/box_fragment_painter.cc:2025-2026,2071-2072
     // cpp: core/paint/inline_box_fragment_painter.cc:63-64
     output.paint.display_item_fragment = item.FragmentId();
-    output.paint.hidden = item.IsHiddenForPaint();
+    output.paint.hidden = item.IsHiddenForPaint() || output.paint.svg_viewport.is_some_and(|v| v.disabled);
     let rect = *item.RectInContainerFragment();
     output.offset = Offset {
         x: Number(rect.offset.left - parent_offset.left),
@@ -2942,7 +2966,7 @@ fn ExportInlineItem(
                         }
                     }
                 }
-                AppendSVGRootChildren(
+                AppendSVGChildren(
                     object,
                     &mut output.children,
                     sources,
@@ -3051,7 +3075,7 @@ fn ExportFragment(
     output.paint =
         ExportPaintProperties(object, sources, style_sources, effective_style, resources);
     output.paint.display_item_fragment = display_item_fragment;
-    output.paint.hidden = fragment.IsHiddenForPaint();
+    output.paint.hidden = fragment.IsHiddenForPaint() || output.paint.svg_viewport.is_some_and(|v| v.disabled);
     output.kind = if fragment.IsBox() {
         FragmentKind::kBox
     } else {
@@ -3166,7 +3190,7 @@ fn ExportFragment(
             );
         }
     }
-    AppendSVGRootChildren(
+    AppendSVGChildren(
         object,
         &mut output.children,
         sources,
@@ -4237,6 +4261,20 @@ pub fn PrepareLayoutObjectTree(
             }
         }
         let node = current.GetNode();
+        let next = current.NextInPreOrder(root_ptr);
+        if current.IsSVGRoot() {
+            let size = space.document_image_container
+                .filter(|container| !node.is_null()
+                    && unsafe { &*node }.InputId() == container.root_node_id)
+                .map_or(PhysicalSize::default(), |container| PhysicalSize::new(
+                    LayoutUnit::from_f64(container.size.width),
+                    LayoutUnit::from_f64(container.size.height),
+                ));
+            let algorithms = LayoutPassScope::Algorithms();
+            let set_container = unsafe { &*algorithms }.svg_support.set_root_container_size
+                .expect("SVG layout module has a root container setter");
+            set_container(unsafe { &mut *object }, size);
+        }
         if !node.is_null() {
             unsafe { &mut *node }.PrepareStandaloneLayout(
                 space,
@@ -4244,7 +4282,7 @@ pub fn PrepareLayoutObjectTree(
                 has_first_line_styles,
             );
         }
-        object = current.NextInPreOrder(root_ptr);
+        object = next;
     }
     object = root_ptr;
     while !object.is_null() {
@@ -4322,6 +4360,7 @@ pub fn ExportLayoutObjectTree(
         fonts: space.fonts.clone(),
         images: space.images.clone(),
         device_pixel_ratio: space.device_pixel_ratio,
+        preferred_color_scheme: space.preferred_color_scheme,
         layout_zoom_factor: space.layout_zoom_factor,
         paints_opaque_base_background: !space.printing,
         viewport: space.viewport,

@@ -1052,6 +1052,12 @@ pub(crate) struct ProductionBaseStyleCollaborators<'a> {
     pub animations: Option<&'a ProductionActiveInterpolationsMap>,
     pub transitions: Option<&'a ProductionActiveInterpolationsMap>,
     pub matched_properties_cache: Option<ProductionMatchedPropertiesCache>,
+    /// Document-owned selector handles and compiled-query cache. Each match
+    /// still creates a fresh session/backend with live DOM and scope state.
+    /// cpp: StyleEngine retains its StyleResolver; per-element collectors
+    /// reference the document's existing node owners rather than rebuilding
+    /// handles for every node in every ResolveStyle call.
+    pub selectors: Option<Rc<RefCell<PersistentSelectorService>>>,
     /// Document-owned live interaction state consumed by selector matching.
     /// cpp: SelectorChecker::MatchInternalPseudoClass delegates
     /// `:-internal-multi-select-focus` to HTMLOptionElement's retained state;
@@ -1087,6 +1093,7 @@ impl ProductionBaseStyleCollaborators<'_> {
             animations: None,
             transitions: None,
             matched_properties_cache: None,
+            selectors: None,
             interaction: UserInteractionState::default(),
         }
     }
@@ -1188,13 +1195,13 @@ impl<'d> ProductionRuleMatchingHost<'d> {
         cascade: ProductionBaseStyleCollaborators<'d>,
     ) -> Self {
         let matched_properties_cache = cascade.matched_properties_cache.clone().unwrap_or_default();
-        let mut selectors = PersistentSelectorService::default();
-        selectors.interaction = cascade.interaction;
+        let selectors = cascade.selectors.clone().unwrap_or_default();
+        selectors.borrow_mut().interaction = cascade.interaction;
         Self {
             initial: ProductionInitialStyleHost::new(media, cascade.color_scheme_settings),
             document,
             author_rule_sets,
-            selectors: Rc::new(RefCell::new(selectors)),
+            selectors,
             html_user_agent_rules,
             svg_user_agent_rules,
             mathml_user_agent_rules,
@@ -1861,7 +1868,37 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
             crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
         );
         let node = self.document.Node(element.index);
-        if node.Namespace() == DOMNamespace::kMathML {
+        // Chromium HTMLElement::CollectStyleForPresentationAttribute,
+        // html_element.cc:412-420 (6c1d401fcca5e1b0030563a90c2f2bba168e0c15).
+        // hidden is an HTML presentation hint, not an unoverrideable UA rule
+        // or an attachment override. MatchPresentationalHints supplies its
+        // cascade origin; canonical ComputedStyle owns the resulting display.
+        if node.Namespace() == DOMNamespace::kHTML {
+            if let Some(hidden) = node.Attributes().iter().find(|attribute| {
+                attribute.namespace_uri.is_empty() && attribute.local_name == "hidden"
+            }) {
+                let (property, value) = if hidden.value.eq_ignore_ascii_case("until-found") {
+                    (CSSPropertyID::kContentVisibility, CSSValueID::kHidden)
+                } else {
+                    (CSSPropertyID::kDisplay, CSSValueID::kNone)
+                };
+                self.SetLonghandProperty(properties.as_ref(), property, value);
+            }
+        }
+        if node.Namespace() == DOMNamespace::kSVG {
+            // SVGElement::CollectStyleForPresentationAttribute feeds the same
+            // retained property-set owner as other presentational hints. Do
+            // not bypass MatchPresentationalHints or repair fill/stroke after
+            // the cascade: author rules must override these declarations.
+            if let CSSPropertyValueSetRuleHandle::Mutable(set) = properties.as_ref().as_ref() {
+                let mut set = set.borrow_mut();
+                for property in
+                    crate::svg_presentation_attributes::CollectPresentationAttributes(node)
+                {
+                    set.SetLonghandProperty(property);
+                }
+            }
+        } else if node.Namespace() == DOMNamespace::kMathML {
             // cpp: mathml/mathml_element.cc:36-124. These attributes synthesize
             // ordinary CSS declarations; their cascade position is owned by
             // MatchPresentationalHints rather than by MathML post-processing.
@@ -3791,6 +3828,26 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                 ..Default::default()
             },
         );
+        // style_adjuster.cc:1252,1261-1282: animated recascades start from
+        // an adjusted base. Recompute forcing reasons instead of retaining a
+        // former explicit z-index when the sampled value becomes auto.
+        state.builder.SetForcesStackingContext(false);
+        super::style_adjuster::AdjustStyleForZIndex(&mut state.builder, Self::style(parent));
+        if self.cascade.is_document_element
+            || matches!(state.builder.StyleType(), PseudoId::kPseudoIdBackdrop | PseudoId::kPseudoIdViewTransition)
+            || element_if_not_pseudo.is_some_and(|element| {
+                self.document.IsInTopLayer(element.index)
+                    || self.document.Node(element.index).IsElement("foreignObject", DOMNamespace::kSVG)
+            })
+        {
+            state.builder.SetForcesStackingContext(true);
+        }
+        // Chromium style_adjuster.cc:1314-1321: finalize each image layer's
+        // shorter longhand lists before forced colors and style publication.
+        // Keep repetition/culling in the canonical FillLayer owner; the
+        // downstream geometry projection must consume the finalized values.
+        state.builder.AdjustBackgroundLayers();
+        state.builder.AdjustMaskLayers();
         if AdjustProductionStyleForForcedColors(
             &mut state.builder,
             self.initial.media,
@@ -4690,6 +4747,56 @@ mod tests {
     }
 
     #[test]
+    fn production_element_and_pseudo_hosts_share_selector_handles_but_not_sessions() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let media = MediaValuesCachedData::default();
+        let owner = html::html_parser::ParseHTML(
+            "<!doctype html><div id=first></div><div id=second></div>",
+        );
+        let document = owner.GetDocument();
+        let first = element_with_id(document, "first");
+        let second = element_with_id(document, "second");
+        let selectors = Rc::new(RefCell::new(PersistentSelectorService::default()));
+        let original = selectors.borrow_mut().StyleMatchSession(document).Backend();
+        let first_handle = original.handle(first);
+        let second_handle = original.handle(second);
+        for (subject, pseudo) in [
+            (first, PseudoId::kPseudoIdNone),
+            (second, PseudoId::kPseudoIdNone),
+            (first, PseudoId::kPseudoIdBefore),
+            (second, PseudoId::kPseudoIdSelection),
+        ] {
+            let mut collaborators = ProductionBaseStyleCollaborators::ordinary(media.em_size);
+            collaborators.subject_node = Some(subject);
+            collaborators.pseudo_id = pseudo;
+            collaborators.selectors = Some(selectors.clone());
+            let host = ProductionRuleMatchingHost::new_with_collaborators(
+                document,
+                &media,
+                ua_rule_set("", &media),
+                Vec::new(),
+                collaborators,
+            );
+            assert!(Rc::ptr_eq(&selectors, &host.selectors));
+            let current = host
+                .selectors
+                .borrow_mut()
+                .StyleMatchSession(document)
+                .Backend();
+            assert!(!Rc::ptr_eq(&original, &current));
+            assert!(Rc::ptr_eq(&first_handle, &current.handle(first)));
+            assert!(Rc::ptr_eq(&second_handle, &current.handle(second)));
+        }
+        let standalone = ProductionRuleMatchingHost::new(
+            document,
+            &media,
+            ua_rule_set("", &media),
+            Vec::new(),
+        );
+        assert!(!Rc::ptr_eq(&selectors, &standalone.selectors));
+    }
+
+    #[test]
     fn translated_quirks_color_uses_document_text_color_owner() {
         let _heap = foundation::LayoutHeapScope::new();
         let declaration = foundation::String::from("color:-internal-quirk-inherit");
@@ -5184,6 +5291,79 @@ mod tests {
         assert_eq!(operator.GetMathRSpace().PercentValue(), 2.0);
         assert_eq!(operator.GetMathMinSize().Pixels(), 3.0);
         assert_eq!(operator.GetMathMaxSize().Pixels(), 4.0);
+    }
+
+    #[test]
+    fn translated_nested_ua_declarations_preserve_button_alignment() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let media = MediaValuesCachedData::default();
+        let owner = html::html_parser::ParseHTML("<!doctype html><button id=target>x</button>");
+        let initial = InitialStyleForDocument(&media, ColorSchemeSettings::default());
+        for css in [
+            "button {text-align:center;color:red}",
+            "button {color:red; @supports (display:block) {text-align:center}}",
+            "button {color:red; @supports not blink-feature(AppearanceBase) {text-align:center}}",
+        ] {
+            let output = ApplyBaseStyleForElement(ProductionBaseStyleInputs {
+                matching: ProductionRuleMatchingInputs {
+                    document: owner.GetDocument(),
+                    element_index: element_with_id(owner.GetDocument(), "target"),
+                    media: &media,
+                    html_user_agent_rules: ua_rule_set(css, &media),
+                    svg_user_agent_rules: None,
+                    mathml_user_agent_rules: None,
+                    author_rule_sets: Vec::new(),
+                },
+                parent: Some(initial.clone()),
+                collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
+            })
+            .unwrap();
+            assert_eq!(
+                unsafe { &*output.style.Get() }.GetTextAlign(),
+                foundation::ETextAlign::kCenter,
+                "{css}"
+            );
+        }
+    }
+
+    #[test]
+    fn translated_svg_presentation_attributes_reach_native_style() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let media = MediaValuesCachedData::default();
+        let owner = html::html_parser::ParseHTML(
+            r##"<!doctype html><svg><path id="shape" fill="none" stroke="#123456"
+                stroke-width="2" stroke-linecap="round" fill-rule="evenodd"
+                transform="translate(3 4)" d="M0 0L10 10"/></svg>"##,
+        );
+        let initial = InitialStyleForDocument(&media, ColorSchemeSettings::default());
+        let empty = rule_set("", &media);
+        let output = ApplyBaseStyleForElement(ProductionBaseStyleInputs {
+            matching: ProductionRuleMatchingInputs {
+                document: owner.GetDocument(),
+                element_index: element_with_id(owner.GetDocument(), "shape"),
+                media: &media,
+                html_user_agent_rules: empty.clone(),
+                svg_user_agent_rules: Some(empty),
+                mathml_user_agent_rules: None,
+                author_rule_sets: Vec::new(),
+            },
+            parent: Some(initial),
+            collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
+        })
+        .expect("SVG hints must stay on the translated resolver path");
+        let style = unsafe { &*output.style.Get() };
+        assert!(
+            !style.FillPaint().IsColor(),
+            "fill=none must suppress the initial black fill"
+        );
+        assert!(style.StrokePaint().IsColor());
+        assert_eq!(
+            style.StrokePaint().GetColor().GetColor().Param0(),
+            0x12 as f32
+        );
+        assert_eq!(style.StrokeWidth().length().Pixels(), 2.0);
+        assert_eq!(style.CapStyle(), foundation::LineCap::kRoundCap);
+        assert_eq!(style.Transform().size(), 1);
     }
 
     #[test]
@@ -6014,6 +6194,64 @@ mod tests {
         let important = base_data.GetBaseImportantSet();
         assert!(!important.is_null());
         assert!(unsafe { &*important }.Has(CSSPropertyID::kOpacity));
+    }
+
+    #[test]
+    fn animated_z_index_auto_recomputes_context_and_retains_unanimated_base() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let media = MediaValuesCachedData {
+            viewport_width: 800.0,
+            viewport_height: 600.0,
+            em_size: 16.0,
+            ..Default::default()
+        };
+        let css = "#target { position:relative; z-index:1 }";
+        let mut owner = html::html_parser::ParseHTML("<!doctype html><div id=target></div>");
+        let target = element_with_id(owner.GetDocument(), "target");
+        let target_id = owner.GetDocument().Node(target).Id();
+        owner.GetDocumentMut().SetAnimationStyle(
+            target_id,
+            1,
+            crate::ParseCSSDeclarationList("z-index:2"),
+        );
+        owner.GetDocumentMut().SetAnimationStyle(
+            target_id,
+            2,
+            crate::ParseCSSDeclarationList("z-index:auto"),
+        );
+        let animations = ParseAnimationInterpolations(
+            owner.GetDocument().AnimationStyles(target_id),
+            CSSParserMode::kHTMLStandardMode,
+        )
+        .expect("fixture animation samples must retain typed values");
+        let parent = InitialStyleForDocument(&media, ColorSchemeSettings::default());
+        let mut collaborators = ProductionBaseStyleCollaborators::ordinary(media.em_size);
+        collaborators.root_style = Some(parent.clone());
+        collaborators.animations = Some(&animations);
+
+        let actual = ApplyBaseStyleNoCacheForElement(ProductionBaseStyleInputs {
+            matching: ProductionRuleMatchingInputs {
+                document: owner.GetDocument(),
+                element_index: target,
+                media: &media,
+                html_user_agent_rules: rule_set("", &media),
+                svg_user_agent_rules: None,
+                mathml_user_agent_rules: None,
+                author_rule_sets: vec![rule_set(css, &media)],
+            },
+            parent: Some(parent),
+            collaborators,
+        })
+        .unwrap_or_else(|fallbacks| panic!("unexpected interpolation fallback: {fallbacks:?}"));
+        let actual = ProductionRuleMatchingHost::style(actual.as_ref());
+        assert!(actual.AllowsZIndex());
+        assert!(actual.HasAutoZIndex());
+        assert!(!actual.ForcesStackingContext());
+        let base_data = unsafe { &*actual.BaseData() };
+        let base_style = unsafe { &*base_data.GetBaseComputedStyle() };
+        assert_eq!(base_style.ZIndex(), 1);
+        assert!(base_style.AllowsZIndex());
+        assert!(base_style.ForcesStackingContext());
     }
 
     #[test]

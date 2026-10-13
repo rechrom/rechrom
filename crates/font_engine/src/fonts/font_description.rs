@@ -186,6 +186,10 @@ pub struct FontDescription {
     word_spacing_: Length,
     size_adjust_: FontSizeAdjust,
     resolved_font_features_: ResolvedFontFeatures,
+    // Immutable Style -> FontEngine value boundary. Entries use the requested
+    // CSS family's spelling, never a native/internal face name. Registry lookup
+    // and its case folding belong to Style, before publishing this snapshot.
+    resolved_font_features_for_families_: Arc<[(AtomicString, ResolvedFontFeatures)]>,
     font_selection_request_: FontSelectionRequest,
     original_slope: FontSelectionValue,
     style_syntax_: StyleSyntax,
@@ -218,6 +222,7 @@ impl Default for FontDescription {
             word_spacing_: Length::Fixed(0.0),
             size_adjust_: FontSizeAdjust::default(),
             resolved_font_features_: Vec::new(),
+            resolved_font_features_for_families_: Arc::from([]),
             font_selection_request_: FontSelectionRequest::new(
                 kNormalWeightValue,
                 kNormalWidthValue,
@@ -256,10 +261,10 @@ impl PartialEq for FontDescription {
             && self.feature_settings_ == other.feature_settings_
             && self.variation_settings_ == other.variation_settings_
             && self.font_palette_ == other.font_palette_
-            && same_arc(
-                &self.font_variant_alternates_,
-                &other.font_variant_alternates_,
-            )
+            && self.font_variant_alternates_ == other.font_variant_alternates_
+            && self.resolved_font_features_ == other.resolved_font_features_
+            && self.resolved_font_features_for_families_
+                == other.resolved_font_features_for_families_
     }
 }
 
@@ -468,6 +473,21 @@ impl FontDescription {
     }
     pub fn SetFontVariantAlternates(&mut self, value: Option<Arc<FontVariantAlternates>>) {
         self.font_variant_alternates_ = value;
+        self.resolved_font_features_for_families_ = Arc::from([]);
+    }
+
+    /// Publish resolved alternates for each requested CSS family while retaining
+    /// the symbolic property above. Replacing this immutable snapshot cannot
+    /// change the features of an already-retained Font or ShapeResult.
+    pub fn SetResolvedFontFeaturesForFamilies(
+        &mut self,
+        value: Arc<[(AtomicString, ResolvedFontFeatures)]>,
+    ) {
+        self.resolved_font_features_for_families_ = value;
+    }
+
+    pub fn ResolvedFontFeaturesForFamilies(&self) -> &[(AtomicString, ResolvedFontFeatures)] {
+        &self.resolved_font_features_for_families_
     }
 
     // cpp: font_engine/fonts/font_description.h:274-279

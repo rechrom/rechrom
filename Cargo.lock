@@ -251,6 +251,7 @@ dependencies = [
  "layoutng_foundation",
  "layoutng_grid",
  "layoutng_list",
+ "layoutng_multicol",
  "layoutng_out_of_flow",
  "layoutng_replaced",
  "layoutng_style",
@@ -720,6 +721,7 @@ dependencies = [
 name = "document_loader"
 version = "0.0.1"
 dependencies = [
+ "browser_tracing",
  "cssom",
  "decode",
  "dom",
@@ -1253,6 +1255,7 @@ version = "0.0.1"
 dependencies = [
  "base64 0.22.1",
  "brotli",
+ "browser_tracing",
  "bytes",
  "flate2",
  "h2",
@@ -1811,6 +1814,17 @@ dependencies = [
 [[package]]
 name = "layoutng_mathml"
 version = "0.0.1"
+
+[[package]]
+name = "layoutng_multicol"
+version = "0.0.1"
+dependencies = [
+ "layoutng_assembly",
+ "layoutng_block",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+]
 
 [[package]]
 name = "layoutng_out_of_flow"
@@ -2397,6 +2411,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 name = "open"
 version = "0.0.1"
 dependencies = [
+ "browser_tracing",
  "cssom",
  "document_loader",
  "dom",
@@ -2888,6 +2903,7 @@ dependencies = [
 name = "resource"
 version = "0.0.1"
 dependencies = [
+ "browser_tracing",
  "decode",
  "image_decoder",
  "image_resource",

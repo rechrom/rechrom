@@ -451,6 +451,7 @@ pub enum LayoutObjectClass {
     TextControlInnerEditor,
     Fieldset,
     SvgGroup,
+    SvgViewportContainer,
     SvgShape,
     SvgRoot,
     SvgForeignObject,
@@ -2354,7 +2355,16 @@ impl LayoutObject {
         if self.IsLayoutReplaced() {
             return false;
         }
-        self.HasNonVisibleOverflow() && self.StyleRef().IsScrollContainer()
+        // SVG containers use LayoutBox storage at the immutable fragment
+        // boundary, but correspond to LayoutSVGModelObject in Chromium.
+        // A viewport clip must not turn that storage into a CSS scroll owner.
+        if self.IsSVGContainer() && !self.IsSVGForeignObject() {
+            return false;
+        }
+        // The extracted LayoutView also carries the document element's style.
+        // Chromium's separate LayoutView is always the viewport scroll owner,
+        // including when the propagated CSS overflow is visible or hidden.
+        self.IsLayoutView() || (self.HasNonVisibleOverflow() && self.StyleRef().IsScrollContainer())
     }
 
     // cpp: layoutng/internal/layout_object.h:1525-1535

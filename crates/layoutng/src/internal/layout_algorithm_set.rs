@@ -182,10 +182,27 @@ impl Default for SvgRootSizingInfo {
 // cpp: layoutng/internal/layout_algorithm_set.h:196-215
 #[derive(Clone, Copy, Default)]
 pub struct SvgLayoutSupport {
+    // Pure derived SVG Layout visual geometry, in local SVG user coordinates.
+    pub text_visual_rect: Option<fn(&LayoutObject) -> foundation::gfx::RectF>,
+    pub viewport_size: Option<fn(&LayoutObject) -> foundation::gfx::SizeF>,
+    pub local_to_parent_transform: Option<
+        fn(
+            &LayoutObject,
+        ) -> foundation::blink_geometry::transforms::affine_transform::AffineTransform,
+    >,
+    pub paint_geometry: Option<
+        fn(
+            &LayoutObject,
+        ) -> (
+            Option<super::layout_input::TransformMatrix>,
+            Option<layoutng_fragment_tree::fragment_tree::SvgViewportGeometry>,
+        ),
+    >,
     // Rust callback for the C++ LayoutObject::UpdateSVGLayout virtual override.
     pub update_object: Option<fn(&mut LayoutObject, &SVGLayoutInfo) -> SVGLayoutResult>,
     pub root_natural_dimensions: Option<fn(&LayoutObject) -> PhysicalNaturalSizingInfo>,
     pub root_sizing_info: Option<fn(&LayoutObject) -> SvgRootSizingInfo>,
+    pub set_root_container_size: Option<fn(&mut LayoutObject, PhysicalSize)>,
     pub layout_root: Option<fn(&mut LayoutObject, &PhysicalRect)>,
     pub resolve_length: Option<fn(&Length, &ComputedStyle, f32) -> f32>,
     pub screen_font_scale: Option<fn(&LayoutObject) -> f32>,

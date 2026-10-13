@@ -64,3 +64,51 @@ fn repeated_relative_moveto_pairs_remain_relative_lines() {
     expect_point(tail[1].point, 7.255, 5.251);
     expect_point(tail[2].point, 7.253, 2.998);
 }
+
+#[test]
+fn consecutive_explicit_moves_replace_the_empty_contour() {
+    for (source, normalized) in [
+        (
+            "M337.5,337.5 m-320,0 a320,320 0 1,1 640,0 a320,320 0 1,1 -640,0",
+            "M17.5,337.5 a320,320 0 1,1 640,0 a320,320 0 1,1 -640,0",
+        ),
+        ("M900 900 M10 20 m20 30 L100 80", "M30 50 L100 80"),
+        ("M900 900 M10 20 Q30 50 100 20", "M10 20 Q30 50 100 20"),
+        (
+            "M900 900 M10 20 C30 50 60 50 100 20 Z",
+            "M10 20 C30 50 60 50 100 20 Z",
+        ),
+        (
+            "M0 0 L10 0 M900 900 M20 20 L30 20",
+            "M0 0 L10 0 M20 20 L30 20",
+        ),
+        ("M900 900 M10 20", "M10 20"),
+    ] {
+        let actual = ParseSVGPathDefault(source).unwrap();
+        let expected = ParseSVGPathDefault(normalized).unwrap();
+        assert_eq!(actual.commands, expected.commands, "{source}");
+        assert_eq!(
+            actual.flattened_points, expected.flattened_points,
+            "{source}"
+        );
+        assert_eq!(actual.single_subpath, expected.single_subpath, "{source}");
+        assert_eq!(actual.bounds_offset, expected.bounds_offset, "{source}");
+        assert_eq!(actual.bounds_width, expected.bounds_width, "{source}");
+        assert_eq!(actual.bounds_height, expected.bounds_height, "{source}");
+    }
+}
+
+#[test]
+fn moveto_after_a_close_or_drawn_contour_stays_a_separate_contour() {
+    for source in ["M10 20 Z M30 40 L50 40", "M10 20 L30 20 M40 40 L50 40"] {
+        let path = ParseSVGPathDefault(source).unwrap();
+        assert!(!path.single_subpath, "{source}");
+        assert_eq!(
+            path.commands
+                .iter()
+                .filter(|c| c.verb == PaintPathVerb::kMoveTo)
+                .count(),
+            2
+        );
+    }
+}

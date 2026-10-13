@@ -1,0 +1,69 @@
+Chromium/Blink and Skia SVG consecutive-move/empty-path source notices
+Chromium revision: 6c1d401fcca5e1b0030563a90c2f2bba168e0c15
+Skia revision from Chromium DEPS: cacf77bdba7ba7df8ea7236d7e14b08c658ff368
+
+See LICENSE.chromium, LICENSE-LGPL-2, LICENSE-LGPL-2.1, LICENSE-APPLE,
+and the unchanged Skia BSD license at ../crates/skia/LICENSE.
+
+
+third_party/blink/renderer/core/svg/svg_path_builder.cc
+https://chromium.googlesource.com/chromium/src/+/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/third_party/blink/renderer/core/svg/svg_path_builder.cc
+/*
+ * Copyright (C) 2002, 2003 The Karbon Developers
+ * Copyright (C) 2006 Alexander Kellett <lypanov@kde.org>
+ * Copyright (C) 2006, 2007 Rob Buis <buis@kde.org>
+ * Copyright (C) 2007, 2009 Apple Inc. All rights reserved.
+ * Copyright (C) Research In Motion Limited 2010. All rights reserved.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Library General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public License
+ * along with this library; see the file COPYING.LIB.  If not, write to
+ * the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
+ */
+
+
+third_party/blink/renderer/core/paint/svg_shape_painter.cc
+https://chromium.googlesource.com/chromium/src/+/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/third_party/blink/renderer/core/paint/svg_shape_painter.cc
+// Copyright 2014 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+
+src/core/SkPathBuilder.cpp
+https://skia.googlesource.com/skia/+/cacf77bdba7ba7df8ea7236d7e14b08c658ff368/src/core/SkPathBuilder.cpp
+/*
+ * Copyright 2015 Google Inc.
+ *
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
+
+
+src/core/SkStroke.cpp
+https://skia.googlesource.com/skia/+/cacf77bdba7ba7df8ea7236d7e14b08c658ff368/src/core/SkStroke.cpp
+/*
+ * Copyright 2008 The Android Open Source Project
+ *
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
+
+
+tests/PathTest.cpp
+https://skia.googlesource.com/skia/+/cacf77bdba7ba7df8ea7236d7e14b08c658ff368/tests/PathTest.cpp
+/*
+ * Copyright 2011 Google Inc.
+ *
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */

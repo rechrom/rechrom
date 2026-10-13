@@ -1,5 +1,60 @@
 (function() {
 'use strict';
+// Window CSSOM View, LocalDOMWindow::scrollTo/scrollBy. Native viewport state
+// and writes use the same scroll owner as input and Element scrolling.
+const scrollInvoke = __domInvoke, queueScrollCompletion = __queueScrollCompletion;
+const ScrollPromise = Promise;
+function windowScroll(receiver, args, relative) {
+  try {
+    if (receiver != null && receiver !== window && receiver !== globalThis)
+      throw new TypeError('Illegal invocation');
+    let left, top, behavior = 'auto';
+    if (args.length > 1) {
+      left = +args[0]; top = +args[1];
+    } else {
+      const options = args[0];
+      if (options != null && typeof options !== 'object' && typeof options !== 'function')
+        throw new TypeError('Scroll options must be an object');
+      if (options != null) {
+        const requestedBehavior = options.behavior;
+        if (requestedBehavior !== undefined) behavior = `${requestedBehavior}`;
+        if (!['auto','instant','smooth'].includes(behavior))
+          throw new TypeError('Invalid scroll behavior');
+        const requestedLeft = options.left;
+        if (requestedLeft !== undefined) left = +requestedLeft;
+        const requestedTop = options.top;
+        if (requestedTop !== undefined) top = +requestedTop;
+      }
+    }
+    const unsupported = scrollInvoke(window,'viewportScroll',relative,left,top,behavior);
+    if (unsupported) throw new DOMException(unsupported,'NotSupportedError');
+    // The instant source path completes its native offset change synchronously,
+    // then posts ScrollPromiseResolver settlement to the DOM-manipulation queue.
+    return new ScrollPromise(resolve => queueScrollCompletion(resolve));
+  } catch (error) {
+    // The pinned Window IDL is Promise-returning; conversion/receiver errors
+    // become rejections through ExceptionToRejectPromiseScope.
+    return ScrollPromise.reject(error);
+  }
+}
+globalThis.scroll = function scroll() { return windowScroll(this,arguments,false); };
+globalThis.scrollTo = function scrollTo() { return windowScroll(this,arguments,false); };
+globalThis.scrollBy = function scrollBy() { return windowScroll(this,arguments,true); };
+for (const [property,axis] of [['scrollX','x'],['pageXOffset','x'],['scrollY','y'],['pageYOffset','y']]) {
+  Object.defineProperty(globalThis,property,{
+    configurable:true, enumerable:true,
+    get() {
+      if (this != null && this !== window && this !== globalThis) throw new TypeError('Illegal invocation');
+      return scrollInvoke(window,'viewportScrollOffset',axis);
+    },
+    // Window IDL marks these readonly attributes Replaceable.
+    set(value) {
+      if (this != null && this !== window && this !== globalThis) throw new TypeError('Illegal invocation');
+      Object.defineProperty(this == null ? globalThis : this,property,{value,writable:true,enumerable:true,configurable:true});
+    }
+  });
+}
+
 const request = __request;
 const cancelRequest = __cancelRequest;
 const randomHex = __randomHex;
@@ -293,19 +348,6 @@ for(const key of ['protocol','host','hostname','port','pathname','username','pas
     this.href=p.protocol+'//'+(p.username?p.username+(p.password?':'+p.password:'')+'@':'')+p.host+p.pathname+p.search+p.hash;
   }});
 globalThis.URL=URL;
-class Event {
-  constructor(type, options = {}) {
-    this.type = String(type); this.bubbles = !!options.bubbles; this.cancelable = !!options.cancelable;
-    this.composed = !!options.composed; this.defaultPrevented = false; this.isTrusted = false;
-    this.target = null; this.currentTarget = null; this.eventPhase = 0; this.timeStamp = performance.now();
-  }
-  preventDefault() { if (this.cancelable && !this._passive) {this.defaultPrevented = true;if(this._nativeDispatch)__domInvoke(window,'__eventAction','prevent');} }
-  stopPropagation() { this._stop = true;if(this._nativeDispatch)__domInvoke(window,'__eventAction','stop'); }
-  stopImmediatePropagation() { this._stop = this._immediate = true;if(this._nativeDispatch)__domInvoke(window,'__eventAction','immediate'); }
-}
-globalThis.Event = Event;
-__domInstall('Event', Event.prototype);
-__domWrap('__eventState', (event,target,current,phase,passive) => {event.target=target;event.currentTarget=current;event.eventPhase=phase;event._nativeDispatch=current!==null;event._passive=passive;});
 Document.prototype.createEvent = function(type) { const event=new Event(''); event.initEvent=function(name,bubbles,cancelable){this.type=String(name);this.bubbles=!!bubbles;this.cancelable=!!cancelable;}; event.initCustomEvent=function(name,bubbles,cancelable,detail){this.initEvent(name,bubbles,cancelable);this.detail=detail;};return event; };
 class DOMException extends Error {
   constructor(message = '', name = 'Error') { super(message); this.name = name; }
@@ -421,28 +463,12 @@ globalThis.fetch=function(input,init={}) {
       ()=>{if(settled)return;settled=true;reject(new TypeError('Failed to fetch'));});
   });
 };
-class XMLHttpRequest {
+class XMLHttpRequest extends EventTarget {
   constructor() {
+    super();
     this.readyState = 0; this.responseText = ''; this.response = ''; this.responseType = '';
     this.status = 0; this.statusText = ''; this.responseURL = ''; this.timeout = 0;
-    this.withCredentials = false; this._listeners = []; this._generation = 0; this._headers = {};
-  }
-  addEventListener(type, callback, options = {}) {
-    if (callback == null || this._listeners.some(l => l.type === type && l.callback === callback)) return;
-    this._listeners.push({type, callback, once: !!options.once});
-  }
-  removeEventListener(type, callback) { this._listeners = this._listeners.filter(l => l.type !== type || l.callback !== callback); }
-  dispatchEvent(event) {
-    event.target = event.currentTarget = this; event.eventPhase = 2;
-    for (const listener of [...this._listeners]) {
-      if (listener.type !== event.type || !this._listeners.includes(listener)) continue;
-      if (listener.once) this.removeEventListener(listener.type, listener.callback);
-      typeof listener.callback === 'function' ? listener.callback.call(this,event) : listener.callback.handleEvent(event);
-      if (event._immediate) break;
-    }
-    if (!event._immediate && typeof this['on'+event.type] === 'function') this['on'+event.type](event);
-    event.currentTarget = null; event.eventPhase = 0;
-    return !event.defaultPrevented;
+    this.withCredentials = false; this._generation = 0; this._headers = {};
   }
   _fire(type) { this.dispatchEvent(new Event(type)); }
   open(method, url, async = true) {
@@ -544,67 +570,217 @@ const documentSelection = new Selection();
 globalThis.Selection = Selection;
 globalThis.getSelection = () => documentSelection;
 
-class CustomElementRegistry {
-  constructor() { this._definitions = new Map(); this._waiters = new Map(); this._upgradeQueued=false; }
-  define(name, constructor, options = {}) {
-    name = String(name).toLowerCase();
-    if (!name.includes('-') || typeof constructor !== 'function')
-      throw new DOMException('Invalid custom element definition', 'SyntaxError');
-    if (this._definitions.has(name))
-      throw new DOMException('Custom element already defined', 'NotSupportedError');
-    for (const definition of this._definitions.values())
-      if (definition.constructor === constructor)
-        throw new DOMException('Constructor already registered', 'NotSupportedError');
-    this._definitions.set(name, {constructor, extends: options?.extends == null ? null : String(options.extends)});
-    const waiter = this._waiters.get(name);
-    if (waiter) { waiter.resolve(constructor); this._waiters.delete(name); }
-    if(!this._upgradeQueued) {
-      this._upgradeQueued=true;
-      queueMicrotask(() => { this._upgradeQueued=false; this.upgrade(document); });
-    }
+// Source: Blink CustomElementRegistry / ScriptCustomElementDefinitionBuilder.
+// DOM owns definitions, element states and reaction queues. This realm retains
+// only the JavaScript constructor/callback handles and whenDefined promises.
+const ceInvoke = __domInvoke, ceApply = Reflect.apply, ceConstruct = Reflect.construct;
+const ceProxy = Proxy, ceString = String, ceArrayIsArray = Array.isArray;
+const ceDefinitions = new Map(), ceConstructors = new WeakMap(), ceWaiters = new Map();
+const ceRegistryToken = {}, ceRegistryBrands = new WeakSet();
+let ceDefinitionRunning = false;
+function ceDOMString(value) {
+  if (typeof value === 'symbol') throw new TypeError('Cannot convert a Symbol to DOMString');
+  return ceString(value);
+}
+function ceBrand(registry) {
+  if (!ceRegistryBrands.has(registry)) throw new TypeError('Illegal invocation');
+}
+function ceIsConstructor(value) {
+  // IsConstructor without invoking author code or reading .prototype. A Proxy
+  // only has [[Construct]] when its target does, even with a construct trap.
+  try { ceConstruct(new ceProxy(value, {construct(){ return {}; }}), []); return true; }
+  catch { return false; }
+}
+function ceStringSequence(value) {
+  if (value === undefined) return [];
+  const result = [];
+  if (ceArrayIsArray(value) && !ceInvoke(document, '__ceIsProxy', value)) {
+    // Blink NativeValueTraits<IDLSequence<IDLString>>'s actual-array branch.
+    for (let i=0; i<value.length; ++i) result.push(ceDOMString(value[i]));
+    return result;
   }
-  get(name) { return this._definitions.get(String(name).toLowerCase())?.constructor; }
-  getName(constructor) {
-    for (const [name, definition] of this._definitions)
-      if (definition.constructor === constructor) return name;
-    return null;
-  }
-  whenDefined(name) {
-    name = String(name).toLowerCase();
-    const found = this.get(name);
-    if (found) return Promise.resolve(found);
-    let waiter = this._waiters.get(name);
-    if (!waiter) {
-      waiter = {};
-      waiter.promise = new Promise(resolve => { waiter.resolve = resolve; });
-      this._waiters.set(name, waiter);
-    }
-    return waiter.promise;
-  }
-  _upgradeElement(element) {
-    if (!(element instanceof Element) || element.__customElementState) return element;
-    const name = element.getAttribute('is') || element.localName;
-    const definition = this._definitions.get(String(name).toLowerCase());
-    if (!definition) return element;
-    Object.defineProperty(element, '__customElementState', {value:'custom',configurable:true});
-    try { __domUpgradeCustomElement(element, definition.constructor); }
-    catch(error) { Object.defineProperty(element,'__customElementState',{value:'failed',configurable:true}); throw error; }
-    if (element.isConnected && typeof element.connectedCallback === 'function')
-      element.connectedCallback();
-    return element;
-  }
-  upgrade(root) {
-    if (root instanceof Element) this._upgradeElement(root);
-    if (root?.querySelectorAll)
-      for (const element of root.querySelectorAll('*')) this._upgradeElement(element);
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function'))
+    throw new TypeError('Value is not a sequence');
+  const iteratorMethod = value[Symbol.iterator];
+  if (typeof iteratorMethod !== 'function') throw new TypeError('Value is not iterable');
+  const iterator = ceApply(iteratorMethod, value, []);
+  if (iterator === null || (typeof iterator !== 'object' && typeof iterator !== 'function'))
+    throw new TypeError('Iterator must be an object');
+  const next = iterator.next;
+  if (typeof next !== 'function') throw new TypeError('Iterator next must be callable');
+  while (true) {
+    const step = ceApply(next, iterator, []);
+    if (step === null || (typeof step !== 'object' && typeof step !== 'function'))
+      throw new TypeError('Iterator result must be an object');
+    // Blink ScriptIterator::Next retrieves value before done, including the
+    // final record; NativeValueTraits does not close on conversion failure.
+    const entry = step.value;
+    if (step.done) return result;
+    result.push(ceDOMString(entry));
   }
 }
+function ceCallback(prototype, name) {
+  const callback = prototype[name];
+  if (callback !== undefined && typeof callback !== 'function')
+    throw new TypeError(name + ' is not a function');
+  return callback;
+}
+function ceDrainReactions() {
+  let reaction;
+  while ((reaction = ceInvoke(document, '__ceNext')) !== null) {
+    const definition = ceDefinitions.get(reaction.definition);
+    if (!definition) throw new Error('Custom element definition has no script handles');
+    const element = reaction.element;
+    if (reaction.kind === 'upgrade') {
+      if (!ceInvoke(element, '__ceBegin', reaction.definition)) continue;
+      let success = false;
+      try {
+        __domUpgradeCustomElement(element, definition.constructor);
+        success = true;
+      } catch(error) { ceInvoke(document, '__ceReportException', error); }
+      finally { ceInvoke(element, '__ceComplete', reaction.definition, success); }
+    } else {
+      const callback = definition.callbacks[reaction.kind];
+      if (callback === undefined) continue;
+      const argumentsList = reaction.kind === 'attributeChangedCallback'
+        ? [reaction.name, reaction.oldValue, reaction.newValue, reaction.namespace] : [];
+      try { ceApply(callback, element, argumentsList); }
+      catch(error) { ceInvoke(document, '__ceReportException', error); }
+    }
+  }
+}
+__domWrap('__customElementReactions', ceDrainReactions);
+__domWrap('__customElementBackupReactions', function() {
+  ceInvoke(document, '__ceBackupStart');
+  ceDrainReactions();
+});
+function ceWithReactions(action) {
+  ceInvoke(document, '__cePush');
+  try { return action(); }
+  finally {
+    try { ceDrainReactions(); }
+    finally { ceInvoke(document, '__cePop'); }
+  }
+}
+class CustomElementRegistry {
+  constructor(token) {
+    if (token !== ceRegistryToken)
+      throw new DOMException('Scoped custom element registries are not supported', 'NotSupportedError');
+    ceRegistryBrands.add(this);
+  }
+  define(name, constructor, options = {}) {
+    ceBrand(this);
+    if (arguments.length < 2) throw new TypeError('define requires a name and constructor');
+    name = ceDOMString(name);
+    if (typeof constructor !== 'function') throw new TypeError('Constructor must be callable');
+    if (options != null && typeof options !== 'object' && typeof options !== 'function')
+      throw new TypeError('ElementDefinitionOptions must be a dictionary');
+    let extendsName = options == null ? null : options.extends;
+    extendsName = extendsName == null ? null : ceDOMString(extendsName);
+    return ceWithReactions(() => {
+      if (!ceIsConstructor(constructor)) throw new TypeError('Constructor is not constructible');
+      if (!ceInvoke(document, '__ceValidName', name))
+        throw new DOMException('Invalid custom element name', 'SyntaxError');
+      if (ceInvoke(document, '__ceFind', name))
+        throw new DOMException('Custom element already defined', 'NotSupportedError');
+      if (ceConstructors.has(constructor))
+        throw new DOMException('Constructor already registered', 'NotSupportedError');
+      if (extendsName !== null)
+        throw new DOMException('Customized built-in elements are not supported', 'NotSupportedError');
+      if (ceDefinitionRunning)
+        throw new DOMException('An element definition is already being processed', 'NotSupportedError');
+      let callbacks, observedAttributes, disabledFeatures, formAssociated;
+      ceDefinitionRunning = true;
+      try {
+        const prototype = constructor.prototype;
+        if (prototype === null || (typeof prototype !== 'object' && typeof prototype !== 'function'))
+          throw new TypeError('Constructor prototype must be an object');
+        callbacks = {};
+        for (const name of ['connectedCallback', 'disconnectedCallback', 'connectedMoveCallback',
+                            'adoptedCallback', 'attributeChangedCallback'])
+          callbacks[name] = ceCallback(prototype, name);
+        observedAttributes = callbacks.attributeChangedCallback === undefined
+          ? [] : ceStringSequence(constructor.observedAttributes);
+        disabledFeatures = ceStringSequence(constructor.disabledFeatures);
+        formAssociated = !!constructor.formAssociated;
+        if (formAssociated) {
+          for (const name of ['formAssociatedCallback', 'formResetCallback', 'formDisabledCallback',
+                              'formStateRestoreCallback', 'toolFillCallback'])
+            callbacks[name] = ceCallback(prototype, name);
+        }
+      } finally { ceDefinitionRunning = false; }
+      if (formAssociated || disabledFeatures.includes('shadow') || disabledFeatures.includes('internals'))
+        throw new DOMException('Form-associated and disabled-feature definitions are not supported', 'NotSupportedError');
+      const flags = ['connectedCallback', 'disconnectedCallback', 'connectedMoveCallback',
+                     'adoptedCallback', 'attributeChangedCallback']
+        .reduce((flags, name, bit) => flags | (callbacks[name] === undefined ? 0 : 1 << bit), 0);
+      const id = ceInvoke(document, '__ceRegister', name, flags, ...observedAttributes);
+      ceDefinitions.set(id, {constructor, callbacks});
+      ceConstructors.set(constructor, id);
+      const waiter = ceWaiters.get(name);
+      if (waiter) { ceWaiters.delete(name); waiter.resolve(constructor); }
+    });
+  }
+  get(name) {
+    ceBrand(this);
+    if (!arguments.length) throw new TypeError('get requires a name');
+    return ceDefinitions.get(ceInvoke(document, '__ceFind', ceDOMString(name)))?.constructor;
+  }
+  getName(constructor) {
+    ceBrand(this);
+    if (typeof constructor !== 'function') throw new TypeError('Constructor must be callable');
+    const id = ceConstructors.get(constructor);
+    return id === undefined ? null : ceInvoke(document, '__ceDefinitionName', id);
+  }
+  whenDefined(name) {
+    try {
+      ceBrand(this);
+      if (!arguments.length) throw new TypeError('whenDefined requires a name');
+      name = ceDOMString(name);
+      if (!ceInvoke(document, '__ceValidName', name))
+        throw new DOMException('Invalid custom element name', 'SyntaxError');
+      const definition = ceDefinitions.get(ceInvoke(document, '__ceFind', name));
+      if (definition) return Promise.resolve(definition.constructor);
+      let waiter = ceWaiters.get(name);
+      if (!waiter) {
+        waiter = {};
+        waiter.promise = new Promise(resolve => { waiter.resolve = resolve; });
+        ceWaiters.set(name, waiter);
+      }
+      return waiter.promise;
+    } catch(error) { return Promise.reject(error); }
+  }
+  upgrade(root) {
+    ceBrand(this);
+    if (!arguments.length) throw new TypeError('upgrade requires a Node');
+    ceWithReactions(() => ceInvoke(root, '__ceUpgrade'));
+  }
+}
+for (const member of ['define', 'get', 'getName', 'whenDefined', 'upgrade']) {
+  const descriptor = Object.getOwnPropertyDescriptor(CustomElementRegistry.prototype, member);
+  Object.defineProperty(CustomElementRegistry.prototype, member, {...descriptor, enumerable:true});
+}
+Object.defineProperty(CustomElementRegistry.prototype, Symbol.toStringTag,
+  {value:'CustomElementRegistry', configurable:true});
 globalThis.CustomElementRegistry = CustomElementRegistry;
-globalThis.customElements = new CustomElementRegistry();
+globalThis.customElements = new CustomElementRegistry(ceRegistryToken);
 const nativeCreateElement = Document.prototype.createElement;
+const nativeCreateElementNS = Document.prototype.createElementNS;
 Document.prototype.createElement = function(name, options) {
-  return customElements._upgradeElement(nativeCreateElement.call(this, name, options));
+  return ceWithReactions(() => {
+    const element = nativeCreateElement.call(this, name, options);
+    ceInvoke(element, '__ceUpgrade');
+    return element;
+  });
 };
+Document.prototype.createElementNS = function(namespace, name, options) {
+  return ceWithReactions(() => {
+    const element = nativeCreateElementNS.call(this, namespace, name, options);
+    ceInvoke(element, '__ceUpgrade');
+    return element;
+  });
+};
+
 
 function observerRect(rect) {
   return {x:rect.x,y:rect.y,width:rect.width,height:rect.height,

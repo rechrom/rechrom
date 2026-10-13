@@ -128,6 +128,10 @@ impl ResourceEngine {
             let key = ResourceRequestKey::from(&request);
             if let Some(shared) = self.loads.borrow().get(&key).cloned() {
                 let mut resource = ResourceLoader::FromShared(shared);
+                browser_tracing::instant_with_text("resource", "ResourceRequestReused", &request.url, &[
+                    ("destination", request.destination as u8 as f64),
+                    ("status", resource.Status() as u8 as f64),
+                ]);
                 if let Some(callback) = self.wake_callback.borrow().clone() {
                     resource.SetWakeCallback(callback);
                 }

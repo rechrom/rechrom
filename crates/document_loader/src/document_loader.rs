@@ -66,6 +66,8 @@ pub struct DocumentLoader {
     needs_input: bool,
     failure: Option<(io::ErrorKind, String)>,
     wake: Option<URLWakeCallback>,
+    diagnostic_scripting: Option<bool>,
+    diagnostic: Option<crate::diagnostic_read_ahead::DiagnosticReadAhead>,
 }
 impl DocumentLoader {
     pub fn new(loader: Rc<RefCell<dyn URLLoader>>) -> Self {
@@ -85,7 +87,15 @@ impl DocumentLoader {
             needs_input: true,
             failure: None,
             wake: None,
+            diagnostic_scripting: None,
+            diagnostic: None,
         }
+    }
+    /// Explicit embedding-only diagnostic. Disabled by default and never admits
+    /// a speculative resource. Configure before BeginParsing.
+    pub fn EnableDiagnosticReadAhead(&mut self, scripting: bool) {
+        assert!(self.parser.is_none(), "configure diagnostic before parsing");
+        self.diagnostic_scripting = Some(scripting);
     }
     pub fn Status(&self) -> DocumentLoaderStatus {
         self.status
@@ -170,6 +180,10 @@ impl DocumentLoader {
                 return self.Fail(error);
             }
         }
+        if let Some(scripting) = self.diagnostic_scripting {
+            let encoding = self.response.as_ref().map_or("utf-8", |head| head.text_encoding.as_str());
+            self.diagnostic = Some(crate::diagnostic_read_ahead::DiagnosticReadAhead::new(encoding, scripting)?);
+        }
         self.parser = Some(parser);
         self.status = DocumentLoaderStatus::kParsing;
         Ok(())
@@ -180,6 +194,8 @@ impl DocumentLoader {
         host: &mut dyn HTMLParserHost,
         budget: impl Into<DocumentLoadBudget>,
     ) -> io::Result<DocumentLoadProgress> {
+        let mut trace = browser_tracing::span("loading", "DocumentLoader.Pump");
+        let mut body_bytes = 0usize;
         let budget = budget.into();
         if budget.body_bytes == 0 || budget.parser_tokens == 0 {
             return Err(io::Error::new(
@@ -202,12 +218,21 @@ impl DocumentLoader {
         self.Parser()?;
         let mut made_progress = !self.needs_input && !self.parser.as_ref().unwrap().IsPaused();
         let mut body_budget_exhausted = false;
-        // Do not read ahead while the tokenizer still has work or a script is
-        // blocking it. This bounds decoded parser input independently of IO.
+        // Production input remains demand-driven. The explicit diagnostic can
+        // retain a bounded FIFO without advancing authoritative parser input.
+        if self.parser.as_ref().unwrap().IsPaused() {
+            if let (Some(diagnostic), Some(stream)) = (&mut self.diagnostic, &mut self.stream) {
+                if diagnostic.read_ahead(stream.as_mut()) {
+                    if let Some(wake) = &self.wake { wake(); }
+                }
+            }
+        }
         if self.needs_input && !self.body_finished && self.stream.is_some() {
             let mut remaining = budget.body_bytes;
             while remaining > 0 {
-                let event = match self.stream.as_mut().unwrap().Poll(remaining) {
+                let queued = self.diagnostic.as_mut().and_then(|d| d.poll_queued(remaining));
+                let from_stream = queued.is_none();
+                let event = match queued.map(|event| event.map(Some)).unwrap_or_else(|| self.stream.as_mut().unwrap().Poll(remaining)) {
                     Ok(event) => event,
                     Err(error) => return self.Fail(error),
                 };
@@ -221,7 +246,12 @@ impl DocumentLoader {
                             ));
                         }
                         remaining -= bytes.len();
+                        body_bytes += bytes.len();
                         made_progress = true;
+                        if let Some(diagnostic) = &mut self.diagnostic {
+                            if from_stream { diagnostic.observe(&bytes, false); }
+                            diagnostic.appended += bytes.len();
+                        }
                         if let Err(error) = self.parser.as_mut().unwrap().AppendBytes(&bytes) {
                             return self.Fail(error);
                         }
@@ -261,6 +291,13 @@ impl DocumentLoader {
                 wake();
             }
         }
+        if let Some(diagnostic) = &self.diagnostic { diagnostic.report(); }
+        trace.set("body_bytes", body_bytes as f64);
+        trace.set("parser_status", result.status as u8 as f64);
+        trace.set("script_node", result.script.map_or(0, |s| s.node_id) as f64);
+        trace.set("body_finished", self.body_finished as u8 as f64);
+        trace.set("made_progress", made_progress as u8 as f64);
+        trace.set("needs_input", self.needs_input as u8 as f64);
         Ok(DocumentLoadProgress {
             body_finished: self.body_finished,
             made_progress,
@@ -270,6 +307,7 @@ impl DocumentLoader {
         })
     }
     pub fn StopLoading(&mut self) {
+        self.diagnostic.take();
         self.stream.take();
         self.parser.take();
         if !matches!(
@@ -287,6 +325,7 @@ impl DocumentLoader {
     }
     fn Fail<T>(&mut self, error: io::Error) -> io::Result<T> {
         self.failure = Some((error.kind(), error.to_string()));
+        self.diagnostic.take();
         self.stream.take();
         self.parser.take();
         self.status = DocumentLoaderStatus::kFailed;
@@ -333,7 +372,11 @@ impl DocumentLoader {
             .as_mut()
             .ok_or_else(|| io::Error::other("document parser is not active"))?;
         let was_paused = parser.IsPaused();
+        let input_before = self.diagnostic.as_ref().map(|_| parser.BufferedInputCharacters());
         let result = parser.WithParser(document, host, task);
+        if was_paused && input_before.is_some_and(|before| !parser.IsPaused() || parser.BufferedInputCharacters() != before) {
+            if let Some(diagnostic) = &mut self.diagnostic { diagnostic.cancel_scan(1); }
+        }
         if parser.IsFinished() {
             self.status = DocumentLoaderStatus::kFinished;
         }
@@ -346,10 +389,12 @@ impl DocumentLoader {
         Ok(result)
     }
     pub fn InsertFromScript(&mut self, text: &str) -> io::Result<()> {
+        if let Some(diagnostic) = &mut self.diagnostic { diagnostic.cancel_scan(2); }
         self.Parser()?.InsertFromScript(text);
         Ok(())
     }
     pub fn ResumeAfterScript(&mut self) -> io::Result<()> {
+        if let Some(diagnostic) = &mut self.diagnostic { diagnostic.cancel_scan(1); }
         self.Parser()?.ResumeAfterScript();
         self.needs_input = false;
         if let Some(wake) = &self.wake {

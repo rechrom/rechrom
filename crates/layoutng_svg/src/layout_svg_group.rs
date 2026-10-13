@@ -3,19 +3,17 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{Traceable, Visitor};
-use layoutng_assembly::internal::block_node::BlockNode;
-use layoutng_assembly::internal::constraint_space_builder::ConstraintSpaceBuilder;
 use layoutng_assembly::internal::layout_block_flow::LayoutBlockFlow;
 use layoutng_assembly::internal::layout_node_metadata::Element;
 use layoutng_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
 use layoutng_assembly::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
-use layoutng_geometry::geometry::logical_size::LogicalSize;
 use layoutng_style::style::computed_style::ComputedStyle;
 
 // cpp: layoutng_svg/layout_svg_group.h:11-28
 #[repr(C)]
 pub struct LayoutSVGGroup {
     flow: LayoutBlockFlow,
+    local_transform: foundation::blink_geometry::transforms::affine_transform::AffineTransform,
 }
 
 impl LayoutSVGGroup {
@@ -23,7 +21,10 @@ impl LayoutSVGGroup {
     pub fn new(element: *mut Element) -> Self {
         let flow = LayoutBlockFlow::new(element.cast());
         flow.SetRuntimeClass(LayoutObjectClass::SvgGroup);
-        Self { flow }
+        Self {
+            flow,
+            local_transform: Default::default(),
+        }
     }
 
     // cpp: layoutng_svg/layout_svg_group.h:15-15
@@ -82,28 +83,19 @@ impl LayoutSVGGroup {
             child_ref.IsSVGInlineText(),
             child_ref.IsSVGRoot()
         );
-        self.flow.AddChild(child, before_child);
+        unsafe { &mut *(self as *mut Self).cast::<LayoutObject>() }
+            .AddChildBase(child, before_child);
     }
 
     // cpp: layoutng_svg/layout_svg_group.cc:26-34
-    pub fn UpdateSVGLayout(&mut self, _info: &SVGLayoutInfo) -> SVGLayoutResult {
-        let style = self.StyleRef();
-        let mut builder = ConstraintSpaceBuilder::new_without_parent_space(
-            style.GetWritingMode(),
-            style.GetWritingDirection(),
-            true,
-            true,
-            false,
-        );
-        builder.SetAvailableSize(LogicalSize::default());
-        let space = builder.ToConstraintSpace();
-        BlockNode::new((self as *mut Self).cast()).Layout(
-            &space,
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-        );
-        SVGLayoutResult::new(true, true)
+    pub fn LocalToSVGParentTransform(
+        &self,
+    ) -> foundation::blink_geometry::transforms::affine_transform::AffineTransform {
+        self.local_transform
+    }
+    pub fn UpdateSVGLayout(&mut self, info: &SVGLayoutInfo) -> SVGLayoutResult {
+        self.local_transform = crate::svg_viewport::LocalTransform(self);
+        crate::svg_container_layout::LayoutContainer(self, info, 0.0, 0.0)
     }
 }
 
@@ -114,7 +106,16 @@ pub fn SvgGroupAddChild(
     before_child: *mut LayoutObject,
 ) {
     let group = unsafe { &mut *(flow as *mut LayoutBlockFlow).cast::<LayoutSVGGroup>() };
-    group.AddChild(child, before_child);
+    if group.RuntimeClass() == LayoutObjectClass::SvgForeignObject {
+        let foreign = unsafe {
+            &*(flow as *const LayoutBlockFlow)
+                .cast::<crate::layout_svg_foreign_object::LayoutSVGForeignObject>()
+        };
+        assert!(foreign.IsChildAllowed(child, unsafe { &*child }.StyleRef()));
+        flow.AddChild(child, before_child);
+    } else {
+        group.AddChild(child, before_child);
+    }
 }
 
 impl Deref for LayoutSVGGroup {
@@ -135,5 +136,29 @@ const _: () = assert!(std::mem::offset_of!(LayoutSVGGroup, flow) == 0);
 impl Traceable for LayoutSVGGroup {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
         self.flow.Trace(visitor);
+    }
+}
+
+// core/layout/svg/layout_svg_model_object.cc::StyleDidChange and
+// layout_svg_viewport_container.cc:133-146. Native SVG transforms participate
+// in SVG layout (including descendant text scaling), even when ordinary CSS
+// boxes can commit the same style change as paint-only.
+pub fn SvgContainerStyleDidChange(
+    flow: &mut LayoutBlockFlow,
+    difference: layoutng_style::style::style_difference::StyleDifference,
+    old_style: *const ComputedStyle,
+    new_style: &ComputedStyle,
+    context: &layoutng_assembly::internal::layout_object::StyleChangeContext,
+) {
+    flow.StyleDidChange(difference, old_style, new_style, context);
+    if !old_style.is_null() && difference.transform_changed() {
+        flow.SetNeedsLayout(
+            &raw const layoutng_assembly::internal::layout_invalidation_reason::kStyleChange,
+        );
+    }
+    if let Some(old) = unsafe { old_style.as_ref() } {
+        if old.OverflowX() != new_style.OverflowX() {
+            flow.SetNeedsPaintPropertyUpdate();
+        }
     }
 }

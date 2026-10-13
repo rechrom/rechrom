@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use document_image::SVGImageDecoder;
 use image_resource::{
     ContainerKey, DocumentImageDecoder, DocumentImageEffect, DocumentImageMutation,
 };
@@ -23,7 +22,7 @@ fn svg_presentation_transform_and_fill_reach_document_paint_record() {
         </svg>"##;
         let assembly = browser::CreateLayoutAssembly();
         let constraints = browser::CreateBrowserConstraints(220, 190);
-        let mut decoder = SVGImageDecoder::new_with_constraints(&assembly, &constraints);
+        let mut decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
         let frame = decoder
             .create(
                 99,
@@ -72,7 +71,7 @@ fn changed_samples_publish_new_immutable_records_without_zero_time_churn() {
     on_layout_thread(|| {
         let assembly = browser::CreateLayoutAssembly();
         let constraints = browser::CreateBrowserConstraints(320, 200);
-        let mut decoder = SVGImageDecoder::new_with_constraints(&assembly, &constraints);
+        let mut decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
         let container = ContainerKey::new(64, 32, 1.0, 1.0);
         let mut created = decoder
             .create(7, Arc::from(SVG), "image/svg+xml", &container)
@@ -125,7 +124,7 @@ fn container_configuration_versions_the_record_cache_key() {
     on_layout_thread(|| {
         let assembly = browser::CreateLayoutAssembly();
         let constraints = browser::CreateBrowserConstraints(320, 200);
-        let mut decoder = SVGImageDecoder::new_with_constraints(&assembly, &constraints);
+        let mut decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
         let initial = ContainerKey::new(64, 32, 1.0, 1.0);
         let mut created = decoder
             .create(9, Arc::from(RESPONSIVE_SVG), "image/svg+xml", &initial)
@@ -160,5 +159,77 @@ fn container_configuration_versions_the_record_cache_key() {
         assert_eq!(old_record.record_size.width, 64);
         assert_eq!(next_record.record_size.width, 128);
         assert!(old_record.artifact.items != next_record.artifact.items);
+    });
+}
+
+#[test]
+fn svg_user_agent_rules_survive_repeated_isolated_document_lifecycles() {
+    on_layout_thread(|| {
+        // Chromium svg.css supplies the default 0 0 origin at UA priority.
+        // The second group verifies that author style still wins the cascade.
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 190">
+          <g transform="translate(10 20) scale(.35)">
+            <rect width="20" height="10" fill="red"/>
+          </g>
+          <g style="transform-origin:10px 20px" transform="translate(70 60) scale(2)">
+            <rect width="20" height="10" fill="blue"/>
+          </g>
+        </svg>"##;
+        let assembly = browser::CreateLayoutAssembly();
+        let constraints = browser::CreateBrowserConstraints(220, 190);
+        for mut decoder in [
+            browser::CreateSVGImageDecoder(&assembly),
+            browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints),
+        ] {
+            let container = ContainerKey::new(220, 190, 1.0, 1.0);
+            let mut created = decoder
+                .create(100, Arc::from(svg.as_slice()), "image/svg+xml", &container)
+                .unwrap();
+            let check = |frame: &image_resource::DocumentImageFrame| {
+                let record = frame
+                    .record
+                    .as_any()
+                    .downcast_ref::<paint::paint_engine::DocumentPaintArtifactRecord>()
+                    .unwrap();
+                for (scale, x, y) in [(0.35, 10.0, 20.0), (2.0, 60.0, 40.0)] {
+                    assert!(
+                        record.artifact.items.iter().any(|item| {
+                            item.r#type == paint::paint_engine::DisplayItemType::kConcat
+                                && (item.transform.values[0] - scale).abs() < 1e-9
+                                && (item.transform.values[5] - scale).abs() < 1e-9
+                                && (item.transform.values[12] - x).abs() < 1e-9
+                                && (item.transform.values[13] - y).abs() < 1e-9
+                        }),
+                        "expected scale {scale} and translation ({x}, {y}) at revision {}",
+                        frame.revision
+                    );
+                }
+            };
+            check(&created.initial_frame);
+            let original_record = created.initial_frame.record.clone();
+            let mut revision = 1;
+            for mutation in [
+                DocumentImageMutation::SetContainer {
+                    container: ContainerKey::new(330, 285, 1.0, 1.0),
+                },
+                DocumentImageMutation::SetPreferredColorScheme { scheme: 1 },
+                DocumentImageMutation::SetPreferredColorScheme { scheme: 0 },
+            ] {
+                let effects = created.image.apply_mutation(mutation).unwrap();
+                let next = effects
+                    .iter()
+                    .find_map(|effect| match effect {
+                        DocumentImageEffect::FrameChanged { frame, .. } => Some(frame),
+                        _ => None,
+                    })
+                    .expect("changed image environment publishes a new record");
+                revision += 1;
+                assert_eq!(next.revision, revision);
+                assert!(!Arc::ptr_eq(&original_record, &next.record));
+                check(next);
+                check(&created.initial_frame);
+                assert_eq!(created.initial_frame.revision, 1);
+            }
+        }
     });
 }

@@ -2,7 +2,7 @@
 
 use std::ops::{Deref, DerefMut};
 
-use foundation::{DowncastFrom, DynamicTo, Traceable, Visitor};
+use foundation::{gfx, DowncastFrom, DynamicTo, Traceable, Visitor};
 use layoutng_assembly::internal::block_node::BlockNode;
 use layoutng_assembly::internal::constraint_space_builder::ConstraintSpaceBuilder;
 use layoutng_assembly::internal::layout_block::LayoutBlock;
@@ -31,6 +31,23 @@ impl LayoutSVGText {
             flow,
             needs_text_metrics_update: true,
         }
+    }
+
+    // Chromium layout_svg_text.cc:288-312. Read the completed native fragment
+    // positions without the integer rounding in RectInContainerFragment.
+    pub fn ObjectBoundingBox(&self) -> gfx::RectF {
+        let mut bounds = gfx::RectF::default();
+        for fragment in self.PhysicalFragments() {
+            let Some(items) = (unsafe { fragment.Items().as_ref() }) else {
+                continue;
+            };
+            for item in items.Items() {
+                if item.IsSvgText() {
+                    bounds.Union(item.ObjectBoundingBox(items));
+                }
+            }
+        }
+        bounds
     }
 
     // cpp: layoutng_svg/layout_svg_text.h:14-25

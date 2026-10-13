@@ -1049,6 +1049,7 @@ impl LayoutObjectTree {
         style: &NativeComputedStyle,
     ) -> Option<PaintStyleBinding> {
         let storage = unsafe { &mut *self.storage_ };
+        let _factory_scope = LayoutObjectFactoryScope::new(&storage.factories);
         assert!(!storage.updating);
         let native_style = style as *const NativeComputedStyle;
         let mut binding = None;

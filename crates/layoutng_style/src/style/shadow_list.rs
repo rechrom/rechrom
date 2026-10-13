@@ -1,6 +1,6 @@
 use foundation::{gfx, HeapVector, Visitor};
 
-use super::shadow_data::ShadowData;
+use super::shadow_data::{ShadowData, ShadowStyle};
 
 // cpp: layoutng_style/style/shadow_list.h:44
 pub type ShadowDataVector = HeapVector<ShadowData, 1>;
@@ -36,16 +36,32 @@ impl ShadowList {
         &self.shadows_
     }
 
-    // cpp: layoutng_style/style/shadow_list.h:60-62
-    // No definition is supplied in this package.
+    // Chromium core/style/shadow_list.cc:39-49.
     pub fn RectOutsetsIncludingOriginal(&self) -> gfx::OutsetsF {
-        unsafe { ShadowListRectOutsetsIncludingOriginal(self) }
+        let mut outsets = gfx::OutsetsF::default();
+        for shadow in self.Shadows() {
+            if shadow.Style() == ShadowStyle::kInset {
+                continue;
+            }
+            let current = shadow.RectOutsets();
+            outsets.set_top(outsets.top().max(current.top()));
+            outsets.set_right(outsets.right().max(current.right()));
+            outsets.set_bottom(outsets.bottom().max(current.bottom()));
+            outsets.set_left(outsets.left().max(current.left()));
+        }
+        outsets
     }
 
-    // cpp: layoutng_style/style/shadow_list.h:64
-    // No definition is supplied in this package.
+    // Chromium core/style/shadow_list.cc:51-53.
     pub fn AdjustRectForShadow(&self, rect: &mut gfx::RectF) {
-        unsafe { ShadowListAdjustRectForShadow(self, rect) }
+        let outsets = self.RectOutsetsIncludingOriginal();
+        *rect = gfx::RectF::new(
+            gfx::PointF::new(rect.x() - outsets.left(), rect.y() - outsets.top()),
+            gfx::SizeF::new(
+                rect.width() + outsets.left() + outsets.right(),
+                rect.height() + outsets.top() + outsets.bottom(),
+            ),
+        );
     }
 }
 
@@ -54,9 +70,4 @@ impl PartialEq for ShadowList {
     fn eq(&self, other: &Self) -> bool {
         self.shadows_ == other.shadows_
     }
-}
-
-unsafe extern "Rust" {
-    fn ShadowListRectOutsetsIncludingOriginal(value: &ShadowList) -> gfx::OutsetsF;
-    fn ShadowListAdjustRectForShadow(value: &ShadowList, rect: &mut gfx::RectF);
 }

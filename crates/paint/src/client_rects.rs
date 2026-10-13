@@ -563,6 +563,13 @@ mod tests {
             preserve_none: true,
             ..Default::default()
         });
+        let mut content_transform = TransformMatrix::default();
+        content_transform.values[0] = 2.0;
+        content_transform.values[5] = 2.0;
+        svg.paint.svg_viewport = Some(layoutng_assembly::fragment_tree::SvgViewportGeometry {
+            content_transform,
+            ..Default::default()
+        });
         let mut shape = fragment(2, 2, 7.0, 8.0, 5.0, 6.0);
         shape.paint.source_kind = NodeKind::kSvgShape;
         shape.paint.svg_shape = Some(Arc::new(SvgShapeData {

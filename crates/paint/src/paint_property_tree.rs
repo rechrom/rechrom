@@ -1319,6 +1319,7 @@ mod retained_scroll_update_tests {
             || PaintPropertyNodeLifecycle::default().updated(PaintPropertyChangeType::Unchanged);
         let scroll = Arc::new(ScrollPaintPropertyNode {
             id: 1,
+            owner_client_id: 42,
             lifecycle: clean(),
             parent: root.transform.scroll.clone(),
             overflow_clip: Some(root.clip.clone()),
@@ -1389,6 +1390,7 @@ mod retained_scroll_update_tests {
         });
         let secondary_scroll = Arc::new(ScrollPaintPropertyNode {
             id: 6,
+            owner_client_id: 43,
             lifecycle: clean(),
             parent: Some(scroll.clone()),
             overflow_clip: Some(clip.clone()),

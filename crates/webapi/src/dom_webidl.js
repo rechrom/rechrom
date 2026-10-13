@@ -1,7 +1,7 @@
 (function() {
 'use strict';
 const invoke = __domInvoke, install = __domInstall, wrap = __domWrap;
-const callbacks = new WeakMap(), eventTargets = new WeakMap();
+const callbacks = new WeakMap(), eventTargets = new WeakMap(), eventStates = new WeakMap();
 function callbackFunction(callback) {
   if (callback == null) return null;
   if (typeof callback === 'function') return callback;
@@ -36,10 +36,13 @@ class EventTarget {
     } else invoke(this, 'removeEventListener', String(type), fn, capture);
   }
   dispatchEvent(event) {
-    if (!event || !event.type || event.currentTarget !== null) throw new TypeError('Invalid event dispatch');
+    const state=eventStates.get(event);
+    if (!event || !event.type || (state ? (state.native ? state.native.currentTarget !== null : state.dispatching) : event.currentTarget !== null)) throw new TypeError('Invalid event dispatch');
     if (!eventTargets.has(this)) return invoke(this, 'dispatchEvent', String(event.type), !!event.bubbles, !!event.cancelable, !!event.composed, event);
     const list = eventTargets.get(this);
-    event.target = event.currentTarget = this; event.eventPhase = 2;
+    if (!state) throw new TypeError('Invalid event dispatch');
+    state.target = state.current = this; state.phase = 2; state.dispatching = true;
+    try {
     for (const listener of [...list]) {
       if (listener.type !== event.type || !list.includes(listener)) continue;
       if (listener.once) list.splice(list.indexOf(listener),1);
@@ -48,51 +51,152 @@ class EventTarget {
       if (event._immediate) break;
     }
     if (!event._immediate && typeof this['on'+event.type] === 'function') this['on'+event.type](event);
-    event.currentTarget = null; event.eventPhase = 0; event._passive = false;
+    } finally {
+      state.current = null; state.phase = 0; state.dispatching = false; event._passive = false;
+      event._stop = event._immediate = false;
+    }
     return !event.defaultPrevented;
   }
 }
+class Event {
+  constructor(type, options = {}) {
+    eventStates.set(this, {target:null,current:null,phase:0,dispatching:false,native:null});
+    this.type = String(type); this.bubbles = !!options.bubbles; this.cancelable = !!options.cancelable;
+    this.composed = !!options.composed; this.defaultPrevented = false; this.isTrusted = false;
+    this.timeStamp = globalThis.performance ? performance.now() : 0;
+  }
+  get target() { const s=eventStates.get(this);return s ? (s.native ? s.native.target : s.target) : invoke(this,'__eventAttribute','target'); }
+  get currentTarget() { const s=eventStates.get(this);return s ? (s.native ? s.native.currentTarget : s.current) : invoke(this,'__eventAttribute','currentTarget'); }
+  get eventPhase() { const s=eventStates.get(this);return s ? (s.native ? s.native.eventPhase : s.phase) : invoke(this,'__eventAttribute','eventPhase'); }
+  composedPath() {
+    const state=eventStates.get(this);
+    if (state) {
+      if (state.native) return Array.from(invoke(state.native, '__eventComposedPath'));
+      return state.dispatching ? [state.current] : [];
+    }
+    return Array.from(invoke(this, '__eventComposedPath'));
+  }
+  preventDefault() { if (this.cancelable && !this._passive) {this.defaultPrevented = true;const native=eventStates.get(this)?.native;if(native)invoke(native,'preventDefault');} }
+  stopPropagation() { this._stop = true;const native=eventStates.get(this)?.native;if(native)invoke(native,'stopPropagation'); }
+  stopImmediatePropagation() { this._stop = this._immediate = true;const native=eventStates.get(this)?.native;if(native)invoke(native,'stopImmediatePropagation'); }
+}
+globalThis.Event = Event;
+__domInstall('Event', Event.prototype);
+Object.defineProperty(Event.prototype, 'composedPath', {enumerable:true});
+__domWrap('__eventState', (event,target,current,phase,passive,native) => {
+  const state=eventStates.get(event);
+  if (!state) throw new TypeError('Invalid event dispatch');
+  state.target=target;state.current=current;state.phase=phase;
+  state.dispatching=current!==null;state.native=native||null;
+  event._passive=passive;
+  if (current===null) event._stop=event._immediate=false;
+});
 wrap('__callEventHandler',function(callback,event){if(callback.call(this,event)===false)event.preventDefault();});
 const customElementConstructionStack=[];
+function constructHTMLElement(newTarget, activeInterface, tag) {
+  const entry = customElementConstructionStack.at(-1);
+  if (!entry || entry.constructor !== newTarget)
+    throw new TypeError('Direct custom element construction is not supported');
+  // HTMLConstructor gets the current new.target.prototype at super(), then
+  // consumes the construction-stack entry. Never use prototype identity as
+  // the native interface brand and never permit another super() to reuse it.
+  let prototype = newTarget.prototype;
+  if (prototype === null || (typeof prototype !== 'object' && typeof prototype !== 'function'))
+    prototype = activeInterface.prototype;
+  if (entry.element === null) throw new TypeError('Custom element already constructed');
+  const element = entry.element;
+  invoke(element, '__htmlConstructionBrand', tag);
+  entry.element = null;
+  Object.setPrototypeOf(element, prototype);
+  return element;
+}
 class Node extends EventTarget {
-  constructor() {
-    super();
-    if(customElementConstructionStack.length)return customElementConstructionStack.at(-1);
-    throw new TypeError('Illegal constructor');
-  }
+  constructor() { super(); throw new TypeError('Illegal constructor'); }
 }
 class Element extends Node {
   get parentElement() { const p = this.parentNode; return p?.nodeType === 1 ? p : null; }
+  hasAttributes() { return invoke(this, 'hasAttributes'); }
+  getAttributeNames() { return Array.from(invoke(this, 'getAttributeNames')); }
 }
-class HTMLElement extends Element {}
+class HTMLElement extends Element {
+  constructor() { return constructHTMLElement(new.target, HTMLElement, ''); }
+}
 class SVGElement extends Element {}
 class SVGGeometryElement extends SVGElement {}
 class SVGPathElement extends SVGGeometryElement {}
 class MathMLElement extends Element {}
-class HTMLInputElement extends HTMLElement {}
-class HTMLTextAreaElement extends HTMLElement {}
-class HTMLButtonElement extends HTMLElement {}
-class HTMLFormElement extends HTMLElement {}
-class HTMLSelectElement extends HTMLElement {}
-class HTMLOptionElement extends HTMLElement {}
-class HTMLLabelElement extends HTMLElement {}
-class HTMLDetailsElement extends HTMLElement {}
-class HTMLDialogElement extends HTMLElement {}
-class HTMLScriptElement extends HTMLElement {}
-class HTMLStyleElement extends HTMLElement {}
-class HTMLLinkElement extends HTMLElement {}
-class HTMLMetaElement extends HTMLElement {}
-class HTMLIFrameElement extends HTMLElement {}
-class HTMLImageElement extends HTMLElement {}
+class HTMLInputElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLInputElement, 'input'); }}
+class HTMLTextAreaElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLTextAreaElement, 'textarea'); }}
+class HTMLButtonElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLButtonElement, 'button'); }}
+class HTMLFormElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLFormElement, 'form'); }}
+class HTMLSelectElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLSelectElement, 'select'); }}
+class HTMLOptionElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLOptionElement, 'option'); }}
+class HTMLLabelElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLLabelElement, 'label'); }}
+class HTMLDetailsElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLDetailsElement, 'details'); }}
+class HTMLDialogElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLDialogElement, 'dialog'); }}
+class HTMLScriptElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLScriptElement, 'script'); }}
+class HTMLStyleElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLStyleElement, 'style'); }}
+class HTMLLinkElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLLinkElement, 'link'); }}
+class HTMLMetaElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLMetaElement, 'meta'); }}
+class HTMLIFrameElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLIFrameElement, 'iframe'); }}
+class HTMLImageElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLImageElement, 'img'); }}
 class HTMLCanvasElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLCanvasElement, 'canvas'); }
   // A conforming canvas returns null for a context type that the user agent
   // does not support. Keep feature detection deterministic until a rendering
   // backend is installed; callers must not observe a missing method.
   getContext(contextId) { String(contextId); return null; }
 }
-class HTMLTemplateElement extends HTMLElement {}
-class HTMLHeadingElement extends HTMLElement {}
+class HTMLTemplateElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLTemplateElement, 'template'); }}
+// Blink HTMLSlotElement IDL: identity and assignment remain native DOM state.
+class HTMLSlotElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLSlotElement, 'slot'); }
+  get name() { return invoke(this, '__slotName'); }
+  set name(value) {
+    invoke(this, '__slotBrand');
+    if (typeof value === 'symbol') throw new TypeError('Cannot convert a Symbol to DOMString');
+    invoke(this, '__setSlotName', String(value));
+  }
+  assignedNodes(options = {}) {
+    invoke(this, '__slotBrand');
+    return Array.from(invoke(this, 'assignedNodes', slotFlattenOption(options)));
+  }
+  assignedElements(options = {}) {
+    invoke(this, '__slotBrand');
+    return Array.from(invoke(this, 'assignedElements', slotFlattenOption(options)));
+  }
+  assign(...nodes) { invoke(this, 'assign', ...nodes); }
+}
+for (const member of ['name', 'assignedNodes', 'assignedElements', 'assign']) {
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLSlotElement.prototype, member);
+  Object.defineProperty(HTMLSlotElement.prototype, member, {...descriptor, enumerable:true});
+}
+function slotFlattenOption(options) {
+  if (options == null) return false;
+  if (typeof options !== 'object' && typeof options !== 'function')
+    throw new TypeError('AssignedNodesOptions must be a dictionary');
+  return !!options.flatten;
+}
+class HTMLHeadingElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLHeadingElement, 'h1'); }}
 class HTMLAnchorElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLAnchorElement, 'a'); }
   get href() { const value=this.getAttribute('href'); if(value===null)return ''; try{return new URL(value,document.URL).href;}catch{return value;} }
   set href(value) { this.setAttribute('href',String(value)); }
   get protocol() { try{return new URL(this.href).protocol;}catch{return ':';} }
@@ -105,6 +209,7 @@ class HTMLAnchorElement extends HTMLElement {
   get origin() { try{return new URL(this.href).origin;}catch{return '';} }
 }
 class HTMLMediaElement extends HTMLElement {
+  constructor() { return constructHTMLElement(new.target, HTMLMediaElement, 'media'); }
   // No media decoder is supplied by this host yet. Unsupported formats must
   // report the empty string so the site's own fallback can run.
   canPlayType(type) { String(type); return ''; }
@@ -117,8 +222,10 @@ class HTMLMediaElement extends HTMLElement {
   get networkState() { return 0; }
   get duration() { return NaN; }
 }
-class HTMLVideoElement extends HTMLMediaElement {}
-class HTMLAudioElement extends HTMLMediaElement {}
+class HTMLVideoElement extends HTMLMediaElement {
+  constructor() { return constructHTMLElement(new.target, HTMLVideoElement, 'video'); }}
+class HTMLAudioElement extends HTMLMediaElement {
+  constructor() { return constructHTMLElement(new.target, HTMLAudioElement, 'audio'); }}
 class Document extends Node {}
 const fontFaceSetToken = {};
 class FontFaceSet extends EventTarget {
@@ -150,8 +257,9 @@ class ElementInternals {
   checkValidity() { return true; }
   reportValidity() { return true; }
 }
-class Text extends Node {}
-class Comment extends Node {}
+class CharacterData extends Node {}
+class Text extends CharacterData {}
+class Comment extends CharacterData {}
 class NodeList { constructor() { throw new TypeError('Illegal constructor'); } }
 class HTMLCollection { constructor() { throw new TypeError('Illegal constructor'); } }
 for (const [name, value] of Object.entries({ELEMENT_NODE:1, ATTRIBUTE_NODE:2, TEXT_NODE:3,
@@ -168,17 +276,95 @@ for (const [name, cls] of Object.entries({EventTarget, Node, Element, HTMLElemen
     HTMLInputElement, HTMLTextAreaElement, HTMLButtonElement, HTMLFormElement,
     HTMLSelectElement, HTMLOptionElement, HTMLLabelElement, HTMLDetailsElement,
     HTMLDialogElement, HTMLScriptElement, HTMLStyleElement, HTMLLinkElement,
-    HTMLMetaElement, HTMLIFrameElement, HTMLImageElement, HTMLCanvasElement, HTMLTemplateElement,
+    HTMLMetaElement, HTMLIFrameElement, HTMLImageElement, HTMLCanvasElement, HTMLTemplateElement, HTMLSlotElement,
     HTMLHeadingElement, HTMLAnchorElement, HTMLMediaElement, HTMLVideoElement, HTMLAudioElement,
-    Document, DocumentFragment, ShadowRoot, ElementInternals, Text, Comment, NodeList, HTMLCollection})) {
+    Document, DocumentFragment, ShadowRoot, ElementInternals, CharacterData, Text, Comment, NodeList, HTMLCollection})) {
   Object.defineProperty(globalThis, name, {value:cls, writable:true, configurable:true});
   Object.defineProperty(cls.prototype, Symbol.toStringTag, {value:name, configurable:true});
   install(name, cls.prototype);
 }
+// Blink's IDLMemberInstaller installs ordinary members on interface prototypes.
+// Let the engine choose own/author/native descriptors, then validate the native
+// declaring-interface brand of the actual receiver. Never infer it from `instanceof`.
+const attributeString = String, attributeTypeError = TypeError;
+function hasInterface(receiver, name) {
+  return invoke(globalThis, '__domHasInterface', receiver, name);
+}
+function requireInterface(receiver, name) {
+  if (!hasInterface(receiver, name)) throw new attributeTypeError('Illegal invocation');
+}
+function attributeDOMString(value) {
+  if (typeof value === 'symbol') throw new attributeTypeError('Cannot convert a Symbol to DOMString');
+  return attributeString(value);
+}
+const nullToEmptyString = value => value === null ? '' : attributeDOMString(value);
+const nullableString = value => value == null ? '' : attributeDOMString(value);
+function nativeAttribute(cls, member, convert, options = {}) {
+  const interfaceName = cls.name;
+  const descriptor = {configurable:true, enumerable:true, get() {
+    if (options.lenient && !hasInterface(this, interfaceName)) return undefined;
+    return invoke(this, '__domAttributeGet', interfaceName, member);
+  }};
+  if (convert) descriptor.set = function(value) {
+    // Web IDL checks the receiver before invoking any user conversion hooks.
+    if (options.lenient && !hasInterface(this, interfaceName)) return;
+    requireInterface(this, interfaceName);
+    invoke(this, '__domAttributeSet', interfaceName, member, convert(value), !!options.reactions);
+  };
+  Object.defineProperty(descriptor.get, 'name', {value:'get ' + member, configurable:true});
+  if (descriptor.set) Object.defineProperty(descriptor.set, 'name', {value:'set ' + member, configurable:true});
+  Object.defineProperty(cls.prototype, member, descriptor);
+}
+for (const member of ['nodeType','nodeName','ownerDocument','parentNode','childNodes','firstChild','lastChild'])
+  nativeAttribute(Node, member);
+for (const member of ['nodeValue','textContent']) nativeAttribute(Node, member, nullableString, {reactions:true});
+nativeAttribute(CharacterData, 'data', nullToEmptyString);
+for (const member of ['tagName','localName','namespaceURI']) nativeAttribute(Element, member);
+for (const member of ['id','className']) nativeAttribute(Element, member, attributeDOMString, {reactions:true});
+for (const cls of [Element, ShadowRoot]) nativeAttribute(cls, 'innerHTML', nullToEmptyString, {reactions:true});
+// The native backend still explicitly rejects unsupported outerHTML/body writes;
+// retain their writable IDL descriptor shape rather than disguising them as readonly.
+nativeAttribute(Element, 'outerHTML', nullToEmptyString, {reactions:true});
+for (const cls of [Element, Document, DocumentFragment]) nativeAttribute(cls, 'children');
+for (const member of ['activeElement','readyState','currentScript','defaultView','fullscreenEnabled',
+                      'fullscreen','fullscreenElement','documentElement','scrollingElement','head'])
+  nativeAttribute(Document, member);
+nativeAttribute(Document, 'body', value => value, {reactions:true});
+nativeAttribute(HTMLTemplateElement, 'content');
+for (const member of ['complete','naturalWidth','naturalHeight','currentSrc'])
+  nativeAttribute(HTMLImageElement, member);
+for (const member of ['checked','indeterminate']) nativeAttribute(HTMLInputElement, member, value => !!value);
+nativeAttribute(HTMLInputElement, 'value', nullToEmptyString, {reactions:true});
+nativeAttribute(HTMLTextAreaElement, 'value', nullToEmptyString, {reactions:true});
+nativeAttribute(HTMLSelectElement, 'value', attributeDOMString);
+for (const cls of [HTMLElement, SVGElement, MathMLElement, Document])
+  for (const member of ['onload','onerror','onabort','oninput','onchange','onclick','onkeydown','onkeyup',
+                        'onkeypress','onfocus','onblur','onsubmit','onreset','onmousedown','onmouseup','onmousemove'])
+    nativeAttribute(cls, member, value => value);
+nativeAttribute(Document, 'onreadystatechange', value => value, {lenient:true});
+for (const cls of [Element, Document])
+  for (const member of ['onfullscreenchange','onfullscreenerror']) nativeAttribute(cls, member, value => value);
+function nativeStringMethod(cls, name, arity = 1) {
+  const interfaceName = cls.name;
+  const method = function(...args) {
+      requireInterface(this, interfaceName);
+      if (args.length < arity) throw new attributeTypeError(name + ' requires ' + arity + ' arguments');
+      return invoke(this, name, ...args.slice(0, arity).map(attributeDOMString));
+  };
+  Object.defineProperties(method, {name:{value:name, configurable:true}, length:{value:arity, configurable:true}});
+  Object.defineProperty(cls.prototype, name, {configurable:true, enumerable:true, writable:true, value:method});
+}
+for (const cls of [Element, Document, DocumentFragment])
+  for (const name of ['querySelector','querySelectorAll']) nativeStringMethod(cls, name);
+for (const cls of [Element, Document])
+  for (const name of ['getElementsByTagName','getElementsByClassName']) nativeStringMethod(cls, name);
+for (const cls of [Document, DocumentFragment]) nativeStringMethod(cls, 'getElementById');
+for (const name of ['matches','closest','getAttribute','hasAttribute','removeAttribute'])
+  nativeStringMethod(Element, name);
+nativeStringMethod(Element, 'setAttribute', 2);
 SVGGeometryElement.prototype.getTotalLength=function(){return invoke(this,'getTotalLength');};
 globalThis.__domUpgradeCustomElement=function(element,constructor){
-  Object.setPrototypeOf(element,constructor.prototype);
-  customElementConstructionStack.push(element);
+  customElementConstructionStack.push({element, constructor});
   try {
     const result=Reflect.construct(constructor,[],constructor);
     if(result!==element)throw new TypeError('Custom element constructor returned another object');
@@ -242,6 +428,21 @@ for (const name of ['appendChild', 'insertBefore', 'removeChild', 'cloneNode'])
   Node.prototype[name] = function(...args) { return invoke(this, name, ...args); };
 for (const name of ['createElement','createElementNS','createTextNode','createComment','createDocumentFragment'])
   Document.prototype[name] = function(...args) { return invoke(this, name, ...args.map(x => x == null ? x : String(x))); };
+// Blink Document::importNode: Web IDL conversion belongs here; the native DOM
+// owns cloning and destination-document identity through one typed mutation.
+Document.prototype.importNode = function(node, options = false) {
+  // Native identities, not JavaScript prototype chains, implement Web IDL
+  // brands. A valid Node remains valid after Object.setPrototypeOf.
+  const supported = invoke(this, '__validateImportNode', node);
+  let deep;
+  if (options === null || typeof options === 'object' || typeof options === 'function') {
+    if (options?.customElementRegistry !== undefined) throw new DOMException('Explicit custom element registries are not supported', 'NotSupportedError');
+    deep = !options?.selfOnly;
+  } else deep = !!options;
+  if (!supported)
+    throw new DOMException('Document and ShadowRoot nodes cannot be imported', 'NotSupportedError');
+  return invoke(this, 'importNode', node, deep);
+};
 Document.prototype.write = function(...text) { invoke(this, 'write', text.map(String).join('')); };
 Document.prototype.writeln = function(...text) { invoke(this, 'write', text.map(String).join('') + '\n'); };
 // Blink implements Node::contains against the native DOM tree. Keep the

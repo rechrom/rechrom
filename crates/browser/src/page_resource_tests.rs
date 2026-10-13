@@ -1,7 +1,6 @@
 //! Frozen independent source Browser::Open evidence. The URL loader is a
 //! deterministic test transport; parser, CSS, decoding, fonts, layout and paint
 //! are the production Rust implementations.
-use document_image::SVGImageDecoder;
 use document_loader::{ResourceFetcher, ResourceFetcherClient};
 use dom::DOM;
 use image_decoder::skia_image_decoder::SkiaImageDecoder;
@@ -148,7 +147,7 @@ fn body() {
     }));
     let decode = Rc::new(decode::DecodeEngine::WithDecoders(
         Rc::new(RefCell::new(SkiaImageDecoder)),
-        Rc::new(RefCell::new(SVGImageDecoder::new(
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
             &crate::CreateLayoutAssembly(),
         ))),
     ));

@@ -313,6 +313,9 @@ impl OpenEngine {
         }
     }
 
+    pub fn EnableDiagnosticReadAhead(&mut self, scripting: bool) {
+        self.loader.EnableDiagnosticReadAhead(scripting);
+    }
     pub fn ApplyMutation(&mut self, mutation: OpenMutation) -> io::Result<OpenEffect> {
         match mutation {
             OpenMutation::Open { request, budget } => {

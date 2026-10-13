@@ -36,22 +36,31 @@ impl LayoutBox {
         }
         debug_assert!(self.StyleRef().IsScrollbarGutterStable());
 
+        // Viewport overflow:visible behaves as auto, and clip as hidden.
+        // The root's gutter propagates independently of the body's overflow.
+        let viewport_overflow = |overflow| if self.IsLayoutView() {
+            match overflow {
+                EOverflow::kVisible => EOverflow::kAuto,
+                EOverflow::kClip => EOverflow::kHidden,
+                value => value,
+            }
+        } else { overflow };
         if orientation == ScrollbarOrientation::kVerticalScrollbar {
-            let overflow = self.StyleRef().OverflowY();
+            let overflow = viewport_overflow(self.StyleRef().OverflowY());
             self.StyleRef().IsHorizontalWritingMode()
                 && (overflow == EOverflow::kAuto
                     || overflow == EOverflow::kScroll
                     || overflow == EOverflow::kHidden)
                 && !self.UsesOverlayScrollbars()
-                && self.GetNode() != self.ViewportDefiningElementForLayout() as *mut Node
+                && (self.IsLayoutView() || self.GetNode() != self.ViewportDefiningElementForLayout() as *mut Node)
         } else {
-            let overflow = self.StyleRef().OverflowX();
+            let overflow = viewport_overflow(self.StyleRef().OverflowX());
             !self.StyleRef().IsHorizontalWritingMode()
                 && (overflow == EOverflow::kAuto
                     || overflow == EOverflow::kScroll
                     || overflow == EOverflow::kHidden)
                 && !self.UsesOverlayScrollbars()
-                && self.GetNode() != self.ViewportDefiningElementForLayout() as *mut Node
+                && (self.IsLayoutView() || self.GetNode() != self.ViewportDefiningElementForLayout() as *mut Node)
         }
     }
 }
