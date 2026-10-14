@@ -1665,6 +1665,7 @@ impl RenderPassRenderer {
         format: skia::PixelFormat,
         row_stride: usize,
         render_pass_outputs: &HashMap<viz::RenderPassId, &[u32]>,
+        force_full_damage: bool,
     ) -> io::Result<RenderUpdate> {
         self.compose_with_output(
             pass,
@@ -1674,6 +1675,7 @@ impl RenderPassRenderer {
             Some((buffer, row_stride)),
             format,
             render_pass_outputs,
+            force_full_damage,
         )
     }
 
@@ -1686,6 +1688,7 @@ impl RenderPassRenderer {
         width: u32,
         height: u32,
         render_pass_outputs: &HashMap<viz::RenderPassId, &[u32]>,
+        force_full_damage: bool,
     ) -> io::Result<RenderUpdate> {
         self.compose_with_output(
             pass,
@@ -1695,6 +1698,7 @@ impl RenderPassRenderer {
             None,
             skia::PixelFormat::Rgba8888,
             render_pass_outputs,
+            force_full_damage,
         )
     }
 
@@ -1711,6 +1715,7 @@ impl RenderPassRenderer {
         output: Option<(&mut [u32], usize)>,
         format: skia::PixelFormat,
         render_pass_outputs: &HashMap<viz::RenderPassId, &[u32]>,
+        force_full_damage: bool,
     ) -> io::Result<RenderUpdate> {
         let mut render_trace = browser_tracing::span("render", "LayerTilePaint");
         render_trace.set("frame_id", pass.SourceFrameId() as f64);
@@ -1739,7 +1744,7 @@ impl RenderPassRenderer {
         // DirectRenderer::CanSkipRenderPass requires an existing valid backing.
         // New/recreated/resized storage and a failed previous draw must repaint
         // even when the compositor's unchanged frame carries no new damage.
-        if !self.composed_valid {
+        if force_full_damage || !self.composed_valid {
             plan.root_damage = Some(SurfaceBounds {
                 left: 0, top: 0, right: width as usize, bottom: height as usize,
             });

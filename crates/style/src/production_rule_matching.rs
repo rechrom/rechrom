@@ -297,6 +297,10 @@ pub(crate) struct ProductionRuleRouting {
     projected_by_identity: HashMap<usize, usize>,
     authoritative_rule_indices: HashSet<usize>,
     compatibility: HashSet<usize>,
+    // Immutable classification from this revision/media-owned RuleSet. Dynamic
+    // collector, matching and transfer statistics are still gathered per query.
+    fallback_report: ProductionRuleMatchReport,
+    ordinary_signature_complete: bool,
 }
 
 impl ProductionRuleRouting {
@@ -362,12 +366,86 @@ impl ProductionRuleRouting {
             .filter(|identity| !authoritative.contains_key(identity))
             .copied()
             .collect();
-        Self {
+        let mut routing = Self {
             authoritative,
             projected_by_identity,
             authoritative_rule_indices,
             compatibility,
+            fallback_report: ProductionRuleMatchReport::default(),
+            ordinary_signature_complete: false,
+        };
+        routing.fallback_report = routing.StaticFallbackReport(rule_set);
+        // The ordinary compatibility probe does not encode highlight names,
+        // starting-style recalc state, or cross-tree/scope contexts. Keep all
+        // those cases conservative, even when the special rule is unmatched.
+        // An empty signature may survive a rule revision only when both versions
+        // exclude global sheet inputs (for example @function in inline values).
+        // RuleAt includes pre-import layers, imports and namespaces as well as
+        // child rules; inactive groups and all non-style variants are rejected.
+        let flat_ordinary_sheet = sheet.diagnostics.is_empty()
+            && (0..sheet.contents.RuleCount()).all(|index| {
+                sheet.contents.RuleAt(index).AsStyle().is_some_and(|rule|
+                    rule.ChildRules().is_none_or(|children| children.is_empty()))
+            });
+        routing.ordinary_signature_complete = flat_ordinary_sheet
+            && rule_set.AllRuleData().iter().all(|data| {
+            let identity = RuleIdentity(data);
+            routing.authoritative.contains_key(&identity)
+                && routing.ProjectedRuleIndex(identity) == Some(data.GetPosition() as usize)
+                && data.Rule().Selectors().ComplexSelectors().count() == 1
+                && !data.IsStartingStyle()
+                && rule_set.ScopeForRule(data).is_none()
+                && rule_set.ContainerQueriesForRule(data).is_none()
+                && data.Rule().GetMixinParameterBindings().is_none()
+                && !special_rules.contains(&identity)
+                && data.Selector().SimpleSelectors().all(|selector| {
+                    selector.Match() != MatchType::kPseudoElement
+                        && selector.SelectorList().is_none()
+                        && !matches!(selector.GetPseudoType(), PseudoType::kPseudoHost | PseudoType::kPseudoHostContext)
+                })
+        });
+        routing
+    }
+
+    fn StaticFallbackReport(&self, rule_set: &RuleSet<Backend>) -> ProductionRuleMatchReport {
+        let mut report = ProductionRuleMatchReport::default();
+        let mut reported_fallback_rules = HashSet::new();
+        let mut reported_scopes = HashSet::new();
+        let mut reported_container_sets = HashSet::new();
+        for data in rule_set.AllRuleData() {
+            let identity = RuleIdentity(data);
+            let report_key = self
+                .ProjectedRuleIndex(identity)
+                .map_or((false, identity), |projected| (true, projected));
+            if self.authoritative.contains_key(&identity)
+                || !reported_fallback_rules.insert(report_key)
+            {
+                continue;
+            }
+            if !HasSupportedPseudoTarget(data) {
+                report.skipped_pseudo += 1;
+            } else if ProductionUnsupportedParsedFeature(&data.Rule().Selectors().CopySelectors())
+                .is_some()
+            {
+                report.skipped_unsupported_selector += 1;
+            } else if let Some(scope) = rule_set
+                .ScopeForRule(data)
+                .filter(|scope| !CanMatchProductionScopeChain(scope))
+            {
+                if reported_scopes.insert(Rc::as_ptr(&scope) as usize) {
+                    report.skipped_scope += 1;
+                }
+            } else if let Some(queries) = rule_set.ContainerQueriesForRule(data) {
+                if reported_container_sets.insert(Rc::as_ptr(&queries) as usize) {
+                    report.skipped_container_query += 1;
+                }
+            }
         }
+        report
+    }
+
+    pub(crate) fn OrdinarySignatureComplete(&self) -> bool {
+        self.ordinary_signature_complete
     }
 
     pub(crate) fn IsAuthoritativeProjectedRule(&self, rule_index: usize) -> bool {
@@ -445,40 +523,11 @@ pub(crate) fn CollectProductionRuleMatchesInto<'d>(
 
     let mut report = ProductionRuleMatchReport::default();
     for input in inputs {
-        let mut reported_fallback_rules = HashSet::new();
-        let mut reported_scopes = HashSet::new();
-        let mut reported_container_sets = HashSet::new();
-        for data in input.rule_set.AllRuleData() {
-            let identity = RuleIdentity(data);
-            let report_key = input
-                .routing
-                .ProjectedRuleIndex(identity)
-                .map_or((false, identity), |projected| (true, projected));
-            if input.routing.authoritative.contains_key(&identity)
-                || !reported_fallback_rules.insert(report_key)
-            {
-                continue;
-            }
-            if !HasSupportedPseudoTarget(data) {
-                report.skipped_pseudo += 1;
-            } else if ProductionUnsupportedParsedFeature(&data.Rule().Selectors().CopySelectors())
-                .is_some()
-            {
-                report.skipped_unsupported_selector += 1;
-            } else if let Some(scope) = input
-                .rule_set
-                .ScopeForRule(data)
-                .filter(|scope| !CanMatchProductionScopeChain(scope))
-            {
-                if reported_scopes.insert(Rc::as_ptr(&scope) as usize) {
-                    report.skipped_scope += 1;
-                }
-            } else if let Some(queries) = input.rule_set.ContainerQueriesForRule(data) {
-                if reported_container_sets.insert(Rc::as_ptr(&queries) as usize) {
-                    report.skipped_container_query += 1;
-                }
-            }
-        }
+        let cached = &input.routing.fallback_report;
+        report.skipped_pseudo += cached.skipped_pseudo;
+        report.skipped_unsupported_selector += cached.skipped_unsupported_selector;
+        report.skipped_scope += cached.skipped_scope;
+        report.skipped_container_query += cached.skipped_container_query;
     }
 
     let mut groups = Vec::new();
@@ -785,6 +834,27 @@ mod tests {
         assert!(report.candidates_considered > report.selector_matches);
         assert_eq!(collection.rules.len(), 3);
         assert_eq!(result.GetMatchedProperties().len(), 3);
+        assert_eq!(routing.fallback_report, routing.StaticFallbackReport(&rule_set));
+        // Static diagnostics preserve multiplicity for repeated collection,
+        // including fallback rules that never enter the translated cascade.
+        let fallback_sheet = parse(".hit::cue{color:red}.hit::-webkit-scrollbar{width:7px}");
+        let fallback_set = Rc::new(fallback_sheet.BuildRuleSet(&medium));
+        let fallback = ProductionRuleRouting::Build(&fallback_set, &fallback_sheet);
+        assert!(fallback.fallback_report.skipped_pseudo > 0);
+        assert_eq!(fallback.fallback_report, fallback.StaticFallbackReport(&fallback_set));
+        for _ in 0..3 {
+            let mut output = MatchResult::default();
+            let actual = CollectProductionRuleMatchesInto(&[ProductionRuleSetInput {
+                sheet_index: 0, rule_set: fallback_set.clone(), routing: &fallback,
+                implicit_scope_trigger: None,
+            }], document, element, &mut selectors, CascadeOrigin::kAuthor,
+                &ProductionPseudoRequest::Element(), None, &mut output).report;
+            assert_eq!(actual.skipped_pseudo, fallback.fallback_report.skipped_pseudo);
+            assert_eq!(actual.skipped_unsupported_selector, fallback.fallback_report.skipped_unsupported_selector);
+            assert_eq!(actual.skipped_scope, fallback.fallback_report.skipped_scope);
+            assert_eq!(actual.skipped_container_query, fallback.fallback_report.skipped_container_query);
+        }
+
         for (transferred, matched) in collection.rules.iter().zip(result.GetMatchedProperties()) {
             assert!(Rc::ptr_eq(
                 &transferred.matched.properties,

@@ -206,3 +206,106 @@ fn shared_selector_sessions_refresh_scope_and_shadow_tree_state() {
         &handle(&engine, &owner, target)
     ));
 }
+
+#[test]
+fn canonical_candidate_signatures_preserve_cascade_and_diagnostic_fallbacks() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let a = RetainedRuleSignature::new(vec![(2, 10, 9), (1, 100, 8)], true);
+    assert!(a.Equivalent(&RetainedRuleSignature::new(vec![(1, 100, 8), (2, 10, 9)], true)));
+    for (values, complete) in [(vec![(1, 100, 8), (2, 10, 9)], false),
+        (vec![(1, 100, 8), (2, 11, 9)], true), (vec![(1, 100, 8), (2, 10, 8)], true),
+        (vec![(1, 100, 8), (2, 10, 9), (2, 10, 9)], true)] {
+        assert!(!a.Equivalent(&RetainedRuleSignature::new(values, complete)));
+    }
+    let mut owner = html::html_parser::ParseHTML("<!doctype html><style>#target{width:20px}.hit{width:10px}.never .hit{height:5px}</style><main id=root><div id=target class=hit></div></main>");
+    let target = node(&owner, "target");
+    let root = node(&owner, "root");
+    let mut engine = DocumentStyleEngine::new(&owner);
+    update(&mut engine, &mut owner);
+    assert!(engine.matches[&target].complete);
+    assert_eq!(style(&owner, target).Width().Pixels(), 20.);
+    let inputs_owner = engine.active_sheets.clone();
+    let inputs = inputs_owner.iter().map(|(sheet, origin)| (sheet, *origin)).collect::<Vec<_>>();
+    let probe = engine.MatchingRules(owner.GetDocument(), target, &media(), &inputs, None, None, None);
+    assert!(engine.matches[&target].Equivalent(&RetainedRuleSignature::new(probe.clone(), true)),
+        "retained={:?}, probe={probe:?}", engine.matches[&target].values);
+
+    attribute(&mut owner, root, "class", "unrelated");
+    update(&mut engine, &mut owner);
+    assert_eq!(style(&owner, target).Width().Pixels(), 20.);
+    assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 1);
+
+    // Global-to-ordinary transitions must not upgrade an unresolved empty
+    // signature. This also covers inactive/global rules outside AllRuleData.
+    for global in ["@function --pick(){result:1px;}", "@layer theme;",
+        "@media print{.absent{width:1px}}"] {
+        let mut changing = html::html_parser::ParseHTML(&format!(
+            "<!doctype html><style id=rules>{global}</style><div id=empty></div>"));
+        let rules = node(&changing, "rules");
+        let empty = node(&changing, "empty");
+        let mut changing_engine = DocumentStyleEngine::new(&changing);
+        update(&mut changing_engine, &mut changing);
+        assert!(!changing_engine.matches[&empty].complete, "{global}");
+        assert!(changing_engine.matches[&empty].values.is_empty());
+        changing.GetDocumentMut().SetTextContent(rules, ".absent{width:2px}".into());
+        update(&mut changing_engine, &mut changing);
+        assert!(!changing_engine.matches[&empty].complete, "unresolved upgrade: {global}");
+        let sheets_owner = changing_engine.active_sheets.clone();
+        let sheets = sheets_owner.iter().map(|(sheet, origin)| (sheet, *origin)).collect::<Vec<_>>();
+        assert!(changing_engine.CandidateRequiresRecalc(changing.GetDocument(), empty,
+            &media(), &sheets, None, false, true, true));
+        attribute(&mut changing, empty, "class", "unrelated");
+        update(&mut changing_engine, &mut changing);
+        assert!(changing_engine.matches[&empty].complete);
+        assert!(!changing_engine.CandidateRequiresRecalc(changing.GetDocument(), empty,
+            &media(), &sheets, None, false, true, true));
+        assert!(changing_engine.CandidateRequiresRecalc(changing.GetDocument(), empty,
+            &media(), &sheets, None, false, false, true));
+    }
+
+    // Built-in UA special pseudos remain conservative. The warm discarded
+    // ordinary probe may be omitted, but ordinary resolution must still run.
+    let ua = vec![crate::ParseUserAgentCSS(include_str!("../../browser/resources/user_agent/html.css"))];
+    engine.Update(&mut owner, &media(), &ua).unwrap();
+    assert!(!engine.matches[&target].complete);
+    let sheets_owner = engine.active_sheets.clone();
+    let sheets = sheets_owner.iter().map(|(sheet, origin)| (sheet, *origin)).collect::<Vec<_>>();
+    assert!(!engine.rule_candidate_index.as_ref().unwrap().matching_may_report_diagnostics);
+    engine.diagnostics.clear();
+    let baseline = engine.MatchingRules(owner.GetDocument(), target, &media(), &sheets, None, None, None);
+    assert!(engine.diagnostics.is_empty());
+    assert!(!engine.matches[&target].Equivalent(&RetainedRuleSignature::new(baseline, false)));
+    assert!(engine.CandidateRequiresRecalc(owner.GetDocument(), target, &media(), &sheets, None, true, true, false));
+    assert!(engine.diagnostics.is_empty());
+    if std::env::var_os("RECHROM_STYLE_CANDIDATE_TIMING").is_some() {
+        let medium = media();
+        let iterations = 2000;
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            let signatures = engine.MatchingRules(owner.GetDocument(), target, &medium, &sheets, None, None, None);
+            std::hint::black_box(engine.matches[&target].Equivalent(&RetainedRuleSignature::new(signatures, false)));
+        }
+        let baseline = start.elapsed();
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            assert!(std::hint::black_box(engine.CandidateRequiresRecalc(owner.GetDocument(), target, &medium, &sheets, None, true, true, false)));
+        }
+        eprintln!("candidate helper iterations={iterations} baseline_ns={} guarded_ns={}", baseline.as_nanos(), start.elapsed().as_nanos());
+    }
+    attribute(&mut owner, root, "class", "still-unrelated");
+    engine.Update(&mut owner, &media(), &ua).unwrap();
+    assert_eq!(style(&owner, target).Width().Pixels(), 20.);
+    assert!(owner.GetDocument().StyleState().stats.resolved_nodes >= 2);
+    // Conditional probes retain the old diagnostic path and multiplicity.
+    owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS("@scope (.scope::before){.hit{width:21px}} @container style(--x: var(--y)){.hit{height:1px}}"));
+    engine.Update(&mut owner, &media(), &ua).unwrap();
+    let sheets_owner = engine.active_sheets.clone();
+    let sheets = sheets_owner.iter().map(|(sheet, origin)| (sheet, *origin)).collect::<Vec<_>>();
+    assert!(engine.rule_candidate_index.as_ref().unwrap().matching_may_report_diagnostics);
+    engine.diagnostics.clear();
+    engine.MatchingRules(owner.GetDocument(), target, &media(), &sheets, None, None, None);
+    let diagnostics = format!("{:?}", engine.Diagnostics());
+    engine.diagnostics.clear();
+    assert!(engine.CandidateRequiresRecalc(owner.GetDocument(), target, &media(), &sheets, None, true, true, false));
+    assert_eq!(format!("{:?}", engine.Diagnostics()), diagnostics);
+}

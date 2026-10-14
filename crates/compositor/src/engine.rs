@@ -196,6 +196,9 @@ pub enum Effect<V, F, M> {
     },
     MainThread(MainThreadEvent<F>),
     RequestBeginFrame,
+    /// Active drawable content changed. Unlike generic frame demand, this may
+    /// reopen a clean compositor preparation before the current draw deadline.
+    VisualDamage,
 }
 
 #[derive(Clone)]
@@ -501,6 +504,8 @@ where
                                 },
                             )
                     });
+                let overlay_before = self.visible_overlay_rect();
+                let mut drawable_changed = false;
                 let constrained = event.DefaultScrollDelta();
                 let update = self.scroll_tree.apply_wheel(
                     event.phase,
@@ -521,7 +526,23 @@ where
                         .root()
                         .expect("scrolled wheel has root node");
                     if let Some(planned) = &mut self.planned {
-                        let _ = apply_scroll_offset(planned, root, desired);
+                        let changed = planned.visual_scroll != Some((root.id, desired));
+                        let has_scroll_content = planned.content.as_ref().is_some_and(|content| {
+                            content.layers.iter().any(|layer| {
+                                !layer.tiles.is_empty()
+                                    && layer_has_scroll(&layer.properties.transform, root.id)
+                            })
+                        });
+                        let applied = apply_scroll_offset(planned, root, desired);
+                        let has_new_scroll_content =
+                            planned.content.as_ref().is_some_and(|content| {
+                                content.layers.iter().any(|layer| {
+                                    !layer.tiles.is_empty()
+                                        && layer_has_scroll(&layer.properties.transform, root.id)
+                                })
+                            });
+                        drawable_changed =
+                            applied && changed && (has_scroll_content || has_new_scroll_content);
                     }
                     self.dirty = true;
                     self.pending_snapshot = self.snapshot.clone().map(|mut snapshot| {
@@ -560,6 +581,9 @@ where
                     queued_at,
                     samples,
                 }));
+                if drawable_changed || overlay_before != self.visible_overlay_rect() {
+                    effects.push(Effect::VisualDamage);
+                }
                 if update.did_scroll || update.active_changed {
                     effects.push(Effect::RequestBeginFrame);
                 }
@@ -575,6 +599,9 @@ where
             }
             Command::Redraw => {
                 self.dirty = true;
+                if self.planned.is_some() {
+                    effects.push(Effect::VisualDamage);
+                }
                 effects.push(Effect::RequestBeginFrame);
             }
             Command::RasterReady(ready) => self.InstallRaster(ready, &mut effects)?,
@@ -620,7 +647,14 @@ where
                     return Ok(effects);
                 }
                 if memory_diagnostics_enabled() {
-                    eprintln!("pipeline-main-request time_ns={} source={} sequence={}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()), args.source_id, args.sequence_number);
+                    eprintln!(
+                        "pipeline-main-request time_ns={} source={} sequence={}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_nanos()),
+                        args.source_id,
+                        args.sequence_number
+                    );
                 }
                 self.main_frame_in_flight = Some((args.source_id, args.sequence_number));
                 let scroll = self.scroll_tree.pull_delta_for_main();
@@ -636,7 +670,14 @@ where
             } => {
                 if self.main_frame_in_flight == Some((source_id, sequence_number)) {
                     if memory_diagnostics_enabled() {
-                        eprintln!("pipeline-main-complete time_ns={} source={} sequence={}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()), source_id, sequence_number);
+                        eprintln!(
+                            "pipeline-main-complete time_ns={} source={} sequence={}",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0, |d| d.as_nanos()),
+                            source_id,
+                            sequence_number
+                        );
                     }
                     self.main_frame_in_flight = None;
                 }
@@ -813,9 +854,22 @@ where
             self.spare_bundle = Some(RasterBundle::new(tile_size));
         }
         self.dirty = true;
+        effects.push(Effect::VisualDamage);
         effects.push(Effect::RequestBeginFrame);
         self.ScheduleRaster(effects);
         Ok(())
+    }
+
+    fn visible_overlay_rect(&self) -> Option<PaintRect> {
+        self.scroll_tree
+            .is_active()
+            .then(|| {
+                self.planned
+                    .as_ref()
+                    .and_then(PlannedFrame::RootOverlayScrollbarQuad)
+                    .map(|(quad, _)| quad.rect)
+            })
+            .flatten()
     }
 
     pub fn Draw(&mut self, frame: F) -> Vec<Effect<V, F, M>> {
@@ -1597,5 +1651,103 @@ mod lifecycle_tests {
                 bundle: RasterBundle::default()
             }))
             .is_err());
+    }
+    #[test]
+    fn actual_wheel_notifies_only_changed_drawable_state_after_clean_prepare() {
+        fn scrolling_engine(ready: bool) -> Engine {
+            let mut engine = Engine::default();
+            let mut snapshot = snapshot(1);
+            snapshot.async_root_scroll = true;
+            let mut content = crate::retained_damage_tests::fixture();
+            content.config.viewport.width = 32.;
+            content.config.viewport.height = 32.;
+            for layer in &mut content.layers {
+                layer.interest_tiles = if ready { layer.tiles.clone() } else { vec![] };
+            }
+            let root = ScrollNode {
+                id: 2,
+                owner_client_id: 2,
+                parent_id: None,
+                container_rect: content.config.viewport,
+                committed: Offset::default(),
+                minimum: Offset::default(),
+                maximum: Offset { x: 0., y: 32. },
+                user_scrollable_horizontal: false,
+                user_scrollable_vertical: true,
+            };
+            engine.scroll_tree.activate(Some(root), 0);
+            engine.snapshot = Some(snapshot.clone());
+            engine.planned = Some(PlannedFrame {
+                snapshot,
+                toolbar: content.clone(),
+                content: Some(content),
+                scroll_tree: ScrollTreeSnapshot::new(vec![root]),
+                visual_scroll: Some((2, Offset::default())),
+                raster_scroll: Some((2, Offset::default())),
+            });
+            engine.dirty = false;
+            engine.raster_in_flight = true; // Keep this fixture on the actual impl-only input path.
+            engine
+        }
+        let wheel = |delta| Command::Wheel {
+            event: WheelEvent {
+                delta_units: ScrollGranularity::kScrollByPrecisePixel,
+                delta: Offset { x: 0., y: delta },
+                ..Default::default()
+            },
+            queued_at: Instant::now(),
+            samples: 1,
+        };
+        let mut entering = scrolling_engine(true);
+        entering
+            .planned
+            .as_mut()
+            .unwrap()
+            .content
+            .as_mut()
+            .unwrap()
+            .layers[1]
+            .tiles
+            .clear();
+        assert!(
+            entering
+                .Handle(wheel(3.))
+                .unwrap()
+                .iter()
+                .any(|effect| matches!(effect, Effect::VisualDamage)),
+            "newly selected resident interest tiles also change drawable content"
+        );
+        for ready in [false, true] {
+            let mut engine = scrolling_engine(ready);
+            assert!(engine.Prepare(frame(1)).unwrap().is_empty());
+            let effects = engine.Handle(wheel(3.)).unwrap();
+            assert_eq!(
+                effects
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::VisualDamage)),
+                ready
+            );
+            assert!(effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::RequestBeginFrame)));
+            assert!(effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::MainThread(MainThreadEvent::Wheel { .. }))));
+            let visual = engine.planned.as_ref().unwrap().visual_scroll.unwrap().1.y;
+            assert_eq!(visual, if ready { 3. } else { 0. });
+            if ready {
+                assert!(engine
+                    .Prepare(frame(1))
+                    .unwrap()
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::FrameProduced { .. })));
+                assert!(engine.Prepare(frame(1)).unwrap().is_empty());
+                assert!(!engine
+                    .Handle(wheel(0.))
+                    .unwrap()
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::VisualDamage)));
+            }
+        }
     }
 }

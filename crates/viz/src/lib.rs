@@ -50,6 +50,10 @@ pub struct ScheduledFrame<T> {
     payload: T,
     deadlines: FrameDeadlines,
     prepared: bool,
+    generation: u64,
+    candidate_produced: bool,
+    retry_pending: bool,
+    retry_consumed: bool,
 }
 
 impl<T: Copy> ScheduledFrame<T> {
@@ -66,31 +70,67 @@ impl<T: Copy> ScheduledFrame<T> {
 /// the returned work; this type owns policy without owning a clock or thread.
 pub struct DisplayScheduler<T> {
     pending: Option<ScheduledFrame<T>>,
+    generation: u64,
 }
 
 impl<T> Default for DisplayScheduler<T> {
     fn default() -> Self {
-        Self { pending: None }
+        Self {
+            pending: None,
+            generation: 0,
+        }
     }
 }
 
 impl<T: Copy> DisplayScheduler<T> {
     pub fn BeginFrame(&mut self, payload: T, timing: FrameTiming) -> Option<ScheduledFrame<T>> {
+        self.generation = self.generation.wrapping_add(1);
         self.pending.replace(ScheduledFrame {
             payload,
             deadlines: timing.Deadlines(),
             prepared: false,
+            generation: self.generation,
+            candidate_produced: false,
+            retry_pending: false,
+            retry_consumed: false,
         })
     }
 
     pub fn NeedsPrepare(&self, now: Instant) -> bool {
-        self.pending
-            .is_some_and(|frame| !frame.prepared && now >= frame.deadlines.compositor_prepare)
+        self.pending.is_some_and(|frame| {
+            (!frame.prepared && now >= frame.deadlines.compositor_prepare)
+                || (frame.retry_pending && now < frame.deadlines.draw_and_swap)
+        })
     }
 
-    pub fn MarkPrepared(&mut self) {
+    /// Genuine active drawable damage can reopen one clean early preparation.
+    /// Generic future-frame demand (including swap completion) cannot do so.
+    pub fn NotifyVisualDamage(&mut self, now: Instant) {
         if let Some(frame) = &mut self.pending {
+            if frame.prepared
+                && !frame.candidate_produced
+                && !frame.retry_consumed
+                && now < frame.deadlines.draw_and_swap
+            {
+                frame.retry_pending = true;
+            }
+        }
+    }
+
+    pub fn PendingFrame(&self) -> Option<ScheduledFrame<T>> {
+        self.pending
+    }
+
+    /// Results from a retired cycle must never latch a replacement cycle.
+    pub fn MarkPrepared(&mut self, attempted: ScheduledFrame<T>, produced: bool) {
+        if let Some(frame) = &mut self.pending {
+            if frame.generation != attempted.generation {
+                return;
+            }
+            frame.retry_consumed |= frame.prepared;
             frame.prepared = true;
+            frame.retry_pending = false;
+            frame.candidate_produced |= produced;
         }
     }
 
@@ -107,7 +147,7 @@ impl<T: Copy> DisplayScheduler<T> {
 
     pub fn NextDeadline(&self) -> Option<Instant> {
         self.pending.map(|frame| {
-            if frame.prepared {
+            if frame.prepared && !frame.retry_pending {
                 frame.deadlines.draw_and_swap
             } else {
                 frame.deadlines.compositor_prepare
@@ -139,6 +179,7 @@ pub struct AggregatedRenderPass {
     is_root: bool,
     owner_effect: Option<Arc<EffectPaintPropertyNode>>,
     destination: DeviceRect,
+    frame_token: u64,
     source_frame_id: u64,
     device_scale_factor: f64,
     raster_scale_factor: f64,
@@ -170,6 +211,11 @@ impl AggregatedRenderPass {
 
     pub fn Destination(&self) -> DeviceRect {
         self.destination
+    }
+
+    /// Producer submission sequence, preserved independently of raster identity.
+    pub fn FrameToken(&self) -> u64 {
+        self.frame_token
     }
 
     pub fn SourceFrameId(&self) -> u64 {
@@ -242,6 +288,7 @@ impl AggregatedFrame {
 
 #[derive(Clone, Debug)]
 struct SurfaceState {
+    frame_token: u64,
     source_frame_id: u64,
     device_scale_factor: f64,
     raster_scale_factor: f64,
@@ -379,6 +426,7 @@ impl VizEngine {
         self.surfaces.insert(
             surface_id,
             SurfaceState {
+                frame_token: metadata.frame_token,
                 source_frame_id: metadata.source_frame_id,
                 device_scale_factor: metadata.device_scale_factor,
                 raster_scale_factor: metadata.raster_scale_factor,
@@ -430,6 +478,7 @@ impl VizEngine {
                     is_root,
                     owner_effect: pass.owner_effect.clone(),
                     destination: placement.destination,
+                    frame_token: surface.frame_token,
                     source_frame_id: surface.source_frame_id,
                     device_scale_factor: surface.device_scale_factor,
                     raster_scale_factor: surface.raster_scale_factor,
@@ -546,6 +595,7 @@ mod tests {
                 frame_token: token,
                 source_frame_id: token,
                 device_scale_factor: 1.0,
+                raster_scale_factor: 1.0,
                 logical_viewport: PaintRect {
                     x: 0.0,
                     y: 0.0,
@@ -640,7 +690,7 @@ mod tests {
         );
         assert!(!scheduler.NeedsPrepare(start + Duration::from_millis(4)));
         assert!(scheduler.NeedsPrepare(start + Duration::from_millis(5)));
-        scheduler.MarkPrepared();
+        scheduler.MarkPrepared(scheduler.PendingFrame().unwrap(), true);
         assert_eq!(
             scheduler.NextDeadline(),
             Some(start + Duration::from_millis(10))
@@ -652,6 +702,50 @@ mod tests {
         assert_eq!(
             scheduler.TakeIfDrawDue(start + Duration::from_millis(10)),
             Some(7)
+        );
+        // Characterize before/middle/at-deadline damage without changing the
+        // deadline constants. A clean attempt can reopen only once.
+        let timing = FrameTiming {
+            frame_time: start,
+            interval,
+            source_deadline: start + interval,
+        };
+        for (offset, expected_retry) in [(4, false), (7, true), (10, false), (11, false)] {
+            scheduler.BeginFrame(8, timing);
+            if offset >= 5 {
+                scheduler.MarkPrepared(scheduler.PendingFrame().unwrap(), false);
+            }
+            let now = start + Duration::from_millis(offset);
+            scheduler.NotifyVisualDamage(now);
+            scheduler.NotifyVisualDamage(now);
+            assert_eq!(scheduler.NeedsPrepare(now), expected_retry);
+            if expected_retry {
+                scheduler.MarkPrepared(scheduler.PendingFrame().unwrap(), false);
+                scheduler.NotifyVisualDamage(now);
+                assert!(
+                    !scheduler.NeedsPrepare(now),
+                    "one retry even when still clean"
+                );
+            }
+        }
+        scheduler.BeginFrame(9, timing);
+        let stale = scheduler.PendingFrame().unwrap();
+        scheduler.MarkPrepared(stale, true);
+        scheduler.MarkPrepared(stale, false); // production is latched
+        scheduler.NotifyVisualDamage(start + Duration::from_millis(7));
+        assert!(!scheduler.NeedsPrepare(start + Duration::from_millis(7)));
+        scheduler.BeginFrame(10, timing);
+        scheduler.MarkPrepared(stale, true); // retired cycle cannot mark new one
+        assert!(scheduler.NeedsPrepare(start + Duration::from_millis(5)));
+        scheduler.MarkPrepared(scheduler.PendingFrame().unwrap(), false);
+        scheduler.NotifyVisualDamage(start + Duration::from_millis(7));
+        assert!(
+            !scheduler.NeedsPrepare(start + Duration::from_millis(10)),
+            "late execution does not retry"
+        );
+        assert_eq!(
+            scheduler.TakeIfDrawDue(start + Duration::from_millis(10)),
+            Some(10)
         );
     }
 }

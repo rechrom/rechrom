@@ -724,10 +724,36 @@ impl RuleCandidateBuckets {
     }
 }
 
+/// Equality-only invalidation metadata, never cascade ordering. Origin,
+/// layers, rule revisions and environment are guarded by the update context.
+/// Preserve duplicates and specificity/proximity; incomplete channels always
+/// require ordinary resolution instead of manufacturing a matching signature.
+#[derive(Clone)]
+struct RetainedRuleSignature {
+    values: Vec<(usize, u32, u32)>,
+    complete: bool,
+}
+impl RetainedRuleSignature {
+    fn new(mut values: Vec<(usize, u32, u32)>, complete: bool) -> Self {
+        for (_, _, proximity) in &mut values {
+            *proximity = crate::element_rule_collector::CanonicalMatchedRuleProximity(*proximity);
+        }
+        values.sort_unstable();
+        Self { values, complete }
+    }
+    fn Equivalent(&self, other: &Self) -> bool {
+        self.complete && other.complete && self.values == other.values
+    }
+}
+
 struct RuleCandidateIndex {
     targets: [RuleCandidateBuckets; 8],
     // Source order is one-based in retained match signatures.
     locations: Vec<(usize, usize)>,
+    // Scope/container queries may emit diagnostics at matching time. Ordinary
+    // compiled matching cannot; compile diagnostics were emitted before this
+    // complete warm index was installed.
+    matching_may_report_diagnostics: bool,
 }
 
 /// Per-update evidence from the retained translated
@@ -892,7 +918,7 @@ pub struct DocumentStyleEngine {
     translated_rule_shadow_stats: TranslatedRuleShadowStats,
     sheet_revision: Option<u64>,
     environment: Option<(MediaValuesCachedData, CompatibilityMode)>,
-    matches: HashMap<usize, Vec<(usize, u32, u32)>>,
+    matches: HashMap<usize, RetainedRuleSignature>,
     cascade_values: HashMap<usize, HashMap<CSSPropertyID, Rc<Value>>>,
     custom_properties: HashMap<usize, Rc<CustomProperties>>,
     sheet_dependencies: Vec<SelectorDependencies>,
@@ -1313,9 +1339,25 @@ impl DocumentStyleEngine {
             .environment
             .as_ref()
             .is_none_or(|(_, mode)| *mode != environment.1);
-        if quirks_changed || !sheet_changes.is_empty() {
+        if quirks_changed || !sheet_changes.is_empty()
+            || self.active_sheet_scopes.as_slice() != active_sheet_scopes.as_slice() {
             self.rule_candidate_index = None;
         }
+        // A document stylesheet may be inserted/removed without changing its
+        // TreeScope owner. Shadow scopes never use the cross-revision empty case.
+        let signature_non_rule_context_unchanged = self.active_sheet_scopes.iter().flatten()
+            .chain(active_sheet_scopes.iter().flatten()).all(|scope| *scope == document.Root())
+            && self.environment.as_ref() == Some(&environment)
+            && !font_features_changed && !registry_changed && environment_variables.is_none();
+        let signature_context_unchanged = signature_non_rule_context_unchanged
+            && self.active_sheet_scopes.as_slice() == active_sheet_scopes.as_slice()
+            && sheet_changes.is_empty();
+        let ordinary_signature_complete = environment_variables.is_none()
+            && active_sheet_scopes.iter().flatten().all(|scope| *scope == document.Root())
+            && active_sheets.iter().all(|(sheet, _)| self.translated_rule_routing
+                .get(&(sheet.Identity(), sheet.Revision()))
+                .is_some_and(|routing| routing.OrdinarySignatureComplete()
+                    && routing.AuthoritativeRuleCount() == sheet.rules.len()));
         let mut rule_sets_built = 0;
         let sheet_dependencies: Vec<_> = active_sheets
             .iter()
@@ -1472,7 +1514,7 @@ impl DocumentStyleEngine {
                         environment_variables,
                     );
                     let was_matched = self.matches.get(&index).is_some_and(|matches| {
-                        matches.iter().any(|(order, _, _)| {
+                        matches.values.iter().any(|(order, _, _)| {
                             old_selectors
                                 .get(order - 1)
                                 .is_some_and(|s| changed_selectors.contains(s))
@@ -1483,7 +1525,13 @@ impl DocumentStyleEngine {
                             .get(order - 1)
                             .is_some_and(|selector| changed_selectors.contains(*selector))
                     });
-                    refreshed_matches.insert(index, matches);
+                    // Refreshing match IDs is not a style resolution. Preserve an
+                    // old incomplete certificate until this element is resolved;
+                    // removing a global at-rule cannot silently upgrade it.
+                    let previously_complete = self.matches.get(&index).is_some_and(|old| old.complete);
+                    refreshed_matches.insert(index, RetainedRuleSignature::new(matches,
+                        previously_complete && ordinary_signature_complete
+                            && OrdinarySignatureElement(document, index)));
                     if was_matched || is_matched {
                         dirty.insert(index);
                     }
@@ -1545,16 +1593,9 @@ impl DocumentStyleEngine {
                 let element_sheets = scoped_sheets
                     .get(&element_scope)
                     .map_or(&[][..], Vec::as_slice);
-                let matches = self.MatchingRules(
-                    document,
-                    index,
-                    media,
-                    element_sheets,
-                    None,
-                    None,
-                    environment_variables,
-                );
-                if self.matches.get(&index) != Some(&matches) {
+                if self.CandidateRequiresRecalc(document, index, media, element_sheets,
+                    environment_variables, signature_context_unchanged,
+                    signature_non_rule_context_unchanged, ordinary_signature_complete) {
                     dirty.insert(index);
                 }
             }
@@ -2381,7 +2422,8 @@ impl DocumentStyleEngine {
                             }
                         }
                     }
-                    pending_matches.insert(index, matched_signatures);
+                    pending_matches.insert(index, RetainedRuleSignature::new(matched_signatures,
+                        ordinary_signature_complete && OrdinarySignatureElement(document, index)));
                     let final_style = unsafe { &*style.Get() };
                     if parent.is_none() {
                         root_font = final_style.GetFontDescription().SpecifiedSize()
@@ -3049,11 +3091,14 @@ impl DocumentStyleEngine {
         let mut index = RuleCandidateIndex {
             targets: std::array::from_fn(|_| RuleCandidateBuckets::default()),
             locations: Vec::new(),
+            matching_may_report_diagnostics: false,
         };
         let mut order = 0;
         for (sheet_index, &(sheet, _)) in sheets.iter().enumerate() {
             for (rule_index, rule) in sheet.rules.iter().enumerate() {
                 order += 1;
+                index.matching_may_report_diagnostics |= !rule.scope_conditions.is_empty()
+                    || !rule.container_conditions.is_empty();
                 index.locations.push((sheet_index, rule_index));
                 let variant = (quirks, !rule.scope_conditions.is_empty());
                 self.EnsureCompiledSelectors(&rule.selector_text, &rule.scope_conditions, quirks);
@@ -3071,6 +3116,34 @@ impl DocumentStyleEngine {
         }
         index
     }
+    fn CandidateRequiresRecalc(
+        &mut self, document: &Document, index: usize, media: &MediaValuesCachedData,
+        sheets: &[(&CSSStyleSheet, CascadeOrigin)],
+        environment_variables: Option<&dyn EnvironmentVariableResolver>,
+        context_unchanged: bool, non_rule_context_unchanged: bool, ordinary_complete: bool,
+    ) -> bool {
+        if context_unchanged && environment_variables.is_none()
+            && OrdinarySignatureElement(document, index)
+            && self.matches.get(&index).is_some_and(|old| !old.complete)
+            && self.rule_candidate_index.as_ref()
+                .is_some_and(|index| !index.matching_may_report_diagnostics) {
+            // Full resolution is already required. Do not build and discard
+            // an incomplete prepass result; the native resolver still runs.
+            return true;
+        }
+        let current = self.MatchingRules(document, index, media, sheets, None, None, environment_variables);
+        let current = RetainedRuleSignature::new(current,
+            ordinary_complete && OrdinarySignatureElement(document, index));
+        self.matches.get(&index).is_none_or(|old| {
+            // Numeric rule IDs never compare across revisions. The only safe
+            // exception is no matched rules in either certified flat sheet;
+            // there are then neither rule values nor global sheet inputs.
+            let comparable = context_unchanged || (non_rule_context_unchanged
+                && old.values.is_empty() && current.values.is_empty());
+            !comparable || !old.Equivalent(&current)
+        })
+    }
+
     fn MatchingRules(
         &mut self,
         document: &Document,
@@ -5838,6 +5911,12 @@ fn StyleImpact(old: Option<&ResolvedNodeStyle>, new: &ResolvedNodeStyle) -> Styl
     }
 }
 
+fn OrdinarySignatureElement(document: &Document, index: usize) -> bool {
+    document.Node(index).Namespace() == DOMNamespace::kHTML
+        && document.TreeScopeRoot(index) == document.Root()
+        && document.CorrespondingSVGElement(index).is_none()
+}
+
 fn CustomPropertiesEquivalent(a: &CustomProperties, b: &CustomProperties) -> bool {
     if a.registered_values.len() != b.registered_values.len()
         || !a.registered_values.iter().all(|(name, value)| {
@@ -5847,6 +5926,11 @@ fn CustomPropertiesEquivalent(a: &CustomProperties, b: &CustomProperties) -> boo
         })
     {
         return false;
+    }
+    // Registered equality remains first (including its numeric semantics).
+    // Immutable unregistered maps detach through Rc::make_mut on every write.
+    if Rc::ptr_eq(&a.values, &b.values) {
+        return true;
     }
     if a.values.len() != b.values.len() {
         return false;

@@ -545,6 +545,13 @@ impl<'a, B: RuleSetBackend, ContainerNode, Element> MatchRequest<'a, B, Containe
     }
 }
 
+// The collector packs scope proximity into the low 16 bits of its sort key.
+// Equality-only retained signatures must use the same saturation, including
+// the unscoped u32::MAX sentinel, without changing actual cascade order.
+pub(crate) fn CanonicalMatchedRuleProximity(proximity: u32) -> u32 {
+    proximity.min(u16::MAX as u32)
+}
+
 // cpp: element_rule_collector.h:51-124. Owns the same StyleRule allocation;
 // RuleData itself cannot escape the borrowed RuleSet.
 pub struct MatchedRule<B: RuleSetBackend> {
@@ -560,7 +567,7 @@ impl<B: RuleSetBackend> MatchedRule<B> {
         Self {
             sort_key_: ((layer as u64) << 48)
                 | ((data.Specificity() as u64) << 16)
-                | (65535 - proximity.min(65535)) as u64,
+                | (65535 - CanonicalMatchedRuleProximity(proximity)) as u64,
             position_: ((sheet as u64) << 18) + data.GetPosition() as u64,
             rule_: data.Rule().clone(),
             link_match_type_: data.LinkMatchType() as u8,

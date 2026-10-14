@@ -47,6 +47,10 @@ pub struct BackingStats {
 #[derive(Default)]
 pub struct Renderer {
     surfaces: HashMap<(SurfaceId, RenderPassId), RenderPassRenderer>,
+    // Damage is relative to the previous producer submission, not to whichever
+    // candidate was last presented. Commit only after that surface's root and
+    // all contributing child passes have composed successfully.
+    consumed_submissions: HashMap<SurfaceId, u64>,
 }
 
 /// Resolves the opaque resource namespace retained by each Viz surface.
@@ -89,9 +93,13 @@ impl Renderer {
             surface.invalidate();
         }
         self.surfaces.clear();
+        self.consumed_submissions.clear();
     }
 
+    /// End the backing and producer-sequence lifetime of this surface. Hosts
+    /// reusing a SurfaceId with a replacement producer must call this first.
     pub fn InvalidateSurface(&mut self, surface_id: SurfaceId) {
+        self.consumed_submissions.remove(&surface_id);
         self.surfaces
             .retain(|(surface, _), _| *surface != surface_id);
     }
@@ -146,6 +154,20 @@ impl Renderer {
                 ));
             }
         }
+        let full_damage_surfaces: HashSet<_> = frame
+            .RenderPasses()
+            .iter()
+            .filter(|pass| pass.IsRoot())
+            .filter(|pass| {
+                self.consumed_submissions
+                    .get(&pass.Surface())
+                    .and_then(|token| token.checked_add(1))
+                    != Some(pass.FrameToken())
+            })
+            .map(|pass| pass.Surface())
+            .collect();
+        // A skipped/rejected build, duplicate, or wrap cannot certify damage
+        // continuity. Repaint the complete dependency graph, retaining storage.
         let before = self.backing_usage();
         self.surfaces
             .retain(|key, _| !represented.contains(&key.0) || required.contains(key));
@@ -195,6 +217,7 @@ impl Renderer {
                 io::Error::other("aggregated render pass has no raster resource provider")
             })?;
             let key = (pass.Surface(), pass.RenderPassId());
+            let force_full_damage = full_damage_surfaces.contains(&pass.Surface());
             // SoftwareRenderer samples each child directly from its retained
             // bitmap. Remove only the destination owner while borrowing the
             // already-completed child backings; no viewport staging copy is
@@ -218,6 +241,7 @@ impl Renderer {
                         destination.width,
                         destination.height,
                         &local_outputs,
+                        force_full_damage,
                     );
                 }
                 if destination.x == 0 && destination.width == width {
@@ -237,6 +261,7 @@ impl Renderer {
                         format,
                         row_stride,
                         &local_outputs,
+                        force_full_damage,
                     )
                 } else {
                     let length = (destination.width as usize)
@@ -252,6 +277,7 @@ impl Renderer {
                         format,
                         destination.width as usize,
                         &local_outputs,
+                        force_full_damage,
                     )?;
                     temporary_output_peak =
                         temporary_output_peak.max(scratch.capacity() * std::mem::size_of::<u32>());
@@ -273,7 +299,10 @@ impl Renderer {
             // lifecycle; unrelated child and surface backings remain resident.
             self.surfaces.insert(key, renderer);
             let update = result?;
-            if !pass.IsRoot() {
+            if pass.IsRoot() {
+                self.consumed_submissions
+                    .insert(pass.Surface(), pass.FrameToken());
+            } else {
                 completed_children.insert(key);
             }
             damage_pixels = damage_pixels.saturating_add(update.damage_pixels);

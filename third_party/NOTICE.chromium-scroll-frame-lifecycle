@@ -31,3 +31,61 @@ relicense those terms.
 
 Canonical source prefix:
 https://chromium.googlesource.com/chromium/src/+/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/
+
+Contributing-content damage and retained-backings continuity:
+  cc/trees/damage_tracker.cc
+  components/viz/service/display/surface_aggregator.cc
+  components/viz/service/display/resolved_frame_data.cc
+
+Rechrom compares canonical contributing layer/property/tile input snapshots,
+including raster-owner LayerTreeId, ordered nested effect surfaces and output
+space. Unchanged child input retains the pass; all changed child input is fully
+damaged. No surface-local coordinate rewrite or source-frame cache is used.
+
+Successful root composition is the consumer commit point. The existing
+CompositorFrame frame_token carries a successful-build submission sequence,
+independent of source_frame_id; a discontinuity conservatively repaints the
+whole surface dependency graph. This is analogous to Chromium's active-frame
+continuity requirement, not an assertion that Chromium frame_token and
+Surface active_frame_index are the same mechanism. A producer belongs to its
+SurfaceId lifetime. Invalidation clears backings/history; normal session
+recreation constructs fresh CompositorEngine and Display/Renderer owners.
+
+Early preparation and visual damage wake:
+  cc/trees/layer_tree_host_impl.cc (DidScrollContent / SetNeedsRedraw)
+  cc/trees/proxy_impl.cc (SetNeedsRedrawOnImplThread)
+  cc/scheduler/scheduler_state_machine.cc (needs_redraw / did_draw)
+
+The runtime routes genuine active drawable damage separately from future-frame
+and swap-ack demand. Rechrom's early preparation split permits one coalesced retry
+after a clean attempt, only in the same cycle before its existing draw deadline.
+A produced candidate is latched; delayed or duplicate notifications cannot make
+an unlimited preparation loop. This adapts cc's redraw signaling to Rechrom's
+pure Viz scheduling owner, rather than claiming identical Chromium scheduling
+or changing BeginFrame deadlines or swap limits.
+
+Retained Style matching and immutable custom properties:
+  third_party/blink/renderer/core/css/element_rule_collector.h
+  third_party/blink/renderer/core/css/element_rule_collector.cc
+  third_party/blink/renderer/core/css/resolver/style_resolver.cc
+  third_party/blink/renderer/core/css/scoped_style_resolver.cc
+  third_party/blink/renderer/core/style/style_inherited_variables.h
+
+The translated MatchedRule proximity packing remains canonical. Equality-only
+retained signatures normalize through that same packing and preserve duplicate
+selector winner specificity/proximity; actual cascade ordering is unchanged.
+Incomplete channels remain conservative. A warm, diagnostic-free ordinary
+candidate query may be omitted only when full resolution is already required.
+Scope/container diagnostics retain their original path and multiplicity.
+
+Cross-revision numeric signatures never establish reuse. The only exception is
+empty signatures certified in BOTH versions against strictly flat ordinary
+leaf-rule sheets, with stable environment/registry and document TreeScope
+ownership. Canonical StyleSheetContents includes all rule partitions; globals,
+imports, layers, nested rules and diagnostics exclude the certificate. Refreshing
+match IDs cannot upgrade incomplete native results without full resolution.
+
+Static collector fallback classifications move to the existing revision-owned
+routing plan, keeping query multiplicity. The immutable unregistered custom
+property Rc identity shortcut follows registered-value comparison; COW updates
+and the different-root deep comparison remain unchanged.

@@ -22,7 +22,11 @@ pub use paint::paint_property_tree::EffectPaintPropertyNode;
 use paint::paint_property_tree::{
     ClipPaintPropertyNode, PaintBackfaceVisibility, PropertyTreeState,
 };
-use std::{collections::BTreeSet, fmt, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    fmt,
+    sync::Arc,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ResourceId(pub u64);
@@ -200,6 +204,9 @@ pub struct TargetPolygon {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompositorFrameMetadata {
+    /// Successful-build sequence in this FrameBuilder/SurfaceId lifetime.
+    /// Distinct from the raster source frame: impl-only updates advance it too.
+    /// A replacement producer must use a new surface or invalidate its renderer.
     pub frame_token: u64,
     pub source_frame_id: u64,
     pub device_scale_factor: f64,
@@ -334,6 +341,7 @@ struct TileSnapshot {
     generation: u64,
     tile_index: (i32, i32),
     rect: PaintRect,
+    tiling_rect: PaintRect,
     pixel_size: (u32, u32),
     raster_scale: f64,
 }
@@ -346,21 +354,96 @@ struct LayerSnapshot {
     tiles: Vec<TileSnapshot>,
     output_bounds: Option<DeviceRect>,
     has_damage_sensitive_effect: bool,
+    raster_content_bounds: Option<PaintRect>,
+    compositor_scroll: Option<layer_tile::CompositorScrollOffset>,
+    is_first_layer: bool,
+    requires_transparent_backing: bool,
+    raster_origin: (f64, f64),
+    root_translation: (f64, f64),
+    root_clip: Option<PaintRect>,
+    rect_known_to_be_opaque: PaintRect,
+}
+
+impl LayerSnapshot {
+    fn same_inputs(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.composition == other.composition
+            && self.tiles == other.tiles
+            && self.properties.same_values(&other.properties)
+            && self.raster_content_bounds == other.raster_content_bounds
+            && self.compositor_scroll == other.compositor_scroll
+            && self.is_first_layer == other.is_first_layer
+            && self.requires_transparent_backing == other.requires_transparent_backing
+            && self.raster_origin == other.raster_origin
+            && self.root_translation == other.root_translation
+            && self.root_clip == other.root_clip
+            && self.rect_known_to_be_opaque == other.rect_known_to_be_opaque
+    }
+}
+
+// Keep ordered nested dependencies, not just a set of leaf layers: a mask,
+// surface owner, or sibling reordering changes contributing content.
+#[derive(Clone)]
+enum CompositionSnapshot {
+    Layer(LayerId, Option<TargetPolygon>),
+    Surface {
+        properties: PropertyTreeState,
+        composition: LayerComposition,
+        polygon: Option<TargetPolygon>,
+        scroll: Option<layer_tile::CompositorScrollOffset>,
+        children: Vec<CompositionSnapshot>,
+    },
+}
+impl PartialEq for CompositionSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Layer(a, b), Self::Layer(x, y)) => a == x && b == y,
+            (
+                Self::Surface {
+                    properties: a,
+                    composition: b,
+                    polygon: c,
+                    scroll: d,
+                    children: e,
+                },
+                Self::Surface {
+                    properties: x,
+                    composition: y,
+                    polygon: z,
+                    scroll: w,
+                    children: v,
+                },
+            ) => a.same_values(x) && b == y && c == z && d == w && e == v,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone)]
 struct FrameSnapshot {
+    layer_tree_id: layer_tile::LayerTreeId,
     viewport: DeviceRect,
     layers: Vec<LayerSnapshot>,
-    draw_order: Vec<(LayerId, Option<TargetPolygon>)>,
+    draw_order: Vec<CompositionSnapshot>,
+    logical_viewport: PaintRect,
+    raster_scale: f64,
+    device_scale: f64,
+    owner: Option<PropertyTreeState>,
 }
 
 /// Retained, backend-independent compositor state. The owner decides which
 /// thread calls it; the compositor only turns ready retained tiles into an
-/// immutable frame and computes root render-pass damage across submissions.
+/// immutable frame and computes render-pass damage across submissions.
+///
+/// One builder is one producer lifetime for a Viz SurfaceId. Invalidate drops
+/// damage history but keeps the successful-build sequence. Replacing the builder
+/// requires a new surface lifetime (or Renderer::InvalidateSurface at the host
+/// boundary); arbitrarily hot-swapping producers on an old surface is unsupported.
 #[derive(Default)]
 pub struct FrameBuilder {
     previous: Option<FrameSnapshot>,
+    submission_sequence: u64,
+    previous_passes: HashMap<RenderPassId, FrameSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1299,6 +1382,7 @@ fn frame_snapshot(
                     generation: tile.generation,
                     tile_index: tile.tile_index,
                     rect: tile.tile_rect,
+                    tiling_rect: tile.tiling_rect,
                     pixel_size: tile.pixel_size,
                     raster_scale: tile.raster_scale,
                 })
@@ -1310,26 +1394,122 @@ fn frame_snapshot(
                 plan.config.raster_scale,
             )?,
             has_damage_sensitive_effect: damage_sensitive_effect(&layer.properties),
+            raster_content_bounds: layer.raster_content_bounds,
+            compositor_scroll: layer.compositor_scroll,
+            is_first_layer: layer.is_first_layer,
+            requires_transparent_backing: layer.requires_transparent_backing,
+            raster_origin: layer.raster_origin,
+            root_translation: layer.root_translation,
+            root_clip: layer.root_clip,
+            rect_known_to_be_opaque: layer.rect_known_to_be_opaque,
         });
     }
-    let draw_order = ordered
-        .iter()
-        .map(|unit| match unit {
-            OrderedCompositionUnit::Layer(fragment) => (
-                plan.layers[fragment.layer_index].id,
-                fragment.visible_polygon.clone(),
-            ),
-            OrderedCompositionUnit::Surface(surface) => (
-                plan.layers[surface.representative_layer_index].id,
-                surface.visible_polygon.clone(),
-            ),
-        })
-        .collect();
     Ok(FrameSnapshot {
+        layer_tree_id: plan.layer_tree_id,
         viewport,
         layers,
-        draw_order,
+        draw_order: composition_snapshot(plan, ordered),
+        logical_viewport: plan.config.viewport,
+        raster_scale: plan.config.raster_scale,
+        device_scale: plan.config.device_scale_factor,
+        owner: None,
     })
+}
+
+fn composition_snapshot(
+    plan: &FramePlan,
+    units: &[OrderedCompositionUnit],
+) -> Vec<CompositionSnapshot> {
+    units
+        .iter()
+        .map(|unit| match unit {
+            OrderedCompositionUnit::Layer(layer) => CompositionSnapshot::Layer(
+                plan.layers[layer.layer_index].id,
+                layer.visible_polygon.clone(),
+            ),
+            OrderedCompositionUnit::Surface(surface) => CompositionSnapshot::Surface {
+                properties: surface.properties.clone(),
+                composition: surface.composition,
+                polygon: surface.visible_polygon.clone(),
+                scroll: plan.layers[surface.representative_layer_index].compositor_scroll,
+                children: composition_snapshot(plan, &surface.units),
+            },
+        })
+        .collect()
+}
+
+fn collect_contributing_layers(units: &[OrderedCompositionUnit], layers: &mut BTreeSet<usize>) {
+    for unit in units {
+        match unit {
+            OrderedCompositionUnit::Layer(layer) => {
+                layers.insert(layer.layer_index);
+            }
+            OrderedCompositionUnit::Surface(surface) => {
+                collect_contributing_layers(&surface.units, layers)
+            }
+        }
+    }
+}
+fn effect_pass_id(owner: &EffectPaintPropertyNode) -> RenderPassId {
+    RenderPassId(Arc::as_ptr(&owner.lifecycle.identity) as usize as u64)
+}
+fn collect_pass_snapshots(
+    plan: &FramePlan,
+    root: &FrameSnapshot,
+    units: &[OrderedCompositionUnit],
+    snapshots: &mut HashMap<RenderPassId, FrameSnapshot>,
+) {
+    for unit in units {
+        if let OrderedCompositionUnit::Surface(surface) = unit {
+            let id = effect_pass_id(&surface.owner);
+            if snapshots.contains_key(&id) {
+                continue;
+            }
+            let mut indices = BTreeSet::new();
+            collect_contributing_layers(&surface.units, &mut indices);
+            snapshots.insert(
+                id,
+                FrameSnapshot {
+                    layer_tree_id: root.layer_tree_id,
+                    viewport: root.viewport,
+                    logical_viewport: root.logical_viewport,
+                    raster_scale: root.raster_scale,
+                    device_scale: root.device_scale,
+                    owner: Some(surface.properties.clone()),
+                    layers: indices
+                        .into_iter()
+                        .map(|index| root.layers[index].clone())
+                        .collect(),
+                    draw_order: composition_snapshot(plan, &surface.units),
+                },
+            );
+            collect_pass_snapshots(plan, root, &surface.units, snapshots);
+        }
+    }
+}
+impl FrameSnapshot {
+    fn same_space(&self, other: &Self) -> bool {
+        self.layer_tree_id == other.layer_tree_id
+            && self.viewport == other.viewport
+            && self.logical_viewport == other.logical_viewport
+            && self.raster_scale == other.raster_scale
+            && self.device_scale == other.device_scale
+            && match (&self.owner, &other.owner) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.same_values(b),
+                _ => false,
+            }
+    }
+    fn same_inputs(&self, other: &Self) -> bool {
+        self.same_space(other)
+            && self.draw_order == other.draw_order
+            && self.layers.len() == other.layers.len()
+            && self
+                .layers
+                .iter()
+                .zip(&other.layers)
+                .all(|(a, b)| a.same_inputs(b))
+    }
 }
 
 fn frame_damage(previous: Option<&FrameSnapshot>, current: &FrameSnapshot) -> DeviceRect {
@@ -1337,7 +1517,7 @@ fn frame_damage(previous: Option<&FrameSnapshot>, current: &FrameSnapshot) -> De
     let Some(previous) = previous else {
         return full;
     };
-    if previous.viewport != current.viewport {
+    if !previous.same_space(current) {
         return full;
     }
     if previous.draw_order != current.draw_order {
@@ -1390,9 +1570,7 @@ fn frame_damage(previous: Option<&FrameSnapshot>, current: &FrameSnapshot) -> De
             union_rect(&mut damage, new.output_bounds);
             continue;
         };
-        let changed = old.composition != new.composition
-            || old.tiles != new.tiles
-            || !old.properties.same_values(&new.properties);
+        let changed = !old.same_inputs(new);
         if !changed {
             continue;
         }
@@ -1661,9 +1839,7 @@ fn append_composition_units(
                 {
                     *pass_id
                 } else {
-                    let pass_id = RenderPassId(
-                        Arc::as_ptr(&surface.owner.lifecycle.identity) as usize as u64
-                    );
+                    let pass_id = effect_pass_id(&surface.owner);
                     // Register before descending so malformed cyclic property
                     // input cannot recurse indefinitely. Valid effect trees
                     // still publish children before parents in pass order.
@@ -1727,6 +1903,7 @@ fn append_composition_units(
 impl FrameBuilder {
     pub fn Invalidate(&mut self) {
         self.previous = None;
+        self.previous_passes.clear();
     }
 
     pub fn BuildFrame(&mut self, plan: &FramePlan) -> Result<CompositorFrame, FrameBuildError> {
@@ -1743,6 +1920,8 @@ impl FrameBuilder {
         let ordered = ordered_composition_units(plan)?;
         let snapshot = frame_snapshot(plan, viewport, &ordered)?;
         let root_damage = frame_damage(self.previous.as_ref(), &snapshot);
+        let mut pass_snapshots = HashMap::new();
+        collect_pass_snapshots(plan, &snapshot, &ordered, &mut pass_snapshots);
         let mut shared_quad_state_list = Vec::with_capacity(plan.layers.len());
         let mut quad_list = Vec::new();
         let mut render_pass_list = Vec::new();
@@ -1760,6 +1939,16 @@ impl FrameBuilder {
             &mut resource_keys,
             viewport,
         )?;
+        for pass in &mut render_pass_list {
+            if self
+                .previous_passes
+                .get(&pass.id)
+                .zip(pass_snapshots.get(&pass.id))
+                .is_some_and(|(old, new)| old.same_inputs(new))
+            {
+                pass.damage_rect = DeviceRect::new(viewport.x, viewport.y, 0, 0);
+            }
+        }
         let root_pass_id = RenderPassId(0);
         render_pass_list.push(CompositorRenderPass {
             id: root_pass_id,
@@ -1771,7 +1960,7 @@ impl FrameBuilder {
         });
         let frame = CompositorFrame {
             metadata: CompositorFrameMetadata {
-                frame_token: plan.frame_id,
+                frame_token: self.submission_sequence.wrapping_add(1),
                 source_frame_id: plan.frame_id,
                 device_scale_factor: plan.config.device_scale_factor,
                 raster_scale_factor: plan.config.raster_scale,
@@ -1790,6 +1979,8 @@ impl FrameBuilder {
             render_pass_list,
         };
         self.previous = Some(snapshot);
+        self.previous_passes = pass_snapshots;
+        self.submission_sequence = frame.metadata.frame_token;
         Ok(frame)
     }
 }
@@ -1847,6 +2038,7 @@ mod tests {
 
     fn snapshot(x: i32) -> FrameSnapshot {
         FrameSnapshot {
+            layer_tree_id: layer_tile::LayerTreeId(1),
             viewport: DeviceRect::new(0, 0, 100, 100),
             layers: vec![LayerSnapshot {
                 id: LayerId(7),
@@ -1867,6 +2059,7 @@ mod tests {
                 tiles: vec![TileSnapshot {
                     id: TileId(11),
                     generation: 3,
+                    tiling_rect: PaintRect::default(),
                     tile_index: (0, 0),
                     rect: PaintRect {
                         x: 0.0,
@@ -1879,8 +2072,20 @@ mod tests {
                 }],
                 output_bounds: Some(DeviceRect::new(x, 0, 10, 10)),
                 has_damage_sensitive_effect: false,
+                raster_content_bounds: None,
+                compositor_scroll: None,
+                is_first_layer: false,
+                requires_transparent_backing: false,
+                raster_origin: (0., 0.),
+                root_translation: (0., 0.),
+                root_clip: None,
+                rect_known_to_be_opaque: PaintRect::default(),
             }],
-            draw_order: vec![(LayerId(7), None)],
+            draw_order: vec![CompositionSnapshot::Layer(LayerId(7), None)],
+            logical_viewport: PaintRect::default(),
+            raster_scale: 1.,
+            device_scale: 1.,
+            owner: None,
         }
     }
 
@@ -1912,3 +2117,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod retained_damage_tests;

@@ -31,12 +31,21 @@ fn production_inherited_variable_maps_share_backing_until_override() {
     assert_ne!(root_key, key_pointer(&engine, &owner, "override"));
     assert_eq!(key_pointer(&engine, &owner, "override"), key_pointer(&engine, &owner, "c"));
     let previous = engine.custom_properties[&node(&owner, "root")].clone();
+    let sibling = engine.custom_properties[&node(&owner, "sibling")].clone();
+    assert!(CustomPropertiesEquivalent(&previous, &sibling));
+    let mut equal_copy = (*previous).clone();
+    equal_copy.values = Rc::new((*previous.values).clone());
+    assert!(!Rc::ptr_eq(&previous.values, &equal_copy.values));
+    assert!(CustomPropertiesEquivalent(&previous, &equal_copy));
+    assert!(!CustomPropertiesEquivalent(&previous, &engine.custom_properties[&node(&owner, "override")]));
+
     let root = node(&owner, "root");
     owner.GetDocumentMut().SetAttribute(root, DOMAttribute { local_name: "style".into(), value: format!("{declarations}--v0:13px;"), ..Default::default() });
     update(&mut engine, &mut owner);
     assert_eq!(width(&owner, "a"), 13.); assert_eq!(width(&owner, "b"), 13.); assert_eq!(width(&owner, "sibling"), 13.);
     assert_eq!(width(&owner, "override"), 9.); assert_eq!(width(&owner, "c"), 9.);
     assert_eq!(previous.Get("--v0").unwrap().original_text, foundation::String::from("1px"));
+    assert!(!CustomPropertiesEquivalent(&previous, &engine.custom_properties[&root]));
     for id in ["a", "b", "sibling"] { assert_eq!(key_pointer(&engine, &owner, "root"), key_pointer(&engine, &owner, id)); }
 }
 #[test]
@@ -50,4 +59,10 @@ fn production_registered_noninherited_reset_preserves_cow_and_values() {
     assert_ne!(key_pointer(&engine, &owner, "root"), key_pointer(&engine, &owner, "a"));
     assert_eq!(key_pointer(&engine, &owner, "a"), key_pointer(&engine, &owner, "b"), "already-reset descendants retain immutable maps");
     assert!(Rc::ptr_eq(&engine.custom_properties[&node(&owner, "a")].registered_values, &engine.custom_properties[&node(&owner, "b")].registered_values));
+    let child = &engine.custom_properties[&node(&owner, "a")];
+    let mut different_registered = (**child).clone();
+    different_registered.registered_values = engine.custom_properties[&node(&owner, "root")].registered_values.clone();
+    assert!(Rc::ptr_eq(&child.values, &different_registered.values));
+    assert!(!CustomPropertiesEquivalent(child, &different_registered));
+
 }

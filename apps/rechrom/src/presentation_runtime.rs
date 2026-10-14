@@ -263,6 +263,7 @@ fn RunDedicatedCompositor(
                 if let Some(previous) = scheduler.BeginFrame(frame, FrameTiming(frame)) {
                     if !previous.IsPrepared() {
                         RouteDedicated(
+                            &mut scheduler,
                             compositor.Prepare(previous.Payload())?,
                             &raster_sender,
                             &display_sender,
@@ -271,6 +272,7 @@ fn RunDedicatedCompositor(
                         )?;
                     }
                     RouteDedicated(
+                        &mut scheduler,
                         compositor.Draw(previous.Payload()),
                         &raster_sender,
                         &display_sender,
@@ -280,6 +282,7 @@ fn RunDedicatedCompositor(
                 }
             }
             Ok(CompositorCommand::BeginFrame(frame)) => RouteDedicated(
+                &mut scheduler,
                 compositor.Handle(CompositorCommand::BeginFrame(frame))?,
                 &raster_sender,
                 &display_sender,
@@ -287,6 +290,7 @@ fn RunDedicatedCompositor(
                 &main_thread,
             )?,
             Ok(message) => RouteDedicated(
+                &mut scheduler,
                 compositor.Handle(message)?,
                 &raster_sender,
                 &display_sender,
@@ -315,20 +319,28 @@ fn AdvanceCycle(
 ) -> io::Result<()> {
     let now = Instant::now();
     if scheduler.NeedsPrepare(now) {
-        let frame = scheduler
-            .PendingPayload()
+        let attempt = scheduler
+            .PendingFrame()
             .expect("Viz scheduler reported pending prepare without a frame");
+        let effects = compositor.Prepare(attempt.Payload())?;
+        scheduler.MarkPrepared(
+            attempt,
+            effects
+                .iter()
+                .any(|effect| matches!(effect, compositor::Effect::FrameProduced { .. })),
+        );
         RouteDedicated(
-            compositor.Prepare(frame)?,
+            scheduler,
+            effects,
             raster_sender,
             display_sender,
             frame_source,
             main_thread,
         )?;
-        scheduler.MarkPrepared();
     }
     if let Some(frame) = scheduler.TakeIfDrawDue(now) {
         RouteDedicated(
+            scheduler,
             compositor.Draw(frame),
             raster_sender,
             display_sender,
@@ -340,6 +352,7 @@ fn AdvanceCycle(
 }
 
 fn RouteDedicated(
+    scheduler: &mut viz::DisplayScheduler<crate::begin_frame_source::NativeBeginFrame>,
     effects: Vec<CompositorEffect>,
     raster_sender: &mpsc::Sender<RasterJob>,
     display_sender: &mpsc::Sender<DisplayMessage>,
@@ -376,6 +389,7 @@ fn RouteDedicated(
                 .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "display stopped"))?,
             compositor::Effect::MainThread(event) => main_thread(event),
             compositor::Effect::RequestBeginFrame => frame_source.request_begin_frame(),
+            compositor::Effect::VisualDamage => scheduler.NotifyVisualDamage(Instant::now()),
         }
     }
     Ok(())
@@ -463,6 +477,7 @@ fn RunShared(
                     if let Some(previous) = scheduler.BeginFrame(frame, FrameTiming(frame)) {
                         if !previous.IsPrepared() {
                             RouteSharedCompositor(
+                                &mut scheduler,
                                 compositor.Prepare(previous.Payload())?,
                                 &mut local,
                                 &raster_sender,
@@ -471,6 +486,7 @@ fn RunShared(
                             )?;
                         }
                         RouteSharedCompositor(
+                            &mut scheduler,
                             compositor.Draw(previous.Payload()),
                             &mut local,
                             &raster_sender,
@@ -481,6 +497,7 @@ fn RunShared(
                 }
                 LocalMessage::Compositor(CompositorCommand::BeginFrame(frame)) => {
                     RouteSharedCompositor(
+                        &mut scheduler,
                         compositor.Handle(CompositorCommand::BeginFrame(frame))?,
                         &mut local,
                         &raster_sender,
@@ -493,6 +510,7 @@ fn RunShared(
                     return Ok(());
                 }
                 LocalMessage::Compositor(message) => RouteSharedCompositor(
+                    &mut scheduler,
                     compositor.Handle(message)?,
                     &mut local,
                     &raster_sender,
@@ -508,20 +526,28 @@ fn RunShared(
         }
         let now = Instant::now();
         if scheduler.NeedsPrepare(now) {
-            let frame = scheduler
-                .PendingPayload()
+            let attempt = scheduler
+                .PendingFrame()
                 .expect("Viz scheduler reported pending prepare without a frame");
+            let effects = compositor.Prepare(attempt.Payload())?;
+            scheduler.MarkPrepared(
+                attempt,
+                effects
+                    .iter()
+                    .any(|effect| matches!(effect, compositor::Effect::FrameProduced { .. })),
+            );
             RouteSharedCompositor(
-                compositor.Prepare(frame)?,
+                &mut scheduler,
+                effects,
                 &mut local,
                 &raster_sender,
                 &frame_source,
                 &main_thread,
             )?;
-            scheduler.MarkPrepared();
         }
         if let Some(frame) = scheduler.TakeIfDrawDue(now) {
             RouteSharedCompositor(
+                &mut scheduler,
                 compositor.Draw(frame),
                 &mut local,
                 &raster_sender,
@@ -546,6 +572,7 @@ fn RouteSharedDisplay(
 }
 
 fn RouteSharedCompositor(
+    scheduler: &mut viz::DisplayScheduler<crate::begin_frame_source::NativeBeginFrame>,
     effects: Vec<CompositorEffect>,
     local: &mut VecDeque<LocalMessage>,
     raster_sender: &mpsc::Sender<RasterJob>,
@@ -578,6 +605,7 @@ fn RouteSharedCompositor(
             })),
             compositor::Effect::MainThread(event) => main_thread(event),
             compositor::Effect::RequestBeginFrame => frame_source.request_begin_frame(),
+            compositor::Effect::VisualDamage => scheduler.NotifyVisualDamage(Instant::now()),
         }
     }
     Ok(())
