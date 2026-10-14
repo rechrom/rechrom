@@ -49,6 +49,57 @@ enum DisplayMessage {
     SwapAckReady,
 }
 
+// Surface submission and DrawAndSwap are distinct lifecycle operations.
+// Deliver every Prepare to Viz (including its resources), while multiple queued
+// draw deadlines represent one outstanding draw demand, as in DisplayScheduler.
+// Bundle ownership changes and control messages remain ordered barriers.
+fn ReceiveDisplayMessage(
+    receiver: &mpsc::Receiver<DisplayMessage>,
+    pending: &mut VecDeque<DisplayMessage>,
+) -> Result<DisplayMessage, mpsc::RecvError> {
+    // Finish the selected batch before accepting new work; incoming frames
+    // cannot indefinitely postpone its selected draw deadline.
+    if let Some(message) = pending.pop_front() {
+        return Ok(message);
+    }
+    let mut message = receiver.recv()?;
+    let mut submissions = VecDeque::new();
+    let mut draw = None;
+    let mut draws = 0;
+    let mut barrier = None;
+    loop {
+        match message {
+            DisplayMessage::Command(command @ display::Message::Prepare { .. }) => {
+                submissions.push_back(DisplayMessage::Command(command));
+                draw = None;
+            }
+            DisplayMessage::Command(command @ display::Message::Submit { .. }) => {
+                draws += 1;
+                draw = Some(DisplayMessage::Command(command));
+            }
+            control => {
+                barrier = Some(control);
+                break;
+            }
+        }
+        match receiver.try_recv() {
+            Ok(next) => message = next,
+            Err(_) => break,
+        }
+    }
+    if draws > usize::from(draw.is_some()) {
+        browser_tracing::instant(
+            "frame",
+            "DisplayDrawRequestsCoalesced",
+            &[("requests", (draws - usize::from(draw.is_some())) as f64)],
+        );
+    }
+    pending.append(&mut submissions);
+    pending.extend(draw);
+    pending.extend(barrier);
+    Ok(pending.pop_front().expect("received display work"))
+}
+
 /// Completion is control input, not more draw work. Keep actual completion
 /// tokens outside the draw FIFO so already-queued Prepare/Submit commands do
 /// not run against an obsolete pending-swap count. Only the Display owner
@@ -172,7 +223,8 @@ fn SpawnDedicated(
                 target_id: 1,
                 ..Default::default()
             });
-            while let Ok(message) = display_receiver.recv() {
+            let mut pending = VecDeque::new();
+            while let Ok(message) = ReceiveDisplayMessage(&display_receiver, &mut pending) {
                 if matches!(message, DisplayMessage::Command(display::Message::Stop)) {
                     break;
                 }
@@ -198,6 +250,14 @@ fn SpawnDedicated(
                         display::Effect::ReturnBundle(bundle) => {
                             if display_compositor
                                 .send(CompositorCommand::SpareBundle(bundle))
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                        display::Effect::RasterReady(ready) => {
+                            if display_compositor
+                                .send(CompositorCommand::ActiveRasterReady(ready))
                                 .is_err()
                             {
                                 return;
@@ -567,6 +627,9 @@ fn RouteSharedDisplay(
         display::Effect::ReturnBundle(bundle) => local.push_back(LocalMessage::Compositor(
             CompositorCommand::SpareBundle(bundle),
         )),
+        display::Effect::RasterReady(ready) => local.push_back(LocalMessage::Compositor(
+            CompositorCommand::ActiveRasterReady(ready),
+        )),
         display::Effect::RequestBeginFrame => frame_source.request_begin_frame(),
     }
 }
@@ -641,6 +704,170 @@ fn SetPresentationThreadPriority() {
             eprintln!(
                 "presentation-thread-priority: {}",
                 io::Error::from_raw_os_error(result)
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_accepts_all_surfaces_and_coalesces_draws_at_resource_barriers() {
+        let frame = |sequence_number| {
+            NativeBeginFrame::from(foundation::begin_frame::BeginFrameArgs {
+                source_id: 1,
+                sequence_number,
+                frame_time: Instant::now(),
+                deadline: Instant::now() + Duration::from_millis(16),
+                interval: Duration::from_millis(16),
+            })
+        };
+        let submit = |sequence| {
+            DisplayMessage::Command(display::Message::Submit {
+                frame: frame(sequence),
+                scroll_active: true,
+            })
+        };
+        let prepare = |sequence| {
+            let viewport = Viewport {
+                width: 2,
+                height: 2,
+                scale: 1.,
+            };
+            let rect = compositor::DeviceRect::new(0, 0, 2, 2);
+            let toolbar = compositor::CompositorFrame {
+                metadata: compositor::CompositorFrameMetadata {
+                    frame_token: sequence,
+                    source_frame_id: sequence,
+                    device_scale_factor: 1.,
+                    raster_scale_factor: 1.,
+                    logical_viewport: paint::paint_engine::PaintRect {
+                        x: 0.,
+                        y: 0.,
+                        width: 2.,
+                        height: 2.,
+                    },
+                    viewport: rect,
+                    root_damage_rect: rect,
+                    raster_task_count: 0,
+                    begin_frame_ack: None,
+                },
+                resource_list: vec![],
+                render_pass_list: vec![compositor::CompositorRenderPass {
+                    id: compositor::RenderPassId(1),
+                    owner_effect: None,
+                    output_rect: rect,
+                    damage_rect: rect,
+                    shared_quad_state_list: vec![],
+                    quad_list: vec![],
+                }],
+            };
+            DisplayMessage::Command(display::Message::Prepare {
+                frame: frame(sequence),
+                scroll_active: true,
+                submitted: compositor::SubmittedFrame {
+                    provenance: compositor::FrameProvenance {
+                        document: (1, 1),
+                        content: None,
+                    },
+                    viewport,
+                    toolbar,
+                    content: None,
+                    metadata: vec![],
+                },
+            })
+        };
+        let (sender, receiver) = mpsc::channel();
+        let mut pending = VecDeque::new();
+        for sequence in 1..=3 {
+            sender.send(prepare(sequence)).unwrap();
+            sender.send(submit(sequence)).unwrap();
+        }
+        sender.send(DisplayMessage::SwapAckReady).unwrap();
+        for expected in 1..=3 {
+            assert!(
+                matches!(ReceiveDisplayMessage(&receiver, &mut pending).unwrap(),
+                DisplayMessage::Command(display::Message::Prepare { frame, .. }) if frame.sequence_number == expected)
+            );
+        }
+        // New arrivals cannot postpone the selected frame's matching Submit.
+        sender.send(prepare(4)).unwrap();
+        sender.send(submit(4)).unwrap();
+        assert!(
+            matches!(ReceiveDisplayMessage(&receiver, &mut pending).unwrap(),
+            DisplayMessage::Command(display::Message::Submit { frame, .. }) if frame.sequence_number == 3)
+        );
+        assert!(matches!(
+            ReceiveDisplayMessage(&receiver, &mut pending).unwrap(),
+            DisplayMessage::SwapAckReady
+        ));
+        assert!(
+            matches!(ReceiveDisplayMessage(&receiver, &mut pending).unwrap(),
+            DisplayMessage::Command(display::Message::Prepare { frame, .. }) if frame.sequence_number == 4)
+        );
+        assert!(
+            matches!(ReceiveDisplayMessage(&receiver, &mut pending).unwrap(),
+            DisplayMessage::Command(display::Message::Submit { frame, .. }) if frame.sequence_number == 4)
+        );
+        sender.send(prepare(5)).unwrap();
+        sender.send(submit(5)).unwrap();
+        sender.send(prepare(6)).unwrap();
+        sender
+            .send(DisplayMessage::Command(display::Message::Install(
+                compositor::RasterBundle::default(),
+            )))
+            .unwrap();
+        sender
+            .send(DisplayMessage::Command(display::Message::Stop))
+            .unwrap();
+        for expected in [5, 6] {
+            assert!(
+                matches!(ReceiveDisplayMessage(&receiver, &mut pending).unwrap(),
+                DisplayMessage::Command(display::Message::Prepare { frame, .. }) if frame.sequence_number == expected)
+            );
+        }
+        assert!(matches!(
+            ReceiveDisplayMessage(&receiver, &mut pending).unwrap(),
+            DisplayMessage::Command(display::Message::Install(_))
+        ));
+        assert!(matches!(
+            ReceiveDisplayMessage(&receiver, &mut pending).unwrap(),
+            DisplayMessage::Command(display::Message::Stop)
+        ));
+        // Surface resources stay with the accepted frame across an Install
+        // barrier. Returning them before its successor is accepted can erase
+        // every undrawn candidate when main commits arrive each vsync.
+        let mut display = Display::New(
+            DisplayTarget::Offscreen,
+            Output {
+                mailbox: Arc::new(std::sync::Mutex::new(None)),
+                notify: Arc::new(|_| {}),
+            },
+            false,
+        );
+        let ack: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(|_| {});
+        for sequence in 1..=2 {
+            let installed = display
+                .Handle(
+                    display::Message::Install(compositor::RasterBundle::default()),
+                    &ack,
+                )
+                .unwrap();
+            assert!(!installed
+                .iter()
+                .any(|effect| matches!(effect, display::Effect::ReturnBundle(_))));
+            let DisplayMessage::Command(message) = prepare(sequence) else {
+                unreachable!()
+            };
+            let accepted = display.Handle(message, &ack).unwrap();
+            assert_eq!(
+                accepted
+                    .iter()
+                    .filter(|effect| matches!(effect, display::Effect::ReturnBundle(_)))
+                    .count(),
+                usize::from(sequence > 1)
             );
         }
     }

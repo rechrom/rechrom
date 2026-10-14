@@ -447,18 +447,36 @@ fn translucent_child_does_not_reblend_outside_parent_damage() {
                 current.render_pass_list[1].shared_quad_state_list[0]
                     .properties
                     .effect = effect;
+            } else {
+                // Child output has a nonzero origin even though retained
+                // allocation uses the surface stride. Pixels outside it are clear.
+                current.render_pass_list[0].output_rect = DeviceRect::new(2, 2, 4, 4);
+                if damaged {
+                    current.render_pass_list[0].damage_rect = DeviceRect::new(2, 2, 4, 4);
+                }
+                let composition = &mut current.render_pass_list[1].shared_quad_state_list[0].composition;
+                composition.content_bounds = Some(DeviceRect::new(2, 2, 4, 4));
+                composition.clip = Some(DeviceRect::new(3, 1, 2, 5));
             }
             current
         };
         let mut renderer = Renderer::default();
         let mut viz = viz::VizEngine::New();
         submit(&mut viz, SurfaceId(1), fixture(true)).unwrap();
-        let (before, _) = render(
+        let (before, first_update) = render(
             &mut renderer,
             &aggregate(&viz, &[1]),
             skia::PixelFormat::Rgba8888,
         );
+        if !blur {
+            assert_eq!(first_update.damage_pixels, (W * H + 16) as usize);
+        }
         let mut partial = fixture(false);
+        if !blur {
+            assert_eq!(before[0], u32::MAX, "backing extent is not visible quad coverage");
+            assert_eq!(before[3 * W as usize + 2], u32::MAX, "quad clip restricts content bounds");
+            assert_ne!(before[3 * W as usize + 3], u32::MAX);
+        }
         let damage = if blur {
             DeviceRect::new(6, 4, 2, 2)
         } else {
@@ -488,6 +506,24 @@ fn translucent_child_does_not_reblend_outside_parent_damage() {
             before[W as usize * 2 + 2].to_ne_bytes(),
             after[W as usize * 2 + 2].to_ne_bytes()
         );
+        if !blur {
+            // Shrinking/moving output must not sample old pixels left in a
+            // reused backing; expanding must repaint even with empty damage.
+            for output in [DeviceRect::new(4, 3, 1, 2), DeviceRect::new(2, 2, 4, 4)] {
+                let mut moved = fixture(false);
+                moved.render_pass_list[0].output_rect = output;
+                moved.metadata.root_damage_rect = rect();
+                moved.render_pass_list[1].damage_rect = rect();
+                submit(&mut viz, SurfaceId(1), moved).unwrap();
+                let (pixels, _) = render(&mut renderer, &aggregate(&viz, &[1]), skia::PixelFormat::Rgba8888);
+                if output.width == 1 {
+                    assert_eq!(pixels[3 * W as usize + 3], u32::MAX);
+                    assert_ne!(pixels[3 * W as usize + 4], u32::MAX);
+                } else {
+                    assert_eq!(pixels, before);
+                }
+            }
+        }
     }
 }
 

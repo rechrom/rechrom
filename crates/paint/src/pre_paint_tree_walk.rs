@@ -3130,7 +3130,7 @@ fn SameSourceIdentity(a: &FragmentNode, b: &FragmentNode) -> bool {
 // LayoutSVGHiddenContainer::Paint is a subtree boundary. Preserve its
 // descendants in immutable Layout snapshots for resource consumers, but do
 // not create ordinary paint owners, properties, or reparentable paint layers.
-fn OrdinaryPaintChildren(fragment: &FragmentNode) -> impl Iterator<Item = &FragmentNode> {
+pub(crate) fn OrdinaryPaintChildren(fragment: &FragmentNode) -> impl Iterator<Item = &FragmentNode> {
     fragment
         .children
         .iter()
@@ -3258,7 +3258,9 @@ impl PrePaintTreeWalk {
         if self.property_node_store.scroll_offsets() == *basis {
             return;
         }
-        if let Some((store, _)) = self.property_node_store.retained_scroll_update(basis) {
+        if let Some((store, _)) = self.property_node_store.retained_scroll_update(
+            basis, &self.property_node_store.sticky_offsets(),
+        ) {
             // Advance the authoritative immutable snapshot lifecycle, also
             // when projecting back to the recording view. Walk refreshes the
             // final states; raw contexts continue describing this same basis.

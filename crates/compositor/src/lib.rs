@@ -1296,9 +1296,36 @@ fn lower_pending_units(
                 {
                     output_bounds = Some(viewport);
                 }
+                // RenderSurfaceImpl only appends a render-pass quad for a
+                // nonempty drawable content rect. Here None is proven empty
+                // output, whereas LayerComposition::content_bounds=None means
+                // unconstrained sampling. Do not turn an offscreen surface
+                // into a full-viewport transparent bitmap/quad at that boundary.
+                if output_bounds.is_none() {
+                    browser_tracing::instant("compose", "EmptyEffectSurfaceSkipped", &[
+                        ("effect_id", surface.owner.id as f64),
+                        ("child_units", child_units.len() as f64),
+                    ]);
+                    continue;
+                }
                 let mut properties = plan.layers[representative].properties.clone();
                 properties.effect = surface.owner.clone();
                 properties.transform = surface.owner.local_transform_space.clone();
+                // RenderSurfaceImpl carries its output clip as the quad's
+                // target-space scissor. Plain rects need no synthesized A8 mask.
+                let clip = if let Some(output_clip) = &surface.owner.output_clip {
+                    let mut output_properties = properties.clone();
+                    output_properties.clip = output_clip.clone();
+                    resolved_compositor_transform_with_scroll(
+                        &output_properties,
+                        plan.config.raster_scale,
+                        plan.layers[representative].compositor_scroll,
+                    )
+                    .map_err(|_| FrameBuildError("unsupported-effect-output-clip"))?
+                    .1.map(|rect| device_rect(rect, 1.0)).transpose()?
+                } else {
+                    None
+                };
                 let context = compositor_context_transform_3d_with_scroll(
                     &surface.owner.local_transform_space,
                     plan.config.raster_scale,
@@ -1313,7 +1340,7 @@ fn lower_pending_units(
                         transform: AffineTransform::IDENTITY,
                         projective: None,
                         rendering_context_id: context,
-                        clip: None,
+                        clip,
                         content_bounds: output_bounds,
                         opaque_bounds: None,
                         white_backing: false,
@@ -1857,16 +1884,16 @@ fn append_composition_units(
                         resource_keys,
                         viewport,
                     )?;
+                    let output_rect = surface.output_bounds
+                        .ok_or(FrameBuildError("empty-effect-output"))?;
                     render_pass_list.push(CompositorRenderPass {
                         id: pass_id,
                         owner_effect: Some(surface.owner.clone()),
-                        // Rechrom's CPU pass backing stays in target device
-                        // coordinates. The surface quad carries the tight
-                        // output polygon; keeping full-viewport pass storage
-                        // preserves global tile/clip coordinates and filter
-                        // outsets without a lossy origin translation.
-                        output_rect: viewport,
-                        damage_rect: viewport,
+                        // RenderSurfaceImpl::CreateRenderPassCommon carries
+                        // the drawable content rect, not framebuffer allocation.
+                        // Filter outsets are already included by lowering.
+                        output_rect,
+                        damage_rect: output_rect,
                         shared_quad_state_list: child_states,
                         quad_list: child_quads,
                     });
@@ -1946,7 +1973,7 @@ impl FrameBuilder {
                 .zip(pass_snapshots.get(&pass.id))
                 .is_some_and(|(old, new)| old.same_inputs(new))
             {
-                pass.damage_rect = DeviceRect::new(viewport.x, viewport.y, 0, 0);
+                pass.damage_rect = DeviceRect::new(pass.output_rect.x, pass.output_rect.y, 0, 0);
             }
         }
         let root_pass_id = RenderPassId(0);

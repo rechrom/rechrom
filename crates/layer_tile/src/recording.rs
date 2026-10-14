@@ -1935,6 +1935,14 @@ fn validate_property_only_update(
         {
             return Err(reject);
         }
+        // PropertyTreeManager carries sticky constraints independently of
+        // recorded drawing content. Reuse that content only when the native
+        // constraint geometry/topology remains fixed; current offsets may move.
+        let real_sticky = a.sticky_constraint.zip(b.sticky_constraint)
+            .is_some_and(|(before, after)| before.same_geometry(&after));
+        if a.sticky_constraint != b.sticky_constraint && !real_sticky {
+            return Err(reject);
+        }
         if a.matrix != b.matrix {
             let real_scroll = a.scroll.as_ref().is_some_and(|scroll| {
                 root.transform
@@ -1942,7 +1950,7 @@ fn validate_property_only_update(
                     .as_ref()
                     .is_none_or(|sentinel| !scroll.lifecycle.same_node(&sentinel.lifecycle))
             });
-            if !real_scroll
+            if !(real_scroll || real_sticky)
                 || translation(&a.matrix, scale).is_err()
                 || translation(&b.matrix, scale).is_err()
             {
@@ -2475,6 +2483,36 @@ mod canonical_directory_tests {
             cache.prepare(&artifact, 1.0).err(),
             Some(ReplayUnsupported("property-update-changes-recording-space"))
         );
+        artifact.chunks[0].properties.effect = artifact.recorded_properties[0].effect.clone();
+        let constraint = layoutng_assembly::fragment_tree::StickyPositionPaintData {
+            owner_client_id: 1,
+            vertical: Some(layoutng_assembly::fragment_tree::StickyAxisPaintData {
+                min_inset: Some(0.0), ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let root_transform = PropertyTreeState::default().transform;
+        let source = Arc::new(paint::paint_property_tree::TransformPaintPropertyNode {
+            id: 17, parent: Some(root_transform.clone()),
+            lifecycle: Default::default(), sticky_constraint: Some(constraint),
+            ..(*root_transform).clone()
+        });
+        artifact.recorded_properties[0].transform = source.clone();
+        artifact.chunks[0].properties.transform = source.clone();
+        let mut cache = CanonicalRasterContentCache::default();
+        let sticky_content = cache.prepare(&artifact, 1.0).unwrap();
+        cache.commit();
+        let mut moved = (*source).clone();
+        moved.matrix.values[13] = 6.0;
+        let axis = moved.sticky_constraint.as_mut().unwrap().vertical.as_mut().unwrap();
+        axis.current_sticky_offset = 6.0;
+        axis.current_total_sticky_box_offset = 6.0;
+        artifact.chunks[0].properties.transform = Arc::new(moved.clone());
+        assert!(Arc::ptr_eq(&sticky_content, &cache.prepare(&artifact, 1.0).unwrap()));
+        moved.sticky_constraint.as_mut().unwrap().vertical.as_mut().unwrap().min_inset = Some(2.0);
+        artifact.chunks[0].properties.transform = Arc::new(moved);
+        assert_eq!(cache.prepare(&artifact, 1.0).err(),
+            Some(ReplayUnsupported("property-update-changes-recording-space")));
         assert_eq!(
             original[0]
                 .items

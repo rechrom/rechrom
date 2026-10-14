@@ -549,6 +549,27 @@ pub struct StickyPositionPaintData {
     pub vertical: Option<StickyAxisPaintData>,
 }
 
+impl StickyPositionPaintData {
+    /// StickyPositionScrollingConstraints::ComputeStickyOffset changes the
+    /// resolved offsets while retaining its layout geometry and ancestor links.
+    /// Paint and compositor admission use this same typed boundary predicate.
+    pub fn same_geometry(&self, other: &Self) -> bool {
+        let (mut before, mut after) = (*self, *other);
+        for data in [&mut before, &mut after] {
+            for axis in [&mut data.horizontal, &mut data.vertical].into_iter().flatten() {
+                if ![axis.current_sticky_offset, axis.current_total_sticky_box_offset,
+                    axis.current_total_containing_block_offset].into_iter().all(f64::is_finite) {
+                    return false;
+                }
+                axis.current_sticky_offset = 0.0;
+                axis.current_total_sticky_box_offset = 0.0;
+                axis.current_total_containing_block_offset = 0.0;
+            }
+        }
+        before == after
+    }
+}
+
 /// CSS canvas background selected by Layout from the document element or its
 /// first body element.  It is owned by the root fragment because Paint must
 /// cover the viewport and must not repaint the source element's own box.

@@ -111,6 +111,31 @@ impl FramePlan {
         &self.raster_records
     }
 
+    /// Refresh the compositor's retained metadata from explicit raster facts.
+    /// Resource pixels remain with Raster; tree identity and generation reject
+    /// completions from an obsolete bundle or invalidated grid slot.
+    pub fn ApplyRasterResults(&mut self, results: &[RasterCompletion]) -> usize {
+        let mut changed = 0;
+        let tree_id = self.layer_tree_id;
+        for result in results
+            .iter()
+            .filter(|result| result.layer_tree_id == tree_id)
+        {
+            for layer in &mut self.layers {
+                for tile in layer.tiles.iter_mut().chain(&mut layer.interest_tiles) {
+                    if !tile.ready
+                        && tile.tile_id == result.tile_id
+                        && tile.generation == result.generation
+                    {
+                        tile.ready = true;
+                        changed += 1;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
     pub fn TileIsReady(&self, tile: &TilePlacement) -> bool {
         tile.ready
     }

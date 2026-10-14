@@ -329,6 +329,20 @@ impl RasterEngine {
         Ok(completions)
     }
 
+    /// cc TileManager::CheckForCompletedTasks: publish completed SOON work
+    /// without waiting for another pending tree or blocking a display frame.
+    pub fn PollCompletedRaster(&mut self) -> io::Result<Vec<RasterCompletion>> {
+        let completions = self.collect_prepaint(&[])?;
+        if !completions.is_empty() {
+            self.stats.resident_bytes = self.resources.values().map(resource_bytes).sum();
+        }
+        Ok(completions)
+    }
+
+    pub fn HasPendingRaster(&self) -> bool {
+        self.pending_prepaint.is_some()
+    }
+
     fn collect_prepaint(&mut self, required: &[RasterTask]) -> io::Result<Vec<RasterCompletion>> {
         let Some(mut batch) = self.pending_prepaint.take() else {
             return Ok(Vec::new());

@@ -432,6 +432,15 @@ mod tests {
                 candidate.ready,
                 "completed draw tiles must also be usable for scrolling"
             );
+            let mut retained = plan.clone();
+            for layer in &mut retained.layers {
+                for tile in layer.tiles.iter_mut().chain(&mut layer.interest_tiles) {
+                    tile.ready = false;
+                }
+            }
+            assert!(retained.ApplyRasterResults(&completions) > 0);
+            assert!(retained.layers[0].interest_tiles.iter().any(|tile| tile.tile_id == candidate.tile_id && tile.ready));
+
             if let Some(old) = previous {
                 assert_eq!(
                     engine.ApplyRasterResults(&[RasterCompletion {

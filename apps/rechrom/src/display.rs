@@ -34,7 +34,15 @@ pub(crate) enum Message {
 
 pub(crate) enum Effect {
     ReturnBundle(RasterBundle),
+    RasterReady(Vec<layer_tile::RasterCompletion>),
     RequestBeginFrame,
+}
+
+struct PendingDisplayFrame {
+    provenance: compositor::FrameProvenance,
+    viewport: Viewport,
+    drag_regions: Vec<crate::chrome::DragRegion>,
+    has_content: bool,
 }
 
 struct PreparedDisplayFrame {
@@ -48,6 +56,8 @@ struct PreparedDisplayFrame {
 pub(crate) struct Display {
     target: DisplayTarget,
     active_bundle: Option<RasterBundle>,
+    incoming_bundle: Option<RasterBundle>,
+    pending: Option<PendingDisplayFrame>,
     prepared: Option<PreparedDisplayFrame>,
     sequence: u64,
     notify: Arc<dyn Fn(UserEvent) + Send + Sync>,
@@ -61,6 +71,8 @@ impl Display {
         Self {
             target,
             active_bundle: None,
+            incoming_bundle: None,
+            pending: None,
             prepared: None,
             sequence: 0,
             notify: output.notify.clone(),
@@ -75,22 +87,26 @@ impl Display {
         message: Message,
         post_swap_ack: &Arc<dyn Fn(u64) + Send + Sync>,
     ) -> io::Result<Vec<Effect>> {
-        match message {
-            Message::Stop => Ok(Vec::new()),
-            Message::Install(bundle) => Ok(self
-                .active_bundle
-                .replace(bundle)
-                .map(Effect::ReturnBundle)
-                .into_iter()
-                .collect()),
+        let mut effects = match message {
+            Message::Stop => return Ok(Vec::new()),
+            Message::Install(bundle) => {
+                // Surface owns the resources of its current accepted frame.
+                // Stage the new tree's owner until its corresponding Prepare;
+                // installation alone cannot invalidate an undrawn old frame.
+                let mut effects: Vec<_> = self
+                    .incoming_bundle
+                    .replace(bundle)
+                    .map(Effect::ReturnBundle)
+                    .into_iter()
+                    .collect();
+                effects.push(Effect::RequestBeginFrame);
+                Ok(effects)
+            }
             Message::Prepare {
                 frame,
                 submitted,
                 scroll_active,
-            } => {
-                self.Prepare(frame, submitted, scroll_active)?;
-                Ok(Vec::new())
-            }
+            } => self.Prepare(frame, submitted, scroll_active),
             Message::Submit {
                 frame,
                 scroll_active,
@@ -105,13 +121,33 @@ impl Display {
                         ("accepted", accepted as u8 as f64),
                     ],
                 );
-                Ok(if accepted && self.prepared.is_some() {
-                    vec![Effect::RequestBeginFrame]
-                } else {
-                    Vec::new()
-                })
+                Ok(
+                    if accepted && (self.pending.is_some() || self.prepared.is_some()) {
+                        vec![Effect::RequestBeginFrame]
+                    } else {
+                        Vec::new()
+                    },
+                )
+            }
+        }?;
+        // Poll the active resource owner as well as the pending raster owner.
+        // Otherwise finished prepaint stays invisible until this whole bundle
+        // happens to return to the raster thread on a later tree swap.
+        if let Some(bundle) = &mut self.active_bundle {
+            let mut ready = bundle.toolbar_raster.PollCompletedRaster()?;
+            let content = bundle.content_raster.PollCompletedRaster()?;
+            bundle.toolbar_tiles.ApplyRasterResults(&ready);
+            bundle.content_tiles.ApplyRasterResults(&content);
+            ready.extend(content);
+            if !ready.is_empty() {
+                effects.push(Effect::RasterReady(ready));
+            }
+            if bundle.toolbar_raster.HasPendingRaster() || bundle.content_raster.HasPendingRaster()
+            {
+                effects.push(Effect::RequestBeginFrame);
             }
         }
+        Ok(effects)
     }
 
     fn Prepare(
@@ -119,18 +155,26 @@ impl Display {
         frame: crate::begin_frame_source::NativeBeginFrame,
         submitted: SubmittedFrame,
         _scroll_active: bool,
-    ) -> io::Result<()> {
+    ) -> io::Result<Vec<Effect>> {
         let _frame = browser_tracing::scope(browser_tracing::Context {
             target_id: 1,
             source_id: frame.source_id,
             frame_id: frame.sequence_number,
             ..Default::default()
         });
-        let Some(bundle) = &mut self.active_bundle else {
-            return Ok(());
-        };
-        self.sequence = self.sequence.wrapping_add(1);
-        let sequence = self.sequence;
+        // Frame acceptance and resource ownership advance together. Runtime
+        // mailbox ordering keeps the matching Install before this submission.
+        let effects: Vec<_> = self
+            .incoming_bundle
+            .take()
+            .and_then(|bundle| self.active_bundle.replace(bundle).map(Effect::ReturnBundle))
+            .into_iter()
+            .collect();
+        if self.active_bundle.is_none() {
+            return Ok(effects);
+        }
+        // Surface::QueueFrame accepts resources and activates retained surface
+        // state. CPU drawing belongs to Display::DrawAndSwap, not submission.
         self.viz
             .SubmitFrame(TOOLBAR_SURFACE, submitted.toolbar)
             .map_err(io::Error::other)?;
@@ -144,21 +188,40 @@ impl Display {
             self.renderer.InvalidateSurface(CONTENT_SURFACE);
             false
         };
-        let toolbar_height = submitted.viewport.toolbar_pixels();
-        let output_rect = ::compositor::DeviceRect::new(
-            0,
-            0,
-            submitted.viewport.width,
-            submitted.viewport.height,
-        );
+        self.pending = Some(PendingDisplayFrame {
+            provenance: submitted.provenance,
+            viewport: submitted.viewport,
+            drag_regions: submitted.metadata,
+            has_content,
+        });
+        Ok(effects)
+    }
+
+    fn DrawPending(
+        &mut self,
+        frame: crate::begin_frame_source::NativeBeginFrame,
+    ) -> io::Result<()> {
+        let Some(pending) = self.pending.take() else {
+            return Ok(());
+        };
+        let Some(bundle) = &self.active_bundle else {
+            return Ok(());
+        };
+        self.sequence = self.sequence.wrapping_add(1);
+        let sequence = self.sequence;
+        let PendingDisplayFrame {
+            provenance,
+            viewport,
+            drag_regions,
+            has_content,
+        } = pending;
+        // Chromium Display::DrawAndSwap aggregates current Surface state only
+        // once the scheduler can draw; older submissions are not CPU frames.
+        let toolbar_height = viewport.toolbar_pixels();
+        let output_rect = ::compositor::DeviceRect::new(0, 0, viewport.width, viewport.height);
         let mut placements = vec![viz::SurfacePlacement {
             surface_id: TOOLBAR_SURFACE,
-            destination: ::compositor::DeviceRect::new(
-                0,
-                0,
-                submitted.viewport.width,
-                toolbar_height,
-            ),
+            destination: ::compositor::DeviceRect::new(0, 0, viewport.width, toolbar_height),
         }];
         if has_content {
             placements.push(viz::SurfacePlacement {
@@ -166,8 +229,8 @@ impl Display {
                 destination: ::compositor::DeviceRect::new(
                     0,
                     toolbar_height as i32,
-                    submitted.viewport.width,
-                    submitted.viewport.height.saturating_sub(toolbar_height),
+                    viewport.width,
+                    viewport.height.saturating_sub(toolbar_height),
                 ),
             });
         }
@@ -180,16 +243,15 @@ impl Display {
             &mut self.renderer,
             &bundle.toolbar_raster,
             has_content.then_some(&bundle.content_raster),
-            submitted.viewport,
+            viewport,
             sequence,
         )?;
-        let provenance = submitted.provenance;
         self.prepared = Some(PreparedDisplayFrame {
             output,
             provenance,
             sequence,
-            viewport: submitted.viewport,
-            drag_regions: submitted.metadata,
+            viewport,
+            drag_regions,
         });
         browser_tracing::instant(
             "frame",
@@ -275,6 +337,7 @@ impl Display {
             frame_trace.set("swap_throttled", 1.0);
             return Ok(vec![Effect::RequestBeginFrame]);
         }
+        self.DrawPending(frame)?;
         let Some(prepared) = self.prepared.take() else {
             frame_trace.set("submitted", 0.0);
             return Ok(Vec::new());

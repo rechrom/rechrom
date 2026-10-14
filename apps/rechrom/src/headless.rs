@@ -14,7 +14,12 @@ use std::{
 };
 
 pub(crate) fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
-    let viewport = viewport(options.width, options.height);
+    let viewport = viewport(options.width, options.height, options.device_scale_factor);
+    if !viewport.valid() {
+        return Err(
+            io::Error::other("headless device viewport exceeds render target limits").into(),
+        );
+    }
     let _devtools_url = crate::devtools_host::serve(options.devtools_port, &options.address)?;
     let mailbox: engine::FrameMailbox = Arc::new(Mutex::new(None));
     crate::devtools_host::attach_screenshots(mailbox.clone());
@@ -45,13 +50,14 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn viewport(width: u32, content_height: u32) -> Viewport {
-    // CLI dimensions describe the Page target in CSS pixels at DPR 1. The
+fn viewport(width: u32, content_height: u32, scale: f64) -> Viewport {
+    // CLI dimensions describe the Page target in CSS pixels. The
     // production embedding still renders its toolbar Page above that target.
     Viewport {
-        width,
-        height: content_height + engine::TOOLBAR_HEIGHT as u32,
-        scale: 1.0,
+        width: (f64::from(width) * scale).round() as u32,
+        height: (f64::from(content_height) * scale).round() as u32
+            + (engine::TOOLBAR_HEIGHT * scale).round() as u32,
+        scale,
     }
 }
 
@@ -139,13 +145,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn viewport_keeps_toolbar_outside_requested_page_at_dpr_one() {
-        let viewport = viewport(1280, 800);
-        assert!(viewport.valid());
-        assert_eq!(viewport.logical_width(), 1280.0);
-        assert_eq!(viewport.content_height(), 800.0);
-        assert_eq!(viewport.scale, 1.0);
-        assert_eq!(viewport.height, 800 + viewport.toolbar_pixels());
+    fn viewport_keeps_toolbar_outside_requested_css_page() {
+        for scale in [1.0, 1.25, 2.0] {
+            let viewport = viewport(1280, 800, scale);
+            assert!(viewport.valid());
+            assert_eq!(viewport.logical_width(), 1280.0);
+            assert_eq!(viewport.content_height(), 800.0);
+            assert_eq!(viewport.scale, scale);
+            assert_eq!(
+                viewport.height,
+                (800.0 * scale) as u32 + viewport.toolbar_pixels()
+            );
+        }
     }
 
     #[test]
@@ -156,7 +167,7 @@ mod tests {
         pump_events(
             receiver,
             commands,
-            viewport(1280, 800),
+            viewport(1280, 800, 1.0),
             "about:blank".into(),
             None,
         )
@@ -172,7 +183,7 @@ mod tests {
         pump_events(
             receiver,
             commands,
-            viewport(1280, 800),
+            viewport(1280, 800, 1.0),
             "about:blank".into(),
             Some(Duration::ZERO),
         )
@@ -190,7 +201,7 @@ mod tests {
         let error = pump_events(
             receiver,
             commands,
-            viewport(1280, 800),
+            viewport(1280, 800, 1.0),
             "about:blank".into(),
             None,
         )
@@ -207,7 +218,7 @@ mod tests {
         pump_events(
             receiver,
             commands,
-            viewport(1280, 800),
+            viewport(1280, 800, 1.0),
             "about:blank".into(),
             None,
         )

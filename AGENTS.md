@@ -56,6 +56,13 @@ lifecycle, raster, compositing, or presentation cause, improve the tracing and
 report generation first and iterate on it as needed so that the performance
 tool can diagnose and verify the optimization.
 
+Match the native page's CSS viewport and device-pixel ratio when reproducing
+scroll performance; headless defaults to DPR 1, so use
+`--force-device-scale-factor 2` for a DPR 2 display. Reaching the final scroll
+position after settling verifies the result, not smoothness. Inspect frame
+publication/commit intervals and input latency during continuous motion;
+headless publication does not establish physical display FPS.
+
 Open a visible Release window only for final user-facing experiential
 verification, or when the behavior being tested specifically requires native
 window interaction.

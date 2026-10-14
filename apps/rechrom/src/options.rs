@@ -5,6 +5,7 @@ pub struct Options {
     pub width: u32,
     pub height: u32,
     pub headless: bool,
+    pub device_scale_factor: f64,
     pub exit_after: Option<std::time::Duration>,
     pub devtools_port: u16,
 }
@@ -16,6 +17,7 @@ impl Options {
             width: 1280,
             height: 800,
             headless: false,
+            device_scale_factor: 1.0,
             exit_after: None,
             devtools_port: 9223,
         };
@@ -31,7 +33,8 @@ impl Options {
                     println!("rechrom [URL or file] [--url URL | --input FILE] [--width N] [--height N] [--headless]\n\
                         Shortcuts: Ctrl/Cmd+L address, Ctrl/Cmd+R reload, Alt+Left/Right history, F12 Performance DevTools.\n\
                         --devtools-port PORT selects the localhost Performance server (default 9223, 0 automatic).\n\
-                        --headless renders without a display server or native window (DPR 1).\n\
+                        --headless renders without a display server or native window (default DPR 1).\n\
+                        --force-device-scale-factor N sets headless DPR (0.25..4).\n\
                         With --headless, --width and --height are the page viewport in CSS pixels.\n\
                         --exit-after SECONDS stops the browser after a timed smoke run.");
                     return Ok(None);
@@ -43,6 +46,9 @@ impl Options {
                 "--width" => options.width = parse_number(args.next(), "width")?,
                 "--height" => options.height = parse_number(args.next(), "height")?,
                 "--headless" => options.headless = true,
+                "--force-device-scale-factor" => {
+                    options.device_scale_factor = parse_number(args.next(), "device scale factor")?
+                }
                 "--devtools-port" => {
                     options.devtools_port = parse_number(args.next(), "devtools-port")?
                 }
@@ -62,6 +68,14 @@ impl Options {
         }
         if !(320..=4096).contains(&options.width) || !(200..=4096).contains(&options.height) {
             return Err(invalid("window dimensions must be 320..4096 by 200..4096"));
+        }
+        if !options.device_scale_factor.is_finite()
+            || !(0.25..=4.0).contains(&options.device_scale_factor)
+            || (!options.headless && options.device_scale_factor != 1.0)
+        {
+            return Err(invalid(
+                "device scale factor must be 0.25..4 and requires --headless",
+            ));
         }
         options.address = normalize_address(&options.address)?;
         Ok(Some(options))

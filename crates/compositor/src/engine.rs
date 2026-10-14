@@ -159,6 +159,7 @@ pub enum Command<V, F, M> {
     Redraw,
     RasterReady(RasterReady<V, M>),
     SpareBundle(RasterBundle),
+    ActiveRasterReady(Vec<layer_tile::RasterCompletion>),
     Stop,
 }
 
@@ -419,17 +420,9 @@ where
                         ],
                     );
                 }
-                // A deferred main lifecycle can reply with its preceding
-                // artifact. It cannot activate against an impl batch that
-                // its committed geometry does not yet acknowledge.
-                if !document_changed
-                    && self
-                        .scroll_tree
-                        .has_unacknowledged_batch(snapshot.compositor_scroll_sequence)
-                {
-                    effects.push(Effect::RequestBeginFrame);
-                    return Ok(effects);
-                }
+                // SyncedScrollOffset preserves deltas newer than this frame's
+                // acknowledgement. A commit need not catch every in-flight
+                // input packet before it can provide new paint/tile coverage.
                 // Input regions are compositor metadata, not raster content.
                 // Refresh them even when the PaintArtifact identity is stable.
                 if let Some(planned) = &mut self.planned {
@@ -533,7 +526,9 @@ where
                                     && layer_has_scroll(&layer.properties.transform, root.id)
                             })
                         });
-                        let applied = apply_scroll_offset(planned, root, desired);
+                        let applied = apply_scroll_offset(
+                            planned, root, desired, ScrollTileSelection::ActiveTree,
+                        );
                         let has_new_scroll_content =
                             planned.content.as_ref().is_some_and(|content| {
                                 content.layers.iter().any(|layer| {
@@ -605,6 +600,21 @@ where
                 effects.push(Effect::RequestBeginFrame);
             }
             Command::RasterReady(ready) => self.InstallRaster(ready, &mut effects)?,
+            Command::ActiveRasterReady(completions) => {
+                if let Some(planned) = &mut self.planned {
+                    let changed = planned.toolbar.ApplyRasterResults(&completions)
+                        + planned.content.as_mut().map_or(0, |plan| plan.ApplyRasterResults(&completions));
+                    browser_tracing::instant("raster", "ActiveRasterReady", &[
+                        ("completed_tiles", completions.len() as f64),
+                        ("updated_placements", changed as f64),
+                    ]);
+                    if changed != 0 {
+                        self.dirty = true;
+                        effects.push(Effect::VisualDamage);
+                        effects.push(Effect::RequestBeginFrame);
+                    }
+                }
+            }
             Command::SpareBundle(bundle) => {
                 self.spare_bundle = Some(bundle);
                 self.ScheduleRaster(&mut effects);
@@ -789,15 +799,6 @@ where
             self.ScheduleRaster(effects);
             return Ok(());
         }
-        if !self.snapshot_matches_active(&planned.snapshot)
-            && self
-                .scroll_tree
-                .has_unacknowledged_batch(planned.snapshot.compositor_scroll_sequence)
-        {
-            self.spare_bundle = Some(ready.bundle);
-            effects.push(Effect::RequestBeginFrame);
-            return Ok(());
-        }
         if let Some(current) = &self.snapshot {
             planned.snapshot.async_root_scroll = current.async_root_scroll;
             planned.snapshot.blocking_wheel_regions = current.blocking_wheel_regions.clone();
@@ -809,15 +810,16 @@ where
             // Preserve only impl deltas not reflected by that exact commit,
             // including wheel input which arrived while raster was in flight.
             let desired = self.scroll_tree.activation_position(root, acknowledged);
-            // Pending-tree raster completion is not by itself permission to
-            // activate.  The tree must also cover the compositor's current
-            // scroll position.  Otherwise replacing the active bundle here
-            // snaps to the pending tree's committed position for one frame and
-            // then jumps forward when the missing activation tiles arrive.
-            // Chromium keeps the old active tree until all
-            // required-for-activation tiles are ready; retain the same atomic
-            // activation boundary here.
-            if !apply_scroll_offset(&mut planned, root, desired) {
+            // Impl-only raster work updates the active tree's resources;
+            // requiring a complete replacement viewport here would discard
+            // useful tiles whenever input advances during raster. A distinct
+            // main commit still obeys the pending-tree activation boundary.
+            let selection = if self.snapshot_matches_active(&planned.snapshot) {
+                ScrollTileSelection::ActiveTree
+            } else {
+                ScrollTileSelection::PendingTree
+            };
+            if !apply_scroll_offset(&mut planned, root, desired, selection) {
                 browser_tracing::instant(
                     "raster",
                     "PendingTreeActivationDeferred",
@@ -893,7 +895,9 @@ where
         if let Some(root) = self.scroll_tree.root() {
             let desired = self.scroll_tree.visual_offset_for(root);
             if let Some(planned) = &mut self.planned {
-                let _ = apply_scroll_offset(planned, root, desired);
+                let _ = apply_scroll_offset(
+                    planned, root, desired, ScrollTileSelection::ActiveTree,
+                );
             }
         }
         let Some(planned) = self.planned.clone() else {
@@ -1215,10 +1219,17 @@ fn layer_has_scroll(transform: &Arc<TransformPaintPropertyNode>, id: u64) -> boo
     false
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScrollTileSelection {
+    ActiveTree,
+    PendingTree,
+}
+
 fn apply_scroll_offset<V, M>(
     frame: &mut PlannedFrame<V, M>,
     root: ScrollNode,
     desired: Offset,
+    selection: ScrollTileSelection,
 ) -> bool {
     let Some(content) = &mut frame.content else {
         return true;
@@ -1231,16 +1242,16 @@ fn apply_scroll_offset<V, M>(
         x: (raster_base.x - desired.x) * content.config.raster_scale,
         y: (raster_base.y - desired.y) * content.config.raster_scale,
     };
-    // A compositor scroll transform and the tile set which covers it are one
-    // activation transaction.  Applying the transform while retaining only
-    // the preceding viewport's tiles exposes the transparent backing for a
-    // frame (most visible below large carousel layers).  Keep the active
-    // property state until every affected layer has drawable coverage.
-    let active = content
-        .layers
-        .iter()
-        .map(|layer| (layer.compositor_scroll, layer.tiles.clone()))
-        .collect::<Vec<_>>();
+    // cc requires complete tiles at pending-tree activation. The active
+    // tree's impl scroll continues with resident drawable tiles while raster
+    // catches up (TileBasedLayerImpl::AppendQuads counts missing tiles).
+    let active = (selection == ScrollTileSelection::PendingTree).then(|| {
+        content
+            .layers
+            .iter()
+            .map(|layer| (layer.compositor_scroll, layer.tiles.clone()))
+            .collect::<Vec<_>>()
+    });
     for layer in &mut content.layers {
         layer.compositor_scroll = if layer_has_scroll(&layer.properties.transform, root.id) {
             Some(CompositorScrollOffset {
@@ -1252,8 +1263,10 @@ fn apply_scroll_offset<V, M>(
             None
         };
     }
-    if !select_ready_scroll_tiles(content, root.id) {
-        for (layer, (scroll, tiles)) in content.layers.iter_mut().zip(active) {
+    if !select_ready_scroll_tiles(content, root.id, selection)
+        && selection == ScrollTileSelection::PendingTree
+    {
+        for (layer, (scroll, tiles)) in content.layers.iter_mut().zip(active.unwrap()) {
             layer.compositor_scroll = scroll;
             layer.tiles = tiles;
         }
@@ -1281,7 +1294,11 @@ fn apply_scroll_offset<V, M>(
     true
 }
 
-fn select_ready_scroll_tiles(plan: &mut FramePlan, scroll_id: u64) -> bool {
+fn select_ready_scroll_tiles(
+    plan: &mut FramePlan,
+    scroll_id: u64,
+    selection: ScrollTileSelection,
+) -> bool {
     let scale = plan.config.raster_scale;
     let mut complete = true;
     for layer_index in 0..plan.layers.len() {
@@ -1374,7 +1391,7 @@ fn select_ready_scroll_tiles(plan: &mut FramePlan, scroll_id: u64) -> bool {
             })
             .cloned()
             .collect();
-        let selected: Vec<_> = wanted
+        let mut selected: Vec<_> = wanted
             .iter()
             .filter(|tile| plan.TileIsReady(tile))
             .cloned()
@@ -1383,15 +1400,18 @@ fn select_ready_scroll_tiles(plan: &mut FramePlan, scroll_id: u64) -> bool {
             // Activate a complete visible tiling in one property-tree state.
             plan.layers[layer_index].tiles = selected;
         } else {
-            // Keep the complete preceding property state until every required
-            // replacement is ready.  Mixing the new transform with the old
-            // tile set leaves uncovered pixels even if some skewport tiles
-            // are already available.
+            // Pending activation retains the preceding complete tree. Active
+            // scrolling uses each ready tile in its actual content coordinates;
+            // missing coverage must not freeze the scroll transform.
             complete = false;
             let layer_id = plan.layers[layer_index].id.0;
             browser_tracing::instant(
                 "raster",
-                "ScrollTileActivationDeferred",
+                if selection == ScrollTileSelection::ActiveTree {
+                    "ScrollTileCoverageMissing"
+                } else {
+                    "ScrollTileActivationDeferred"
+                },
                 &[
                     ("layer", layer_id as f64),
                     ("wanted", wanted.len() as f64),
@@ -1404,6 +1424,36 @@ fn select_ready_scroll_tiles(plan: &mut FramePlan, scroll_id: u64) -> bool {
                     ),
                 ],
             );
+            browser_tracing::instant(
+                "raster",
+                "ScrollTileCoverageGeometry",
+                &[
+                    ("layer", layer_id as f64),
+                    ("required_x", required_visible.x),
+                    ("required_y", required_visible.y),
+                    ("required_width", required_visible.width),
+                    ("required_height", required_visible.height),
+                    ("origin_x", layer.raster_origin.0),
+                    ("origin_y", layer.raster_origin.1),
+                    ("scale", scale),
+                ],
+            );
+            if selection == ScrollTileSelection::ActiveTree {
+                for tile in &layer.tiles {
+                    if plan.TileIsReady(tile)
+                        && tile.tile_rect.x < visible.x + visible.width
+                        && tile.tile_rect.x + tile.tile_rect.width > visible.x
+                        && tile.tile_rect.y < visible.y + visible.height
+                        && tile.tile_rect.y + tile.tile_rect.height > visible.y
+                        && !selected
+                            .iter()
+                            .any(|candidate| candidate.tile_id == tile.tile_id)
+                    {
+                        selected.push(tile.clone());
+                    }
+                }
+                plan.layers[layer_index].tiles = selected;
+            }
         }
     }
     complete
@@ -1720,12 +1770,18 @@ mod lifecycle_tests {
         for ready in [false, true] {
             let mut engine = scrolling_engine(ready);
             assert!(engine.Prepare(frame(1)).unwrap().is_empty());
+            if !ready {
+                let root = engine.scroll_tree.root().unwrap();
+                assert!(!apply_scroll_offset(engine.planned.as_mut().unwrap(), root,
+                    Offset { x: 0., y: 3. }, ScrollTileSelection::PendingTree));
+                assert_eq!(engine.planned.as_ref().unwrap().visual_scroll.unwrap().1.y, 0.);
+            }
             let effects = engine.Handle(wheel(3.)).unwrap();
             assert_eq!(
                 effects
                     .iter()
                     .any(|effect| matches!(effect, Effect::VisualDamage)),
-                ready
+                true
             );
             assert!(effects
                 .iter()
@@ -1734,7 +1790,7 @@ mod lifecycle_tests {
                 .iter()
                 .any(|effect| matches!(effect, Effect::MainThread(MainThreadEvent::Wheel { .. }))));
             let visual = engine.planned.as_ref().unwrap().visual_scroll.unwrap().1.y;
-            assert_eq!(visual, if ready { 3. } else { 0. });
+            assert_eq!(visual, 3.);
             if ready {
                 assert!(engine
                     .Prepare(frame(1))
@@ -1748,6 +1804,11 @@ mod lifecycle_tests {
                     .iter()
                     .any(|effect| matches!(effect, Effect::VisualDamage)));
             }
+            engine.scroll_tree.pull_delta_for_main().unwrap();
+            assert!(engine.scroll_tree.has_unacknowledged_batch(0));
+            engine.Handle(Command::Snapshot(snapshot(2))).unwrap();
+            assert_eq!(engine.snapshot.as_ref().unwrap().signature.1, 2,
+                "unacknowledged impl input must not reject a new main snapshot");
         }
     }
 }

@@ -74,7 +74,7 @@ use layoutng_style::style::{
 };
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     fmt,
     rc::Rc,
     sync::Arc,
@@ -596,6 +596,7 @@ enum SelectorBucket {
     Class(String),
     Attribute(String),
     Tag(String),
+    CustomPseudo(String),
     Universal,
 }
 
@@ -639,6 +640,7 @@ impl SelectorBucket {
     fn Matches(&self, document: &Document, index: usize, quirks: bool) -> bool {
         let node = document.Node(index);
         match self {
+            Self::CustomPseudo(expected) => document.ShadowPseudoId(index).is_some_and(|name| name == expected),
             Self::Id(expected) => node.FindAttribute("id").is_some_and(|attribute| {
                 if quirks {
                     attribute.value.eq_ignore_ascii_case(expected)
@@ -688,6 +690,7 @@ impl RuleCandidateBuckets {
             SelectorBucket::Attribute(value) => self.attributes.entry(value.clone()).or_default(),
             SelectorBucket::Tag(value) => self.tags.entry(value.clone()).or_default(),
             SelectorBucket::Universal => &mut self.universal,
+            SelectorBucket::CustomPseudo(_) => &mut self.universal,
         };
         if destination.last() != Some(&order) {
             destination.push(order);
@@ -892,6 +895,8 @@ impl ResolverDependencyState {
 pub struct DocumentStyleEngine {
     document: DOMOwnerHandle,
     selectors: Rc<RefCell<PersistentSelectorService>>,
+    interaction_changed_nodes: HashSet<u64>,
+    interaction_changed_pseudos: BTreeSet<PseudoType>,
     diagnostics: Vec<DocumentStyleError>,
     active_sheets: Arc<Vec<(CSSStyleSheet, CascadeOrigin)>>,
     /// TreeScope owner aligned with `active_sheets`; UA entries have no
@@ -1001,6 +1006,8 @@ impl DocumentStyleEngine {
         Self {
             document: owner.GetDocument().RootHandle(),
             selectors: Default::default(),
+            interaction_changed_nodes: HashSet::new(),
+            interaction_changed_pseudos: BTreeSet::new(),
             diagnostics: vec![],
             active_sheets: Default::default(),
             active_sheet_scopes: Default::default(),
@@ -1170,11 +1177,107 @@ impl DocumentStyleEngine {
         if owner.GetDocument().RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
         }
-        if self.selectors.borrow().interaction == state {
+        let previous = self.selectors.borrow().interaction;
+        if previous == state {
             return Ok(false);
         }
+        use crate::selector_checker::SelectorCheckerBackend;
+        let old_actions = {
+            let mut selectors = self.selectors.borrow_mut();
+            let session = selectors.StyleMatchSession(owner.GetDocument());
+            let backend = session.Backend();
+            (0..owner.GetDocument().NodeCount())
+                .filter(|&index| ConnectedElement(owner.GetDocument(), index))
+                .map(|index| {
+                    (
+                        index,
+                        backend.IsHovered(&index),
+                        backend.IsActive(&index),
+                        backend.HasFocusWithin(&index),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
         self.selectors.borrow_mut().interaction = state;
-        owner.GetDocumentMut().StyleStateMut().all_dirty = true;
+        self.interaction_changed_nodes.extend(
+            [previous.focused_node_id, state.focused_node_id]
+                .into_iter()
+                .flatten(),
+        );
+        // Element::PseudoStateChanged schedules selector invalidation; it does
+        // not force every ComputedStyle in the document to be rebuilt. Reuse
+        // the retained rule matcher below, including its incomplete-signature
+        // fallback, to decide which elements actually require recalc.
+        for (old, new, pseudo) in [
+            (
+                previous.focused_node_id,
+                state.focused_node_id,
+                PseudoType::kPseudoFocus,
+            ),
+            (
+                previous.focus_visible_node_id,
+                state.focus_visible_node_id,
+                PseudoType::kPseudoFocusVisible,
+            ),
+            (
+                previous.hovered_node_id,
+                state.hovered_node_id,
+                PseudoType::kPseudoHover,
+            ),
+            (
+                previous.pressed_node_id,
+                state.pressed_node_id,
+                PseudoType::kPseudoActive,
+            ),
+            (
+                previous.multi_select_focused_option_id,
+                state.multi_select_focused_option_id,
+                PseudoType::kPseudoMultiSelectFocus,
+            ),
+        ] {
+            if old != new {
+                self.interaction_changed_pseudos.insert(pseudo);
+                if pseudo == PseudoType::kPseudoFocus {
+                    self.interaction_changed_pseudos.extend([
+                        PseudoType::kPseudoFocusVisible,
+                        PseudoType::kPseudoSpatialNavigationFocus,
+                        PseudoType::kPseudoActiveOption,
+                    ]);
+                }
+                self.interaction_changed_nodes
+                    .extend([old, new].into_iter().flatten());
+            }
+        }
+        {
+            // Reuse the production user-action traversal, including label
+            // controls, flat-tree ancestry and top-layer boundaries. Blink
+            // updates local style on every element whose state actually flips.
+            let mut selectors = self.selectors.borrow_mut();
+            let session = selectors.StyleMatchSession(owner.GetDocument());
+            let backend = session.Backend();
+            for (index, hovered, active, focus_within) in old_actions {
+                for (changed, pseudo) in [
+                    (
+                        hovered != backend.IsHovered(&index),
+                        PseudoType::kPseudoHover,
+                    ),
+                    (
+                        active != backend.IsActive(&index),
+                        PseudoType::kPseudoActive,
+                    ),
+                    (
+                        focus_within != backend.HasFocusWithin(&index),
+                        PseudoType::kPseudoFocusWithin,
+                    ),
+                ] {
+                    if changed {
+                        self.interaction_changed_pseudos.insert(pseudo);
+                        self.interaction_changed_nodes
+                            .insert(owner.GetDocument().Node(index).Id());
+                    }
+                }
+            }
+        }
         Ok(true)
     }
     pub fn HasContainerQueries(&self) -> bool {
@@ -1585,6 +1688,72 @@ impl DocumentStyleEngine {
                     }
                 }
             }
+            if !self.interaction_changed_nodes.is_empty() {
+                // RuleSet's compiled features select relational subjects.
+                // Local user-action state was compared through the production
+                // selector backend above; unrelated elements keep their style
+                // even when a sheet cannot certify a complete match signature.
+                let mut buckets = Vec::new();
+                let mut whole_scope = false;
+                for (sheet, _) in active_sheets.iter() {
+                    let Some(rules) = self
+                        .translated_rule_sets
+                        .get(&(sheet.Identity(), sheet.Revision()))
+                    else {
+                        whole_scope = true;
+                        continue;
+                    };
+                    for pseudo in &self.interaction_changed_pseudos {
+                        let Some(set) = rules.Features().user_action_invalidation.get(pseudo) else {
+                            continue;
+                        };
+                        let set = set.borrow();
+                        whole_scope |= set.WholeSubtreeInvalid();
+                        buckets.extend(set.Ids().into_iter().map(|s| SelectorBucket::Id(s.Utf8())));
+                        buckets.extend(
+                            set.Classes()
+                                .into_iter()
+                                .map(|s| SelectorBucket::Class(s.Utf8())),
+                        );
+                        buckets.extend(
+                            set.Attributes()
+                                .into_iter()
+                                .map(|s| SelectorBucket::Attribute(s.Utf8())),
+                        );
+                        buckets.extend(
+                            set.TagNames()
+                                .into_iter()
+                                .map(|s| SelectorBucket::Tag(s.Utf8())),
+                        );
+                        buckets.extend(
+                            set.CustomPseudoNames()
+                                .into_iter()
+                                .map(|s| SelectorBucket::CustomPseudo(s.Utf8())),
+                        );
+                    }
+                }
+                let quirks = document.GetCompatibilityMode() == CompatibilityMode::kQuirks;
+                for index in 0..document.NodeCount() {
+                    if !ConnectedElement(document, index) {
+                        continue;
+                    }
+                    if whole_scope
+                        || buckets
+                            .iter()
+                            .any(|bucket| bucket.Matches(document, index, quirks))
+                    {
+                        candidates.insert(index);
+                    }
+                    // Element's own native/control state must be refreshed
+                    // even when its ordinary matched-rule signature is equal.
+                    if self
+                        .interaction_changed_nodes
+                        .contains(&document.Node(index).Id())
+                    {
+                        dirty.insert(index);
+                    }
+                }
+            }
             for index in candidates {
                 if dirty.contains(&index) || !ConnectedElement(document, index) {
                     continue;
@@ -1636,6 +1805,8 @@ impl DocumentStyleEngine {
             }
         }
         if visit.is_empty() {
+            self.interaction_changed_nodes.clear();
+            self.interaction_changed_pseudos.clear();
             self.sheet_revision = Some(revision);
             self.active_sheets = active_sheets;
             self.active_sheet_scopes = active_sheet_scopes;
@@ -2735,6 +2906,8 @@ impl DocumentStyleEngine {
         self.matches.extend(pending_matches);
         self.cascade_values.extend(pending_values);
         self.custom_properties.extend(pending_custom_properties);
+        self.interaction_changed_nodes.clear();
+        self.interaction_changed_pseudos.clear();
         let document = owner.GetDocumentMut();
         for (index, style) in pending {
             document.SetResolvedStyle(index, style)

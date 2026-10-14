@@ -16,7 +16,7 @@ use crate::{
     PaintRect,
 };
 use layoutng_assembly::{
-    fragment_tree::FragmentNode,
+    fragment_tree::{FragmentNode, StickyPositionPaintData},
     internal::layout_input::{Offset, Size, TransformMatrix},
     internal::paint_input::BackgroundAttachment,
 };
@@ -467,11 +467,15 @@ impl RetainedScrollPaintState {
 
 // Validate current exported inputs while placing them in the recorded slots.
 // Unknown, duplicate or missing identities still reject the whole update.
+// ScrollPaintReuseRejected stages: 1 missing identity, 2 duplicate identity,
+// 3 changed geometry/unowned sticky placement, 4 scroll-dependent background,
+// 5 property owner/constraint change.
 fn collect_current_fragments<'a>(
     f: &'a FragmentNode,
     retained: &RetainedScrollPaintState,
     nodes: &mut [Option<&'a FragmentNode>],
     offsets: &mut BTreeMap<PaintPropertyOwner, Offset>,
+    sticky: &mut BTreeMap<PaintPropertyOwner, (Offset, StickyPositionPaintData)>,
     collected: &mut usize,
 ) -> bool {
     let key = (
@@ -481,13 +485,30 @@ fn collect_current_fragments<'a>(
         f.paint.display_item_fragment,
     );
     let Some(&index) = retained.fragment_indices.get(&key) else {
+        browser_tracing::instant("paint", "ScrollPaintReuseRejected", &[
+            ("stage", 1.0), ("node_id", f.node_id as f64),
+            ("fragment_instance_id", f.fragment_instance_id as f64),
+            ("display_item_client_id", f.paint.display_item_client_id as f64),
+        ]);
         return false;
     };
     if nodes[index].is_some() {
+        browser_tracing::instant("paint", "ScrollPaintReuseRejected", &[
+            ("stage", 2.0), ("node_id", f.node_id as f64),
+        ]);
         return false;
     }
     let old = &retained.fragments[index];
-    if f.offset != old.offset || f.size != old.size || f.paint.sticky_offset != old.sticky_offset {
+    let unowned_sticky_change = f.paint.sticky_offset != old.sticky_offset
+        && (f.paint.sticky_constraint.is_none() || f.paint.display_item_client_id == 0);
+    if f.offset != old.offset || f.size != old.size || unowned_sticky_change {
+        browser_tracing::instant("paint", "ScrollPaintReuseRejected", &[
+            ("stage", 3.0), ("node_id", f.node_id as f64),
+            ("offset_changed", (f.offset != old.offset) as u8 as f64),
+            ("size_changed", (f.size != old.size) as u8 as f64),
+            ("sticky_changed", (f.paint.sticky_offset != old.sticky_offset) as u8 as f64),
+            ("old_sticky_y", old.sticky_offset.y), ("new_sticky_y", f.paint.sticky_offset.y),
+        ]);
         return false;
     }
     nodes[index] = Some(f);
@@ -497,6 +518,12 @@ fn collect_current_fragments<'a>(
             client: f.paint.display_item_client_id,
             fragment: f.paint.display_item_fragment,
         };
+        if let Some(constraint) = f.paint.sticky_constraint {
+            let current = (f.paint.sticky_offset, constraint);
+            if sticky.insert(owner, current).is_some_and(|old| old != current) {
+                return false;
+            }
+        }
         if offsets
             .insert(owner, f.paint.scroll_offset)
             .is_some_and(|old| old != f.paint.scroll_offset)
@@ -504,9 +531,11 @@ fn collect_current_fragments<'a>(
             return false;
         }
     }
-    f.children
-        .iter()
-        .all(|child| collect_current_fragments(child, retained, nodes, offsets, collected))
+    // LayoutSVGHiddenContainer remains in Layout snapshots for resource users,
+    // but PrePaint creates no ordinary owners beneath that boundary. Traverse
+    // the same owner-selected children when validating retained identities.
+    crate::pre_paint_tree_walk::OrdinaryPaintChildren(f)
+        .all(|child| collect_current_fragments(child, retained, nodes, offsets, sticky, collected))
 }
 
 fn has_scroll_dependent_background(fragment: &FragmentNode) -> bool {
@@ -517,9 +546,7 @@ fn has_scroll_dependent_background(fragment: &FragmentNode) -> bool {
             .background_images
             .iter()
             .any(|layer| layer.attachment != BackgroundAttachment::kScroll))
-        || fragment
-            .children
-            .iter()
+        || crate::pre_paint_tree_walk::OrdinaryPaintChildren(fragment)
             .any(has_scroll_dependent_background)
 }
 
@@ -620,10 +647,11 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
     }
     // This path is admitted only by Page's retained native-layout proof. No
     // property builder or temporary PaintTreeNode is needed for clean content.
-    // Verify current geometry independently; inspecting cached nodes here would
-    // accidentally accept a changed sticky position.
+    // Verify current geometry independently and carry Layout's resolved sticky
+    // values into its existing property slot before validating recorded coverage.
     let mut nodes = vec![None; retained.fragments.len()];
     let mut offsets = BTreeMap::new();
+    let mut sticky = BTreeMap::new();
     let mut collected = 0;
     let collect_trace = browser_tracing::span("paint", "ScrollPaint.CollectFragments");
     if !collect_current_fragments(
@@ -631,6 +659,7 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
         retained,
         &mut nodes,
         &mut offsets,
+        &mut sticky,
         &mut collected,
     ) || collected != retained.fragments.len()
     {
@@ -649,13 +678,17 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
             .is_some_and(|recorded| recorded != current)
     });
     if scroll_changed && has_scroll_dependent_background(fragments) {
+        browser_tracing::instant("paint", "ScrollPaintReuseRejected", &[("stage", 4.0)]);
         return Err(FragmentChanged);
     }
     let property_trace = browser_tracing::span("paint", "ScrollPaint.RebindPropertyTrees");
     let (updated_store, mut trees) = prepaint
         .property_node_store
-        .retained_scroll_update(&offsets)
-        .ok_or(PropertyChanged)?;
+        .retained_scroll_update(&offsets, &sticky)
+        .ok_or_else(|| {
+            browser_tracing::instant("paint", "ScrollPaintReuseRejected", &[("stage", 5.0)]);
+            PropertyChanged
+        })?;
     drop(property_trace);
     let artifact_to_device_scale = fragments
         .paint
@@ -928,7 +961,7 @@ mod coverage_tests {
             let mut nodes = vec![None; retained.fragments.len()];
             let mut offsets = BTreeMap::new();
             let mut collected = 0;
-            collect_current_fragments(f, retained, &mut nodes, &mut offsets, &mut collected)
+            collect_current_fragments(f, retained, &mut nodes, &mut offsets, &mut BTreeMap::new(), &mut collected)
                 && collected == retained.fragments.len()
         }
         let mut root = fragment(1);
@@ -969,6 +1002,14 @@ mod coverage_tests {
             coverage_groups: Vec::new(),
         };
         assert!(accepts(&retained, &root));
+        let mut with_resource = root.clone();
+        let mut hidden = fragment(4);
+        hidden.paint.svg_hidden_container = true;
+        hidden.children.push(fragment(5));
+        with_resource.children.push(hidden);
+        assert!(accepts(&retained, &with_resource));
+        with_resource.children.last_mut().unwrap().paint.svg_hidden_container = false;
+        assert!(!accepts(&retained, &with_resource));
         let mut current = root.clone();
         current.children.reverse();
         current.paint.scroll_offset.y = 64.5;
@@ -987,6 +1028,9 @@ mod coverage_tests {
         let mut current = root.clone();
         current.children[0].paint.sticky_offset.y += 1.0;
         assert!(!accepts(&retained, &current));
+        current.children[0].paint.sticky_constraint = Some(Default::default());
+        assert!(accepts(&retained, &current)); // Store subsequently validates the real slot/geometry.
+
     }
 
     #[test]

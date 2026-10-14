@@ -1,5 +1,6 @@
 //! Owner-thread input queue corresponding to Blink's frame-aligned event queue.
-//! Only adjacent compatible updates coalesce; gesture boundaries remain events.
+//! Compatible updates coalesce across other continuous event classes; discrete
+//! input and incompatible events of the same class remain ordering boundaries.
 use crate::input_event::{InputEvent, MouseEventType, WheelPhase};
 use std::{collections::VecDeque, time::Instant};
 
@@ -41,7 +42,13 @@ impl FrameAlignedInputQueue {
         self.entries.pop_front()
     }
     pub fn Push(&mut self, input: InputEvent, queued_at: Instant, samples: usize) {
-        if let Some(last) = self.entries.back_mut() {
+        // MainThreadEventQueue::QueuedWebInputEvent::FilterNewEvent keeps
+        // searching across a different event class. Wheel/mouse alternation
+        // must not turn one frame's continuous input into hundreds of tasks.
+        for last in self.entries.iter_mut().rev() {
+            if !Self::IsFrameAligned(&input) || !Self::IsFrameAligned(&last.input) {
+                break;
+            }
             let merged = match (&mut last.input, &input) {
                 (InputEvent::Wheel(a), InputEvent::Wheel(b)) => {
                     let finite = |x: f64, y: f64| x.is_finite() && y.is_finite();
@@ -75,13 +82,16 @@ impl FrameAlignedInputQueue {
                         false
                     }
                 }
-                _ => false,
+                _ => continue,
             };
             if merged {
                 last.queued_at = last.queued_at.min(queued_at);
                 last.samples = last.samples.saturating_add(samples);
                 return;
             }
+            // An incompatible event of the same class blocks coalescing
+            // with still older events, as in FilterResult::StopIterating.
+            break;
         }
         self.entries.push_back(QueuedFrameInput {
             input,
@@ -130,6 +140,15 @@ mod tests {
             3,
             "precise and non-precise input retain separate units"
         );
+        let mut alternating = FrameAlignedInputQueue::default();
+        for _ in 0..4 {
+            alternating.Push(wheel(10., WheelPhase::kChanged, false), time, 1);
+            alternating.Push(InputEvent::Mouse(Default::default()), time, 1);
+        }
+        assert_eq!(alternating.entries.len(), 2);
+        let merged = alternating.PopFront().unwrap();
+        assert_eq!(merged.samples, 4);
+        assert!(matches!(merged.input, InputEvent::Wheel(event) if event.delta.y == 40.));
+        assert_eq!(alternating.PopFront().unwrap().samples, 4);
     }
-
 }

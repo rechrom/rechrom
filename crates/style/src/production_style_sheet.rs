@@ -44,7 +44,7 @@ use crate::{
 };
 use foundation::{AtomicString, CSSPropertyID, CSSValueID, Member, String, StringView};
 use layoutng_style::style::computed_style_constants::PseudoId;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::{BTreeMap, BTreeSet, HashMap}, rc::Rc};
 pub type ContainerSet = crate::production_container_parser::ContainerSet;
 pub type ContainerCondition = crate::production_container_parser::ContainerCondition;
 pub type QuerySet = ConcreteQuerySet<crate::css_numeric_literal_value::CSSNumericLiteralValue>;
@@ -143,6 +143,156 @@ impl RuleBucketTable for ProductionRuleBucketTable {
 #[derive(Default)]
 pub struct ProductionRuleFeatureSet {
     media_query_result_flags: MediaQueryResultFlags,
+    pub(crate) user_action_invalidation:
+        BTreeMap<PseudoType, crate::invalidation::invalidation_set::InvalidationSetRef>,
+}
+
+// RuleInvalidationDataVisitor distinguishes a pseudo on the subject from one
+// which invalidates descendants, siblings or :has() subjects. Retain those
+// target features while RuleSet still owns the compiled selector, rather than
+// reparsing a CSSOM projection during each input event.
+fn user_action_features(
+    selector: CSSSelectorComplex<'_>,
+) -> (BTreeSet<PseudoType>, BTreeSet<PseudoType>) {
+    use crate::css_selector::RelationType;
+    let (mut any, mut relational, mut subject) = (BTreeSet::new(), BTreeSet::new(), true);
+    for simple in selector.SimpleSelectors() {
+        let pseudo = simple.GetPseudoType();
+        if matches!(
+            simple.Match(),
+            MatchType::kPseudoClass | MatchType::kPseudoElement
+        ) && matches!(
+            pseudo,
+            PseudoType::kPseudoHover
+                | PseudoType::kPseudoActive
+                | PseudoType::kPseudoActiveOption
+                | PseudoType::kPseudoFocus
+                | PseudoType::kPseudoFocusVisible
+                | PseudoType::kPseudoFocusWithin
+                | PseudoType::kPseudoMultiSelectFocus
+                | PseudoType::kPseudoSpatialNavigationFocus
+        ) {
+            any.insert(pseudo);
+            if !subject {
+                relational.insert(pseudo);
+            }
+        }
+        if let Some(list) = simple.SelectorListOrParent() {
+            for nested in list.ComplexSelectors() {
+                let (nested_any, nested_relational) = user_action_features(nested);
+                any.extend(nested_any.iter().copied());
+                relational.extend(nested_relational);
+                if !subject
+                    || !matches!(
+                        pseudo,
+                        PseudoType::kPseudoIs
+                            | PseudoType::kPseudoAny
+                            | PseudoType::kPseudoWhere
+                            | PseudoType::kPseudoNot
+                            | PseudoType::kPseudoParent
+                    )
+                {
+                    relational.extend(nested_any);
+                }
+            }
+        }
+        if !matches!(
+            simple.Relation(),
+            RelationType::kSubSelector | RelationType::kPseudoChild
+        ) {
+            subject = false;
+        }
+    }
+    (any, relational)
+}
+
+fn collect_user_action_features(
+    features: &mut ProductionRuleFeatureSet,
+    selector: CSSSelectorComplex<'_>,
+    scope: Option<&crate::style_scope::StyleScope>,
+) {
+    use crate::invalidation::invalidation_set::DescendantInvalidationSet;
+    let mut pseudos = user_action_features(selector).1;
+    let mut scoped = BTreeSet::new();
+    if let Some(scope) = scope {
+        collect_scope_user_actions(scope, &mut scoped);
+    }
+    pseudos.extend(scoped.iter().copied());
+    for pseudo in pseudos {
+        let mut set = features
+            .user_action_invalidation
+            .entry(pseudo)
+            .or_insert_with(DescendantInvalidationSet::Create)
+            .borrow_mut();
+        // Scope activation can depend on a user-action selector outside this rule.
+        if scoped.contains(&pseudo) {
+            set.SetWholeSubtreeInvalid();
+            continue;
+        }
+        collect_user_action_subject(&mut set, selector);
+    }
+}
+
+fn collect_user_action_subject(
+    set: &mut crate::invalidation::invalidation_set::InvalidationSet,
+    selector: CSSSelectorComplex<'_>,
+) {
+    use crate::css_selector::RelationType;
+    let (mut class, mut attribute, mut tag, mut custom_pseudo) = (None, None, None, None);
+    for simple in selector.SimpleSelectors() {
+        match simple.Match() {
+            MatchType::kId => {
+                set.AddId(&simple.Value());
+                return;
+            }
+            MatchType::kClass if class.is_none() => class = Some((*simple.Value()).clone()),
+            MatchType::kTag if tag.is_none() => tag = Some(simple.TagQName().LocalName().clone()),
+            MatchType::kPseudoElement
+                if matches!(
+                    simple.GetPseudoType(),
+                    PseudoType::kPseudoWebKitCustomElement
+                        | PseudoType::kPseudoBlinkInternalElement
+                ) =>
+            {
+                custom_pseudo = Some((*simple.Value()).clone())
+            }
+            _ if simple.IsAttributeSelector() && attribute.is_none() => {
+                attribute = Some(simple.Attribute().LocalName().clone())
+            }
+            _ => {}
+        }
+        if !matches!(
+            simple.Relation(),
+            RelationType::kSubSelector | RelationType::kPseudoChild
+        ) {
+            break;
+        }
+    }
+    if let Some(class) = class {
+        set.AddClass(&class);
+    } else if let Some(attribute) = attribute {
+        set.AddAttribute(&attribute);
+    } else if let Some(tag) = tag {
+        set.AddTagName(&tag);
+    } else if let Some(custom_pseudo) = custom_pseudo {
+        set.AddCustomPseudoName(&custom_pseudo);
+    } else {
+        set.SetWholeSubtreeInvalid();
+    }
+}
+
+fn collect_scope_user_actions(
+    scope: &crate::style_scope::StyleScope,
+    pseudos: &mut BTreeSet<PseudoType>,
+) {
+    for list in scope.From().into_iter().chain(scope.To()) {
+        for selector in list.ComplexSelectors() {
+            pseudos.extend(user_action_features(selector).0);
+        }
+    }
+    if let Some(parent) = scope.Parent() {
+        collect_scope_user_actions(parent, pseudos);
+    }
 }
 
 pub struct ProductionSubstringSetMatcher(Vec<RuleSetSubstringPattern>);
@@ -3528,6 +3678,7 @@ impl RuleSetBackend for Backend {
         selector: CSSSelectorComplex<'_>,
         scope: Option<&Self::StyleScope>,
     ) -> SelectorPreMatch {
+        collect_user_action_features(features, selector, scope);
         SelectorPreMatch::kMayMatch
     }
     fn NewFeatures() -> Self::RuleFeatureSet {

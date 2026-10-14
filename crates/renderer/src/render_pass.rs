@@ -82,6 +82,7 @@ struct CompositionPlan {
     scale: f64,
     raster_task_count: usize,
     root_damage: Option<SurfaceBounds>,
+    output_bounds: Option<SurfaceBounds>,
     transparent_root: bool,
     owner_effect: Option<Arc<EffectPaintPropertyNode>>,
     layers: Vec<CompositionLayer>,
@@ -164,7 +165,8 @@ impl CompositionPlan {
             viewport: pass.LogicalViewport(),
             scale: pass.RasterScaleFactor(),
             raster_task_count: pass.RasterTaskCount(),
-            root_damage: compositor_damage_bounds(pass.DamageRect(), pass.Viewport())?,
+            root_damage: compositor_damage_bounds(pass.DamageRect(), pass.SurfaceViewport())?,
+            output_bounds: compositor_damage_bounds(pass.Viewport(), pass.SurfaceViewport())?,
             transparent_root: !pass.IsRoot(),
             owner_effect: pass.OwnerEffect().cloned(),
             layers,
@@ -204,6 +206,32 @@ struct SurfaceBounds {
     top: usize,
     right: usize,
     bottom: usize,
+}
+
+// SoftwareRenderer::DrawRenderPassQuad draws dest_visible_rect, intersected
+// with the target clip. The backing's allocation extent is not quad coverage.
+fn render_pass_quad_bounds(
+    composition: LayerComposition,
+    width: u32,
+    height: u32,
+) -> Option<SurfaceBounds> {
+    let (mut left, mut top, mut right, mut bottom) =
+        (0i64, 0i64, i64::from(width), i64::from(height));
+    for clip in [composition.clip, composition.content_bounds]
+        .into_iter()
+        .flatten()
+    {
+        left = left.max(i64::from(clip.x));
+        top = top.max(i64::from(clip.y));
+        right = right.min(i64::from(clip.x) + i64::from(clip.width));
+        bottom = bottom.min(i64::from(clip.y) + i64::from(clip.height));
+    }
+    (left < right && top < bottom).then_some(SurfaceBounds {
+        left: left as usize,
+        top: top as usize,
+        right: right as usize,
+        bottom: bottom as usize,
+    })
 }
 
 fn compositor_damage_bounds(
@@ -732,6 +760,7 @@ fn needs_clip_mask(clip: &ClipPaintPropertyNode, scale: f64) -> bool {
         .unwrap_or(true);
     affine
         || clip.radii != PaintCornerRadii::default()
+        || clip.clip_path_error.is_some()
         || (clip.clip_path_is_empty || !clip.clip_path.is_empty())
 }
 fn append_clip_scopes(
@@ -1205,12 +1234,7 @@ fn effect_allocation_plan(
             let composition = layer.composition;
             let mut bounds = None;
             if layer.render_pass.is_some() {
-                bounds = Some(SurfaceBounds {
-                    left: 0,
-                    top: 0,
-                    right: width as usize,
-                    bottom: height as usize,
-                });
+                bounds = render_pass_quad_bounds(composition, width, height);
             }
             for tile in &layer.tiles {
                 union_bounds(
@@ -1381,6 +1405,7 @@ pub(crate) struct RenderPassRenderer {
     composed_pixels: Vec<u32>,
     composed_format: Option<skia::PixelFormat>,
     composed_valid: bool,
+    composed_output_bounds: Option<SurfaceBounds>,
     clip_masks: ClipMaskCache,
     stats: LayerTileRasterStats,
 }
@@ -1392,6 +1417,7 @@ impl Default for RenderPassRenderer {
             composed_pixels: Vec::new(),
             composed_format: None,
             composed_valid: false,
+            composed_output_bounds: None,
             clip_masks: ClipMaskCache::default(),
             stats: LayerTileRasterStats::default(),
         }
@@ -1413,6 +1439,7 @@ impl RenderPassRenderer {
         self.composed_pixels.clear();
         self.composed_format = None;
         self.composed_valid = false;
+        self.composed_output_bounds = None;
         self.clip_masks = ClipMaskCache::default();
         self.stats = LayerTileRasterStats::default();
     }
@@ -1741,14 +1768,28 @@ impl RenderPassRenderer {
             self.composed_format = Some(format);
             self.composed_valid = false;
         }
-        // DirectRenderer::CanSkipRenderPass requires an existing valid backing.
-        // New/recreated/resized storage and a failed previous draw must repaint
-        // even when the compositor's unchanged frame carries no new damage.
-        if force_full_damage || !self.composed_valid {
-            plan.root_damage = Some(SurfaceBounds {
-                left: 0, top: 0, right: width as usize, bottom: height as usize,
-            });
+        // SoftwareRenderer's render-pass bitmap is transparent outside its
+        // output_rect. Our retained storage keeps surface coordinates/stride;
+        // when that rect moves, erase the old extent before drawing the new one.
+        // Allocation extent never enlarges either output or damage coverage.
+        let bounds_changed = self.composed_output_bounds != plan.output_bounds;
+        if bounds_changed {
+            if let Some(old) = self.composed_output_bounds {
+                for y in old.top.min(height as usize)..old.bottom.min(height as usize) {
+                    let left = old.left.min(width as usize);
+                    let right = old.right.min(width as usize);
+                    self.composed_pixels[y * width as usize + left..y * width as usize + right].fill(0);
+                }
+            }
         }
+        // DirectRenderer::CanSkipRenderPass requires a valid backing. Repaint
+        // the full *output rect* after loss, token gaps or output-rect changes.
+        if force_full_damage || !self.composed_valid || bounds_changed {
+            plan.root_damage = plan.output_bounds;
+        }
+        plan.root_damage = plan.root_damage.and_then(|damage| {
+            plan.output_bounds.and_then(|output| intersect_bounds(damage, output))
+        });
         // Keep one renderer-owned root render-pass backing. Native IOSurfaces
         // are a rotating presentation queue, so repainting them directly would
         // otherwise discard unchanged pixels on every animation frame.
@@ -1784,6 +1825,7 @@ impl RenderPassRenderer {
         // A failed draw may have modified part of the retained target. Never
         // expose it as a valid retained pass on the next attempt.
         self.composed_valid = result.is_ok();
+        self.composed_output_bounds = plan.output_bounds;
         render_trace.set("succeeded", if result.is_ok() { 1.0 } else { 0.0 });
         if let Ok(update) = &result {
             render_trace.set("layers", self.stats.layers as f64);
@@ -1936,7 +1978,7 @@ impl RenderPassRenderer {
                     }
                 }
             }
-            compose_damage = Some(damage);
+            compose_damage = plan.output_bounds.and_then(|output| intersect_bounds(damage, output));
         }
         let damage_pixels = compose_damage.map_or(0, |bounds| {
             (bounds.right - bounds.left) * (bounds.bottom - bounds.top)
@@ -2235,6 +2277,17 @@ impl RenderPassRenderer {
             let composition = layer.composition;
             let blit_start = compose_costs.as_ref().map(|_| std::time::Instant::now());
             if let Some(render_pass_id) = layer.render_pass {
+                let mut quad_trace = browser_tracing::span("compose", "ComposeRenderPassQuad");
+                quad_trace.set("render_pass_id", render_pass_id.0 as f64);
+                quad_trace.set(
+                    "visible_polygon",
+                    layer.visible_polygon.is_some() as u8 as f64,
+                );
+                quad_trace.set("source_pixels", f64::from(width) * f64::from(height));
+                quad_trace.set(
+                    "content_bounds_known",
+                    composition.content_bounds.is_some() as u8 as f64,
+                );
                 let source = render_pass_outputs.get(&render_pass_id).ok_or_else(|| {
                     io::Error::other("render-pass quad references unavailable child output")
                 })?;
@@ -2249,11 +2302,21 @@ impl RenderPassRenderer {
                 }
                 let owner = layer.properties.effect.clone();
                 let scope = Scope::Effect(owner.clone());
+                let filters = effect_filters(&scope, scale, true, layer.compositor_scroll)?;
+                let backdrop_filters = backdrop_filters(&scope, scale, layer.compositor_scroll)?;
+                let borrows_source = filters.is_empty()
+                    && backdrop_filters.is_empty()
+                    && owner.backdrop_filter_clip.is_none();
                 let output_clips = owner
                     .output_clip
                     .as_ref()
                     .map(clip_chain)
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                    .into_iter()
+                    // The compositor already supplied the enclosing scissor.
+                    // Raster coverage is only for rounded/path/transformed clips.
+                    .filter(|clip| !borrows_source || needs_clip_mask(clip, scale))
+                    .collect::<Vec<_>>();
                 let coverage = (!output_clips.is_empty())
                     .then(|| {
                         self.clip_masks.coverage(
@@ -2265,6 +2328,10 @@ impl RenderPassRenderer {
                         )
                     })
                     .transpose()?;
+                quad_trace.set(
+                    "clip_mask_pixels",
+                    coverage.as_ref().map_or(0, |mask| mask.pixels.len()) as f64,
+                );
                 let backdrop_output =
                     backdrop_output_bounds(&owner, width, height, scale, layer.compositor_scroll)?;
                 let backdrop_coverage = match (&owner.backdrop_filter_clip, backdrop_output) {
@@ -2277,6 +2344,60 @@ impl RenderPassRenderer {
                     )?),
                     _ => None,
                 };
+                if borrows_source {
+                    // The child backing is immutable and already contains its
+                    // subtree's mask/effects. Like SoftwareRenderer's bitmap
+                    // shader, sample it directly rather than copying a whole
+                    // viewport into a transient saveLayer for every quad.
+                    let source_view = TargetView {
+                        origin: (0, 0),
+                        stride: width as usize,
+                    };
+                    let touched = render_pass_quad_bounds(composition, width, height);
+                    quad_trace.set("borrowed_source", 1.0);
+                    quad_trace.set(
+                        "draw_pixels",
+                        touched.map_or(0, |b| (b.right - b.left) * (b.bottom - b.top)) as f64,
+                    );
+                    if let Some(parent) = groups.last_mut() {
+                        let written = composite_effect_surface(
+                            &mut parent.pixels,
+                            source,
+                            touched,
+                            parent.view,
+                            source_view,
+                            skia::PixelFormat::Rgba8888,
+                            owner.opacity,
+                            owner.blend_mode,
+                            coverage.as_deref(),
+                            layer.visible_polygon.as_ref(),
+                        );
+                        union_bounds(&mut parent.touched, written);
+                    } else {
+                        composite_effect_surface(
+                            buffer,
+                            source,
+                            touched.and_then(|b| intersect_bounds(b, compose_damage)),
+                            frame_view,
+                            source_view,
+                            format,
+                            owner.opacity,
+                            owner.blend_mode,
+                            coverage.as_deref(),
+                            layer.visible_polygon.as_ref(),
+                        );
+                    }
+                    if let Some(cost) = &mut compose_costs {
+                        cost.blit += blit_start.unwrap().elapsed();
+                    }
+                    continue;
+                }
+                let copy_started = std::time::Instant::now();
+                let pixels = source.to_vec();
+                quad_trace.set(
+                    "source_copy_ms",
+                    copy_started.elapsed().as_secs_f64() * 1000.0,
+                );
                 groups.push(EffectSurface {
                     run: usize::MAX,
                     scope: scope.clone(),
@@ -2284,7 +2405,7 @@ impl RenderPassRenderer {
                     direct_clip: false,
                     dst_in_root: false,
                     coverage,
-                    pixels: source.to_vec(),
+                    pixels,
                     view: TargetView {
                         origin: (0, 0),
                         stride: width as usize,
@@ -2295,8 +2416,8 @@ impl RenderPassRenderer {
                         right: width as usize,
                         bottom: height as usize,
                     }),
-                    filters: effect_filters(&scope, scale, true, layer.compositor_scroll)?,
-                    backdrop_filters: backdrop_filters(&scope, scale, layer.compositor_scroll)?,
+                    filters,
+                    backdrop_filters,
                     backdrop_output,
                     backdrop_coverage,
                     visible_polygon: layer.visible_polygon.clone(),

@@ -184,6 +184,7 @@ pub struct AggregatedRenderPass {
     device_scale_factor: f64,
     raster_scale_factor: f64,
     logical_viewport: PaintRect,
+    surface_viewport: DeviceRect,
     viewport: DeviceRect,
     damage_rect: DeviceRect,
     raster_task_count: usize,
@@ -234,6 +235,12 @@ impl AggregatedRenderPass {
         self.logical_viewport
     }
 
+    /// Surface coordinate domain, independent of a child pass's output rect.
+    pub fn SurfaceViewport(&self) -> DeviceRect {
+        self.surface_viewport
+    }
+
+    /// This render pass's drawable output in surface device coordinates.
     pub fn Viewport(&self) -> DeviceRect {
         self.viewport
     }
@@ -483,6 +490,7 @@ impl VizEngine {
                     device_scale_factor: surface.device_scale_factor,
                     raster_scale_factor: surface.raster_scale_factor,
                     logical_viewport: surface.logical_viewport,
+                    surface_viewport: viewport,
                     viewport: pass.output_rect,
                     damage_rect: pass.damage_rect,
                     raster_task_count: surface.raster_task_count,

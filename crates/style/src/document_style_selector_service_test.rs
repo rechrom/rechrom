@@ -68,10 +68,14 @@ fn shared_selector_owner_reuses_handles_after_growth_mutation_and_interaction() 
          .item{width:10px;height:2px;margin-left:0px}\
          .changed{width:20px} #marked{width:30px}\
          .item:hover{height:7px} .item:focus{height:9px}\
+         .item:hover::after{content:'+'}\
+         .item:hover ~ .item{margin-right:6px}\
+         main:has(> .item:hover){padding-right:3px}\
          .item:first-child{margin-left:4px}\
          main:has(> .changed){padding-left:3px}\
          </style><main id=root><div id=first class=item></div>\
-         <div id=second class=item></div></main>",
+         <div id=second class=item></div></main>\
+         <aside id=unrelated><p>stable</p><p>stable</p><p>stable</p></aside>",
     );
     let root = node(&owner, "root");
     let first = node(&owner, "first");
@@ -149,6 +153,17 @@ fn shared_selector_owner_reuses_handles_after_growth_mutation_and_interaction() 
     assert!(Rc::ptr_eq(&selectors, &engine.selectors));
     assert!(Rc::ptr_eq(&first_handle, &handle(&engine, &owner, first)));
     assert!(Rc::ptr_eq(&second_handle, &handle(&engine, &owner, second)));
+    let unrelated = node(&owner, "unrelated");
+    let retained = owner.GetDocument().ResolvedStyleFor(unrelated).unwrap().native_style.clone();
+    engine.SetUserInteractionState(&mut owner, UserInteractionState {
+        hovered_node_id: Some(second_id), ..Default::default()
+    }).unwrap();
+    update(&mut engine, &mut owner);
+    assert_eq!(style(&owner, second).Height().Pixels(), 7.0);
+    assert_eq!(style(&owner, first).MarginRight().Pixels(), 6.0);
+    assert_eq!(style(&owner, root).PaddingRight().Pixels(), 3.0);
+    assert_eq!(retained.Get(), owner.GetDocument().ResolvedStyleFor(unrelated).unwrap().native_style.Get(),
+        "unrelated styles must retain their canonical owner across hover changes");
 }
 
 #[test]
@@ -179,6 +194,7 @@ fn shared_selector_sessions_refresh_scope_and_shadow_tree_state() {
     update(&mut engine, &mut owner);
     assert_eq!(style(&owner, target).Width().Pixels(), 1.0);
 
+    let unrelated_style = owner.GetDocument().ResolvedStyleFor(root).unwrap().native_style.clone();
     // Attach a new TreeScope after the selector service has already interned
     // the light DOM. Style and scope caches must come from the next session.
     let (shadow, shadow_style) = {
@@ -191,6 +207,7 @@ fn shared_selector_sessions_refresh_scope_and_shadow_tree_state() {
         (shadow, sheet)
     };
     update(&mut engine, &mut owner);
+    assert_eq!(owner.GetDocument().ResolvedStyleFor(root).unwrap().native_style.Get(), unrelated_style.Get());
     assert_eq!(owner.GetDocument().TreeScopeRoot(target), shadow);
     assert_eq!(style(&owner, target).Width().Pixels(), 27.0);
     owner

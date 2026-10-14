@@ -116,6 +116,9 @@ fn contributing_inputs_retain_only_unchanged_children_and_successful_build_histo
     let scrolled = builder.BuildFrame(&plan).unwrap();
     assert!(empty(child_damage(&scrolled, &fixed)));
     assert!(!empty(child_damage(&scrolled, &moving)));
+    let moving_pass = scrolled.render_pass_list.iter().find(|pass| pass.id == effect_pass_id(&moving)).unwrap();
+    assert_eq!(moving_pass.output_rect, DeviceRect::new(0, 0, 64, 61));
+    assert_eq!(moving_pass.damage_rect, moving_pass.output_rect);
     assert_ne!(
         scrolled.render_pass_list[1].shared_quad_state_list[0]
             .composition
@@ -174,6 +177,13 @@ fn contributing_inputs_retain_only_unchanged_children_and_successful_build_histo
         .render_pass_list
         .iter()
         .all(|pass| !empty(pass.damage_rect)));
+    let tiles = std::mem::take(&mut plan.layers[1].tiles);
+    let offscreen = builder.BuildFrame(&plan).unwrap();
+    assert!(offscreen.render_pass_list.iter().all(|pass| pass.id != effect_pass_id(&moving)),
+        "empty effect output must not become an unconstrained render-pass quad");
+    plan.layers[1].tiles = tiles;
+    assert!(builder.BuildFrame(&plan).unwrap().render_pass_list.iter()
+        .any(|pass| pass.id == effect_pass_id(&moving)), "returning content recreates its surface");
 }
 
 #[test]

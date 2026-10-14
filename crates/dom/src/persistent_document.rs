@@ -2682,7 +2682,10 @@ impl PersistentDocument {
         self.RecordFlatTreeChange();
         self.RecomputeDirectionality();
         self.InvalidateNodeStyle(host);
-        self.style_state.all_dirty = true;
+        // Element::CreateAndAttachShadowRoot removes this host's light
+        // children from the flat tree. Revisit that subtree, including its
+        // new shadow scope, without invalidating unrelated document styles.
+        self.style_state.inserted_style_subtrees.insert(host);
         root
     }
 
