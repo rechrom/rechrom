@@ -3360,6 +3360,22 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         physical_box_offset,
                     );
                 }
+                // cc::PaintOp::GetBounds(DrawTextBlobOp) consumes blob ink,
+                // independently of the containing decoration record's bound.
+                // Layout supplied real shaped glyph ink even when decoration
+                // overflow still requires InlinePaintContext. Keep that proof
+                // only for the ordinary untransformed fill path.
+                if svg.is_none()
+                    && (fragment.paint.text_glyph_ink.is_some()
+                        || fragment.paint.self_ink_overflow.is_some())
+                    && fragment.paint.text_combine.is_none()
+                    && fragment.paint.text_combine_inline_offset == 0.0
+                    && input_run.writing_mode == WritingMode::kHorizontalTb
+                    && !is_shadow
+                    && !stroke_glyphs
+                {
+                    item.glyph_ink_rect = Some(FragmentVisualRect(self.node));
+                }
                 item
             };
             for shadow in style.text_shadows.iter().rev() {

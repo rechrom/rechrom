@@ -902,6 +902,37 @@ fn rect_record_pixel_bounds(
 ) -> Option<PaintRect> {
     record_pixel_bounds(raw, initial, clip, scale, false)
 }
+
+// DecorationLinePainter's snapped solid/double rectangles and thin dotted
+// dashes, matching compat/canvas.rs::stroke_line. Other line styles retain
+// conservative bounds until their actual path/paint support is available.
+fn decoration_line_bounds(item: &DisplayItem, state: State, scale: f64) -> Option<PaintRect> {
+    use layoutng_assembly::internal::layout_input::TextDecorationStyle;
+    if !item.is_text_decoration || item.rect.height != 0.0 || item.blur_radius != 0.0
+        || !item.stroke_width.is_finite() || item.stroke_width < 0.0 || !finite_rect(item.rect)
+    { return None; }
+    let mut rect = item.rect;
+    match item.decoration_style {
+        TextDecorationStyle::kSolid | TextDecorationStyle::kDouble => {
+            rect.y = (item.rect.y + 0.5).floor();
+            rect.height = item.stroke_width.floor().max(1.0);
+            if item.decoration_style == TextDecorationStyle::kDouble {
+                let second = (item.rect.y + (item.stroke_width + 1.0).floor() + 0.5).floor();
+                rect.height = second + rect.height - rect.y;
+            }
+        }
+        TextDecorationStyle::kDotted if item.stroke_width.round() <= 3.0 => {
+            rect.y -= item.stroke_width * 0.5;
+            rect.height = item.stroke_width;
+        }
+        _ => return None,
+    }
+    let mut rect = mapped_rect(rect, state);
+    let fringe = 1.0 / scale;
+    rect.x -= fringe; rect.y -= fringe;
+    rect.width += 2.0 * fringe; rect.height += 2.0 * fringe;
+    finite_rect(rect).then_some(rect)
+}
 pub fn record_pixel_bounds(
     raw: &[DisplayItem],
     initial: State,
@@ -1033,6 +1064,18 @@ pub fn record_pixel_bounds(
                         rect.y -= border;
                         rect.width += 2.0 * border;
                         rect.height += 2.0 * border;
+                        rect
+                    })
+                } else if kind == Kind::kStrokeLine {
+                    decoration_line_bounds(item, state, scale)
+                } else if kind == Kind::kDrawGlyphRun && item.blur_radius == 0.0
+                    && !item.stroke_glyphs && item.transform == TransformMatrix::default()
+                {
+                    item.glyph_ink_rect.filter(|rect| finite_rect(*rect)).map(|rect| {
+                        let mut rect = mapped_rect(rect, state);
+                        let fringe = 1.0 / scale;
+                        rect.x -= fringe; rect.y -= fringe;
+                        rect.width += 2.0 * fringe; rect.height += 2.0 * fringe;
                         rect
                     })
                 } else if kind == Kind::kDrawGlyphRun
@@ -1332,6 +1375,7 @@ fn canonical_item(item: &DisplayItem, delta: (f64, f64)) -> Result<DisplayItem, 
         item.r#type,
         Kind::kDrawGradientRect | Kind::kDrawTiledGradient
     );
+    let path_shader = matches!(item.r#type, Kind::kDrawPath | Kind::kStrokePath);
     let box_shadow = item.r#type == Kind::kDrawBoxShadow;
     let blurred_glyph = item.r#type == Kind::kDrawGlyphRun;
     let text_decoration_shadow = item.r#type == Kind::kStrokeLine && item.is_text_decoration;
@@ -1361,7 +1405,7 @@ fn canonical_item(item: &DisplayItem, delta: (f64, f64)) -> Result<DisplayItem, 
             && ![item.shadow_offset.x, item.shadow_offset.y]
                 .iter()
                 .all(|value| value.is_finite()))
-        || (item.paint_shader.is_some() && !gradient)
+        || (item.paint_shader.is_some() && !gradient && !path_shader)
     {
         if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
             eprintln!("layer-replay unsupported-record type={:?} node={} rect={:?} blur={} filters={} masks={} blend={:?} shader={:?}",
@@ -1377,11 +1421,22 @@ fn canonical_item(item: &DisplayItem, delta: (f64, f64)) -> Result<DisplayItem, 
     // Only destination positions move. Image source_rect, relative glyph
     // offsets, stroke widths and shadow_offset are resource/vector quantities.
     output.rect = shift(output.rect, delta);
+    output.glyph_ink_rect = output.glyph_ink_rect.map(|rect| shift(rect, delta));
     if !output.inner_rect.is_empty() {
         output.inner_rect = shift(output.inner_rect, delta);
     }
     if !output.tile_rect.is_empty() {
         output.tile_rect = shift(output.tile_rect, delta);
+    }
+    if path_shader {
+        // SVG path paint servers are already resolved in path coordinates.
+        // Translate their local matrix with the path, as PaintOp playback
+        // does under the recording canvas transform. Do not rewrite gradient
+        // endpoints in their own (possibly transformed) coordinate system.
+        if let Some(shader) = output.paint_shader.as_mut() {
+            shader.transform.values[12] += delta.0;
+            shader.transform.values[13] += delta.1;
+        }
     }
     if gradient {
         let shader = output.paint_shader.as_mut().unwrap();
@@ -1462,6 +1517,7 @@ fn translated_item_matches(item: &DisplayItem, delta: (f64, f64), old: &DisplayI
         node_id: _,
         fragment_instance_id: _,
         rect: _,
+        glyph_ink_rect: _,
         source_rect: _,
         inner_rect: _,
         tile_rect: _,
@@ -1543,6 +1599,9 @@ fn translated_item_matches(item: &DisplayItem, delta: (f64, f64), old: &DisplayI
         return false;
     }
     if item.source_rect != old.source_rect {
+        return false;
+    }
+    if item.glyph_ink_rect.map(|rect| shift(rect, delta)) != old.glyph_ink_rect {
         return false;
     }
     if item.image_interpolation_quality != old.image_interpolation_quality {
@@ -1895,7 +1954,9 @@ fn validate_property_only_update(
             .zip(current)
             .all(|(a, b)| same_chunk_metadata(a.chunk, b, false) && a.properties == &b.properties)
     {
-        return Err(reject);
+        browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 1.0)]);
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=1"); }
+            return Err(reject);
     }
     if recording
         .iter()
@@ -1915,7 +1976,9 @@ fn validate_property_only_update(
         || old.effects.keys().ne(new.effects.keys())
         || old.scrolls.keys().ne(new.scrolls.keys())
     {
-        return Err(reject);
+        browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 2.0)]);
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=2"); }
+            return Err(reject);
     }
     let root = PropertyTreeState::default();
     for (&id, a) in &old.transforms {
@@ -1933,6 +1996,8 @@ fn validate_property_only_update(
                 a.lifecycle.same_node(&b.lifecycle)
             })
         {
+            browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 3.0)]);
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=3"); }
             return Err(reject);
         }
         // PropertyTreeManager carries sticky constraints independently of
@@ -1941,6 +2006,8 @@ fn validate_property_only_update(
         let real_sticky = a.sticky_constraint.zip(b.sticky_constraint)
             .is_some_and(|(before, after)| before.same_geometry(&after));
         if a.sticky_constraint != b.sticky_constraint && !real_sticky {
+            browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 4.0)]);
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=4"); }
             return Err(reject);
         }
         if a.matrix != b.matrix {
@@ -1954,7 +2021,9 @@ fn validate_property_only_update(
                 || translation(&a.matrix, scale).is_err()
                 || translation(&b.matrix, scale).is_err()
             {
-                return Err(reject);
+                browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 5.0)]);
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=5"); }
+            return Err(reject);
             }
         }
     }
@@ -1981,6 +2050,8 @@ fn validate_property_only_update(
                 |a, b| a.lifecycle.same_node(&b.lifecycle),
             )
         {
+            browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 6.0)]);
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=6"); }
             return Err(reject);
         }
     }
@@ -2011,6 +2082,8 @@ fn validate_property_only_update(
                 a.lifecycle.same_node(&b.lifecycle)
             })
         {
+            browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 7.0)]);
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=7"); }
             return Err(reject);
         }
     }
@@ -2030,6 +2103,8 @@ fn validate_property_only_update(
                 |a, b| a.lifecycle.same_node(&b.lifecycle),
             )
         {
+            browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 8.0)]);
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=8"); }
             return Err(reject);
         }
     }
@@ -2044,6 +2119,8 @@ fn validate_property_only_update(
         let old = crate::raster_properties(&a.properties).map_err(property_error)?;
         let new = crate::raster_properties(&b.properties).map_err(property_error)?;
         if old != new {
+            browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 9.0)]);
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=9"); }
             return Err(reject);
         }
         let old_origin = resolved(&old, scale)?.translation;
@@ -2053,6 +2130,8 @@ fn validate_property_only_update(
         let new_clip = removed_clip_bounds(&b.properties.clip, &new.clip)?
             .map(|r| pixel_bounds(shift(r, (-new_origin.0, -new_origin.1)), scale));
         if old_clip != new_clip {
+            browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 10.0)]);
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=10"); }
             return Err(reject);
         }
         // The retained raster clip's phase is local to its anchor. Root-space
@@ -2068,7 +2147,9 @@ fn validate_property_only_update(
             let new_shape = removed_clip_bounds(new_node, new_parent)?
                 .map(|r| shift(r, (-new_origin.0, -new_origin.1)));
             if old_shape != new_shape {
-                return Err(reject);
+                browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 11.0)]);
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=11"); }
+            return Err(reject);
             }
             old_node = old_parent;
             new_node = new_parent;

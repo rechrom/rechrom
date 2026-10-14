@@ -861,7 +861,9 @@ mod tests {
                     id: 7,
                     width: 2,
                     height: 1,
-                    rgba8: vec![255, 0, 0, 255, 0, 0, 255, 255].into(),
+                    content: image_resource::PaintImageContent::Bitmap(
+                        vec![255, 0, 0, 255, 0, 0, 255, 255].into(),
+                    ),
                     ..PaintImage::default()
                 }],
                 ..PaintResources::default()

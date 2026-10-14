@@ -315,8 +315,13 @@ impl ComputedStyle {
     }
 
     // cpp: layoutng_style/style/computed_style.h:2786-2787
-    pub(crate) fn DiffNeedsRecomputeVisualOverflow(&self, other: &Self, field_diff: u64) -> bool {
-        unsafe { ComputedStyleDiffNeedsRecomputeVisualOverflow(self, other, field_diff) }
+    // cpp: third_party/blink/renderer/core/style/computed_style.cc:1235-1255
+    pub fn DiffNeedsRecomputeVisualOverflow(&self, other: &Self, field_diff: u64) -> bool {
+        use super::computed_style_base::FieldDifference as F;
+        field_diff & F::kVisualOverflow.bits() != 0
+            || (field_diff & F::kBorderImage.bits() != 0 && !self.BorderVisualOverflowEqual(other))
+            || (field_diff & F::kOutline.bits() != 0 && !self.OutlineVisuallyEqual(other))
+            || (field_diff & F::kTextDecoration.bits() != 0 && self.TextDecorationVisualOverflowChanged(other))
     }
 
     // cpp: layoutng_style/style/computed_style.h:2788-2789
@@ -2619,8 +2624,18 @@ impl ComputedStyle {
     }
 
     // cpp: layoutng_style/style/computed_style.h:1870
+    // cpp: third_party/blink/renderer/core/style/computed_style.cc:2175-2207
     pub fn TextDecorationVisualOverflowChanged(&self, other: &ComputedStyle) -> bool {
-        unsafe { ComputedStyleTextDecorationVisualOverflowChanged(self, other) }
+        let current = self.AppliedTextDecorations();
+        let previous = other.AppliedTextDecorations();
+        current.size() != previous.size()
+            || current.iter().zip(previous.iter()).any(|(a, b)| {
+                a.Thickness() != b.Thickness() || a.UnderlineOffset() != b.UnderlineOffset()
+                    || a.Style() != b.Style() || a.Lines() != b.Lines()
+                    || a.DecorationInset() != b.DecorationInset()
+                    || a.BoxDecorationBreak() != b.BoxDecorationBreak()
+            })
+            || self.GetTextUnderlinePosition() != other.GetTextUnderlinePosition()
     }
 
     // cpp: layoutng_style/style/computed_style.h:1872

@@ -1389,20 +1389,15 @@ impl DocumentStyleEngine {
             active_sheet_scopes.as_slice(),
         );
         let function_registry = {
-            let evaluator =
-                crate::production_style_sheet::ProductionMediaQueryEvaluator::FromCachedData(media);
-            let typed_sheets = active_sheets
+            let rule_sets = active_sheets
                 .iter()
                 .filter_map(|(sheet, _)| {
-                    self.typed_sheets
+                    self.translated_rule_sets
                         .get(&(sheet.Identity(), sheet.Revision()))
-                        .map(Rc::as_ref)
+                        .cloned()
                 })
                 .collect::<Vec<_>>();
-            crate::production_style_sheet::ProductionFunctionRegistry::FromStyleSheets(
-                &typed_sheets,
-                &evaluator,
-            )
+            crate::production_style_sheet::ProductionFunctionRegistry::FromRuleSets(&rule_sets)
         };
         let registry_changed = self
             .property_registry

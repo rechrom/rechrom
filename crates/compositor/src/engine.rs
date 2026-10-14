@@ -210,6 +210,7 @@ pub struct PlannedFrame<V, M> {
     scroll_tree: ScrollTreeSnapshot,
     visual_scroll: Option<(u64, Offset)>,
     raster_scroll: Option<(u64, Offset)>,
+    root_scrollbars: Vec<layer_tile::SolidScrollbarLayer>,
 }
 
 pub struct SubmittedFrame<V, M> {
@@ -258,6 +259,51 @@ pub struct RasterReady<V, M> {
 }
 
 impl<V: CompositorViewport, M> PlannedFrame<V, M> {
+    fn RootScrollbarQuads(&self) -> Option<(Vec<SolidColorDrawQuad>, DeviceRect)> {
+        if self.root_scrollbars.is_empty() { return None; }
+        let root = self.scroll_tree.root()?;
+        let current = self.visual_scroll.filter(|(id, _)| *id == root.id)
+            .map_or(root.committed, |(_, offset)| offset);
+        let zoom = self.content.as_ref()?.config.layout_zoom_factor;
+        let mut quads = Vec::new();
+        let mut bounds = PaintRect::default();
+        for layer in &self.root_scrollbars {
+            bounds.union(layer.track);
+            let (position, minimum, maximum) = if layer.horizontal {
+                (current.x, root.minimum.x, root.maximum.x)
+            } else { (current.y, root.minimum.y, root.maximum.y) };
+            let ratio = if maximum > minimum {
+                ((position - minimum) / (maximum - minimum)).clamp(0.0, 1.0)
+            } else { 0.0 };
+            for part in &layer.parts {
+                let mut rect = part.rect;
+                if part.is_thumb {
+                    // ScrollbarLayerImplBase::ComputeThumbQuadRect consumes
+                    // current impl position, track insets and retained thumb
+                    // dimensions independently of main-thread paint.
+                    if layer.horizontal {
+                        rect.width = (rect.width / zoom).round() * zoom;
+                        let travel = ((layer.track.width - layer.start_inset - layer.end_inset - rect.width) / zoom).max(0.0);
+                        rect.x = layer.track.x + layer.start_inset +
+                            ((travel as f32 * ratio as f32) as i32 as f64) * zoom;
+                    } else {
+                        rect.height = (rect.height / zoom).round() * zoom;
+                        let travel = ((layer.track.height - layer.start_inset - layer.end_inset - rect.height) / zoom).max(0.0);
+                        rect.y = layer.track.y + layer.start_inset +
+                            ((travel as f32 * ratio as f32) as i32 as f64) * zoom;
+                    }
+                }
+                let rect = PaintRect { x: rect.x / zoom, y: rect.y / zoom,
+                    width: rect.width / zoom, height: rect.height / zoom };
+                quads.push(SolidColorDrawQuad { rect, visible_rect: rect, color: part.color, corner_radius: 0.0 });
+            }
+        }
+        let scale = self.snapshot.viewport.Scale() / zoom;
+        let x = (bounds.x * scale).floor(); let y = (bounds.y * scale).floor();
+        Some((quads, DeviceRect::new(x as i32, y as i32,
+            (((bounds.x + bounds.width) * scale).ceil() - x).max(0.0) as u32,
+            (((bounds.y + bounds.height) * scale).ceil() - y).max(0.0) as u32)))
+    }
     fn RootOverlayScrollbarQuad(&self) -> Option<(SolidColorDrawQuad, DeviceRect)> {
         let root = self.scroll_tree.root()?;
         // Paint already records the platform/theme scrollbar in border-box
@@ -868,8 +914,13 @@ where
             .then(|| {
                 self.planned
                     .as_ref()
-                    .and_then(PlannedFrame::RootOverlayScrollbarQuad)
-                    .map(|(quad, _)| quad.rect)
+                    .and_then(|frame| frame.RootScrollbarQuads().map(|(quads, _)| {
+                        let mut bounds = PaintRect::default();
+                        for (part, quad) in frame.root_scrollbars.iter().flat_map(|layer| &layer.parts).zip(quads) {
+                            if part.is_thumb { bounds.union(quad.rect); }
+                        }
+                        bounds
+                    }).or_else(|| frame.RootOverlayScrollbarQuad().map(|(quad, _)| quad.rect)))
             })
             .flatten()
     }
@@ -916,7 +967,15 @@ where
         let mut content = if let Some(plan) = planned.content.as_ref() {
             Some(
                 self.content_frame_builder
-                    .BuildFrame(plan)
+                    .BuildFrame(&{
+                        let mut draw = plan.clone();
+                        for layer in &mut draw.layers {
+                            if planned.root_scrollbars.iter().any(|scrollbar| scrollbar.layer_id == layer.id) {
+                                layer.tiles.clear();
+                            }
+                        }
+                        draw
+                    })
                     .map_err(io::Error::other)?
                     .WithBeginFrameAck(ack),
             )
@@ -924,15 +983,19 @@ where
             self.content_frame_builder.Invalidate();
             None
         };
-        let overlay = self
-            .scroll_tree
-            .is_active()
-            .then(|| planned.RootOverlayScrollbarQuad())
-            .flatten();
+        if !planned.root_scrollbars.is_empty() {
+            browser_tracing::instant("input", "ScrollbarImplPosition", &[
+                ("offset_y", planned.visual_scroll.map_or(0.0, |(_, offset)| offset.y)),
+                ("layers", planned.root_scrollbars.len() as f64),
+            ]);
+        }
+        let overlay = planned.RootScrollbarQuads().or_else(|| self.scroll_tree.is_active()
+            .then(|| planned.RootOverlayScrollbarQuad().map(|(quad, damage)| (vec![quad], damage))).flatten());
         let next_overlay_damage = overlay.as_ref().map(|(_, damage)| *damage);
         if let Some(frame) = content.take() {
             content = Some(match overlay {
-                Some((quad, damage)) => frame.WithSolidColorQuad(quad, damage),
+                Some((quads, damage)) => quads.into_iter().fold(frame,
+                    |frame, quad| frame.WithSolidColorQuad(quad, damage)),
                 None => match self.overlay_scrollbar_damage {
                     Some(damage) => frame.WithRootDamage(damage),
                     None => frame,
@@ -1126,7 +1189,11 @@ where
             start.elapsed().as_secs_f64() * 1000.0
         );
     }
+    let root_scrollbars = content.as_ref().zip(root_scroll)
+        .map_or_else(Vec::new, |(plan, root)| plan.SolidScrollbarLayers(root.id));
+    browser_tracing::instant("input", "ScrollbarLayersCommitted", &[("layers", root_scrollbars.len() as f64)]);
     Ok(PlannedFrame {
+        root_scrollbars,
         snapshot,
         toolbar,
         content,
@@ -1396,7 +1463,8 @@ fn select_ready_scroll_tiles(
             .filter(|tile| plan.TileIsReady(tile))
             .cloned()
             .collect();
-        if selected.len() == wanted.len() && !wanted.is_empty() {
+        let viewport_covered = tiles_cover_rect(required_visible, &wanted, layer.raster_origin, scale);
+        if selected.len() == wanted.len() && viewport_covered {
             // Activate a complete visible tiling in one property-tree state.
             plan.layers[layer_index].tiles = selected;
         } else {
@@ -1416,6 +1484,7 @@ fn select_ready_scroll_tiles(
                     ("layer", layer_id as f64),
                     ("wanted", wanted.len() as f64),
                     ("ready", selected.len() as f64),
+                    ("viewport_covered", viewport_covered as u8 as f64),
                     ("interest", layer.interest_tiles.len() as f64),
                     ("bounds_complete", layer.bounds_are_complete as u8 as f64),
                     (
@@ -1457,6 +1526,54 @@ fn select_ready_scroll_tiles(
         }
     }
     complete
+}
+
+// PictureLayerTiling::CoverageIterator accounts for the entire visible rect,
+// including grid slots absent from the interest set. Checking only known tile
+// readiness admits a partial viewport when input outruns the pending tiling.
+fn tiles_cover_rect(required: PaintRect, tiles: &[layer_tile::TilePlacement], origin: (f64, f64), scale: f64) -> bool {
+    if required.is_empty() { return true; }
+    // CoverageIterator walks integer raster-content pixels. Restore those
+    // original tile coordinates before checking adjacency; accumulating CSS
+    // widths at fractional scale need not reproduce the shared edge exactly.
+    let x = ((required.x - origin.0) * scale).floor();
+    let y = ((required.y - origin.1) * scale).floor();
+    let required = PaintRect {
+        x, y,
+        width: ((required.x + required.width - origin.0) * scale).ceil() - x,
+        height: ((required.y + required.height - origin.1) * scale).ceil() - y,
+    };
+    let tiles = tiles.iter().map(|tile| PaintRect {
+        x: ((tile.tile_rect.x - origin.0) * scale).round(),
+        y: ((tile.tile_rect.y - origin.1) * scale).round(),
+        width: tile.pixel_size.0 as f64,
+        height: tile.pixel_size.1 as f64,
+    }).collect::<Vec<_>>();
+    let bottom = required.y + required.height;
+    let right = required.x + required.width;
+    let mut rows = vec![required.y, bottom];
+    for tile in &tiles {
+        rows.push(tile.y.clamp(required.y, bottom));
+        rows.push((tile.y + tile.height).clamp(required.y, bottom));
+    }
+    rows.sort_by(f64::total_cmp);
+    rows.dedup();
+    for row in rows.windows(2) {
+        let mut intervals = tiles.iter().filter_map(|tile| {
+            let rect = *tile;
+            (rect.y <= row[0] && rect.y + rect.height >= row[1])
+                .then_some((rect.x, rect.x + rect.width))
+        }).collect::<Vec<_>>();
+        intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut covered = required.x;
+        for (left, end) in intervals {
+            if left > covered { break; }
+            covered = covered.max(end);
+            if covered >= right { break; }
+        }
+        if covered < right { return false; }
+    }
+    true
 }
 
 fn intersect_rect(a: PaintRect, b: PaintRect) -> PaintRect {
@@ -1734,6 +1851,7 @@ mod lifecycle_tests {
                 scroll_tree: ScrollTreeSnapshot::new(vec![root]),
                 visual_scroll: Some((2, Offset::default())),
                 raster_scroll: Some((2, Offset::default())),
+                root_scrollbars: Vec::new(),
             });
             engine.dirty = false;
             engine.raster_in_flight = true; // Keep this fixture on the actual impl-only input path.
@@ -1767,6 +1885,18 @@ mod lifecycle_tests {
                 .any(|effect| matches!(effect, Effect::VisualDamage)),
             "newly selected resident interest tiles also change drawable content"
         );
+        // All known tiles can be ready while their interest grid covers only
+        // a prefix of the newly visible viewport. Pending activation must keep
+        // the complete active tree rather than publishing that partial strip.
+        let mut partial = scrolling_engine(true);
+        for tile in &mut partial.planned.as_mut().unwrap().content.as_mut().unwrap().layers[1].interest_tiles {
+            tile.tile_rect.height = 16.;
+            tile.pixel_size.1 = 16;
+        }
+        let root = partial.scroll_tree.root().unwrap();
+        assert!(!apply_scroll_offset(partial.planned.as_mut().unwrap(), root,
+            Offset { x: 0., y: 3. }, ScrollTileSelection::PendingTree));
+        assert_eq!(partial.planned.as_ref().unwrap().visual_scroll.unwrap().1.y, 0.);
         for ready in [false, true] {
             let mut engine = scrolling_engine(ready);
             assert!(engine.Prepare(frame(1)).unwrap().is_empty());

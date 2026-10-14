@@ -301,6 +301,9 @@ pub struct DisplayItem {
     pub node_id: u64,
     pub fragment_instance_id: u64,
     pub rect: PaintRect,
+    /// DrawTextBlobOp's retained blob bounds, independent of decoration ink.
+    /// None keeps unsupported text geometry conservative.
+    pub glyph_ink_rect: Option<PaintRect>,
     pub source_rect: PaintRect,
     pub inner_rect: PaintRect,
     pub tile_rect: PaintRect,
@@ -380,6 +383,7 @@ impl Default for DisplayItem {
             node_id: 0,
             fragment_instance_id: 0,
             rect: PaintRect::default(),
+            glyph_ink_rect: None,
             source_rect: PaintRect::default(),
             inner_rect: PaintRect::default(),
             tile_rect: PaintRect::default(),

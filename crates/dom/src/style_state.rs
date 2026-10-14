@@ -113,6 +113,11 @@ pub struct StyleState {
     pub append_affected_subtrees: HashSet<usize>,
     pub impact: StyleUpdateImpact,
     pub stats: StyleUpdateStats,
+    /// Resolved element styles pending delivery to the retained LayoutObjects.
+    /// Cleared by Paint commit, not by a second style recalc in the same frame.
+    pub paint_style_nodes: HashSet<u64>,
+    /// Generated/flattened paint input changes need ordinary fragment export.
+    pub paint_style_requires_export: bool,
     /// Geometry-query inputs changed during native style resolution or DOM
     /// flat-tree attachment. Equal-style redistribution still revokes geometry;
     /// paint-only changes retain their ordinary layout/paint impact.
@@ -136,6 +141,8 @@ impl Default for StyleState {
             append_affected_subtrees: Default::default(),
             impact: StyleUpdateImpact::TREE,
             stats: Default::default(),
+            paint_style_nodes: Default::default(),
+            paint_style_requires_export: true,
             measurement_geometry_revision: 0,
         }
     }

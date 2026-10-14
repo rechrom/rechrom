@@ -347,29 +347,31 @@ impl RasterEngine {
         let Some(mut batch) = self.pending_prepaint.take() else {
             return Ok(Vec::new());
         };
-        let needed_now = required.iter().any(|task| {
-            batch
-                .tasks
-                .iter()
-                .any(|&(id, generation)| id == task.tile_id && generation == task.generation)
-        });
-        if needed_now {
-            let products = batch.pending.finish()?;
-            return self.publish_prepaint(batch.layer_tree_id, batch.frame_id, products);
-        }
-        match batch.pending.try_finish() {
-            None => {
-                self.pending_prepaint = Some(batch);
-                Ok(Vec::new())
-            }
-            Some(Ok(products)) => {
-                self.publish_prepaint(batch.layer_tree_id, batch.frame_id, products)
-            }
-            Some(Err(_)) => {
+        let needed_now = required.iter().filter_map(|task| {
+            batch.tasks.contains(&(task.tile_id, task.generation))
+                .then_some((task.tile_id, task.generation))
+        }).collect::<Vec<_>>();
+        let products = match batch.pending.collect_required(&needed_now) {
+            Ok(products) => products,
+            Err(_) if needed_now.is_empty() => {
+                // Speculative work may fail without rejecting active pixels.
+                // Preserve the previous SOON failure contract; required work
+                // still reports its error to the pending-tree owner.
                 self.prepaint_worker_pool = None;
-                Ok(Vec::new())
+                return Ok(Vec::new());
             }
+            Err(error) => return Err(error),
+        };
+        for product in &products {
+            batch.tasks.retain(|&(id, generation)| {
+                id != product.task.tile_id || generation != product.task.generation
+            });
         }
+        let completions = self.publish_prepaint(batch.layer_tree_id, batch.frame_id, products)?;
+        if !batch.pending.is_finished() {
+            self.pending_prepaint = Some(batch);
+        }
+        Ok(completions)
     }
 
     fn schedule_prepaint(
@@ -515,7 +517,19 @@ impl RasterEngine {
                     })
             })
             .collect();
-        let tasks = &batch.tasks[..required];
+        // CheckForCompletedTasks may have completed a promoted SOON tile
+        // after this immutable batch was selected. Consume its real resource
+        // instead of rasterizing that same generation a second time.
+        let tasks = batch.tasks[..required].iter().filter(|task| {
+            !replay.composition(task.layer_id).is_some_and(|state| {
+                self.resources.get(&task.tile_id).is_some_and(|resource| resource.matches_task(task, state))
+            })
+        }).collect::<Vec<_>>();
+        let foreground_modes = tasks.iter().map(|task| {
+            replay.solid_analysis_commands(task).map_or(RasterDrawMode::Resource, |records| {
+                solid_analysis::analyze(task, records)
+            })
+        }).collect::<Vec<_>>();
         let layers: Vec<_> = tasks.iter().map(|task| replay.worker_layer(task)).collect();
         let eligible = layers.iter().filter(|layer| layer.is_some()).count();
         if self.worker_pool.is_none() && eligible >= 4 {
@@ -539,15 +553,15 @@ impl RasterEngine {
             if let Some(layer) = layer.filter(|_| parallel) {
                 worker_jobs.push(RasterJob {
                     plan_index: index,
-                    task: task.clone(),
+                    task: (*task).clone(),
                     layer,
                     reuse,
-                    solid_color: match draw_modes[index] {
+                    solid_color: match foreground_modes[index] {
                         RasterDrawMode::SolidColor { premul_rgba } => Some(premul_rgba),
                         RasterDrawMode::Resource => None,
                     },
                 });
-            } else if let RasterDrawMode::SolidColor { premul_rgba } = draw_modes[index] {
+            } else if let RasterDrawMode::SolidColor { premul_rgba } = foreground_modes[index] {
                 let composition = replay
                     .composition(task.layer_id)
                     .ok_or_else(|| io::Error::other("solid task has no layer composition"))?;
@@ -586,7 +600,7 @@ impl RasterEngine {
                 tile_row_support(&rgba, task.pixel_size.0 as usize, composition.white_backing);
             products.push(RasterProduct {
                 plan_index: index,
-                task: task.clone(),
+                task: (*task).clone(),
                 composition,
                 bgra: cached_bgra(&rgba),
                 rgba,
@@ -620,7 +634,7 @@ impl RasterEngine {
                     "raster product differs from submitted tile generation",
                 ));
             }
-            product.row_support.draw_mode = draw_modes[index];
+            product.row_support.draw_mode = foreground_modes[index];
             damage_pixels = damage_pixels.saturating_add(tile_bytes(task.pixel_size)? / 4);
             staged.insert(
                 task.tile_id,

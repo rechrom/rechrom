@@ -14,7 +14,7 @@ use layoutng_assembly::layout_engine::{LayoutMutation, LayoutTreeUpdate};
 use layoutng_style::style::appearance::AppearanceValue;
 
 // cpp: dom_to_layout/layout_object_tree_builder.cc:376-631
-fn ElementMetadata(
+pub(super) fn ElementMetadata(
     document: &crate::Document,
     index: usize,
     interaction_state: &UserInteractionState,
@@ -535,7 +535,7 @@ fn DefaultListMarkerText(document: &Document, index: usize, style: &ComputedStyl
 // projection until each adapter migrates together with its native shadow tree;
 // entering a control UA root here would duplicate content or native theme painting.
 // SVGUseElement owns real SVG descendants and uses ordinary flat-tree attachment.
-fn AttachmentChildren(document: &Document, index: usize) -> std::borrow::Cow<'_, [usize]> {
+pub(super) fn AttachmentChildren(document: &Document, index: usize) -> std::borrow::Cow<'_, [usize]> {
     if !document.Node(index).IsElement("use", DOMNamespace::kSVG)
         && document
         .ShadowRoot(index)

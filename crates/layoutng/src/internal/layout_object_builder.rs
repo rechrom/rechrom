@@ -129,6 +129,11 @@ pub struct PaintStyleBinding {
     pub svg_clip_resources: super::paint_input::SvgClipResourceBinding,
 }
 
+pub struct PaintInputUpdate {
+    pub sources: Vec<u64>,
+    pub inline_ink_changes: Vec<u64>,
+}
+
 // cpp: layoutng/internal/layout_object_builder.h:75-77
 // cpp: layoutng/internal/boundary/layout_boundary.cc:2181-2191
 // cpp: layoutng/internal/boundary/layout_boundary.cc:2355-2362
@@ -1113,6 +1118,135 @@ impl LayoutObjectTree {
             unsafe { &mut *record.object }.SetStyle(native_style);
         }
         binding
+    }
+
+    /// Element::RecalcOwnStyle installs local style/theme inputs on existing
+    /// LayoutObjects. Admission retains native geometry and rejects changes
+    /// requiring the fragment/overflow lifecycle (ComputedStyle::VisualInvalidationDiff).
+    pub fn UpdatePaintInput(
+        &mut self,
+        id: u64,
+        style: &ComputedStyle,
+        element: Option<ElementData>,
+    ) -> Option<PaintInputUpdate> {
+        use layoutng_style::style::computed_style_base::{ComputedStyleBase, FieldDifference as F};
+        let mut trace = browser_tracing::span("layout", "LayoutTree.UpdatePaintInput");
+        trace.set("node_id", id as f64);
+        let storage = unsafe { &mut *self.storage_ };
+        let _factory_scope = LayoutObjectFactoryScope::new(&storage.factories);
+        assert!(!storage.updating);
+        let records = storage.managed.values().filter(|record| record.input.id == id)
+            .collect::<Vec<_>>();
+        if records.is_empty() {
+            // Element::RecalcOwnStyle updates GetLayoutObject() only when one
+            // exists. Hidden, inactive flat-tree and collapsible text sources
+            // can retain computed style without any attached layout object.
+            // Geometry/reattachment changes are excluded by this entry's
+            // paint-only lifecycle; do not manufacture an object or fail it.
+            trace.set("no_layout_object", 1.0);
+            return Some(PaintInputUpdate { sources: Vec::new(), inline_ink_changes: Vec::new() });
+        }
+        // Create's effective style proves which native text children inherit
+        // this source, including generated control labels with transport-only
+        // descriptors. This is PropagateStyleToAnonymousChildren's retained
+        // ownership; an independently styled pseudo/text source is excluded.
+        let parents = records.iter().map(|r| (r.object, r.effective_style.native_style))
+            .collect::<Vec<_>>();
+        let mut ids = std::collections::HashSet::from([id]);
+        for child in storage.managed.values() {
+            if child.input.kind == NodeKind::kText
+                && parents.iter().any(|&(parent, native)| child.parent == parent
+                    && !native.is_null() && child.effective_style.native_style == native)
+            {
+                ids.insert(child.input.id);
+            }
+        }
+        drop(records);
+        let records = storage.managed.values().filter(|r| ids.contains(&r.input.id)).collect::<Vec<_>>();
+        let mut inline_ink_changes = Vec::new();
+        for record in &records {
+            let object = unsafe { &*record.object };
+            // Text's source descriptor can be a generated transport style;
+            // its effective style is the canonical parent consumed by Create.
+            // Keep these owners distinct when validating the local update.
+            let old = unsafe { record.effective_style.native_style.as_ref() };
+            let new = unsafe { style.native_style.as_ref() };
+            let (Some(old), Some(new)) = (old, new) else {
+                trace.set("missing_canonical_style", 1.0);
+                trace.set("source_kind", record.input.kind as u8 as f64);
+                return None;
+            };
+            let fields = ComputedStyleBase::FieldInvalidationDiff(old, new);
+            let inline = DynamicTo::<LayoutInline>(record.object);
+            if !inline.is_null()
+                && super::boundary::layout_boundary::NativeStyleRequiresPaintBackedInlineFragment(old)
+                    != super::boundary::layout_boundary::NativeStyleRequiresPaintBackedInlineFragment(new)
+            {
+                return None;
+            }
+            let geometry = (F::kLayout | F::kReshape
+                | F::kHasTransform | F::kTransformData | F::kTransformOther
+                | F::kFilterData | F::kMask | F::kStroke | F::kBorderShape).bits();
+            trace.set("field_difference", fields as f64);
+            trace.set("native_needs_layout", object.NeedsLayout() as u8 as f64);
+            trace.set("first_line", unsafe { &*record.node }.InputHasFirstLineStyles() as u8 as f64);
+            let mut input = style.clone();
+            if record.input.kind == NodeKind::kText && record.input.id != id {
+                input.svg_clip_resources = record.effective_style.svg_clip_resources.clone();
+            }
+            let layout_equivalent = record.effective_style.LayoutEquivalent(&input);
+            trace.set("layout_equivalent", layout_equivalent as u8 as f64);
+            // Text decorations retain shaping and layout; their existing
+            // fragment items need ink invalidation/export, not tree attachment.
+            let text_ink = old.DiffNeedsRecomputeVisualOverflow(new, fields)
+                && fields & F::kTextDecoration.bits() != 0;
+            let other_ink = old.DiffNeedsRecomputeVisualOverflow(new, fields & !F::kTextDecoration.bits());
+            if fields & geometry != 0 || other_ink
+                || object.NeedsLayout() || object.IsSVG()
+                || (record.input.style_generated && !(record.input.kind == NodeKind::kText && record.input.id != id))
+                || record.input.first_line_style.is_some()
+                || unsafe { &*record.node }.InputHasFirstLineStyles()
+                || !layout_equivalent
+                || record.effective_style.svg_clip_resources.snapshot.version
+                    != input.svg_clip_resources.snapshot.version
+            {
+                return None;
+            }
+            let mut candidate = record.input.clone();
+            candidate.element = if record.input.kind == NodeKind::kText { None } else { element.clone() };
+            // Only native user-action state may change without geometry.
+            PreserveNonGeometryMetadata(&mut candidate, &record.input);
+            if candidate != record.input {
+                trace.set("metadata_requires_export", 1.0);
+                return None;
+            }
+            if text_ink { inline_ink_changes.push(record.input.id); }
+        }
+        drop(records);
+        for record in storage.managed.values_mut().filter(|record| ids.contains(&record.input.id)) {
+            let previous = unsafe { &*record.object }.StyleRef();
+            let native_style = PreservePaintOnlyFontBinding(style.native_style, previous);
+            let mut projected = style.clone();
+            projected.svg_clip_resources = record.effective_style.svg_clip_resources.clone();
+            projected.paint.svg_filter_graphs = record.effective_style.paint.svg_filter_graphs.clone();
+            // A generated text-source projection supplies transport metadata,
+            // while StyleRef supplies the canonical text paint. Preserve the
+            // former exactly as Create's source_text_style branch does.
+            if !record.input.style.native_style.is_null() {
+                record.input.style = projected.clone();
+            }
+            record.input.element = if record.input.kind == NodeKind::kText { None } else { element.clone() };
+            record.effective_style = projected;
+            record.input_style_roots = RetainInputStyles(&record.input, &record.effective_style);
+            let node = unsafe { &mut *record.node };
+            let sealed = node.InputTreeIsSealed();
+            node.UpdateInputData(&record.input);
+            if sealed { node.seal_input_tree(); }
+            node.ClearInputFontBinding();
+            node.SetComputedStyle(native_style);
+            unsafe { &mut *record.object }.SetStyle(native_style);
+        }
+        Some(PaintInputUpdate { sources: ids.into_iter().collect(), inline_ink_changes })
     }
 
     /// Exclusive access to the tree-owned root for the layout entry point.

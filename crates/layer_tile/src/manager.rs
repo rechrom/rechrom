@@ -408,6 +408,17 @@ impl LayerTileManager {
             } else {
                 None
             };
+            // cc pending-tree draw properties use SyncedProperty::Current(false),
+            // including the unreflected impl delta. The activation viewport is
+            // the NOW viewport, not a second required viewport appended to the
+            // older main-thread base. Rasterizing both endpoints delays newly
+            // exposed tiles during a fast gesture.
+            if let Some(target) = config.activation_scroll.and_then(|scroll| {
+                scroll_target_rect(&layer.properties, scroll, config.viewport,
+                    raster_content_bounds, config.raster_scale)
+            }) {
+                visible = target;
+            }
             // cc::EffectTree::UpdateIsDrawn / draw_property_utils skips an
             // active-tree opacity-zero subtree before computing drawable tile
             // coverage. Our supported effects have no backdrop filters, copy
@@ -459,9 +470,8 @@ impl LayerTileManager {
             // low-priority resident raster resources.
             let mut interest =
                 soon_interest_rect(visible, raster_content_bounds, config.raster_scale);
-            // The pending viewport is required for activation. The farther
-            // velocity prediction is only skewport prepaint: it must not delay
-            // activation of the current scroll position.
+            // The current pending viewport owns activation. The farther
+            // velocity prediction is only skewport prepaint.
             let mut activation_interest = visible;
             let mut activation_target_grid = visible_grid;
             if let Some(target) = config.activation_scroll.and_then(|scroll| {
@@ -481,8 +491,8 @@ impl LayerTileManager {
             let mut predicted_grid = visible_grid;
             // Chromium's skewport changes tile priority without changing the
             // active tree's draw transform. Do the same: union the current
-            // visible rect with the impl-side scroll target only for interest
-            // selection. `translation` and visible quads remain committed.
+            // visible rect with the velocity prediction only for interest
+            // selection. The recording origin remains in committed layer space.
             if let Some(predicted) = prepaint_scroll.and_then(|scroll| {
                 scroll_target_rect(
                     &layer.properties,
@@ -584,6 +594,9 @@ impl LayerTileManager {
             ),
         ) in pending.into_iter().zip(geometry).enumerate()
         {
+            let compositor_scroll = config.activation_scroll.filter(|scroll| {
+                layer_has_scroll_node(&pending.properties.transform, scroll.scroll_node_id)
+            });
             let first = &list.chunks[pending.chunks[0]];
             if matched.is_none()
                 && grid.0 < grid.2
@@ -653,7 +666,7 @@ impl LayerTileManager {
                         rect_known_to_be_opaque: pending.rect_known_to_be_opaque,
                         raster_origin: origin,
                         root_translation: translation,
-                        compositor_scroll: None,
+                        compositor_scroll,
                         root_clip,
                         record_indices: pending.records,
                         interest_tiles: Vec::new(),
@@ -1038,7 +1051,7 @@ impl LayerTileManager {
                 rect_known_to_be_opaque: pending.rect_known_to_be_opaque,
                 raster_origin: origin,
                 root_translation: translation,
-                compositor_scroll: None,
+                compositor_scroll,
                 root_clip,
                 record_indices: pending.records,
                 interest_tiles: interest_placements,

@@ -67,6 +67,49 @@ impl DOM {
         true
     }
 
+    /// Deliver ordinary paint-only style and native theme state to resident
+    /// objects. Text uses its resolved flat-tree parent's style, exactly as
+    /// AppendChildren does during attachment. Generated/flattened sources keep
+    /// the ordinary export path until their separate source can be retained.
+    pub fn EmitPaintInputs(
+        &self,
+        node_id: u64,
+        interaction: &UserInteractionState,
+        mut receive: impl FnMut(LayoutMutation<'_>) -> bool,
+    ) -> bool {
+        use crate::persistent_document::{DOMNamespace, DOMNodeType};
+        let document = self.GetDocument();
+        let Some(resources) = document.SVGResources() else { return false; };
+        let Some(index) = document.FindNodeById(node_id) else { return false; };
+        let Some(resolved) = document.ResolvedStyleFor(index) else { return false; };
+        if document.Node(index).Namespace() != DOMNamespace::kHTML
+            || resolved.display_contents || !resolved.own_generates_box
+            || resolved.first_letter.is_some() || resolved.marker.is_some()
+        {
+            return false;
+        }
+        let mut style = resolved.style.clone();
+        style.svg_clip_resources.snapshot = resources.clone();
+        style.svg_clip_resources.scope = document.SVGResourceScope(index);
+        let element = super::persistent_tree_builder::ElementMetadata(
+            document, index, interaction, style.paint.respect_image_orientation,
+        );
+        if !receive(LayoutMutation::PaintInput { node_id, style: &style, element: Some(element) }) {
+            return false;
+        }
+        for &child in super::persistent_tree_builder::AttachmentChildren(document, index).iter() {
+            let node = document.Node(child);
+            if node.Type() == DOMNodeType::kText && !node.Data().is_empty()
+                && !receive(LayoutMutation::PaintInput {
+                    node_id: node.Id(), style: &resolved.style, element: None,
+                })
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Return whether a live DOM node was found and a scroll mutation emitted.
     /// A receiver can separately inspect its native engine's application result.
     pub fn EmitScrollOffset(

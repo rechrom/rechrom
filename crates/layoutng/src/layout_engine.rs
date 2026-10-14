@@ -103,6 +103,12 @@ pub enum LayoutMutation<'a> {
         projected: &'a crate::internal::paint_input::PaintStyleData,
         clip_resource_version: crate::internal::paint_input::SvgClipResourceVersion,
     },
+    /// Complete local paint-only input, including native theme metadata.
+    PaintInput {
+        node_id: u64,
+        style: &'a crate::internal::layout_input::ComputedStyle,
+        element: Option<crate::internal::layout_input::ElementData>,
+    },
     ReplaceTree(LayoutObjectTree),
     ScrollOffset {
         node_id: u64,
@@ -140,6 +146,8 @@ pub struct LayoutEngine {
     pre_paint_inputs_: PrePaintRevisionTracker,
     scroll_paint_index_: Option<ScrollPaintPropertyIndex>,
     pending_scroll_ids_: HashSet<u64>,
+    pending_paint_ids_: HashSet<u64>,
+    pending_inline_ink_ids_: HashSet<u64>,
     algorithms_: LayoutAlgorithmSet,
     objects_: LayoutObjectFactorySet,
     boundary_: LayoutBoundarySupport,
@@ -155,6 +163,8 @@ impl LayoutEngine {
             pre_paint_inputs_: PrePaintRevisionTracker::new(),
             scroll_paint_index_: None,
             pending_scroll_ids_: HashSet::new(),
+            pending_paint_ids_: HashSet::new(),
+            pending_inline_ink_ids_: HashSet::new(),
             algorithms_: assembly.algorithms,
             objects_: assembly.objects,
             boundary_: assembly.boundary,
@@ -167,9 +177,14 @@ impl LayoutEngine {
         // Native topology, style, constraints and layout results may change at
         // all other mutation entries. Never keep borrowed native pointers or
         // exported paths across them, even if the mutation later proves a noop.
+        if !matches!(&mutation, LayoutMutation::PaintInput { .. }) {
+            self.pending_paint_ids_.clear();
+            self.pending_inline_ink_ids_.clear();
+        }
         if !matches!(
             &mutation,
             LayoutMutation::ScrollOffset { .. } | LayoutMutation::PaintStyle { .. }
+                | LayoutMutation::PaintInput { .. }
         ) {
             self.scroll_paint_index_ = None;
             self.pending_scroll_ids_.clear();
@@ -235,6 +250,16 @@ impl LayoutEngine {
                     }
                 }
                 binding.is_some()
+            }
+            LayoutMutation::PaintInput { node_id, style, element } => {
+                if self.fragments.is_none() { return false; }
+                let update = self.tree_.as_mut()
+                    .and_then(|tree| tree.UpdatePaintInput(node_id, style, element));
+                if let Some(update) = update {
+                    self.pending_paint_ids_.extend(update.sources);
+                    self.pending_inline_ink_ids_.extend(update.inline_ink_changes);
+                    true
+                } else { false }
             }
             LayoutMutation::ReplaceTree(tree) => {
                 self.fragments = None;
@@ -434,6 +459,32 @@ impl LayoutEngine {
         true
     }
 
+    /// Publish ordinary local paint updates from resident geometry. The
+    /// boundary refreshes paint inputs only; shaped runs and fragment IDs stay
+    /// owned by the last layout, like Blink's FragmentData/ObjectPaintProperties.
+    pub fn ExportTargetedPaintInputs(&mut self) -> bool {
+        let mut trace = browser_tracing::span("layout", "LayoutEngine.ExportTargetedPaintInputs");
+        if self.tree_.is_none() { return false; }
+        let root = self.RootPointer();
+        if unsafe { &*root }.NeedsLayout() {
+            return false;
+        }
+        let Some(fragments) = &mut self.fragments else { return false; };
+        let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
+        if !crate::internal::boundary::layout_boundary::RefreshRetainedPaintInputs(
+            unsafe { &mut *root }, Rc::make_mut(fragments), &self.pending_paint_ids_, &self.pending_inline_ink_ids_,
+        ) {
+            trace.set("rejected", 1.0);
+            return false;
+        }
+        self.pre_paint_inputs_.update(Rc::make_mut(fragments));
+        trace.set("updated_sources", self.pending_paint_ids_.len() as f64);
+        self.pending_paint_ids_.clear();
+        self.pending_inline_ink_ids_.clear();
+        trace.set("published", 1.0);
+        true
+    }
+
     /// The latest successful exported layout snapshot. Reading it does not
     /// clone the tree or run layout.
     pub fn GetLayoutResult(&self) -> Option<&Rc<FragmentNode>> {
@@ -535,7 +586,7 @@ impl LayoutEngine {
                 ));
             }
             self.pending_scroll_ids_.clear();
-            heap.AllowUnchangedReuse();
+            heap.DeferCollection();
             trace.set("retained_geometry", 1.0);
             return Some(ScrollLayoutUpdate::RetainedGeometry);
         }

@@ -39,7 +39,7 @@ struct Batch {
     resources: Option<Arc<PaintResources>>,
     jobs: Arc<Mutex<VecDeque<RasterJob>>>,
     layers: Arc<BTreeMap<layer_tile::LayerId, Arc<PreparedLayer>>>,
-    reply: mpsc::Sender<(u64, io::Result<Vec<RasterProduct>>)>,
+    reply: mpsc::Sender<(u64, io::Result<Vec<RasterProduct>>, bool)>,
 }
 struct Worker {
     sender: Option<mpsc::Sender<Batch>>,
@@ -61,14 +61,15 @@ pub(crate) struct RasterWorkerPool {
 }
 pub(crate) struct PendingTiles {
     frame: u64,
-    receiver: mpsc::Receiver<(u64, io::Result<Vec<RasterProduct>>)>,
+    receiver: mpsc::Receiver<(u64, io::Result<Vec<RasterProduct>>, bool)>,
     outstanding: usize,
+    jobs: Arc<Mutex<VecDeque<RasterJob>>>,
     error: Option<io::Error>,
     products: Vec<RasterProduct>,
 }
 impl PendingTiles {
-    fn accept(&mut self, frame: u64, result: io::Result<Vec<RasterProduct>>) {
-        self.outstanding -= 1;
+    fn accept(&mut self, frame: u64, result: io::Result<Vec<RasterProduct>>, complete: bool) {
+        if complete { self.outstanding -= 1; }
         if frame != self.frame {
             self.error
                 .get_or_insert_with(|| io::Error::other("raster worker returned another frame"));
@@ -81,35 +82,64 @@ impl PendingTiles {
             }
         }
     }
-    /// Collect a completed background batch without waiting on the frame
-    /// thread. None means workers still own at least one accepted batch.
-    pub fn try_finish(&mut self) -> Option<io::Result<Vec<RasterProduct>>> {
-        use std::sync::mpsc::TryRecvError;
-        while self.outstanding != 0 {
-            match self.receiver.try_recv() {
-                Ok((frame, result)) => self.accept(frame, result),
-                Err(TryRecvError::Empty) => return None,
-                Err(TryRecvError::Disconnected) => {
-                    self.error.get_or_insert_with(|| {
-                        io::Error::other("raster worker exited before completing its batch")
-                    });
-                    self.outstanding = 0;
-                }
-            }
+    /// Reprioritize queued SOON tasks that have become NOW, then wait only
+    /// for those tile generations. Other accepted work retains its owner and
+    /// is collected at subsequent CheckForCompletedTasks opportunities.
+    pub fn collect_required(
+        &mut self, required: &[(layer_tile::TileId, u64)],
+    ) -> io::Result<Vec<RasterProduct>> {
+        let mut wanted: std::collections::HashSet<_> = required.iter().copied().collect();
+        {
+            let mut jobs = self.jobs.lock()
+                .map_err(|_| io::Error::other("raster task queue poisoned"))?;
+            let queued = std::mem::take(&mut *jobs);
+            let (now, soon): (VecDeque<_>, VecDeque<_>) = queued.into_iter()
+                .partition(|job| wanted.contains(&(job.task.tile_id, job.task.generation)));
+            jobs.extend(now);
+            jobs.extend(soon);
         }
-        Some(if let Some(error) = self.error.take() {
-            Err(error)
-        } else {
-            Ok(std::mem::take(&mut self.products))
-        })
+        for product in &self.products {
+            wanted.remove(&(product.task.tile_id, product.task.generation));
+        }
+        let _wait = (!wanted.is_empty()).then(|| browser_tracing::span("raster", "RasterRequiredTileWait"));
+        while self.outstanding != 0 {
+            let response = if wanted.is_empty() {
+                match self.receiver.try_recv() {
+                    Ok(response) => response,
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        self.outstanding = 0;
+                        self.error.get_or_insert_with(|| io::Error::other("raster worker exited before completing its batch"));
+                        break;
+                    }
+                }
+            } else {
+                match self.receiver.recv() {
+                    Ok(response) => response,
+                    Err(_) => {
+                        self.outstanding = 0;
+                        self.error.get_or_insert_with(|| io::Error::other("raster worker exited before completing its batch"));
+                        break;
+                    }
+                }
+            };
+            for product in response.1.as_ref().into_iter().flatten() {
+                wanted.remove(&(product.task.tile_id, product.task.generation));
+            }
+            self.accept(response.0, response.1, response.2);
+        }
+        if let Some(error) = self.error.take() { return Err(error); }
+        if !wanted.is_empty() { return Err(io::Error::other("required raster tile did not complete")); }
+        Ok(std::mem::take(&mut self.products))
     }
+    pub fn is_finished(&self) -> bool { self.outstanding == 0 }
     pub fn finish(mut self) -> io::Result<Vec<RasterProduct>> {
         let _wait = browser_tracing::span("raster", "RasterWorkerWait");
         // Drain every accepted batch even when another lane failed. No reply,
         // allocation or unfinished cache transaction can enter a later frame.
         while self.outstanding != 0 {
             match self.receiver.recv() {
-                Ok((frame, result)) => self.accept(frame, result),
+                Ok((frame, result, complete)) => self.accept(frame, result, complete),
                 Err(_) => {
                     self.error.get_or_insert_with(|| {
                         io::Error::other("raster worker exited before completing its batch")
@@ -128,10 +158,10 @@ impl PendingTiles {
 impl Drop for PendingTiles {
     fn drop(&mut self) {
         while self.outstanding != 0 {
-            if self.receiver.recv().is_err() {
-                break;
+            match self.receiver.recv() {
+                Ok((_, _, complete)) => { if complete { self.outstanding -= 1; } }
+                Err(_) => break,
             }
-            self.outstanding -= 1;
         }
     }
 }
@@ -192,6 +222,7 @@ impl RasterWorkerPool {
             frame,
             receiver,
             outstanding: 0,
+            jobs: jobs.clone(),
             error: None,
             products: Vec::new(),
         };
@@ -262,7 +293,8 @@ fn worker_loop(receiver: mpsc::Receiver<Batch>, clip_limit: usize, image_limit: 
                 std::mem::take(&mut scratch),
             );
             let result = (|| {
-                let mut products = Vec::new();
+                let products: Vec<RasterProduct> = Vec::new();
+                let mut task_count = 0;
                 loop {
                     let Some(job) = batch
                         .jobs
@@ -278,38 +310,29 @@ fn worker_loop(receiver: mpsc::Receiver<Batch>, clip_limit: usize, image_limit: 
                     let composition = replay
                         .composition(job.task.layer_id)
                         .ok_or_else(|| io::Error::other("worker job has no prepared layer"))?;
-                    if let Some(premul_rgba) = job.solid_color {
-                        products.push(crate::solid::raster_product(
-                            job.plan_index,
-                            &job.task,
-                            composition,
-                            premul_rgba,
-                            job.reuse,
-                        )?);
-                        continue;
-                    }
-                    let rgba = replay.raster_tile_with_pixels(
-                        &job.task,
-                        &mut images,
-                        &mut clips,
-                        job.reuse,
-                    )?;
-                    let row_support = crate::engine::tile_row_support(
-                        &rgba,
-                        job.task.pixel_size.0 as usize,
-                        composition.white_backing,
-                    );
-                    let bgra = crate::engine::cached_bgra(&rgba);
-                    products.push(RasterProduct {
-                        plan_index: job.plan_index,
-                        task: job.task,
-                        composition,
-                        rgba,
-                        bgra,
-                        row_support,
-                    });
+                    let product = if let Some(premul_rgba) = job.solid_color {
+                        crate::solid::raster_product(
+                            job.plan_index, &job.task, composition, premul_rgba, job.reuse,
+                        )?
+                    } else {
+                        let rgba = replay.raster_tile_with_pixels(
+                            &job.task, &mut images, &mut clips, job.reuse,
+                        )?;
+                        let row_support = crate::engine::tile_row_support(
+                            &rgba, job.task.pixel_size.0 as usize, composition.white_backing,
+                        );
+                        let bgra = crate::engine::cached_bgra(&rgba);
+                        RasterProduct {
+                            plan_index: job.plan_index, task: job.task, composition,
+                            rgba, bgra, row_support,
+                        }
+                    };
+                    // TileManager publishes each completed task. A NOW tile
+                    // must not wait behind the rest of an unrelated SOON batch.
+                    let _ = reply.send((frame, Ok(vec![product]), false));
+                    task_count += 1;
                 }
-                trace.set("raster_tasks", products.len() as f64);
+                trace.set("raster_tasks", task_count as f64);
                 Ok(products)
             })();
             scratch = replay.take_scratch();
@@ -339,7 +362,7 @@ fn worker_loop(receiver: mpsc::Receiver<Batch>, clip_limit: usize, image_limit: 
                 scratch.capacity(), skia::src::core::SkCanvas::RasterThreadScratchBytes(), product_capacity,
                 skia::src::core::SkCanvas::RasterThreadGlyphMemoryDiagnostics());
         }
-        let _ = reply.send((frame, result));
+        let _ = reply.send((frame, result, true));
     }
     if let Some(id) = memory_id {
         eprintln!("raster-memory-worker-exit time_ns={} thread={:?} lane={}",

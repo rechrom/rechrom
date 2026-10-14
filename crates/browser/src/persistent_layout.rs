@@ -72,8 +72,21 @@ pub(crate) fn ExportPaintOnlyDocumentWithEngine(
     owner: &mut DOM,
     interaction: &UserInteractionState,
 ) -> Option<Rc<FragmentNode>> {
-    let _trace = browser_tracing::span("layout", "Page.ExportPaintOnlyDocumentWithEngine");
+    let mut trace = browser_tracing::span("layout", "Page.ExportPaintOnlyDocumentWithEngine");
     let mut heap_scope = foundation::LayoutHeapScope::new();
+    heap_scope.DeferCollection();
+    let state = owner.GetDocument().StyleState();
+    let nodes = state.paint_style_nodes.iter().copied().collect::<Vec<_>>();
+    trace.set("requires_export", state.paint_style_requires_export as u8 as f64);
+    trace.set("input_nodes", nodes.len() as f64);
+    let targeted = !state.paint_style_requires_export && !nodes.is_empty()
+        && nodes.iter().all(|&id| owner.EmitPaintInputs(id, interaction, |mutation| {
+            engine.ApplyMutation(mutation)
+        }))
+        && engine.ExportTargetedPaintInputs();
+    if targeted {
+        return engine.TakeLayoutResult();
+    }
     owner.EmitLayoutMutations(interaction, |mutation| {
         engine.ApplyMutation(mutation);
     });

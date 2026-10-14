@@ -35,7 +35,10 @@ impl DOM {
     }
 
     pub fn DidCommitPaint(&mut self) {
-        self.GetDocumentMut().StyleStateMut().impact = Default::default();
+        let state = self.GetDocumentMut().StyleStateMut();
+        state.impact = Default::default();
+        state.paint_style_nodes.clear();
+        state.paint_style_requires_export = false;
     }
 
     /// Return whether the DOM node exists. Updating an offset does not change

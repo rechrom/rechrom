@@ -1114,9 +1114,21 @@ impl PageState {
                         // The StyleEngine setter below turns the state change
                         // into selector invalidation at the next lifecycle.
                         self.styles_resolved.set(false);
+                        self.scroll_only.set(false);
+                        self.dirty.set(true);
                     }
                     if needs_paint {
-                        self.document.borrow_mut().InvalidatePaint();
+                        let mut owner = self.document.borrow_mut();
+                        owner.InvalidatePaint();
+                        owner.GetDocumentMut().StyleStateMut().paint_style_nodes.extend(
+                            [previous.hovered_node_id, m.state.hovered_node_id,
+                             previous.pressed_node_id, m.state.pressed_node_id,
+                             previous.focus_visible_node_id, m.state.focus_visible_node_id,
+                             previous.focused_node_id, m.state.focused_node_id,
+                             previous.multi_select_focused_option_id, m.state.multi_select_focused_option_id]
+                                .into_iter().flatten(),
+                        );
+                        drop(owner);
                         // Focus/hover/pressed state changes native appearance
                         // and focus/caret paint, but not box geometry. Preserve
                         // the last geometry as a stale-paint candidate so a
@@ -1569,17 +1581,28 @@ impl Page {
                 );
             }
         }
-        fn install_resources(node: &mut FragmentNode, resources: &Arc<PaintResources>) {
-            if node.paint.resources.as_deref() != Some(resources.as_ref()) {
-                // Resource fulfillment happens after Layout certified this
-                // snapshot. Revoke that certificate so retained PrePaint nodes
-                // cannot keep stale image payloads or embedding preferences.
+        fn install_resources(
+            node: &mut FragmentNode,
+            resources: &Arc<PaintResources>,
+            catalogs: &mut std::collections::HashMap<*const PaintResources, bool>,
+        ) {
+            // Export shares one immutable catalog across all fragments. Compare
+            // each distinct prior catalog once, preserving resource identity
+            // when it is current, as ImageResourceContent/Font retain theirs.
+            let changed = node.paint.resources.as_ref().is_none_or(|previous| {
+                if Arc::ptr_eq(previous, resources) {
+                    return false;
+                }
+                *catalogs.entry(Arc::as_ptr(previous))
+                    .or_insert_with(|| previous.as_ref() != resources.as_ref())
+            });
+            if changed {
                 node.pre_paint_revision = 0;
                 node.pre_paint_subtree_revision = 0;
+                node.paint.resources = Some(resources.clone());
             }
-            node.paint.resources = Some(resources.clone());
             for child in &mut node.children {
-                install_resources(child, resources);
+                install_resources(child, resources, catalogs);
             }
         }
 
@@ -1647,7 +1670,10 @@ impl Page {
                 paints_opaque_base_background: !constraints.printing,
                 viewport: constraints.viewport,
             });
-            install_resources(Rc::make_mut(fragments), &resources);
+            let mut trace = browser_tracing::span("resource", "Page.BindPaintResources");
+            let mut catalogs = std::collections::HashMap::new();
+            install_resources(Rc::make_mut(fragments), &resources, &mut catalogs);
+            trace.set("compared_catalogs", catalogs.len() as f64);
         }
         Ok(())
     }
@@ -2550,6 +2576,7 @@ impl Page {
             frame.compositor_scroll_sequence = self.processed_compositor_scroll_sequence;
             self.state.scroll_only.set(false);
             self.state.dirty.set(false);
+            self.state.document.borrow_mut().DidCommitPaint();
             if let Some(scripts) = &mut self.scripts {
                 scripts.DidPaint();
             }
@@ -2594,7 +2621,7 @@ impl Page {
         // snapshot before taking it for Paint. Generic export replaces the
         // snapshot, so release its old reference first. Either path leaves no
         // extra engine reference while CommitPaint mutates client lifecycle.
-        if animation_paint_nodes.is_empty() {
+        if !paint_only_style {
             self.state.layout_engine.borrow_mut().ReleaseLayoutResult();
         } else if let Some(fragments) = &measured {
             self.state

@@ -967,6 +967,13 @@ impl ProductionFunctionRegistry {
             .iter()
             .map(|sheet| Rc::new(sheet.BuildRuleSet(medium)))
             .collect::<Vec<_>>();
+        Self::FromRuleSets(&rule_sets)
+    }
+
+    // ScopedStyleResolver::AppendActiveStyleSheets collects FunctionRules from
+    // the already compiled active RuleSets. Ordinary recalc must not compile
+    // every sheet again just to consult its document-level name map.
+    pub(crate) fn FromRuleSets(rule_sets: &[Rc<RuleSet<Backend>>]) -> Self {
         let active = rule_sets
             .iter()
             .map(|rules| ActiveStyleSheet::new(Rc::new(()), Some(rules.clone())))
@@ -974,7 +981,7 @@ impl ProductionFunctionRegistry {
         let layers = CascadeLayerMap::new(&active);
         let mut functions: HashMap<AtomicString, CascadeLayered<ProductionFunctionHandle>> =
             HashMap::new();
-        for rules in &rule_sets {
+        for rules in rule_sets {
             for rule in rules.FunctionRules() {
                 let name = rule.value.Name().clone();
                 let replace = functions.get(&name).is_none_or(|old| {

@@ -555,6 +555,21 @@ impl Default for PseudoElement {
 }
 
 impl PseudoElement {
+    fn SamePaintInput(&self, other: &Self) -> bool {
+        let native_equal = match (unsafe { self.native_style.Get().as_ref() }, unsafe { other.native_style.Get().as_ref() }) {
+            (Some(a), Some(b)) => layoutng_style::style::computed_style_base::ComputedStyleBase::FieldInvalidationDiff(a, b) == 0,
+            (None, None) => true,
+            _ => false,
+        };
+        native_equal && self.style.LayoutEquivalent(&other.style)
+            && self.style.paint == other.style.paint && self.text == other.text
+            && self.content == other.content && self.display_contents == other.display_contents
+            && match (&self.marker, &other.marker) {
+                (Some(a), Some(b)) => a.SamePaintInput(b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
     pub fn SetNativeStyle(&mut self, native_style: Persistent<NativeComputedStyle>) {
         self.style.native_style = native_style.Get();
         self.native_style = native_style;
@@ -746,6 +761,9 @@ pub struct PersistentDocument {
         Option<std::sync::Arc<layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot>>,
     svg_clip_resource_inputs: Option<(u64, u64)>,
     resolved_style_revision: u64,
+    // SVGResources tracks changes to resource definitions/descendants, rather
+    // than invalidating the catalog for an unrelated HTML color or hover edit.
+    svg_resource_style_revision: u64,
     root: usize,
     next_id: u64,
     compatibility: CompatibilityMode,
@@ -890,6 +908,7 @@ impl PersistentDocument {
             svg_clip_resources: None,
             svg_clip_resource_inputs: None,
             resolved_style_revision: 0,
+            svg_resource_style_revision: 0,
             root: 0,
             next_id: 1,
             compatibility: CompatibilityMode::kNoQuirks,
@@ -1001,10 +1020,10 @@ impl PersistentDocument {
 
     fn SVGResourceInputKey(&self) -> Option<(u64, u64)> {
         (self.collection_membership_revision != u64::MAX
-            && self.resolved_style_revision != u64::MAX)
+            && self.svg_resource_style_revision != u64::MAX)
             .then_some((
                 self.collection_membership_revision,
-                self.resolved_style_revision,
+                self.svg_resource_style_revision,
             ))
     }
 
@@ -5636,11 +5655,37 @@ impl PersistentDocument {
     pub fn ResolvedStyleHandle(&self, node: usize) -> Option<std::sync::Arc<ResolvedNodeStyle>> {
         self.resolved_styles.get(&self.arena[node].id).cloned()
     }
+    fn IsSVGResourceStyleNode(&self, node: usize) -> bool {
+        let mut current = Some(node);
+        while let Some(index) = current {
+            if self.arena[index].namespace == DOMNamespace::kSVG {
+                return true;
+            }
+            current = self.arena[index].parent;
+        }
+        false
+    }
     pub fn SetResolvedStyle(&mut self, node: usize, style: ResolvedNodeStyle) {
         if self.ResolvedStyleFor(node) == Some(&style) {
             return;
         }
+        let same_pseudo = |a: &Option<PseudoElement>, b: &Option<PseudoElement>| match (a, b) {
+            (Some(a), Some(b)) => a.SamePaintInput(b),
+            (None, None) => true,
+            _ => false,
+        };
+        let requires_export = self.ResolvedStyleFor(node).is_none_or(|old| {
+            old.display_contents || style.display_contents
+                || !same_pseudo(&old.before, &style.before) || !same_pseudo(&old.after, &style.after)
+                || !same_pseudo(&old.first_letter, &style.first_letter)
+                || !same_pseudo(&old.placeholder, &style.placeholder) || !same_pseudo(&old.marker, &style.marker)
+        }) || self.IsSVGResourceStyleNode(node);
+        self.style_state.paint_style_nodes.insert(self.arena[node].id);
+        self.style_state.paint_style_requires_export |= requires_export;
         self.resolved_style_revision = self.resolved_style_revision.saturating_add(1);
+        if self.IsSVGResourceStyleNode(node) {
+            self.svg_resource_style_revision = self.svg_resource_style_revision.saturating_add(1);
+        }
         let new_sources = StyleImageSources(&style);
         let same_sources = self
             .ResolvedStyleFor(node)
@@ -5662,6 +5707,9 @@ impl PersistentDocument {
             return;
         };
         self.resolved_style_revision = self.resolved_style_revision.saturating_add(1);
+        if self.IsSVGResourceStyleNode(node) {
+            self.svg_resource_style_revision = self.svg_resource_style_revision.saturating_add(1);
+        }
         for source in StyleImageSources(&style) {
             if let Some(consumers) = self.style_image_consumers.get_mut(&source) {
                 consumers.remove(&node);

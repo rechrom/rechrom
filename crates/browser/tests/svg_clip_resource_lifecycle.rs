@@ -749,3 +749,77 @@ fn foundation_asset_inline_and_fetched_retains_real_clip_content() {
         }
     });
 }
+
+#[test]
+fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
+    native_test_thread::run(|| {
+        use layoutng_assembly::layout_engine::{LayoutEngine, LayoutMutation};
+        let _heap = foundation::LayoutHeapScope::new();
+        let mut owner = html::html_parser::ParseHTML(&format!(
+            "<!doctype html><body style='margin:0'><div id='label' style='color:red'>label</div>{CLIPPED}"
+        ));
+        let assembly = browser::CreateLayoutAssembly();
+        let mut engine = LayoutEngine::new(&assembly);
+        let mut constraints = browser::CreateBrowserConstraints(320, 240);
+        constraints.fonts = vec![FontFace {
+            family: "SvgPaintOwnershipFixture".into(),
+            bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf").as_slice().into(),
+            ..Default::default()
+        }];
+        let mut styles = style::StyleEngine::new(&owner);
+        styles.Update(&mut owner, &Default::default(), &host_styles()).unwrap();
+        owner.UpdateSVGResources();
+        engine.ApplyMutation(LayoutMutation::Constraints(&constraints));
+        owner.EmitLayoutMutations(&Default::default(), |m| { engine.ApplyMutation(m); });
+        engine.Layout();
+        owner.DidCommitPaint();
+        let old = engine.GetLayoutResult().unwrap().clone();
+        let catalog = owner.GetDocument().SVGResources().unwrap().clone();
+        let label = (0..owner.GetDocument().NodeCount()).find(|&i| owner.GetDocument().Node(i)
+            .FindAttribute("id").is_some_and(|a| a.value == "label")).unwrap();
+        let label_id = owner.GetDocument().Node(label).Id();
+        let text_id = owner.GetDocument().Node(owner.GetDocument().Node(label).Children()[0]).Id();
+        let glyphs = find_fragment(&old, text_id).unwrap().paint.glyph_runs.clone();
+        let native_label = engine.GetLayoutTree().unwrap().Root();
+        let mut object = native_label as *const LayoutObject;
+        while unsafe { &*object }.OwnerNodeIdDefault() as u64 != label_id {
+            object = unsafe { &*object }.NextInPreOrder(native_label);
+            assert!(!object.is_null());
+        }
+        let bound_font = unsafe { &*object }.StyleRef().GetFont();
+        owner.GetDocumentMut().SetAttribute(label, dom::persistent_document::DOMAttribute {
+            local_name: "style".into(), value: "color:blue".into(), ..Default::default()
+        });
+        styles.Update(&mut owner, &Default::default(), &host_styles()).unwrap();
+        assert!(!owner.UpdateSVGResources());
+        assert!(std::sync::Arc::ptr_eq(&catalog, owner.GetDocument().SVGResources().unwrap()));
+        assert!(owner.EmitPaintInputs(label_id, &Default::default(), |m| engine.ApplyMutation(m)));
+        assert!(engine.ExportTargetedPaintInputs());
+        let current = engine.GetLayoutResult().unwrap();
+        let text = find_fragment(current, text_id).unwrap();
+        assert_eq!(text.paint.style.color.blue, 1.0);
+        assert_eq!(text.paint.style.color.red, 0.0);
+        assert!(text.paint.glyph_runs == glyphs);
+        assert_eq!(text.fragment_instance_id, find_fragment(&old, text_id).unwrap().fragment_instance_id);
+        assert_eq!(unsafe { &*object }.StyleRef().GetFont(), bound_font);
+        assert_eq!(find_fragment(&old, text_id).unwrap().paint.style.color.red, 1.0);
+        owner.GetDocumentMut().SetAttribute(label, dom::persistent_document::DOMAttribute {
+            local_name: "style".into(), value: "color:blue;text-decoration:underline".into(), ..Default::default()
+        });
+        styles.Update(&mut owner, &Default::default(), &host_styles()).unwrap();
+        owner.UpdateSVGResources();
+        assert!(owner.EmitPaintInputs(label_id, &Default::default(), |m| engine.ApplyMutation(m)));
+        assert!(engine.ExportTargetedPaintInputs());
+        let retained = engine.GetLayoutResult().unwrap().clone();
+        let text = find_fragment(&retained, text_id).unwrap();
+        assert!(text.paint.style.text_decoration.underline
+            || text.paint.style.applied_text_decorations.iter().any(|decoration| decoration.underline));
+        assert!(text.paint.glyph_runs == glyphs);
+        assert!(engine.ExportPaintOnly());
+        let exported = find_fragment(engine.GetLayoutResult().unwrap(), text_id).unwrap();
+        assert!(exported.paint.style == text.paint.style);
+        assert_eq!(exported.paint.self_ink_overflow, text.paint.self_ink_overflow);
+        assert_eq!(exported.paint.ink_overflow, text.paint.ink_overflow);
+        assert!(exported.paint.glyph_runs == text.paint.glyph_runs);
+    });
+}
