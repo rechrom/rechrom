@@ -760,29 +760,53 @@ impl FontFace<'_> {
         })
     }
 }
-// The raster cache outlives a borrowed resource snapshot. Keep exact source
-// bytes, not a pointer or family name, so data replacement and allocator address
-// reuse cannot return outlines from an earlier font-context generation.
+// The raster cache outlives a borrowed resource snapshot. Retain the exact
+// immutable owner, like SkTypeface/SkData, or copy unowned source bytes. A live
+// owner makes its full-slice address a safe fast path, without address reuse.
+#[cfg(any(target_os = "macos", test))]
+enum FontDataBacking {
+    Shared(std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>),
+    Copied(Box<[u8]>),
+}
 #[cfg(any(target_os = "macos", test))]
 pub(crate) struct FontDataIdentity {
-    bytes: Box<[u8]>,
+    bytes: FontDataBacking,
     face_index: u32,
 }
 #[cfg(any(target_os = "macos", test))]
 impl FontDataIdentity {
     pub(crate) fn new(face: &FontFace<'_>) -> Self {
         Self {
-            bytes: face.bytes.into(),
+            bytes: face.shared_bytes().map_or_else(
+                || FontDataBacking::Copied(face.bytes.into()),
+                |owner| FontDataBacking::Shared(owner.clone()),
+            ),
             face_index: face.face_index,
         }
     }
 
+    fn as_slice(&self) -> &[u8] {
+        match &self.bytes {
+            FontDataBacking::Shared(owner) => owner.as_ref().as_ref(),
+            FontDataBacking::Copied(bytes) => bytes,
+        }
+    }
+
     pub(crate) fn matches(&self, face: &FontFace<'_>) -> bool {
-        self.face_index == face.face_index && self.bytes.as_ref() == face.bytes
+        let bytes = self.as_slice();
+        self.face_index == face.face_index
+            && (std::ptr::eq(bytes, face.bytes) || bytes == face.bytes)
     }
 
     pub(crate) fn byte_len(&self) -> usize {
-        self.bytes.len()
+        self.as_slice().len()
+    }
+
+    pub(crate) fn copied_byte_len(&self) -> usize {
+        match &self.bytes {
+            FontDataBacking::Shared(_) => 0,
+            FontDataBacking::Copied(bytes) => bytes.len(),
+        }
     }
 }
 
@@ -892,6 +916,27 @@ mod font_identity_tests {
             !identity.matches(&face(&bytes)),
             "same allocation, new bytes"
         );
+        let owner: std::sync::Arc<dyn AsRef<[u8]> + Send + Sync> =
+            std::sync::Arc::new(vec![5; 2 * 1024 * 1024 + 1]);
+        let weak = std::sync::Arc::downgrade(&owner);
+        let mut shared = face(owner.as_ref().as_ref());
+        shared.bytes_owner = Some(owner.clone());
+        let retained = FontDataIdentity::new(&shared);
+        assert_eq!(retained.byte_len(), shared.bytes.len());
+        assert_eq!(retained.copied_byte_len(), 0);
+        assert!(std::ptr::eq(retained.as_slice(), shared.bytes));
+        assert!(retained.matches(&shared));
+        // A caller can replace its public view without updating the owner.
+        // Never use an unrelated owner's address or contents as its identity.
+        shared.bytes = &[9, 8];
+        let reassigned = FontDataIdentity::new(&shared);
+        assert_eq!(reassigned.copied_byte_len(), 2);
+        assert!(!retained.matches(&shared));
+        drop(shared);
+        drop(owner);
+        assert!(weak.upgrade().is_some());
+        drop(retained);
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]

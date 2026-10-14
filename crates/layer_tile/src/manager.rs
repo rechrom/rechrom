@@ -355,29 +355,12 @@ impl LayerTileManager {
                 self.default_tile_size,
                 self.max_untiled_layer_size,
             );
-            // Select the retained grid before deriving tile indices. A changed
-            // support minimum is not a new raster space. cc stabilizes partial
-            // recorded origins for the same reason (ComputeTilingRect).
-            let origin = matched
-                .and_then(|index| {
-                    let old = &self.layers[index];
-                    old.raster_transform
-                        .lifecycle
-                        .same_node(&layer.properties.transform.lifecycle)
-                        .then(|| {
-                            old.tilings
-                                .iter()
-                                .find(|tiling| {
-                                    tiling.scale == config.raster_scale
-                                        && tiling.tile_size == tile_size
-                                })
-                                .map(|tiling| tiling.origin)
-                        })
-                        .flatten()
-                })
-                .unwrap_or_else(|| {
-                    raster_origin(picture_bounds, config.raster_scale, layer.complete)
-                });
+            // cc::PictureLayerTiling::SetRasterSourceAndResize recomputes the
+            // tiling rect and resets its tile map when the origin changes.
+            // Retaining a complete picture's old origin can put new ink at
+            // negative indices, which finite tile geometry cannot represent.
+            // Incomplete picture bounds still use the stable (0,0) grid.
+            let origin = raster_origin(picture_bounds, config.raster_scale, layer.complete);
             // A cc tile grid is expressed in layer space.  Its device-space
             // origin is allowed to carry a subpixel phase: non-integral DPR,
             // page zoom and retained raster origins routinely produce one.
@@ -732,8 +715,9 @@ impl LayerTileManager {
                 .tilings
                 .iter()
                 .any(|tiling| tiling.scale == config.raster_scale && tiling.tile_size != tile_size);
-            let origin_changed =
-                (raster_space_changed || tile_grid_changed) && !state.tilings.is_empty();
+            let origin_changed = state.tilings.iter().any(|tiling| {
+                tiling.scale == config.raster_scale && tiling.origin != origin
+            });
             let (all_dirty, damage, first_change) = record_damage(
                 &state.records,
                 &records,
@@ -785,7 +769,7 @@ impl LayerTileManager {
             // Each scale keeps its own resident grid anchor. Bounds/culling
             // changes only change live tile ranges. A real raster-space owner
             // change makes the old tiling coordinates incompatible.
-            if raster_space_changed || tile_grid_changed {
+            if raster_space_changed || tile_grid_changed || origin_changed {
                 for tiling in state.tilings.drain(..) {
                     plan.retired_tiles
                         .extend(tiling.tiles.values().map(|t| t.id));

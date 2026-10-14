@@ -310,10 +310,12 @@ fn required_raster_task_count(plan: &FramePlan, tasks: &[crate::RasterTask]) -> 
 
 fn refresh_readiness(manager: &LayerTileManager, plan: Option<&mut FramePlan>) {
     let Some(plan) = plan else { return };
+    // Draw placements and scroll-interest placements are separate copies of
+    // the same tile identities. Both must observe completion and eviction.
     for tile in plan
         .layers
         .iter_mut()
-        .flat_map(|layer| layer.tiles.iter_mut())
+        .flat_map(|layer| layer.tiles.iter_mut().chain(layer.interest_tiles.iter_mut()))
     {
         tile.ready = manager.is_rasterized(tile.tile_id, tile.generation);
     }
@@ -324,6 +326,138 @@ mod tests {
     use super::*;
     use paint::paint_engine::PaintRect;
     use std::time::Duration;
+
+    #[test]
+    fn moved_complete_bounds_keep_draw_and_scroll_tiles_usable() {
+        use paint::paint_engine::{
+            DisplayItem, DisplayItemType, PaintChunk, RecordedDisplayItem, RecordedDisplayItemKind,
+        };
+        use paint::paint_property_tree::PropertyTreeState;
+        let properties = PropertyTreeState::default();
+        let mut engine = LayerTileEngine::new(256);
+        let mut previous = None;
+        let mut previous_layer = None;
+        for x in [321., 281.] {
+            let bounds = PaintRect {
+                x,
+                y: 115.,
+                width: 20.,
+                height: 20.,
+            };
+            let artifact = Arc::new(PaintArtifact {
+                items: vec![DisplayItem {
+                    r#type: DisplayItemType::kDrawRect,
+                    rect: bounds,
+                    color: layoutng_assembly::internal::layout_input_types::Color {
+                        red: 1.,
+                        green: 0.,
+                        blue: 0.,
+                        alpha: 1.,
+                    },
+                    ..Default::default()
+                }]
+                .into(),
+                display_items: vec![RecordedDisplayItem {
+                    kind: RecordedDisplayItemKind::Drawing,
+                    id: Default::default(),
+                    visual_rect: bounds,
+                    visual_rect_is_accurate: true,
+                    draws_content: true,
+                    raster_effect_outset: paint::paint_engine::RasterEffectOutset::kNone,
+                    record_begin: 0,
+                    record_end: 1,
+                    scroll_translation: None,
+                }],
+                chunks: vec![PaintChunk {
+                    begin_index: 0,
+                    end_index: 1,
+                    is_cacheable: true,
+                    properties: properties.clone(),
+                    bounds,
+                    drawable_bounds: bounds,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            let update = engine
+                .UpdatePending(
+                    &artifact,
+                    FrameConfig {
+                        viewport: PaintRect {
+                            x: 0.,
+                            y: 0.,
+                            width: 400.,
+                            height: 240.,
+                        },
+                        raster_scale: 1.,
+                        device_scale_factor: 1.,
+                        layout_zoom_factor: 1.,
+                        activation_scroll: None,
+                        frame_time: None,
+                    },
+                )
+                .unwrap();
+            let layer = &update.frame_plan.layers[0];
+            if let Some(previous) = previous_layer {
+                assert_eq!(layer.id, previous, "exercise a retained layer, not replacement");
+            }
+            previous_layer = Some(layer.id);
+            assert_eq!(layer.raster_origin, (x, 115.));
+            assert!(
+                !layer.tiles.is_empty(),
+                "visible ink must have a tile after moving left"
+            );
+            let tile = layer.tiles[0].clone();
+            assert!(previous.as_ref().is_none_or(|old| *old != tile.tile_id));
+            let completions = update
+                .raster_batch
+                .tasks
+                .iter()
+                .map(|task| RasterCompletion {
+                    layer_tree_id: update.frame_plan.layer_tree_id,
+                    frame_id: update.frame_plan.frame_id,
+                    tile_id: task.tile_id,
+                    generation: task.generation,
+                })
+                .collect::<Vec<_>>();
+            engine.ApplyRasterResults(&completions);
+            assert!(engine.ActivatePending().is_some());
+            let plan = engine.GetActiveFramePlan().unwrap();
+            let candidate = plan.layers[0]
+                .interest_tiles
+                .iter()
+                .find(|candidate| candidate.tile_id == tile.tile_id)
+                .unwrap();
+            assert!(
+                candidate.ready,
+                "completed draw tiles must also be usable for scrolling"
+            );
+            if let Some(old) = previous {
+                assert_eq!(
+                    engine.ApplyRasterResults(&[RasterCompletion {
+                        tile_id: old,
+                        ..completions[0]
+                    }]),
+                    0,
+                    "retired grid slots must reject late completion"
+                );
+            }
+            previous = Some(tile.tile_id);
+        }
+        engine.InvalidateResources();
+        assert!(engine
+            .GetActiveFramePlan()
+            .unwrap()
+            .layers
+            .iter()
+            .all(|layer| {
+                layer
+                    .tiles
+                    .iter()
+                    .chain(&layer.interest_tiles)
+                    .all(|tile| !tile.ready)
+            }));
+    }
 
     fn config(frame_time: std::time::Instant, node: u64, translation_y: f64) -> FrameConfig {
         FrameConfig {

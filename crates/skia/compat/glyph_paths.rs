@@ -5,12 +5,24 @@ use crate::raster::Path;
 use crate::src::core::SkStrikeCache::SkStrikeCache;
 use std::{cell::RefCell, sync::Arc};
 type SharedBytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
-enum FontBytes { Shared(SharedBytes), Copied(Vec<u8>) }
-impl FontBytes {
-    fn as_slice(&self) -> &[u8] { match self { Self::Shared(b) => b.as_ref().as_ref(), Self::Copied(b) => b } }
-    fn copied_capacity(&self) -> usize { match self { Self::Shared(_) => 0, Self::Copied(b) => b.capacity() } }
+enum FontBytes {
+    Shared(SharedBytes),
+    Copied(Vec<u8>),
 }
-
+impl FontBytes {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Shared(b) => b.as_ref().as_ref(),
+            Self::Copied(b) => b,
+        }
+    }
+    fn copied_capacity(&self) -> usize {
+        match self {
+            Self::Shared(_) => 0,
+            Self::Copied(b) => b.capacity(),
+        }
+    }
+}
 
 #[derive(Clone, Hash, Eq, PartialEq)]
 pub(crate) struct Descriptor {
@@ -55,12 +67,22 @@ pub(crate) fn with_paths<R>(
         let id = cache
             .fonts
             .iter()
-            .find(|(_, stored)| stored.as_slice() == bytes)
+            .find(|(_, stored)| {
+                std::ptr::eq(stored.as_slice(), bytes) || stored.as_slice() == bytes
+            })
             .map(|(id, _)| *id)
             .unwrap_or_else(|| {
-                // Font ownership is separately bounded; purge paths before releasing an identity.
+                // Validate the full immutable view before retaining its owner.
+                let owner = owner.filter(|owner| {
+                    let view: &[u8] = owner.as_ref().as_ref();
+                    std::ptr::eq(view, bytes)
+                });
+                let copied_bytes = if owner.is_some() { 0 } else { bytes.len() };
+                // Shared SkData-style owners are bounded by count; only new
+                // copies consume this adapter's byte budget. A large shared CJK
+                // font must coexist with Latin faces without purging all paths.
                 if cache.fonts.len() >= 32
-                    || cache.bytes.saturating_add(bytes.len()) > 2 * 1024 * 1024
+                    || cache.bytes.saturating_add(copied_bytes) > 2 * 1024 * 1024
                 {
                     cache.strikes.purge_all();
                     cache.fonts.clear();
@@ -73,12 +95,12 @@ pub(crate) fn with_paths<R>(
                 let id = cache.next_id;
                 // Like SkData/SkTypeface, retain immutable data through its owner.
                 // A caller with only borrowed bytes preserves the old exact copy.
-                let data = owner.filter(|owner| {
-                    let view: &[u8] = owner.as_ref().as_ref();
-                    view.as_ptr() == bytes.as_ptr() && view.len() == bytes.len()
-                }).map_or_else(|| FontBytes::Copied(bytes.to_vec()), |owner| FontBytes::Shared(owner.clone()));
+                let data = owner.map_or_else(
+                    || FontBytes::Copied(bytes.to_vec()),
+                    |owner| FontBytes::Shared(owner.clone()),
+                );
+                cache.bytes += data.copied_capacity();
                 cache.fonts.push((id, data));
-                cache.bytes += bytes.len();
                 id
             });
         descriptor.font = id;
@@ -89,8 +111,25 @@ pub(crate) fn with_paths<R>(
 pub(crate) fn memory_diagnostics() -> (usize, usize, usize, usize, usize, usize) {
     CACHE.with(|cache| {
         let cache = cache.borrow();
-        (cache.fonts.len(), cache.fonts.capacity() * std::mem::size_of::<(u64, FontBytes)>(), cache.fonts.iter().map(|(_, bytes)| bytes.copied_capacity()).sum(),
-            cache.strikes.count(), cache.strikes.memory_used(), cache.fonts.iter().filter_map(|(_, bytes)| match bytes { FontBytes::Shared(b) => Some(b.as_ref().as_ref().len()), _ => None }).sum())
+        (
+            cache.fonts.len(),
+            cache.fonts.capacity() * std::mem::size_of::<(u64, FontBytes)>(),
+            cache
+                .fonts
+                .iter()
+                .map(|(_, bytes)| bytes.copied_capacity())
+                .sum(),
+            cache.strikes.count(),
+            cache.strikes.memory_used(),
+            cache
+                .fonts
+                .iter()
+                .filter_map(|(_, bytes)| match bytes {
+                    FontBytes::Shared(b) => Some(b.as_ref().as_ref().len()),
+                    _ => None,
+                })
+                .sum(),
+        )
     })
 }
 
@@ -130,7 +169,9 @@ mod tests {
         assert_eq!(before.0, 1);
         assert!(before.1 >= std::mem::size_of::<(u64, FontBytes)>());
         assert_eq!(before.2, bytes.len());
-        for _ in 0..4 { assert_eq!(before, memory_diagnostics()); }
+        for _ in 0..4 {
+            assert_eq!(before, memory_diagnostics());
+        }
         with_paths(&bytes, None, descriptor(), |_| {});
         assert_eq!(before, memory_diagnostics());
         purge();
@@ -148,11 +189,27 @@ mod tests {
             with_paths(view, Some(&owner), descriptor(), |_| {});
             assert_eq!(memory_diagnostics().2, 0);
             assert_eq!(memory_diagnostics().5, view.len());
+            with_paths(&[1, 2, 3], None, descriptor(), |_| {});
+            with_paths(view, Some(&owner), descriptor(), |_| {});
+            assert_eq!(
+                memory_diagnostics().0,
+                2,
+                "large shared and small faces coexist"
+            );
+            assert_eq!(memory_diagnostics().2, 3);
             drop(owner);
-            assert!(weak.upgrade().is_some(), "cache must own the only remaining backing");
+            assert!(
+                weak.upgrade().is_some(),
+                "cache must own the only remaining backing"
+            );
             purge();
-            assert!(weak.upgrade().is_none(), "purge must release the last owner");
-        }).join().unwrap();
+            assert!(
+                weak.upgrade().is_none(),
+                "purge must release the last owner"
+            );
+        })
+        .join()
+        .unwrap();
     }
     #[test]
     fn shared_identity_checks_complete_view_and_exact_equal_bytes() {

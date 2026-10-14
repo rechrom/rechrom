@@ -964,37 +964,43 @@ impl SkScalerContext_Mac {
         device_size: f32,
         variations: &[FontVariation],
     ) -> Ref {
-        let typeface =
-            if let Some(entry) = self.typefaces.iter().find(|entry| entry.data.matches(face)) {
-                entry.id
+        let typeface = if let Some(entry) =
+            self.typefaces.iter().find(|entry| entry.data.matches(face))
+        {
+            entry.id
+        } else {
+            // Like SkTypeface's retained SkData, shared immutable source data
+            // is not a new allocation in this cache. Bound retained identities
+            // by count and borrowed-data copies by bytes, independently of the
+            // glyph-image budget. Charging shared CJK files here purges every
+            // strike each time text switches between Latin and CJK faces.
+            let bytes: usize = self
+                .typefaces
+                .iter()
+                .map(|entry| entry.data.copied_byte_len())
+                .sum();
+            let copied_bytes = if face.shared_bytes().is_some() {
+                0
             } else {
-                // Bounds are local font-owner adapter limits, separate from the
-                // official 2 MiB image budget. Keep at most 32 identities/64 CTFonts.
-                // One oversized font may exceed the identity byte budget alone.
-                let bytes: usize = self
-                    .typefaces
-                    .iter()
-                    .map(|entry| entry.data.byte_len())
-                    .sum();
-                if self.typefaces.len() >= 32
-                    || bytes.saturating_add(face.bytes.len()) > 2 * 1024 * 1024
-                {
-                    self.fonts.clear();
-                    // Every native font owner has been dropped before its metadata.
-                    self.font_bounds.clear();
-                    self.typefaces.clear();
-                    purge_images();
-                }
-                self.next_typeface = self
-                    .next_typeface
-                    .checked_add(1)
-                    .expect("typeface identity exhausted");
-                self.typefaces.push(TypefaceIdentity {
-                    id: self.next_typeface,
-                    data: FontDataIdentity::new(face),
-                });
-                self.next_typeface
+                face.bytes.len()
             };
+            if self.typefaces.len() >= 32 || bytes.saturating_add(copied_bytes) > 2 * 1024 * 1024 {
+                self.fonts.clear();
+                // Every native font owner has been dropped before its metadata.
+                self.font_bounds.clear();
+                self.typefaces.clear();
+                purge_images();
+            }
+            self.next_typeface = self
+                .next_typeface
+                .checked_add(1)
+                .expect("typeface identity exhausted");
+            self.typefaces.push(TypefaceIdentity {
+                id: self.next_typeface,
+                data: FontDataIdentity::new(face),
+            });
+            self.next_typeface
+        };
         // Font selection may already have resolved optical sizing from the
         // specified CSS size. Preserve that explicit value when raster scales
         // the same run to its zoomed/device size; only synthesize `opsz` for
