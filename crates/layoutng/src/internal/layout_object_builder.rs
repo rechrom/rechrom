@@ -97,6 +97,27 @@ struct ManagedObject {
     parent: *mut LayoutObject,
     input: NativeNodeConstructionData,
     effective_style: ComputedStyle,
+    // These descriptors survive DOM style replacement and are read during the
+    // next incremental comparison. LayoutObject::StyleRef can be a distinct
+    // font-bound copy; tracing it does not retain the canonical source styles.
+    input_style_roots: Vec<Persistent<NativeComputedStyle>>,
+}
+
+fn RetainInputStyles(
+    input: &NativeNodeConstructionData,
+    effective: &ComputedStyle,
+) -> Vec<Persistent<NativeComputedStyle>> {
+    let mut roots: Vec<Persistent<NativeComputedStyle>> = Vec::new();
+    for style in [
+        input.style.native_style,
+        effective.native_style,
+        input.first_line_style.as_ref().map_or(std::ptr::null(), |s| s.native_style),
+    ] {
+        if !style.is_null() && !roots.iter().any(|root| root.Get().cast_const() == style) {
+            roots.push(Persistent::from_ptr(style.cast_mut()));
+        }
+    }
+    roots
 }
 
 /// Non-CSS data attached by DOM/resource loading and needed when a native
@@ -594,6 +615,7 @@ impl LayoutObjectTreeStorage {
                 object,
                 node: metadata_node,
                 parent,
+                input_style_roots: RetainInputStyles(&descriptor, &effective_style),
                 input: descriptor,
                 effective_style,
             },
@@ -1085,6 +1107,7 @@ impl LayoutObjectTree {
             }
             record.input.style.native_style = native_style;
             record.effective_style.native_style = native_style;
+            record.input_style_roots = RetainInputStyles(&record.input, &record.effective_style);
             let node = unsafe { &mut *record.node };
             node.SetComputedStyle(native_style);
             unsafe { &mut *record.object }.SetStyle(native_style);

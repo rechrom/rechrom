@@ -143,7 +143,7 @@ impl Default for SelectorRuntimeFeatures {
             CSSPseudoColumn: true,
             SearchTextHighlightPseudo: true,
             WebMCP: false,
-            UnboundedElement: true,
+            UnboundedElement: foundation::RuntimeEnabledFeatures::UnboundedElementEnabled(),
             CSSPseudoHasSlotted: false,
             OverscrollGestures: false,
             CustomizableCombobox: false,

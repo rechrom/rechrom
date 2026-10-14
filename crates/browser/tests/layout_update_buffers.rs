@@ -122,6 +122,58 @@ fn complete_tree_updates_survive_reorder_removal_and_failed_build() {
 }
 
 #[test]
+fn retained_style_inputs_survive_dom_replacement_and_collection() {
+    native_test_thread::run(|| {
+        let mut owner = html::html_parser::ParseHTML(
+            "<html><head><style>html:active {color:red}</style></head>\
+             <body><p>Retained layout must own its previous style.</p></body></html>",
+        );
+        let html = (0..owner.GetDocument().NodeCount())
+            .find(|&i| owner.GetDocument().Node(i).IsHTMLElement("html"))
+            .unwrap();
+        let interaction = dom::UserInteractionState {
+            pressed_node_id: Some(owner.GetDocument().Node(html).Id()),
+            ..Default::default()
+        };
+        let space = browser::CreateBrowserConstraints(320, 240);
+        let assembly = browser::CreateLayoutAssembly();
+        let mut engine = LayoutEngine::new(&assembly);
+        let mut styles = style::StyleEngine::new(&owner);
+        let old;
+        {
+            let _heap = foundation::LayoutHeapScope::new();
+            styles.SetUserInteractionState(&mut owner, interaction.clone()).unwrap();
+            styles.Update(&mut owner, &Default::default(), &[]).unwrap();
+            browser::LayoutPersistentDocument(&mut engine, &mut owner, &interaction, &space);
+            let canonical = owner.GetDocument().ResolvedStyleFor(html).unwrap().native_style.Get();
+            old = foundation::WeakPersistent::from_ptr(canonical);
+            assert_ne!(engine.GetLayoutTree().unwrap().Root().StyleRef() as *const _,
+                canonical.cast_const(), "font binding must exercise a distinct native style");
+            owner.GetDocumentMut().SetAttribute(html, dom::persistent_document::DOMAttribute {
+                local_name: "style".into(), value: "font-size:19px; gap:7px; color:blue".into(),
+                ..Default::default()
+            });
+            styles.Update(&mut owner, &Default::default(), &[]).unwrap();
+            assert_ne!(owner.GetDocument().ResolvedStyleFor(html).unwrap().native_style.Get(),
+                old.Get(), "DOM must have replaced the canonical style before GC");
+        }
+        foundation::CollectLayoutHeapForTesting();
+        assert!(!old.Get().is_null(), "resident comparison inputs must survive collection");
+        let actual = browser::LayoutPersistentDocument(&mut engine, &mut owner, &interaction, &space);
+        let mut fresh = LayoutEngine::new(&assembly);
+        let expected = browser::LayoutPersistentDocument(&mut fresh, &mut owner, &interaction, &space);
+        let mut actual_geometry = Vec::new();
+        let mut expected_geometry = Vec::new();
+        geometry(&actual, &mut actual_geometry);
+        geometry(&expected, &mut expected_geometry);
+        assert_eq!(actual_geometry, expected_geometry);
+        drop((actual, expected, fresh, engine, styles, owner));
+        foundation::CollectLayoutHeapForTesting();
+        assert!(old.Get().is_null(), "retired style inputs must not leak");
+    });
+}
+
+#[test]
 fn complete_dom_projection_matches_fresh_after_input_changes() {
     native_test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();

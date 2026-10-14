@@ -1512,7 +1512,10 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: MatchesToolFormActive")
     }
     fn IsUnboundedElementActive(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsUnboundedElementActive")
+        // cpp: HTMLElement::IsUnboundedElementActive reads a dedicated element
+        // flag, never the mouse :active state. The unbounded-surface API is not
+        // exposed by this host, so no representable element can set that flag.
+        false
     }
     fn MatchesToolSubmitActive(&self, e: &Self::Element) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: MatchesToolSubmitActive")

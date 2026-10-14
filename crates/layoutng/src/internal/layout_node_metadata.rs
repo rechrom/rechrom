@@ -511,6 +511,12 @@ impl Node {
         visitor.Trace(&self.style_);
         visitor.Trace(&self.first_line_style_);
         visitor.Trace(&self.input_data_.bound_font);
+        // Input descriptors retain canonical styles independently of the
+        // font-bound style_ and first_line_style_ used by the LayoutObject.
+        visitor.Trace(&Member::from_ptr(self.input_data_.input_style.native_style.cast_mut()));
+        if let Some(style) = &self.input_data_.input_first_line_style_data {
+            visitor.Trace(&Member::from_ptr(style.native_style.cast_mut()));
+        }
         visitor.Trace(&self.layout_object_);
         visitor.Trace(&self.parent_);
         visitor.Trace(&self.previous_);

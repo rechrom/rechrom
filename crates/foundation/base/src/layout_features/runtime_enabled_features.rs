@@ -211,7 +211,8 @@ impl RuntimeEnabledFeatures {
     }
 
     pub const fn UnboundedElementEnabled() -> bool {
-        true
+        // The embedding does not provide unbounded surface activation.
+        false
     }
 
     pub const fn UsePositionForPointInFlexibleBoxWithSingleChildElementEnabled() -> bool {

@@ -633,7 +633,8 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
         false
     }
     fn IsUnboundedHTMLElementActive(&self, e: &Self::Element) -> bool {
-        SelectorCheckerBackend::IsActive(self.selector.as_ref(), e)
+        SelectorCheckerBackend::IsHTMLElement(self.selector.as_ref(), e)
+            && SelectorCheckerBackend::IsUnboundedElementActive(self.selector.as_ref(), e)
     }
     fn IsDocumentElement(&self, e: &Self::Element) -> bool {
         SelectorCheckerBackend::DocumentElement(self.selector.as_ref(), e)
