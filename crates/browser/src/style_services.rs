@@ -9,6 +9,38 @@ use std::{cell::RefCell, rc::Rc};
 use style::media_queries::{media_values_cached::MediaValuesCachedData, scripting::Scripting};
 use webapi::dom_bindings::DOMBindingsHost;
 
+struct StyleFontMetricsResolver {
+    engine: RefCell<font_engine::FontEngine>,
+}
+
+impl StyleFontMetricsResolver {
+    fn new(constraints: &ConstraintSpace) -> Self {
+        let mut engine = font_engine::FontEngine::FromFaces(
+            &constraints.fonts,
+            constraints.font_backend_factory.clone(),
+        );
+        engine.SetQueryCollector(constraints.font_queries.clone());
+        Self {
+            engine: RefCell::new(engine),
+        }
+    }
+}
+
+impl style::resolver::production_style_builder::FontMetricsResolver
+    for StyleFontMetricsResolver
+{
+    fn Metrics(
+        &self,
+        description: &font_engine::FontDescription,
+    ) -> Option<font_engine::FontMetrics> {
+        let version = self.engine.borrow().ContextVersion();
+        match self.engine.borrow_mut().GetMetrics(description, version) {
+            font_engine::FontCompute::Ready(metrics) => Some(metrics),
+            font_engine::FontCompute::Pending(_) | font_engine::FontCompute::Error(_) => None,
+        }
+    }
+}
+
 pub(crate) fn MediaValuesForLayout(
     constraints: &ConstraintSpace,
     preferred_color_scheme: style::PreferredColorScheme,
@@ -472,6 +504,7 @@ pub(crate) fn ResolveLayoutStylesWithEngineAndForcedColors(
     let user_agent = UserAgentStyleSheets::new();
     let environment = MediaValuesForLayout(constraints, preferred_color_scheme, forced_colors);
     let sheets = user_agent.ForDocument(owner.GetDocument());
+    engine.SetFontMetricsResolver(Rc::new(StyleFontMetricsResolver::new(constraints)));
     engine
         .Update(owner, &environment, sheets)
         .unwrap_or_else(|error| panic!("StyleEngine update failed: {error}"));

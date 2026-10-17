@@ -23,7 +23,7 @@ use paint::paint_property_tree::{
     ClipPaintPropertyNode, PaintBackfaceVisibility, PropertyTreeState,
 };
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
     sync::Arc,
 };
@@ -322,6 +322,15 @@ pub struct CompositorRenderPass {
     pub has_transparent_background: bool,
     pub output_rect: DeviceRect,
     pub damage_rect: DeviceRect,
+    /// Exact damaged areas in pass coordinates. `damage_rect` remains the
+    /// enclosing rect used by presentation scheduling; renderers should use
+    /// this region so disjoint fixed and newly exposed scroll content do not
+    /// turn into a full-surface repaint.
+    pub damage_rects: Vec<DeviceRect>,
+    /// Integer device-pixel translation of otherwise retained pass content.
+    /// SoftwareRenderer moves the existing backing before repainting the
+    /// newly exposed damage, matching Viz render-surface transform damage.
+    pub backing_shift: Option<(i32, i32)>,
     pub shared_quad_state_list: Vec<SharedQuadState>,
     pub quad_list: Vec<DrawQuad>,
 }
@@ -345,6 +354,7 @@ struct TileSnapshot {
     tiling_rect: PaintRect,
     pixel_size: (u32, u32),
     raster_scale: f64,
+    output_bounds: Option<DeviceRect>,
 }
 
 #[derive(Clone)]
@@ -365,12 +375,77 @@ struct LayerSnapshot {
     rect_known_to_be_opaque: PaintRect,
 }
 
+fn same_clip_draw_values(
+    mut current: Option<&Arc<paint::paint_property_tree::ClipPaintPropertyNode>>,
+    mut previous: Option<&Arc<paint::paint_property_tree::ClipPaintPropertyNode>>,
+) -> bool {
+    loop {
+        match (current, previous) {
+            (None, None) => return true,
+            (Some(a), Some(b))
+                if a.lifecycle.same_node(&b.lifecycle)
+                    && a.lifecycle.revision == b.lifecycle.revision
+                    && a.local_transform_space
+                        .lifecycle
+                        .same_node(&b.local_transform_space.lifecycle)
+                    && match (&a.pixel_moving_filter, &b.pixel_moving_filter) {
+                        (None, None) => true,
+                        (Some(a), Some(b)) => {
+                            a.lifecycle.same_node(&b.lifecycle)
+                                && a.lifecycle.revision == b.lifecycle.revision
+                        }
+                        _ => false,
+                    } =>
+            {
+                current = a.parent.as_ref();
+                previous = b.parent.as_ref();
+            }
+            _ => return false,
+        }
+    }
+}
+
+fn same_effect_draw_values(
+    mut current: Option<&Arc<EffectPaintPropertyNode>>,
+    mut previous: Option<&Arc<EffectPaintPropertyNode>>,
+) -> bool {
+    loop {
+        match (current, previous) {
+            (None, None) => return true,
+            (Some(a), Some(b))
+                if a.lifecycle.same_node(&b.lifecycle)
+                    && a.lifecycle.revision == b.lifecycle.revision
+                    && a.local_transform_space
+                        .lifecycle
+                        .same_node(&b.local_transform_space.lifecycle)
+                    && same_clip_draw_values(a.output_clip.as_ref(), b.output_clip.as_ref())
+                    && same_clip_draw_values(
+                        a.backdrop_filter_clip.as_ref(),
+                        b.backdrop_filter_clip.as_ref(),
+                    ) =>
+            {
+                current = a.parent.as_ref();
+                previous = b.parent.as_ref();
+            }
+            _ => return false,
+        }
+    }
+}
+
+fn same_property_draw_values(current: &PropertyTreeState, previous: &PropertyTreeState) -> bool {
+    current
+        .transform
+        .lifecycle
+        .same_node(&previous.transform.lifecycle)
+        && same_clip_draw_values(Some(&current.clip), Some(&previous.clip))
+        && same_effect_draw_values(Some(&current.effect), Some(&previous.effect))
+}
+
 impl LayerSnapshot {
-    fn same_inputs(&self, other: &Self) -> bool {
+    fn same_non_tile_inputs(&self, other: &Self) -> bool {
         self.id == other.id
             && self.composition == other.composition
-            && self.tiles == other.tiles
-            && self.properties.same_values(&other.properties)
+            && same_property_draw_values(&self.properties, &other.properties)
             && self.raster_content_bounds == other.raster_content_bounds
             && self.compositor_scroll == other.compositor_scroll
             && self.is_first_layer == other.is_first_layer
@@ -379,6 +454,60 @@ impl LayerSnapshot {
             && self.root_translation == other.root_translation
             && self.root_clip == other.root_clip
             && self.rect_known_to_be_opaque == other.rect_known_to_be_opaque
+    }
+
+    fn same_inputs(&self, other: &Self) -> bool {
+        self.same_non_tile_inputs(other)
+            && self.tiles == other.tiles
+    }
+
+    fn retained_translation_from(&self, old: &Self) -> Option<(i32, i32)> {
+        if self.id != old.id
+            || self.composition.projective.is_some()
+            || old.composition.projective.is_some()
+            || self.composition.transform.m11 != old.composition.transform.m11
+            || self.composition.transform.m12 != old.composition.transform.m12
+            || self.composition.transform.m21 != old.composition.transform.m21
+            || self.composition.transform.m22 != old.composition.transform.m22
+            || !same_property_draw_values(&self.properties, &old.properties)
+            || self.raster_content_bounds != old.raster_content_bounds
+            || self.is_first_layer != old.is_first_layer
+            || self.requires_transparent_backing != old.requires_transparent_backing
+            || self.raster_origin != old.raster_origin
+            || self.rect_known_to_be_opaque != old.rect_known_to_be_opaque
+        {
+            return None;
+        }
+        let dx = self.composition.transform.tx - old.composition.transform.tx;
+        let dy = self.composition.transform.ty - old.composition.transform.ty;
+        if !dx.is_finite()
+            || !dy.is_finite()
+            || dx.fract() != 0.0
+            || dy.fract() != 0.0
+            || dx.abs() > i32::MAX as f64
+            || dy.abs() > i32::MAX as f64
+        {
+            return None;
+        }
+        let old_tiles: HashMap<_, _> = old
+            .tiles
+            .iter()
+            .map(|tile| (tile.tile_index, tile))
+            .collect();
+        for tile in &self.tiles {
+            if let Some(before) = old_tiles.get(&tile.tile_index) {
+                if tile.id != before.id
+                    || tile.generation != before.generation
+                    || tile.rect != before.rect
+                    || tile.tiling_rect != before.tiling_rect
+                    || tile.pixel_size != before.pixel_size
+                    || tile.raster_scale != before.raster_scale
+                {
+                    return None;
+                }
+            }
+        }
+        Some((dx as i32, dy as i32))
     }
 }
 
@@ -419,6 +548,33 @@ impl PartialEq for CompositionSnapshot {
         }
     }
 }
+impl CompositionSnapshot {
+    fn same_structure(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Layer(a, _), Self::Layer(b, _)) => a == b,
+            (
+                Self::Surface {
+                    properties: a,
+                    children,
+                    ..
+                },
+                Self::Surface {
+                    properties: b,
+                    children: other_children,
+                    ..
+                },
+            ) => {
+                a.effect.lifecycle.same_node(&b.effect.lifecycle)
+                    && children.len() == other_children.len()
+                    && children
+                        .iter()
+                        .zip(other_children)
+                        .all(|(a, b)| a.same_structure(b))
+            }
+            _ => false,
+        }
+    }
+}
 
 #[derive(Clone)]
 struct FrameSnapshot {
@@ -430,6 +586,11 @@ struct FrameSnapshot {
     raster_scale: f64,
     device_scale: f64,
     owner: Option<PropertyTreeState>,
+}
+
+struct RetainedPassUpdate {
+    shift: (i32, i32),
+    damage: Vec<DeviceRect>,
 }
 
 /// Retained, backend-independent compositor state. The owner decides which
@@ -648,27 +809,39 @@ fn layer_output_bounds(
 ) -> Result<Option<DeviceRect>, FrameBuildError> {
     let mut bounds = None;
     for tile in &layer.tiles {
-        let mut rect = transformed_device_rect(
-            tile.tile_rect,
-            scale,
-            composition.transform,
-            composition.projective,
-        )?;
-        if let Some(clip) = composition.clip {
-            let Some(clipped) = intersect_rect(rect, clip) else {
-                continue;
-            };
-            rect = clipped;
-        }
-        if let Some(content) = composition.content_bounds {
-            let Some(clipped) = intersect_rect(rect, content) else {
-                continue;
-            };
-            rect = clipped;
-        }
-        union_rect(&mut bounds, intersect_rect(rect, viewport));
+        union_rect(
+            &mut bounds,
+            tile_output_bounds(tile.tile_rect, composition, viewport, scale)?,
+        );
     }
     Ok(bounds)
+}
+
+fn tile_output_bounds(
+    rect: PaintRect,
+    composition: LayerComposition,
+    viewport: DeviceRect,
+    scale: f64,
+) -> Result<Option<DeviceRect>, FrameBuildError> {
+    let mut rect = transformed_device_rect(
+        rect,
+        scale,
+        composition.transform,
+        composition.projective,
+    )?;
+    if let Some(clip) = composition.clip {
+        let Some(clipped) = intersect_rect(rect, clip) else {
+            return Ok(None);
+        };
+        rect = clipped;
+    }
+    if let Some(content) = composition.content_bounds {
+        let Some(clipped) = intersect_rect(rect, content) else {
+            return Ok(None);
+        };
+        rect = clipped;
+    }
+    Ok(intersect_rect(rect, viewport))
 }
 
 #[derive(Clone)]
@@ -1467,16 +1640,24 @@ fn frame_snapshot(
             tiles: layer
                 .tiles
                 .iter()
-                .map(|tile| TileSnapshot {
-                    id: tile.tile_id,
-                    generation: tile.generation,
-                    tile_index: tile.tile_index,
-                    rect: tile.tile_rect,
-                    tiling_rect: tile.tiling_rect,
-                    pixel_size: tile.pixel_size,
-                    raster_scale: tile.raster_scale,
+                .map(|tile| {
+                    Ok(TileSnapshot {
+                        id: tile.tile_id,
+                        generation: tile.generation,
+                        tile_index: tile.tile_index,
+                        rect: tile.tile_rect,
+                        tiling_rect: tile.tiling_rect,
+                        pixel_size: tile.pixel_size,
+                        raster_scale: tile.raster_scale,
+                        output_bounds: tile_output_bounds(
+                            tile.tile_rect,
+                            composition,
+                            viewport,
+                            plan.config.raster_scale,
+                        )?,
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, FrameBuildError>>()?,
             output_bounds: layer_output_bounds(
                 layer,
                 composition,
@@ -1561,7 +1742,7 @@ fn collect_pass_snapshots(
                 id,
                 FrameSnapshot {
                     layer_tree_id: root.layer_tree_id,
-                    viewport: root.viewport,
+                    viewport: surface.output_bounds.unwrap_or(root.viewport),
                     logical_viewport: root.logical_viewport,
                     raster_scale: root.raster_scale,
                     device_scale: root.device_scale,
@@ -1586,7 +1767,7 @@ impl FrameSnapshot {
             && self.device_scale == other.device_scale
             && match (&self.owner, &other.owner) {
                 (None, None) => true,
-                (Some(a), Some(b)) => a.same_values(b),
+                (Some(a), Some(b)) => same_property_draw_values(a, b),
                 _ => false,
             }
     }
@@ -1600,6 +1781,203 @@ impl FrameSnapshot {
                 .zip(&other.layers)
                 .all(|(a, b)| a.same_inputs(b))
     }
+
+    fn retained_translation_from(&self, old: &Self) -> Option<RetainedPassUpdate> {
+        if self.layer_tree_id != old.layer_tree_id
+            || self.viewport != old.viewport
+            || self.logical_viewport != old.logical_viewport
+            || self.raster_scale != old.raster_scale
+            || self.device_scale != old.device_scale
+            || !match (&self.owner, &old.owner) {
+                (Some(a), Some(b)) => same_property_draw_values(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+        {
+            return None;
+        }
+        let old_by_id: HashMap<_, _> = old.layers.iter().map(|layer| (layer.id, layer)).collect();
+        let new_by_id: HashMap<_, _> = self.layers.iter().map(|layer| (layer.id, layer)).collect();
+        if old_by_id.len() != old.layers.len() || new_by_id.len() != self.layers.len() {
+            return None;
+        }
+        let old_common: Vec<_> = old
+            .layers
+            .iter()
+            .filter(|layer| new_by_id.contains_key(&layer.id))
+            .map(|layer| layer.id)
+            .collect();
+        let new_common: Vec<_> = self
+            .layers
+            .iter()
+            .filter(|layer| old_by_id.contains_key(&layer.id))
+            .map(|layer| layer.id)
+            .collect();
+        if old_common != new_common {
+            return None;
+        }
+
+        // A render surface may contain both scrolling descendants and fixed
+        // descendants. Move the backing with the dominant retained content,
+        // then repaint the exceptional layers at both their displaced old
+        // bounds and current bounds. This is the software equivalent of cc's
+        // render-surface damage tracking.
+        let mut weights = BTreeMap::<(i32, i32), u64>::new();
+        for current in &self.layers {
+            let Some(previous) = old_by_id.get(&current.id).copied() else {
+                continue;
+            };
+            let Some(delta) = current.retained_translation_from(previous) else {
+                continue;
+            };
+            if delta == (0, 0) {
+                continue;
+            }
+            let weight = current.output_bounds.map_or(1, |bounds| {
+                u64::from(bounds.width).saturating_mul(u64::from(bounds.height)).max(1)
+            });
+            let total = weights.entry(delta).or_default();
+            *total = total.saturating_add(weight);
+        }
+        let shift = weights
+            .into_iter()
+            .max_by_key(|(delta, weight)| (*weight, *delta))?
+            .0;
+        let mut damage = exposed_translation_damage(self.viewport, shift);
+        for previous in &old.layers {
+            let current = new_by_id.get(&previous.id).copied();
+            let moves_with_backing = current
+                .and_then(|current| current.retained_translation_from(previous))
+                == Some(shift);
+            if moves_with_backing {
+                continue;
+            }
+            if (previous.has_damage_sensitive_effect
+                || current.is_some_and(|layer| layer.has_damage_sensitive_effect))
+                && previous.output_bounds.is_none()
+                && current.and_then(|layer| layer.output_bounds).is_none()
+            {
+                return None;
+            }
+            if let Some(bounds) = previous.output_bounds {
+                push_damage_rect(
+                    &mut damage,
+                    translate_and_clip(bounds, shift, self.viewport),
+                );
+            }
+            if let Some(bounds) = current.and_then(|layer| layer.output_bounds) {
+                push_damage_rect(&mut damage, intersect_rect(bounds, self.viewport));
+            }
+        }
+        for current in self
+            .layers
+            .iter()
+            .filter(|layer| !old_by_id.contains_key(&layer.id))
+        {
+            if current.has_damage_sensitive_effect && current.output_bounds.is_none() {
+                return None;
+            }
+            push_damage_rect(
+                &mut damage,
+                current
+                    .output_bounds
+                    .and_then(|bounds| intersect_rect(bounds, self.viewport)),
+            );
+        }
+        compact_damage_rects(&mut damage, 3);
+        Some(RetainedPassUpdate { shift, damage })
+    }
+}
+
+fn push_damage_rect(damage: &mut Vec<DeviceRect>, rect: Option<DeviceRect>) {
+    let Some(rect) = rect.filter(|rect| rect.width != 0 && rect.height != 0) else {
+        return;
+    };
+    if let Some(existing) = damage.iter_mut().find(|existing| {
+        let a_right = i64::from(existing.x) + i64::from(existing.width);
+        let a_bottom = i64::from(existing.y) + i64::from(existing.height);
+        let b_right = i64::from(rect.x) + i64::from(rect.width);
+        let b_bottom = i64::from(rect.y) + i64::from(rect.height);
+        i64::from(existing.x) <= b_right
+            && i64::from(rect.x) <= a_right
+            && i64::from(existing.y) <= b_bottom
+            && i64::from(rect.y) <= a_bottom
+    }) {
+        *existing = union_device_rect(*existing, rect);
+        return;
+    }
+    damage.push(rect);
+    if damage.len() > 32 {
+        let bounds = damage
+            .iter()
+            .copied()
+            .reduce(union_device_rect)
+            .expect("damage is non-empty");
+        damage.clear();
+        damage.push(bounds);
+    }
+}
+
+fn compact_damage_rects(damage: &mut Vec<DeviceRect>, maximum: usize) {
+    while damage.len() > maximum {
+        let mut best = None;
+        for left in 0..damage.len() {
+            for right in left + 1..damage.len() {
+                let merged = union_device_rect(damage[left], damage[right]);
+                let area = u64::from(merged.width) * u64::from(merged.height);
+                let separate = u64::from(damage[left].width) * u64::from(damage[left].height)
+                    + u64::from(damage[right].width) * u64::from(damage[right].height);
+                let overhead = area.saturating_sub(separate);
+                if best.is_none_or(|(_, _, best_overhead)| overhead < best_overhead) {
+                    best = Some((left, right, overhead));
+                }
+            }
+        }
+        let Some((left, right, _)) = best else { break };
+        let merged = union_device_rect(damage[left], damage[right]);
+        damage[left] = merged;
+        damage.swap_remove(right);
+    }
+}
+
+fn translate_and_clip(
+    rect: DeviceRect,
+    delta: (i32, i32),
+    clip: DeviceRect,
+) -> Option<DeviceRect> {
+    let x = i64::from(rect.x) + i64::from(delta.0);
+    let y = i64::from(rect.y) + i64::from(delta.1);
+    if x < i64::from(i32::MIN)
+        || x > i64::from(i32::MAX)
+        || y < i64::from(i32::MIN)
+        || y > i64::from(i32::MAX)
+    {
+        return None;
+    }
+    intersect_rect(DeviceRect::new(x as i32, y as i32, rect.width, rect.height), clip)
+}
+
+fn exposed_translation_damage(rect: DeviceRect, delta: (i32, i32)) -> Vec<DeviceRect> {
+    let mut damage = Vec::new();
+    let dx = delta.0.unsigned_abs().min(rect.width);
+    let dy = delta.1.unsigned_abs().min(rect.height);
+    if dx != 0 {
+        let x = if delta.0 > 0 {
+            rect.x
+        } else {
+            rect.x + i32::try_from(rect.width - dx).unwrap_or(0)
+        };
+        push_damage_rect(&mut damage, Some(DeviceRect::new(x, rect.y, dx, rect.height)));
+    }
+    if dy != 0 {
+        let y = if delta.1 > 0 {
+            rect.y
+        } else {
+            rect.y + i32::try_from(rect.height - dy).unwrap_or(0)
+        };
+        push_damage_rect(&mut damage, Some(DeviceRect::new(rect.x, y, rect.width, dy)));
+    }
+    damage
 }
 
 fn frame_damage(previous: Option<&FrameSnapshot>, current: &FrameSnapshot) -> DeviceRect {
@@ -1608,9 +1986,6 @@ fn frame_damage(previous: Option<&FrameSnapshot>, current: &FrameSnapshot) -> De
         return full;
     };
     if !previous.same_space(current) {
-        return full;
-    }
-    if previous.draw_order != current.draw_order {
         return full;
     }
     let old_by_id: std::collections::HashMap<_, _> = previous
@@ -1647,16 +2022,10 @@ fn frame_damage(previous: Option<&FrameSnapshot>, current: &FrameSnapshot) -> De
         .iter()
         .filter(|layer| !new_by_id.contains_key(&layer.id))
     {
-        if old.has_damage_sensitive_effect {
-            return full;
-        }
         union_rect(&mut damage, old.output_bounds);
     }
     for new in &current.layers {
         let Some(old) = old_by_id.get(&new.id).copied() else {
-            if new.has_damage_sensitive_effect {
-                return full;
-            }
             union_rect(&mut damage, new.output_bounds);
             continue;
         };
@@ -1664,8 +2033,37 @@ fn frame_damage(previous: Option<&FrameSnapshot>, current: &FrameSnapshot) -> De
         if !changed {
             continue;
         }
-        if old.has_damage_sensitive_effect || new.has_damage_sensitive_effect {
-            return full;
+        if old.same_non_tile_inputs(new) {
+            let old_tiles: HashMap<_, _> = old
+                .tiles
+                .iter()
+                .map(|tile| (tile.tile_index, tile))
+                .collect();
+            let new_tiles: HashMap<_, _> = new
+                .tiles
+                .iter()
+                .map(|tile| (tile.tile_index, tile))
+                .collect();
+            if old_tiles.len() != old.tiles.len() || new_tiles.len() != new.tiles.len() {
+                return full;
+            }
+            for tile in &old.tiles {
+                if new_tiles
+                    .get(&tile.tile_index)
+                    .is_none_or(|current| *current != tile)
+                {
+                    union_rect(&mut damage, tile.output_bounds);
+                }
+            }
+            for tile in &new.tiles {
+                if old_tiles
+                    .get(&tile.tile_index)
+                    .is_none_or(|previous| *previous != tile)
+                {
+                    union_rect(&mut damage, tile.output_bounds);
+                }
+            }
+            continue;
         }
         union_rect(&mut damage, old.output_bounds);
         union_rect(&mut damage, new.output_bounds);
@@ -1959,6 +2357,8 @@ fn append_composition_units(
                         // Filter outsets are already included by lowering.
                         output_rect,
                         damage_rect: output_rect,
+                        damage_rects: vec![output_rect],
+                        backing_shift: None,
                         shared_quad_state_list: child_states,
                         quad_list: child_quads,
                     });
@@ -2032,14 +2432,29 @@ impl FrameBuilder {
             viewport,
         )?;
         for pass in &mut render_pass_list {
-            if self
+            let snapshots = self
                 .previous_passes
                 .get(&pass.id)
-                .zip(pass_snapshots.get(&pass.id))
-                .is_some_and(|(old, new)| old.same_inputs(new))
-            {
-                pass.damage_rect = DeviceRect::new(pass.output_rect.x, pass.output_rect.y, 0, 0);
-            }
+                .zip(pass_snapshots.get(&pass.id));
+            let retained = snapshots.and_then(|(old, new)| new.retained_translation_from(old));
+            pass.backing_shift = retained.as_ref().map(|update| update.shift);
+            pass.damage_rects = retained.map_or_else(
+                || {
+                    let damage = snapshots
+                        .map_or(pass.output_rect, |(old, new)| frame_damage(Some(old), new));
+                    (damage.width != 0 && damage.height != 0)
+                        .then_some(damage)
+                        .into_iter()
+                        .collect()
+                },
+                |update| update.damage,
+            );
+            pass.damage_rect = pass
+                .damage_rects
+                .iter()
+                .copied()
+                .reduce(union_device_rect)
+                .unwrap_or(DeviceRect::new(pass.output_rect.x, pass.output_rect.y, 0, 0));
         }
         let root_pass_id = RenderPassId(0);
         render_pass_list.push(CompositorRenderPass {
@@ -2048,6 +2463,11 @@ impl FrameBuilder {
             has_transparent_background: false,
             output_rect: viewport,
             damage_rect: root_damage,
+            damage_rects: (root_damage.width != 0 && root_damage.height != 0)
+                .then_some(root_damage)
+                .into_iter()
+                .collect(),
+            backing_shift: None,
             shared_quad_state_list,
             quad_list,
         });
@@ -2113,6 +2533,10 @@ impl CompositorFrame {
             0,
             0,
         ));
+        push_damage_rect(
+            &mut root.damage_rects,
+            intersect_rect(damage, root.output_rect),
+        );
         self.metadata.root_damage_rect = root.damage_rect;
         self
     }
@@ -2174,6 +2598,7 @@ mod tests {
                     },
                     pixel_size: (10, 10),
                     raster_scale: 1.0,
+                    output_bounds: Some(DeviceRect::new(x, 0, 10, 10)),
                 }],
                 output_bounds: Some(DeviceRect::new(x, 0, 10, 10)),
                 has_damage_sensitive_effect: false,

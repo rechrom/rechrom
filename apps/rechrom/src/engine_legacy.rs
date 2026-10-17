@@ -109,6 +109,9 @@ pub fn spawn(
                     samples,
                 });
             }
+            ::compositor::MainThreadEvent::RasterFallback => {
+                let _ = begin_frame_page.send(Command::Redraw);
+            }
         });
     let compositor = crate::presentation_runtime::Spawn(
         presentation_config,

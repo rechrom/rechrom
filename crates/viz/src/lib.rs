@@ -13,7 +13,7 @@ pub use compositor::{
 };
 use compositor::{CompositorFrame, CompositorRenderPass, EffectPaintPropertyNode, ResourceId};
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
     sync::Arc,
     time::{Duration, Instant},
@@ -181,6 +181,8 @@ pub struct AggregatedRenderPass {
     owner_effect: Option<Arc<EffectPaintPropertyNode>>,
     destination: DeviceRect,
     frame_token: u64,
+    damage_start_token: Option<u64>,
+    damage_continuous: bool,
     source_frame_id: u64,
     device_scale_factor: f64,
     raster_scale_factor: f64,
@@ -188,6 +190,8 @@ pub struct AggregatedRenderPass {
     surface_viewport: DeviceRect,
     viewport: DeviceRect,
     damage_rect: DeviceRect,
+    damage_rects: Arc<[DeviceRect]>,
+    backing_shift: Option<(i32, i32)>,
     raster_task_count: usize,
     resource_list: Arc<[TransferableResource]>,
     shared_quad_state_list: Arc<[SharedQuadState]>,
@@ -224,6 +228,16 @@ impl AggregatedRenderPass {
         self.frame_token
     }
 
+    /// First producer submission represented by the accumulated damage.
+    pub fn DamageStartToken(&self) -> Option<u64> {
+        self.damage_start_token
+    }
+
+    /// Whether every producer submission since `DamageStartToken` was observed.
+    pub fn DamageIsContinuous(&self) -> bool {
+        self.damage_continuous
+    }
+
     pub fn SourceFrameId(&self) -> u64 {
         self.source_frame_id
     }
@@ -252,6 +266,14 @@ impl AggregatedRenderPass {
 
     pub fn DamageRect(&self) -> DeviceRect {
         self.damage_rect
+    }
+
+    pub fn DamageRects(&self) -> &[DeviceRect] {
+        &self.damage_rects
+    }
+
+    pub fn BackingShift(&self) -> Option<(i32, i32)> {
+        self.backing_shift
     }
 
     pub fn RasterTaskCount(&self) -> usize {
@@ -301,12 +323,16 @@ impl AggregatedFrame {
 #[derive(Clone, Debug)]
 struct SurfaceState {
     frame_token: u64,
+    pending_damage_start_token: Option<u64>,
+    pending_damage_continuous: bool,
     source_frame_id: u64,
     device_scale_factor: f64,
     raster_scale_factor: f64,
     logical_viewport: PaintRect,
     viewport: DeviceRect,
     damage_rect: DeviceRect,
+    pending_pass_damage: BTreeMap<RenderPassId, Vec<DeviceRect>>,
+    pending_pass_shift: BTreeMap<RenderPassId, Option<(i32, i32)>>,
     raster_task_count: usize,
     resource_list: Arc<[TransferableResource]>,
     render_pass_list: Arc<[CompositorRenderPass]>,
@@ -364,6 +390,15 @@ fn ValidateFrame(frame: &CompositorFrame) -> Result<(), VizError> {
     }
     let mut available = BTreeSet::new();
     for pass in &frame.render_pass_list {
+        let region_bounds = pass.damage_rects.iter().copied().reduce(union);
+        if region_bounds.is_none() && pass.damage_rect.width != 0 && pass.damage_rect.height != 0
+            || region_bounds.is_some_and(|bounds| bounds != pass.damage_rect)
+            || pass.damage_rects.iter().any(|rect| {
+                rect.width != 0 && rect.height != 0 && !contains(pass.output_rect, *rect)
+            })
+        {
+            return Err(VizError::InvalidRootPass);
+        }
         for quad in &pass.quad_list {
             match quad {
                 DrawQuad::Tile(tile) => {
@@ -435,16 +470,96 @@ impl VizEngine {
             resource_list,
             render_pass_list,
         } = frame;
+        let previous = self.surfaces.get(&surface_id);
+        let (pending_damage_start_token, pending_damage_continuous) = previous.map_or(
+            (Some(metadata.frame_token), true),
+            |surface| match surface.pending_damage_start_token {
+                Some(start) => (
+                    Some(start),
+                    surface.pending_damage_continuous
+                        && surface.frame_token.checked_add(1) == Some(metadata.frame_token),
+                ),
+                None => (Some(metadata.frame_token), true),
+            },
+        );
+        let pending_pass_damage = render_pass_list
+            .iter()
+            .map(|pass| {
+                let damage = previous
+                    .and_then(|surface| {
+                        surface
+                            .render_pass_list
+                            .iter()
+                            .find(|old| old.id == pass.id)
+                            .map(|old| (surface, old))
+                    })
+                    .map_or_else(|| pass.damage_rects.clone(), |(surface, old)| {
+                        if old.output_rect != pass.output_rect {
+                            vec![pass.output_rect]
+                        } else {
+                            let mut pending = surface
+                                .pending_pass_damage
+                                .get(&pass.id)
+                                .cloned()
+                                .unwrap_or_default();
+                            if let Some(shift) = pass.backing_shift {
+                                pending = pending
+                                    .into_iter()
+                                    .filter_map(|rect| translate_and_clip(rect, shift, pass.output_rect))
+                                    .collect();
+                            }
+                            for rect in &pass.damage_rects {
+                                push_damage_rect(&mut pending, *rect);
+                            }
+                            pending
+                        }
+                    });
+                (pass.id, damage)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let root_damage = render_pass_list
+            .last()
+            .and_then(|root| pending_pass_damage.get(&root.id))
+            .and_then(|damage| damage.iter().copied().reduce(union))
+            .unwrap_or(metadata.root_damage_rect);
+        let pending_pass_shift = render_pass_list
+            .iter()
+            .map(|pass| {
+                let previous_shift = previous
+                    .and_then(|surface| {
+                        surface
+                            .render_pass_list
+                            .iter()
+                            .find(|old| old.id == pass.id && old.output_rect == pass.output_rect)
+                            .and_then(|_| surface.pending_pass_shift.get(&pass.id))
+                    })
+                    .copied()
+                    .flatten();
+                let shift = match (previous_shift, pass.backing_shift) {
+                    (Some(old), Some(current)) => Some((
+                        old.0.saturating_add(current.0),
+                        old.1.saturating_add(current.1),
+                    )),
+                    (Some(old), None) => Some(old),
+                    (None, current) => current,
+                };
+                (pass.id, shift)
+            })
+            .collect();
         self.surfaces.insert(
             surface_id,
             SurfaceState {
                 frame_token: metadata.frame_token,
+                pending_damage_start_token,
+                pending_damage_continuous,
                 source_frame_id: metadata.source_frame_id,
                 device_scale_factor: metadata.device_scale_factor,
                 raster_scale_factor: metadata.raster_scale_factor,
                 logical_viewport: metadata.logical_viewport,
                 viewport: metadata.viewport,
-                damage_rect: metadata.root_damage_rect,
+                damage_rect: root_damage,
+                pending_pass_damage,
+                pending_pass_shift,
                 raster_task_count: metadata.raster_task_count,
                 resource_list: resource_list.into(),
                 render_pass_list: render_pass_list.into(),
@@ -454,7 +569,7 @@ impl VizEngine {
     }
 
     pub fn Aggregate(
-        &self,
+        &mut self,
         output_rect: DeviceRect,
         placements: &[SurfacePlacement],
     ) -> Result<AggregatedFrame, VizError> {
@@ -463,7 +578,7 @@ impl VizEngine {
         for placement in placements {
             let surface = self
                 .surfaces
-                .get(&placement.surface_id)
+                .get_mut(&placement.surface_id)
                 .ok_or(VizError::MissingSurface)?;
             let viewport = surface.viewport;
             if placement.destination.width != viewport.width
@@ -492,18 +607,45 @@ impl VizEngine {
                     owner_effect: pass.owner_effect.clone(),
                     destination: placement.destination,
                     frame_token: surface.frame_token,
+                    damage_start_token: surface.pending_damage_start_token,
+                    damage_continuous: surface.pending_damage_continuous,
                     source_frame_id: surface.source_frame_id,
                     device_scale_factor: surface.device_scale_factor,
                     raster_scale_factor: surface.raster_scale_factor,
                     logical_viewport: surface.logical_viewport,
                     surface_viewport: viewport,
                     viewport: pass.output_rect,
-                    damage_rect: pass.damage_rect,
+                    damage_rect: surface
+                        .pending_pass_damage
+                        .get(&pass.id)
+                        .and_then(|damage| damage.iter().copied().reduce(union))
+                        .unwrap_or(pass.damage_rect),
+                    damage_rects: surface
+                        .pending_pass_damage
+                        .get(&pass.id)
+                        .cloned()
+                        .unwrap_or_else(|| pass.damage_rects.clone())
+                        .into(),
+                    backing_shift: surface
+                        .pending_pass_shift
+                        .get(&pass.id)
+                        .copied()
+                        .flatten(),
                     raster_task_count: surface.raster_task_count,
                     resource_list: surface.resource_list.clone(),
                     shared_quad_state_list: pass.shared_quad_state_list.clone().into(),
                     quad_list: pass.quad_list.clone().into(),
                 });
+            }
+            surface.damage_rect = DeviceRect::new(viewport.x, viewport.y, 0, 0);
+            surface.pending_damage_start_token = None;
+            surface.pending_damage_continuous = true;
+            for pass in surface.render_pass_list.iter() {
+                surface.pending_pass_damage.insert(
+                    pass.id,
+                    Vec::new(),
+                );
+                surface.pending_pass_shift.insert(pass.id, None);
             }
         }
         Ok(AggregatedFrame {
@@ -596,6 +738,72 @@ fn union(a: DeviceRect, b: DeviceRect) -> DeviceRect {
     )
 }
 
+fn intersect(a: DeviceRect, b: DeviceRect) -> Option<DeviceRect> {
+    let left = a.x.max(b.x);
+    let top = a.y.max(b.y);
+    let right = right(a)?.min(right(b)?);
+    let bottom = bottom(a)?.min(bottom(b)?);
+    (right > i64::from(left) && bottom > i64::from(top)).then_some(DeviceRect::new(
+        left,
+        top,
+        (right - i64::from(left)) as u32,
+        (bottom - i64::from(top)) as u32,
+    ))
+}
+
+fn translate_and_clip(
+    rect: DeviceRect,
+    delta: (i32, i32),
+    clip: DeviceRect,
+) -> Option<DeviceRect> {
+    let x = i64::from(rect.x) + i64::from(delta.0);
+    let y = i64::from(rect.y) + i64::from(delta.1);
+    let translated = DeviceRect::new(
+        i32::try_from(x).ok()?,
+        i32::try_from(y).ok()?,
+        rect.width,
+        rect.height,
+    );
+    intersect(translated, clip)
+}
+
+fn push_damage_rect(damage: &mut Vec<DeviceRect>, rect: DeviceRect) {
+    if rect.width == 0 || rect.height == 0 {
+        return;
+    }
+    if let Some(existing) = damage.iter_mut().find(|existing| {
+        i64::from(existing.x) <= right(rect).unwrap_or(i64::MIN)
+            && i64::from(rect.x) <= right(**existing).unwrap_or(i64::MIN)
+            && i64::from(existing.y) <= bottom(rect).unwrap_or(i64::MIN)
+            && i64::from(rect.y) <= bottom(**existing).unwrap_or(i64::MIN)
+    }) {
+        *existing = union(*existing, rect);
+        return;
+    }
+    damage.push(rect);
+    while damage.len() > 3 {
+        let mut best = None;
+        for left in 0..damage.len() {
+            for right_index in left + 1..damage.len() {
+                let merged = union(damage[left], damage[right_index]);
+                let area = u64::from(merged.width) * u64::from(merged.height);
+                let separate = u64::from(damage[left].width) * u64::from(damage[left].height)
+                    + u64::from(damage[right_index].width)
+                        * u64::from(damage[right_index].height);
+                let overhead = area.saturating_sub(separate);
+                if best.is_none_or(|(_, _, best_overhead)| overhead < best_overhead) {
+                    best = Some((left, right_index, overhead));
+                }
+            }
+        }
+        let Some((left, right_index, _)) = best else {
+            break;
+        };
+        damage[left] = union(damage[left], damage[right_index]);
+        damage.swap_remove(right_index);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -628,6 +836,8 @@ mod tests {
                 has_transparent_background: false,
                 output_rect: viewport,
                 damage_rect: viewport,
+                damage_rects: vec![viewport],
+                backing_shift: None,
                 shared_quad_state_list: Vec::new(),
                 quad_list: Vec::new(),
             }],

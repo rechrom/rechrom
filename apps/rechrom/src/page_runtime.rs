@@ -941,6 +941,9 @@ fn run_document(
                     page.QueueFrameInput(InputEvent::Wheel(event), queued_at, samples)?;
                 }
             }
+            Ok(Command::Main(compositor::MainThreadEvent::RasterFallback)) => {
+                page.RecoverRetainedRaster();
+            }
             Ok(Command::Input {
                 input,
                 queued_at,

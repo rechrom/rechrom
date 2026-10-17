@@ -66,6 +66,9 @@ pub struct RetainedScrollPaintState {
     fragment_indices: HashMap<(u64, u64, u64, u32), usize>,
     masks: Vec<MaskOutput>,
     coverage_groups: Vec<CoverageGroup>,
+    /// Whether Paint folded a live scroll offset into background drawing
+    /// commands. Property-driven backgrounds keep their existing records.
+    has_scroll_dependent_background: bool,
 }
 
 #[derive(Clone)]
@@ -350,6 +353,8 @@ impl RetainedScrollPaintState {
         let mut coverage_groups = Vec::<CoverageGroup>::new();
         let mut coverage_group_indices: HashMap<((usize, usize, usize), [u64; 16]), usize> =
             HashMap::new();
+        let has_scroll_dependent_background =
+            nodes.iter().any(|node| has_scroll_dependent_background(node));
         for node in &nodes {
             if !node.applies_mask {
                 continue;
@@ -365,51 +370,32 @@ impl RetainedScrollPaintState {
         }
         for node in nodes {
             let f = node.fragment.as_deref()?;
-            // Pixel-moving effects need an effect-specific input cull proof.
-            if !f.paint.style.filters.is_empty()
-                || !f.paint.style.backdrop_filters.is_empty()
-                || f.paint.style.backdrop_filter_has_reference
-            {
-                if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
-                    eprintln!(
-                        "scroll-coverage-capture rejected=filter node={} filters={:?}",
-                        f.node_id,
-                        (&f.paint.style.filters, &f.paint.style.backdrop_filters)
-                    );
-                }
-                return None;
-            }
-            let world = property_world(&node.properties.nodes, &mut worlds).or_else(|| {
-                if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
-                    eprintln!("scroll-coverage-capture rejected=transform node={} source={} hidden={} transform={} world={:?}",
-                        f.node_id, f.paint.has_source, f.paint.hidden, node.properties.nodes.transform.id,
-                        world_transform(&node.properties.nodes.transform, &mut worlds).values);
-                }
-                None
-            })?;
-            let recorded_visible = visible_output(
-                &node.properties.nodes,
-                &masks,
-                &mut mask_cache,
-                store.viewport_clip(),
-                &mut worlds,
-                &mut clip_cache,
-                0.0,
-            )
-            .or_else(|| {
-                if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
-                    eprintln!(
-                        "scroll-coverage-capture rejected=output node={} clip={} effect={}",
-                        f.node_id, node.properties.nodes.clip.id, node.properties.nodes.effect.id
-                    );
-                }
-                None
-            })?;
+            // Pixel-moving effects are retained property-tree effects. Their
+            // unsupported coverage mapping is isolated below to that state;
+            // it must not disable retained scrolling for unrelated layers.
+            let raw_world = world_transform(&node.properties.nodes.transform, &mut worlds);
+            // A singular transform has no drawable area. Keep its retained
+            // fragment/property identity, but omit it from the coverage proof.
+            // One scale(0) menu or animation must not disable retained scroll
+            // painting for the whole document.
+            let world = property_world(&node.properties.nodes, &mut worlds);
+            let recorded_visible = world.and_then(|_| {
+                visible_output(
+                    &node.properties.nodes,
+                    &masks,
+                    &mut mask_cache,
+                    store.viewport_clip(),
+                    &mut worlds,
+                    &mut clip_cache,
+                    0.0,
+                )
+            });
             let identity = identity(node);
             if fragment_indices.insert(identity, fragments.len()).is_some() {
                 return None;
             }
-            if f.paint.has_source && f.paint.style.visible && !f.paint.hidden {
+            if let (Some(world), Some(recorded_visible)) = (world, recorded_visible) {
+              if f.paint.has_source && f.paint.style.visible && !f.paint.hidden {
                 if let Some(recorded_cull) = node.self_cull_rect {
                     let key = (
                         state_cache_key(&node.properties.nodes),
@@ -436,13 +422,14 @@ impl RetainedScrollPaintState {
                         });
                     }
                 }
+              }
             }
             fragments.push(FragmentCoverage {
                 offset: f.offset,
                 size: f.size,
                 sticky_offset: f.paint.sticky_offset,
                 paint_offset: node.paint_offset,
-                recorded_world: world,
+                recorded_world: world.unwrap_or(raw_world),
                 properties: node.properties.nodes.clone(),
                 controls: f
                     .paint
@@ -461,6 +448,7 @@ impl RetainedScrollPaintState {
             fragment_indices,
             masks: retained_masks,
             coverage_groups,
+            has_scroll_dependent_background,
         })
     }
 }
@@ -560,16 +548,25 @@ fn collect_current_fragments<'a>(
         .all(|child| collect_current_fragments(child, retained, nodes, offsets, sticky, collected))
 }
 
-fn has_scroll_dependent_background(fragment: &FragmentNode) -> bool {
-    (fragment.paint.has_source
-        && fragment
-            .paint
-            .style
-            .background_images
-            .iter()
-            .any(|layer| layer.attachment != BackgroundAttachment::kScroll))
-        || crate::pre_paint_tree_walk::OrdinaryPaintChildren(fragment)
-            .any(has_scroll_dependent_background)
+fn has_scroll_dependent_background(node: &PaintTreeNode<'_>) -> bool {
+    let Some(fragment) = node.fragment.as_deref() else {
+        return false;
+    };
+    if !fragment.paint.has_source || fragment.paint.background_transfers_to_view {
+        return false;
+    }
+    fragment.paint.style.background_images.iter().any(|layer| match layer.attachment {
+        BackgroundAttachment::kScroll => false,
+        BackgroundAttachment::kLocal => fragment.paint.scroll_container.is_some(),
+        BackgroundAttachment::kFixed => {
+            let independently_recorded = fragment.paint.can_composite_background_attachment_fixed
+                && !node.fixed_background_acts_as_scroll
+                && fragment.paint.background_paint_location.PaintsBorderBox()
+                && fragment.paint.style.background_images.len() == 1
+                && (layer.shader.is_some() || layer.resource_id != 0);
+            !node.fixed_background_acts_as_scroll && !independently_recorded
+        }
+    })
 }
 
 fn contains(outer: PaintRect, inner: PaintRect, roundoff: Offset) -> bool {
@@ -584,9 +581,9 @@ fn refreshed(
     state: &PropertyTreeState,
     trees: &mut PaintPropertyTrees,
 ) -> Option<PropertyTreeState> {
-    if !trees.transforms.contains_key(&state.transform.id)
-        || !trees.clips.contains_key(&state.clip.id)
-        || !trees.effects.contains_key(&state.effect.id)
+    if trees.transform_for(&state.transform).is_none()
+        || trees.clip_for(&state.clip).is_none()
+        || trees.effect_for(&state.effect).is_none()
     {
         // Fresh property nodes without native-owner slots still belong to the
         // retained graph. Rebind their actual ancestors through the updated
@@ -594,9 +591,9 @@ fn refreshed(
         let mut referenced = state.clone();
         trees.clear_state_change_markers(&mut referenced);
     }
-    let transform = trees.transforms.get(&state.transform.id)?.clone();
-    let clip = trees.clips.get(&state.clip.id)?.clone();
-    let effect = trees.effects.get(&state.effect.id)?.clone();
+    let transform = trees.transform_for(&state.transform)?.clone();
+    let clip = trees.clip_for(&state.clip)?.clone();
+    let effect = trees.effect_for(&state.effect)?.clone();
     (transform.lifecycle.same_node(&state.transform.lifecycle)
         && clip.lifecycle.same_node(&state.clip.lifecycle)
         && effect.lifecycle.same_node(&state.effect.lifecycle))
@@ -699,7 +696,7 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
             .get(owner)
             .is_some_and(|recorded| recorded != current)
     });
-    if scroll_changed && has_scroll_dependent_background(fragments) {
+    if scroll_changed && retained.has_scroll_dependent_background {
         browser_tracing::instant("paint", "ScrollPaintReuseRejected", &[("stage", 4.0)]);
         return Err(FragmentChanged);
     }
@@ -723,10 +720,7 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
     let mut worlds = BTreeMap::new();
     let mut masks = BTreeMap::new();
     for mask in &retained.masks {
-        let transform = trees
-            .transforms
-            .get(&mask.transform.id)
-            .ok_or(PropertyChanged)?;
+        let transform = trees.transform_for(&mask.transform).ok_or(PropertyChanged)?;
         if !transform.lifecycle.same_node(&mask.transform.lifecycle) {
             return Err(PropertyChanged);
         }
@@ -941,7 +935,7 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
     }
     for record in &mut artifact.display_items {
         if let Some(old) = record.scroll_translation.as_ref() {
-            record.scroll_translation = trees.transforms.get(&old.id).cloned();
+            record.scroll_translation = trees.transform_for(old).cloned();
         }
     }
     for (index, ops) in replacements {
@@ -1028,6 +1022,7 @@ mod coverage_tests {
             fragment_indices,
             masks: Vec::new(),
             coverage_groups: Vec::new(),
+            has_scroll_dependent_background: false,
         };
         assert!(accepts(&retained, &root));
         let mut with_resource = root.clone();

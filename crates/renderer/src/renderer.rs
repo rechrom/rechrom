@@ -192,15 +192,31 @@ impl Renderer {
                 ));
             }
         }
-        let full_damage_surfaces: HashSet<_> = frame
+        let repeated_surfaces: HashSet<_> = frame
             .RenderPasses()
             .iter()
             .filter(|pass| pass.IsRoot())
             .filter(|pass| {
-                self.consumed_submissions
-                    .get(&pass.Surface())
-                    .and_then(|token| token.checked_add(1))
-                    != Some(pass.FrameToken())
+                pass.DamageStartToken().is_none()
+                    && self.consumed_submissions.get(&pass.Surface())
+                        == Some(&pass.FrameToken())
+            })
+            .map(|pass| pass.Surface())
+            .collect();
+        let full_damage_surfaces: HashSet<_> = frame
+            .RenderPasses()
+            .iter()
+            .filter(|pass| pass.IsRoot())
+            // Viz accumulates damage across consecutively submitted frames.
+            // Trust that region only when its first token directly follows the
+            // last root which this renderer composed successfully.
+            .filter(|pass| {
+                !pass.DamageIsContinuous()
+                    || self
+                        .consumed_submissions
+                        .get(&pass.Surface())
+                        .and_then(|token| token.checked_add(1))
+                        != pass.DamageStartToken()
             })
             .map(|pass| pass.Surface())
             .collect();
@@ -259,6 +275,7 @@ impl Renderer {
             })?;
             let key = (pass.Surface(), pass.RenderPassId());
             let force_full_damage = full_damage_surfaces.contains(&pass.Surface());
+            let suppress_damage = repeated_surfaces.contains(&pass.Surface());
             // SoftwareRenderer samples each child directly from its retained
             // bitmap. Remove only the destination owner while borrowing the
             // already-completed child backings; no viewport staging copy is
@@ -283,6 +300,7 @@ impl Renderer {
                         destination.height,
                         &local_outputs,
                         force_full_damage,
+                        suppress_damage,
                     );
                 }
                 if pass.HasTransparentBackground() {
@@ -295,6 +313,7 @@ impl Renderer {
                         destination.height,
                         &local_outputs,
                         force_full_damage,
+                        suppress_damage,
                     )?;
                     let pixels = renderer
                         .backing_pixels()
@@ -344,6 +363,7 @@ impl Renderer {
                         row_stride,
                         &local_outputs,
                         force_full_damage,
+                        suppress_damage,
                     )
                 } else {
                     let length = (destination.width as usize)
@@ -360,6 +380,7 @@ impl Renderer {
                         destination.width as usize,
                         &local_outputs,
                         force_full_damage,
+                        suppress_damage,
                     )?;
                     temporary_output_peak =
                         temporary_output_peak.max(scratch.capacity() * std::mem::size_of::<u32>());

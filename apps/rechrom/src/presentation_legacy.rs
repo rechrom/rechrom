@@ -610,6 +610,8 @@ mod tests {
                     has_transparent_background: false,
                     output_rect: rect,
                     damage_rect: rect,
+                    damage_rects: vec![rect],
+                    backing_shift: None,
                     shared_quad_state_list: vec![],
                     quad_list: vec![],
                 }],

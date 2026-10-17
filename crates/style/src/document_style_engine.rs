@@ -1220,6 +1220,7 @@ pub struct DocumentStyleEngine {
     property_registry: crate::property_registry::PropertyRegistry,
     registered_container_properties: Option<Rc<dyn RegisteredContainerPropertyResolver>>,
     color_scheme_settings: production_style_builder::ColorSchemeSettings,
+    font_metrics: Option<Rc<dyn production_style_builder::FontMetricsResolver>>,
 }
 /// Read-only capacities of the production custom-property owner. Map bucket
 /// figures exclude control bytes/allocator rounding. Token payloads and maps
@@ -1329,7 +1330,15 @@ impl DocumentStyleEngine {
             property_registry: Default::default(),
             registered_container_properties: None,
             color_scheme_settings: Default::default(),
+            font_metrics: None,
         }
+    }
+
+    pub fn SetFontMetricsResolver(
+        &mut self,
+        resolver: Rc<dyn production_style_builder::FontMetricsResolver>,
+    ) {
+        self.font_metrics = Some(resolver);
     }
     /// Layout/scroll/anchor owners publish the complete state after their update.
     /// Descendant query matches must be revisited even when CSS/DOM are unchanged.
@@ -3516,6 +3525,7 @@ impl DocumentStyleEngine {
                                     Some(&function_registry),
                                     self.color_scheme_settings,
                                     self.resolver_dependencies.text_link_text_color,
+                                    self.font_metrics.as_deref(),
                                     &mut self.diagnostics,
                                     &mut self.translated_rule_shadow_stats,
                                 )?;
@@ -6544,6 +6554,7 @@ impl DocumentStyleEngine {
             function_registry,
             self.color_scheme_settings,
             self.resolver_dependencies.text_link_text_color,
+            self.font_metrics.as_deref(),
             &mut self.diagnostics,
             &mut self.translated_rule_shadow_stats,
         )?;
@@ -6636,6 +6647,7 @@ impl DocumentStyleEngine {
             function_registry,
             self.color_scheme_settings,
             self.resolver_dependencies.text_link_text_color,
+            self.font_metrics.as_deref(),
             &mut self.diagnostics,
             &mut self.translated_rule_shadow_stats,
         )?;
@@ -6750,6 +6762,7 @@ impl DocumentStyleEngine {
         function_registry: Option<&crate::production_style_sheet::ProductionFunctionRegistry>,
         color_scheme_settings: production_style_builder::ColorSchemeSettings,
         text_link_text_color: Option<foundation::Color>,
+        font_metrics: Option<&dyn production_style_builder::FontMetricsResolver>,
         diagnostics: &mut Vec<DocumentStyleError>,
         translated_stats: &mut TranslatedRuleShadowStats,
     ) -> Result<(HashMap<CSSPropertyID, Rc<Value>>, Rc<CustomProperties>), DocumentStyleError> {
@@ -7101,6 +7114,7 @@ impl DocumentStyleEngine {
                         function_registry,
                         animations: animation_interpolations.as_ref(),
                         transitions: transition_interpolations.as_ref(),
+                        font_metrics,
                     },
                 ) {
                     Ok(output) => {
@@ -7271,6 +7285,7 @@ impl DocumentStyleEngine {
                         media,
                         &image_resolver,
                         color_scheme_settings,
+                        font_metrics,
                     )
                 {
                     diagnostics.push(DocumentStyleError::Application { node, error });

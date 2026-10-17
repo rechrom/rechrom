@@ -88,6 +88,8 @@ struct CompositionPlan {
     scale: f64,
     raster_task_count: usize,
     root_damage: Option<SurfaceBounds>,
+    damage_region: Vec<SurfaceBounds>,
+    backing_shift: Option<(i32, i32)>,
     output_bounds: Option<SurfaceBounds>,
     transparent_root: bool,
     owner_effect: Option<Arc<EffectPaintPropertyNode>>,
@@ -166,12 +168,22 @@ impl CompositionPlan {
                 tiles,
             })
             .collect();
+        let damage_region = pass
+            .DamageRects()
+            .iter()
+            .map(|rect| compositor_damage_bounds(*rect, pass.SurfaceViewport()))
+            .collect::<io::Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         Ok(Self {
             frame_id: pass.SourceFrameId(),
             viewport: pass.LogicalViewport(),
             scale: pass.RasterScaleFactor(),
             raster_task_count: pass.RasterTaskCount(),
             root_damage: compositor_damage_bounds(pass.DamageRect(), pass.SurfaceViewport())?,
+            damage_region,
+            backing_shift: pass.BackingShift(),
             output_bounds: compositor_damage_bounds(pass.Viewport(), pass.SurfaceViewport())?,
             transparent_root: !pass.IsRoot() || pass.HasTransparentBackground(),
             owner_effect: pass.OwnerEffect().cloned(),
@@ -212,6 +224,45 @@ struct SurfaceBounds {
     top: usize,
     right: usize,
     bottom: usize,
+}
+
+fn shift_retained_backing(
+    pixels: &mut [u32],
+    width: usize,
+    bounds: SurfaceBounds,
+    delta: (i32, i32),
+) {
+    if delta == (0, 0) || bounds.left >= bounds.right || bounds.top >= bounds.bottom {
+        return;
+    }
+    let dx = delta.0 as isize;
+    let dy = delta.1 as isize;
+    for row in 0..bounds.bottom - bounds.top {
+        let y = if dy > 0 {
+            bounds.bottom - 1 - row
+        } else {
+            bounds.top + row
+        };
+        for column in 0..bounds.right - bounds.left {
+            let x = if dx > 0 {
+                bounds.right - 1 - column
+            } else {
+                bounds.left + column
+            };
+            let source_x = x as isize - dx;
+            let source_y = y as isize - dy;
+            let destination = y * width + x;
+            pixels[destination] = if source_x >= bounds.left as isize
+                && source_x < bounds.right as isize
+                && source_y >= bounds.top as isize
+                && source_y < bounds.bottom as isize
+            {
+                pixels[source_y as usize * width + source_x as usize]
+            } else {
+                0
+            };
+        }
+    }
 }
 
 // SoftwareRenderer::DrawRenderPassQuad draws dest_visible_rect, intersected
@@ -1709,6 +1760,7 @@ impl RenderPassRenderer {
         row_stride: usize,
         render_pass_outputs: &HashMap<viz::RenderPassId, &[u32]>,
         force_full_damage: bool,
+        suppress_damage: bool,
     ) -> io::Result<RenderUpdate> {
         self.compose_with_output(
             pass,
@@ -1719,6 +1771,7 @@ impl RenderPassRenderer {
             format,
             render_pass_outputs,
             force_full_damage,
+            suppress_damage,
         )
     }
 
@@ -1732,6 +1785,7 @@ impl RenderPassRenderer {
         height: u32,
         render_pass_outputs: &HashMap<viz::RenderPassId, &[u32]>,
         force_full_damage: bool,
+        suppress_damage: bool,
     ) -> io::Result<RenderUpdate> {
         self.compose_with_output(
             pass,
@@ -1742,6 +1796,7 @@ impl RenderPassRenderer {
             skia::PixelFormat::Rgba8888,
             render_pass_outputs,
             force_full_damage,
+            suppress_damage,
         )
     }
 
@@ -1760,6 +1815,7 @@ impl RenderPassRenderer {
         format: skia::PixelFormat,
         render_pass_outputs: &HashMap<viz::RenderPassId, &[u32]>,
         force_full_damage: bool,
+        suppress_damage: bool,
     ) -> io::Result<RenderUpdate> {
         let mut render_trace = browser_tracing::span("render", "LayerTilePaint");
         render_trace.set("frame_id", pass.SourceFrameId() as f64);
@@ -1767,6 +1823,15 @@ impl RenderPassRenderer {
         render_trace.set("output_width", pass.Viewport().width as f64);
         render_trace.set("output_height", pass.Viewport().height as f64);
         render_trace.set("force_full_damage", force_full_damage as u8 as f64);
+        render_trace.set("suppress_damage", suppress_damage as u8 as f64);
+        render_trace.set("damage_rects", pass.DamageRects().len() as f64);
+        if let Some(shift) = pass.BackingShift() {
+            if shift.1 != 0 {
+                render_trace.set("backing_shift_y", shift.1 as f64);
+            } else {
+                render_trace.set("backing_shift_x", shift.0 as f64);
+            }
+        }
         if let Some(effect) = pass.OwnerEffect() {
             render_trace.set("effect_id", effect.id as f64);
             render_trace.set("effect_opacity", effect.opacity as f64);
@@ -1821,32 +1886,100 @@ impl RenderPassRenderer {
                 }
             }
         }
+        if self.composed_valid && !bounds_changed {
+            if let (Some(delta), Some(bounds)) = (plan.backing_shift, plan.output_bounds) {
+                shift_retained_backing(
+                    &mut self.composed_pixels,
+                    width as usize,
+                    bounds,
+                    delta,
+                );
+                render_trace.set("backing_shift_x", delta.0 as f64);
+                render_trace.set("backing_shift_y", delta.1 as f64);
+            }
+        }
         // DirectRenderer::CanSkipRenderPass requires a valid backing. Repaint
         // the full *output rect* after loss, token gaps or output-rect changes.
-        if force_full_damage || !self.composed_valid || bounds_changed {
+        if suppress_damage && self.composed_valid && !bounds_changed {
+            plan.root_damage = None;
+            plan.damage_region.clear();
+        } else if force_full_damage || !self.composed_valid || bounds_changed {
             plan.root_damage = plan.output_bounds;
+            plan.damage_region = plan.output_bounds.into_iter().collect();
         }
-        plan.root_damage = plan.root_damage.and_then(|damage| {
-            plan.output_bounds
-                .and_then(|output| intersect_bounds(damage, output))
-        });
+        plan.damage_region = plan
+            .damage_region
+            .into_iter()
+            .filter_map(|damage| {
+                plan.output_bounds
+                    .and_then(|output| intersect_bounds(damage, output))
+            })
+            .collect();
+        plan.root_damage = plan
+            .damage_region
+            .iter()
+            .copied()
+            .reduce(|a, b| SurfaceBounds {
+                left: a.left.min(b.left),
+                top: a.top.min(b.top),
+                right: a.right.max(b.right),
+                bottom: a.bottom.max(b.bottom),
+            });
         // Keep one renderer-owned root render-pass backing. Native IOSurfaces
         // are a rotating presentation queue, so repainting them directly would
         // otherwise discard unchanged pixels on every animation frame.
         let mut composed = std::mem::take(&mut self.composed_pixels);
-        let result = self.paint_frame(
-            &plan,
-            width,
-            height,
-            &mut composed,
-            format,
-            width as usize,
-            resources.resources(),
-            resources.prepared_damage_pixels(),
-            render_pass_outputs,
-        );
+        let damage_region = std::mem::take(&mut plan.damage_region);
+        let mut result = if damage_region.is_empty() {
+            plan.root_damage = None;
+            self.paint_frame(
+                &plan,
+                width,
+                height,
+                &mut composed,
+                format,
+                width as usize,
+                resources.resources(),
+                resources.prepared_damage_pixels(),
+                render_pass_outputs,
+            )
+        } else {
+            let mut combined = RenderUpdate {
+                mode: "layer-tiles",
+                reason: "damage-region",
+                damage_pixels: 0,
+                copied_bytes: 0,
+            };
+            let mut failure = None;
+            for damage in damage_region {
+                plan.root_damage = Some(damage);
+                match self.paint_frame(
+                    &plan,
+                    width,
+                    height,
+                    &mut composed,
+                    format,
+                    width as usize,
+                    resources.resources(),
+                    resources.prepared_damage_pixels(),
+                    render_pass_outputs,
+                ) {
+                    Ok(update) => {
+                        combined.damage_pixels =
+                            combined.damage_pixels.saturating_add(update.damage_pixels);
+                        combined.copied_bytes =
+                            combined.copied_bytes.saturating_add(update.copied_bytes);
+                    }
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+            }
+            failure.map_or(Ok(combined), Err)
+        };
         self.composed_pixels = composed;
-        let result = result.map(|mut update| {
+        result = result.map(|mut update| {
             if let Some((buffer, row_stride)) = output {
                 for (source, destination) in self
                     .composed_pixels
@@ -6472,6 +6605,21 @@ fn composite_effect_surface(
             continue;
         }
         if alpha.is_none() && coverage.is_none() {
+            // A premultiplied transparent backdrop is the identity source
+            // boundary for SrcOver, including CSS blend modes: with Ab=0 the
+            // blend contribution from the backdrop is zero. Render surfaces
+            // begin transparent, so their first covering child can copy rows
+            // directly instead of running a full per-pixel blend pipeline.
+            if format == skia::PixelFormat::Rgba8888
+                && (target[target_range.clone()].iter().all(|&pixel| pixel == 0)
+                    || (blend_mode == PaintBlendMode::kNormal
+                        && source[source_range.clone()]
+                            .iter()
+                            .all(|&pixel| pixel & 0xff00_0000 == 0xff00_0000)))
+            {
+                target[target_range].copy_from_slice(&source[source_range]);
+                continue;
+            }
             blend_effect_row(
                 &mut target[target_range],
                 &source[source_range],
@@ -6489,16 +6637,39 @@ fn composite_effect_surface(
             if mask.is_some_and(|row| row.iter().all(|&v| v == 0)) {
                 continue;
             }
-            if alpha.is_none() && mask.is_none_or(|row| row.iter().all(|&v| v == 255)) {
-                blend_effect_row(output, input, format, blend_mode);
+            let opaque_mask = mask.is_none_or(|row| row.iter().all(|&v| v == 255));
+            if alpha.is_none() && opaque_mask {
+                if format == skia::PixelFormat::Rgba8888
+                    && (output.iter().all(|&pixel| pixel == 0)
+                        || (blend_mode == PaintBlendMode::kNormal
+                            && input
+                                .iter()
+                                .all(|&pixel| pixel & 0xff00_0000 == 0xff00_0000)))
+                {
+                    output.copy_from_slice(input);
+                } else {
+                    blend_effect_row(output, input, format, blend_mode);
+                }
                 continue;
             }
             let scaled = &mut scratch[..input.len()];
             // Opacity then true DstIn, preserving the original rounding at
             // both stages. SIMD only replaces the independent channel loop.
-            let any = scale_effect_row(scaled, input, opacity, alpha.as_ref(), mask);
+            let any = scale_effect_row(
+                scaled,
+                input,
+                opacity,
+                alpha.as_ref(),
+                (!opaque_mask).then_some(mask).flatten(),
+            );
             if any != 0 {
-                blend_effect_row(output, scaled, format, blend_mode);
+                if format == skia::PixelFormat::Rgba8888
+                    && output.iter().all(|&pixel| pixel == 0)
+                {
+                    output.copy_from_slice(scaled);
+                } else {
+                    blend_effect_row(output, scaled, format, blend_mode);
+                }
             }
         }
     }

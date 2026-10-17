@@ -341,9 +341,77 @@ pub struct PaintPropertyTrees {
     pub clips: BTreeMap<u64, Arc<ClipPaintPropertyNode>>,
     pub effects: BTreeMap<u64, Arc<EffectPaintPropertyNode>>,
     pub scrolls: BTreeMap<u64, Arc<ScrollPaintPropertyNode>>,
+    transforms_by_identity: BTreeMap<usize, Arc<TransformPaintPropertyNode>>,
+    clips_by_identity: BTreeMap<usize, Arc<ClipPaintPropertyNode>>,
+    effects_by_identity: BTreeMap<usize, Arc<EffectPaintPropertyNode>>,
+    scrolls_by_identity: BTreeMap<usize, Arc<ScrollPaintPropertyNode>>,
 }
 
 impl PaintPropertyTrees {
+    fn identity(lifecycle: &PaintPropertyNodeLifecycle) -> usize {
+        Arc::as_ptr(&lifecycle.identity) as usize
+    }
+    pub(crate) fn transform_for(
+        &self,
+        node: &TransformPaintPropertyNode,
+    ) -> Option<&Arc<TransformPaintPropertyNode>> {
+        self.transforms_by_identity
+            .get(&Self::identity(&node.lifecycle))
+    }
+    pub(crate) fn clip_for(
+        &self,
+        node: &ClipPaintPropertyNode,
+    ) -> Option<&Arc<ClipPaintPropertyNode>> {
+        self.clips_by_identity.get(&Self::identity(&node.lifecycle))
+    }
+    pub(crate) fn effect_for(
+        &self,
+        node: &EffectPaintPropertyNode,
+    ) -> Option<&Arc<EffectPaintPropertyNode>> {
+        self.effects_by_identity
+            .get(&Self::identity(&node.lifecycle))
+    }
+    pub(crate) fn scroll_for(
+        &self,
+        node: &ScrollPaintPropertyNode,
+    ) -> Option<&Arc<ScrollPaintPropertyNode>> {
+        self.scrolls_by_identity
+            .get(&Self::identity(&node.lifecycle))
+    }
+    pub fn transform_snapshots(
+        &self,
+    ) -> impl Iterator<Item = &Arc<TransformPaintPropertyNode>> {
+        self.transforms_by_identity.values()
+    }
+    pub fn clip_snapshots(&self) -> impl Iterator<Item = &Arc<ClipPaintPropertyNode>> {
+        self.clips_by_identity.values()
+    }
+    pub fn effect_snapshots(&self) -> impl Iterator<Item = &Arc<EffectPaintPropertyNode>> {
+        self.effects_by_identity.values()
+    }
+    pub fn scroll_snapshots(&self) -> impl Iterator<Item = &Arc<ScrollPaintPropertyNode>> {
+        self.scrolls_by_identity.values()
+    }
+    fn insert_transform(&mut self, node: Arc<TransformPaintPropertyNode>) {
+        self.transforms_by_identity
+            .insert(Self::identity(&node.lifecycle), node.clone());
+        self.transforms.entry(node.id).or_insert(node);
+    }
+    fn insert_clip(&mut self, node: Arc<ClipPaintPropertyNode>) {
+        self.clips_by_identity
+            .insert(Self::identity(&node.lifecycle), node.clone());
+        self.clips.entry(node.id).or_insert(node);
+    }
+    fn insert_effect(&mut self, node: Arc<EffectPaintPropertyNode>) {
+        self.effects_by_identity
+            .insert(Self::identity(&node.lifecycle), node.clone());
+        self.effects.entry(node.id).or_insert(node);
+    }
+    fn insert_scroll(&mut self, node: Arc<ScrollPaintPropertyNode>) {
+        self.scrolls_by_identity
+            .insert(Self::identity(&node.lifecycle), node.clone());
+        self.scrolls.entry(node.id).or_insert(node);
+    }
     /// Clear every referenced ancestor, including fresh nodes without a
     /// native-owner slot. Blink's PropertyTreeState::ClearChangedToRoot walks
     /// the actual state graph; the owner directory is not the complete graph.
@@ -369,10 +437,10 @@ impl PaintPropertyTrees {
         trees
     }
     fn add_transform(&mut self, node: &Arc<TransformPaintPropertyNode>) {
-        if self.transforms.contains_key(&node.id) {
+        if self.transform_for(node).is_some() {
             return;
         }
-        self.transforms.insert(node.id, node.clone());
+        self.insert_transform(node.clone());
         if let Some(parent) = &node.parent {
             self.add_transform(parent);
         }
@@ -381,10 +449,10 @@ impl PaintPropertyTrees {
         }
     }
     fn add_clip(&mut self, node: &Arc<ClipPaintPropertyNode>) {
-        if self.clips.contains_key(&node.id) {
+        if self.clip_for(node).is_some() {
             return;
         }
-        self.clips.insert(node.id, node.clone());
+        self.insert_clip(node.clone());
         if let Some(parent) = &node.parent {
             self.add_clip(parent);
         }
@@ -394,10 +462,10 @@ impl PaintPropertyTrees {
         self.add_transform(&node.local_transform_space);
     }
     fn add_effect(&mut self, node: &Arc<EffectPaintPropertyNode>) {
-        if self.effects.contains_key(&node.id) {
+        if self.effect_for(node).is_some() {
             return;
         }
-        self.effects.insert(node.id, node.clone());
+        self.insert_effect(node.clone());
         if let Some(parent) = &node.parent {
             self.add_effect(parent);
         }
@@ -410,10 +478,10 @@ impl PaintPropertyTrees {
         }
     }
     fn add_scroll(&mut self, node: &Arc<ScrollPaintPropertyNode>) {
-        if self.scrolls.contains_key(&node.id) {
+        if self.scroll_for(node).is_some() {
             return;
         }
-        self.scrolls.insert(node.id, node.clone());
+        self.insert_scroll(node.clone());
         if let Some(parent) = &node.parent {
             self.add_scroll(parent);
         }
@@ -588,7 +656,10 @@ impl PaintPropertyNodeStore {
             let mut matrix = node.matrix;
             matrix.values[12] = -offset.x;
             matrix.values[13] = -offset.y;
-            translations.insert(node.id, (matrix, node.sticky_constraint));
+            translations.insert(
+                PaintPropertyTrees::identity(&node.lifecycle),
+                (matrix, node.sticky_constraint),
+            );
         }
         // FragmentPaintPropertyTreeBuilder::UpdateStickyTranslation uses
         // Layout's resolved offset and constraint data. Do not recompute sticky
@@ -623,7 +694,10 @@ impl PaintPropertyNodeStore {
             let mut matrix = node.matrix;
             matrix.values[12] = offset.x;
             matrix.values[13] = offset.y;
-            translations.insert(node.id, (matrix, Some(*constraint)));
+            translations.insert(
+                PaintPropertyTrees::identity(&node.lifecycle),
+                (matrix, Some(*constraint)),
+            );
         }
         Some(self.staged_snapshots(translations))
     }
@@ -659,7 +733,7 @@ impl PaintPropertyNodeStore {
 
     fn staged_snapshots(
         &self,
-        translations: BTreeMap<u64, (TransformMatrix, Option<StickyPositionPaintData>)>,
+        translations: BTreeMap<usize, (TransformMatrix, Option<StickyPositionPaintData>)>,
     ) -> (Self, PaintPropertyTrees) {
         let mut rebind = RetainedScrollSnapshotRebinder {
             translations,
@@ -841,7 +915,7 @@ impl PaintPropertyNodeStore {
 // One pass over the resident property graph, not the fragment tree. Memoized
 // per-type IDs name existing directory entries; no new node identity is made.
 struct RetainedScrollSnapshotRebinder {
-    translations: BTreeMap<u64, (TransformMatrix, Option<StickyPositionPaintData>)>,
+    translations: BTreeMap<usize, (TransformMatrix, Option<StickyPositionPaintData>)>,
     trees: PaintPropertyTrees,
     changed: PaintPropertyChangeType,
 }
@@ -850,14 +924,14 @@ impl RetainedScrollSnapshotRebinder {
         &mut self,
         input: &Arc<TransformPaintPropertyNode>,
     ) -> Arc<TransformPaintPropertyNode> {
-        if let Some(node) = self.trees.transforms.get(&input.id) {
+        if let Some(node) = self.trees.transform_for(input) {
             return node.clone();
         }
         let parent = input.parent.as_ref().map(|parent| self.transform(parent));
         let scroll = input.scroll.as_ref().map(|scroll| self.scroll(scroll));
         let (matrix, sticky_constraint) = self
             .translations
-            .get(&input.id)
+            .get(&PaintPropertyTrees::identity(&input.lifecycle))
             .copied()
             .unwrap_or((input.matrix, input.sticky_constraint));
         let node = if matrix == input.matrix
@@ -892,11 +966,11 @@ impl RetainedScrollSnapshotRebinder {
                 direct_compositing_reasons: input.direct_compositing_reasons.clone(),
             })
         };
-        self.trees.transforms.insert(input.id, node.clone());
+        self.trees.insert_transform(node.clone());
         node
     }
     fn clip(&mut self, input: &Arc<ClipPaintPropertyNode>) -> Arc<ClipPaintPropertyNode> {
-        if let Some(node) = self.trees.clips.get(&input.id) {
+        if let Some(node) = self.trees.clip_for(input) {
             return node.clone();
         }
         let parent = input.parent.as_ref().map(|parent| self.clip(parent));
@@ -927,11 +1001,11 @@ impl RetainedScrollSnapshotRebinder {
                 pixel_moving_filter: filter,
             })
         };
-        self.trees.clips.insert(input.id, node.clone());
+        self.trees.insert_clip(node.clone());
         node
     }
     fn effect(&mut self, input: &Arc<EffectPaintPropertyNode>) -> Arc<EffectPaintPropertyNode> {
-        if let Some(node) = self.trees.effects.get(&input.id) {
+        if let Some(node) = self.trees.effect_for(input) {
             return node.clone();
         }
         let parent = input.parent.as_ref().map(|parent| self.effect(parent));
@@ -969,11 +1043,11 @@ impl RetainedScrollSnapshotRebinder {
                 direct_compositing_reasons: input.direct_compositing_reasons.clone(),
             })
         };
-        self.trees.effects.insert(input.id, node.clone());
+        self.trees.insert_effect(node.clone());
         node
     }
     fn scroll(&mut self, input: &Arc<ScrollPaintPropertyNode>) -> Arc<ScrollPaintPropertyNode> {
-        if let Some(node) = self.trees.scrolls.get(&input.id) {
+        if let Some(node) = self.trees.scroll_for(input) {
             return node.clone();
         }
         let parent = input.parent.as_ref().map(|parent| self.scroll(parent));
@@ -998,7 +1072,7 @@ impl RetainedScrollSnapshotRebinder {
                 user_scrollable_vertical: input.user_scrollable_vertical,
             })
         };
-        self.trees.scrolls.insert(input.id, node.clone());
+        self.trees.insert_scroll(node.clone());
         node
     }
 }

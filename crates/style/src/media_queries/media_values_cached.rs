@@ -11,6 +11,18 @@ use super::scripting::Scripting;
 use super::web_preferences::{HoverType, OutputDeviceUpdateAbilityType, PointerType};
 use super::window_show_state::WindowShowState;
 use foundation::{String, WritingMode};
+
+/// Glyph measurements carried only by a property-conversion scope. Media
+/// queries retain their initial-font measurements; the cascade installs these
+/// values from the element's selected font, like Blink's
+/// CSSToLengthConversionData::FontSizes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FontRelativeLengthMetrics {
+    pub ex: f32,
+    pub ch: f32,
+    pub ic: f32,
+    pub cap: f32,
+}
 // cpp: third_party/blink/renderer/core/css/media_values_cached.h:28-88
 #[derive(Clone, Debug, PartialEq)]
 pub struct MediaValuesCachedData {
@@ -52,6 +64,8 @@ pub struct MediaValuesCachedData {
     /// style-application scope, matching CSSToLengthConversionData's separate
     /// LineHeightSize root member.
     pub style_root_line_height: Option<f32>,
+    pub style_font_metrics: Option<FontRelativeLengthMetrics>,
+    pub style_root_font_metrics: Option<FontRelativeLengthMetrics>,
     pub three_d_enabled: bool,
     pub strict_mode: bool,
     pub media_type: String,
@@ -104,6 +118,8 @@ impl Default for MediaValuesCachedData {
             cap_size: 16.0,
             line_height: 0.0,
             style_root_line_height: None,
+            style_font_metrics: None,
+            style_root_font_metrics: None,
             three_d_enabled: false,
             strict_mode: true,
             media_type: String::default(),

@@ -112,10 +112,22 @@ mod timeline_trigger_application;
 mod view_transition_application;
 pub use color_ui_application::ColorSchemeSettings;
 
+/// Style's font-relative length input. The browser supplies the same resolved
+/// font catalog that Layout will use; Style keeps ownership of CSS unit
+/// conversion and never reaches into Layout's objects.
+pub trait FontMetricsResolver {
+    fn Metrics(
+        &self,
+        description: &font_engine::FontDescription,
+    ) -> Option<font_engine::FontMetrics>;
+}
+
 #[derive(Clone, Copy, Default)]
-pub(super) struct PropertyConversionContext {
+pub(super) struct PropertyConversionContext<'a> {
     pub root_line_height: Option<f32>,
     pub document_text_color: Option<Color>,
+    pub font_metrics: Option<&'a dyn FontMetricsResolver>,
+    pub root_style: Option<&'a ComputedStyle>,
 }
 
 pub fn ApplyWithColorSchemeSettings(
@@ -143,6 +155,7 @@ pub(crate) fn ApplyWithColorSchemeSettingsAndRootStyle(
     settings: ColorSchemeSettings,
     root_style: Option<&ComputedStyle>,
     document_text_color: Option<Color>,
+    font_metrics: Option<&dyn FontMetricsResolver>,
 ) -> Result {
     if color_ui_application::IsColorUIProperty(id) {
         return color_ui_application::Apply(id, b, parent, v, media, settings);
@@ -158,6 +171,8 @@ pub(crate) fn ApplyWithColorSchemeSettingsAndRootStyle(
             root_line_height: root_style
                 .map(|style| style.ComputedLineHeight() / style.EffectiveZoom()),
             document_text_color,
+            font_metrics,
+            root_style,
         },
     )
 }
@@ -291,11 +306,36 @@ pub fn ApplyWithImageResolverAndColorSchemeSettings(
     media: &MediaValuesCachedData,
     images: &dyn URLImageResolver,
     settings: ColorSchemeSettings,
+    font_metrics: Option<&dyn FontMetricsResolver>,
 ) -> Result {
     if color_ui_application::IsColorUIProperty(id) {
         return color_ui_application::Apply(id, b, parent, v, media, settings);
     }
-    ApplyWithImageResolver(id, b, parent, v, root, media, images)
+    if matches!(
+        id,
+        CSSPropertyID::kWebkitBoxReflect
+            | CSSPropertyID::kBackgroundImage
+            | CSSPropertyID::kMaskImage
+            | CSSPropertyID::kListStyleImage
+            | CSSPropertyID::kContent
+            | CSSPropertyID::kShapeOutside
+            | CSSPropertyID::kClipPath
+    ) || border_image_application::IsBorderImageProperty(id)
+    {
+        return ApplyWithImageResolver(id, b, parent, v, root, media, images);
+    }
+    ApplyWithPropertyContext(
+        id,
+        b,
+        parent,
+        v,
+        root,
+        media,
+        PropertyConversionContext {
+            font_metrics,
+            ..Default::default()
+        },
+    )
 }
 
 pub(crate) fn ApplyWithImageResolverColorSchemeAndRootStyle(
@@ -309,6 +349,7 @@ pub(crate) fn ApplyWithImageResolverColorSchemeAndRootStyle(
     settings: ColorSchemeSettings,
     root_style: Option<&ComputedStyle>,
     document_text_color: Option<Color>,
+    font_metrics: Option<&dyn FontMetricsResolver>,
 ) -> Result {
     if color_ui_application::IsColorUIProperty(id) {
         return color_ui_application::Apply(id, b, parent, v, media, settings);
@@ -317,6 +358,8 @@ pub(crate) fn ApplyWithImageResolverColorSchemeAndRootStyle(
         root_line_height: root_style
             .map(|style| style.ComputedLineHeight() / style.EffectiveZoom()),
         document_text_color,
+        font_metrics,
+        root_style,
     };
     // Resource-bearing properties keep their existing image owner. Some of
     // those properties also contain lengths (for example border-image widths
@@ -916,6 +959,38 @@ pub fn Pixels(
         UnitType::kPixels | UnitType::kUserUnits => 1.0,
         UnitType::kEms | UnitType::kQuirkyEms => font as f64,
         UnitType::kRems => root as f64,
+        UnitType::kExs => media
+            .style_font_metrics
+            .ok_or(LonghandApplicationError::Unsupported(id))?
+            .ex as f64,
+        UnitType::kChs => media
+            .style_font_metrics
+            .ok_or(LonghandApplicationError::Unsupported(id))?
+            .ch as f64,
+        UnitType::kIcs => media
+            .style_font_metrics
+            .ok_or(LonghandApplicationError::Unsupported(id))?
+            .ic as f64,
+        UnitType::kCaps => media
+            .style_font_metrics
+            .ok_or(LonghandApplicationError::Unsupported(id))?
+            .cap as f64,
+        UnitType::kRexs => media
+            .style_root_font_metrics
+            .ok_or(LonghandApplicationError::Unsupported(id))?
+            .ex as f64,
+        UnitType::kRchs => media
+            .style_root_font_metrics
+            .ok_or(LonghandApplicationError::Unsupported(id))?
+            .ch as f64,
+        UnitType::kRics => media
+            .style_root_font_metrics
+            .ok_or(LonghandApplicationError::Unsupported(id))?
+            .ic as f64,
+        UnitType::kRcaps => media
+            .style_root_font_metrics
+            .ok_or(LonghandApplicationError::Unsupported(id))?
+            .cap as f64,
         UnitType::kCentimeters => 96.0 / 2.54,
         UnitType::kMillimeters => 96.0 / 25.4,
         UnitType::kQuarterMillimeters => 96.0 / 101.6,
@@ -940,6 +1015,56 @@ pub fn Pixels(
         _ => return Err(LonghandApplicationError::Unsupported(id)),
     };
     Ok(value * factor)
+}
+
+// cpp: css_to_length_conversion_data.cc:FontSizes::{Ex,Ch,Rex,Rch,Cap,Rcap}
+// and css_length_resolver.cc:ComputeLength. Glyph-relative units use the
+// selected font's metrics, not the media-query initial-font approximation.
+fn PixelsForStyle(
+    id: CSSPropertyID,
+    value: f64,
+    unit: UnitType,
+    builder: &mut ComputedStyleBuilder,
+    root: f32,
+    media: &MediaValuesCachedData,
+    context: PropertyConversionContext<'_>,
+) -> std::result::Result<f64, LonghandApplicationError> {
+    let glyph = |style: &ComputedStyle| {
+        context
+            .font_metrics
+            .and_then(|resolver| resolver.Metrics(style.GetFontDescription()))
+    };
+    let current_metrics = || {
+        context
+            .font_metrics
+            .and_then(|resolver| resolver.Metrics(builder.GetFontDescription()))
+    };
+    let factor = match unit {
+        UnitType::kExs => current_metrics()
+            .filter(font_engine::FontMetrics::HasXHeight)
+            .map_or(builder.GetFontDescription().ComputedSize() / 2.0, |m| m.XHeight()),
+        UnitType::kChs => current_metrics().map_or(0.0, |m| m.ZeroWidth()),
+        UnitType::kIcs => builder.GetFontDescription().ComputedSize(),
+        UnitType::kCaps => current_metrics().map_or(
+            builder.GetFontDescription().ComputedSize(),
+            |m| m.CapHeight(),
+        ),
+        UnitType::kRexs => context.root_style.and_then(glyph).map_or(root / 2.0, |m| {
+            if m.HasXHeight() { m.XHeight() } else { root / 2.0 }
+        }),
+        UnitType::kRchs => context.root_style.and_then(glyph).map_or(0.0, |m| m.ZeroWidth()),
+        UnitType::kRics => root,
+        UnitType::kRcaps => context
+            .root_style
+            .and_then(glyph)
+            .map_or(root, |m| m.CapHeight()),
+        _ => return Pixels(id, value, unit, builder.GetFontDescription().ComputedSize(), root, media),
+    };
+    builder.SetHasGlyphRelativeUnits();
+    if matches!(unit, UnitType::kRexs | UnitType::kRchs | UnitType::kRics | UnitType::kRcaps) {
+        builder.SetHasRootRelativeUnits();
+    }
+    Ok(value * f64::from(factor))
 }
 
 // cpp: style_builder_converter.cc:2695-2714,2732-2748.
@@ -1057,7 +1182,7 @@ fn ApplyShadow(
     media: &MediaValuesCachedData,
     inherit: bool,
     initial: bool,
-    length_context: PropertyConversionContext,
+    length_context: PropertyConversionContext<'_>,
 ) -> Result {
     use foundation::{MakeGarbageCollected, Member};
     use layoutng_style::style::shadow_list::{ShadowDataVector, ShadowList};
@@ -1466,7 +1591,19 @@ pub(super) fn MathLengthResolver<'a>(
         }
         let pixels = Pixels(id, value, unit, font, root, media)
             .map_err(|_| crate::css_math_expression_node::MathError::MissingLengthContext)?;
-        Ok(if matches!(unit, UnitType::kEms | UnitType::kQuirkyEms) {
+        Ok(if matches!(
+            unit,
+            UnitType::kEms
+                | UnitType::kQuirkyEms
+                | UnitType::kExs
+                | UnitType::kChs
+                | UnitType::kIcs
+                | UnitType::kCaps
+                | UnitType::kRexs
+                | UnitType::kRchs
+                | UnitType::kRics
+                | UnitType::kRcaps
+        ) {
             pixels
         } else {
             pixels * zoom as f64
@@ -1604,15 +1741,48 @@ fn ApplyWithPropertyContext(
     v: &Value,
     root: f32,
     media: &MediaValuesCachedData,
-    length_context: PropertyConversionContext,
+    length_context: PropertyConversionContext<'_>,
 ) -> Result {
     let uses_lh = UsesLineHeightUnit(v, UnitType::kLhs);
     let uses_rlh = UsesLineHeightUnit(v, UnitType::kRlhs);
+    let uses_glyph_units = [UnitType::kExs, UnitType::kChs, UnitType::kIcs, UnitType::kCaps]
+        .into_iter()
+        .any(|unit| UsesLineHeightUnit(v, unit));
+    let uses_root_glyph_units = [
+        UnitType::kRexs,
+        UnitType::kRchs,
+        UnitType::kRics,
+        UnitType::kRcaps,
+    ]
+    .into_iter()
+    .any(|unit| UsesLineHeightUnit(v, unit));
     let scoped_media;
-    let media = if let Some(root_line_height) = length_context.root_line_height {
+    let media = if length_context.root_line_height.is_some()
+        || length_context.font_metrics.is_some()
+    {
         scoped_media = {
             let mut media = media.clone();
-            media.style_root_line_height = Some(root_line_height);
+            media.style_root_line_height = length_context.root_line_height;
+            if let Some(resolver) = length_context.font_metrics {
+                media.style_font_metrics = Some(FontRelativeMetrics(
+                    b.GetFontDescription(),
+                    resolver.Metrics(b.GetFontDescription()),
+                    1.0,
+                ));
+                media.style_root_font_metrics = Some(if let Some(style) = length_context.root_style {
+                    FontRelativeMetrics(
+                        style.GetFontDescription(),
+                        resolver.Metrics(style.GetFontDescription()),
+                        b.EffectiveZoom() / style.EffectiveZoom(),
+                    )
+                } else {
+                    FontRelativeMetrics(
+                        b.GetFontDescription(),
+                        resolver.Metrics(b.GetFontDescription()),
+                        1.0,
+                    )
+                });
+            }
             media
         };
         &scoped_media
@@ -1639,7 +1809,38 @@ fn ApplyWithPropertyContext(
     let value = resolved_line_height_value.as_deref().unwrap_or(v);
     let result = ApplyResolved(id, b, parent, value, root, media, length_context);
     MarkLineHeightUnitDependencies(b, result.is_ok(), uses_lh, uses_rlh);
+    if result.is_ok() && (uses_glyph_units || uses_root_glyph_units) {
+        b.SetHasGlyphRelativeUnits();
+        if uses_root_glyph_units {
+            b.SetHasRootRelativeUnits();
+        }
+    }
     result
+}
+
+fn FontRelativeMetrics(
+    description: &font_engine::FontDescription,
+    metrics: Option<font_engine::FontMetrics>,
+    scale: f32,
+) -> crate::media_queries::media_values_cached::FontRelativeLengthMetrics {
+    let size = description.ComputedSize();
+    crate::media_queries::media_values_cached::FontRelativeLengthMetrics {
+        ex: metrics
+            .as_ref()
+            .filter(|metrics| metrics.HasXHeight())
+            .map_or(size / 2.0, |metrics| metrics.XHeight())
+            * scale,
+        ch: metrics
+            .as_ref()
+            .filter(|metrics| metrics.HasZeroWidth())
+            .map_or(0.0, |metrics| metrics.ZeroWidth())
+            * scale,
+        // Blink uses the CJK water ideograph's advance when available. The
+        // font service currently exposes no ideographic advance through its
+        // metrics boundary, so the specified em fallback is retained here.
+        ic: size * scale,
+        cap: metrics.as_ref().map_or(size, |metrics| metrics.CapHeight()) * scale,
+    }
 }
 
 // cpp: style_builder.cc:ApplyPhysicalProperty, generated longhands.cc Apply*.
@@ -1650,7 +1851,7 @@ fn ApplyResolved(
     v: &Value,
     root: f32,
     media: &MediaValuesCachedData,
-    length_context: PropertyConversionContext,
+    length_context: PropertyConversionContext<'_>,
 ) -> Result {
     if !crate::production_corner_features::IsExposed(id) {
         return Err(LonghandApplicationError::Unsupported(id));
@@ -2024,13 +2225,14 @@ fn ApplyResolved(
                 }
             }
             if value.GetType() != UnitType::kPercentage {
-                if let Ok(px) = Pixels(
+                if let Ok(px) = PixelsForStyle(
                     id,
                     value.DoubleValue(),
                     value.GetType(),
-                    b.GetFontDescription().ComputedSize(),
+                    b,
                     root,
                     media,
+                    length_context,
                 ) {
                     let width=crate::resolver::style_builder_converter::StyleBuilderConverter::ClampLineWidth(px as f32 as f64);
                     if ApplyConvertedBorderWidth(id, b, &width).is_ok() {
@@ -2041,13 +2243,14 @@ fn ApplyResolved(
             let length = if value.GetType() == UnitType::kPercentage {
                 Length::Percent(value.DoubleValue())
             } else {
-                Length::Fixed(Pixels(
+                Length::Fixed(PixelsForStyle(
                     id,
                     value.DoubleValue(),
                     value.GetType(),
-                    b.GetFontDescription().ComputedSize(),
+                    b,
                     root,
                     media,
+                    length_context,
                 )?)
             };
             ApplyConvertedLength(id, b, &length)

@@ -5,6 +5,7 @@ use compositor::{
 use paint::{paint_property_tree::PropertyTreeState, PaintRect};
 use raster::RasterResourceProvider;
 use renderer::{RasterResourceRegistry, RenderTarget, RenderUpdate, Renderer};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use viz::{AggregatedFrame, RenderPassId, SurfaceId};
@@ -92,6 +93,11 @@ fn frame(ids: &[u64], color: [u8; 4], damaged: bool) -> CompositorFrame {
             has_transparent_background: !root,
             output_rect: rect(),
             damage_rect: damage,
+            damage_rects: (damage.width != 0 && damage.height != 0)
+                .then_some(damage)
+                .into_iter()
+                .collect(),
+            backing_shift: None,
             shared_quad_state_list: Vec::new(),
             quad_list: Vec::new(),
         };
@@ -136,20 +142,18 @@ fn submit(
     surface: SurfaceId,
     mut frame: CompositorFrame,
 ) -> Result<(), viz::VizError> {
-    let previous = viz
-        .Aggregate(
-            rect(),
-            &[viz::SurfacePlacement {
-                surface_id: surface,
-                destination: rect(),
-            }],
-        )
-        .ok()
-        .and_then(|frame| frame.RenderPasses().last().map(|pass| pass.FrameToken()));
-    frame.metadata.frame_token = previous.unwrap_or(0).wrapping_add(1);
+    thread_local! {
+        static NEXT_FRAME_TOKENS: RefCell<HashMap<u64, u64>> = RefCell::new(HashMap::new());
+    }
+    frame.metadata.frame_token = NEXT_FRAME_TOKENS.with(|tokens| {
+        let mut tokens = tokens.borrow_mut();
+        let token = tokens.entry(surface.0).or_insert(0);
+        *token = token.wrapping_add(1);
+        *token
+    });
     viz.SubmitFrame(surface, frame)
 }
-fn aggregate(viz: &viz::VizEngine, ids: &[u64]) -> AggregatedFrame {
+fn aggregate(viz: &mut viz::VizEngine, ids: &[u64]) -> AggregatedFrame {
     viz.Aggregate(
         DeviceRect::new(0, 0, W, H * ids.len() as u32),
         &ids.iter()
@@ -198,7 +202,7 @@ fn complete_pass_graph_reconciles_churn_and_retains_undamaged_backings() {
     let red = [255, 0, 0, 255];
     for child in 10..90 {
         submit(&mut viz, SurfaceId(1), frame(&[child, 1], red, true)).unwrap();
-        let current = aggregate(&viz, &[1]);
+        let current = aggregate(&mut viz, &[1]);
         let (pixels, update) = render(&mut renderer, &current, skia::PixelFormat::Rgba8888);
         check(&pixels, red);
         assert_eq!(update.copied_bytes, W as usize * H as usize * 4);
@@ -211,7 +215,7 @@ fn complete_pass_graph_reconciles_churn_and_retains_undamaged_backings() {
         submit(&mut viz, SurfaceId(1), frame(&[child, 1], red, false)).unwrap();
         let (retained, update) = render(
             &mut renderer,
-            &aggregate(&viz, &[1]),
+            &aggregate(&mut viz, &[1]),
             skia::PixelFormat::Rgba8888,
         );
         assert_eq!(pixels, retained);
@@ -221,7 +225,7 @@ fn complete_pass_graph_reconciles_churn_and_retains_undamaged_backings() {
     }
     let held = render(
         &mut renderer,
-        &aggregate(&viz, &[1]),
+        &aggregate(&mut viz, &[1]),
         skia::PixelFormat::Rgba8888,
     )
     .0;
@@ -229,7 +233,7 @@ fn complete_pass_graph_reconciles_churn_and_retains_undamaged_backings() {
     check(
         &render(
             &mut renderer,
-            &aggregate(&viz, &[1]),
+            &aggregate(&mut viz, &[1]),
             skia::PixelFormat::Rgba8888,
         )
         .0,
@@ -241,11 +245,12 @@ fn complete_pass_graph_reconciles_churn_and_retains_undamaged_backings() {
     // its missing backing must be drawn, while the changed parent is damaged.
     let mut recreated = frame(&[89, 1], [0, 255, 0, 255], true);
     recreated.render_pass_list[0].damage_rect = DeviceRect::new(0, 0, 0, 0);
+    recreated.render_pass_list[0].damage_rects.clear();
     submit(&mut viz, SurfaceId(1), recreated).unwrap();
     check(
         &render(
             &mut renderer,
-            &aggregate(&viz, &[1]),
+            &aggregate(&mut viz, &[1]),
             skia::PixelFormat::Rgba8888,
         )
         .0,
@@ -267,7 +272,7 @@ fn nested_graph_surface_namespaces_and_explicit_invalidation_are_independent() {
     check(
         &render(
             &mut renderer,
-            &aggregate(&viz, &[1, 2]),
+            &aggregate(&mut viz, &[1, 2]),
             skia::PixelFormat::Rgba8888,
         )
         .0,
@@ -277,7 +282,7 @@ fn nested_graph_surface_namespaces_and_explicit_invalidation_are_independent() {
     submit(&mut viz, SurfaceId(1), frame(&[1], [0, 0, 255, 255], true)).unwrap();
     render(
         &mut renderer,
-        &aggregate(&viz, &[1]),
+        &aggregate(&mut viz, &[1]),
         skia::PixelFormat::Rgba8888,
     );
     assert_eq!(renderer.BackingStats().passes, 4);
@@ -289,7 +294,7 @@ fn nested_graph_surface_namespaces_and_explicit_invalidation_are_independent() {
     .unwrap();
     let (pixels, update) = render(
         &mut renderer,
-        &aggregate(&viz, &[2]),
+        &aggregate(&mut viz, &[2]),
         skia::PixelFormat::Rgba8888,
     );
     check(&pixels, [255, 0, 0, 255]);
@@ -299,7 +304,7 @@ fn nested_graph_surface_namespaces_and_explicit_invalidation_are_independent() {
     assert_eq!(renderer.BackingStats().passes, 1);
     let (pixels, update) = render(
         &mut renderer,
-        &aggregate(&viz, &[2]),
+        &aggregate(&mut viz, &[2]),
         skia::PixelFormat::Rgba8888,
     );
     check(&pixels, [255, 0, 0, 255]);
@@ -327,6 +332,11 @@ fn nested_graph_surface_namespaces_and_explicit_invalidation_are_independent() {
             DeviceRect::new(0, 0, 0, 0)
         };
         overlay.render_pass_list[0].damage_rect = overlay.metadata.root_damage_rect;
+        overlay.render_pass_list[0].damage_rects = (overlay.metadata.root_damage_rect.width != 0
+            && overlay.metadata.root_damage_rect.height != 0)
+            .then_some(overlay.metadata.root_damage_rect)
+            .into_iter()
+            .collect();
         submit(&mut viz, SurfaceId(2), overlay.clone()).unwrap();
         let combined = viz.Aggregate(rect(), &placements).unwrap();
         for format in [
@@ -372,7 +382,7 @@ fn draw_errors_restore_child_and_root_owners_without_staging_copies() {
     submit(&mut viz, SurfaceId(1), frame(&[2, 1], red, true)).unwrap();
     let (original, _) = render(
         &mut renderer,
-        &aggregate(&viz, &[1]),
+        &aggregate(&mut viz, &[1]),
         skia::PixelFormat::Rgba8888,
     );
     for broken in [0, 1] {
@@ -381,7 +391,10 @@ fn draw_errors_restore_child_and_root_owners_without_staging_copies() {
         // or duplicate parent quad after removing its owner for borrowing.
         let mut invalid = frame(&[2, 1], red, false);
         let expected_error = if broken == 0 {
+            invalid.render_pass_list[0].output_rect = DeviceRect::new(W as i32, 0, 1, 1);
             invalid.render_pass_list[0].damage_rect = DeviceRect::new(W as i32, 0, 1, 1);
+            invalid.render_pass_list[0].damage_rects =
+                vec![DeviceRect::new(W as i32, 0, 1, 1)];
             "damage is outside viewport"
         } else {
             let repeated = invalid.render_pass_list[1].quad_list[0].clone();
@@ -392,7 +405,7 @@ fn draw_errors_restore_child_and_root_owners_without_staging_copies() {
         let mut output = vec![0; (W * H) as usize];
         let error = renderer
             .Render(
-                &aggregate(&viz, &[1]),
+                &aggregate(&mut viz, &[1]),
                 &Resources::default(),
                 RenderTarget {
                     width: W,
@@ -416,7 +429,7 @@ fn draw_errors_restore_child_and_root_owners_without_staging_copies() {
         .unwrap();
         let (retained, update) = render(
             &mut renderer,
-            &aggregate(&viz, &[1]),
+            &aggregate(&mut viz, &[1]),
             skia::PixelFormat::Rgba8888,
         );
         check(&retained, [0, 0, 255, 255]);
@@ -437,7 +450,7 @@ fn invalid_candidate_preserves_backings_and_new_format_cannot_reuse_old_pixels()
     .unwrap();
     render(
         &mut renderer,
-        &aggregate(&viz, &[1]),
+        &aggregate(&mut viz, &[1]),
         skia::PixelFormat::Rgba8888,
     );
     submit(
@@ -446,7 +459,7 @@ fn invalid_candidate_preserves_backings_and_new_format_cannot_reuse_old_pixels()
         frame(&[1], [12, 34, 56, 255], false),
     )
     .unwrap();
-    let candidate = aggregate(&viz, &[1]);
+    let candidate = aggregate(&mut viz, &[1]);
     assert!(renderer
         .Render(
             &candidate,
@@ -512,6 +525,8 @@ fn translucent_child_does_not_reblend_outside_parent_damage() {
                 current.render_pass_list[0].output_rect = DeviceRect::new(2, 2, 4, 4);
                 if damaged {
                     current.render_pass_list[0].damage_rect = DeviceRect::new(2, 2, 4, 4);
+                    current.render_pass_list[0].damage_rects =
+                        vec![DeviceRect::new(2, 2, 4, 4)];
                 }
                 let composition =
                     &mut current.render_pass_list[1].shared_quad_state_list[0].composition;
@@ -525,7 +540,7 @@ fn translucent_child_does_not_reblend_outside_parent_damage() {
         submit(&mut viz, SurfaceId(1), fixture(true)).unwrap();
         let (before, first_update) = render(
             &mut renderer,
-            &aggregate(&viz, &[1]),
+            &aggregate(&mut viz, &[1]),
             skia::PixelFormat::Rgba8888,
         );
         if !blur {
@@ -559,10 +574,11 @@ fn translucent_child_does_not_reblend_outside_parent_damage() {
         }
         partial.metadata.root_damage_rect = damage;
         partial.render_pass_list[1].damage_rect = damage;
+        partial.render_pass_list[1].damage_rects = vec![damage];
         submit(&mut viz, SurfaceId(1), partial).unwrap();
         let (after, update) = render(
             &mut renderer,
-            &aggregate(&viz, &[1]),
+            &aggregate(&mut viz, &[1]),
             skia::PixelFormat::Rgba8888,
         );
         assert_eq!(update.damage_pixels, 4);
@@ -582,10 +598,11 @@ fn translucent_child_does_not_reblend_outside_parent_damage() {
                 moved.render_pass_list[0].output_rect = output;
                 moved.metadata.root_damage_rect = rect();
                 moved.render_pass_list[1].damage_rect = rect();
+                moved.render_pass_list[1].damage_rects = vec![rect()];
                 submit(&mut viz, SurfaceId(1), moved).unwrap();
                 let (pixels, _) = render(
                     &mut renderer,
-                    &aggregate(&viz, &[1]),
+                    &aggregate(&mut viz, &[1]),
                     skia::PixelFormat::Rgba8888,
                 );
                 if output.width == 1 {
@@ -637,7 +654,7 @@ fn submitted_damage_requires_successful_root_consumption_continuity() {
         .unwrap();
     render(
         &mut renderer,
-        &aggregate(&viz, &[1]),
+        &aggregate(&mut viz, &[1]),
         skia::PixelFormat::Rgba8888,
     );
     // Build 11 was dropped before composition; 12 describes the same new blue
@@ -646,7 +663,7 @@ fn submitted_damage_requires_successful_root_consumption_continuity() {
         .unwrap();
     let (pixels, update) = render(
         &mut renderer,
-        &aggregate(&viz, &[1]),
+        &aggregate(&mut viz, &[1]),
         skia::PixelFormat::Rgba8888,
     );
     check(&pixels, [0, 0, 255, 255]);
@@ -656,7 +673,7 @@ fn submitted_damage_requires_successful_root_consumption_continuity() {
     root.quad_list.push(root.quad_list[0].clone());
     viz.SubmitFrame(surface, broken).unwrap();
     assert!(
-        draw_error(&mut renderer, &aggregate(&viz, &[1]), &Resources::default())
+        draw_error(&mut renderer, &aggregate(&mut viz, &[1]), &Resources::default())
             .to_string()
             .contains("shared state mixes")
     );
@@ -667,7 +684,7 @@ fn submitted_damage_requires_successful_root_consumption_continuity() {
     check(
         &render(
             &mut renderer,
-            &aggregate(&viz, &[1]),
+            &aggregate(&mut viz, &[1]),
             skia::PixelFormat::Rgba8888,
         )
         .0,
@@ -678,7 +695,7 @@ fn submitted_damage_requires_successful_root_consumption_continuity() {
     assert_eq!(
         render(
             &mut renderer,
-            &aggregate(&viz, &[1]),
+            &aggregate(&mut viz, &[1]),
             skia::PixelFormat::Rgba8888
         )
         .1
@@ -688,7 +705,7 @@ fn submitted_damage_requires_successful_root_consumption_continuity() {
     viz.SubmitFrame(surface, candidate(16, [255, 255, 0, 255], true))
         .unwrap();
     assert!(
-        draw_error(&mut renderer, &aggregate(&viz, &[1]), &MissingResources)
+        draw_error(&mut renderer, &aggregate(&mut viz, &[1]), &MissingResources)
             .to_string()
             .contains("no raster resource provider")
     );
@@ -697,7 +714,7 @@ fn submitted_damage_requires_successful_root_consumption_continuity() {
     check(
         &render(
             &mut renderer,
-            &aggregate(&viz, &[1]),
+            &aggregate(&mut viz, &[1]),
             skia::PixelFormat::Rgba8888,
         )
         .0,
@@ -710,7 +727,7 @@ fn submitted_damage_requires_successful_root_consumption_continuity() {
             .unwrap();
         let (pixels, update) = render(
             &mut renderer,
-            &aggregate(&viz, &[1]),
+            &aggregate(&mut viz, &[1]),
             skia::PixelFormat::Rgba8888,
         );
         check(&pixels, [9, 8, 7, 255]);
@@ -723,7 +740,7 @@ fn submitted_damage_requires_successful_root_consumption_continuity() {
     check(
         &render(
             &mut renderer,
-            &aggregate(&viz, &[1]),
+            &aggregate(&mut viz, &[1]),
             skia::PixelFormat::Rgba8888,
         )
         .0,

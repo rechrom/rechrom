@@ -208,6 +208,10 @@ pub enum MainThreadEvent<F> {
         queued_at: Instant,
         samples: usize,
     },
+    /// Retained raster input could not be lowered. The Page must publish one
+    /// fresh paint artifact while the compositor continues presenting its
+    /// active tree.
+    RasterFallback,
 }
 
 pub enum Effect<V, F, M> {
@@ -445,6 +449,7 @@ pub struct CompositorEngine<V, F, M> {
     active_bundle_installed: bool,
     raster_in_flight: bool,
     raster_in_flight_main_commit: bool,
+    raster_fallback_requested: bool,
     main_frame_in_flight: Option<(u64, u64)>,
     pending_snapshot: Option<ArtifactSnapshot<V, M>>,
     pending_activation_target: Option<(u64, Offset)>,
@@ -466,6 +471,7 @@ impl<V, F, M> Default for CompositorEngine<V, F, M> {
             active_bundle_installed: false,
             raster_in_flight: false,
             raster_in_flight_main_commit: false,
+            raster_fallback_requested: false,
             main_frame_in_flight: None,
             pending_snapshot: None,
             pending_activation_target: None,
@@ -894,6 +900,21 @@ where
                     );
                     return Ok(());
                 }
+                if error.kind() == io::ErrorKind::Unsupported && self.planned.is_some() {
+                    self.pending_snapshot = None;
+                    self.pending_activation_target = None;
+                    if !self.raster_fallback_requested {
+                        self.raster_fallback_requested = true;
+                        effects.push(Effect::MainThread(MainThreadEvent::RasterFallback));
+                        effects.push(Effect::RequestBeginFrame);
+                    }
+                    browser_tracing::instant(
+                        "raster",
+                        "RetainedRasterFallback",
+                        &[("kept_active_tree", 1.0)],
+                    );
+                    return Ok(());
+                }
                 return Err(error);
             }
         };
@@ -961,6 +982,7 @@ where
         self.scroll_tree.activate(root_scroll, acknowledged);
         report_pipeline("activated", &planned.snapshot);
         self.planned = Some(planned);
+        self.raster_fallback_requested = false;
         let tile_size = ready.bundle.tile_size;
         effects.push(Effect::InstallRasterBundle(ready.bundle));
         // Bootstrap the second half of the fixed active/pending pair.  The

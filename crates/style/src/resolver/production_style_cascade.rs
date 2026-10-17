@@ -305,6 +305,7 @@ pub(crate) struct ProductionCascadeInputs<'a> {
     pub function_registry: Option<&'a production_style_sheet::ProductionFunctionRegistry>,
     pub animations: Option<&'a ProductionActiveInterpolationsMap>,
     pub transitions: Option<&'a ProductionActiveInterpolationsMap>,
+    pub font_metrics: Option<&'a dyn production_style_builder::FontMetricsResolver>,
 }
 
 /// The two values produced by one source `StyleCascade::Apply` operation.
@@ -649,6 +650,7 @@ pub(crate) struct ProductionStyleCascadeBackend<'a> {
     property_registry: Option<&'a PropertyRegistry>,
     function_registry: Option<&'a production_style_sheet::ProductionFunctionRegistry>,
     container_runtime: Option<&'a ProductionContainerRuntime<'a>>,
+    font_metrics: Option<&'a dyn production_style_builder::FontMetricsResolver>,
     fallback: RefCell<Vec<ProductionCascadeFallback>>,
 }
 impl<'a> ProductionStyleCascadeBackend<'a> {
@@ -665,6 +667,7 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
         property_registry: Option<&'a PropertyRegistry>,
         function_registry: Option<&'a production_style_sheet::ProductionFunctionRegistry>,
         container_runtime: Option<&'a ProductionContainerRuntime<'a>>,
+        font_metrics: Option<&'a dyn production_style_builder::FontMetricsResolver>,
     ) -> Self {
         let language = Box::leak(Box::new(AtomicString::default()));
         // cpp: ComputedStyleBuilder's inherited/non-inherited variable data is
@@ -718,6 +721,7 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
             property_registry,
             function_registry,
             container_runtime,
+            font_metrics,
             fallback: RefCell::new(Vec::new()),
         }
     }
@@ -1188,6 +1192,7 @@ pub(crate) fn ApplyInlineProperties(
         inputs.property_registry,
         inputs.function_registry,
         inputs.container_runtime,
+        inputs.font_metrics,
     );
     if let Some(root) = inputs.root_style.clone() {
         let _ = backend.document_element_style.set(root);
@@ -1281,6 +1286,7 @@ pub(crate) fn ApplyMatchResultWithFilter(
         inputs.property_registry,
         inputs.function_registry,
         inputs.container_runtime,
+        inputs.font_metrics,
     );
     let document = ();
     if let Some(root_style) = inputs.root_style.clone() {
@@ -3648,6 +3654,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                         .get()
                         .map(ProductionStyleCascadeBackend::style),
                     self.text_link_text_color,
+                    self.font_metrics,
                 )
             } else {
                 production_style_builder::ApplyWithColorSchemeSettingsAndRootStyle(
@@ -3662,6 +3669,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                         .get()
                         .map(ProductionStyleCascadeBackend::style),
                     self.text_link_text_color,
+                    self.font_metrics,
                 )
             };
             if let Err(error) = result {
@@ -3875,6 +3883,7 @@ mod tests {
             function_registry: None,
             animations: None,
             transitions: None,
+            font_metrics: None,
         }
     }
 

@@ -3253,6 +3253,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                     function_registry: self.cascade.function_registry,
                     animations: None,
                     transitions: None,
+                    font_metrics: None,
                 },
                 &mut state.builder,
                 &properties,
@@ -4026,6 +4027,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                 function_registry: self.cascade.function_registry,
                 animations: cascade.animations.as_ref(),
                 transitions: cascade.transitions.as_ref(),
+                font_metrics: None,
             },
             filter,
         ) {
@@ -6054,6 +6056,7 @@ mod tests {
             function_registry: None,
             animations: None,
             transitions: None,
+            font_metrics: None,
         })
         .expect("ordinary declarations must apply through translated StyleCascade");
         let actual = unsafe { &*actual.Get() };

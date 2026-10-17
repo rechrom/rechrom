@@ -2061,6 +2061,19 @@ impl Page {
         self.state.scroll_only.set(false);
         self.RequestBeginFrameIfNeeded();
     }
+    /// Recover from a compositor-side retained recording rejection by asking
+    /// Paint for one new artifact. The active compositor tree remains valid
+    /// until that replacement reaches raster.
+    pub fn RecoverRetainedRaster(&mut self) {
+        self.state.document.borrow_mut().InvalidatePaint();
+        self.state.scroll_only.set(false);
+        self.state.dirty.set(true);
+        self.state
+            .rendering
+            .borrow_mut()
+            .InvalidatePreparedArtifact();
+        self.RequestBeginFrameIfNeeded();
+    }
     pub fn SetPreferredColorScheme(&mut self, preference: PreferredColorScheme) {
         if let Some(scripts) = &self.scripts {
             scripts.SetPreferredColorScheme(preference);

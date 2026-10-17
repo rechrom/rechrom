@@ -626,6 +626,23 @@ pub fn finite_rect(r: PaintRect) -> bool {
         && r.width >= 0.0
         && r.height >= 0.0
 }
+fn same_raster_rect(a: PaintRect, b: PaintRect, roundoff: f64) -> bool {
+    (a.x - b.x).abs() <= roundoff
+        && (a.y - b.y).abs() <= roundoff
+        && (a.x + a.width - b.x - b.width).abs() <= roundoff
+        && (a.y + a.height - b.y - b.height).abs() <= roundoff
+}
+fn same_optional_raster_rect(
+    a: Option<PaintRect>,
+    b: Option<PaintRect>,
+    roundoff: f64,
+) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => same_raster_rect(a, b, roundoff),
+        (None, None) => true,
+        _ => false,
+    }
+}
 fn pixel_integer(value: f64, scale: f64) -> bool {
     let v = value * scale;
     v.is_finite() && v.fract() == 0.0 && v.abs() <= (1 << 22) as f64
@@ -1959,6 +1976,9 @@ fn same_optional_node<T>(
         _ => false,
     }
 }
+fn lifecycle_identity(lifecycle: &paint::paint_property_tree::PaintPropertyNodeLifecycle) -> usize {
+    Arc::as_ptr(&lifecycle.identity) as usize
+}
 fn validate_property_only_update(
     recording: RecordingChunks<'_>,
     current: &[PaintChunk],
@@ -1991,20 +2011,79 @@ fn validate_property_only_update(
     let new = paint::paint_property_tree::PaintPropertyTrees::from_states(
         current.iter().map(|c| &c.properties),
     );
-    if old.transforms.keys().ne(new.transforms.keys())
-        || old.clips.keys().ne(new.clips.keys())
-        || old.effects.keys().ne(new.effects.keys())
-        || old.scrolls.keys().ne(new.scrolls.keys())
+    // Numeric node IDs are dump-local labels. Blink property-node identity is
+    // the persistent node allocation, represented here by lifecycle.identity.
+    // A retained snapshot may legitimately relabel an unchanged node while
+    // preserving its identity and references.
+    let old_transforms: BTreeMap<_, _> = old
+        .transform_snapshots()
+        .map(|node| (lifecycle_identity(&node.lifecycle), node))
+        .collect();
+    let new_transforms: BTreeMap<_, _> = new
+        .transform_snapshots()
+        .map(|node| (lifecycle_identity(&node.lifecycle), node))
+        .collect();
+    let old_clips: BTreeMap<_, _> = old
+        .clip_snapshots()
+        .map(|node| (lifecycle_identity(&node.lifecycle), node))
+        .collect();
+    let new_clips: BTreeMap<_, _> = new
+        .clip_snapshots()
+        .map(|node| (lifecycle_identity(&node.lifecycle), node))
+        .collect();
+    let old_effects: BTreeMap<_, _> = old
+        .effect_snapshots()
+        .map(|node| (lifecycle_identity(&node.lifecycle), node))
+        .collect();
+    let new_effects: BTreeMap<_, _> = new
+        .effect_snapshots()
+        .map(|node| (lifecycle_identity(&node.lifecycle), node))
+        .collect();
+    let old_scrolls: BTreeMap<_, _> = old
+        .scroll_snapshots()
+        .map(|node| (lifecycle_identity(&node.lifecycle), node))
+        .collect();
+    let new_scrolls: BTreeMap<_, _> = new
+        .scroll_snapshots()
+        .map(|node| (lifecycle_identity(&node.lifecycle), node))
+        .collect();
+    if old_transforms.keys().ne(new_transforms.keys())
+        || old_clips.keys().ne(new_clips.keys())
+        || old_effects.keys().ne(new_effects.keys())
+        || old_scrolls.keys().ne(new_scrolls.keys())
     {
         browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 2.0)]);
         if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
-            eprintln!("recording-space-rejected stage=2");
+            eprintln!(
+                "recording-space-rejected stage=2 old_counts={:?} new_counts={:?}",
+                (old_transforms.len(), old_clips.len(), old_effects.len(), old_scrolls.len()),
+                (new_transforms.len(), new_clips.len(), new_effects.len(), new_scrolls.len()),
+            );
+            for (kind, identity, id) in old_transforms
+                .iter()
+                .filter(|(identity, _)| !new_transforms.contains_key(identity))
+                .map(|(identity, node)| ("old-transform", identity, node.id))
+                .chain(new_transforms.iter().filter(|(identity, _)| !old_transforms.contains_key(identity)).map(|(identity, node)| ("new-transform", identity, node.id)))
+                .chain(old_clips.iter().filter(|(identity, _)| !new_clips.contains_key(identity)).map(|(identity, node)| ("old-clip", identity, node.id)))
+                .chain(new_clips.iter().filter(|(identity, _)| !old_clips.contains_key(identity)).map(|(identity, node)| ("new-clip", identity, node.id)))
+                .take(12)
+            {
+                eprintln!("recording-space-node-diff kind={kind} identity={identity} id={id}");
+            }
+            for (kind, node) in old_clips
+                .iter()
+                .filter(|(identity, _)| !new_clips.contains_key(identity))
+                .map(|(_, node)| ("old-clip", *node))
+                .chain(new_clips.iter().filter(|(identity, _)| !old_clips.contains_key(identity)).map(|(_, node)| ("new-clip", *node)))
+            {
+                eprintln!("recording-space-clip-diff kind={kind} id={} parent={:?} transform={} rect={:?} path={} filter={:?}", node.id, node.parent.as_ref().map(|parent| parent.id), node.local_transform_space.id, node.rect, node.clip_path.len(), node.pixel_moving_filter.as_ref().map(|effect| effect.id));
+            }
         }
         return Err(reject);
     }
     let root = PropertyTreeState::default();
-    for (&id, a) in &old.transforms {
-        let b = &new.transforms[&id];
+    for (&identity, a) in &old_transforms {
+        let b = new_transforms[&identity];
         if !a.lifecycle.same_node(&b.lifecycle)
             || a.origin != b.origin
             || a.flattens_inherited_transform != b.flattens_inherited_transform
@@ -2057,8 +2136,8 @@ fn validate_property_only_update(
             }
         }
     }
-    for (&id, a) in &old.clips {
-        let b = &new.clips[&id];
+    for (&identity, a) in &old_clips {
+        let b = new_clips[&identity];
         if !a.lifecycle.same_node(&b.lifecycle)
             || a.rect != b.rect
             || a.radii != b.radii
@@ -2082,13 +2161,22 @@ fn validate_property_only_update(
         {
             browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 6.0)]);
             if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
-                eprintln!("recording-space-rejected stage=6");
+                eprintln!("recording-space-rejected stage=6 identity={identity} old_id={} new_id={} same_node={} rect={} radii={} path={} empty={} children={} even_odd={} error={} transform={} parent={} filter={}",
+                    a.id, b.id, a.lifecycle.same_node(&b.lifecycle), a.rect == b.rect,
+                    a.radii == b.radii, a.clip_path == b.clip_path,
+                    a.clip_path_is_empty == b.clip_path_is_empty,
+                    a.clip_path_children == b.clip_path_children,
+                    a.clip_path_even_odd == b.clip_path_even_odd,
+                    a.clip_path_error == b.clip_path_error,
+                    a.local_transform_space.lifecycle.same_node(&b.local_transform_space.lifecycle),
+                    same_optional_node(a.parent.as_ref(), b.parent.as_ref(), |a, b| a.lifecycle.same_node(&b.lifecycle)),
+                    same_optional_node(a.pixel_moving_filter.as_ref(), b.pixel_moving_filter.as_ref(), |a, b| a.lifecycle.same_node(&b.lifecycle)));
             }
             return Err(reject);
         }
     }
-    for (&id, a) in &old.effects {
-        let b = &new.effects[&id];
+    for (&identity, a) in &old_effects {
+        let b = new_effects[&identity];
         if !a.lifecycle.same_node(&b.lifecycle)
             || a.opacity != b.opacity
             || a.blend_mode != b.blend_mode
@@ -2121,8 +2209,8 @@ fn validate_property_only_update(
             return Err(reject);
         }
     }
-    for (&id, a) in &old.scrolls {
-        let b = &new.scrolls[&id];
+    for (&identity, a) in &old_scrolls {
+        let b = new_scrolls[&identity];
         if !a.lifecycle.same_node(&b.lifecycle)
             || a.container_rect != b.container_rect
             || a.contents_rect != b.contents_rect
@@ -2186,14 +2274,31 @@ fn validate_property_only_update(
                 .map(|r| shift(r, (-old_origin.0, -old_origin.1)));
             let new_shape = removed_clip_bounds(new_node, new_parent)?
                 .map(|r| shift(r, (-new_origin.0, -new_origin.1)));
-            if old_shape != new_shape {
+            // These bounds become SkRect coordinates during replay. Equivalent
+            // scroll-transform cancellation can differ by one f32 ULP because
+            // the old and current paths apply translation in a different
+            // order; that is the same raster coordinate, not changed geometry.
+            // SkMatrix and SkRect use f32. Bound the cancellation error by the
+            // largest intermediate world coordinate and the number of affine
+            // arithmetic steps; do not derive tolerance from the small local
+            // result after subtracting a large scroll origin.
+            let magnitude = old_shape
+                .into_iter()
+                .chain(new_shape)
+                .flat_map(|rect| [rect.x, rect.y, rect.x + rect.width, rect.y + rect.height])
+                .chain([old_origin.0, old_origin.1, new_origin.0, new_origin.1])
+                .map(f64::abs)
+                .fold(1.0, f64::max);
+            const MAX_RASTER_AFFINE_OPS: f64 = 8.0;
+            let roundoff = magnitude * f32::EPSILON as f64 * MAX_RASTER_AFFINE_OPS;
+            if !same_optional_raster_rect(old_shape, new_shape, roundoff) {
                 browser_tracing::instant(
                     "layer_tile",
                     "RecordingSpaceRejected",
                     &[("stage", 11.0)],
                 );
                 if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
-                    eprintln!("recording-space-rejected stage=11");
+                    eprintln!("recording-space-rejected stage=11 chunk={:?} old_node={} new_node={} old_parent={} new_parent={} old_origin={old_origin:?} new_origin={new_origin:?} old_shape={old_shape:?} new_shape={new_shape:?}", a.chunk.id, old_node.id, new_node.id, old_parent.id, new_parent.id);
                 }
                 return Err(reject);
             }
