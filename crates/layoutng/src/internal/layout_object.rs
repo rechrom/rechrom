@@ -104,7 +104,17 @@ pub enum BoxQuadType {
 
 // cpp: layoutng/internal/layout_object.h:112-113
 pub fn LocalRectForBoxQuad(fragment: &PhysicalBoxFragment, box_type: BoxQuadType) -> PhysicalRect {
-    unsafe { LocalRectForBoxQuadProvider(fragment, box_type) }
+    use layoutng_geometry::geometry::physical_rect::PhysicalRectExt;
+    let mut rect = PhysicalRect::new(PhysicalOffset::default(), fragment.Size());
+    match box_type {
+        BoxQuadType::kMargin => rect.Expand(&fragment.Margins()),
+        BoxQuadType::kBorder => {},
+        BoxQuadType::kPadding => rect.Contract(&(fragment.Borders() + fragment.Scrollbar())),
+        BoxQuadType::kContent => rect.Contract(&(fragment.Borders() + fragment.Scrollbar() + fragment.Padding())),
+    }
+    rect.size.width = rect.size.width.ClampNegativeToZero();
+    rect.size.height = rect.size.height.ClampNegativeToZero();
+    rect
 }
 
 // cpp: layoutng/internal/layout_object.h:115-115
@@ -669,10 +679,6 @@ unsafe extern "Rust" {
     fn LayoutObjectSetLayoutNeededForbiddenScopeDestructProvider(
         scope: &mut SetLayoutNeededForbiddenScope,
     );
-    fn LocalRectForBoxQuadProvider(
-        fragment: &PhysicalBoxFragment,
-        box_type: BoxQuadType,
-    ) -> PhysicalRect;
     fn LayoutObjectHitTestForOcclusionProvider(
         object: &LayoutObject,
         rect: &PhysicalRect,

@@ -1,6 +1,6 @@
 //! Document-owned SVG filter resource snapshots.  CSS keeps only the IRI;
 //! this is the DOM -> Layout projection of the referenced SVG graph.
-use crate::persistent_document::DOMNamespace;
+use crate::persistent_document::{DOMNamespace, DOMNode, DOMNodeType};
 use crate::{Child, Element, ParsedDocument as Document};
 use layoutng_assembly::internal::layout_input::ComputedStyle;
 use layoutng_assembly::internal::layout_input_types::Color;
@@ -8,12 +8,112 @@ use layoutng_assembly::internal::paint_input::*;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-fn attr<'a>(element: &'a Element, name: &str) -> Option<&'a str> {
-    element
-        .attributes
-        .iter()
-        .find(|(key, _)| key == name)
-        .map(|(_, value)| value.as_str())
+// A borrowed view keeps filter graph construction on its DOM resource subtree.
+// In particular, do not serialize the live document and clone every computed
+// style just to adapt it to the static parser's graph builder.
+#[derive(Clone, Copy)]
+enum FilterElement<'a> {
+    Parsed(&'a Element),
+    Persistent(&'a DOMNode),
+}
+impl<'a> FilterElement<'a> {
+    fn tag(self) -> &'a str {
+        match self {
+            Self::Parsed(n) => &n.tag,
+            Self::Persistent(n) => n.Name(),
+        }
+    }
+    fn namespace(self) -> DOMNamespace {
+        match self {
+            Self::Parsed(n) => n.namespace,
+            Self::Persistent(n) => n.Namespace(),
+        }
+    }
+    fn id(self) -> Option<&'a str> {
+        match self {
+            Self::Parsed(n) => n.id.as_deref(),
+            Self::Persistent(n) => n.FindAttribute("id").map(|a| a.value.as_str()),
+        }
+    }
+}
+enum FilterDocument<'a> {
+    Parsed(&'a Document, &'a [ComputedStyle]),
+    Persistent(&'a crate::Document),
+}
+impl<'a> FilterDocument<'a> {
+    // TreeScopeResources resolves attached targets in DOM tree order. The
+    // persistent arena also contains detached allocation history, which must
+    // neither add filter resources nor make a local layout update scan it.
+    fn indices<'b>(&'b self) -> impl Iterator<Item = usize> + 'b + use<'a, 'b> {
+        let mut parsed_index = 0;
+        let mut stack = match self {
+            Self::Persistent(document) => document.ActiveTreeScopes(),
+            Self::Parsed(..) => Vec::new(),
+        };
+        stack.reverse();
+        std::iter::from_fn(move || match self {
+            Self::Parsed(document, _) => {
+                let index = parsed_index;
+                parsed_index += 1;
+                (index < document.elements.len()).then_some(index)
+            }
+            Self::Persistent(document) => loop {
+                let index = stack.pop()?;
+                let node = document.Node(index);
+                stack.extend(node.Children().iter().rev().copied());
+                if node.Type() == DOMNodeType::kElement {
+                    return Some(index);
+                }
+            },
+        })
+    }
+    fn element(&self, index: usize) -> FilterElement<'a> {
+        match self {
+            Self::Parsed(d, _) => FilterElement::Parsed(&d.elements[index]),
+            Self::Persistent(d) => FilterElement::Persistent(d.Node(index)),
+        }
+    }
+    fn style(&self, index: usize) -> Option<&'a ComputedStyle> {
+        match self {
+            Self::Parsed(_, s) => s.get(index),
+            Self::Persistent(d) => d.ResolvedStyleFor(index).map(|s| &s.style),
+        }
+    }
+    fn children<'b>(
+        &'b self,
+        element: FilterElement<'b>,
+    ) -> impl Iterator<Item = usize> + 'b + use<'a, 'b> {
+        let (parsed, persistent) = match element {
+            FilterElement::Parsed(n) => (n.children.as_slice(), &[][..]),
+            FilterElement::Persistent(n) => (&[][..], n.Children()),
+        };
+        parsed
+            .iter()
+            .filter_map(|c| match c {
+                Child::Element(i) => Some(*i),
+                _ => None,
+            })
+            .chain(persistent.iter().copied().filter(|&i| match self {
+                Self::Persistent(d) => d.Node(i).Type() == DOMNodeType::kElement,
+                _ => false,
+            }))
+    }
+    fn image(&self, source: &str) -> Option<&'a crate::ImageResourceMetadata> {
+        match self {
+            Self::Parsed(d, _) => d.ImageResourceFor(source),
+            Self::Persistent(d) => d.ImageResourceFor(source),
+        }
+    }
+}
+fn attr<'a>(element: FilterElement<'a>, name: &str) -> Option<&'a str> {
+    match element {
+        FilterElement::Parsed(n) => n
+            .attributes
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str()),
+        FilterElement::Persistent(n) => n.FindAttribute(name).map(|a| a.value.as_str()),
+    }
 }
 fn number(value: Option<&str>, default: f64) -> f64 {
     value
@@ -40,7 +140,7 @@ fn length(value: Option<&str>) -> Option<SvgFilterLength> {
         .filter(|v| v.is_finite())
         .map(|value| SvgFilterLength { value, percentage })
 }
-fn region(element: &Element) -> SvgFilterRegion {
+fn region(element: FilterElement<'_>) -> SvgFilterRegion {
     SvgFilterRegion {
         x: length(attr(element, "x")),
         y: length(attr(element, "y")),
@@ -77,7 +177,7 @@ fn channel(value: Option<&str>, default: SvgFilterChannel) -> Result<SvgFilterCh
         Some(v) => Err(format!("invalid displacement channel {v}")),
     }
 }
-fn transfer_function(element: &Element) -> Result<SvgTransferFunction, String> {
+fn transfer_function(element: FilterElement<'_>) -> Result<SvgTransferFunction, String> {
     Ok(match attr(element, "type").unwrap_or("identity") {
         "identity" => SvgTransferFunction::kIdentity,
         "table" => SvgTransferFunction::kTable(numbers(attr(element, "tableValues"))),
@@ -94,7 +194,7 @@ fn transfer_function(element: &Element) -> Result<SvgTransferFunction, String> {
         value => return Err(format!("unsupported component transfer type {value}")),
     })
 }
-fn style_value<'a>(element: &'a Element, property: &str) -> Option<&'a str> {
+fn style_value<'a>(element: FilterElement<'a>, property: &str) -> Option<&'a str> {
     if let Some(value) = attr(element, property) {
         return Some(value);
     }
@@ -117,7 +217,7 @@ fn computed_flood_color(style: &ComputedStyle) -> Option<Color> {
         alpha: value.Alpha() * native.FloodOpacity().clamp(0.0, 1.0),
     })
 }
-fn flood_color(element: &Element, style: Option<&ComputedStyle>) -> Result<Color, String> {
+fn flood_color(element: FilterElement<'_>, style: Option<&ComputedStyle>) -> Result<Color, String> {
     if let Some(color) = style.and_then(computed_flood_color) {
         return Ok(color);
     }
@@ -144,7 +244,10 @@ fn computed_lighting_color(style: &ComputedStyle) -> Option<Color> {
         alpha: value.Alpha(),
     })
 }
-fn lighting_color(element: &Element, style: Option<&ComputedStyle>) -> Result<Color, String> {
+fn lighting_color(
+    element: FilterElement<'_>,
+    style: Option<&ComputedStyle>,
+) -> Result<Color, String> {
     // SVGFilterBuilder reads the primitive's final ComputedStyle. This keeps
     // presentation attributes, author declarations, inheritance and
     // currentColor on the canonical cascade path instead of reparsing one
@@ -159,7 +262,7 @@ fn lighting_color(element: &Element, style: Option<&ComputedStyle>) -> Result<Co
     layoutng_assembly::css_color_parser::ParseCSSColor(raw)
         .ok_or_else(|| "invalid SVG lighting-color".to_owned())
 }
-fn linear_rgb(element: &Element, style: Option<&ComputedStyle>, inherited: bool) -> bool {
+fn linear_rgb(element: FilterElement<'_>, style: Option<&ComputedStyle>, inherited: bool) -> bool {
     if let Some(native) = style.and_then(|style| unsafe { style.native_style.as_ref() }) {
         return native.ColorInterpolationFilters() == foundation::EColorInterpolation::kLinearrgb;
     }
@@ -171,13 +274,13 @@ fn linear_rgb(element: &Element, style: Option<&ComputedStyle>, inherited: bool)
         _ => inherited,
     }
 }
-fn light_source(document: &Document, element: &Element) -> Option<SvgLightSource> {
-    element.children.iter().find_map(|child| {
-        let Child::Element(index) = child else {
-            return None;
-        };
-        let light = &document.elements[*index];
-        match light.tag.as_str() {
+fn light_source(
+    document: &FilterDocument<'_>,
+    element: FilterElement<'_>,
+) -> Option<SvgLightSource> {
+    document.children(element).find_map(|index| {
+        let light = document.element(index);
+        match light.tag() {
             "feDistantLight" => Some(SvgLightSource::kDistant {
                 azimuth: number(attr(light, "azimuth"), 0.0),
                 elevation: number(attr(light, "elevation"), 0.0),
@@ -201,14 +304,10 @@ fn light_source(document: &Document, element: &Element) -> Option<SvgLightSource
         }
     })
 }
-fn primitive(
-    document: &Document,
-    index: usize,
-    styles: &[ComputedStyle],
-) -> Result<SvgFilterPrimitive, String> {
-    let element = &document.elements[index];
+fn primitive(document: &FilterDocument<'_>, index: usize) -> Result<SvgFilterPrimitive, String> {
+    let element = document.element(index);
     let first = input(attr(element, "in"));
-    let kind = match element.tag.as_str() {
+    let kind = match element.tag() {
         "feGaussianBlur" => {
             let values = numbers(attr(element, "stdDeviation"));
             let x = values.first().copied().unwrap_or(0.0).max(0.0);
@@ -238,7 +337,7 @@ fn primitive(
             dy: number(attr(element, "dy"), 0.0),
         },
         "feFlood" => SvgFilterPrimitiveKind::kFlood {
-            color: flood_color(element, styles.get(index))?,
+            color: flood_color(element, document.style(index))?,
         },
         "feBlend" => {
             let mode = match attr(element, "mode").unwrap_or("normal") {
@@ -277,12 +376,10 @@ fn primitive(
         }
         "feMerge" => {
             let mut inputs = Vec::new();
-            for child in &element.children {
-                if let Child::Element(index) = child {
-                    let node = &document.elements[*index];
-                    if node.tag == "feMergeNode" {
-                        inputs.push(input(attr(node, "in")));
-                    }
+            for index in document.children(element) {
+                let node = document.element(index);
+                if node.tag() == "feMergeNode" {
+                    inputs.push(input(attr(node, "in")));
                 }
             }
             SvgFilterPrimitiveKind::kMerge { inputs }
@@ -290,12 +387,9 @@ fn primitive(
         "feComponentTransfer" => {
             let mut functions: [SvgTransferFunction; 4] =
                 std::array::from_fn(|_| SvgTransferFunction::kIdentity);
-            for child in &element.children {
-                let Child::Element(index) = child else {
-                    continue;
-                };
-                let node = &document.elements[*index];
-                let slot = match node.tag.as_str() {
+            for index in document.children(element) {
+                let node = document.element(index);
+                let slot = match node.tag() {
                     "feFuncR" => Some(0),
                     "feFuncG" => Some(1),
                     "feFuncB" => Some(2),
@@ -364,18 +458,18 @@ fn primitive(
             let mut resource = if local_fragment {
                 None
             } else {
-                document.ImageResourceFor(&href)
+                document.image(&href)
             };
             if local_fragment {
                 let id = href.trim_start_matches('#');
-                let target = find_id(document, id)
+                let target = find_id(document, index, id)
                     .ok_or_else(|| "feImage local fragment is missing".to_owned())?;
-                let target = &document.elements[target];
-                if target.tag == "image" {
+                let target = document.element(target);
+                if target.tag() == "image" {
                     if let Some(source) =
                         attr(target, "href").or_else(|| attr(target, "xlink:href"))
                     {
-                        resource = document.ImageResourceFor(source);
+                        resource = document.image(source);
                         local_fragment = false
                     }
                 } else {
@@ -435,7 +529,7 @@ fn primitive(
             }
         }
         "feDiffuseLighting" | "feSpecularLighting" => {
-            let specular = element.tag == "feSpecularLighting";
+            let specular = element.tag() == "feSpecularLighting";
             let unit = numbers(attr(element, "kernelUnitLength"));
             let kernel_unit_x = unit.first().copied().unwrap_or(0.0);
             let kernel_unit_y = unit.get(1).copied().unwrap_or(kernel_unit_x);
@@ -446,7 +540,7 @@ fn primitive(
                     SvgLightingType::kDiffuse
                 },
                 light: light_source(document, element),
-                color: lighting_color(element, styles.get(index))?,
+                color: lighting_color(element, document.style(index))?,
                 surface_scale: number(attr(element, "surfaceScale"), 1.0),
                 constant: number(
                     attr(
@@ -471,24 +565,30 @@ fn primitive(
         input: first,
         result: attr(element, "result").unwrap_or("").to_owned(),
         region: region(element),
-        linear_rgb: linear_rgb(element, styles.get(index), true),
+        linear_rgb: linear_rgb(element, document.style(index), true),
         kind,
     })
 }
-fn find_id(document: &Document, id: &str) -> Option<usize> {
-    document
-        .elements
-        .iter()
-        .position(|element| attr(element, "id") == Some(id) || element.id.as_deref() == Some(id))
+fn find_id(document: &FilterDocument<'_>, source: usize, id: &str) -> Option<usize> {
+    match document {
+        FilterDocument::Persistent(document) => {
+            let source = document.CorrespondingSVGElement(source).unwrap_or(source);
+            document.FindElementByIdInTreeScope(source, id)
+        }
+        FilterDocument::Parsed(..) => document.indices().find(|&index| {
+            let element = document.element(index);
+            attr(element, "id") == Some(id) || element.id() == Some(id)
+        }),
+    }
 }
+
 fn build_one(
-    document: &Document,
-    styles: &[ComputedStyle],
+    document: &FilterDocument<'_>,
     index: usize,
     stack: &mut HashSet<usize>,
 ) -> SvgFilterGraph {
-    let element = &document.elements[index];
-    let filter_linear_rgb = linear_rgb(element, styles.get(index), true);
+    let element = document.element(index);
+    let filter_linear_rgb = linear_rgb(element, document.style(index), true);
     let units = |name, default| match attr(element, name) {
         Some("userSpaceOnUse") => SvgFilterUnits::kUserSpaceOnUse,
         Some("objectBoundingBox") | None => default,
@@ -496,7 +596,7 @@ fn build_one(
     };
     let mut graph = SvgFilterGraph {
         id: attr(element, "id")
-            .or(element.id.as_deref())
+            .or(element.id())
             .unwrap_or("")
             .to_owned(),
         filter_units: units("filterUnits", SvgFilterUnits::kObjectBoundingBox),
@@ -511,11 +611,14 @@ fn build_one(
         graph.unsupported = Some("recursive SVG filter href".into());
         return graph;
     }
-    let has_local_primitives=element.children.iter().any(|child| matches!(child,Child::Element(index) if document.elements[*index].namespace==DOMNamespace::kSVG && document.elements[*index].tag.starts_with("fe")));
+    let has_local_primitives = document.children(element).any(|index| {
+        let child = document.element(index);
+        child.namespace() == DOMNamespace::kSVG && child.tag().starts_with("fe")
+    });
     if let Some(href) = attr(element, "href").or_else(|| attr(element, "xlink:href")) {
         if let Some(id) = href.strip_prefix('#') {
-            if let Some(base) = find_id(document, id) {
-                let inherited = build_one(document, styles, base, stack);
+            if let Some(base) = find_id(document, index, id) {
+                let inherited = build_one(document, base, stack);
                 if inherited.unsupported.is_some() {
                     graph.unsupported = inherited.unsupported;
                 }
@@ -547,18 +650,15 @@ fn build_one(
             graph.unsupported = Some("external SVG filter href".into());
         }
     }
-    for child in &element.children {
-        let Child::Element(child) = child else {
-            continue;
-        };
-        let node = &document.elements[*child];
-        if node.namespace != DOMNamespace::kSVG || !node.tag.starts_with("fe") {
+    for child in document.children(element) {
+        let node = document.element(child);
+        if node.namespace() != DOMNamespace::kSVG || !node.tag().starts_with("fe") {
             continue;
         }
-        match primitive(document, *child, styles) {
+        match primitive(document, child) {
             Ok(mut value) => {
-                if styles
-                    .get(*child)
+                if document
+                    .style(child)
                     .is_none_or(|style| style.native_style.is_null())
                     && style_value(node, "color-interpolation-filters").is_none()
                 {
@@ -574,70 +674,29 @@ fn build_one(
     stack.remove(&index);
     graph
 }
+fn build_graphs(document: &FilterDocument<'_>) -> Arc<Vec<SvgFilterGraph>> {
+    let mut trace = browser_tracing::span("layout", "DOM.BuildSVGFilterGraphs");
+    let graphs: Vec<_> = document
+        .indices()
+        .filter(|&index| {
+            let element = document.element(index);
+            element.namespace() == DOMNamespace::kSVG && element.tag() == "filter"
+        })
+        .map(|index| build_one(document, index, &mut HashSet::new()))
+        .collect();
+    trace.set("filters", graphs.len() as f64);
+    Arc::new(graphs)
+}
 pub(super) fn build(document: &Document, styles: &[ComputedStyle]) -> Arc<Vec<SvgFilterGraph>> {
-    Arc::new(
-        document
-            .elements
-            .iter()
-            .enumerate()
-            .filter(|(_, element)| {
-                element.namespace == DOMNamespace::kSVG && element.tag == "filter"
-            })
-            .map(|(index, _)| build_one(document, styles, index, &mut HashSet::new()))
-            .collect(),
-    )
+    build_graphs(&FilterDocument::Parsed(document, styles))
 }
 
-/// Project the retained DOM through the same document-owned filter snapshot as
-/// the static adapter. Arena indices are preserved so every primitive can read
-/// its own final ComputedStyle while the document keeps the native styles
-/// rooted for the duration of this build.
+// cpp: FilterEffectBuilder::BuildReferenceFilter / SVGFilterBuilder::BuildGraph.
+// Read resource attributes and canonical computed styles directly from their
+// DOM owner. The output alone is owned by the immutable paint snapshot.
 pub(super) fn build_persistent(document: &crate::Document) -> Arc<Vec<SvgFilterGraph>> {
-    use crate::persistent_document::DOMNodeType;
-
-    let mut snapshot = Document::default();
-    let mut styles = Vec::with_capacity(document.NodeCount());
-    let mut copied_resources = HashSet::new();
-    for index in 0..document.NodeCount() {
-        let node = document.Node(index);
-        let attributes = node
-            .Attributes()
-            .iter()
-            .map(|attribute| (attribute.local_name.clone(), attribute.value.clone()))
-            .collect::<Vec<_>>();
-        for (_, value) in &attributes {
-            if copied_resources.insert(value.clone()) {
-                if let Some(resource) = document.ImageResourceFor(value) {
-                    snapshot.SetImageResource(value.clone(), *resource);
-                }
-            }
-        }
-        snapshot.elements.push(Element {
-            tag: node.Name().to_owned(),
-            namespace: node.Namespace(),
-            id: node
-                .FindAttribute("id")
-                .map(|attribute| attribute.value.clone()),
-            classes: Vec::new(),
-            inline_style: node
-                .FindAttribute("style")
-                .map(|attribute| attribute.value.clone()),
-            attributes,
-            parent: node.Parent(),
-            children: node
-                .Children()
-                .iter()
-                .copied()
-                .filter(|child| document.Node(*child).Type() == DOMNodeType::kElement)
-                .map(Child::Element)
-                .collect(),
-        });
-        styles.push(
-            document
-                .ResolvedStyleFor(index)
-                .map(|resolved| resolved.style.clone())
-                .unwrap_or_default(),
-        );
-    }
-    build(&snapshot, &styles)
+    document
+        .SVGFilterGraphs()
+        .cloned()
+        .unwrap_or_else(|| build_graphs(&FilterDocument::Persistent(document)))
 }

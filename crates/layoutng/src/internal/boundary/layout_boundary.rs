@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use crate::layout_boundary_support::LayoutUpdateKind;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -806,21 +807,41 @@ fn ExportPaintProperties(
     effective_style: *const NativeComputedStyle,
     resources: &Arc<PaintResources>,
 ) -> PaintProperties {
+    ExportProperties(
+        object,
+        sources,
+        style_sources,
+        effective_style,
+        resources,
+        LayoutUpdateKind::Paint,
+    )
+}
+
+fn ExportProperties(
+    object: *const LayoutObject,
+    sources: &SourceMap,
+    style_sources: &StyleSourceMap,
+    effective_style: *const NativeComputedStyle,
+    resources: &Arc<PaintResources>,
+    purpose: LayoutUpdateKind,
+) -> PaintProperties {
     let mut output = PaintProperties::default();
     output.resources = Some(Arc::clone(resources));
     if object.is_null() {
         return output;
     }
     output.svg_hidden_container = unsafe { &*object }.IsSVGHiddenContainer();
-    // LayoutObject's base-first representation preserves the native
-    // DisplayItemClient subobject, including anonymous layout clients.
-    // cpp: core/layout/layout_object.h:280
-    // cpp: platform/graphics/paint/display_item_client.h:33-35,71-82
-    let client = unsafe { &*(object as *const DisplayItemClient) };
-    output.display_item_client_id = client.Id() as u64;
-    output.display_item_client_is_cacheable = client.IsCacheable();
-    output.display_item_client_is_just_created = client.IsJustCreated();
-    output.display_item_raster_effect_outset = client.VisualRectOutsetForRasterEffects();
+    if purpose == LayoutUpdateKind::Paint {
+        // LayoutObject's base-first representation preserves the native
+        // DisplayItemClient subobject, including anonymous layout clients.
+        // cpp: core/layout/layout_object.h:280
+        // cpp: platform/graphics/paint/display_item_client.h:33-35,71-82
+        let client = unsafe { &*(object as *const DisplayItemClient) };
+        output.display_item_client_id = client.Id() as u64;
+        output.display_item_client_is_cacheable = client.IsCacheable();
+        output.display_item_client_is_just_created = client.IsJustCreated();
+        output.display_item_raster_effect_outset = client.VisualRectOutsetForRasterEffects();
+    }
     let text_combine = DynamicTo::<LayoutTextCombine>(object);
     if !text_combine.is_null() {
         let text_combine = unsafe { &*text_combine };
@@ -835,11 +856,17 @@ fn ExportPaintProperties(
             .get(&(parent as *const LayoutObject))
             .map(|entry| unsafe { &*entry.node }.InputStyle().paint.image_resource_id)
             .unwrap_or(None);
-        output.style = crate::internal::boundary::native_paint_style::ExportStyle(
-            parent_style,
-            parent_image_resource_id,
-        );
-        output.style.applied_text_decorations = ExportAppliedTextDecorations(parent_style);
+        output.style = if purpose == LayoutUpdateKind::Paint {
+            crate::internal::boundary::native_paint_style::ExportStyle(
+                parent_style,
+                parent_image_resource_id,
+            )
+        } else {
+            crate::internal::boundary::native_paint_style::ExportGeometryStyle(parent_style)
+        };
+        if purpose == LayoutUpdateKind::Paint {
+            output.style.applied_text_decorations = ExportAppliedTextDecorations(parent_style);
+        }
         output.writing_mode = PublicWritingMode(parent_style.GetWritingMode());
         let scale_x = text_combine.ScaleXForInline().map(f64::from);
         let inline_spacing =
@@ -864,68 +891,72 @@ fn ExportPaintProperties(
                 font_size: unsafe { &*parent_style.GetFont() }
                     .GetFontDescription()
                     .ComputedSize() as f64,
-                emphasis: ExportTextCombineEmphasis(parent_style),
+                emphasis: (purpose == LayoutUpdateKind::Paint)
+                    .then(|| ExportTextCombineEmphasis(parent_style))
+                    .flatten(),
             },
         );
     }
     let layout_box = DynamicTo::<LayoutBox>(object);
-    if !layout_box.is_null() {
-        output.can_composite_background_attachment_fixed =
-            unsafe { &*object }.CanCompositeBackgroundAttachmentFixed();
-        output.background_paint_location =
-            match unsafe { &*layout_box }.GetBackgroundPaintLocation() {
-                crate::internal::layout_object::kBackgroundPaintInBorderBoxSpace => {
-                    BackgroundPaintLocation::BorderBox
-                }
-                crate::internal::layout_object::kBackgroundPaintInContentsSpace => {
-                    BackgroundPaintLocation::Contents
-                }
-                crate::internal::layout_object::kBackgroundPaintInBothSpaces => {
-                    BackgroundPaintLocation::Both
-                }
-                value => panic!("invalid native background paint location {value}"),
-            };
-        // Preserve the LayoutBox virtual override rather than calling only
-        // the DisplayItemClient base default (layout_box.cc:4099-4108).
-        output.display_item_raster_effect_outset =
-            unsafe { &*layout_box }.VisualRectOutsetForRasterEffects();
-        if unsafe { &*layout_box }.HasCSSClip() {
-            output.css_clip = Some(ExportNativeInkRect(unsafe { &*layout_box }.CSSClipRect()));
-        }
-    } else if unsafe { &*object }.IsSVGShape() {
-        // layout_svg_shape.cc:664-674: hairline raster expansion is metadata,
-        // not an inflation of the stored VisualRect or chunk bounds.
-        let style = unsafe { &*object }.StyleRef();
-        if style.HasVisibleStroke() {
-            output.display_item_raster_effect_outset =
-                if style.CapStyle() == foundation::LineCap::kButtCap {
-                    layoutng_fragment_tree::fragment_tree::RasterEffectOutset::kHalfPixel
-                } else {
-                    layoutng_fragment_tree::fragment_tree::RasterEffectOutset::kWholePixel
+    if purpose == LayoutUpdateKind::Paint {
+        if !layout_box.is_null() {
+            output.can_composite_background_attachment_fixed =
+                unsafe { &*object }.CanCompositeBackgroundAttachmentFixed();
+            output.background_paint_location =
+                match unsafe { &*layout_box }.GetBackgroundPaintLocation() {
+                    crate::internal::layout_object::kBackgroundPaintInBorderBoxSpace => {
+                        BackgroundPaintLocation::BorderBox
+                    }
+                    crate::internal::layout_object::kBackgroundPaintInContentsSpace => {
+                        BackgroundPaintLocation::Contents
+                    }
+                    crate::internal::layout_object::kBackgroundPaintInBothSpaces => {
+                        BackgroundPaintLocation::Both
+                    }
+                    value => panic!("invalid native background paint location {value}"),
                 };
+            // Preserve the LayoutBox virtual override rather than calling only
+            // the DisplayItemClient base default (layout_box.cc:4099-4108).
+            output.display_item_raster_effect_outset =
+                unsafe { &*layout_box }.VisualRectOutsetForRasterEffects();
+            if unsafe { &*layout_box }.HasCSSClip() {
+                output.css_clip = Some(ExportNativeInkRect(unsafe { &*layout_box }.CSSClipRect()));
+            }
+        } else if unsafe { &*object }.IsSVGShape() {
+            // layout_svg_shape.cc:664-674: hairline raster expansion is metadata,
+            // not an inflation of the stored VisualRect or chunk bounds.
+            let style = unsafe { &*object }.StyleRef();
+            if style.HasVisibleStroke() {
+                output.display_item_raster_effect_outset =
+                    if style.CapStyle() == foundation::LineCap::kButtCap {
+                        layoutng_fragment_tree::fragment_tree::RasterEffectOutset::kHalfPixel
+                    } else {
+                        layoutng_fragment_tree::fragment_tree::RasterEffectOutset::kWholePixel
+                    };
+            }
         }
-    }
-    // A native object with no PaintLayer is a known result, not permission for
-    // Paint to reconstruct a layer from flattened style (notably SVG children).
-    output.paint_layer_state_is_native = true;
-    // PaintLayerPainter uses the layer's own client, distinct from this box.
-    // cpp: core/paint/paint_layer_painter.cc:452-454,484-486,730-732
-    let box_model = DynamicTo::<LayoutBoxModelObject>(object);
-    if !box_model.is_null() {
-        let layer = unsafe { &*box_model }.Layer();
-        if !layer.is_null() {
-            let layer = unsafe { &*layer };
-            output.paint_layer_client_id = layer.Id();
-            output.paint_layer_client_is_cacheable = layer.IsCacheable();
-            output.paint_layer_client_is_just_created = layer.IsJustCreated();
-            output.paint_layer_is_self_painting = layer.IsSelfPaintingLayer();
-            // These decisions belong to native Layout/PaintLayer setup. In
-            // particular, style adjustment makes static flex/grid items with
-            // z-index stacking contexts, and containment/perspective can form
-            // contexts without an equivalent field in the public projection.
-            let layout_object = unsafe { &*object };
-            output.paint_layer_is_stacking_context = layout_object.IsStackingContext();
-            output.paint_layer_stacking_level = layout_object.StyleRef().EffectiveZIndex();
+        // A native object with no PaintLayer is a known result, not permission for
+        // Paint to reconstruct a layer from flattened style (notably SVG children).
+        output.paint_layer_state_is_native = true;
+        // PaintLayerPainter uses the layer's own client, distinct from this box.
+        // cpp: core/paint/paint_layer_painter.cc:452-454,484-486,730-732
+        let box_model = DynamicTo::<LayoutBoxModelObject>(object);
+        if !box_model.is_null() {
+            let layer = unsafe { &*box_model }.Layer();
+            if !layer.is_null() {
+                let layer = unsafe { &*layer };
+                output.paint_layer_client_id = layer.Id();
+                output.paint_layer_client_is_cacheable = layer.IsCacheable();
+                output.paint_layer_client_is_just_created = layer.IsJustCreated();
+                output.paint_layer_is_self_painting = layer.IsSelfPaintingLayer();
+                // These decisions belong to native Layout/PaintLayer setup. In
+                // particular, style adjustment makes static flex/grid items with
+                // z-index stacking contexts, and containment/perspective can form
+                // contexts without an equivalent field in the public projection.
+                let layout_object = unsafe { &*object };
+                output.paint_layer_is_stacking_context = layout_object.IsStackingContext();
+                output.paint_layer_stacking_level = layout_object.StyleRef().EffectiveZIndex();
+            }
         }
     }
     let Some(source_entry) = sources.get(&object) else {
@@ -960,53 +991,67 @@ fn ExportPaintProperties(
     } else {
         unsafe { &*effective_style }
     };
-    output.style = crate::internal::boundary::native_paint_style::ExportStyleWithProjectedSvg(
-        native_paint_style,
-        paint_style.paint.image_resource_id,
-        &paint_style.paint,
-        &paint_style.svg_clip_resources,
-    );
-    if let Some(target) = output
-        .style
-        .clip_path
-        .as_ref()
-        .and_then(|clip| clip.reference_target_id)
-    {
-        // Reuse the native SVG viewport query at the existing Layout boundary.
-        // The resource can live under a different nested SVG from its client.
-        let resource = sources.iter().find_map(|(&object, entry)| {
-            (unsafe { &*entry.node }.InputId() == target
-                && unsafe { &*entry.node }.InputKind() == NodeKind::kSvgResourceClipper)
-                .then_some(object)
-        });
-        let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
-        let resolve = unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.viewport_size);
-        if let (Some(resource), Some(resolve)) = (resource, resolve) {
-            let size = resolve(unsafe { &*resource });
-            output.style.clip_path.as_mut().unwrap().reference_viewport = Some(Size {
-                width: f64::from(size.width()),
-                height: f64::from(size.height()),
+    if purpose == LayoutUpdateKind::Layout {
+        output.style =
+            crate::internal::boundary::native_paint_style::ExportGeometryStyle(native_paint_style);
+    } else {
+        output.style = crate::internal::boundary::native_paint_style::ExportStyleWithProjectedSvg(
+            native_paint_style,
+            paint_style.paint.image_resource_id,
+            &paint_style.paint,
+            &paint_style.svg_clip_resources,
+        );
+        if let Some(target) = output
+            .style
+            .clip_path
+            .as_ref()
+            .and_then(|clip| clip.reference_target_id)
+        {
+            // Reuse the native SVG viewport query at the existing Layout boundary.
+            // The resource can live under a different nested SVG from its client.
+            let resource = sources.iter().find_map(|(&object, entry)| {
+                (unsafe { &*entry.node }.InputId() == target
+                    && unsafe { &*entry.node }.InputKind() == NodeKind::kSvgResourceClipper)
+                    .then_some(object)
             });
-        } else {
-            // Connected ID targets without an attached native resource are
-            // unavailable (for example a display:none ancestor).
-            output.style.clip_path = None;
+            let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
+            let resolve = unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.viewport_size);
+            if let (Some(resource), Some(resolve)) = (resource, resolve) {
+                let size = resolve(unsafe { &*resource });
+                output.style.clip_path.as_mut().unwrap().reference_viewport = Some(Size {
+                    width: f64::from(size.width()),
+                    height: f64::from(size.height()),
+                });
+            } else {
+                // Connected ID targets without an attached native resource are
+                // unavailable (for example a display:none ancestor).
+                output.style.clip_path = None;
+            }
         }
-    }
-    for layer in &mut output.style.mask_images {
-        let Some(reference) = layer.svg_reference.as_mut() else { continue; };
-        let Some(target) = reference.target_id else { continue; };
-        let resource = sources.iter().find_map(|(&object, entry)| {
-            (unsafe { &*entry.node }.InputId() == target
-                && unsafe { &*entry.node }.InputKind() == NodeKind::kSvgResourceMasker).then_some(object)
-        });
-        let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
-        let resolve = unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.viewport_size);
-        if let (Some(resource), Some(resolve)) = (resource, resolve) {
-            let size = resolve(unsafe { &*resource });
-            reference.viewport = Some(Size { width: f64::from(size.width()), height: f64::from(size.height()) });
-        } else {
-            reference.graph = None; layer.image_state = crate::internal::paint_input::PaintMaskImageState::kInvalid;
+        for layer in &mut output.style.mask_images {
+            let Some(reference) = layer.svg_reference.as_mut() else {
+                continue;
+            };
+            let Some(target) = reference.target_id else {
+                continue;
+            };
+            let resource = sources.iter().find_map(|(&object, entry)| {
+                (unsafe { &*entry.node }.InputId() == target
+                    && unsafe { &*entry.node }.InputKind() == NodeKind::kSvgResourceMasker)
+                    .then_some(object)
+            });
+            let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
+            let resolve = unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.viewport_size);
+            if let (Some(resource), Some(resolve)) = (resource, resolve) {
+                let size = resolve(unsafe { &*resource });
+                reference.viewport = Some(Size {
+                    width: f64::from(size.width()),
+                    height: f64::from(size.height()),
+                });
+            } else {
+                reference.graph = None;
+                layer.image_state = crate::internal::paint_input::PaintMaskImageState::kInvalid;
+            }
         }
     }
     if native_paint_style.HasOffset() && !layout_box.is_null() {
@@ -1018,7 +1063,9 @@ fn ExportPaintProperties(
             );
         }
     }
-    output.style.applied_text_decorations = ExportAppliedTextDecorations(native_paint_style);
+    if purpose == LayoutUpdateKind::Paint {
+        output.style.applied_text_decorations = ExportAppliedTextDecorations(native_paint_style);
+    }
     output.margin = paint_style.margin;
     output.border = paint_style.border;
     output.border_styles = paint_style.border_styles;
@@ -1082,6 +1129,9 @@ fn ExportPaintProperties(
                 ..Default::default()
             });
         }
+    }
+    if purpose == LayoutUpdateKind::Layout {
+        return output;
     }
     // Preserve the real editor identity rather than reconstructing its synthetic id.
     let mut ancestor = source as *const Node;
@@ -1153,12 +1203,13 @@ fn ExportPaintProperties(
             control.hovered = element_data.control_hovered;
             control.active = element_data.control_active;
             control.focused = element_data.control_focused;
+            // OutlinePainter uses the computed outline, including the UA
+            // :focus-visible rule; focus alone must not override outline:none
+            // or add an auto ring alongside an author's non-auto outline.
             control.auto_focus_ring = element_data.control_focused
                 && appearance == AppearanceValue::kNone
-                && !paint_style
-                    .extended
-                    .as_ref()
-                    .is_some_and(|extended| extended.has_author_outline);
+                && native_paint_style.HasOutline()
+                && native_paint_style.OutlineStyleIsAuto();
             control.autofilled = element_data.autofill_state != AutofillState::kNotFilled;
             control.value_ratio = element_data
                 .control_value_ratio
@@ -1574,7 +1625,7 @@ fn ExportListMarkerSymbol(item: &FragmentItem, paint: &mut PaintProperties) {
             let defaults = ExtendedStyle::default();
             let style = unsafe { &*node }.InputStyle();
             paint.list_marker_symbol =
-                Some(style.extended.as_ref().unwrap_or(&defaults).list_style_type);
+                Some(style.extended.as_deref().unwrap_or(&defaults).list_style_type);
             return;
         }
         object = layout_object.Parent();
@@ -1764,6 +1815,15 @@ fn ExportBoxPaintGeometry(box_fragment: &PhysicalBoxFragment, paint: &mut PaintP
             }
         };
         paint.client_size = Some(client_size);
+        // Node::GetLayoutBox uses the native class hierarchy. Extracted SVG
+        // shapes/containers share LayoutBox storage but are not CSS boxes;
+        // SVGRoot and SVGBlock subclasses (text/foreignObject) really are.
+        let object = unsafe { &*box_fragment.GetLayoutObject() };
+        if object.IsSVG() && !object.IsSVGRoot() && !object.IsSVGText() && !object.IsSVGForeignObject() {
+            paint.client_size = Some(Size::default());
+            paint.scroll_size = Size::default();
+        }
+
         // Export the native scroll owner, not the unpropagated input CSS.
         // Blink's UpdateScrollNode/UpdateScrollTranslation use this same area.
         let area = layout_box.GetScrollableArea();
@@ -2584,13 +2644,48 @@ fn ExportCollapsedTablePaintData(
 }
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:1704-1734
+#[derive(Default)]
+struct FragmentOwners {
+    paint: HashSet<*const PhysicalBoxFragment>,
+    instances: HashMap<*const PhysicalBoxFragment, u64>,
+}
+impl FragmentOwners {
+    fn insert(&mut self, native: *const PhysicalBoxFragment, instance: u64) -> bool {
+        self.instances.entry(native).or_insert(instance);
+        self.paint.insert(native)
+    }
+}
+
+// cpp: LayoutInline::QuadsForSelfInternal / LocalBoundingBoxRectF. Paint may
+// cull a plain inline, but CSSOM still gets each native line/column rectangle.
+fn ExportInlineGeometry(objects: &[*mut LayoutObject], owners: &FragmentOwners) -> Vec<layoutng_fragment_tree::fragment_tree::InlineGeometry> {
+    use layoutng_fragment_tree::fragment_tree::{InlineGeometry, InlineGeometryRect};
+    let mut output = Vec::new();
+    for &object in objects {
+        let native = unsafe { &*object };
+        if !native.IsLayoutInline() || native.IsSVG() || native.GetNode().is_null() { continue; }
+        if unsafe { &*native.GetNode() }.InputIsStyleGenerated() { continue; }
+        let inline = unsafe { &*DynamicTo::<LayoutInline>(object) };
+        let native_geometry = inline.ClientRectsInContainers();
+        if native_geometry.rects.is_empty() { continue; }
+        let mut geometry = InlineGeometry { node_id: InputId(object), effective_zoom: native.StyleRef().EffectiveZoom(), local_bounds: ExportNativeInkRect(native_geometry.bounds), ..Default::default() };
+        for (container, rect) in native_geometry.rects {
+            let instance = owners.instances.get(&container).copied().expect("inline geometry requires its exported physical container");
+            geometry.rects.push(InlineGeometryRect { container_fragment_instance_id: instance, rect: ExportNativeInkRect(rect) });
+        }
+        output.push(geometry);
+    }
+    output
+}
+
 fn AppendSVGChildren(
     object: *const LayoutObject,
     output: &mut Vec<FragmentNode>,
     sources: &SourceMap,
     style_sources: &StyleSourceMap,
     resources: &Arc<PaintResources>,
-    paint_state_owners: &mut HashSet<*const PhysicalBoxFragment>,
+    purpose: LayoutUpdateKind,
+    paint_state_owners: &mut FragmentOwners,
     fragmentainer_instance_id: u64,
     display_item_fragment: u32,
     next_fragment_instance_id: &mut u64,
@@ -2618,6 +2713,7 @@ fn AppendSVGChildren(
                     sources,
                     style_sources,
                     resources,
+                    purpose,
                     paint_state_owners,
                     fragmentainer_instance_id,
                     display_item_fragment,
@@ -2786,7 +2882,8 @@ fn ExportInlineItem(
     sources: &SourceMap,
     style_sources: &StyleSourceMap,
     resources: &Arc<PaintResources>,
-    paint_state_owners: &mut HashSet<*const PhysicalBoxFragment>,
+    purpose: LayoutUpdateKind,
+    paint_state_owners: &mut FragmentOwners,
     fragmentainer_instance_id: u64,
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
@@ -2803,7 +2900,7 @@ fn ExportInlineItem(
         std::ptr::null()
     };
     output.paint =
-        ExportPaintProperties(object, sources, style_sources, effective_style, resources);
+        ExportProperties(object, sources, style_sources, effective_style, resources, purpose);
     // cpp: core/paint/box_fragment_painter.cc:2025-2026,2071-2072
     // cpp: core/paint/inline_box_fragment_painter.cc:63-64
     output.paint.display_item_fragment = item.FragmentId();
@@ -2819,7 +2916,7 @@ fn ExportInlineItem(
         height: Number(rect.size.height),
     };
     output.content_size = output.size;
-    if item.Type() == ItemType::kBox && !object.is_null() {
+    if purpose == LayoutUpdateKind::Paint && item.Type() == ItemType::kBox && !object.is_null() {
         let native_style = if effective_style.is_null() {
             unsafe { &*object }.StyleRef()
         } else {
@@ -2827,7 +2924,7 @@ fn ExportInlineItem(
         };
         ExportNativeNinePieceImages(native_style, output.size, resources, &mut output.paint);
     }
-    ExportInlineInkOverflow(item, &mut output.paint);
+    if purpose == LayoutUpdateKind::Paint { ExportInlineInkOverflow(item, &mut output.paint); }
     ExportSvgTextPaintData(item, rect, &mut output.paint);
     match item.Type() {
         ItemType::kText | ItemType::kGeneratedText => {
@@ -2856,9 +2953,11 @@ fn ExportInlineItem(
             output.paint.text_line_height = containing_line_height.map(Number);
             output.text_start = Some(item.StartOffset());
             output.text_end = Some(item.EndOffset());
-            ExportListMarkerSymbol(item, &mut output.paint);
-            ExportGlyphRuns(item, &mut output.paint);
-            if output.paint.text_control_host.is_some() {
+            if purpose == LayoutUpdateKind::Paint {
+                ExportListMarkerSymbol(item, &mut output.paint);
+                ExportGlyphRuns(item, &mut output.paint);
+            }
+            if purpose == LayoutUpdateKind::Paint && output.paint.text_control_host.is_some() {
                 let text = item.Text(fragment_items);
                 let view = item.TextShapeResult();
                 let shape = (!view.is_null()).then(|| unsafe { &*view }.CreateShapeResult());
@@ -2892,9 +2991,9 @@ fn ExportInlineItem(
             if !box_fragment.is_null() {
                 let box_fragment = unsafe { &*box_fragment };
                 ExportBoxPaintGeometry(box_fragment, &mut output.paint);
-                ExportOverflowClipMargin(box_fragment, &mut output.paint);
-                ExportScrollbarPaintData(box_fragment, &mut output.paint);
-                ExportTablePaintData(box_fragment, sources, &mut output.paint);
+                if purpose == LayoutUpdateKind::Paint { ExportOverflowClipMargin(box_fragment, &mut output.paint); }
+                if purpose == LayoutUpdateKind::Paint { ExportScrollbarPaintData(box_fragment, &mut output.paint); }
+                if purpose == LayoutUpdateKind::Paint { ExportTablePaintData(box_fragment, sources, &mut output.paint); }
                 if box_fragment.IsTableCell() {
                     output.paint.table_cell_column =
                         Some(box_fragment.TableCellColumnIndex() as usize);
@@ -2907,12 +3006,13 @@ fn ExportInlineItem(
                 } else {
                     owner_fragment
                 };
-                output.paint.establishes_paint_state = paint_state_owners.insert(owner_fragment);
+                output.paint.establishes_paint_state = paint_state_owners.insert(owner_fragment, output.fragment_instance_id);
+                paint_state_owners.instances.entry(box_fragment as *const PhysicalBoxFragment).or_insert(output.fragment_instance_id);
                 output.content_size = ExportContentSize(box_fragment);
-                ExportMathMLPaintData(box_fragment, &mut output.paint);
-                ExportFrameSetPaintData(box_fragment, &mut output.paint);
-                ExportFieldsetPaintData(box_fragment, &mut output.paint);
-                ExportColumnRulePaintData(box_fragment, &mut output.paint);
+                if purpose == LayoutUpdateKind::Paint { ExportMathMLPaintData(box_fragment, &mut output.paint); }
+                if purpose == LayoutUpdateKind::Paint { ExportFrameSetPaintData(box_fragment, &mut output.paint); }
+                if purpose == LayoutUpdateKind::Paint { ExportFieldsetPaintData(box_fragment, &mut output.paint); }
+                if purpose == LayoutUpdateKind::Paint { ExportColumnRulePaintData(box_fragment, &mut output.paint); }
                 if item.DescendantsCount() <= 1 {
                     let nested_items = box_fragment.Items();
                     for child in box_fragment.Children() {
@@ -2925,6 +3025,7 @@ fn ExportInlineItem(
                             sources,
                             style_sources,
                             resources,
+                            purpose,
                             paint_state_owners,
                             fragmentainer_instance_id,
                             item.FragmentId(),
@@ -2948,6 +3049,7 @@ fn ExportInlineItem(
                                 sources,
                                 style_sources,
                                 resources,
+                                purpose,
                                 paint_state_owners,
                                 fragmentainer_instance_id,
                                 next_fragment_instance_id,
@@ -2962,6 +3064,7 @@ fn ExportInlineItem(
                     sources,
                     style_sources,
                     resources,
+                    purpose,
                     paint_state_owners,
                     fragmentainer_instance_id,
                     item.FragmentId(),
@@ -2988,7 +3091,8 @@ fn AppendInlineItemTree(
     sources: &SourceMap,
     style_sources: &StyleSourceMap,
     resources: &Arc<PaintResources>,
-    paint_state_owners: &mut HashSet<*const PhysicalBoxFragment>,
+    purpose: LayoutUpdateKind,
+    paint_state_owners: &mut FragmentOwners,
     fragmentainer_instance_id: u64,
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
@@ -3010,6 +3114,7 @@ fn AppendInlineItemTree(
         sources,
         style_sources,
         resources,
+        purpose,
         paint_state_owners,
         fragmentainer_instance_id,
         next_fragment_instance_id,
@@ -3029,6 +3134,7 @@ fn AppendInlineItemTree(
             sources,
             style_sources,
             resources,
+            purpose,
             paint_state_owners,
             fragmentainer_instance_id,
             next_fragment_instance_id,
@@ -3046,7 +3152,8 @@ fn ExportFragment(
     sources: &SourceMap,
     style_sources: &StyleSourceMap,
     resources: &Arc<PaintResources>,
-    paint_state_owners: &mut HashSet<*const PhysicalBoxFragment>,
+    purpose: LayoutUpdateKind,
+    paint_state_owners: &mut FragmentOwners,
     mut fragmentainer_instance_id: u64,
     mut display_item_fragment: u32,
     next_fragment_instance_id: &mut u64,
@@ -3063,7 +3170,7 @@ fn ExportFragment(
         std::ptr::null()
     };
     output.paint =
-        ExportPaintProperties(object, sources, style_sources, effective_style, resources);
+        ExportProperties(object, sources, style_sources, effective_style, resources, purpose);
     output.paint.display_item_fragment = display_item_fragment;
     output.paint.hidden =
         fragment.IsHiddenForPaint() || output.paint.svg_viewport.is_some_and(|v| v.disabled);
@@ -3087,7 +3194,7 @@ fn ExportFragment(
     }
     let box_fragment = To::<PhysicalBoxFragment>(fragment as *const PhysicalFragment);
     let box_fragment = unsafe { &*box_fragment };
-    if !object.is_null() {
+    if purpose == LayoutUpdateKind::Paint && !object.is_null() {
         let native_style = if effective_style.is_null() {
             unsafe { &*object }.StyleRef()
         } else {
@@ -3095,7 +3202,7 @@ fn ExportFragment(
         };
         ExportNativeNinePieceImages(native_style, output.size, resources, &mut output.paint);
     }
-    ExportBoxInkOverflow(box_fragment, &mut output.paint);
+    if purpose == LayoutUpdateKind::Paint { ExportBoxInkOverflow(box_fragment, &mut output.paint); }
     if box_fragment.IsFragmentainerBox() {
         fragmentainer_instance_id = *next_fragmentainer_instance_id;
         *next_fragmentainer_instance_id += 1;
@@ -3123,22 +3230,22 @@ fn ExportFragment(
     output.paint.display_item_fragment = display_item_fragment;
     output.fragmentainer_instance_id = fragmentainer_instance_id;
     ExportBoxPaintGeometry(box_fragment, &mut output.paint);
-    ExportOverflowClipMargin(box_fragment, &mut output.paint);
-    ExportScrollbarPaintData(box_fragment, &mut output.paint);
-    ExportTablePaintData(box_fragment, sources, &mut output.paint);
+    if purpose == LayoutUpdateKind::Paint { ExportOverflowClipMargin(box_fragment, &mut output.paint); }
+    if purpose == LayoutUpdateKind::Paint { ExportScrollbarPaintData(box_fragment, &mut output.paint); }
+    if purpose == LayoutUpdateKind::Paint { ExportTablePaintData(box_fragment, sources, &mut output.paint); }
     if box_fragment.IsTableCell() {
         output.paint.table_cell_column = Some(box_fragment.TableCellColumnIndex() as usize);
     }
     output.paint.painted_atomically = fragment.IsPaintedAtomically();
     output.paint.has_collapsed_borders = fragment.HasCollapsedBorders();
     output.paint.establishes_paint_state =
-        paint_state_owners.insert(box_fragment as *const PhysicalBoxFragment);
+        paint_state_owners.insert(box_fragment as *const PhysicalBoxFragment, output.fragment_instance_id);
     output.content_size = ExportContentSize(box_fragment);
-    ExportMathMLPaintData(box_fragment, &mut output.paint);
-    ExportFrameSetPaintData(box_fragment, &mut output.paint);
-    ExportFieldsetPaintData(box_fragment, &mut output.paint);
-    ExportColumnRulePaintData(box_fragment, &mut output.paint);
-    ExportCollapsedTablePaintData(box_fragment, style_sources, &mut output.paint);
+    if purpose == LayoutUpdateKind::Paint { ExportMathMLPaintData(box_fragment, &mut output.paint); }
+    if purpose == LayoutUpdateKind::Paint { ExportFrameSetPaintData(box_fragment, &mut output.paint); }
+    if purpose == LayoutUpdateKind::Paint { ExportFieldsetPaintData(box_fragment, &mut output.paint); }
+    if purpose == LayoutUpdateKind::Paint { ExportColumnRulePaintData(box_fragment, &mut output.paint); }
+    if purpose == LayoutUpdateKind::Paint { ExportCollapsedTablePaintData(box_fragment, style_sources, &mut output.paint); }
     output.children.reserve(box_fragment.Children().len());
     let items = box_fragment.Items();
     for child in box_fragment.Children() {
@@ -3151,6 +3258,7 @@ fn ExportFragment(
             sources,
             style_sources,
             resources,
+            purpose,
             paint_state_owners,
             fragmentainer_instance_id,
             display_item_fragment,
@@ -3174,6 +3282,7 @@ fn ExportFragment(
                 sources,
                 style_sources,
                 resources,
+                purpose,
                 paint_state_owners,
                 fragmentainer_instance_id,
                 next_fragment_instance_id,
@@ -3187,6 +3296,7 @@ fn ExportFragment(
         sources,
         style_sources,
         resources,
+        purpose,
         paint_state_owners,
         fragmentainer_instance_id,
         display_item_fragment,
@@ -3678,7 +3788,7 @@ fn ExportStickyPaintProperties(object: *const LayoutObject, output: &mut PaintPr
     }
 }
 
-fn UpdateStickyOffsets(
+pub(crate) fn UpdateStickyOffsets(
     objects: impl IntoIterator<Item = *mut LayoutObject>,
     reuse_constraints: bool,
 ) {
@@ -3973,7 +4083,7 @@ fn InitialLetterTextStyle(initial_letter_box: &mut LayoutObject) -> *const Nativ
     }
     let defaults = ExtendedStyle::default();
     let input = unsafe { &*node }.InputStyle();
-    let extra = input.extended.as_ref().unwrap_or(&defaults);
+    let extra = input.extended.as_deref().unwrap_or(&defaults);
     let mut adjusted_font = std::ptr::null_mut();
     while adjusted_size > 1.0 {
         let request = NativeFontRequest {
@@ -4020,7 +4130,7 @@ fn RebindFont(
     let zoomed = crate::internal::css_zoom::ZoomedStyle(input);
     let input = zoomed.as_ref();
     let defaults = ExtendedStyle::default();
-    let extra = input.extended.as_ref().unwrap_or(&defaults);
+    let extra = input.extended.as_deref().unwrap_or(&defaults);
     let mut builder = ComputedStyleBuilder::from_style(native_style);
     let mut resolved_font_size = extra.font_size;
     if extra.font_size_math && !parent.is_null() {
@@ -4529,6 +4639,16 @@ pub fn ExportLayoutObjectTree(
     result: &LayoutResult,
     space: &ConstraintSpace,
 ) -> FragmentNode {
+    ExportObjectTree(root, result, space, LayoutUpdateKind::Paint)
+}
+
+
+fn ExportObjectTree(
+    root: &mut LayoutObject,
+    result: &LayoutResult,
+    space: &ConstraintSpace,
+    purpose: LayoutUpdateKind,
+) -> FragmentNode {
     let mut sources = SourceMap::new();
     let mut style_sources = StyleSourceMap::new();
     let mut objects = Vec::new();
@@ -4565,15 +4685,23 @@ pub fn ExportLayoutObjectTree(
     }
     UpdateStickyOffsets(objects.iter().copied(), false);
     let resources = Arc::new(PaintResources {
-        fonts: space.fonts.clone(),
-        images: space.images.clone(),
+        fonts: if purpose == LayoutUpdateKind::Paint {
+            space.fonts.clone()
+        } else {
+            Vec::new()
+        },
+        images: if purpose == LayoutUpdateKind::Paint {
+            space.images.clone()
+        } else {
+            Vec::new()
+        },
         device_pixel_ratio: space.device_pixel_ratio,
         preferred_color_scheme: space.preferred_color_scheme,
         layout_zoom_factor: space.layout_zoom_factor,
         paints_opaque_base_background: !space.printing,
         viewport: space.viewport,
     });
-    let mut paint_state_owners = HashSet::new();
+    let mut paint_state_owners = FragmentOwners::default();
     let mut next_fragment_instance_id = 1;
     let mut next_fragmentainer_instance_id = 1;
     let mut output = ExportFragment(
@@ -4582,14 +4710,20 @@ pub fn ExportLayoutObjectTree(
         &sources,
         &style_sources,
         &resources,
+        purpose,
         &mut paint_state_owners,
         0,
         0,
         &mut next_fragment_instance_id,
         &mut next_fragmentainer_instance_id,
     );
-    ExportCanvasBackground(root, &objects, &mut output);
+    if purpose == LayoutUpdateKind::Paint {
+        ExportCanvasBackground(root, &objects, &mut output);
+    }
+    output.inline_geometry = ExportInlineGeometry(&objects, &paint_state_owners);
     ResolveLogicalParentOccurrences(&mut output);
-    ExportInlineStitchedDecorations(&mut output);
+    if purpose == LayoutUpdateKind::Paint {
+        ExportInlineStitchedDecorations(&mut output);
+    }
     output
 }

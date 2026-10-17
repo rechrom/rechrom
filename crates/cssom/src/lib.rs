@@ -1,6 +1,8 @@
 pub mod container_condition;
 pub use container_condition::*;
+pub mod css_inline_style;
 pub mod css_property_value_set;
+pub use css_inline_style::CSSInlineStyle;
 pub mod css_style_sheet;
 pub mod cssom;
 pub use css_style_sheet::{

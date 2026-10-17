@@ -17,7 +17,7 @@ mod geometry;
 mod manager;
 mod plan;
 mod scrollbar;
-pub use scrollbar::{SolidScrollbarLayer, ScrollbarSolidRect};
+pub use scrollbar::{ScrollbarSolidRect, SolidScrollbarLayer};
 #[doc(hidden)]
 pub mod recording;
 

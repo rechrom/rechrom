@@ -414,8 +414,13 @@ impl LayerTileManager {
             // older main-thread base. Rasterizing both endpoints delays newly
             // exposed tiles during a fast gesture.
             if let Some(target) = config.activation_scroll.and_then(|scroll| {
-                scroll_target_rect(&layer.properties, scroll, config.viewport,
-                    raster_content_bounds, config.raster_scale)
+                scroll_target_rect(
+                    &layer.properties,
+                    scroll,
+                    config.viewport,
+                    raster_content_bounds,
+                    config.raster_scale,
+                )
             }) {
                 visible = target;
             }
@@ -728,9 +733,10 @@ impl LayerTileManager {
                 .tilings
                 .iter()
                 .any(|tiling| tiling.scale == config.raster_scale && tiling.tile_size != tile_size);
-            let origin_changed = state.tilings.iter().any(|tiling| {
-                tiling.scale == config.raster_scale && tiling.origin != origin
-            });
+            let origin_changed = state
+                .tilings
+                .iter()
+                .any(|tiling| tiling.scale == config.raster_scale && tiling.origin != origin);
             let (all_dirty, damage, first_change) = record_damage(
                 &state.records,
                 &records,

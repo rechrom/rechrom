@@ -1,7 +1,9 @@
 //! ICU4X-backed Locale service shared with the browser, without OS lookups.
-//! This supplies Intl.Locale; other Intl constructors are not advertised.
+//! Locale and formatter host services use the same ICU locale data.
 use super::native::*;
 use icu_locale::{Locale, LocaleExpander};
+#[path = "quickjs_intl_format.rs"]
+mod format;
 
 fn locale(ctx: &mut Context, _: &Value, args: &[Value], _: i32) -> JsResult<Value> {
     let tag = ctx.to_rust_string(args.first().unwrap_or(&Value::Undefined))?;
@@ -62,5 +64,5 @@ pub(super) fn install(ctx: &mut Context) -> JsResult<()> {
     ctx.define_value(&intl, "Locale", constructor, PropFlags::C_W);
     let global = ctx.global();
     ctx.define_value(&global, "Intl", Value::Object(intl), PropFlags::C_W);
-    Ok(())
+    format::install(ctx)
 }

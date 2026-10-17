@@ -107,12 +107,31 @@ pub(crate) fn LayoutWithSystemFonts(
     constraints: &mut ConstraintSpace,
     fonts: &mut SystemFontSession,
 ) {
+    LayoutWithSystemFontsAtStage(
+        layout,
+        document,
+        interaction,
+        constraints,
+        fonts,
+        layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Paint,
+    );
+}
+
+pub(crate) fn LayoutWithSystemFontsAtStage(
+    layout: &mut layoutng_assembly::layout_engine::LayoutEngine,
+    document: &mut dom::DOM,
+    interaction: &dom::UserInteractionState,
+    constraints: &mut ConstraintSpace,
+    fonts: &mut SystemFontSession,
+    purpose: layoutng_assembly::layout_boundary_support::LayoutUpdateKind,
+) {
     loop {
-        super::persistent_layout::LayoutDocumentWithEngine(
+        super::persistent_layout::LayoutDocumentWithEngineAtStage(
             layout,
             document,
             interaction,
             constraints,
+            purpose,
         );
         if !fonts.CompletePass(constraints) {
             break;

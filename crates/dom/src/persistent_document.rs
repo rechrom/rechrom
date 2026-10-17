@@ -403,9 +403,13 @@ pub struct DOMNode {
     name: String,
     data: String,
     attributes: Vec<DOMAttribute>,
+    inline_style: RefCell<Option<cssom::CSSInlineStyle>>,
     owner_document_handle: Option<DOMOwnerHandle>,
     parent: Option<usize>,
     children: Vec<usize>,
+    selector_attribute_revision: u64,
+    selector_identifier_revision: u64,
+    selector_subtree_revision: u64,
 }
 
 impl DOMNode {
@@ -427,6 +431,29 @@ impl DOMNode {
     }
     pub fn Attributes(&self) -> &[DOMAttribute] {
         &self.attributes
+    }
+
+    /// ElementData retains parsed inline declarations. Initializing their
+    /// backing is derived state; it does not create or modify an attribute.
+    pub fn InlineStyle(&self) -> cssom::CSSInlineStyle {
+        let source = self.FindAttribute("style").map_or("", |a| a.value.as_str());
+        let mut retained = self.inline_style.borrow_mut();
+        if let Some(style) = retained
+            .as_ref()
+            .filter(|style| style.SourceText() == source)
+        {
+            return style.clone();
+        }
+        let style = cssom::CSSInlineStyle::new(source);
+        *retained = Some(style.clone());
+        style
+    }
+
+    pub(crate) fn RetainInlineStyle(&self, style: cssom::CSSInlineStyle) {
+        let source = self.FindAttribute("style").map_or("", |a| a.value.as_str());
+        if style.SourceText() == source {
+            *self.inline_style.borrow_mut() = Some(style);
+        }
     }
     pub fn OwnerDocumentNode(&self) -> Option<DOMOwnerHandle> {
         self.owner_document_handle
@@ -556,14 +583,23 @@ impl Default for PseudoElement {
 
 impl PseudoElement {
     fn SamePaintInput(&self, other: &Self) -> bool {
-        let native_equal = match (unsafe { self.native_style.Get().as_ref() }, unsafe { other.native_style.Get().as_ref() }) {
-            (Some(a), Some(b)) => layoutng_style::style::computed_style_base::ComputedStyleBase::FieldInvalidationDiff(a, b) == 0,
+        let native_equal = match (unsafe { self.native_style.Get().as_ref() }, unsafe {
+            other.native_style.Get().as_ref()
+        }) {
+            (Some(a), Some(b)) => {
+                layoutng_style::style::computed_style_base::ComputedStyleBase::FieldInvalidationDiff(
+                    a, b,
+                ) == 0
+            }
             (None, None) => true,
             _ => false,
         };
-        native_equal && self.style.LayoutEquivalent(&other.style)
-            && self.style.paint == other.style.paint && self.text == other.text
-            && self.content == other.content && self.display_contents == other.display_contents
+        native_equal
+            && self.style.LayoutEquivalent(&other.style)
+            && self.style.paint == other.style.paint
+            && self.text == other.text
+            && self.content == other.content
+            && self.display_contents == other.display_contents
             && match (&self.marker, &other.marker) {
                 (Some(a), Some(b)) => a.SamePaintInput(b),
                 (None, None) => true,
@@ -663,7 +699,8 @@ fn NativeStyleImageSources(style: &NativeComputedStyle, output: &mut Vec<String>
             return;
         };
         let image = layoutng_style::style::style_mask_source_image::MaskSourceImage(image)
-            .and_then(|mask| mask.FetchedImage()).unwrap_or(image);
+            .and_then(|mask| mask.FetchedImage())
+            .unwrap_or(image);
         if let Some(image) = FetchedImage(image) {
             output.push(image.SourceURL().to_owned());
         }
@@ -752,17 +789,26 @@ enum ImageResourceState {
 pub struct PersistentDocument {
     document_url: String,
     arena: Vec<DOMNode>,
+    node_reference_observers: crate::node_references::NodeReferenceObservers,
+    // HTML input/button identities are stable across attribute/type changes.
+    // Notifications still check live type, form and connectedness.
+    form_observer_elements: Option<Vec<usize>>,
     arena_id: u64,
     pub(crate) custom_elements: crate::custom_elements::CustomElementRegistry,
+    pub(crate) mutation_observers: crate::mutation_observers::MutationObservers,
     collection_membership_revision: u64,
+    selector_filter_generation: u64,
     // Local SVG resource identity/content is owned by this document. Frames
     // retain immutable graph Arcs; style replacement never rewrites them.
     svg_clip_resources:
         Option<std::sync::Arc<layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot>>,
     svg_clip_resource_inputs: Option<(u64, u64)>,
+    svg_filter_graphs:
+        std::sync::Arc<Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>>,
     resolved_style_revision: u64,
     // SVGResources tracks changes to resource definitions/descendants, rather
     // than invalidating the catalog for an unrelated HTML color or hover edit.
+    svg_resource_dom_revision: u64,
     svg_resource_style_revision: u64,
     root: usize,
     next_id: u64,
@@ -901,13 +947,19 @@ impl PersistentDocument {
     fn new() -> Self {
         let mut document = Self {
             arena: Vec::new(),
+            node_reference_observers: Vec::new(),
+            form_observer_elements: Some(Vec::new()),
             arena_id: NEXT_ARENA_ID.fetch_add(1, Ordering::Relaxed),
             document_url: String::new(),
             custom_elements: Default::default(),
+            mutation_observers: Default::default(),
             collection_membership_revision: 0,
+            selector_filter_generation: 0,
             svg_clip_resources: None,
+            svg_filter_graphs: std::sync::Arc::new(Vec::new()),
             svg_clip_resource_inputs: None,
             resolved_style_revision: 0,
+            svg_resource_dom_revision: 0,
             svg_resource_style_revision: 0,
             root: 0,
             next_id: 1,
@@ -1004,6 +1056,66 @@ impl PersistentDocument {
         self.collection_membership_revision = self.collection_membership_revision.saturating_add(1);
     }
 
+    // cpp: LocalSVGResource::TargetChanged / SVGElement resource invalidation.
+    // Collection membership also changes for every ordinary HTML attribute.
+    // SVG resources depend on ID targets, connected topology, SVG contents and
+    // their computed style, not unrelated HTML class/style/value edits.
+    fn BumpSVGResourceDOMRevision(&mut self) {
+        self.svg_resource_dom_revision = self.svg_resource_dom_revision.saturating_add(1);
+    }
+    fn InvalidateSVGAttribute(&mut self, element: usize, name: &str) {
+        if self.IsConnectedToDocument(element)
+            && (name == "id" || self.IsSVGResourceStyleNode(element))
+        {
+            self.BumpSVGResourceDOMRevision();
+        }
+    }
+
+    // ElementData/Element's selector-filter inputs stay with the DOM owner.
+    // Style owns the actual hashes and bloom filters. A typed mutation changes
+    // only local attributes or the affected ancestor path; character data
+    // cannot change these attribute/class facts. Unknown NodeMut edits revoke
+    // the complete generation instead of publishing possibly stale revisions.
+    pub fn SelectorFilterKey(&self) -> Option<(DOMOwnerHandle, u64)> {
+        (self.collection_membership_revision != u64::MAX
+            && self.selector_filter_generation != u64::MAX)
+            .then(|| (self.RootHandle(), self.selector_filter_generation))
+    }
+
+    pub fn SelectorFilterRevisions(&self, index: usize) -> (u64, u64) {
+        let node = &self.arena[index];
+        (
+            node.selector_identifier_revision,
+            node.selector_subtree_revision,
+        )
+    }
+
+    pub fn SelectorAttributeRevision(&self, index: usize) -> u64 {
+        self.arena[index].selector_attribute_revision
+    }
+
+    fn InvalidateSelectorSubtree(&mut self, node: usize) {
+        let revision = self.collection_membership_revision;
+        let mut current = Some(node);
+        while let Some(index) = current {
+            self.arena[index].selector_subtree_revision = revision;
+            current = self.arena[index].parent;
+        }
+    }
+
+    fn InvalidateSelectorAttributes(&mut self, node: usize, name: &str, presence_changed: bool) {
+        self.arena[node].selector_attribute_revision = self.collection_membership_revision;
+        // cpp: Element::AppendAttributeInternal/ClassAttributeChanged and
+        // SelectorFilter::CollectElementIdentifierHashes. Ordinary attribute
+        // values do not enter identifier hashes or subtree filters; style is
+        // excluded entirely. Attribute-value matching still observes every
+        // change through its separate local revision above.
+        if name != "style" && (presence_changed || matches!(name, "id" | "class")) {
+            self.arena[node].selector_identifier_revision = self.collection_membership_revision;
+            self.InvalidateSelectorSubtree(node);
+        }
+    }
+
     /// Opaque, document-qualified OriginatingTreeScope identity. SVG use
     /// instances resolve local resources in their corresponding element's
     /// scope; generated pseudo styles are supplied their originating index.
@@ -1019,19 +1131,22 @@ impl PersistentDocument {
     }
 
     fn SVGResourceInputKey(&self) -> Option<(u64, u64)> {
-        (self.collection_membership_revision != u64::MAX
-            && self.svg_resource_style_revision != u64::MAX)
+        (self.svg_resource_dom_revision != u64::MAX && self.svg_resource_style_revision != u64::MAX)
             .then_some((
-                self.collection_membership_revision,
+                self.svg_resource_dom_revision,
                 self.svg_resource_style_revision,
             ))
     }
 
     /// A targeted style update may use the catalog only after the document's
     /// current DOM and computed styles were observed by the resource lifecycle.
-    pub fn DocumentURL(&self) -> &str { &self.document_url }
+    pub fn DocumentURL(&self) -> &str {
+        &self.document_url
+    }
 
-    pub fn SetDocumentURL(&mut self, url: String) { self.document_url = url; }
+    pub fn SetDocumentURL(&mut self, url: String) {
+        self.document_url = url;
+    }
 
     pub fn SVGResources(
         &self,
@@ -1043,19 +1158,35 @@ impl PersistentDocument {
             .flatten()
     }
 
+    pub(crate) fn SVGFilterGraphs(
+        &self,
+    ) -> Option<&std::sync::Arc<Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>>>
+    {
+        self.SVGResources()?;
+        Some(&self.svg_filter_graphs)
+    }
+
     pub(crate) fn PublishSVGResources(
         &mut self,
         mut snapshot: std::sync::Arc<
             layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot,
         >,
+        filters: std::sync::Arc<Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>>,
     ) -> bool {
+        // cpp: SVGFilterElement::PrimitiveAttributeChanged/InvalidateFilterChain.
+        // Filter content participates in the same document resource lifecycle;
+        // equal clip entries cannot hide a changed filter primitive or style.
+        let filters_changed = self.svg_filter_graphs != filters;
+        if filters_changed {
+            self.svg_filter_graphs = filters;
+        }
         self.svg_clip_resource_inputs = self.SVGResourceInputKey();
         if self
             .svg_clip_resources
             .as_ref()
             .is_some_and(|old| old.entries == snapshot.entries)
         {
-            return false;
+            return filters_changed;
         }
         let revision = self.svg_clip_resources.as_ref().map_or(1, |old| {
             old.version
@@ -1231,6 +1362,39 @@ impl PersistentDocument {
         options
     }
 
+    // cpp: core/dom/node.cc Node::isEqualNode. Compare DOM children, never
+    // attached shadow roots, listeners, live control state or layout state.
+    pub fn IsEqualNode(&self, node: usize, other: &Self, other_node: usize) -> bool {
+        let mut pending = vec![(node, other_node)];
+        while let Some((left, right)) = pending.pop() {
+            let left = self.Node(left);
+            let right = other.Node(right);
+            if left.Type() != right.Type()
+                || left.Name() != right.Name()
+                || left.Namespace() != right.Namespace()
+                || left.Data() != right.Data()
+                || left.Children().len() != right.Children().len()
+                || left.Attributes().len() != right.Attributes().len()
+                || !left.Attributes().iter().all(|a| {
+                    right.Attributes().iter().any(|b| {
+                        a.local_name == b.local_name
+                            && a.namespace_uri == b.namespace_uri
+                            && a.value == b.value
+                    })
+                })
+            {
+                return false;
+            }
+            pending.extend(
+                left.Children()
+                    .iter()
+                    .copied()
+                    .zip(right.Children().iter().copied()),
+            );
+        }
+        true
+    }
+
     // cpp: select_type.cc:717-722,2008-2010. MenuListSelectType assigns the
     // first element child when it is an HTMLButtonElement; ListBoxSelectType
     // never exposes a slotted button. This query intentionally does not invent
@@ -1290,7 +1454,7 @@ impl PersistentDocument {
         (!negative || parsed == 0).then_some(parsed)
     }
 
-    fn FindElementByIdInTreeScope(&self, element: usize, id: &str) -> Option<usize> {
+    pub(crate) fn FindElementByIdInTreeScope(&self, element: usize, id: &str) -> Option<usize> {
         fn find(document: &PersistentDocument, node: usize, id: &str) -> Option<usize> {
             if document.arena[node].node_type == DOMNodeType::kElement
                 && document.arena[node]
@@ -1489,12 +1653,19 @@ impl PersistentDocument {
     }
     // Index-to-reference adapter for source callbacks receiving DOMNode&.
     pub fn NodeMut(&mut self, index: usize) -> &mut DOMNode {
+        // This escape hatch can replace the whole node, including its tag.
+        self.form_observer_elements = None;
         self.BumpCollectionMembershipRevision();
+        self.BumpSVGResourceDOMRevision();
+        self.selector_filter_generation = self.selector_filter_generation.saturating_add(1);
         self.InvalidateNodeStyle(index);
         self.MarkStyleElementTextDirty(index);
-        self.style_state
-            .impact
-            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+        if self.IsConnectedToDocument(index) {
+            self.style_state.layout_inputs_require_tree = true;
+            self.style_state
+                .impact
+                .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+        }
         &mut self.arena[index]
     }
     // cpp: dom/document.cc:11-22
@@ -1522,10 +1693,29 @@ impl PersistentDocument {
             name,
             data,
             attributes,
+            inline_style: RefCell::new(None),
             owner_document_handle,
             parent: None,
             children: Vec::new(),
+            selector_attribute_revision: self.collection_membership_revision,
+            selector_identifier_revision: self.collection_membership_revision,
+            selector_subtree_revision: self.collection_membership_revision,
         });
+        self.NotifyNodeReference(crate::node_references::NodeReferenceChange::Object {
+            id,
+            document_root: index == self.root && node_type == DOMNodeType::kDocument,
+        });
+        if let Some(owner) = owner_document_handle {
+            self.NotifyNodeReference(crate::node_references::NodeReferenceChange::OwnerDocument {
+                node: id,
+                document: owner.node_id,
+            });
+        }
+        if self.arena[index].IsHTMLElement("input") || self.arena[index].IsHTMLElement("button") {
+            if let Some(elements) = self.form_observer_elements.as_mut() {
+                elements.push(index);
+            }
+        }
         index
     }
 
@@ -1551,7 +1741,17 @@ impl PersistentDocument {
                 .expect("owner document must exist in the local arena");
             assert_eq!(self.arena[index].node_type, DOMNodeType::kDocument);
         }
+        let owner_changed = self.arena[node].owner_document_handle != Some(owner);
+        if owner_changed && self.IsConnectedToDocument(node) {
+            self.BumpSVGResourceDOMRevision();
+        }
         self.arena[node].owner_document_handle = Some(owner);
+        if owner_changed && owner.arena_id == self.arena_id {
+            self.NotifyNodeReference(crate::node_references::NodeReferenceChange::OwnerDocument {
+                node: self.arena[node].id,
+                document: owner.node_id,
+            });
+        }
         let children = self.arena[node].children.clone();
         for child in children {
             self.AdoptNodeByHandle(child, owner);
@@ -1644,7 +1844,7 @@ impl PersistentDocument {
         self.EnsureFileUAShadowTree(element);
         self.EnsureMeterUAShadowTree(element);
         self.EnsureProgressUAShadowTree(element);
-        self.RecomputeDirectionality();
+        self.UpdateDirectionalitySubtree(element);
         element
     }
 
@@ -1771,7 +1971,7 @@ impl PersistentDocument {
             self.SyncSearchCancelButtonVisibility(clone);
             self.SyncColorSwatchAppearance(clone);
         }
-        self.RecomputeDirectionality();
+        self.UpdateDirectionalitySubtree(clone);
         clone
     }
 
@@ -2312,9 +2512,7 @@ impl PersistentDocument {
         // MenuListSelectType/ListBoxSelectType::DidSetSuggestedOption updates
         // rendered content even when the state remains kPreviewed.
         self.InvalidateNodeStyle(select);
-        self.style_state
-            .impact
-            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+        self.RecordLayoutInputChange(select);
     }
 
     fn RefreshSelectSuggestedValues(&mut self) {
@@ -2335,9 +2533,7 @@ impl PersistentDocument {
             if self.suggested_value_state.get(&select_id) != Some(&value) {
                 self.suggested_value_state.insert(select_id, value);
                 self.InvalidateNodeStyle(select);
-                self.style_state
-                    .impact
-                    .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+                self.RecordLayoutInputChange(select);
             }
         }
     }
@@ -2372,9 +2568,7 @@ impl PersistentDocument {
             self.SetAutofillState(element, DOMAutofillState::kNotFilled);
             if removed {
                 self.InvalidateNodeStyle(element);
-                self.style_state
-                    .impact
-                    .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+                self.RecordLayoutInputChange(element);
             }
             return;
         }
@@ -2426,9 +2620,7 @@ impl PersistentDocument {
             self.InvalidateNodeStyle(editor);
         }
         self.InvalidateNodeStyle(element);
-        self.style_state
-            .impact
-            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+        self.RecordLayoutInputChange(element);
     }
 
     fn SetUAShadowPseudoElementIdentity(&mut self, host: usize, element: usize, pseudo_id: &str) {
@@ -2663,6 +2855,10 @@ impl PersistentDocument {
         }
         self.template_contents
             .insert(self.arena[template_element].id, fragment);
+        self.NotifyNodeReference(crate::node_references::NodeReferenceChange::Template {
+            owner: self.arena[template_element].id,
+            content: self.arena[fragment].id,
+        });
         fragment
     }
     pub fn TemplateContents(&self, template_element: usize) -> Option<usize> {
@@ -2695,16 +2891,22 @@ impl PersistentDocument {
         self.shadow_roots
             .insert(host, (root, mode, slot_assignment));
         self.shadow_hosts.insert(root, host);
+        self.NotifyNodeReference(crate::node_references::NodeReferenceChange::Shadow {
+            host: self.arena[host].id,
+            root: self.arena[root].id,
+        });
         // cpp: Element::CreateAndAttachShadowRoot; Node::RemovedFromFlatTree.
         // Even an empty root removes the old light children from layout. This
         // changes attachment/geometry independently of computed-style equality.
-        self.RecordFlatTreeChange();
-        self.RecomputeDirectionality();
+        self.RecordFlatTreeChange(host);
+        self.UpdateDirectionalityForMutation(host);
         self.InvalidateNodeStyle(host);
         // Element::CreateAndAttachShadowRoot removes this host's light
         // children from the flat tree. Revisit that subtree, including its
         // new shadow scope, without invalidating unrelated document styles.
-        self.style_state.inserted_style_subtrees.insert(host);
+        if self.ShouldRecordStyleChange(host) {
+            self.style_state.inserted_style_subtrees.insert(host);
+        }
         root
     }
 
@@ -2826,14 +3028,79 @@ impl PersistentDocument {
     // cpp: Node::FlatTreeParentChanged / RemovedFromFlatTree. Reattachment
     // revokes query geometry even when all newly inherited CSS values compare
     // equal; Page and Style consume these existing document-owned facts.
-    fn RecordFlatTreeChange(&mut self) {
+    fn MayHaveRenderedSubtree(&self, node: usize) -> bool {
+        // cpp: ContainerNode::ChildrenChanged (1477-1493). A clean element
+        // without a rendered subtree has no layout children to invalidate.
+        // DOM, stylesheet, directionality and semantic-owner notifications
+        // still run; a later null -> non-null style attaches the entire branch.
+        if !self.IsConnectedToDocument(node) {
+            return false;
+        }
+        if !self.style_state.all_dirty
+            && self.arena[node].node_type == DOMNodeType::kElement
+            && self.ResolvedStyleFor(node).is_none_or(|style| {
+                unsafe { style.native_style.Get().as_ref() }
+                    .is_some_and(|native| native.IsEnsuredInDisplayNone())
+                    || (!style.generates_box && !style.display_contents)
+            })
+        {
+            return false;
+        }
+        true
+    }
+    fn RecordLayoutInputChange(&mut self, node: usize) {
+        if !self.IsConnectedToDocument(node) {
+            return;
+        }
+        self.style_state
+            .layout_tree_roots
+            .insert(self.arena[node].id);
         self.style_state
             .impact
-            .Merge(crate::style_state::StyleUpdateImpact::TREE);
+            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+    }
+    fn RecordLayoutGeometryChange(&mut self, node: usize) -> bool {
+        if !self.MayHaveRenderedSubtree(node) {
+            return false;
+        }
+        self.style_state
+            .layout_tree_roots
+            .insert(self.arena[node].id);
+        if self.AffectsSVGResourceClients(node) {
+            self.style_state.layout_inputs_require_tree = true;
+        }
+        self.style_state
+            .impact
+            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
         self.style_state.measurement_geometry_revision = self
             .style_state
             .measurement_geometry_revision
             .wrapping_add(1);
+        true
+    }
+    fn RecordFlatTreeChange(&mut self, node: usize) {
+        if self.IsConnectedToDocument(node) {
+            self.BumpSVGResourceDOMRevision();
+        }
+        if self.RecordLayoutGeometryChange(node) {
+            self.style_state
+                .impact
+                .Merge(crate::style_state::StyleUpdateImpact::TREE);
+        }
+    }
+
+    // cpp: HTMLOptionElement::ChildrenChanged/DidChangeTextContent ->
+    // HTMLSelectElement::OptionElementChildrenChanged. The rendered menu-list
+    // label can depend on text in an option without its own layout object.
+    fn RecordSelectContentGeometryChange(&mut self, node: usize) {
+        let select = if self.arena[node].IsHTMLElement("select") {
+            Some(node)
+        } else {
+            self.NearestAncestorElementNamed(node, "select")
+        };
+        if let Some(select) = select {
+            self.RecordLayoutGeometryChange(select);
+        }
     }
 
     fn AttributeMayChangeFlatTree(&self, element: usize, name: &str, namespace: &str) -> bool {
@@ -3111,7 +3378,7 @@ impl PersistentDocument {
             return false;
         }
         for changed_slot in changed_slots {
-            self.RecordNonAppendChildrenChange(changed_slot);
+            self.RecordNonAppendChildrenChange(changed_slot, None);
         }
         true
     }
@@ -3329,58 +3596,109 @@ impl PersistentDocument {
         self.ContainedTextDirectionality(element, cache)
     }
 
-    fn ComputeDirectionality(
-        &self,
-        element: usize,
-        cache: &mut HashMap<usize, TextDirection>,
-    ) -> TextDirection {
-        if let Some(direction) = cache.get(&element).copied() {
-            return direction;
-        }
-        let parent_direction = self
-            .ParentOrShadowHostElement(element)
-            .map(|parent| self.ComputeDirectionality(parent, cache))
-            .unwrap_or(TextDirection::kLtr);
-        let direction = match self.DirectionAttribute(element) {
+    // cpp: Element::RecomputeDirectionFromParent and
+    // UpdateDirectionalityAndDescendant. Cached values belong to elements;
+    // mutations never rebuild directionality for the document's arena.
+    fn ResolveElementDirectionality(&self, element: usize) -> TextDirection {
+        match self.DirectionAttribute(element) {
             Some(value) if value.eq_ignore_ascii_case("ltr") => TextDirection::kLtr,
             Some(value) if value.eq_ignore_ascii_case("rtl") => TextDirection::kRtl,
-            Some(_) => self
-                .ResolveAutoDirectionality(element, cache)
+            _ if self.HasDirectionAuto(element) => self
+                .ResolveAutoDirectionality(element, &self.cached_directionality)
                 .unwrap_or(TextDirection::kLtr),
-            None if self.arena[element].IsHTMLElement("bdi") => self
-                .ResolveAutoDirectionality(element, cache)
-                .unwrap_or(TextDirection::kLtr),
-            None if self.arena[element].IsHTMLElement("input")
+            _ if self.arena[element].IsHTMLElement("input")
                 && self.arena[element]
                     .FindAttribute("type")
-                    .is_some_and(|attribute| attribute.value.eq_ignore_ascii_case("tel")) =>
+                    .is_some_and(|a| a.value.eq_ignore_ascii_case("tel")) =>
             {
                 TextDirection::kLtr
             }
-            None => parent_direction,
-        };
-        cache.insert(element, direction);
-        direction
+            _ => self
+                .ParentOrShadowHostElement(element)
+                .map_or(TextDirection::kLtr, |parent| {
+                    self.CachedDirectionality(parent)
+                }),
+        }
     }
 
-    fn RecomputeDirectionality(&mut self) {
-        let mut next = HashMap::new();
-        for element in 0..self.arena.len() {
-            if self.arena[element].Type() == DOMNodeType::kElement {
-                self.ComputeDirectionality(element, &mut next);
+    fn UpdateDirectionalitySubtree(&mut self, root: usize) {
+        let mut trace = browser_tracing::span("dom", "DOM.UpdateDirectionality");
+        let mut visited = 0;
+        let mut changed = 0;
+        let mut pending = vec![root];
+        while let Some(element) = pending.pop() {
+            if self.arena[element].Type() != DOMNodeType::kElement {
+                pending.extend_from_slice(self.arena[element].Children());
+                continue;
+            }
+            visited += 1;
+            let direction = self.ResolveElementDirectionality(element);
+            if self.CachedDirectionality(element) == direction {
+                continue;
+            }
+            changed += 1;
+            self.cached_directionality.insert(element, direction);
+            self.RecordStyleChange(crate::style_state::StyleChange::Directionality(element));
+            pending.extend_from_slice(self.arena[element].Children());
+            if let Some(shadow) = self.ShadowRoot(element) {
+                pending.extend_from_slice(self.arena[shadow].Children());
             }
         }
-        let changed = next
-            .iter()
-            .filter_map(|(&element, &direction)| {
-                (self.cached_directionality.get(&element).copied() != Some(direction))
-                    .then_some(element)
-            })
-            .collect::<Vec<_>>();
-        self.cached_directionality = next;
-        for element in changed {
-            self.InvalidateNodeStyle(element);
+        trace.set("visited_elements", visited as f64);
+        trace.set("changed_elements", changed as f64);
+    }
+
+    // cpp: Element::UpdateAncestorWithDirAuto. An explicit direction, bdi,
+    // script/style or text control terminates the ancestor text dependency.
+    fn UpdateAutoDirectionalityAncestors(&mut self, mut element: Option<usize>) {
+        while let Some(current) = element {
+            if self.HasDirectionAuto(current) {
+                self.UpdateDirectionalitySubtree(current);
+            }
+            if self.DirectionAttribute(current).is_some()
+                || matches!(
+                    self.arena[current].Name(),
+                    "bdi" | "script" | "style" | "textarea"
+                )
+            {
+                break;
+            }
+            element = self.ParentOrShadowHostElement(current);
         }
+    }
+
+    // cpp: Element::UpdateDirectionalityAndDescendant's slot notification and
+    // HTMLSlotElement::CalculateAndAdjustAutoDirectionality. Only shadow roots
+    // on the changed node's ancestor chain can receive different assignments
+    // or inherit a changed host direction; unrelated trees are never visited.
+    fn UpdateDirectionalitySlots(&mut self, root: usize) {
+        let mut hosts = HashSet::new();
+        let mut ancestor = Some(root);
+        while let Some(current) = ancestor {
+            if self.ShadowRoot(current).is_some() {
+                hosts.insert(current);
+            }
+            if let Some(host) = self.OwnerShadowHost(current) {
+                hosts.insert(host);
+            }
+            ancestor = self.ParentOrShadowHostElement(current);
+        }
+        for host in hosts {
+            let mut pending = vec![self.ShadowRoot(host).unwrap()];
+            while let Some(current) = pending.pop() {
+                if self.IsSlotSupportingAssignment(current) {
+                    self.UpdateDirectionalitySubtree(current);
+                    self.UpdateAutoDirectionalityAncestors(self.ParentOrShadowHostElement(current));
+                }
+                pending.extend_from_slice(self.arena[current].Children());
+            }
+        }
+    }
+
+    fn UpdateDirectionalityForMutation(&mut self, element: usize) {
+        self.UpdateDirectionalitySubtree(element);
+        self.UpdateAutoDirectionalityAncestors(self.ParentOrShadowHostElement(element));
+        self.UpdateDirectionalitySlots(element);
     }
 
     pub fn CachedDirectionality(&self, element: usize) -> TextDirection {
@@ -3448,8 +3766,32 @@ impl PersistentDocument {
             .iter()
             .position(|&index| index == child)
             .unwrap_or_else(|| logic_error("DOM parent/child links are inconsistent"));
+        let boundary = crate::style_state::ChildrenChangeBoundary {
+            before: (self.arena[child].node_type == DOMNodeType::kElement)
+                .then(|| {
+                    self.arena[parent].children[..position]
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(|&i| self.arena[i].node_type == DOMNodeType::kElement)
+                })
+                .flatten(),
+            after: (self.arena[child].node_type == DOMNodeType::kElement)
+                .then(|| {
+                    self.arena[parent].children[position + 1..]
+                        .iter()
+                        .copied()
+                        .find(|&i| self.arena[i].node_type == DOMNodeType::kElement)
+                })
+                .flatten(),
+        };
         self.arena[parent].children.remove(position);
         self.arena[child].parent = None;
+        self.NotifyNodeReference(crate::node_references::NodeReferenceChange::Child {
+            parent: self.arena[parent].id,
+            child: self.arena[child].id,
+            attached: false,
+        });
         for select in suggested_selects {
             self.SetSelectSuggestedOption(select, None);
         }
@@ -3469,9 +3811,16 @@ impl PersistentDocument {
             self.RemoveResolvedStyle(node);
             self.responsive_image_selections.remove(&node);
             self.responsive_image_auto_sizes.remove(&node);
+            // Element::DetachLayoutTree descends into its ShadowRoot as well.
+            // The shadow tree remains owned by the detached host, while its
+            // document-computed styles and layout/resource clients are released.
+            if let Some(root) = self.ShadowRoot(node) {
+                detached.push(root);
+            }
             detached.extend_from_slice(&self.arena[node].children);
         }
-        self.RecordNonAppendChildrenChange(parent);
+        self.UpdateDirectionalitySubtree(child);
+        self.RecordNonAppendChildrenChange(parent, Some(boundary));
     }
 
     // cpp: dom/document.cc:164-175
@@ -3509,6 +3858,12 @@ impl PersistentDocument {
             .flatten();
         self.arena[parent].children.push(child);
         self.arena[child].parent = Some(parent);
+        self.NotifyNodeReference(crate::node_references::NodeReferenceChange::Child {
+            parent: self.arena[parent].id,
+            child: self.arena[child].id,
+            attached: true,
+        });
+        self.UpdateDirectionalitySubtree(child);
         self.OptionSubtreeInserted(child);
         self.StyleSheetConnectivityChanged(child);
         self.RecordAppendChildrenChange(parent, child, previous_last, previous_same_type);
@@ -3547,16 +3902,43 @@ impl PersistentDocument {
             .iter()
             .position(|&index| index == next_child)
             .expect("DOM insertion point is not a child");
+        let boundary = crate::style_state::ChildrenChangeBoundary {
+            before: (self.arena[child].node_type == DOMNodeType::kElement)
+                .then(|| {
+                    self.arena[parent].children[..position]
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(|&i| self.arena[i].node_type == DOMNodeType::kElement)
+                })
+                .flatten(),
+            after: (self.arena[child].node_type == DOMNodeType::kElement)
+                .then(|| {
+                    self.arena[parent].children[position..]
+                        .iter()
+                        .copied()
+                        .find(|&i| self.arena[i].node_type == DOMNodeType::kElement)
+                })
+                .flatten(),
+        };
         self.arena[parent].children.insert(position, child);
         self.arena[child].parent = Some(parent);
+        self.NotifyNodeReference(crate::node_references::NodeReferenceChange::Child {
+            parent: self.arena[parent].id,
+            child: self.arena[child].id,
+            attached: true,
+        });
+        self.UpdateDirectionalitySubtree(child);
         self.OptionSubtreeInserted(child);
         self.StyleSheetConnectivityChanged(child);
-        self.RecordNonAppendChildrenChange(parent);
+        self.RecordNonAppendChildrenChange(parent, Some(boundary));
         // InsertBefore attaches the same fresh/stale-free subtree as
         // AppendChild. Record it explicitly so style invalidation resolves the
         // inserted branch and treats existing siblings through selector
         // invalidation sets instead of rescanning the whole parent subtree.
-        if !self.style_state.all_dirty && self.arena[child].node_type == DOMNodeType::kElement {
+        if self.ShouldRecordStyleChange(parent)
+            && self.arena[child].node_type == DOMNodeType::kElement
+        {
             self.style_state.inserted_style_subtrees.insert(child);
         }
         let owner = if self.arena[parent].node_type == DOMNodeType::kDocument {
@@ -3618,8 +4000,26 @@ impl PersistentDocument {
 
     // cpp: dom/document.cc:224-236
     pub fn SetAttribute(&mut self, element: usize, attribute: DOMAttribute) {
+        self.SetAttributeWithInlineStyleChange(element, attribute, false);
+    }
+
+    pub(crate) fn SetAttributeWithInlineStyleChange(
+        &mut self,
+        element: usize,
+        attribute: DOMAttribute,
+        independent: bool,
+    ) {
         if self.arena[element].node_type != DOMNodeType::kElement {
             invalid_argument("attributes require an element");
+        }
+        if attribute.namespace_uri.is_empty() && attribute.local_name == "style" {
+            let retained = self.arena[element].inline_style.get_mut();
+            if retained
+                .as_ref()
+                .is_some_and(|style| style.SourceText() != attribute.value)
+            {
+                retained.take();
+            }
         }
         let existing = self.arena[element].attributes.iter().position(|candidate| {
             candidate.local_name == attribute.local_name
@@ -3692,6 +4092,12 @@ impl PersistentDocument {
         if !changed {
             return;
         }
+        self.RecordAttributeSelectorKeys(
+            element,
+            &attribute.local_name,
+            &attribute.namespace_uri,
+            Some(&attribute.value),
+        );
         // cpp: HTMLStyleElement::ParseAttribute. Media changes refresh the
         // owner's sheet conditions; type changes reprocess its contents. Feed
         // both through the existing stylesheet synchronization dirty queue.
@@ -3705,14 +4111,28 @@ impl PersistentDocument {
         let descendant_sensitive_before = self.NodeMayAffectDescendantSelectors(element);
         if self.AttributeMayChangeFlatTree(element, &attribute.local_name, &attribute.namespace_uri)
         {
-            self.RecordFlatTreeChange();
+            self.RecordFlatTreeChange(element);
         }
         self.BumpCollectionMembershipRevision();
+        self.InvalidateSelectorAttributes(element, &attribute.local_name, existing.is_none());
+        self.InvalidateSVGAttribute(element, &attribute.local_name);
         let affects_metadata = !matches!(attribute.local_name.as_str(), "style" | "class" | "id");
         let selector_only = if attribute.local_name == "style" && attribute.namespace_uri.is_empty()
         {
-            self.RecordStyleChange(crate::style_state::StyleChange::InlineStyle(element));
-            if sibling_sensitive_before && !self.style_state.all_dirty {
+            let inline = crate::style_state::StyleChange::InlineStyle(element);
+            let independent = independent
+                && (!self.style_state.changes.contains(&inline)
+                    || self
+                        .style_state
+                        .independent_inline_styles
+                        .contains(&element));
+            self.RecordStyleChange(inline);
+            if independent && self.ShouldRecordStyleChange(element) {
+                self.style_state.independent_inline_styles.insert(element);
+            } else {
+                self.style_state.independent_inline_styles.remove(&element);
+            }
+            if sibling_sensitive_before && self.ShouldRecordStyleChange(element) {
                 self.style_state.sibling_sensitive_nodes.insert(element);
             }
             false
@@ -3726,7 +4146,18 @@ impl PersistentDocument {
         };
         // These admitted attributes have no layout metadata consumer. Any
         // selector/attr() presentation change is merged by the style resolver.
-        if affects_metadata && !selector_only {
+        if affects_metadata && !selector_only && self.IsConnectedToDocument(element) {
+            if self.MayHaveRenderedSubtree(element) {
+                self.style_state
+                    .geometry_input_nodes
+                    .insert(self.arena[element].id);
+            }
+            self.style_state
+                .layout_tree_roots
+                .insert(self.arena[element].id);
+            if self.AffectsSVGResourceClients(element) {
+                self.style_state.layout_inputs_require_tree = true;
+            }
             self.style_state
                 .impact
                 .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
@@ -3737,6 +4168,7 @@ impl PersistentDocument {
             self.arena[element].attributes.push(attribute);
         }
         if self.arena[element].IsElement("option", DOMNamespace::kHTML) {
+            self.RecordSelectContentGeometryChange(element);
             self.RefreshSelectSuggestedValues();
         }
         if disabled_state_changed
@@ -3775,7 +4207,7 @@ impl PersistentDocument {
             self.SyncProgressValueAppearance(element);
         }
         if directionality_changed {
-            self.RecomputeDirectionality();
+            self.UpdateDirectionalityForMutation(element);
         }
         if option_selectedness_changed {
             self.OptionSelectedAttributeChanged(
@@ -3825,10 +4257,14 @@ impl PersistentDocument {
                 None,
             );
         }
+        if namespace_uri.is_empty() && local_name == "style" {
+            self.arena[element].inline_style.get_mut().take();
+        }
+        self.RecordAttributeSelectorKeys(element, local_name, namespace_uri, None);
         let sibling_sensitive_before = self.NodeMayAffectSiblingSelectors(element);
         let descendant_sensitive_before = self.NodeMayAffectDescendantSelectors(element);
         if self.AttributeMayChangeFlatTree(element, local_name, namespace_uri) {
-            self.RecordFlatTreeChange();
+            self.RecordFlatTreeChange(element);
         }
         let option_selectedness_before = (local_name == "selected"
             && namespace_uri.is_empty()
@@ -3846,6 +4282,8 @@ impl PersistentDocument {
         let default_button_may_change =
             namespace_uri.is_empty() && matches!(local_name, "type" | "form" | "id");
         self.BumpCollectionMembershipRevision();
+        self.InvalidateSelectorAttributes(element, local_name, true);
+        self.InvalidateSVGAttribute(element, local_name);
         if std::env::var_os("BROWSER_PROFILE_STYLE_INVALIDATION").is_some() {
             eprintln!("style-attribute-mutation-profile node_id={} name={:?} namespace={:?} changed=true inline_style={} removed=true",
                 self.arena[element].id, local_name, namespace_uri,
@@ -3853,7 +4291,8 @@ impl PersistentDocument {
         }
         let selector_only = if local_name == "style" && namespace_uri.is_empty() {
             self.RecordStyleChange(crate::style_state::StyleChange::InlineStyle(element));
-            if sibling_sensitive_before && !self.style_state.all_dirty {
+            self.style_state.independent_inline_styles.remove(&element);
+            if sibling_sensitive_before && self.ShouldRecordStyleChange(element) {
                 self.style_state.sibling_sensitive_nodes.insert(element);
             }
             false
@@ -3865,7 +4304,21 @@ impl PersistentDocument {
                 sibling_sensitive_before,
             )
         };
-        if !selector_only && !matches!(local_name, "style" | "class" | "id") {
+        if !selector_only
+            && !matches!(local_name, "style" | "class" | "id")
+            && self.IsConnectedToDocument(element)
+        {
+            if self.MayHaveRenderedSubtree(element) {
+                self.style_state
+                    .geometry_input_nodes
+                    .insert(self.arena[element].id);
+            }
+            self.style_state
+                .layout_tree_roots
+                .insert(self.arena[element].id);
+            if self.AffectsSVGResourceClients(element) {
+                self.style_state.layout_inputs_require_tree = true;
+            }
             self.style_state
                 .impact
                 .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
@@ -3885,6 +4338,7 @@ impl PersistentDocument {
             self.InvalidateDefaultPseudoCandidates();
         }
         if self.arena[element].IsElement("option", DOMNamespace::kHTML) {
+            self.RecordSelectContentGeometryChange(element);
             self.RefreshSelectSuggestedValues();
         }
         if local_name == "selected"
@@ -3963,7 +4417,7 @@ impl PersistentDocument {
             && (matches!(local_name, "dir" | "type" | "value" | "slot")
                 || (local_name == "name" && self.arena[element].IsHTMLElement("slot")))
         {
-            self.RecomputeDirectionality();
+            self.UpdateDirectionalityForMutation(element);
         }
         self.RecordSiblingSensitivity(element, false);
         self.RecordDescendantSensitivity(element, descendant_sensitive_before);
@@ -4038,9 +4492,7 @@ impl PersistentDocument {
         } else {
             self.InvalidateNodeStyle(node);
         }
-        self.style_state
-            .impact
-            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+        self.RecordLayoutInputChange(node);
     }
 
     pub fn ControlIndeterminate(&self, node: usize) -> bool {
@@ -4061,9 +4513,7 @@ impl PersistentDocument {
         self.control_indeterminate_state
             .insert(self.arena[node].id, indeterminate);
         self.InvalidateNodeStyle(node);
-        self.style_state
-            .impact
-            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+        self.RecordLayoutInputChange(node);
     }
 
     // cpp: checkbox_input_type.cc:127-129; radio_input_type.cc:317-365;
@@ -4111,6 +4561,14 @@ impl PersistentDocument {
         let id = self.arena[element].id;
         if !self.top_layer_elements.contains(&id) {
             self.top_layer_elements.push(id);
+            // Element::SetIsInTopLayer forces reattachment even if removing
+            // and re-adding left computed overlay style unchanged. Top-layer
+            // ordering belongs to the LayoutView, not a DOM-local subtree.
+            self.style_state.layout_inputs_require_tree = true;
+            self.style_state.measurement_geometry_revision = self
+                .style_state
+                .measurement_geometry_revision
+                .wrapping_add(1);
         }
     }
 
@@ -4120,7 +4578,15 @@ impl PersistentDocument {
             && !self.open_popovers.contains(&id)
             && !self.fullscreen_element_stack.contains(&id)
         {
+            let previous = self.top_layer_elements.len();
             self.top_layer_elements.retain(|candidate| *candidate != id);
+            if self.top_layer_elements.len() != previous {
+                self.style_state.layout_inputs_require_tree = true;
+                self.style_state.measurement_geometry_revision = self
+                    .style_state
+                    .measurement_geometry_revision
+                    .wrapping_add(1);
+            }
         }
     }
 
@@ -4227,6 +4693,7 @@ impl PersistentDocument {
         }
         self.svg_image_view_root = Some(root_id);
         self.svg_image_view_spec = view_spec;
+        self.style_state.layout_inputs_require_tree = true;
         self.style_state
             .impact
             .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
@@ -4238,6 +4705,14 @@ impl PersistentDocument {
             .flatten()
     }
 
+    /// SVGElement's retained instance registry. Callers still select connected
+    /// instances; detached former instances cannot affect the active tree.
+    pub fn SVGInstanceElements(&self) -> impl Iterator<Item = usize> + '_ {
+        self.corresponding_svg_elements
+            .keys()
+            .filter_map(|id| self.FindNodeById(*id))
+    }
+
     pub fn CorrespondingSVGElement(&self, element: usize) -> Option<usize> {
         self.corresponding_svg_elements
             .get(&self.arena[element].id)
@@ -4246,6 +4721,9 @@ impl PersistentDocument {
 
     pub fn SetCorrespondingSVGElement(&mut self, element: usize, corresponding: Option<usize>) {
         self.BumpCollectionMembershipRevision();
+        if self.IsConnectedToDocument(element) {
+            self.BumpSVGResourceDOMRevision();
+        }
         self.InvalidateNodeStyle(element);
         let id = self.arena[element].id;
         if let Some(corresponding) = corresponding {
@@ -4530,7 +5008,7 @@ impl PersistentDocument {
     }
 
     // cpp: html_option_element.cc:243-254.
-    fn OptionValue(&self, option: usize) -> String {
+    pub fn OptionValue(&self, option: usize) -> String {
         if let Some(value) = self.arena[option].FindAttribute("value") {
             return value.value.clone();
         }
@@ -4568,6 +5046,7 @@ impl PersistentDocument {
         if let Some(select) = self.OptionOwnerSelect(option) {
             self.InvalidateNodeStyle(select);
         }
+        self.style_state.layout_inputs_require_tree = true;
         self.style_state
             .impact
             .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
@@ -4627,6 +5106,7 @@ impl PersistentDocument {
         }
         self.control_value_state.remove(&self.arena[select].id);
         self.InvalidateNodeStyle(select);
+        self.style_state.layout_inputs_require_tree = true;
         self.style_state
             .impact
             .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
@@ -4859,16 +5339,16 @@ impl PersistentDocument {
             }
             self.control_value_state.remove(&self.arena[node].id);
             self.SyncFileUAShadowTree(node);
+            self.RecordLayoutGeometryChange(node);
             self.InvalidateNodeStyle(node);
-            self.style_state
-                .impact
-                .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+            self.RecordLayoutInputChange(node);
             return;
         }
         if self.arena[node].IsElement("select", DOMNamespace::kHTML) {
             // SelectOptionByElement clears suggested_option_ before applying
             // either script selection or an autofill selection.
             self.SetSelectSuggestedOption(node, None);
+            self.RecordLayoutGeometryChange(node);
             let option = self
                 .SelectOptionNodeIds(node)
                 .into_iter()
@@ -4880,6 +5360,7 @@ impl PersistentDocument {
         // cpp: HTMLInputElement::SetValue, HTMLTextAreaElement::SetValue and
         // HTMLSelectElement::SetValue default their WebAutofillState argument
         // to kNotFilled. Explicit autofill callers use SetAutofillValue below.
+        let autofill_changed = self.AutofillState(node) != DOMAutofillState::kNotFilled;
         self.SetAutofillState(node, DOMAutofillState::kNotFilled);
         let value = if self.InputType(node) == Some(DOMInputType::kColor) {
             Self::SanitizeColorInputValue(&value)
@@ -4888,6 +5369,7 @@ impl PersistentDocument {
         };
         // HTMLInputElement/HTMLTextAreaElement clear the base-class suggested
         // value before their early-return-on-equal-value check.
+        let placeholder_was_visible = self.TextControlPlaceholderIsVisible(node);
         let had_suggested_value = if self.arena[node].IsElement("input", DOMNamespace::kHTML)
             || self.arena[node].IsElement("textarea", DOMNamespace::kHTML)
         {
@@ -4899,8 +5381,13 @@ impl PersistentDocument {
         };
         let previous = self.ControlValue(node);
         let changed = previous != value;
-        let empty_changed = previous.is_empty() != value.is_empty();
         self.control_value_state.insert(self.arena[node].id, value);
+        // cpp: HTMLTextAreaElement::SetValueCommon (603-643). An equal value
+        // preserves native geometry; actual editor/suggestion changes revoke
+        // it here, at the DOM owner, before Document projects lifecycle effects.
+        if changed || had_suggested_value || autofill_changed {
+            self.RecordLayoutGeometryChange(node);
+        }
         if !changed {
             if had_suggested_value {
                 self.SyncTextControlPlaceholderElement(node);
@@ -4908,9 +5395,7 @@ impl PersistentDocument {
                     self.InvalidateNodeStyle(editor);
                 }
                 self.InvalidateNodeStyle(node);
-                self.style_state
-                    .impact
-                    .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+                self.RecordLayoutInputChange(node);
             }
             return;
         }
@@ -4926,18 +5411,15 @@ impl PersistentDocument {
                 }
             }
         }
-        self.RecomputeDirectionality();
-        // Live text values affect selector matching through :placeholder-shown.
-        // Changing one nonempty value to another leaves that state (and every
-        // attribute selector) unchanged. Keep the broad dependency fallback for
-        // an empty/nonempty transition, including ancestors matched by :has().
-        // Layout still receives every edit, even when the cascade is unchanged.
-        if empty_changed || self.arena[node].IsElement("select", DOMNamespace::kHTML) {
-            self.InvalidateNodeStyle(node);
+        self.UpdateDirectionalityForMutation(node);
+        // cpp: TextControlElement::UpdatePlaceholderVisibility (282-316).
+        // Only an actual placeholder visibility transition changes this pseudo
+        // state. An empty/nonempty edit without a placeholder is not a selector
+        // mutation; every edit still updates the retained layout below.
+        if placeholder_was_visible != self.TextControlPlaceholderIsVisible(node) {
+            self.RecordStyleChange(crate::style_state::StyleChange::PlaceholderShown(node));
         }
-        self.style_state
-            .impact
-            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+        self.RecordLayoutInputChange(node);
     }
 
     fn IsAutofillFormControl(&self, node: usize) -> bool {
@@ -4970,9 +5452,7 @@ impl PersistentDocument {
             self.control_autofill_state.insert(id, state);
         }
         self.InvalidateNodeStyle(node);
-        self.style_state
-            .impact
-            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
+        self.RecordLayoutInputChange(node);
     }
 
     // cpp: WebFormControlElement::SetAutofillValue. Value and state are one
@@ -5069,22 +5549,30 @@ impl PersistentDocument {
     }
 
     fn StyleSheetConnectivityChanged(&mut self, subtree: usize) {
-        let contains_sheet = self.cssom.GetStyleSheets(None).iter().any(|sheet| {
-            let mut owner = self.FindNodeById(sheet.owner_node_id);
-            while let Some(node) = owner {
-                if node == subtree {
-                    return true;
-                }
-                owner = self.arena[node].parent;
+        // cpp: StyleEngine::{Add,Remove}StyleSheetCandidateNode. Connectivity
+        // changes notify through candidates in the affected shadow-including
+        // subtree, rather than searching every sheet and its owner ancestry.
+        let mut node = subtree;
+        let mut pending = Vec::new();
+        loop {
+            if self.cssom.HasStyleSheetForOwner(self.arena[node].id)
+                || self
+                    .TreeScopeHandle(node)
+                    .is_some_and(|scope| self.cssom.HasAdoptedStyleSheets(&scope))
+            {
+                self.style_state.sheet_revision += 1;
+                // StyleEngine compares the retained active-sheet sequence,
+                // including inline/adopted sheets carried by nested hosts.
+                return;
             }
-            false
-        });
-        if contains_sheet {
-            self.style_state.sheet_revision += 1;
-            // Let StyleEngine compare the retained active-sheet sequence.
-            // Connecting a new source-order suffix can use its compiled target
-            // features as an invalidation set; removal, replacement and
-            // reordering still fail that proof and become a full update there.
+            if let Some(root) = self.ShadowRoot(node) {
+                pending.push(root);
+            }
+            pending.extend_from_slice(&self.arena[node].children);
+            let Some(next) = pending.pop() else {
+                return;
+            };
+            node = next;
         }
     }
     pub fn ActiveStyleSheets(&self) -> impl Iterator<Item = &CSSStyleSheet> {
@@ -5260,6 +5748,7 @@ impl PersistentDocument {
                 self.RecordStyleChange(crate::style_state::StyleChange::Resource(index));
             }
         }
+        self.style_state.layout_inputs_require_tree = true;
         self.style_state
             .impact
             .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
@@ -5368,6 +5857,7 @@ impl PersistentDocument {
         }
         // Candidate changes alter the replaced resource id, intrinsic size
         // and image_device_pixel_ratio without changing selector matching.
+        self.style_state.layout_inputs_require_tree = true;
         self.style_state
             .impact
             .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
@@ -5394,6 +5884,13 @@ impl PersistentDocument {
             .get(&self.arena[node].id)
             .map(std::sync::Arc::as_ref)
     }
+    /// Borrow the canonical resolved output without traversing allocation
+    /// history or materializing a second style collection.
+    pub fn ResolvedStyles(&self) -> impl Iterator<Item = (usize, &ResolvedNodeStyle)> {
+        self.resolved_styles
+            .iter()
+            .filter_map(|(&id, style)| self.FindNodeById(id).map(|node| (node, style.as_ref())))
+    }
     /// Compatibility entry for a full style invalidation. Keep old values for
     /// comparison and sharing; style reads update before exposing current data.
     pub fn ClearResolvedStyles(&mut self) {
@@ -5408,17 +5905,41 @@ impl PersistentDocument {
     pub fn InvalidateAllStyles(&mut self) {
         self.style_state.all_dirty = true;
         self.style_state.changes.clear();
+        self.style_state.independent_inline_styles.clear();
+        self.style_state.attribute_changes.clear();
         self.style_state.sibling_sensitive_nodes.clear();
         self.style_state.append_only_children.clear();
         self.style_state.non_append_children.clear();
+        self.style_state.child_change_boundaries.clear();
         self.style_state.inserted_style_subtrees.clear();
         self.style_state.append_affected_subtrees.clear();
+        self.style_state.layout_inputs_require_tree = true;
         self.style_state
             .impact
             .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
     }
+    // cpp: StyleEngine::ShouldSkipInvalidationFor / Node::SetNeedsStyleRecalc.
+    // Detached preparation keeps DOM/selector data current, but cannot dirty
+    // the active document. Insertion records the complete newly connected tree.
+    fn ShouldRecordStyleChange(&self, node: usize) -> bool {
+        !self.style_state.all_dirty && self.IsConnectedToDocument(node)
+    }
     fn RecordStyleChange(&mut self, change: crate::style_state::StyleChange) {
-        if !self.style_state.all_dirty {
+        use crate::style_state::StyleChange as C;
+        let (C::Node(node)
+        | C::AttributeValue(node)
+        | C::PlaceholderShown(node)
+        | C::Directionality(node)
+        | C::ControlPseudo(node, _)
+        | C::InlineStyle(node)
+        | C::ExportParts(node)
+        | C::Children(node)
+        | C::Animation(node)
+        | C::Resource(node)) = change;
+        if self.ShouldRecordStyleChange(node) {
+            if !matches!(change, C::InlineStyle(_)) {
+                self.style_state.independent_inline_styles.remove(&node);
+            }
             self.style_state.changes.insert(change);
         }
     }
@@ -5433,7 +5954,7 @@ impl PersistentDocument {
         true
     }
     fn RecordSiblingSensitivity(&mut self, node: usize, conservative: bool) {
-        if self.style_state.all_dirty {
+        if !self.ShouldRecordStyleChange(node) {
             return;
         }
         let sensitive = conservative || self.NodeMayAffectSiblingSelectors(node);
@@ -5442,7 +5963,7 @@ impl PersistentDocument {
         }
     }
     fn RecordDescendantSensitivity(&mut self, node: usize, conservative: bool) {
-        if self.style_state.all_dirty {
+        if !self.ShouldRecordStyleChange(node) {
             return;
         }
         if conservative || self.NodeMayAffectDescendantSelectors(node) {
@@ -5467,25 +5988,30 @@ impl PersistentDocument {
     // Textarea default content also feeds its control value/placeholder state.
     fn RecordCharacterDataChange(&mut self, parent: usize, was_empty: bool, is_empty: bool) {
         self.BumpCollectionMembershipRevision();
+        if self.IsConnectedToDocument(parent) && self.IsSVGResourceStyleNode(parent) {
+            self.BumpSVGResourceDOMRevision();
+        }
         self.MarkStyleElementTextDirty(parent);
         if was_empty != is_empty || self.arena[parent].IsHTMLElement("textarea") {
             self.RecordStyleChange(crate::style_state::StyleChange::Children(parent));
-            if !self.style_state.all_dirty {
+            if self.ShouldRecordStyleChange(parent) {
                 self.style_state.non_append_children.insert(parent);
                 self.style_state.append_only_children.remove(&parent);
             }
         }
-        self.style_state
-            .impact
-            .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
-        self.RecomputeDirectionality();
+        self.RecordLayoutGeometryChange(parent);
+        self.RecordSelectContentGeometryChange(parent);
+        self.UpdateAutoDirectionalityAncestors(Some(parent));
+        self.UpdateDirectionalitySlots(parent);
         self.RefreshSelectSuggestedValues();
     }
     fn RecordChildrenChange(&mut self, parent: usize) {
         self.BumpCollectionMembershipRevision();
+        self.InvalidateSelectorSubtree(parent);
         self.MarkStyleElementTextDirty(parent);
         self.RecordStyleChange(crate::style_state::StyleChange::Children(parent));
-        self.RecordFlatTreeChange();
+        self.RecordFlatTreeChange(parent);
+        self.RecordSelectContentGeometryChange(parent);
         if self.arena[parent].IsElement("fieldset", DOMNamespace::kHTML) {
             self.InvalidateFormDisabledDescendants(parent);
         }
@@ -5494,11 +6020,19 @@ impl PersistentDocument {
         // datalist a list-bearing input resolves in its TreeScope. The compact
         // DOM owner does not retain Blink's per-ID observer registry, so it
         // publishes the equivalent input invalidations here.
-        self.InvalidateDatalistInputs();
-        self.InvalidateRadioInputs();
-        self.InvalidateDefaultPseudoCandidates();
+        // cpp: ListedElement::InsertedInto/RemovedFrom and
+        // HTMLInputElement::ResetListAttributeTargetObserver. Mutations in a
+        // detached fragment cannot change the active document's form/ID target
+        // observers. Attachment/removal still notifies the connected parent.
+        if self.IsConnectedToDocument(parent) {
+            let _trace = browser_tracing::span("dom", "DOM.InvalidateFormObservers");
+            self.InvalidateDatalistInputs();
+            self.InvalidateRadioInputs();
+            self.InvalidateDefaultPseudoCandidates();
+        }
         self.InvalidateAncestorSelectContainsInput(parent);
-        self.RecomputeDirectionality();
+        self.UpdateAutoDirectionalityAncestors(Some(parent));
+        self.UpdateDirectionalitySlots(parent);
         self.RefreshSelectSuggestedValues();
     }
 
@@ -5534,11 +6068,30 @@ impl PersistentDocument {
         }
     }
 
+    // cpp: ListedElement/form-control and ID-target observer ownership. Keep a
+    // conservative subject index; every notification evaluates the same live
+    // predicates, including detached controls and dynamic input types.
+    fn FormObserverElements(&mut self) -> Vec<usize> {
+        if self.form_observer_elements.is_none() {
+            self.form_observer_elements = Some(
+                (0..self.arena.len())
+                    .filter(|&node| {
+                        self.arena[node].IsHTMLElement("input")
+                            || self.arena[node].IsHTMLElement("button")
+                    })
+                    .collect(),
+            );
+        }
+        self.form_observer_elements.as_ref().unwrap().clone()
+    }
+
     fn InvalidateDatalistInputs(&mut self) {
         if self.style_state.all_dirty {
             return;
         }
-        let inputs = (0..self.arena.len())
+        let inputs = self
+            .FormObserverElements()
+            .into_iter()
             .filter(|&node| {
                 self.InputType(node).is_some_and(|input_type| {
                     input_type.ShouldRespectListAttribute()
@@ -5549,7 +6102,12 @@ impl PersistentDocument {
             })
             .collect::<Vec<_>>();
         for input in inputs {
-            self.InvalidateNodeStyle(input);
+            if self.IsConnectedToDocument(input) {
+                self.RecordStyleChange(crate::style_state::StyleChange::ControlPseudo(
+                    input,
+                    crate::style_state::ControlPseudoState::HasDatalist,
+                ));
+            }
         }
     }
 
@@ -5557,11 +6115,18 @@ impl PersistentDocument {
         if self.style_state.all_dirty {
             return;
         }
-        let radios = (0..self.arena.len())
+        let radios = self
+            .FormObserverElements()
+            .into_iter()
             .filter(|&node| self.InputType(node) == Some(DOMInputType::kRadio))
             .collect::<Vec<_>>();
         for radio in radios {
-            self.InvalidateNodeStyle(radio);
+            if self.IsConnectedToDocument(radio) {
+                self.RecordStyleChange(crate::style_state::StyleChange::ControlPseudo(
+                    radio,
+                    crate::style_state::ControlPseudoState::Indeterminate,
+                ));
+            }
         }
     }
 
@@ -5572,19 +6137,54 @@ impl PersistentDocument {
         if self.style_state.all_dirty {
             return;
         }
-        let candidates = (0..self.arena.len())
+        let candidates = self
+            .FormObserverElements()
+            .into_iter()
             .filter(|&node| {
-                self.arena[node].Namespace() == DOMNamespace::kHTML
-                    && matches!(self.arena[node].Name(), "input" | "button")
+                self.CanBeSuccessfulSubmitButton(node)
+                    && self.FormOwner(node).is_some()
+                    && self.IsConnectedToDocument(node)
             })
             .collect::<Vec<_>>();
         for candidate in candidates {
-            self.InvalidateNodeStyle(candidate);
+            // cpp: HTMLFormElement::InvalidateDefaultButtonStyle. Affected
+            // listed submit controls receive PseudoStateChanged(kPseudoDefault),
+            // rather than ordinary attribute/sibling invalidation.
+            self.RecordStyleChange(crate::style_state::StyleChange::ControlPseudo(
+                candidate,
+                crate::style_state::ControlPseudoState::Default,
+            ));
         }
     }
-    fn RecordNonAppendChildrenChange(&mut self, parent: usize) {
+    fn RecordChildrenBoundary(
+        &mut self,
+        parent: usize,
+        boundary: Option<crate::style_state::ChildrenChangeBoundary>,
+    ) {
+        if !self.ShouldRecordStyleChange(parent) {
+            return;
+        }
+        let entry = self
+            .style_state
+            .child_change_boundaries
+            .entry(parent)
+            .or_insert_with(|| Some(Vec::new()));
+        if let Some(boundary) = boundary {
+            if let Some(boundaries) = entry {
+                boundaries.push(boundary);
+            }
+        } else {
+            *entry = None;
+        }
+    }
+    fn RecordNonAppendChildrenChange(
+        &mut self,
+        parent: usize,
+        boundary: Option<crate::style_state::ChildrenChangeBoundary>,
+    ) {
         self.RecordChildrenChange(parent);
-        if self.style_state.all_dirty {
+        self.RecordChildrenBoundary(parent, boundary);
+        if !self.ShouldRecordStyleChange(parent) {
             return;
         }
         self.style_state.non_append_children.insert(parent);
@@ -5598,7 +6198,16 @@ impl PersistentDocument {
         previous_same_type: Option<usize>,
     ) {
         self.RecordChildrenChange(parent);
-        if self.style_state.all_dirty {
+        self.RecordChildrenBoundary(
+            parent,
+            Some(crate::style_state::ChildrenChangeBoundary {
+                before: (self.arena[child].node_type == DOMNodeType::kElement)
+                    .then_some(previous_last)
+                    .flatten(),
+                after: None,
+            }),
+        );
+        if !self.ShouldRecordStyleChange(parent) {
             return;
         }
         if !self.style_state.non_append_children.contains(&parent) {
@@ -5611,6 +6220,47 @@ impl PersistentDocument {
             self.style_state.append_affected_subtrees.insert(node);
         }
     }
+    // cpp: StyleEngine::ClassChangedForElement / IdChangedForElement.
+    // Preserve removed keys before changing the DOM; Style owns rule lookup.
+    fn RecordAttributeSelectorKeys(
+        &mut self,
+        node: usize,
+        name: &str,
+        namespace: &str,
+        value: Option<&str>,
+    ) {
+        if !self.ShouldRecordStyleChange(node) {
+            return;
+        }
+        let old = self.arena[node]
+            .attributes
+            .iter()
+            .find(|a| a.local_name == name && a.namespace_uri == namespace)
+            .map(|a| a.value.as_str());
+        let change = self.style_state.attribute_changes.entry(node).or_default();
+        change.names.insert(name.to_string());
+        if namespace.is_empty() && name == "id" {
+            change.ids.extend(
+                old.into_iter()
+                    .chain(value)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+            );
+        }
+        if namespace.is_empty() && name == "class" {
+            let old = old
+                .unwrap_or_default()
+                .split_ascii_whitespace()
+                .collect::<HashSet<_>>();
+            let new = value
+                .unwrap_or_default()
+                .split_ascii_whitespace()
+                .collect::<HashSet<_>>();
+            change
+                .classes
+                .extend(old.symmetric_difference(&new).map(|s| (*s).to_string()));
+        }
+    }
     fn RecordAttributeStyleChange(
         &mut self,
         node: usize,
@@ -5618,35 +6268,18 @@ impl PersistentDocument {
         namespace: &str,
         sibling_sensitive: bool,
     ) -> bool {
-        use crate::style_state::SelectorOnlyAttribute;
-        let kind = if namespace.is_empty() && self.arena[node].namespace == DOMNamespace::kHTML {
-            match name {
-                "data-pcr" => Some(SelectorOnlyAttribute::DataPcr),
-                "src" if self.arena[node].IsHTMLElement("script") => {
-                    Some(SelectorOnlyAttribute::ScriptSrc)
-                }
-                "nonce" if self.arena[node].IsHTMLElement("script") => {
-                    Some(SelectorOnlyAttribute::ScriptNonce)
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-        if let Some(kind) = kind {
-            self.RecordStyleChange(crate::style_state::StyleChange::Attribute(node, kind));
-            if sibling_sensitive && !self.style_state.all_dirty {
-                self.style_state.sibling_sensitive_nodes.insert(node);
-            }
-            true
-        } else {
-            self.RecordStyleChange(crate::style_state::StyleChange::Node(node));
-            if sibling_sensitive && !self.style_state.all_dirty {
-                self.style_state.sibling_sensitive_nodes.insert(node);
-            }
-            false
+        self.RecordStyleChange(crate::style_state::StyleChange::AttributeValue(node));
+        if sibling_sensitive && self.ShouldRecordStyleChange(node) {
+            self.style_state.sibling_sensitive_nodes.insert(node);
         }
+        // Custom data and script loading metadata have no HTML presentation
+        // effect. Style still observes their ordinary attribute selector keys.
+        namespace.is_empty()
+            && self.arena[node].namespace == DOMNamespace::kHTML
+            && (name.starts_with("data-")
+                || (self.arena[node].IsHTMLElement("script") && matches!(name, "src" | "nonce")))
     }
+
     pub fn InvalidateNodeStyle(&mut self, node: usize) {
         self.RecordStyleChange(crate::style_state::StyleChange::Node(node));
         self.RecordSiblingSensitivity(node, true);
@@ -5665,8 +6298,44 @@ impl PersistentDocument {
         }
         false
     }
+    // LayoutSVGResourceContainer::StyleChanged/MarkForLayoutAndParentResourceInvalidation.
+    // These are the seven LayoutSVGResourceType owners. Ordinary SVG nodes
+    // still invalidate the resource catalog above (e.g. external clipPath use
+    // targets), but only resource owners require cross-branch client updates.
+    fn AffectsSVGResourceClients(&self, node: usize) -> bool {
+        let mut current = Some(node);
+        while let Some(index) = current {
+            let element = self.Node(index);
+            if element.Namespace() == DOMNamespace::kSVG
+                && matches!(
+                    element.Name(),
+                    "clipPath"
+                        | "mask"
+                        | "filter"
+                        | "marker"
+                        | "linearGradient"
+                        | "radialGradient"
+                        | "pattern"
+                )
+            {
+                return true;
+            }
+            current = element.Parent();
+        }
+        false
+    }
     pub fn SetResolvedStyle(&mut self, node: usize, style: ResolvedNodeStyle) {
         if self.ResolvedStyleFor(node) == Some(&style) {
+            return;
+        }
+        // EnsureComputedStyle caches hidden query results. They have no layout
+        // or paint client and must not start resource loads or invalidate frames.
+        if unsafe { style.native_style.Get().as_ref() }
+            .is_some_and(|native| native.IsEnsuredInDisplayNone())
+        {
+            debug_assert!(!style.generates_box);
+            self.resolved_styles
+                .insert(self.arena[node].id, std::sync::Arc::new(style));
             return;
         }
         let same_pseudo = |a: &Option<PseudoElement>, b: &Option<PseudoElement>| match (a, b) {
@@ -5675,13 +6344,37 @@ impl PersistentDocument {
             _ => false,
         };
         let requires_export = self.ResolvedStyleFor(node).is_none_or(|old| {
-            old.display_contents || style.display_contents
-                || !same_pseudo(&old.before, &style.before) || !same_pseudo(&old.after, &style.after)
+            old.display_contents
+                || style.display_contents
+                || !same_pseudo(&old.before, &style.before)
+                || !same_pseudo(&old.after, &style.after)
                 || !same_pseudo(&old.first_letter, &style.first_letter)
-                || !same_pseudo(&old.placeholder, &style.placeholder) || !same_pseudo(&old.marker, &style.marker)
+                || !same_pseudo(&old.placeholder, &style.placeholder)
+                || !same_pseudo(&old.marker, &style.marker)
         }) || self.IsSVGResourceStyleNode(node);
-        self.style_state.paint_style_nodes.insert(self.arena[node].id);
+        self.style_state
+            .layout_style_nodes
+            .insert(self.arena[node].id);
+        self.style_state
+            .paint_style_nodes
+            .insert(self.arena[node].id);
+        if requires_export {
+            // Generated/flattened children need attachment context once. A
+            // newly styled element has no resident attachment yet, so start
+            // at its parent rather than enqueueing every new child separately.
+            let root = if self.ResolvedStyleFor(node).is_some() {
+                node
+            } else {
+                self.FlatTreeParentElement(node).unwrap_or(node)
+            };
+            self.style_state
+                .layout_tree_roots
+                .insert(self.arena[root].id);
+        }
         self.style_state.paint_style_requires_export |= requires_export;
+        if self.AffectsSVGResourceClients(node) {
+            self.style_state.layout_inputs_require_tree = true;
+        }
         self.resolved_style_revision = self.resolved_style_revision.saturating_add(1);
         if self.IsSVGResourceStyleNode(node) {
             self.svg_resource_style_revision = self.svg_resource_style_revision.saturating_add(1);
@@ -5701,6 +6394,33 @@ impl PersistentDocument {
         }
         self.resolved_styles
             .insert(self.arena[node].id, std::sync::Arc::new(style));
+    }
+    /// Style's normal lifecycle can publish absence of computed style, just as
+    /// Element::SetComputedStyle(nullptr) does for display:none subtrees.
+    pub fn ClearResolvedStyle(&mut self, node: usize) {
+        let Some(old) = self.ResolvedStyleFor(node) else {
+            return;
+        };
+        if unsafe { old.native_style.Get().as_ref() }
+            .is_some_and(|style| style.IsEnsuredInDisplayNone())
+        {
+            self.resolved_styles.remove(&self.arena[node].id);
+            return;
+        }
+        self.style_state
+            .layout_style_nodes
+            .insert(self.arena[node].id);
+        self.style_state
+            .layout_tree_roots
+            .insert(self.arena[node].id);
+        self.style_state
+            .paint_style_nodes
+            .insert(self.arena[node].id);
+        if self.AffectsSVGResourceClients(node) {
+            self.style_state.layout_inputs_require_tree = true;
+        }
+        self.style_state.paint_style_requires_export = true;
+        self.RemoveResolvedStyle(node);
     }
     fn RemoveResolvedStyle(&mut self, node: usize) {
         let Some(style) = self.resolved_styles.remove(&self.arena[node].id) else {
@@ -5723,7 +6443,14 @@ impl PersistentDocument {
     // cpp: dom/document.h:166-167
     // cpp: dom/document.cc:380-388
     pub fn SetScrollOffset(&mut self, node: usize, offset: Offset) {
-        self.scroll_offsets.insert(self.arena[node].id, offset);
+        if self.ScrollOffsetFor(node) == offset {
+            return;
+        }
+        let id = self.arena[node].id;
+        self.scroll_offsets.insert(id, offset);
+        // Geometry queries consume the scroll translation even when no CSS
+        // style changed. Do not depend on a full tree projection to carry it.
+        self.style_state.geometry_input_nodes.insert(id);
     }
     pub fn ScrollOffsetFor(&self, node: usize) -> Offset {
         self.scroll_offsets
@@ -5735,10 +6462,66 @@ impl PersistentDocument {
     // cpp: dom/document.h:132-132
     /// Existing DOM connectivity semantics, sampled only by opt-in diagnostics.
     pub fn MemoryDiagnostics(&self) -> DOMMemoryDiagnostics {
-        let connected = (0..self.arena.len()).filter(|&i| self.IsConnectedToDocument(i)).count();
-        DOMMemoryDiagnostics { arena_nodes: self.arena.len(), connected_nodes: connected,
+        let connected = (0..self.arena.len())
+            .filter(|&i| self.IsConnectedToDocument(i))
+            .count();
+        DOMMemoryDiagnostics {
+            arena_nodes: self.arena.len(),
+            connected_nodes: connected,
             detached_nodes: self.arena.len() - connected,
-            arena_slot_capacity_bytes: self.arena.capacity() * std::mem::size_of::<DOMNode>() }
+            arena_slot_capacity_bytes: self.arena.capacity() * std::mem::size_of::<DOMNode>(),
+        }
+    }
+    /// Subscribe to this arena's native reference writes. The stream moves
+    /// with parser document swaps; no consumer borrows DOM during GC.
+    pub fn SubscribeNodeReferences(&mut self) -> Rc<crate::node_references::NodeReferenceQueue> {
+        use crate::node_references::{NodeReferenceChange as C, NodeReferenceQueue};
+        let queue = Rc::new(NodeReferenceQueue::default());
+        for (index, node) in self.arena.iter().enumerate() {
+            queue.push(C::Object {
+                id: node.id,
+                document_root: index == self.root,
+            });
+            if let Some(owner) = node
+                .owner_document_handle
+                .filter(|owner| owner.arena_id == self.arena_id)
+            {
+                queue.push(C::OwnerDocument {
+                    node: node.id,
+                    document: owner.node_id,
+                });
+            }
+            for &child in &node.children {
+                queue.push(C::Child {
+                    parent: node.id,
+                    child: self.arena[child].id,
+                    attached: true,
+                });
+            }
+        }
+        for (&host, &(root, _, _)) in &self.shadow_roots {
+            queue.push(C::Shadow {
+                host: self.arena[host].id,
+                root: self.arena[root].id,
+            });
+        }
+        for (&owner, &content) in &self.template_contents {
+            queue.push(C::Template {
+                owner,
+                content: self.arena[content].id,
+            });
+        }
+        self.node_reference_observers
+            .retain(|observer| observer.strong_count() != 0);
+        self.node_reference_observers.push(Rc::downgrade(&queue));
+        queue
+    }
+    fn NotifyNodeReference(&self, change: crate::node_references::NodeReferenceChange) {
+        for observer in &self.node_reference_observers {
+            if let Some(queue) = observer.upgrade() {
+                queue.push(change);
+            }
+        }
     }
     pub fn NodeCount(&self) -> usize {
         self.arena.len()
@@ -6179,6 +6962,19 @@ mod collection_membership_epoch_tests {
         let before = d.CollectionMembershipKey();
         *d.NodeMut(e) = replacement;
         assert_ne!(before, d.CollectionMembershipKey());
+        d.style_state.impact = Default::default();
+        let geometry = d.style_state.measurement_geometry_revision;
+        let fragment = d.CreateDocumentFragment();
+        let temporary = d.CreateElementDefault(DOMNamespace::kHTML, "div".into());
+        d.AppendChild(fragment, temporary);
+        let text = d.AppendText(temporary, "first");
+        d.AppendText(temporary, " and second");
+        d.Remove(text);
+        assert_eq!(d.style_state.measurement_geometry_revision, geometry);
+        assert!(d.style_state.impact.IsEmpty());
+        d.AppendChild(root, fragment);
+        assert!(d.style_state.measurement_geometry_revision > geometry);
+        assert!(d.style_state.impact.reattach);
         let before = d.CollectionMembershipKey();
         let clone = d.CloneNode(e, true);
         assert_ne!(before, d.CollectionMembershipKey());
@@ -6218,6 +7014,8 @@ mod collection_membership_epoch_tests {
 /// Partial DOM arena storage, excluding separately allocated node payloads/styles.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DOMMemoryDiagnostics {
-    pub arena_nodes: usize, pub connected_nodes: usize, pub detached_nodes: usize,
+    pub arena_nodes: usize,
+    pub connected_nodes: usize,
+    pub detached_nodes: usize,
     pub arena_slot_capacity_bytes: usize,
 }

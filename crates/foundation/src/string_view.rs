@@ -269,8 +269,14 @@ mod tests {
         let backing = String::from_latin1(b"prefix-value-suffix");
         let view = StringView::from_blink_string_range(&backing, 7, 5);
         assert_eq!(view.Span8(), Some(b"value".as_slice()));
-        assert_eq!(view.Span16().as_ptr(), backing.Span16().unwrap()[7..].as_ptr());
-        assert_eq!(view.Span8().unwrap().as_ptr(), backing.Span8().unwrap()[7..].as_ptr());
+        assert_eq!(
+            view.Span16().as_ptr(),
+            backing.Span16().unwrap()[7..].as_ptr()
+        );
+        assert_eq!(
+            view.Span8().unwrap().as_ptr(),
+            backing.Span8().unwrap()[7..].as_ptr()
+        );
         let nested = view.Substring(1, 3);
         drop(backing);
         drop(view);
@@ -278,7 +284,10 @@ mod tests {
 
         let backing = String::from_utf16(&[b'x' as u16, 0xd83d, 0xde00, b'y' as u16]);
         let view = StringView::from_blink_string_range(&backing, 1, 2);
-        assert_eq!(view.Span16().as_ptr(), backing.Span16().unwrap()[1..].as_ptr());
+        assert_eq!(
+            view.Span16().as_ptr(),
+            backing.Span16().unwrap()[1..].as_ptr()
+        );
         drop(backing);
         assert_eq!(view.CodePointAt(0), 0x1f600);
         assert_eq!(view.ToString().Utf8(), "😀");

@@ -860,8 +860,12 @@ impl HTTPRequestOperation for HTTPRequest {
     fn SetPriority(&mut self, priority: HTTPRequestPriority) {
         // Fetcher's coalesced parser consumer boosts an existing speculative
         // load. A later async consumer must not demote the blocking consumer.
-        if priority == HTTPRequestPriority::High && self.state.priority.swap(1, Ordering::AcqRel) == 0 {
-            self.state.trace.event("HTTPRequestPriorityRaised", &[("priority", 1.)]);
+        if priority == HTTPRequestPriority::High
+            && self.state.priority.swap(1, Ordering::AcqRel) == 0
+        {
+            self.state
+                .trace
+                .event("HTTPRequestPriorityRaised", &[("priority", 1.)]);
             self.state.priority_changed.notify_one();
         }
     }

@@ -6,6 +6,7 @@
 
 use super::invalidation_set::InvalidationElement;
 use std::hash::Hash;
+use std::ops::Deref;
 
 /// Blink StyleChangeType ordering used by the invalidation scheduler.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -22,8 +23,11 @@ pub enum StyleChangeType {
 pub trait InvalidationDom {
     type Node: Clone + Eq + Hash;
     type Element: InvalidationElement;
+    type ElementRef<'a>: Deref<Target = Self::Element>
+    where
+        Self: 'a;
 
-    fn element(&self, node: &Self::Node) -> Option<&Self::Element>;
+    fn element(&self, node: &Self::Node) -> Option<Self::ElementRef<'_>>;
     fn is_document(&self, node: &Self::Node) -> bool;
     fn shadow_host(&self, node: &Self::Node) -> Option<Self::Node>;
     fn parent_node(&self, node: &Self::Node) -> Option<Self::Node>;

@@ -69,6 +69,11 @@ fn IntoDecodedImage(
 
 // cpp: image_decoder/skia_image_decoder.cc:180-229
 impl ImageDecoder for SkiaImageDecoder {
+    fn BackgroundFactory(
+        &self,
+    ) -> Option<std::sync::Arc<dyn Fn() -> Box<dyn ImageDecoder> + Send + Sync>> {
+        Some(std::sync::Arc::new(|| Box::new(SkiaImageDecoder)))
+    }
     fn Decode(&mut self, input: &ImageDecodeInput<'_>) -> io::Result<DecodedImage> {
         if input.bytes.is_empty() {
             return Err(io::Error::new(

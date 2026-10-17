@@ -363,6 +363,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::Message(message) => eprintln!("page: {message}"),
+            UserEvent::PageError(error) => error.emit_stderr(),
             UserEvent::Fatal(FatalError { source, message }) => {
                 self.fail(event_loop, source, message)
             }

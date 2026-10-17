@@ -177,6 +177,7 @@ fn changing_position_z_index_and_auto_recomputes_flags_without_changing_old_fram
         let current = page.CurrentFrame().unwrap();
         let retained = browser::page::PageFrame {
             sequence: current.sequence,
+            compositor_scroll_sequence: current.compositor_scroll_sequence,
             fragments: current.fragments.clone(),
             display_items: current.display_items.clone(),
         };

@@ -575,10 +575,7 @@ fn PaintColumnStyle(
                     height: tile.height,
                 },
                 f64::from(table_fragment.paint.effective_zoom),
-                table_fragment
-                    .paint
-                    .resources
-                    .as_deref(),
+                table_fragment.paint.resources.as_deref(),
                 (!style.color_scheme_flags_is_normal)
                     .then_some(u8::from(style.used_dark_color_scheme)),
             )

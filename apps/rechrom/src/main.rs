@@ -2,10 +2,12 @@
 // ordinary Release build retains the standard allocator without header overhead.
 #[cfg(feature = "allocation_diagnostics")]
 #[global_allocator]
-static ALLOCATOR: browser_tracing::allocation::PhaseAllocator = browser_tracing::allocation::PhaseAllocator;
+static ALLOCATOR: browser_tracing::allocation::PhaseAllocator =
+    browser_tracing::allocation::PhaseAllocator;
 
 mod app;
 mod begin_frame_source;
+mod browser_host;
 mod chrome;
 mod crash_report;
 mod devtools_host;
@@ -17,8 +19,13 @@ mod input;
 mod memory_diagnostics;
 mod navigation;
 mod options;
+mod page_dom;
+mod page_error;
+mod page_presentation;
+mod page_runtime;
 mod presentation_runtime;
 mod tabs;
+mod window_runtime;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     memory_diagnostics::start_sampler();

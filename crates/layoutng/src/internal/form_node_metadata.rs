@@ -321,6 +321,12 @@ impl HTMLTextAreaElement {
     pub fn GetElementType(&self) -> ElementType {
         ElementType::kHTMLTextAreaElement
     }
+    // cpp: HTMLTextAreaElement::ParseAttribute. The DOM boundary already
+    // parsed defaults and ranges; keep retained native metadata current too.
+    pub(crate) fn UpdateSizing(&mut self, rows: u32, cols: u32) {
+        self.rows_ = rows;
+        self.cols_ = cols;
+    }
     pub fn cols(&self) -> u32 {
         self.cols_
     }

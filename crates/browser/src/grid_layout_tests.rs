@@ -43,11 +43,9 @@ fn run_matrix(smoke: bool) {
     };
     space.fonts.push(FontFace {
         family: "sans-serif".into(),
-        bytes: include_bytes!(
-            "../../../assets/fonts/Roboto-Regular.ttf"
-        )
-        .as_slice()
-        .into(),
+        bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
+            .as_slice()
+            .into(),
         ..Default::default()
     });
     space.viewport = Some(

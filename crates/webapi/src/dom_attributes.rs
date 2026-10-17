@@ -8,6 +8,52 @@
 use super::*;
 
 impl DOMJavaScriptBindings {
+    // IDLMemberInstaller::InstallAttribute installs an actual native accessor
+    // on the ordinary prototype. The runtime owns/traces captures; the DOM
+    // callback retains declaring-interface validation and property semantics.
+    pub(crate) fn PrepareNativeGetter(arguments: &[HostValue]) -> HostContinuation {
+        let [HostValue::String(interface), HostValue::String(member), HostValue::Boolean(lenient), ..] =
+            arguments
+        else {
+            return Box::new(|_| Self::type_error("Invalid native getter definition"));
+        };
+        let binding = HostFunctionBinding {
+            name: format!("get {member}"),
+            length: 0,
+            callback: HostMethodRef {
+                receiver: 0,
+                name: "__domAttributeGetter".into(),
+            },
+            data: vec![
+                HostValue::String(interface.clone()),
+                HostValue::String(member.clone()),
+                HostValue::Boolean(*lenient),
+            ],
+        };
+        Box::new(move |runtime| runtime.CreateHostFunction(&binding))
+    }
+
+    pub(super) fn NativeAttributeGetter(&self, arguments: &[HostValue]) -> HostResult {
+        let [receiver, HostValue::String(interface), HostValue::String(member), HostValue::Boolean(lenient), ..] =
+            arguments
+        else {
+            return Self::type_error("Invalid native attribute invocation");
+        };
+        let receiver = match receiver {
+            HostValue::Object(object) if self.ImplementsDOMInterface(object.id, interface) => {
+                object.id
+            }
+            _ if *lenient => return HostResult::default(),
+            _ => return Self::type_error("Illegal invocation"),
+        };
+        let result = self.get(receiver, member);
+        if result.handled {
+            result
+        } else {
+            Self::type_error("Native attribute is not implemented")
+        }
+    }
+
     pub(super) fn UsesOrdinaryNodeProperties(&self, receiver: HostObjectId) -> bool {
         // Prototype registration marks the installed public binding surface.
         // Preserve the raw host protocol for embedders before bootstrap only.
@@ -40,6 +86,7 @@ impl DOMJavaScriptBindings {
             "HTMLInputElement" => node.IsHTMLElement("input"),
             "HTMLTextAreaElement" => node.IsHTMLElement("textarea"),
             "HTMLSelectElement" => node.IsHTMLElement("select"),
+            "HTMLOptionElement" => node.IsHTMLElement("option"),
             "HTMLImageElement" => node.IsHTMLElement("img"),
             "HTMLTemplateElement" => node.IsHTMLElement("template"),
             _ => false,
@@ -69,11 +116,7 @@ impl DOMJavaScriptBindings {
         }
         // No second state owner and no fallback after a selected native member:
         // use the existing getter/typed setter and preserve its exception.
-        let result = if operation == "__domAttributeGet" {
-            self.get(receiver, member)
-        } else {
-            self.set(receiver, member, rest)
-        };
+        let result = self.set(receiver, member, rest);
         if result.handled {
             result
         } else {

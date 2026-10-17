@@ -64,9 +64,7 @@ fn native_content_box_publication_recalculates_rules_before_page_paint() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(
-                &assembly,
-            ))),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
             browser::CreateBrowserConstraints(600, 300),
             None,
             None,

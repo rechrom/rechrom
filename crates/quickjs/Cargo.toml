@@ -24,3 +24,7 @@ malloc-large-blocks = []
 [[test]]
 name = "source_oracles"
 path = "tests/source_oracles.rs"
+
+[[test]]
+name = "embedding_exceptions"
+path = "tests/quickjs_embedding_exceptions.rs"

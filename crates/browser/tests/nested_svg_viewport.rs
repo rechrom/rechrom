@@ -608,9 +608,9 @@ fn inline_svg_root_resize_does_not_reuse_an_image_container_override() {
         let mut page = fixture(
             r#"<svg id="outer" width="40" height="80"><svg x="50%" y="50%" width="50%" height="50%"><rect id="shape" width="10" height="10"/></svg></svg>"#,
         );
-        assert_draw(&page, "shape", rect(20.,40.,10.,10.), true);
+        assert_draw(&page, "shape", rect(20., 40., 10., 10.), true);
         set_attribute(&mut page, "outer", "width", "80");
         set_attribute(&mut page, "outer", "height", "160");
-        assert_draw(&page, "shape", rect(40.,80.,10.,10.), true);
+        assert_draw(&page, "shape", rect(40., 80., 10., 10.), true);
     });
 }

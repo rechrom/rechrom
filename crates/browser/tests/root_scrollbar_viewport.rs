@@ -398,7 +398,10 @@ fn paint_fixed_control(page: &Page, width: u32, height: u32, x: usize, y: usize)
         width as usize,
     )
     .unwrap();
-    assert_eq!(pixels[y * width as usize + x].to_ne_bytes(), [20, 40, 60, 255]);
+    assert_eq!(
+        pixels[y * width as usize + x].to_ne_bytes(),
+        [20, 40, 60, 255]
+    );
 }
 
 #[test]
@@ -407,8 +410,16 @@ fn fixed_control_keeps_root_overflow_clip_with_classic_and_overlay_scrollbars() 
         for overlay in [false, true] {
             for (fill, client_width, client_height) in [
                 ("height:400px", if overlay { 300 } else { 285 }, 200),
-                ("width:400px;height:100px", 300, if overlay { 200 } else { 185 }),
-                ("width:400px;height:400px", if overlay { 300 } else { 285 }, if overlay { 200 } else { 185 }),
+                (
+                    "width:400px;height:100px",
+                    300,
+                    if overlay { 200 } else { 185 },
+                ),
+                (
+                    "width:400px;height:400px",
+                    if overlay { 300 } else { 285 },
+                    if overlay { 200 } else { 185 },
+                ),
             ] {
                 let mut page = fixture(
                     &format!("#fill{{{fill}}}#fixed{{position:fixed;right:24px;bottom:20px;width:44px;height:80px;background:rgb(20,40,60);border-radius:22px}}"),
@@ -418,7 +429,13 @@ fn fixed_control_keeps_root_overflow_clip_with_classic_and_overlay_scrollbars() 
                 dimensions(&mut page, client_width, client_height);
                 // A rounded drawing must reach the full property-state
                 // validator; the rect-only redundant-clip proof is insufficient.
-                paint_fixed_control(&page, 300, 200, client_width as usize - 46, client_height as usize - 60);
+                paint_fixed_control(
+                    &page,
+                    300,
+                    200,
+                    client_width as usize - 46,
+                    client_height as usize - 60,
+                );
             }
         }
     });
@@ -438,13 +455,23 @@ fn fixed_control_root_clip_tracks_scrollbar_mutation_resize_and_scroll() {
             position: layoutng_assembly::internal::layout_input::Offset { x: 100.0, y: 100.0 },
             delta: layoutng_assembly::internal::layout_input::Offset { x: 0.0, y: 80.0 },
             ..Default::default()
-        }).unwrap();
-        assert_eq!(page.CurrentFrame().unwrap().fragments.paint.scroll_offset.y, 80.0);
+        })
+        .unwrap();
+        assert_eq!(
+            page.CurrentFrame().unwrap().fragments.paint.scroll_offset.y,
+            80.0
+        );
         paint_fixed_control(&page, 300, 200, 239, 140);
-        check(&mut page, "document.getElementById('fill').setAttribute('style','height:100px')");
+        check(
+            &mut page,
+            "document.getElementById('fill').setAttribute('style','height:100px')",
+        );
         dimensions(&mut page, 300, 200);
         paint_fixed_control(&page, 300, 200, 254, 140);
-        check(&mut page, "document.getElementById('fill').setAttribute('style','height:400px')");
+        check(
+            &mut page,
+            "document.getElementById('fill').setAttribute('style','height:400px')",
+        );
         dimensions(&mut page, 285, 200);
         paint_fixed_control(&page, 300, 200, 239, 140);
         page.ResizeViewport(300.0, 500.0, 1.0).unwrap();

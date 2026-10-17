@@ -85,7 +85,7 @@ impl SiblingData {
             }
             let set = self.invalidation_entries_[index].invalidation_set_.borrow();
             index += 1;
-            if !set.InvalidatesElement(dom.element(element).expect("element traversal")) {
+            if !set.InvalidatesElement(&*dom.element(element).expect("element traversal")) {
                 continue;
             }
             if set.InvalidatesSelf() {
@@ -215,7 +215,7 @@ impl<'a, N: Clone + Eq + Hash> StyleInvalidator<'a, N> {
     ) -> bool {
         self.invalidation_sets_.iter().any(|set| {
             set.borrow()
-                .InvalidatesElement(dom.element(element).expect("element traversal"))
+                .InvalidatesElement(&*dom.element(element).expect("element traversal"))
         })
     }
     fn MatchesCurrentInvalidationSetsAsSlotted<D: InvalidationDom<Node = N>>(
@@ -227,7 +227,7 @@ impl<'a, N: Clone + Eq + Hash> StyleInvalidator<'a, N> {
         self.invalidation_sets_.iter().any(|set| {
             let value = set.borrow();
             value.InvalidatesSlotted()
-                && value.InvalidatesElement(dom.element(element).expect("assigned element"))
+                && value.InvalidatesElement(&*dom.element(element).expect("assigned element"))
         })
     }
     fn MatchesCurrentInvalidationSetsAsParts<D: InvalidationDom<Node = N>>(
@@ -239,7 +239,7 @@ impl<'a, N: Clone + Eq + Hash> StyleInvalidator<'a, N> {
         self.invalidation_sets_.iter().any(|set| {
             let value = set.borrow();
             value.InvalidatesParts()
-                && value.InvalidatesElement(dom.element(element).expect("part element"))
+                && value.InvalidatesElement(&*dom.element(element).expect("part element"))
         })
     }
 

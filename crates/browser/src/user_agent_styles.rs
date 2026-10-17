@@ -2,6 +2,7 @@
 
 use cssom::{CSSStyleSheet, CSSUserAgentStyleSheetRole};
 use dom::ParsedDocument;
+use std::rc::Rc;
 use style::{ParseUserAgentCSS, ParseUserAgentCSSWithRole};
 
 // Exact resource bytes from Chromium commit
@@ -21,14 +22,14 @@ const MATHML_USER_AGENT_CSS: &str = include_str!("../resources/user_agent/mathml
 
 // cpp: browser/user_agent_styles.h:14-25
 pub struct UserAgentStyleSheets {
-    sheets_: Vec<CSSStyleSheet>,
+    sheets_: Rc<Vec<Rc<CSSStyleSheet>>>,
 }
 
 thread_local! {
     // Blink's StyleSheetContents and CSSStyleSheet live on the document/style
     // thread. Keep one parsed UA owner per thread and cheaply clone its Rc
     // backing into each browser assembly instead of requiring CSSOM to be Sync.
-    static SHEETS: Vec<CSSStyleSheet> = vec![
+    static SHEETS: Rc<Vec<Rc<CSSStyleSheet>>> = Rc::new(vec![
         ParseUserAgentCSS(HTML_USER_AGENT_CSS),
         ParseUserAgentCSSWithRole(
             HTML_QUIRKS_USER_AGENT_CSS,
@@ -45,7 +46,7 @@ thread_local! {
         ),
         ParseUserAgentCSSWithRole(SVG_USER_AGENT_CSS, CSSUserAgentStyleSheetRole::kSVG),
         ParseUserAgentCSSWithRole(MATHML_USER_AGENT_CSS, CSSUserAgentStyleSheetRole::kMathML),
-    ];
+    ].into_iter().map(Rc::new).collect());
 }
 
 impl UserAgentStyleSheets {
@@ -56,16 +57,16 @@ impl UserAgentStyleSheets {
         }
     }
 
-    pub(crate) fn Sheets(&self) -> &[CSSStyleSheet] {
+    pub(crate) fn Sheets(&self) -> &[Rc<CSSStyleSheet>] {
         &self.sheets_
     }
 
     // cpp: browser/user_agent_styles.cc:49-52
-    pub fn For(&self, _document: &ParsedDocument) -> &[CSSStyleSheet] {
+    pub fn For(&self, _document: &ParsedDocument) -> &[Rc<CSSStyleSheet>] {
         self.sheets_.as_slice()
     }
     // cpp: browser/user_agent_styles.cc:49-52
-    pub fn ForDocument(&self, _document: &dom::Document) -> &[CSSStyleSheet] {
+    pub fn ForDocument(&self, _document: &dom::Document) -> &[Rc<CSSStyleSheet>] {
         self.sheets_.as_slice()
     }
 }
@@ -97,10 +98,14 @@ mod tests {
         );
         let user_agent = UserAgentStyleSheets::new();
         assert_eq!(
+            user_agent.Sheets().as_ptr(),
+            UserAgentStyleSheets::new().Sheets().as_ptr()
+        );
+        assert_eq!(
             user_agent
                 .ForDocument(owner.GetDocument())
                 .iter()
-                .map(CSSStyleSheet::UserAgentStyleSheetRole)
+                .map(|sheet| sheet.UserAgentStyleSheetRole())
                 .collect::<Vec<_>>(),
             vec![
                 Some(CSSUserAgentStyleSheetRole::kHTML),

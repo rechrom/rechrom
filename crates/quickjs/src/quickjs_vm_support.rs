@@ -17,7 +17,7 @@ const FUNC_RET_INITIAL_YIELD: i32 = 3;
 // the Rust allocator, so the JS runtime allocator trace remains unchanged.
 // Alignment and contiguous value/var-ref layout match the original C frame.
 unsafe fn vm_temp_allocate(
-    storage: &mut Vec<u64>,
+    storage: &mut Vec<core::mem::MaybeUninit<u64>>,
     size: usize,
     ctx: *mut JSContext,
 ) -> Option<*mut c_void> {
@@ -26,52 +26,77 @@ unsafe fn vm_temp_allocate(
         JS_ThrowOutOfMemory(ctx);
         return None;
     }
-    storage.resize(words, 0);
+    // The C operand stack is uninitialized alloca storage. JS_CallInternal
+    // initializes copied arguments, locals and varrefs before publishing the
+    // frame, and writes each operand before making it live. MaybeUninit keeps
+    // the raw allocation valid without clearing unused operand-stack capacity.
+    storage.set_len(words);
     Some(storage.as_mut_ptr().cast())
 }
-// Recycle only the raw C-alloca-equivalent call-frame allocation. JSValue
-// ownership and cleanup stay in JS_CallInternal; this pool never traces or
-// retains a JS object. Each frame exclusively owns its buffer through reentry.
-const VM_CALL_FRAME_CACHE_WORDS: usize = 16 * 1024 / size_of::<u64>();
+// C obtains every bytecode call frame from the native stack with `alloca`.
+// A Vec-per-call translation makes hot JavaScript pay for TLS lookup, pool
+// search and Vec ownership transfer at every nesting level, and starts
+// allocating again as soon as the small cache is deeper than eight calls.
+//
+// Retain the same LIFO lifetime in one stable, thread-local backing store.
+// Page owns its JavaScript runtime on one executor, calls nest on that owner
+// thread, and the fixed Box never moves while frame pointers are live. A frame
+// that exceeds the bounded arena keeps the existing fallible heap path.
+const VM_CALL_FRAME_ARENA_WORDS: usize = 1024 * 1024 / size_of::<u64>();
+struct VmCallFrameArena {
+    words: Box<[core::mem::MaybeUninit<u64>]>,
+    used: usize,
+}
+impl VmCallFrameArena {
+    fn new() -> Self {
+        Self {
+            words: vec![core::mem::MaybeUninit::uninit(); VM_CALL_FRAME_ARENA_WORDS].into_boxed_slice(),
+            used: 0,
+        }
+    }
+}
 std::thread_local! {
-    static VM_CALL_FRAME_CACHE: std::cell::RefCell<[Option<Vec<u64>>; 8]> =
-        std::cell::RefCell::new(std::array::from_fn(|_| None));
+    static VM_CALL_FRAME_ARENA: std::cell::RefCell<VmCallFrameArena> =
+        std::cell::RefCell::new(VmCallFrameArena::new());
 }
 struct VmCallFrameStorage {
-    words: Vec<u64>,
+    words: Vec<core::mem::MaybeUninit<u64>>,
+    arena_range: Option<(usize, usize)>,
 }
 impl VmCallFrameStorage {
-    fn new() -> Self { Self { words: Vec::new() } }
+    fn new() -> Self { Self { words: Vec::new(), arena_range: None } }
     unsafe fn allocate(&mut self, size: usize, ctx: *mut JSContext) -> Option<*mut c_void> {
-        // Native/non-bytecode calls never touch the pool. Large frames retain
-        // the original allocation path and cannot displace these small frames.
         let words = size.div_ceil(size_of::<u64>());
-        if self.words.capacity() == 0 && words != 0 && words <= VM_CALL_FRAME_CACHE_WORDS {
-            let _ = VM_CALL_FRAME_CACHE.try_with(|pool| {
-                if let Ok(mut slots) = pool.try_borrow_mut() {
-                    let slot = slots.iter().position(|slot|
-                        slot.as_ref().is_some_and(|buffer| buffer.capacity() >= words))
-                        .or_else(|| slots.iter().position(Option::is_some));
-                    if let Some(slot) = slot { self.words = slots[slot].take().unwrap(); }
+        if self.arena_range.is_none() && self.words.capacity() == 0 && words != 0 {
+            let allocated = VM_CALL_FRAME_ARENA.try_with(|arena| {
+                let mut arena = arena.try_borrow_mut().ok()?;
+                let start = arena.used;
+                let end = start.checked_add(words)?;
+                if end > arena.words.len() {
+                    return None;
                 }
+                let pointer = arena.words.as_mut_ptr().add(start).cast();
+                arena.used = end;
+                Some((pointer, start, end))
             });
+            if let Ok(Some((pointer, start, end))) = allocated {
+                self.arena_range = Some((start, end));
+                return Some(pointer);
+            }
         }
-        // Returned buffers have length zero, so the original resize still
-        // initializes every word, including locals, operand stack and varrefs.
+        // Arena exhaustion preserves the former fallible allocation behavior.
         vm_temp_allocate(&mut self.words, size, ctx)
     }
 }
 impl Drop for VmCallFrameStorage {
     fn drop(&mut self) {
-        if self.words.capacity() == 0 || self.words.capacity() > VM_CALL_FRAME_CACHE_WORDS {
+        let Some((start, end)) = self.arena_range.take() else {
             return;
-        }
-        self.words.clear();
-        let _ = VM_CALL_FRAME_CACHE.try_with(|pool| {
-            if let Ok(mut slots) = pool.try_borrow_mut() {
-                if let Some(slot) = slots.iter_mut().find(|slot| slot.is_none()) {
-                    *slot = Some(std::mem::take(&mut self.words));
-                }
+        };
+        let _ = VM_CALL_FRAME_ARENA.try_with(|arena| {
+            if let Ok(mut arena) = arena.try_borrow_mut() {
+                debug_assert_eq!(arena.used, end, "QuickJS call frames must unwind LIFO");
+                arena.used = start;
             }
         });
     }

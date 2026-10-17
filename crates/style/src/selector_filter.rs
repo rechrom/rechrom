@@ -30,12 +30,10 @@
 
 // cpp: third_party/blink/renderer/core/css/selector_filter.h:90-93,153-154
 // cpp: third_party/blink/renderer/core/css/selector_filter.cc:45
-// The original batch maps SelectorFilter::Mark and constants. The DOM-backed
-// SelectorFilter parent-stack and ancestor-collection routines remain pending;
-// subject/single collection dependencies are mapped below.
+// PersistentSelectorService supplies retained DOM identifiers and parent edges;
+// this module owns the translated parent stack and ancestor rejection filter.
 
-// Direct SelectorQuery dependencies; the rest of SelectorFilter above remains
-// separately pending. cpp: selector_filter.cc:196-276 (subject/single helpers).
+// Direct SelectorQuery dependencies: selector_filter.cc:196-276 (subject/single helpers).
 // Source commit: 6c1d401fcca5e1b0030563a90c2f2bba168e0c15.
 // Selected dependency ledger (physical / effective / mapped / omitted / pending):
 //   selector_filter.cc:196-276: 81 / 56 / 56 / 0 / 0.
@@ -54,8 +52,7 @@ pub struct Mark {
 }
 
 // cpp: selector_filter.h:153-154
-// These are SelectorFilter's constants; module scope retains them until the
-// owning class can be mapped with the genuine DOM parent-stack type.
+// Module scope shares the source constants with the production DOM adapter.
 pub const kFilterSize: u32 = 8192;
 pub const kFilterMask: u32 = kFilterSize - 1;
 
@@ -145,5 +142,195 @@ pub fn CollectSingleSelectorIdentifierHashes<B: SelectorQueryFilterBackend>(
             }
         }
         _ => {}
+    }
+}
+
+// cpp: selector_filter.h:95-177; selector_filter.cc:277-319.
+// Element identities and identifiers are supplied by the retained DOM adapter.
+pub(crate) struct SelectorFilter {
+    parents: Vec<usize>,
+    set_bits: Vec<u16>,
+    parent_marks: Vec<Mark>,
+    bits: [u64; 128],
+}
+impl Default for SelectorFilter {
+    fn default() -> Self {
+        Self {
+            parents: Vec::new(),
+            set_bits: Vec::new(),
+            parent_marks: Vec::new(),
+            bits: [0; 128],
+        }
+    }
+}
+impl SelectorFilter {
+    pub(crate) fn PushParent(&mut self, parent: usize, hashes: impl IntoIterator<Item = u32>) {
+        self.parent_marks.push(Mark {
+            parent_stack_size: self.parents.len() as WtfSizeT,
+            set_bits_size: self.set_bits.len() as WtfSizeT,
+        });
+        self.parents.push(parent);
+        for hash in hashes {
+            let bit = hash & kFilterMask;
+            let word = &mut self.bits[bit as usize / 64];
+            let mask = 1u64 << (bit % 64);
+            if *word & mask == 0 {
+                *word |= mask;
+                self.set_bits.push(bit as u16);
+            }
+        }
+    }
+    pub(crate) fn Parents(&self) -> &[usize] {
+        &self.parents
+    }
+    pub(crate) fn PopToParentCount(&mut self, count: usize) {
+        if count == self.parents.len() {
+            return;
+        }
+        let mark = self.parent_marks[count];
+        while self.set_bits.len() > mark.set_bits_size as usize {
+            let bit = self.set_bits.pop().unwrap() as usize;
+            self.bits[bit / 64] &= !(1u64 << (bit % 64));
+        }
+        self.parents.truncate(mark.parent_stack_size as usize);
+        self.parent_marks.truncate(mark.parent_stack_size as usize);
+    }
+    pub(crate) fn ParentStackIsConsistent(&self, parent: Option<usize>) -> bool {
+        self.parents.last().copied() == parent
+    }
+    pub(crate) fn FastRejectSelector(&self, hashes: &[u16]) -> bool {
+        hashes.iter().any(|&hash| {
+            let bit = u32::from(hash) & kFilterMask;
+            self.bits[bit as usize / 64] & (1u64 << (bit % 64)) == 0
+        })
+    }
+}
+
+// The persistent DOM eagerly synchronizes attributes. Standard identifiers
+// are handled separately, just as Element::IsExcludedAttribute does in Blink.
+pub(crate) struct ProductionFilterAttributes;
+impl SelectorQueryFilterBackend for ProductionFilterAttributes {
+    fn IsExcludedAttribute(
+        &self,
+        name: &crate::css_selector::QualifiedName,
+        _: AttributesToExcludeHashesFor,
+    ) -> bool {
+        matches!(name.LocalName().Utf8().as_str(), "id" | "class" | "style")
+    }
+}
+
+// cpp: selector_filter.cc:79-194,319-330. Keep sibling compounds out of the
+// ancestor filter and intersect selector-list subject requirements.
+pub(crate) fn CollectIdentifierHashes(
+    selector: crate::css_selector::CSSSelectorComplex<'_>,
+    scope: Option<&crate::style_scope::StyleScope>,
+    backing: &mut Vec<u16>,
+    subject: &mut u32,
+) {
+    let mut simples = selector.SimpleSelectors();
+    if let Some(first) = simples.next() {
+        CollectDescendantCompoundHashes(simples, first.Relation(), scope, backing);
+    }
+    *subject = 0;
+    CollectSubjectIdentifierHashes(
+        selector,
+        AttributesToExcludeHashesFor::kExcludeAllLazilySynchronizedAttributes,
+        subject,
+        &ProductionFilterAttributes,
+    );
+}
+fn CollectDescendantCompoundHashes<'a>(
+    selectors: impl Iterator<Item = &'a crate::css_selector::CSSSelector>,
+    mut relation: crate::css_selector::RelationType,
+    scope: Option<&crate::style_scope::StyleScope>,
+    hashes: &mut Vec<u16>,
+) {
+    use crate::css_selector::RelationType::*;
+    let mut skip = true;
+    for current in selectors {
+        match relation {
+            kSubSelector => {
+                if !skip {
+                    CollectDescendantHashes(current, scope, hashes);
+                }
+            }
+            kDirectAdjacent | kIndirectAdjacent | kPseudoChild => skip = true,
+            kShadowSlot | kDescendant | kChild | kUAShadow | kShadowPart => {
+                skip = false;
+                CollectDescendantHashes(current, scope, hashes);
+            }
+            kRelativeDescendant
+            | kRelativeChild
+            | kRelativeDirectAdjacent
+            | kRelativeIndirectAdjacent => {
+                unreachable!("relative selector is not an ancestor compound")
+            }
+        }
+        relation = current.Relation();
+    }
+}
+fn CollectDescendantHashes(
+    selector: &crate::css_selector::CSSSelector,
+    scope: Option<&crate::style_scope::StyleScope>,
+    hashes: &mut Vec<u16>,
+) {
+    use crate::css_selector::{MatchType::*, PseudoType::*};
+    let hash = match selector.Match() {
+        kId if !selector.Value().empty() => Some(selector.Value().Hash().wrapping_mul(kIdSalt)),
+        kClass if !selector.Value().empty() => {
+            Some(selector.Value().Hash().wrapping_mul(kClassSalt))
+        }
+        kTag => Some(
+            selector
+                .TagQName()
+                .LocalName()
+                .Hash()
+                .wrapping_mul(kTagNameSalt),
+        ),
+        kAttributeExact | kAttributeSet | kAttributeList | kAttributeContain | kAttributeBegin
+        | kAttributeEnd | kAttributeHyphen => (!ProductionFilterAttributes.IsExcludedAttribute(
+            &selector.Attribute(),
+            AttributesToExcludeHashesFor::kExcludeStandardAttributesOnly,
+        ))
+        .then(|| {
+            selector
+                .Attribute()
+                .LocalName()
+                .ToAsciiLower()
+                .Hash()
+                .wrapping_mul(kAttributeSalt)
+        }),
+        kPseudoClass => {
+            let (list, nested_scope) = match selector.GetPseudoType() {
+                kPseudoIs | kPseudoWhere | kPseudoParent => {
+                    (selector.SelectorListOrParent(), scope)
+                }
+                kPseudoScope => (
+                    scope
+                        .and_then(|scope| scope.From())
+                        .map(crate::css_selector::SelectorListRef::Parent),
+                    scope.and_then(|scope| scope.Parent()),
+                ),
+                _ => (None, scope),
+            };
+            if let Some(list) = list {
+                let mut complexes = list.ComplexSelectors();
+                if let Some(only) = complexes.next() {
+                    if complexes.next().is_none() {
+                        CollectDescendantCompoundHashes(
+                            only.SimpleSelectors(),
+                            crate::css_selector::RelationType::kDescendant,
+                            nested_scope,
+                            hashes,
+                        );
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    };
+    if let Some(hash) = hash {
+        hashes.push(hash as u16);
     }
 }

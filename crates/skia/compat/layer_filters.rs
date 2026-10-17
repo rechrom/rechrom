@@ -611,6 +611,24 @@ fn affine_svg_graph_rgba(
     if pixels.len() != width.saturating_mul(height).saturating_mul(4) {
         return false;
     }
+    // FilterResult::applyTransform concatenates integer translations without
+    // resolving/resampling the image. This includes the identity mapping used
+    // by axis-aligned device-space filters: only their region origin changes.
+    if filter_to_device[..4] == [1.0, 0.0, 0.0, 1.0]
+        && filter_to_device[4].fract() == 0.0
+        && filter_to_device[5].fract() == 0.0
+    {
+        return svg_graph_rgba_at(
+            pixels,
+            width as u32,
+            height as u32,
+            graph,
+            (
+                surface_origin.0 as f32 - filter_to_device[4],
+                surface_origin.1 as f32 - filter_to_device[5],
+            ),
+        );
+    }
     let Some(device_to_filter) = affine_inverse(filter_to_device) else {
         return false;
     };
@@ -730,22 +748,13 @@ pub fn apply_rgba_at(
         } => drop_shadow_rgba(
             pixels, width, height, *sigma_x, *sigma_y, *offset_x, *offset_y, *color,
         ),
-        RenderSurfaceFilter::SvgGraph(graph) => {
-            // Graph regions are retained in the owning render target's device
-            // coordinates. A tightly allocated effect surface has its own
-            // storage origin, just like SkCanvas saveLayer; translate regions
-            // into that storage before executing the graph.
-            let mut graph = graph.clone();
-            let ox = surface_origin.0 as f32;
-            let oy = surface_origin.1 as f32;
-            graph.region[0] -= ox;
-            graph.region[1] -= oy;
-            for primitive in &mut graph.primitives {
-                primitive.region[0] -= ox;
-                primitive.region[1] -= oy;
-            }
-            svg_graph_rgba(pixels, width, height, &graph)
-        }
+        RenderSurfaceFilter::SvgGraph(graph) => svg_graph_rgba_at(
+            pixels,
+            width,
+            height,
+            graph,
+            (surface_origin.0 as f32, surface_origin.1 as f32),
+        ),
         RenderSurfaceFilter::AffineSvgGraph {
             graph,
             filter_to_device,
@@ -1209,18 +1218,74 @@ fn blur_edge(
     }
     Some(out)
 }
+fn region_bounds(width: usize, height: usize, region: [f32; 4]) -> [usize; 4] {
+    [
+        region[0].floor().clamp(0.0, width as f32) as usize,
+        region[1].floor().clamp(0.0, height as f32) as usize,
+        (region[0] + region[2]).ceil().clamp(0.0, width as f32) as usize,
+        (region[1] + region[3]).ceil().clamp(0.0, height as f32) as usize,
+    ]
+}
 fn clip_region(pixels: &mut [u8], width: usize, height: usize, region: [f32; 4]) {
-    let left = region[0].floor().max(0.0) as usize;
-    let top = region[1].floor().max(0.0) as usize;
-    let right = (region[0] + region[2]).ceil().clamp(0.0, width as f32) as usize;
-    let bottom = (region[1] + region[3]).ceil().clamp(0.0, height as f32) as usize;
-    for y in 0..height {
-        for x in 0..width {
-            if x < left || x >= right || y < top || y >= bottom {
-                pixels[(y * width + x) * 4..(y * width + x + 1) * 4].fill(0);
+    let [left, top, right, bottom] = region_bounds(width, height, region);
+    if left >= right || top >= bottom {
+        pixels.fill(0);
+        return;
+    }
+    let stride = width * 4;
+    pixels[..top * stride].fill(0);
+    pixels[bottom * stride..].fill(0);
+    for row in pixels[top * stride..bottom * stride].chunks_exact_mut(stride) {
+        row[..left * 4].fill(0);
+        row[right * 4..].fill(0);
+    }
+}
+fn offset_rgba(
+    input: &[u8],
+    width: usize,
+    height: usize,
+    x: f32,
+    y: f32,
+    region: [f32; 4],
+) -> Vec<u8> {
+    let mut output = vec![0; input.len()];
+    let [left, top, right, bottom] = region_bounds(width, height, region);
+    if left >= right || top >= bottom || !x.is_finite() || !y.is_finite() {
+        return output;
+    }
+    // SkImageFilterTypes::FilterResult::applyTransform downgrades pixel-aligned
+    // translation to nearest sampling. Copy the surviving rows exactly; as in
+    // SkImageFilters::Offset, the primitive crop restricts output, never input.
+    if x.fract() == 0.0 && y.fract() == 0.0 {
+        if x.abs() >= width as f32 || y.abs() >= height as f32 {
+            return output;
+        }
+        let (dx, dy) = (x as i64, y as i64);
+        let left = (left as i64).max(dx);
+        let right = (right as i64).min(width as i64 + dx);
+        let top = (top as i64).max(dy);
+        let bottom = (bottom as i64).min(height as i64 + dy);
+        if left >= right || top >= bottom {
+            return output;
+        }
+        let count = (right - left) as usize * 4;
+        for py in top..bottom {
+            let dst = (py as usize * width + left as usize) * 4;
+            let src = ((py - dy) as usize * width + (left - dx) as usize) * 4;
+            output[dst..dst + count].copy_from_slice(&input[src..src + count]);
+        }
+    } else {
+        for py in top..bottom {
+            for px in left..right {
+                let i = (py * width + px) * 4;
+                for c in 0..4 {
+                    output[i + c] =
+                        sample_channel(input, width, height, px as f32 - x, py as f32 - y, c);
+                }
             }
         }
     }
+    output
 }
 fn normalize3(value: [f32; 3]) -> [f32; 3] {
     let length = value[0]
@@ -1370,6 +1435,24 @@ fn lighting_rgba(
     }
     output
 }
+// Graph regions are in the owning filter space; translate them into the
+// caller-owned pixel storage, as SkCanvas saveLayer does for its device origin.
+fn svg_graph_rgba_at(
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    graph: &RenderSvgFilterGraph,
+    origin: (f32, f32),
+) -> bool {
+    let mut graph = graph.clone();
+    graph.region[0] -= origin.0;
+    graph.region[1] -= origin.1;
+    for primitive in &mut graph.primitives {
+        primitive.region[0] -= origin.0;
+        primitive.region[1] -= origin.1;
+    }
+    svg_graph_rgba(pixels, width, height, &graph)
+}
 fn svg_graph_rgba(
     pixels: &mut [u8],
     width: u32,
@@ -1439,17 +1522,7 @@ fn svg_graph_rgba(
                 }
             }
             RenderSvgFilterKind::Offset { x, y } => {
-                let input = out;
-                out = vec![0; input.len()];
-                for py in 0..h {
-                    for px in 0..w {
-                        let i = (py * w + px) * 4;
-                        for c in 0..4 {
-                            out[i + c] =
-                                sample_channel(&input, w, h, px as f32 - *x, py as f32 - *y, c)
-                        }
-                    }
-                }
+                out = offset_rgba(&out, w, h, *x, *y, primitive.region);
             }
             RenderSvgFilterKind::Flood(color) => {
                 let a = unit_to_byte(color[3]);

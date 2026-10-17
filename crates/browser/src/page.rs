@@ -20,6 +20,7 @@ use javascript::javascript_runtime::{
     JavaScriptRuntime,
 };
 use javascript::script_engine::ScriptEngine;
+use layoutng_assembly::layout_boundary_support::LayoutUpdateKind;
 use layoutng_assembly::{
     fragment_tree::{FragmentKind, FragmentNode, PaintResources},
     internal::{
@@ -219,7 +220,7 @@ struct ScriptClient(Rc<RefCell<dyn PageClient>>, Weak<PageState>);
 impl ScriptLoadClient for ScriptClient {
     fn DidPumpParser(&mut self) {
         if let Some(state) = self.1.upgrade() {
-            state.InvalidateMeasurement();
+            state.InvalidateLayoutOutput();
             state.InvalidateStyle();
         }
     }
@@ -239,9 +240,10 @@ impl ScriptLoadClient for ScriptClient {
     }
 }
 
-mod measurement;
+#[cfg(test)]
+#[path = "page/layout_output_tests.rs"]
+mod layout_output_tests;
 mod paint_commit;
-use measurement::MeasurementSnapshot;
 use paint_commit::CommitPaint;
 
 struct PendingImageEvent {
@@ -277,8 +279,7 @@ struct PageState {
     // This never means DOM, layout geometry or display-item recording changed.
     paint_resources_dirty: Cell<bool>,
     pending_paint_mutations: RefCell<Vec<paint::paint_engine::PaintMutation>>,
-    measurement: RefCell<Option<MeasurementSnapshot>>,
-    measurement_candidate: RefCell<Option<MeasurementSnapshot>>,
+    layout_revision: Cell<Option<u64>>,
     #[cfg(test)]
     full_layout_lifecycles: Cell<usize>,
     scroll_updates: RefCell<Vec<(u64, Offset)>>,
@@ -327,8 +328,7 @@ impl PageState {
             resource_references_dirty: Cell::new(true),
             paint_resources_dirty: Cell::new(false),
             pending_paint_mutations: RefCell::new(Vec::new()),
-            measurement: RefCell::new(None),
-            measurement_candidate: RefCell::new(None),
+            layout_revision: Cell::new(None),
             #[cfg(test)]
             full_layout_lifecycles: Cell::new(0),
             scroll_updates: RefCell::new(Vec::new()),
@@ -352,35 +352,13 @@ impl PageState {
         )
     }
 
-    #[track_caller]
-    fn InvalidateMeasurement(&self) {
-        let had_snapshot = self.measurement.borrow().is_some();
-        let had_candidate = self.measurement_candidate.borrow().is_some();
-        if had_snapshot || had_candidate {
-            browser_tracing::instant(
-                "layout",
-                "MeasurementInvalidated",
-                &[
-                    ("caller_line", std::panic::Location::caller().line() as f64),
-                    ("had_snapshot", had_snapshot as u8 as f64),
-                    ("had_candidate", had_candidate as u8 as f64),
-                ],
-            );
-        }
-        self.measurement.borrow_mut().take();
-        self.measurement_candidate.borrow_mut().take();
+    fn InvalidateLayoutOutput(&self) {
+        self.layout_revision.set(None);
     }
-    fn PreserveMeasurementGeometry(&self) {
-        if let Some(mut snapshot) = self.measurement.borrow_mut().take() {
-            snapshot.MarkPaintStale();
-            *self.measurement_candidate.borrow_mut() = Some(snapshot);
-        }
-    }
-    fn InstallMeasurement(&self, fragments: Rc<FragmentNode>) {
-        let revision = self.document.borrow().GetMeasurementGeometryRevision();
-        self.measurement_candidate.borrow_mut().take();
-        *self.measurement.borrow_mut() =
-            Some(MeasurementSnapshot::with_revision(fragments, revision));
+    fn MarkLayoutCurrent(&self) {
+        self.layout_revision.set(Some(
+            self.document.borrow().GetMeasurementGeometryRevision(),
+        ));
     }
 
     fn PublishPaintResources(&self, frame: &mut PageFrame) {
@@ -406,11 +384,10 @@ impl PageState {
         self.paint_resources_dirty.set(false);
     }
     fn InvalidateStyle(&self) {
-        self.InvalidateMeasurement();
+        self.InvalidateLayoutOutput();
         self.InvalidateStylePreservingGeometry();
     }
     fn InvalidateStylePreservingGeometry(&self) {
-        self.PreserveMeasurementGeometry();
         self.styles_resolved.set(false);
         self.resource_references_dirty.set(true);
         self.scroll_only.set(false);
@@ -423,6 +400,9 @@ impl PageState {
         notify: &mut dyn FnMut(),
         dispatch_image: &mut dyn FnMut(u64, bool),
     ) {
+        let mut mutation_trace = browser_tracing::span("dom", "Page.ApplyDOMMutation");
+        mutation_trace.set("mutation_type", m.mutation_type as u8 as f64);
+        mutation_trace.set("node_id", m.target_node_id as f64);
         let effect = self
             .document
             .ApplyDOMMutation(m)
@@ -489,9 +469,7 @@ impl PageState {
         // the relevant lifecycle engines. Attribute changes keep committed
         // geometry until computed-style diffing proves layout changed.
         if effects.layout == Some(DocumentLayoutMutation::InvalidateGeometry) {
-            self.InvalidateMeasurement();
-        } else if effects.style.is_some() {
-            self.PreserveMeasurementGeometry();
+            self.InvalidateLayoutOutput();
         }
         if effects.style.is_some() {
             self.InvalidateStylePreservingGeometry();
@@ -647,7 +625,21 @@ impl PageState {
                     },
                 ));
             })),
-            update_style: Some(Box::new(move || style.ResolveStyles())),
+            update_style: Some(Box::new(move |id| {
+                style.ResolveStyles();
+                let mut document = style.document.borrow_mut();
+                let Some(node) = document.GetDocument().FindNodeById(id) else {
+                    return;
+                };
+                crate::style_services::EnsureComputedStyleForNode(
+                    &mut style.style_engine.borrow_mut(),
+                    &mut document,
+                    &style.constraints.borrow(),
+                    style.preferred_color_scheme.get(),
+                    style.forced_colors.get(),
+                    node,
+                );
+            })),
             emit_style_sheet: Some(Box::new(move |sheet| {
                 let base = stylesheet
                     .resources
@@ -665,9 +657,9 @@ impl PageState {
             read_viewport_scroll: Some(Box::new(move || {
                 // Assembly only: Layout supplies its viewport range, DOM owns
                 // the latest offset, and canonical Style supplies scroll policy.
-                viewport_scroll.EnsureMeasurement();
-                let measurement = viewport_scroll.measurement.borrow();
-                let viewport = measurement.as_ref()?;
+                viewport_scroll.EnsureLayoutOutput();
+                let layout = viewport_scroll.layout_engine.borrow();
+                let range = layout.Output()?.Root().ScrollRange();
                 let owner = viewport_scroll.document.borrow();
                 let tree = owner.GetDocument();
                 let root = tree
@@ -679,35 +671,47 @@ impl PageState {
                 let native = tree
                     .ResolvedStyleFor(root)
                     .map(|resolved| unsafe { &*resolved.native_style.Get() })?;
-                let range = viewport.paint.scroll_container;
                 Some(ViewportScrollState {
                     target_node_id: tree.Node(root).Id(),
                     offset: tree.ScrollOffsetFor(root),
-                    minimum: range.map_or(Offset::default(), |range| range.minimum_scroll_offset),
-                    maximum: range.map_or(Offset::default(), |range| range.maximum_scroll_offset),
+                    minimum: range.minimum,
+                    maximum: range.maximum,
                     layout_zoom_factor: viewport_scroll.constraints.borrow().layout_zoom_factor,
                     smooth_behavior: native.GetScrollBehavior().value() == 2,
                     snap: !native.GetScrollSnapType().is_none,
                 })
             })),
             read_metric: Some(Box::new(move |id, name| {
-                metric.EnsureMeasurement();
-                crate::style_services::FragmentMetric(
-                    metric.measurement.borrow().as_ref().unwrap(),
-                    id,
-                    name,
-                )
+                if !metric.EnsureLayoutOutputForNode(id) {
+                    return None;
+                }
+                let query = layoutng_assembly::layout_engine::LayoutMetric::try_from(name).ok()?;
+                let layout = metric.layout_engine.borrow();
+                let output = layout.Output()?;
+                output.Node(id).map_or(Some(0.0), |node| node.Metric(query))
             })),
             dispatch_synthetic: None,
             submit_form: None,
             read_geometry: Some(Box::new(move |id| {
-                geometry.EnsureMeasurement();
+                if !geometry.EnsureLayoutOutputForNode(id) {
+                    return Vec::new();
+                }
                 geometry
-                    .measurement
+                    .layout_engine
                     .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .ClientRects(id)
+                    .Output()
+                    .and_then(|output| output.Node(id))
+                    .map_or_else(Vec::new, |node| {
+                        node.ClientRects()
+                            .into_iter()
+                            .map(|rect| paint::paint_engine::PaintRect {
+                                x: rect.x,
+                                y: rect.y,
+                                width: rect.width,
+                                height: rect.height,
+                            })
+                            .collect()
+                    })
             })),
         };
         host
@@ -842,7 +846,7 @@ impl PageState {
             // Share the immutable post-scroll snapshot. Every mutation clears
             // measurement first, so the next scroll mutates the unique frame;
             // callers retaining an old snapshot get copy-on-write isolation.
-            self.InstallMeasurement(frame.fragments.clone());
+            self.MarkLayoutCurrent();
             self.layout_engine
                 .borrow_mut()
                 .PublishLayoutResult(frame.fragments.clone());
@@ -885,7 +889,6 @@ impl PageState {
             // every consumer's canonical clip-path is unchanged. Revoke an
             // animation-only paint proof before the retained-frame gate.
             self.ApplyAnimationMutation(animation::AnimationMutation::InvalidatePaintBatch);
-            self.PreserveMeasurementGeometry();
             self.scroll_only.set(false);
             self.dirty.set(true);
         }
@@ -895,7 +898,11 @@ impl PageState {
             trace.set("document_nodes", document.GetDocument().NodeCount() as f64);
             trace.set("resolved_nodes", state.stats.resolved_nodes as f64);
             trace.set("changed_nodes", state.stats.changed_nodes as f64);
-            trace.set("rule_sets_built", state.stats.rule_sets_built as f64);
+            trace.set("rule_sets_built", state.stats.rule_sets_built as f64); // compatibility metric
+            trace.set(
+                "selector_dependency_sets_built",
+                state.stats.rule_sets_built as f64,
+            );
         }
         self.styles_resolved.set(true);
     }
@@ -905,7 +912,7 @@ impl PageState {
     // layout. This assembly exports complete native layout batches, so advance
     // style/layout until the published content sizes are unchanged before any
     // measurement or paint consumes the batch.
-    fn LayoutWithContainerQueries(&self) {
+    fn LayoutWithContainerQueries(&self, purpose: LayoutUpdateKind) {
         let mut observed = std::collections::HashSet::new();
         let limit = self.document.borrow().GetDocument().NodeCount() + 1;
         for _ in 0..limit {
@@ -914,20 +921,24 @@ impl PageState {
                 .set(self.full_layout_lifecycles.get() + 1);
             let sizes = {
                 loop {
-                    crate::font_session::LayoutWithSystemFonts(
+                    crate::font_session::LayoutWithSystemFontsAtStage(
                         &mut self.layout_engine.borrow_mut(),
                         &mut self.document.borrow_mut(),
                         &self.interaction.borrow(),
                         &mut self.constraints.borrow_mut(),
                         &mut self.system_fonts.borrow_mut(),
+                        purpose,
                     );
                     // Apply ready (including MemoryCache) font responses at
                     // the host boundary before exposing provisional layout.
                     // No layout/DOM borrow survives decoding or callbacks, and
                     // an outstanding network load never waits here.
+                    let mut font_trace =
+                        browser_tracing::span("lifecycle", "Page.PollPendingFontsAfterLayout");
                     let completed = self.resources.borrow().as_ref().map_or(0, |resources| {
                         resources.PollPendingFonts(&mut LayoutFontResourceClient { state: self })
                     });
+                    font_trace.set("completed", completed as f64);
                     if completed == 0 {
                         break;
                     }
@@ -941,11 +952,18 @@ impl PageState {
                 }
                 layout.ContainerQuerySizes()
             };
-            let changed = crate::style_services::PublishContainerSizes(
-                &mut self.style_engine.borrow_mut(),
-                &mut self.document.borrow_mut(),
-                &sizes,
-            );
+            let changed = {
+                let mut container_trace =
+                    browser_tracing::span("lifecycle", "Page.PublishContainerSizes");
+                container_trace.set("containers", sizes.len() as f64);
+                let changed = crate::style_services::PublishContainerSizes(
+                    &mut self.style_engine.borrow_mut(),
+                    &mut self.document.borrow_mut(),
+                    &sizes,
+                );
+                container_trace.set("changed", changed as u8 as f64);
+                changed
+            };
             if !changed {
                 self.ReflectLayoutScrollOffsets();
                 return;
@@ -969,26 +987,11 @@ impl PageState {
     // final native values to Document and the existing scroll-event queue; this
     // is not a new scroll request and must not invalidate the completed layout.
     fn ReflectLayoutScrollOffsets(&self) {
-        fn collect(
-            node: &FragmentNode,
-            seen: &mut std::collections::HashSet<u64>,
-            out: &mut Vec<(u64, Offset)>,
-        ) {
-            if node.paint.has_source && node.node_id != 0 && seen.insert(node.node_id) {
-                out.push((node.node_id, node.paint.scroll_offset));
-            }
-            for child in &node.children {
-                collect(child, seen, out);
-            }
-        }
-        let mut offsets = Vec::new();
-        if let Some(fragments) = self.layout_engine.borrow().GetLayoutResult() {
-            collect(
-                fragments,
-                &mut std::collections::HashSet::new(),
-                &mut offsets,
-            );
-        }
+        let mut offsets = self
+            .layout_engine
+            .borrow()
+            .Output()
+            .map_or_else(Vec::new, |output| output.ScrollOffsets());
         offsets.retain(|(id, offset)| {
             let owner = self.document.borrow();
             let document = owner.GetDocument();
@@ -1012,48 +1015,42 @@ impl PageState {
         }
     }
 
-    // cpp: browser/browser.cc:932-939
-    fn EnsureMeasurement(&self) {
-        let mut trace = browser_tracing::span("layout", "Page.EnsureMeasurement");
-        trace.set(
-            "candidate",
-            self.measurement_candidate.borrow().is_some() as u8 as f64,
-        );
-        trace.set(
-            "cache_hit",
-            self.measurement.borrow().is_some() as u8 as f64,
-        );
-        if self.measurement.borrow().is_some() {
-            return;
+    // cpp: Document::UpdateStyleAndLayoutForNode. Detached nodes have no
+    // layout object and must not flush the active document's lifecycle.
+    fn EnsureLayoutOutputForNode(&self, id: u64) -> bool {
+        let connected = {
+            let owner = self.document.borrow();
+            let tree = owner.GetDocument();
+            tree.FindNodeById(id)
+                .is_some_and(|index| tree.IsConnectedToDocument(index))
+        };
+        if connected {
+            self.EnsureLayoutOutput();
         }
+        connected
+    }
+
+    // Document::UpdateStyleAndLayoutForNode. Updating layout publishes no
+    // geometry tree: binding calls borrow the engine's resident output below.
+    fn EnsureLayoutOutput(&self) {
+        let mut trace = browser_tracing::span("layout", "Page.EnsureLayoutOutput");
         self.ResolveStyles();
         let revision = self.document.borrow().GetMeasurementGeometryRevision();
-        trace.set("geometry_revision", revision as f64);
-        if let Some(snapshot) = self.measurement_candidate.borrow().as_ref() {
-            trace.set("candidate_revision", snapshot.GeometryRevision() as f64);
-        }
-        if let Some(snapshot) = self
-            .measurement_candidate
-            .borrow_mut()
-            .take()
-            .filter(|snapshot| snapshot.GeometryRevision() == revision)
-        {
-            // Style has been updated. This old snapshot proves query geometry
-            // only: its paint properties must never stand in for a new Paint.
-            *self.measurement.borrow_mut() = Some(snapshot);
-            trace.set("geometry_reused", 1.0);
+        let current = self.layout_revision.get() == Some(revision)
+            && self.layout_engine.borrow().Output().is_some()
+            && crate::persistent_layout::MeasurementInputsMatch(
+                &self.layout_engine.borrow(),
+                &mut self.document.borrow_mut(),
+                &self.interaction.borrow(),
+            );
+        trace.set("cache_hit", current as u8 as f64);
+        if current {
             return;
         }
-        let fragments = {
-            trace.set("layout", 1.0);
-            self.LayoutWithContainerQueries();
-            self.layout_engine
-                .borrow()
-                .GetLayoutResult()
-                .expect("successful layout has fragments")
-                .clone()
-        };
-        self.InstallMeasurement(fragments);
+        self.LayoutWithContainerQueries(LayoutUpdateKind::Layout);
+        self.layout_revision.set(Some(
+            self.document.borrow().GetMeasurementGeometryRevision(),
+        ));
     }
 
     // cpp: browser/browser.cc:947-1044
@@ -1120,14 +1117,26 @@ impl PageState {
                     if needs_paint {
                         let mut owner = self.document.borrow_mut();
                         owner.InvalidatePaint();
-                        owner.GetDocumentMut().StyleStateMut().paint_style_nodes.extend(
-                            [previous.hovered_node_id, m.state.hovered_node_id,
-                             previous.pressed_node_id, m.state.pressed_node_id,
-                             previous.focus_visible_node_id, m.state.focus_visible_node_id,
-                             previous.focused_node_id, m.state.focused_node_id,
-                             previous.multi_select_focused_option_id, m.state.multi_select_focused_option_id]
-                                .into_iter().flatten(),
-                        );
+                        owner
+                            .GetDocumentMut()
+                            .StyleStateMut()
+                            .paint_style_nodes
+                            .extend(
+                                [
+                                    previous.hovered_node_id,
+                                    m.state.hovered_node_id,
+                                    previous.pressed_node_id,
+                                    m.state.pressed_node_id,
+                                    previous.focus_visible_node_id,
+                                    m.state.focus_visible_node_id,
+                                    previous.focused_node_id,
+                                    m.state.focused_node_id,
+                                    previous.multi_select_focused_option_id,
+                                    m.state.multi_select_focused_option_id,
+                                ]
+                                .into_iter()
+                                .flatten(),
+                            );
                         drop(owner);
                         // Focus/hover/pressed state changes native appearance
                         // and focus/caret paint, but not box geometry. Preserve
@@ -1136,7 +1145,6 @@ impl PageState {
                         // listener does not force a duplicate full layout.
                         // UpdateFrameIfNeeded still rejects it for PaintCurrent
                         // and exports the new interaction paint state.
-                        self.PreserveMeasurementGeometry();
                         self.scroll_only.set(false);
                         self.dirty.set(true);
                     }
@@ -1182,7 +1190,7 @@ impl PageState {
             }
             PageMutation::ScrollMutation(m) => {
                 if let Some(effect) = self.document.ApplyScrollOffset(m.target_node_id, m.offset) {
-                    self.InvalidateMeasurement();
+                    self.InvalidateLayoutOutput();
                     browser_tracing::instant(
                         "input",
                         "ScrollApplied",
@@ -1237,7 +1245,7 @@ impl PageState {
                 // existing style consumers, without changing their URL/font
                 // references. Preserve any pending DOM/sheet discovery; load
                 // listeners invalidate references through the normal mutation path.
-                self.InvalidateMeasurement();
+                self.InvalidateLayoutOutput();
                 self.styles_resolved.set(false);
                 self.scroll_only.set(false);
                 self.dirty.set(true);
@@ -1313,7 +1321,7 @@ impl PageState {
                 {
                     dom::error::invalid_argument("document image source missing");
                 }
-                self.InvalidateMeasurement();
+                self.InvalidateLayoutOutput();
                 // StyleFetchedImage retains the resource's natural size and
                 // resolution. Re-resolve actual consumers so CSS backgrounds,
                 // masks, border images and generated content observe the new
@@ -1325,7 +1333,7 @@ impl PageState {
                 self.dirty.set(true);
             }
             ResourceMutation::FontResourceReady(m) => {
-                self.InvalidateMeasurement();
+                self.InvalidateLayoutOutput();
                 self.constraints.borrow_mut().fonts.push(m.font);
                 self.document.borrow_mut().InvalidateLayout();
                 self.scroll_only.set(false);
@@ -1335,7 +1343,7 @@ impl PageState {
                 if m.kind == page_mutation::ResourceKind::kFont {
                     // A failed face can expose an earlier overlapping face or
                     // another family. Re-enter text selection to request it.
-                    self.InvalidateMeasurement();
+                    self.InvalidateLayoutOutput();
                     self.document.borrow_mut().InvalidateLayout();
                     self.scroll_only.set(false);
                     self.dirty.set(true);
@@ -1350,7 +1358,7 @@ impl PageState {
                         if changed {
                             // Mirror successful completion: the document marks
                             // actual image clients for immutable-style refresh.
-                            self.InvalidateMeasurement();
+                            self.InvalidateLayoutOutput();
                             self.styles_resolved.set(false);
                             self.scroll_only.set(false);
                             self.dirty.set(true);
@@ -1378,9 +1386,30 @@ pub struct ScriptEnvironment {
     pub user_agent: String,
 }
 
+/// Per-Page worker policy. Actor/event-loop placement belongs to the embedder.
+#[allow(non_snake_case)]
+#[derive(Clone)]
+pub struct PageThreads {
+    pub raster: bool,
+    pub decode: bool,
+    pub scriptCompile: bool,
+    pub executor: std::sync::Arc<dyn executor::Executor>,
+}
+impl Default for PageThreads {
+    fn default() -> Self {
+        Self {
+            raster: false,
+            decode: false,
+            scriptCompile: false,
+            executor: executor::inline(),
+        }
+    }
+}
+
 // cpp: browser/browser.h:69-95
 /// One persistent Page lifecycle, independent of whether scripts are enabled.
 pub struct Page {
+    threads: PageThreads,
     begin_frame: begin_frame::PageBeginFrame,
     state: Rc<PageState>,
     interaction: interaction::Interaction<'static>,
@@ -1436,26 +1465,64 @@ pub struct PageMemoryDiagnostics {
     pub unique_bitmap_capacity: usize,
 }
 impl Page {
+    pub fn JavaScriptGarbageCollectionRequested(&self) -> bool {
+        self.scripts
+            .as_ref()
+            .is_some_and(|scripts| scripts.GarbageCollectionRequested())
+    }
+
+    pub fn CollectJavaScriptGarbage(&mut self) {
+        if let Some(scripts) = &mut self.scripts {
+            scripts.CollectGarbage();
+        }
+    }
+
     /// Does not advance lifecycle, execute JS, load resources or collect heaps.
     pub fn MemoryDiagnostics(&self) -> PageMemoryDiagnostics {
         let (javascript, host) = self.scripts.as_ref().map_or((None, None), |scripts| {
-            let (js, host) = scripts.MemoryDiagnostics(); (js, Some(host))
+            let (js, host) = scripts.MemoryDiagnostics();
+            (js, Some(host))
         });
         let constraints = self.state.constraints.borrow();
         let mut seen = std::collections::HashSet::new();
-        let unique_bitmap_capacity = constraints.images.iter().filter_map(|image| {
-            if let image_resource::PaintImageContent::Bitmap(pixels) = &image.content {
-                seen.insert(Arc::as_ptr(pixels)).then_some(pixels.capacity())
-            } else { None }
-        }).sum();
+        let unique_bitmap_capacity = constraints
+            .images
+            .iter()
+            .filter_map(|image| {
+                if let image_resource::PaintImageContent::Bitmap(pixels) = &image.content {
+                    seen.insert(Arc::as_ptr(pixels))
+                        .then_some(pixels.capacity())
+                } else {
+                    None
+                }
+            })
+            .sum();
         PageMemoryDiagnostics {
-            loading: self.IsLoading(), dirty: self.state.dirty.get(), styles_resolved: self.state.styles_resolved.get(),
-            pending_scroll_updates: self.state.scroll_updates.borrow().len(), frame_sequence: self.frame.as_ref().map(|f| f.sequence),
-            recording_revision: self.frame.as_ref().map(|f| f.display_items.recording_revision),
-            dom: self.state.document.borrow().GetDocument().MemoryDiagnostics(),
-            custom_properties: self.state.style_engine.borrow().CustomPropertyMemoryDiagnostics(),
-            javascript, host, resources: self.resources.MemoryDiagnostics(),
-            catalog_images: constraints.images.len(), unique_bitmap_capacity,
+            loading: self.IsLoading(),
+            dirty: self.state.dirty.get(),
+            styles_resolved: self.state.styles_resolved.get(),
+            pending_scroll_updates: self.state.scroll_updates.borrow().len(),
+            frame_sequence: self.frame.as_ref().map(|f| f.sequence),
+            recording_revision: self
+                .frame
+                .as_ref()
+                .map(|f| f.display_items.recording_revision),
+            dom: self
+                .state
+                .document
+                .borrow()
+                .GetDocument()
+                .MemoryDiagnostics(),
+            custom_properties: self
+                .state
+                .style_engine
+                .borrow()
+                .CustomPropertyMemoryDiagnostics(),
+            javascript,
+            host,
+            resources: self.resources.MemoryDiagnostics(),
+            catalog_images: constraints.images.len(),
+            unique_bitmap_capacity,
         }
     }
     /// Publish HTMLImageElement's rendered auto-sizes width and run the same
@@ -1466,6 +1533,8 @@ impl Page {
         &mut self,
         mut fragments: Rc<FragmentNode>,
     ) -> io::Result<Rc<FragmentNode>> {
+        let mut trace =
+            browser_tracing::span("lifecycle", "Page.ReconcileResponsiveAutoSizes");
         fn collect(document: &Document, node: &FragmentNode, output: &mut Vec<(usize, f64)>) {
             if node.kind == FragmentKind::kBox && node.paint.replaced_content.is_some() {
                 if let Some(index) = document.FindNodeById(node.node_id) {
@@ -1487,16 +1556,24 @@ impl Page {
         // bound used by the container-query lifecycle.
         let limit = self.state.document.borrow().GetDocument().NodeCount() + 1;
         let mut observed = std::collections::HashSet::new();
+        let mut iterations = 0usize;
+        let mut responsive_images = 0usize;
         for _ in 0..limit {
             let widths = {
+                let _trace = browser_tracing::span(
+                    "lifecycle",
+                    "Page.CollectResponsiveAutoSizes",
+                );
                 let owner = self.state.document.borrow();
                 let mut widths = Vec::new();
                 collect(owner.GetDocument(), &fragments, &mut widths);
                 widths
             };
+            responsive_images = responsive_images.max(widths.len());
             if widths.is_empty() {
                 break;
             }
+            iterations += 1;
             let signature = widths
                 .iter()
                 .map(|(node, width)| (*node, width.to_bits()))
@@ -1505,16 +1582,33 @@ impl Page {
                 break;
             }
             let width_changed = {
+                let _trace = browser_tracing::span(
+                    "lifecycle",
+                    "Page.PublishResponsiveAutoSizes",
+                );
                 let mut owner = self.state.document.borrow_mut();
                 let document = owner.GetDocumentMut();
                 widths.into_iter().fold(false, |changed, (node, width)| {
                     document.SetResponsiveImageAutoSize(node, width) || changed
                 })
             };
-            if !width_changed || !self.resources.QueueReferencedImages()? {
+            if !width_changed {
                 break;
             }
-            self.state.LayoutWithContainerQueries();
+            let selection_changed = {
+                let _trace = browser_tracing::span(
+                    "lifecycle",
+                    "Page.ReselectResponsiveImages",
+                );
+                self.resources.QueueReferencedImages()?
+            };
+            if !selection_changed {
+                break;
+            }
+            let _trace =
+                browser_tracing::span("lifecycle", "Page.RelayoutResponsiveImages");
+            self.state
+                .LayoutWithContainerQueries(LayoutUpdateKind::Paint);
             fragments = self
                 .state
                 .layout_engine
@@ -1522,6 +1616,8 @@ impl Page {
                 .TakeLayoutResult()
                 .expect("responsive auto-size relayout has fragments");
         }
+        trace.set("iterations", iterations as f64);
+        trace.set("responsive_images", responsive_images as f64);
         Ok(fragments)
     }
 
@@ -1593,7 +1689,8 @@ impl Page {
                 if Arc::ptr_eq(previous, resources) {
                     return false;
                 }
-                *catalogs.entry(Arc::as_ptr(previous))
+                *catalogs
+                    .entry(Arc::as_ptr(previous))
                     .or_insert_with(|| previous.as_ref() != resources.as_ref())
             });
             if changed {
@@ -1784,12 +1881,45 @@ impl Page {
         scripting: Option<ScriptEnvironment>,
         client: Option<Rc<RefCell<dyn PageClient>>>,
     ) -> Self {
+        Self::CreateWithThreads(
+            loader,
+            images,
+            document_images,
+            constraints,
+            scripting,
+            client,
+            PageThreads::default(),
+        )
+    }
+
+    pub fn CreateWithThreads(
+        loader: Rc<RefCell<dyn URLLoader>>,
+        images: Rc<RefCell<dyn ImageDecoder>>,
+        document_images: Rc<RefCell<dyn DocumentImageDecoder>>,
+        constraints: ConstraintSpace,
+        mut scripting: Option<ScriptEnvironment>,
+        client: Option<Rc<RefCell<dyn PageClient>>>,
+        threads: PageThreads,
+    ) -> Self {
         // Keep the complete Page dependency graph visible in this one
         // composition root. The individual services remain independent and
         // communicate through their existing typed inputs and immutable
         // snapshots; Page only owns their lifetime and routing.
         let client = client.unwrap_or_else(|| Rc::new(RefCell::new(NullPageClient)));
-        let decode_engine = Rc::new(decode::DecodeEngine::WithDecoders(images, document_images));
+        let mut decode_engine = decode::DecodeEngine::WithDecoders(images.clone(), document_images);
+        if threads.decode {
+            let factory = images
+                .borrow()
+                .BackgroundFactory()
+                .expect("threaded decode requires an image decoder factory");
+            decode_engine.SetExecutor(threads.executor.clone(), factory);
+        }
+        if let Some(scripting) = &mut scripting {
+            scripting
+                .runtime
+                .SetCompilationExecutor(threads.scriptCompile.then(|| threads.executor.clone()));
+        }
+        let decode_engine = Rc::new(decode_engine);
         let resource_engine = Rc::new(ResourceEngine::WithDecodeEngine(
             loader.clone(),
             decode_engine,
@@ -1878,6 +2008,7 @@ impl Page {
             )
         };
         Self {
+            threads,
             begin_frame: begin_frame::PageBeginFrame::default(),
             state,
             interaction,
@@ -1910,7 +2041,7 @@ impl Page {
             .system_fonts
             .borrow_mut()
             .SetProvider(provider, &mut self.state.constraints.borrow_mut());
-        self.state.InvalidateMeasurement();
+        self.state.InvalidateLayoutOutput();
         self.state.document.borrow_mut().InvalidateLayout();
         self.state.dirty.set(true);
         self.state.scroll_only.set(false);
@@ -1924,7 +2055,7 @@ impl Page {
             .system_fonts
             .borrow_mut()
             .EnvironmentChanged(&mut self.state.constraints.borrow_mut());
-        self.state.InvalidateMeasurement();
+        self.state.InvalidateLayoutOutput();
         self.state.document.borrow_mut().InvalidateLayout();
         self.state.dirty.set(true);
         self.state.scroll_only.set(false);
@@ -1937,7 +2068,7 @@ impl Page {
         if self.state.preferred_color_scheme.replace(preference) != preference {
             self.state.constraints.borrow_mut().preferred_color_scheme =
                 u8::from(preference == PreferredColorScheme::kDark);
-            self.state.InvalidateMeasurement();
+            self.state.InvalidateLayoutOutput();
             self.state.InvalidateStyle();
         }
     }
@@ -1946,7 +2077,7 @@ impl Page {
             scripts.SetForcedColors(forced_colors);
         }
         if self.state.forced_colors.replace(forced_colors) != forced_colors {
-            self.state.InvalidateMeasurement();
+            self.state.InvalidateLayoutOutput();
             self.state.InvalidateStyle();
         }
     }
@@ -2035,6 +2166,10 @@ impl Page {
     pub fn OpenStatus(&self) -> OpenStatus {
         self.open_engine.Status()
     }
+    pub fn Threads(&self) -> &PageThreads {
+        &self.threads
+    }
+
     pub fn SetLoadingWakeCallback(&mut self, callback: URLWakeCallback) {
         self.open_engine.SetWakeCallback(callback);
     }
@@ -2349,7 +2484,6 @@ impl Page {
             // does not make the text control need layout. Control-value DOM
             // mutations still invalidate geometry through ApplyDOMMutation.
             // Keep the completed fragment geometry for the paint-only pass.
-            self.state.PreserveMeasurementGeometry();
             self.state.document.borrow_mut().InvalidatePaint();
             self.state.scroll_only.set(false);
             self.state.dirty.set(true);
@@ -2450,7 +2584,7 @@ impl Page {
         self.state.ResolveStyles();
         self.resources.QueueReferencedImages()?;
         self.resources.PrepareFontFaces();
-        self.state.EnsureMeasurement();
+        self.state.EnsureLayoutOutput();
         self.resources.StartPendingFonts();
         let mut client = ResourceClient {
             state: self.state.clone(),
@@ -2482,16 +2616,6 @@ impl Page {
         self.UpdateCaret(false);
         if self.DeferLifecycleForBeginFrame() {
             trace.set("deferred_for_begin_frame", 1.0);
-            return Ok(());
-        }
-        if self.open_engine.ParserImmediateWorkPending() {
-            // The parser yielded only because its bounded token/byte budget
-            // expired and has already scheduled the continuation. Chromium's
-            // parser scheduler resumes that burst before committing a partial
-            // lifecycle. This prevents repeated full style/layout work over a
-            // monotonically growing DOM while retaining progressive rendering
-            // whenever the network actually stalls.
-            trace.set("deferred_for_parser", 1.0);
             return Ok(());
         }
         if !self.state.dirty.get() {
@@ -2536,10 +2660,25 @@ impl Page {
         let reused_recordings = self.state.ApplyPendingScrollUpdates(self.frame.as_mut());
         trace.set("scroll_records_reused", reused_recordings as u8 as f64);
         let scroll_done = profile.map(|start| start.elapsed());
-        let paint_only_style = self.frame.is_some() && {
-            let impact = self.state.document.borrow().GetStyleImpact();
-            impact.paint && !impact.layout && !impact.reattach
-        };
+        // A CSSOM flush already brought native geometry up to date even when
+        // the document's frame impact remains pending until Paint commits.
+        let revision = self
+            .state
+            .document
+            .borrow()
+            .GetMeasurementGeometryRevision();
+        let layout_geometry_current = self.state.layout_revision.get() == Some(revision)
+            && self.state.layout_engine.borrow().Output().is_some()
+            && crate::persistent_layout::MeasurementInputsMatch(
+                &self.state.layout_engine.borrow(),
+                &mut self.state.document.borrow_mut(),
+                &self.state.interaction.borrow(),
+            );
+        let paint_only_style = layout_geometry_current
+            || (self.frame.is_some() && {
+                let impact = self.state.document.borrow().GetStyleImpact();
+                impact.paint && !impact.layout && !impact.reattach
+            });
         trace.set("paint_only_style", paint_only_style as u8 as f64);
         if self.frame.is_some()
             && !self.editing_paint_dirty
@@ -2563,15 +2702,7 @@ impl Page {
                 );
             }
             let frame = self.frame.as_mut().unwrap();
-            if self
-                .state
-                .measurement
-                .borrow()
-                .as_ref()
-                .is_none_or(|snapshot| !snapshot.PaintCurrent())
-            {
-                self.state.InstallMeasurement(frame.fragments.clone());
-            }
+            self.state.MarkLayoutCurrent();
             frame.sequence += 1;
             frame.compositor_scroll_sequence = self.processed_compositor_scroll_sequence;
             self.state.scroll_only.set(false);
@@ -2585,29 +2716,11 @@ impl Page {
             self.UpdateCursor();
             return Ok(());
         }
-        // A full geometry flush may already own the current exported paint
-        // inputs. A geometry-only reuse after a proven color/opacity change
-        // does not: its old paint properties must be exported again below.
-        let measured = {
-            let mut measurement = self.state.measurement.borrow_mut();
-            if measurement
-                .as_ref()
-                .is_some_and(MeasurementSnapshot::PaintCurrent)
-            {
-                measurement.take()
-            } else {
-                None
-            }
-        };
-        let measurement_reused = measured.is_some();
-        trace.set("measurement_reused", measurement_reused as u8 as f64);
-        let (measured, measurement_cache) = match measured {
-            Some(snapshot) => {
-                let (fragments, cache) = snapshot.IntoPaintParts();
-                (Some(fragments), Some(cache))
-            }
-            None => (None, None),
-        };
+        // Geometry cleanliness authorizes reuse of native layout only. A
+        // rendering update must materialize current paint inputs; no old
+        // exported tree can stand in for changed SVG resources or style.
+        let layout_output_reused = layout_geometry_current;
+        trace.set("layout_output_reused", layout_output_reused as u8 as f64);
         let animation_paint_nodes = if paint_only_style {
             self.state
                 .paint_engine
@@ -2623,12 +2736,8 @@ impl Page {
         // extra engine reference while CommitPaint mutates client lifecycle.
         if !paint_only_style {
             self.state.layout_engine.borrow_mut().ReleaseLayoutResult();
-        } else if let Some(fragments) = &measured {
-            self.state
-                .layout_engine
-                .borrow_mut()
-                .PublishLayoutResult(fragments.clone());
         }
+
         trace.set(
             "targeted_animation_paint",
             (!animation_paint_nodes.is_empty()) as u8 as f64,
@@ -2655,9 +2764,10 @@ impl Page {
             "paint_only_geometry_reused",
             paint_only_fragments.is_some() as u8 as f64,
         );
-        let mut fragments = paint_only_fragments.or(measured).unwrap_or_else(|| {
+        let mut fragments = paint_only_fragments.unwrap_or_else(|| {
             trace.set("full_layout", 1.0);
-            self.state.LayoutWithContainerQueries();
+            self.state
+                .LayoutWithContainerQueries(LayoutUpdateKind::Paint);
             self.state
                 .layout_engine
                 .borrow_mut()
@@ -2718,13 +2828,13 @@ impl Page {
         if let Some(start) = profile {
             let elapsed = start.elapsed();
             eprintln!(
-                "page-lifecycle-profile resources_ms={:.3} scroll_layout_paint_ms={:.3} layout_ms={:.3} paint_ms={:.3} total_ms={:.3} reused=false measurement_reused={}",
+                "page-lifecycle-profile resources_ms={:.3} scroll_layout_paint_ms={:.3} layout_ms={:.3} paint_ms={:.3} total_ms={:.3} reused=false layout_output_reused={}",
                 resources_done.unwrap().as_secs_f64() * 1000.0,
                 (scroll_done.unwrap() - resources_done.unwrap()).as_secs_f64() * 1000.0,
                 (layout_done.unwrap() - scroll_done.unwrap()).as_secs_f64() * 1000.0,
                 (elapsed - layout_done.unwrap()).as_secs_f64() * 1000.0,
                 elapsed.as_secs_f64() * 1000.0,
-                measurement_reused
+                layout_output_reused
             );
         }
         let frame = PageFrame {
@@ -2737,26 +2847,9 @@ impl Page {
             .layout_engine
             .borrow_mut()
             .PublishLayoutResult(frame.fragments.clone());
-        // Geometry queries after presentation share this completed lifecycle;
-        // later inline/animation edits retain the index only if actual style
-        // resolution proves the complete query geometry unchanged.
-        if let Some(cache) = measurement_cache {
-            self.state.measurement_candidate.borrow_mut().take();
-            *self.state.measurement.borrow_mut() = Some(MeasurementSnapshot::FromPaintParts(
-                frame.fragments.clone(),
-                cache,
-            ));
-        } else {
-            let measurement_changed = self
-                .state
-                .measurement
-                .borrow()
-                .as_ref()
-                .is_none_or(|snapshot| !Rc::ptr_eq(&snapshot.Fragments(), &frame.fragments));
-            if measurement_changed {
-                self.state.InstallMeasurement(frame.fragments.clone());
-            }
-        }
+        // Native geometry remains current after presentation. Bindings borrow
+        // that output directly; no measurement holder retains the paint tree.
+        self.state.MarkLayoutCurrent();
         self.frame = Some(frame);
         self.open_engine.DidBeginRendering();
         self.editing_paint_dirty = false;
@@ -2875,7 +2968,9 @@ struct LayoutFontResourceClient<'a> {
     state: &'a PageState,
 }
 impl ResourceFetcherClient for LayoutFontResourceClient<'_> {
-    fn HasJavaScript(&self) -> bool { false }
+    fn HasJavaScript(&self) -> bool {
+        false
+    }
     fn ApplyResourceMutation(&mut self, mutation: ResourceMutation) {
         self.state.ApplyResourceMutation(mutation);
     }

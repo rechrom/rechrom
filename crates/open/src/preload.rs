@@ -176,7 +176,8 @@ impl Preloads {
             url,
             destination,
             defer: if candidate.kind == PreloadKind::Script
-                && (Attr(attributes, "async").is_some() || Attr(attributes, "defer").is_some()) {
+                && (Attr(attributes, "async").is_some() || Attr(attributes, "defer").is_some())
+            {
                 url_loader::RequestDefer::Lazy
             } else {
                 url_loader::RequestDefer::None

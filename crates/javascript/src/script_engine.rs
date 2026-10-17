@@ -64,7 +64,17 @@ impl ScriptExecutor for RefCell<ScriptEngine> {
 }
 
 impl ScriptEngine {
-    pub fn MemoryDiagnostics(&self) -> Option<crate::javascript_runtime::JavaScriptMemoryDiagnostics> {
+    pub fn GarbageCollectionRequested(&self) -> bool {
+        self.runtime.GarbageCollectionRequested()
+    }
+
+    pub fn CollectGarbage(&mut self) {
+        self.runtime.CollectGarbage();
+    }
+
+    pub fn MemoryDiagnostics(
+        &self,
+    ) -> Option<crate::javascript_runtime::JavaScriptMemoryDiagnostics> {
         self.runtime.MemoryDiagnostics(&self.realm)
     }
     pub fn new<H>(mut runtime: Box<dyn JavaScriptRuntime>, global: Rc<RefCell<H>>) -> Self

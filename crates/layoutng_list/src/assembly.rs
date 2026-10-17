@@ -70,7 +70,7 @@ fn CreateListObject(node: &mut Node, _style: &ComputedStyle) -> *mut LayoutObjec
         if node.InputIsStyleGenerated() {
             let defaults = ExtendedStyle::default();
             let parent_style = unsafe { &*parent }.InputStyle();
-            let extra = parent_style.extended.as_ref().unwrap_or(&defaults);
+            let extra = parent_style.extended.as_deref().unwrap_or(&defaults);
             let symbol = matches!(
                 extra.list_style_type,
                 ListStyleType::kDisc | ListStyleType::kCircle | ListStyleType::kSquare

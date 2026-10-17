@@ -6,6 +6,9 @@
 //! windows or threads. ResourceEngine supplies stable resource identities and
 //! explicit timeline mutations, then routes the immutable effects.
 
+mod job;
+pub use job::{DecodeJob, Wake};
+
 use image_decoder::image_decoder::{DecodedImage, ImageDecodeInput, ImageDecoder};
 use image_resource::{
     ContainerKey, DocumentImage, DocumentImageDecoder, DocumentImageEffect, DocumentImageFrame,
@@ -62,7 +65,32 @@ struct ActiveDocumentImage {
     begin_frame_requested: bool,
 }
 
+pub type BitmapDecoderFactory = Arc<dyn Fn() -> Box<dyn ImageDecoder> + Send + Sync>;
+
+pub enum ImageDecodeJob {
+    Ready(Option<io::Result<DecodedImageResource>>),
+    Bitmap {
+        resource_id: ImageId,
+        job: DecodeJob<DecodedImage>,
+    },
+}
+impl ImageDecodeJob {
+    pub fn poll(&mut self) -> Option<io::Result<DecodedImageResource>> {
+        match self {
+            Self::Ready(result) => result.take(),
+            Self::Bitmap { resource_id, job } => job.poll().map(|result| {
+                result.map(|image| DecodedImageResource::Bitmap {
+                    resource_id: *resource_id,
+                    image,
+                })
+            }),
+        }
+    }
+}
+
 pub struct DecodeEngine {
+    execution: Option<(Arc<dyn executor::Executor>, BitmapDecoderFactory)>,
+    wake: job::WakeSlot,
     bitmap_decoder: Option<Rc<RefCell<dyn ImageDecoder>>>,
     document_image_decoder: Option<Rc<RefCell<dyn DocumentImageDecoder>>>,
     web_font_decoder: web_font::WebFontDecoder,
@@ -80,6 +108,8 @@ impl DecodeEngine {
     /// users. Asset decode attempts fail explicitly.
     pub fn new() -> Self {
         Self {
+            execution: None,
+            wake: Default::default(),
             bitmap_decoder: None,
             document_image_decoder: None,
             web_font_decoder: web_font::WebFontDecoder::new(),
@@ -92,11 +122,74 @@ impl DecodeEngine {
         document_image_decoder: Rc<RefCell<dyn DocumentImageDecoder>>,
     ) -> Self {
         Self {
+            execution: None,
+            wake: Default::default(),
             bitmap_decoder: Some(bitmap_decoder),
             document_image_decoder: Some(document_image_decoder),
             web_font_decoder: web_font::WebFontDecoder::new(),
             document_images: RefCell::new(BTreeMap::new()),
         }
+    }
+
+    /// Injection occurs before Page starts loading. The factory creates a
+    /// decoder on the execution thread; Rc-backed owner decoders never move.
+    pub fn SetExecutor(
+        &mut self,
+        executor: Arc<dyn executor::Executor>,
+        factory: BitmapDecoderFactory,
+    ) {
+        self.execution = Some((executor, factory));
+    }
+    pub fn SetWakeCallback(&self, wake: Option<Wake>) {
+        *self.wake.lock().unwrap_or_else(|e| e.into_inner()) = wake;
+    }
+    pub fn BeginFontDecode(&self, bytes: Vec<u8>) -> DecodeJob<Vec<u8>> {
+        let inline = executor::InlineExecutor;
+        let executor: &dyn executor::Executor = self
+            .execution
+            .as_ref()
+            .map_or(&inline, |(executor, _)| executor.as_ref());
+        DecodeJob::start(executor, self.wake.clone(), "FontDecode", move || {
+            web_font::WebFontDecoder::new().Decode(bytes)
+        })
+    }
+    pub fn BeginImageDecode(
+        &self,
+        resource_id: ImageId,
+        bytes: Arc<[u8]>,
+        mime_type: &str,
+        container: &ContainerKey,
+    ) -> ImageDecodeJob {
+        // SVG owns a document, style and animation lifecycle, so it stays on
+        // the document owner. Only immutable bitmap input enters the executor.
+        let document_image = self
+            .document_image_decoder
+            .as_ref()
+            .is_some_and(|decoder| decoder.borrow().can_decode(&bytes, mime_type));
+        if !document_image {
+            if let Some((executor, factory)) = &self.execution {
+                let factory = factory.clone();
+                let mime_type = mime_type.to_owned();
+                let job = DecodeJob::start(
+                    executor.as_ref(),
+                    self.wake.clone(),
+                    "BitmapDecode",
+                    move || {
+                        factory().Decode(&ImageDecodeInput {
+                            bytes: &bytes,
+                            mime_type: &mime_type,
+                        })
+                    },
+                );
+                return ImageDecodeJob::Bitmap { resource_id, job };
+            }
+        }
+        ImageDecodeJob::Ready(Some(self.DecodeImage(
+            resource_id,
+            bytes,
+            mime_type,
+            container,
+        )))
     }
 
     /// Returns the platform web-font decoder used by resource loading.

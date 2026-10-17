@@ -9,8 +9,8 @@ pub(super) fn visible_rects(
     plan: &CompositionPlan,
     effects: &[LayerEffectPlan],
     direct_clips: &[Option<layer_direct_clip::DirectClipRun>],
-    staged: &HashMap<TileId, CachedTile>,
-    resident: &HashMap<TileId, CachedTile>,
+    staged: &HashMap<TileId, Arc<CachedTile>>,
+    resident: &HashMap<TileId, Arc<CachedTile>>,
     width: u32,
     height: u32,
 ) -> io::Result<Vec<Vec<Option<SurfaceBounds>>>> {
@@ -155,8 +155,8 @@ pub(super) fn visible_rects(
 fn checked_pixels<'a>(
     tile: &TilePlacement,
     composition: LayerComposition,
-    staged: &'a HashMap<TileId, CachedTile>,
-    resident: &'a HashMap<TileId, CachedTile>,
+    staged: &'a HashMap<TileId, Arc<CachedTile>>,
+    resident: &'a HashMap<TileId, Arc<CachedTile>>,
 ) -> io::Result<&'a CachedTile> {
     let pixels = staged
         .get(&tile.tile_id)

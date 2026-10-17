@@ -18,11 +18,12 @@ impl Default for HTTPTransportOptions {
             trace_requests: false,
             connect_timeout_ms: 30_000,
             timeout_ms: 0,
-            // This finite idle limit is an embedder policy, not Chromium's
-            // ordinary navigation deadline. A streamed response may legitimately
-            // pause beyond 10s; retain cancellation and fail after 30s without
-            // network progress rather than replaying a committed document.
-            stall_timeout_ms: 30_000,
+            // Chromium does not impose one generic response-header/body-idle
+            // deadline on ordinary navigations. Once the connection is made,
+            // keep waiting for network progress until the request is cancelled
+            // or the transport reports a concrete error. Embedders can still
+            // opt into a finite stall policy explicitly.
+            stall_timeout_ms: 0,
             max_response_bytes: 64 * 1024 * 1024,
             max_parallel_requests: 8,
             max_retries: 1,

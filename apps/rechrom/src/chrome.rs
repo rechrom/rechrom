@@ -68,66 +68,12 @@ pub fn popup_document(rows: &[(String, String, String)], width: f64, x: f64) -> 
         r#"<!doctype html><html><head><style>*{{box-sizing:border-box}}html,body{{margin:0;width:100%;height:100%;background:transparent;font:13px sans-serif;color:#202124}}#popup{{position:absolute;left:{x}px;top:4px;width:{width}px;padding:8px 0;background:#fff;border:1px solid #dadce0;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.2)}}button{{display:flex;align-items:center;width:100%;height:32px;padding:0 16px;background:transparent;border:0;text-align:left;color:#202124;font:13px sans-serif;cursor:default}}button.hovered{{background:#e8eaed}}button:focus{{background:#e8eaed}}.label{{flex:1;min-width:0;white-space:nowrap;overflow:hidden}}.shortcut{{margin-left:16px;color:#5f6368;font-size:12px}}</style></head><body><div id="popup">{entries}</div></body></html>"#
     )
 }
-/// Compose two paint artifacts in paint order. Popup font slots and both
-/// semantic index spaces are rebased; native IDs/property references survive.
+/// Compose independent Page recordings for the explicit readback host.
 pub fn content_with_popup(
     content: Option<&raster::surface::PaintArtifact>,
     popup: &raster::surface::PaintArtifact,
 ) -> std::io::Result<raster::surface::PaintArtifact> {
-    use paint::paint_engine::{DisplayItem, DisplayItemType};
-    let mut list = content.cloned().unwrap_or_default();
-    let mut resources = list.resources.as_deref().cloned().unwrap_or_default();
-    let font_offset = resources.fonts.len() as u32;
-    if let Some(popup_resources) = &popup.resources {
-        if !popup_resources.images.is_empty() {
-            return Err(std::io::Error::other(
-                "chrome popup may not load image resources",
-            ));
-        }
-        resources
-            .fonts
-            .extend(popup_resources.fonts.iter().cloned());
-    }
-    list.resources = Some(std::sync::Arc::new(resources));
-    let display_item_offset = u32::try_from(list.display_items.len())
-        .map_err(|_| std::io::Error::other("too many content display items"))?;
-    std::sync::Arc::make_mut(&mut list.items).push(DisplayItem {
-        r#type: DisplayItemType::kSave,
-        ..Default::default()
-    });
-    // The wrapper save occupies one replay-op slot, but no semantic item slot.
-    let record_offset = list.items.len();
-    std::sync::Arc::make_mut(&mut list.items).extend(popup.items.iter().cloned().map(
-        |mut item| {
-            item.font_face_index += font_offset;
-            item
-        },
-    ));
-    list.display_items
-        .extend(popup.display_items.iter().cloned().map(|mut item| {
-            item.record_begin += record_offset;
-            item.record_end += record_offset;
-            item
-        }));
-    for popup_chunk in &popup.chunks {
-        let mut chunk = popup_chunk.clone();
-        chunk.begin_index = chunk
-            .begin_index
-            .checked_add(display_item_offset)
-            .ok_or_else(|| std::io::Error::other("too many popup display items"))?;
-        chunk.end_index = chunk
-            .end_index
-            .checked_add(display_item_offset)
-            .ok_or_else(|| std::io::Error::other("too many popup display items"))?;
-        // Each Page has its own native clients. Clone retains property-node
-        // Arcs and IDs; neither DOM IDs nor dump-local property IDs replace them.
-        list.chunks.push(chunk);
-    }
-    std::sync::Arc::make_mut(&mut list.items).push(DisplayItem {
-        r#type: DisplayItemType::kRestore,
-        ..Default::default()
-    });
-    Ok(list)
+    paint::paint_engine::PaintArtifact::WithFontOnlyOverlay(content, popup)
 }
 
 pub fn reload_icon(loading: bool) -> &'static str {

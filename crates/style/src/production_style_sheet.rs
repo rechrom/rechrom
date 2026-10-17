@@ -44,7 +44,11 @@ use crate::{
 };
 use foundation::{AtomicString, CSSPropertyID, CSSValueID, Member, String, StringView};
 use layoutng_style::style::computed_style_constants::PseudoId;
-use std::{cell::RefCell, collections::{BTreeMap, BTreeSet, HashMap}, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, HashMap},
+    rc::Rc,
+};
 pub type ContainerSet = crate::production_container_parser::ContainerSet;
 pub type ContainerCondition = crate::production_container_parser::ContainerCondition;
 pub type QuerySet = ConcreteQuerySet<crate::css_numeric_literal_value::CSSNumericLiteralValue>;
@@ -140,10 +144,26 @@ impl RuleBucketTable for ProductionRuleBucketTable {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum AttributeInvalidationKey {
+    Class(AtomicString),
+    Id(AtomicString),
+    Attribute(AtomicString),
+}
+pub(crate) struct AttributeInvalidation {
+    pub set: crate::invalidation::invalidation_set::InvalidationSetRef,
+    pub siblings: bool,
+    pub cross_tree: bool,
+}
+
 #[derive(Default)]
 pub struct ProductionRuleFeatureSet {
-    media_query_result_flags: MediaQueryResultFlags,
-    pub(crate) user_action_invalidation:
+    pub(crate) non_descendant_has_invalidation: bool,
+    pub(crate) attribute_invalidation: HashMap<AttributeInvalidationKey, AttributeInvalidation>,
+    pub(crate) scope_pseudo_states: BTreeSet<PseudoType>,
+    pub(crate) non_descendant_pseudo_states: BTreeSet<PseudoType>,
+    pub(crate) media_query_result_flags: MediaQueryResultFlags,
+    pub(crate) pseudo_state_invalidation:
         BTreeMap<PseudoType, crate::invalidation::invalidation_set::InvalidationSetRef>,
 }
 
@@ -171,6 +191,16 @@ fn user_action_features(
                 | PseudoType::kPseudoFocusWithin
                 | PseudoType::kPseudoMultiSelectFocus
                 | PseudoType::kPseudoSpatialNavigationFocus
+                | PseudoType::kPseudoAnyLink
+                | PseudoType::kPseudoWebkitAnyLink
+                | PseudoType::kPseudoLink
+                | PseudoType::kPseudoVisited
+                | PseudoType::kPseudoPlaceholderShown
+                | PseudoType::kPseudoDefault
+                | PseudoType::kPseudoHasDatalist
+                | PseudoType::kPseudoIndeterminate
+                | PseudoType::kPseudoHas
+                | PseudoType::kPseudoDir
         ) {
             any.insert(pseudo);
             if !subject {
@@ -206,6 +236,151 @@ fn user_action_features(
     (any, relational)
 }
 
+fn non_descendant_user_action_selector(selector: CSSSelectorComplex<'_>) -> bool {
+    use crate::css_selector::RelationType::*;
+    selector.SimpleSelectors().any(|simple| {
+        matches!(
+            simple.Relation(),
+            kDirectAdjacent | kIndirectAdjacent | kShadowSlot | kShadowPart
+        ) || matches!(
+            simple.GetPseudoType(),
+            PseudoType::kPseudoHas
+                | PseudoType::kPseudoNthChild
+                | PseudoType::kPseudoNthLastChild
+                | PseudoType::kPseudoNthOfType
+                | PseudoType::kPseudoNthLastOfType
+        ) || simple.SelectorListOrParent().is_some_and(|list| {
+            list.ComplexSelectors()
+                .any(non_descendant_user_action_selector)
+        })
+    })
+}
+
+fn non_descendant_has_selector(selector: CSSSelectorComplex<'_>) -> bool {
+    use crate::css_selector::RelationType::*;
+    selector.SimpleSelectors().any(|simple| {
+        matches!(simple.Relation(), kDirectAdjacent | kIndirectAdjacent | kShadowSlot | kShadowPart)
+            || (matches!(simple.GetPseudoType(), PseudoType::kPseudoNthChild | PseudoType::kPseudoNthLastChild)
+                && simple.SelectorListOrParent().is_some_and(|list| list.ComplexSelectors()
+                    .any(|nested| user_action_features(nested).0.contains(&PseudoType::kPseudoHas))))
+            // The relative selector inside :has controls ancestor traversal,
+            // not the descendant subjects scheduled from this Has anchor.
+            || (simple.GetPseudoType() != PseudoType::kPseudoHas
+                && simple.SelectorListOrParent().is_some_and(|list| list.ComplexSelectors().any(non_descendant_has_selector)))
+    })
+}
+
+// cpp: RuleInvalidationDataVisitor::AddFeaturesToInvalidationSets and
+// StyleEngine::{Class,Id,Attribute}ChangedForElement. Admit ordinary tree
+// relations here; cross-tree keys retain the owner's conservative route.
+fn collect_attribute_features(
+    features: &mut ProductionRuleFeatureSet,
+    selector: CSSSelectorComplex<'_>,
+    scope: Option<&crate::style_scope::StyleScope>,
+) {
+    use crate::css_selector::RelationType::*;
+    use crate::invalidation::invalidation_set::DescendantInvalidationSet;
+    use AttributeInvalidationKey as Key;
+    fn keys(selector: CSSSelectorComplex<'_>, result: &mut Vec<Key>) {
+        for simple in selector.SimpleSelectors() {
+            match simple.Match() {
+                MatchType::kClass => result.push(Key::Class(simple.Value().clone())),
+                MatchType::kId => result.push(Key::Id(simple.Value().clone())),
+                MatchType::kPseudoClass if simple.GetPseudoType() == PseudoType::kPseudoTarget => {
+                    result.push(Key::Attribute(AtomicString::from_str("id")))
+                }
+                _ if simple.IsAttributeSelector() => {
+                    result.push(Key::Attribute(simple.Attribute().LocalName().clone()))
+                }
+                _ => {}
+            }
+            if let Some(list) = simple.SelectorListOrParent() {
+                for nested in list.ComplexSelectors() {
+                    keys(nested, result);
+                }
+            }
+        }
+    }
+    fn relations(selector: CSSSelectorComplex<'_>, siblings: &mut bool, cross: &mut bool) {
+        for simple in selector.SimpleSelectors() {
+            *siblings |= matches!(
+                simple.Relation(),
+                kDirectAdjacent
+                    | kIndirectAdjacent
+                    | kRelativeDirectAdjacent
+                    | kRelativeIndirectAdjacent
+            );
+            *cross |= matches!(simple.Relation(), kUAShadow | kShadowSlot | kShadowPart)
+                || matches!(
+                    simple.GetPseudoType(),
+                    PseudoType::kPseudoHost
+                        | PseudoType::kPseudoHostContext
+                        | PseudoType::kPseudoPart
+                        | PseudoType::kPseudoSlotted
+                );
+            if let Some(list) = simple.SelectorListOrParent() {
+                for nested in list.ComplexSelectors() {
+                    relations(nested, siblings, cross);
+                }
+            }
+        }
+    }
+    let (mut siblings, mut cross_tree) = (false, scope.is_some());
+    relations(selector, &mut siblings, &mut cross_tree);
+    let mut changed_keys = Vec::new();
+    if cross_tree {
+        keys(selector, &mut changed_keys);
+    } else {
+        let mut subject = true;
+        for simple in selector.SimpleSelectors() {
+            if !subject {
+                match simple.Match() {
+                    MatchType::kClass => changed_keys.push(Key::Class(simple.Value().clone())),
+                    MatchType::kId => changed_keys.push(Key::Id(simple.Value().clone())),
+                    MatchType::kPseudoClass
+                        if simple.GetPseudoType() == PseudoType::kPseudoTarget =>
+                    {
+                        changed_keys.push(Key::Attribute(AtomicString::from_str("id")))
+                    }
+                    _ if simple.IsAttributeSelector() => {
+                        changed_keys.push(Key::Attribute(simple.Attribute().LocalName().clone()))
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(list) = simple.SelectorListOrParent() {
+                for nested in list.ComplexSelectors() {
+                    // Logical combinations may carry ancestor/sibling keys
+                    // even while their outer compound is the subject.
+                    if !subject
+                        || nested
+                            .SimpleSelectors()
+                            .any(|s| s.Relation() != kSubSelector)
+                    {
+                        keys(nested, &mut changed_keys);
+                    }
+                }
+            }
+            if simple.Relation() != kSubSelector && simple.Relation() != kPseudoChild {
+                subject = false;
+            }
+        }
+    }
+    for key in changed_keys {
+        let entry = features
+            .attribute_invalidation
+            .entry(key)
+            .or_insert_with(|| AttributeInvalidation {
+                set: DescendantInvalidationSet::Create(),
+                siblings: false,
+                cross_tree: false,
+            });
+        entry.siblings |= siblings;
+        entry.cross_tree |= cross_tree;
+        collect_user_action_subject(&mut entry.set.borrow_mut(), selector);
+    }
+}
+
 fn collect_user_action_features(
     features: &mut ProductionRuleFeatureSet,
     selector: CSSSelectorComplex<'_>,
@@ -213,14 +388,24 @@ fn collect_user_action_features(
 ) {
     use crate::invalidation::invalidation_set::DescendantInvalidationSet;
     let mut pseudos = user_action_features(selector).1;
+    if pseudos.contains(&PseudoType::kPseudoHas) {
+        features.non_descendant_has_invalidation |=
+            scope.is_some() || non_descendant_has_selector(selector);
+    }
+    if non_descendant_user_action_selector(selector) {
+        features
+            .non_descendant_pseudo_states
+            .extend(pseudos.iter().copied());
+    }
     let mut scoped = BTreeSet::new();
     if let Some(scope) = scope {
-        collect_scope_user_actions(scope, &mut scoped);
+        collect_scope_pseudo_states(scope, &mut scoped);
     }
+    features.scope_pseudo_states.extend(scoped.iter().copied());
     pseudos.extend(scoped.iter().copied());
     for pseudo in pseudos {
         let mut set = features
-            .user_action_invalidation
+            .pseudo_state_invalidation
             .entry(pseudo)
             .or_insert_with(DescendantInvalidationSet::Create)
             .borrow_mut();
@@ -281,7 +466,7 @@ fn collect_user_action_subject(
     }
 }
 
-fn collect_scope_user_actions(
+fn collect_scope_pseudo_states(
     scope: &crate::style_scope::StyleScope,
     pseudos: &mut BTreeSet<PseudoType>,
 ) {
@@ -291,7 +476,7 @@ fn collect_scope_user_actions(
         }
     }
     if let Some(parent) = scope.Parent() {
-        collect_scope_user_actions(parent, pseudos);
+        collect_scope_pseudo_states(parent, pseudos);
     }
 }
 
@@ -1115,13 +1300,15 @@ pub fn ParseStyleSheetWithBase(
     ParseStyleSheetWithURL(text, mode, SourceURL::FromString(base_url))
 }
 
-fn ParseStyleSheetWithURL(
-    text: &String,
+pub(crate) fn InlineStyleSheetParserContext() -> Rc<CSSParserContext<Backend>> {
+    StyleSheetParserContext(CSSParserMode::kHTMLStandardMode, SourceURL::Null)
+}
+
+fn StyleSheetParserContext(
     mode: CSSParserMode,
     base_url: SourceURL,
-) -> ProductionStyleSheet {
-    let _edges = MediaEdges::new();
-    let context = Rc::new(CSSParserContext::<Backend>::new(
+) -> Rc<CSSParserContext<Backend>> {
+    Rc::new(CSSParserContext::<Backend>::new(
         base_url,
         true,
         None,
@@ -1132,7 +1319,16 @@ fn ParseStyleSheetWithURL(
         None,
         None,
         crate::css_resource_fetch_restriction::ResourceFetchRestriction::kNone,
-    ));
+    ))
+}
+
+fn ParseStyleSheetWithURL(
+    text: &String,
+    mode: CSSParserMode,
+    base_url: SourceURL,
+) -> ProductionStyleSheet {
+    let _edges = MediaEdges::new();
+    let context = StyleSheetParserContext(mode, base_url);
     let mut contents = StyleSheetContents::<Backend>::new(context.clone(), String::default(), None);
     let mut observer = SourceObserver {
         source: text.clone(),
@@ -2129,7 +2325,7 @@ impl crate::style_rule_keyframe::StyleRuleKeyframeBackend for Backend {
         }
     }
 }
-fn SerializeProperties(set: &CSSPropertyValueSet<ProductionCSSValueDispatch>) -> String {
+pub(crate) fn SerializeProperties(set: &CSSPropertyValueSet<ProductionCSSValueDispatch>) -> String {
     let mut text = std::string::String::new();
     for index in 0..set.PropertyCount() {
         let property = set.PropertyAt(index);
@@ -3665,8 +3861,8 @@ impl RuleSetBackend for Backend {
             _ => AtomicString::default(),
         }
     }
-    fn SelectorIsEasy(_selector: CSSSelectorComplex<'_>) -> bool {
-        false
+    fn SelectorIsEasy(selector: CSSSelectorComplex<'_>) -> bool {
+        crate::selector_checker::EasySelectorChecker::IsEasy(selector)
     }
     fn CollectIdentifierHashes(
         selector: CSSSelectorComplex<'_>,
@@ -3674,9 +3870,7 @@ impl RuleSetBackend for Backend {
         backing: &mut Vec<u16>,
         subject_filter: &mut u32,
     ) {
-        // An empty bloom filter disables the rejection optimization and keeps
-        // matching conservative until the production invalidation feature set
-        // is connected.
+        crate::selector_filter::CollectIdentifierHashes(selector, scope, backing, subject_filter);
     }
     fn BeginSelector(_rule: &Rc<StyleRule<Self>>, _selector_index: u32) {}
     fn EndSelector() {}
@@ -3686,6 +3880,7 @@ impl RuleSetBackend for Backend {
         scope: Option<&Self::StyleScope>,
     ) -> SelectorPreMatch {
         collect_user_action_features(features, selector, scope);
+        collect_attribute_features(features, selector, scope);
         SelectorPreMatch::kMayMatch
     }
     fn NewFeatures() -> Self::RuleFeatureSet {
@@ -3752,9 +3947,8 @@ impl CSSPropertyValueSetBackend for ProductionCSSValueDispatch {
         a: CSSPropertyID,
         b: CSSPropertyID,
     ) -> bool {
-        unavailable(
-            "CSSPropertyValueSetBackend::IsInSameLogicalPropertyGroupWithDifferentMappingLogic",
-        )
+        crate::properties::css_property::CSSProperty::Get(a)
+            .IsInSameLogicalPropertyGroupWithDifferentMappingLogic(b)
     }
     fn SerializeShorthand(set: &CSSPropertyValueSet<Self>, id: CSSPropertyID) -> String {
         unavailable("CSSPropertyValueSetBackend::SerializeShorthand")

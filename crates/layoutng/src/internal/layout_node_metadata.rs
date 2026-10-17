@@ -877,6 +877,16 @@ impl Element {
         self.used_canvas_transform_ = None;
         prepare_element_dimensions(self, input).unwrap_or_else(|error| panic!("{error:?}"));
         self.InputSvgLengthAdjust();
+        let textarea = foundation::DynamicTo::<super::form_node_metadata::HTMLTextAreaElement>(
+            self as *mut Element,
+        );
+        if !textarea.is_null() {
+            let sizing = input.element.as_ref().and_then(|data| data.text_area_sizing.as_ref());
+            unsafe { &mut *textarea }.UpdateSizing(
+                sizing.map_or(2, |sizing| sizing.rows),
+                sizing.map_or(20, |sizing| sizing.columns),
+            );
+        }
         let control = foundation::DynamicTo::<super::form_node_metadata::HTMLFormControlElement>(
             self as *mut Element,
         );

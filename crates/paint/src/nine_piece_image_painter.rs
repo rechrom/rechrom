@@ -416,10 +416,7 @@ impl NinePieceImagePainter {
                         * effective_zoom,
                 },
                 effective_zoom,
-                fragment
-                    .paint
-                    .resources
-                    .as_deref(),
+                fragment.paint.resources.as_deref(),
                 (!fragment.paint.style.color_scheme_flags_is_normal)
                     .then_some(u8::from(fragment.paint.style.used_dark_color_scheme)),
             )
@@ -617,10 +614,7 @@ impl NinePieceImagePainter {
                     height: f64::from(image.height) / image_resolution_scale * effective_zoom,
                 },
                 effective_zoom,
-                fragment
-                    .paint
-                    .resources
-                    .as_deref(),
+                fragment.paint.resources.as_deref(),
                 (!fragment.paint.style.color_scheme_flags_is_normal)
                     .then_some(u8::from(fragment.paint.style.used_dark_color_scheme)),
             )

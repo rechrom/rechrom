@@ -3,25 +3,21 @@
 //! This module owns the native surface and display resources, but deliberately
 //! knows nothing about threads, channels, or executors. `PresentationRuntime`
 //! delivers messages and routes the returned effects.
+use crate::page_presentation::{Document, PageFrame as SubmittedFrame, Scene};
 use crate::{
     engine::{Output, UserEvent, Viewport},
     window_surface::{DisplayTarget, PreparedDisplayTarget},
 };
-use compositor::RasterBundle;
 use renderer::Renderer;
-use std::{io, sync::Arc, time::Instant};
+use std::{collections::BTreeMap, io, sync::Arc, time::Instant};
 use viz::{SurfaceId, SwapId, VizEngine};
 
-type SubmittedFrame = compositor::SubmittedFrame<Viewport, Vec<crate::chrome::DragRegion>>;
-
-pub(crate) const TOOLBAR_SURFACE: SurfaceId = SurfaceId(1);
-pub(crate) const CONTENT_SURFACE: SurfaceId = SurfaceId(2);
-
 pub(crate) enum Message {
-    Install(RasterBundle),
+    Scene(Scene),
     Prepare {
         frame: crate::begin_frame_source::NativeBeginFrame,
         submitted: SubmittedFrame,
+        resources: raster::RasterResourceSnapshot,
         scroll_active: bool,
     },
     Submit {
@@ -33,18 +29,15 @@ pub(crate) enum Message {
 }
 
 pub(crate) enum Effect {
-    ReturnBundle(RasterBundle),
-    RasterReady(Vec<layer_tile::RasterCompletion>),
     RequestBeginFrame,
 }
 
-struct PendingDisplayFrame {
-    provenance: compositor::FrameProvenance,
-    viewport: Viewport,
-    drag_regions: Vec<crate::chrome::DragRegion>,
-    has_content: bool,
+struct PageSurface {
+    id: SurfaceId,
+    resources: raster::RasterResourceSnapshot,
+    provenance: Option<compositor::FrameProvenance>,
+    viewport: Option<Viewport>,
 }
-
 struct PreparedDisplayFrame {
     output: PreparedDisplayTarget,
     provenance: compositor::FrameProvenance,
@@ -55,9 +48,10 @@ struct PreparedDisplayFrame {
 
 pub(crate) struct Display {
     target: DisplayTarget,
-    active_bundle: Option<RasterBundle>,
-    incoming_bundle: Option<RasterBundle>,
-    pending: Option<PendingDisplayFrame>,
+    pages: BTreeMap<Document, PageSurface>,
+    next_surface_id: u64,
+    scene: Option<Scene>,
+    pending: Option<()>,
     prepared: Option<PreparedDisplayFrame>,
     sequence: u64,
     notify: Arc<dyn Fn(UserEvent) + Send + Sync>,
@@ -70,8 +64,9 @@ impl Display {
     pub(crate) fn New(target: DisplayTarget, output: Output, capture_frames: bool) -> Self {
         Self {
             target,
-            active_bundle: None,
-            incoming_bundle: None,
+            pages: BTreeMap::new(),
+            next_surface_id: 0,
+            scene: None,
             pending: None,
             prepared: None,
             sequence: 0,
@@ -87,26 +82,20 @@ impl Display {
         message: Message,
         post_swap_ack: &Arc<dyn Fn(u64) + Send + Sync>,
     ) -> io::Result<Vec<Effect>> {
-        let mut effects = match message {
+        let effects = match message {
             Message::Stop => return Ok(Vec::new()),
-            Message::Install(bundle) => {
-                // Surface owns the resources of its current accepted frame.
-                // Stage the new tree's owner until its corresponding Prepare;
-                // installation alone cannot invalidate an undrawn old frame.
-                let mut effects: Vec<_> = self
-                    .incoming_bundle
-                    .replace(bundle)
-                    .map(Effect::ReturnBundle)
-                    .into_iter()
-                    .collect();
-                effects.push(Effect::RequestBeginFrame);
-                Ok(effects)
+            Message::Scene(scene) => {
+                self.scene = Some(scene);
+                self.PrunePages();
+                self.pending = Some(());
+                Ok(vec![Effect::RequestBeginFrame])
             }
             Message::Prepare {
                 frame,
                 submitted,
+                resources,
                 scroll_active,
-            } => self.Prepare(frame, submitted, scroll_active),
+            } => self.Prepare(frame, submitted, resources, scroll_active),
             Message::Submit {
                 frame,
                 scroll_active,
@@ -130,30 +119,53 @@ impl Display {
                 )
             }
         }?;
-        // Poll the active resource owner as well as the pending raster owner.
-        // Otherwise finished prepaint stays invisible until this whole bundle
-        // happens to return to the raster thread on a later tree swap.
-        if let Some(bundle) = &mut self.active_bundle {
-            let mut ready = bundle.toolbar_raster.PollCompletedRaster()?;
-            let content = bundle.content_raster.PollCompletedRaster()?;
-            bundle.toolbar_tiles.ApplyRasterResults(&ready);
-            bundle.content_tiles.ApplyRasterResults(&content);
-            ready.extend(content);
-            if !ready.is_empty() {
-                effects.push(Effect::RasterReady(ready));
-            }
-            if bundle.toolbar_raster.HasPendingRaster() || bundle.content_raster.HasPendingRaster()
-            {
-                effects.push(Effect::RequestBeginFrame);
-            }
-        }
         Ok(effects)
+    }
+
+    fn Selected(&self, requested: Document) -> Option<Document> {
+        if self
+            .pages
+            .get(&requested)
+            .is_some_and(|page| page.provenance.is_some())
+        {
+            return Some(requested);
+        }
+        // DelegatedFrameHost's previous Surface remains visible during a new
+        // document's first commit. The fallback is local to that embedding view.
+        self.pages.iter().rev().find_map(|(&document, page)| {
+            (document.0 == requested.0 && page.provenance.is_some()).then_some(document)
+        })
+    }
+
+    fn PrunePages(&mut self) {
+        let Some(scene) = &self.scene else {
+            return;
+        };
+        let retained: Vec<_> = scene
+            .placements
+            .iter()
+            .filter_map(|p| self.Selected(p.document))
+            .collect();
+        let removed: Vec<_> = self
+            .pages
+            .iter()
+            .filter_map(|(&document, page)| {
+                (!scene.live_documents.contains(&document) && !retained.contains(&document))
+                    .then_some((document, page.id))
+            })
+            .collect();
+        for (document, surface) in removed {
+            self.pages.remove(&document);
+            self.viz.DestroySurface(surface);
+            self.renderer.InvalidateSurface(surface);
+        }
     }
 
     fn Prepare(
         &mut self,
         frame: crate::begin_frame_source::NativeBeginFrame,
         submitted: SubmittedFrame,
+        resources: raster::RasterResourceSnapshot,
         _scroll_active: bool,
     ) -> io::Result<Vec<Effect>> {
         let _frame = browser_tracing::scope(browser_tracing::Context {
@@ -162,87 +174,99 @@ impl Display {
             frame_id: frame.sequence_number,
             ..Default::default()
         });
-        // Frame acceptance and resource ownership advance together. Runtime
-        // mailbox ordering keeps the matching Install before this submission.
-        let effects: Vec<_> = self
-            .incoming_bundle
-            .take()
-            .and_then(|bundle| self.active_bundle.replace(bundle).map(Effect::ReturnBundle))
-            .into_iter()
-            .collect();
-        if self.active_bundle.is_none() {
-            return Ok(effects);
-        }
-        // Surface::QueueFrame accepts resources and activates retained surface
-        // state. CPU drawing belongs to Display::DrawAndSwap, not submission.
-        self.viz
-            .SubmitFrame(TOOLBAR_SURFACE, submitted.toolbar)
-            .map_err(io::Error::other)?;
-        let has_content = if let Some(content) = submitted.content {
-            self.viz
-                .SubmitFrame(CONTENT_SURFACE, content)
-                .map_err(io::Error::other)?;
-            true
-        } else {
-            self.viz.DestroySurface(CONTENT_SURFACE);
-            self.renderer.InvalidateSurface(CONTENT_SURFACE);
-            false
-        };
-        self.pending = Some(PendingDisplayFrame {
-            provenance: submitted.provenance,
-            viewport: submitted.viewport,
-            drag_regions: submitted.metadata,
-            has_content,
+        // The exact frame and its immutable resource leases are accepted as
+        // one message. No raster engine or tile scheduler crosses this boundary.
+        let document = submitted.provenance.document;
+        let page = self.pages.entry(document).or_insert_with(|| {
+            self.next_surface_id += 1;
+            PageSurface {
+                id: SurfaceId(self.next_surface_id),
+                resources: resources.clone(),
+                provenance: None,
+                viewport: None,
+            }
         });
-        Ok(effects)
+        page.resources = resources;
+        if let Some(frame) = submitted.content {
+            self.viz
+                .SubmitFrame(page.id, frame)
+                .map_err(io::Error::other)?;
+            page.provenance = Some(submitted.provenance);
+            page.viewport = Some(submitted.viewport);
+        } else {
+            page.provenance = None;
+            self.viz.DestroySurface(page.id);
+            self.renderer.InvalidateSurface(page.id);
+        }
+        self.PrunePages();
+        self.pending = Some(());
+        Ok(vec![])
     }
 
     fn DrawPending(
         &mut self,
         frame: crate::begin_frame_source::NativeBeginFrame,
     ) -> io::Result<()> {
-        let Some(pending) = self.pending.take() else {
+        if self.pending.take().is_none() {
+            return Ok(());
+        }
+        let Some(scene) = &self.scene else {
             return Ok(());
         };
-        let Some(bundle) = &self.active_bundle else {
-            return Ok(());
+        let viewport = scene.viewport;
+        let mut placements = vec![];
+        let mut provenance = compositor::FrameProvenance {
+            document: scene
+                .placements
+                .iter()
+                .find(|p| p.document.0 != 0 && p.document.0 != u64::MAX)
+                .map_or((0, 0), |p| p.document),
+            content: None,
         };
+        for placement in &scene.placements {
+            let Some(document) = self.Selected(placement.document) else {
+                continue;
+            };
+            let page = &self.pages[&document];
+            let Some(local) = page.viewport else {
+                continue;
+            };
+            // A resize waits for a matching producer frame; Viz never stretches
+            // an old Page into a different local viewport.
+            if local.width != placement.destination.width
+                || local.height != placement.destination.height
+            {
+                continue;
+            }
+            placements.push(viz::SurfacePlacement {
+                surface_id: page.id,
+                destination: placement.destination,
+            });
+            if placement.document.0 != 0 && placement.document.0 != u64::MAX {
+                provenance = page.provenance.unwrap();
+            }
+        }
+        if placements.is_empty() {
+            return Ok(());
+        }
         self.sequence = self.sequence.wrapping_add(1);
         let sequence = self.sequence;
-        let PendingDisplayFrame {
-            provenance,
-            viewport,
-            drag_regions,
-            has_content,
-        } = pending;
-        // Chromium Display::DrawAndSwap aggregates current Surface state only
-        // once the scheduler can draw; older submissions are not CPU frames.
-        let toolbar_height = viewport.toolbar_pixels();
-        let output_rect = ::compositor::DeviceRect::new(0, 0, viewport.width, viewport.height);
-        let mut placements = vec![viz::SurfacePlacement {
-            surface_id: TOOLBAR_SURFACE,
-            destination: ::compositor::DeviceRect::new(0, 0, viewport.width, toolbar_height),
-        }];
-        if has_content {
-            placements.push(viz::SurfacePlacement {
-                surface_id: CONTENT_SURFACE,
-                destination: ::compositor::DeviceRect::new(
-                    0,
-                    toolbar_height as i32,
-                    viewport.width,
-                    viewport.height.saturating_sub(toolbar_height),
-                ),
-            });
-        }
         let aggregated = self
             .viz
-            .Aggregate(output_rect, &placements)
+            .Aggregate(
+                compositor::DeviceRect::new(0, 0, viewport.width, viewport.height),
+                &placements,
+            )
             .map_err(io::Error::other)?;
+        let resources: Vec<_> = self
+            .pages
+            .values()
+            .map(|page| (page.id, &page.resources))
+            .collect();
         let output = self.target.render_aggregated_frame(
             &aggregated,
             &mut self.renderer,
-            &bundle.toolbar_raster,
-            has_content.then_some(&bundle.content_raster),
+            &resources,
             viewport,
             sequence,
         )?;
@@ -251,7 +275,7 @@ impl Display {
             provenance,
             sequence,
             viewport,
-            drag_regions,
+            drag_regions: scene.metadata.clone(),
         });
         browser_tracing::instant(
             "frame",
@@ -274,7 +298,7 @@ impl Display {
                     Instant::now()
                         .saturating_duration_since(frame.frame_time)
                         .as_secs_f64()
-                        * 1000.0,
+                        * 1000.,
                 ),
             ],
         );
@@ -343,7 +367,7 @@ impl Display {
             return Ok(Vec::new());
         };
         let PreparedDisplayFrame {
-            output,
+            mut output,
             provenance,
             sequence,
             viewport,
@@ -353,7 +377,7 @@ impl Display {
         // Submission activates this complete compositor frame; pending or
         // failed candidates never replace the last published frame.
         if let Some(diagnostic) = &self.diagnostic_output {
-            let mut readback = output.readback_rgba(viewport)?;
+            let mut readback = output.take_readback_rgba(viewport)?;
             readback.provenance = Some(provenance);
             diagnostic.publish(readback);
         }

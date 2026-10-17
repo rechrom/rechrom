@@ -38,7 +38,11 @@ fn ParseInnerHTMLMutation(
     // Snapshot only the context node's immutable parser data: ParseHTMLFragment
     // reborrows the same arena mutably, and allocates the source synthetic
     // context and fragment there. No tree or node identity is cloned.
-    let context = document.Node(target).clone();
+    // cpp: ShadowRoot::SetInnerHTMLInternal sets context_element to host(),
+    // whose namespace/tokenizer state belongs to the fragment's elements.
+    let context = document
+        .Node(document.ShadowHost(target).unwrap_or(target))
+        .clone();
     let fragment = ParseHTMLFragment(document, &context, &mutation.value);
     if let Some(contents) = document.TemplateContents(target) {
         target = contents;

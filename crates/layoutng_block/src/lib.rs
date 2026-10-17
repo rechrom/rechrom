@@ -43,11 +43,9 @@ mod block_fixture_test {
         };
         space.fonts.push(FontFace {
             family: "Roboto".into(),
-            bytes: include_bytes!(
-                "../../../assets/fonts/Roboto-Regular.ttf"
-            )
-            .as_slice()
-            .into(),
+            bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
+                .as_slice()
+                .into(),
             ..FontFace::default()
         });
         let mut tree = LayoutObjectTree::new_with_factories(&space, &assembly.objects);

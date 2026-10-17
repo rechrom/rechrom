@@ -19,14 +19,14 @@ pub(crate) enum PreparedDisplayTarget {
 }
 
 impl PreparedDisplayTarget {
-    pub(crate) fn readback_rgba(
-        &self,
+    pub(crate) fn take_readback_rgba(
+        &mut self,
         viewport: crate::engine::Viewport,
     ) -> io::Result<crate::engine::WindowFrame> {
         match self {
             Self::Native(frame) => frame.readback_rgba(viewport),
             Self::Offscreen { pixels, row_stride } => {
-                readback_pixels(pixels, *row_stride, false, viewport)
+                take_offscreen_frame(std::mem::take(pixels), *row_stride, viewport)
             }
         }
     }
@@ -41,21 +41,13 @@ impl DisplayTarget {
         &mut self,
         frame: &viz::AggregatedFrame,
         renderer: &mut Renderer,
-        toolbar_raster: &raster::RasterEngine,
-        content_raster: Option<&raster::RasterEngine>,
+        page_rasters: &[(viz::SurfaceId, &raster::RasterResourceSnapshot)],
         viewport: crate::engine::Viewport,
         present_sequence: u64,
     ) -> io::Result<PreparedDisplayTarget> {
         match self {
             Self::Native(target) => target
-                .render_aggregated_frame(
-                    frame,
-                    renderer,
-                    toolbar_raster,
-                    content_raster,
-                    viewport,
-                    present_sequence,
-                )
+                .render_aggregated_frame(frame, renderer, page_rasters, viewport, present_sequence)
                 .map(PreparedDisplayTarget::Native),
             Self::Offscreen => {
                 if !viewport.valid() {
@@ -66,10 +58,7 @@ impl DisplayTarget {
                 }
                 let mut pixels = vec![0u32; viewport.width as usize * viewport.height as usize];
                 let row_stride = viewport.width as usize;
-                let resources = WindowRasterResources {
-                    toolbar: toolbar_raster,
-                    content: content_raster,
-                };
+                let resources = WindowRasterResources(page_rasters);
                 renderer.Render(
                     frame,
                     &resources,
@@ -77,7 +66,7 @@ impl DisplayTarget {
                         width: viewport.width,
                         height: viewport.height,
                         pixels: &mut pixels,
-                        format: skia::PixelFormat::Bgrx8888,
+                        format: skia::PixelFormat::Rgba8888,
                         row_stride,
                     },
                 )?;
@@ -117,6 +106,32 @@ impl DisplayTarget {
     }
 }
 
+fn take_offscreen_frame(
+    pixels: Vec<u32>,
+    row_stride: usize,
+    viewport: crate::engine::Viewport,
+) -> io::Result<crate::engine::WindowFrame> {
+    if row_stride != viewport.width as usize
+        || pixels.len() != row_stride * viewport.height as usize
+    {
+        return Err(io::Error::other("offscreen readback size differs"));
+    }
+    let pixels = Arc::new(pixels);
+    let toolbar_height = viewport.toolbar_pixels();
+    let content_height = viewport.height - toolbar_height;
+    Ok(crate::engine::WindowFrame {
+        provenance: None,
+        viewport,
+        toolbar: RasterSurface::from_rgba_words(viewport.width, toolbar_height, pixels.clone(), 0)?,
+        content: RasterSurface::from_rgba_words(
+            viewport.width,
+            content_height,
+            pixels,
+            viewport.width as usize * toolbar_height as usize,
+        )?,
+    })
+}
+
 #[cfg(test)]
 pub struct SurfaceLayer<'a> {
     pub surface: &'a RasterSurface,
@@ -140,23 +155,16 @@ pub(crate) struct PreparedWindowFrame {
     row_stride: usize,
 }
 
-struct WindowRasterResources<'a> {
-    toolbar: &'a raster::RasterEngine,
-    content: Option<&'a raster::RasterEngine>,
-}
-
+struct WindowRasterResources<'a>(&'a [(viz::SurfaceId, &'a raster::RasterResourceSnapshot)]);
 impl RasterResourceRegistry for WindowRasterResources<'_> {
     fn ResourcesFor(
         &self,
         surface_id: viz::SurfaceId,
     ) -> Option<&dyn raster::RasterResourceProvider> {
-        match surface_id {
-            crate::display::TOOLBAR_SURFACE => Some(self.toolbar),
-            crate::display::CONTENT_SURFACE => self
-                .content
-                .map(|resources| resources as &dyn raster::RasterResourceProvider),
-            _ => None,
-        }
+        self.0
+            .iter()
+            .find(|(id, _)| *id == surface_id)
+            .map(|(_, raster)| *raster as &dyn raster::RasterResourceProvider)
     }
 }
 
@@ -239,8 +247,7 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         &mut self,
         frame: &viz::AggregatedFrame,
         renderer: &mut Renderer,
-        toolbar_raster: &raster::RasterEngine,
-        content_raster: Option<&raster::RasterEngine>,
+        page_rasters: &[(viz::SurfaceId, &raster::RasterResourceSnapshot)],
         viewport: crate::engine::Viewport,
         present_sequence: u64,
     ) -> io::Result<PreparedWindowFrame> {
@@ -274,10 +281,7 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         let pixels = buffer.pixels_mut();
         #[cfg(not(target_os = "macos"))]
         let pixels = buffer.as_mut_slice();
-        let resources = WindowRasterResources {
-            toolbar: toolbar_raster,
-            content: content_raster,
-        };
+        let resources = WindowRasterResources(page_rasters);
         let render_update = {
             let _target = browser_tracing::scope(browser_tracing::Context {
                 target_id: 1,
@@ -618,13 +622,13 @@ mod tests {
                 scale,
             };
             let toolbar_pixels = viewport.toolbar_pixels() as usize * viewport.width as usize;
-            let mut pixels = vec![0x0011_2233; viewport.width as usize * viewport.height as usize];
-            pixels[toolbar_pixels..].fill(0x007f_3a91);
-            let prepared = PreparedDisplayTarget::Offscreen {
+            let mut pixels = vec![0xff33_2211; viewport.width as usize * viewport.height as usize];
+            pixels[toolbar_pixels..].fill(0xff91_3a7f);
+            let mut prepared = PreparedDisplayTarget::Offscreen {
                 pixels,
                 row_stride: 4,
             };
-            let frame = prepared.readback_rgba(viewport).unwrap();
+            let frame = prepared.take_readback_rgba(viewport).unwrap();
             assert_eq!(frame.content.size(), (4, 3));
             assert_eq!(frame.toolbar.size(), (4, viewport.toolbar_pixels()));
             assert!(frame

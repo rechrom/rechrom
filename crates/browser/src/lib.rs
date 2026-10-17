@@ -26,7 +26,6 @@ use std::path::Path;
 pub mod dom_mutation;
 mod font_catalog;
 mod font_session;
-pub mod system_font_provider;
 #[cfg(feature = "source_paint")]
 mod form_submission;
 #[cfg(test)]
@@ -46,6 +45,7 @@ mod persistent_layout;
 pub mod style_services;
 #[cfg(all(test, feature = "source_paint"))]
 mod svg_image_tests;
+pub mod system_font_provider;
 #[cfg(test)]
 mod table_layout_tests;
 mod text_transform;
@@ -92,7 +92,11 @@ pub fn CreateSVGImageDecoderWithConstraints(
     constraints: &ConstraintSpace,
 ) -> document_image::SVGImageDecoder {
     let user_agent = user_agent_styles::UserAgentStyleSheets::new();
-    document_image::SVGImageDecoder::new_with_constraints(assembly, constraints, user_agent.Sheets())
+    document_image::SVGImageDecoder::new_with_constraints(
+        assembly,
+        constraints,
+        user_agent.Sheets(),
+    )
 }
 
 /// Host viewport, system fonts and theme inputs shared by static and live DOM layout.
@@ -136,7 +140,9 @@ pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
     // opened or parsed here; query completion happens before publication.
     space.fonts = vec![font_engine::FontFace {
         family: "Rechrom Emergency".into(),
-        bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf").as_slice().into(),
+        bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
+            .as_slice()
+            .into(),
         fallback_role: font_engine::FontFallbackRole::kLastResort,
         ..Default::default()
     }];
@@ -205,9 +211,16 @@ fn LayoutStaticHtml(source: &str, width: u32, height: u32) -> io::Result<Fragmen
     let mut space = CreateBrowserConstraints(width, height);
     style_services::ResolveLayoutStyles(&mut document, &space);
     let mut layout = LayoutEngine::new(&assembly);
-    font_session::LayoutWithSystemFonts(&mut layout, &mut document,
-        &dom::UserInteractionState::default(), &mut space, &mut font_session::SystemFontSession::new());
-    let fragments = layout.TakeLayoutResult().expect("completed font/layout transaction");
+    font_session::LayoutWithSystemFonts(
+        &mut layout,
+        &mut document,
+        &dom::UserInteractionState::default(),
+        &mut space,
+        &mut font_session::SystemFontSession::new(),
+    );
+    let fragments = layout
+        .TakeLayoutResult()
+        .expect("completed font/layout transaction");
     Ok(std::rc::Rc::try_unwrap(fragments).unwrap_or_else(|shared| (*shared).clone()))
 }
 

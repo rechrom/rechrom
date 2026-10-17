@@ -114,6 +114,7 @@ type VariableMap<B> = HashMap<AtomicString, Option<Variable<B>>>;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ProductionCascadeFallback {
     UnsupportedFeature(&'static str),
+    UnsupportedProperty(CSSPropertyID),
     InvalidProperty(CSSPropertyID),
 }
 
@@ -423,7 +424,7 @@ fn SelectUsesMenuList(node: &dom::persistent_document::DOMNode) -> bool {
 
 // cpp: element.cc:14142-14163 and the HTML element/type overrides of
 // SupportsBaseAppearanceInternal at the pinned Chromium revision.
-pub(super) fn SupportsBaseAppearance(
+pub(crate) fn SupportsBaseAppearance(
     document: &dom::Document,
     element: usize,
     appearance: AppearanceValue,
@@ -1164,6 +1165,72 @@ pub(crate) fn ApplyMatchResult(
     inputs: ProductionCascadeInputs<'_>,
 ) -> Result<ProductionCascadeOutput, Vec<ProductionCascadeFallback>> {
     ApplyMatchResultWithFilter(inputs, CascadeFilter::new())
+}
+
+/// StyleResolver's MISU branch uses the same native property application as
+/// StyleCascade, without matching/cascading rules again. The caller has already
+/// checked the source eligibility guards and owns the previous style builder.
+pub(crate) fn ApplyInlineProperties(
+    inputs: ProductionCascadeInputs<'_>,
+    builder: &mut ComputedStyleBuilder,
+    properties: &[(CSSPropertyName, Rc<production_css_value::Value>)],
+) -> Result<u32, Vec<ProductionCascadeFallback>> {
+    let backend = ProductionStyleCascadeBackend::new(
+        inputs.document,
+        inputs.media.clone(),
+        inputs.root_font_size,
+        inputs.color_scheme_settings,
+        inputs.text_link_text_color,
+        inputs.custom_properties,
+        inputs.parent_custom_properties,
+        inputs.substitution_context,
+        inputs.image_resolver,
+        inputs.property_registry,
+        inputs.function_registry,
+        inputs.container_runtime,
+    );
+    if let Some(root) = inputs.root_style.clone() {
+        let _ = backend.document_element_style.set(root);
+    }
+    let element = Rc::new(ProductionElement {
+        node: inputs.subject_node,
+        parent: inputs.parent.clone(),
+        root: inputs.root_style.clone(),
+        pseudo_id: inputs.pseudo_id,
+    });
+    let request = ProductionRequest {
+        pseudo_id: inputs.pseudo_id,
+        originating_style: None,
+    };
+    let state = StyleResolverState::new(&backend, &(), element, None, Some(&request));
+    state.CreateNewStyle(
+        ProductionStyleCascadeBackend::style(&inputs.base),
+        ProductionStyleCascadeBackend::style(inputs.parent.as_ref().unwrap_or(&inputs.base)),
+        None,
+    );
+    std::mem::swap(&mut *state.StyleBuilderMut(), builder);
+    for (name, value) in properties {
+        let logical = CSSProperty::Get(name.Id());
+        let property = if logical.IsSurrogate() {
+            backend.SurrogateFor(logical, state.StyleBuilder().GetWritingDirection())
+        } else {
+            *logical
+        };
+        backend.ApplyPhysicalProperty(
+            &CSSPropertyName::new(property.PropertyID()),
+            &property,
+            &state,
+            value,
+        );
+    }
+    let flags = state.TakeLengthConversionFlags();
+    std::mem::swap(&mut *state.StyleBuilderMut(), builder);
+    let fallbacks = backend.take_fallbacks();
+    if fallbacks.is_empty() {
+        Ok(flags)
+    } else {
+        Err(fallbacks)
+    }
 }
 
 pub(crate) fn ApplyMatchResultWithFilter(
@@ -3598,10 +3665,18 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                 )
             };
             if let Err(error) = result {
+                if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
+                    eprintln!(
+                        "translated longhand fallback property={:?} class={:?} value={}",
+                        property.PropertyID(),
+                        value.GetClassType(),
+                        value.CssText().Utf8()
+                    );
+                }
                 use crate::properties::longhand_dispatch::LonghandApplicationError;
                 self.fallback.borrow_mut().push(match error {
                     LonghandApplicationError::Unsupported(id) => {
-                        ProductionCascadeFallback::UnsupportedFeature("longhand-application")
+                        ProductionCascadeFallback::UnsupportedProperty(id)
                     }
                     LonghandApplicationError::InvalidValue(id) => {
                         ProductionCascadeFallback::InvalidProperty(id)

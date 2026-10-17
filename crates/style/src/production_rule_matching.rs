@@ -72,6 +72,151 @@ pub(crate) struct ProductionRuleMatchCollection {
     pub rules: Vec<ProductionTransferredRule>,
 }
 
+/// cpp: StyleEngine::ApplyRuleSetInvalidationForElement / AnyRuleCausesInvalidation.
+/// Only changed old/new RuleSets participate. The translated collector stops at
+/// its first match and retains dynamic-state flags even for a nonmatching rule.
+/// UA implementation elements use the collector's cross-tree bucket. Author
+/// scope, :host, ::part and ::slotted retain the owner's separate path.
+pub(crate) fn InvalidateProductionRuleSets(
+    rule_sets: &[Rc<RuleSet<Backend>>],
+    document: &Document,
+    selectors: &mut PersistentSelectorService,
+    elements: &[usize],
+) -> Option<HashSet<usize>> {
+    use crate::resolver::match_flags::MatchFlag;
+    let mut trace = browser_tracing::span("style", "StyleEngine.InvalidateProductionRuleSets");
+    // cpp: StyleEngine::ApplyRuleSetChanges passes HeapHashSet<Member<RuleSet>>.
+    // Several CSSStyleSheet owners can share one immutable contents/RuleSet.
+    // This is an existential invalidation check, not ordered cascade matching:
+    // probing that same RuleSet again cannot add a match or a dynamic flag.
+    let mut seen = HashSet::with_capacity(rule_sets.len());
+    let unique_rule_sets = rule_sets
+        .iter()
+        .filter(|rules| seen.insert(Rc::as_ptr(rules) as usize))
+        .collect::<Vec<_>>();
+    trace.set("input_rule_sets", rule_sets.len() as f64);
+    trace.set("unique_rule_sets", unique_rule_sets.len() as f64);
+    trace.set(
+        "duplicate_rule_sets",
+        (rule_sets.len() - unique_rule_sets.len()) as f64,
+    );
+    trace.set("elements", elements.len() as f64);
+    let unsupported = if document.GetCompatibilityMode()
+        == dom::persistent_document::CompatibilityMode::kQuirks
+    {
+        Some(("quirks", String::new()))
+    } else {
+        unique_rule_sets.iter().find_map(|rules| {
+            rules.AllRuleData().iter().find_map(|data| {
+                // CheckIfAnyRuleMatches returns before cascade/pseudo output
+                // materialization (ElementRuleCollector's STOP branch). Only the
+                // selector checker's capabilities constrain invalidation here;
+                // HasSupportedPseudoTarget belongs to rule-output routing below.
+                let reason = if rules.ScopeForRule(data).is_some() {
+                    Some("scope")
+                } else if ProductionUnsupportedParsedFeature(
+                    &data.Rule().Selectors().CopySelectors(),
+                )
+                .is_some()
+                {
+                    Some("selector")
+                } else if data.Selector().SimpleSelectors().any(|selector| {
+                    matches!(
+                        selector.GetPseudoType(),
+                        PseudoType::kPseudoHost
+                            | PseudoType::kPseudoHostContext
+                            | PseudoType::kPseudoPart
+                            | PseudoType::kPseudoSlotted
+                    )
+                }) {
+                    Some("tree_scope")
+                } else {
+                    None
+                };
+                reason.map(|reason| {
+                    (
+                        reason,
+                        if browser_tracing::enabled() {
+                            data.Selector().SelectorText().Utf8()
+                        } else {
+                            String::new()
+                        },
+                    )
+                })
+            })
+        })
+    };
+    if let Some((reason, selector)) = unsupported {
+        if browser_tracing::enabled() {
+            browser_tracing::instant_with_text(
+                "style",
+                "RuleSetInvalidationFallback",
+                &format!("reason={reason} selector={selector}"),
+                &[],
+            );
+        }
+        return None;
+    }
+    // cpp: StyleEngine::ApplyRuleSetInvalidationForTreeScope descends into
+    // shadow trees when changed rules address UA implementation elements.
+    // ElementRuleCollector checks the UA bucket before rejecting ordinary
+    // selectors outside the request's TreeScope.
+    let crosses_ua_shadow = unique_rule_sets
+        .iter()
+        .any(|rules| rules.HasUAShadowPseudoElementRules());
+    let mut groups = Vec::new();
+    for rules in unique_rule_sets {
+        AddRuleSetToRuleSetGroupList(rules.clone(), &mut groups);
+    }
+    trace.set("groups", groups.len() as f64);
+    let session = selectors.StyleMatchSession(document);
+    let runtime = ProductionElementRuleCollectorRuntime::new(&session);
+    let mut invalidated = HashSet::new();
+    for &index in elements {
+        if !crosses_ua_shadow && document.TreeScopeRoot(index) != document.Root() {
+            continue;
+        }
+        let context = ProductionElementResolveContext { element: index };
+        let recalc = ProductionStyleRecalcContext::ForElement(document, index, None);
+        let filter = runtime.SelectorFilterForElement(index);
+        let mut result = MatchResult::default();
+        let mut collector = ElementRuleCollector::<Backend, _>::new(
+            &runtime,
+            &context,
+            &recalc,
+            &filter,
+            &mut result,
+            EInsideLink::kNotInsideLink,
+        );
+        collector.BeginAddingAuthorRulesForTreeScope(Rc::new(ProductionTreeScope(document.Root())));
+        for group in &groups {
+            let request = MatchRequest::new(group, Some(Rc::new(document.Root())), None);
+            if collector.CheckIfAnyRuleMatches(&request)
+                || [
+                    MatchFlag::kAffectedByDrag,
+                    MatchFlag::kAffectedByFocusWithin,
+                    MatchFlag::kAffectedByHover,
+                    MatchFlag::kAffectedByActive,
+                ]
+                .into_iter()
+                .any(|flag| collector.MatchedResult().HasFlag(flag))
+            {
+                invalidated.insert(index);
+                // The retained output stores ::placeholder's computed style
+                // on its originating control. Resolve that same owner when
+                // Chromium's collector invalidates its real UA element.
+                if document.ShadowPseudoId(index) == Some("-webkit-input-placeholder") {
+                    if let Some(host) = document.OwnerShadowHost(index) {
+                        invalidated.insert(host);
+                    }
+                }
+                break;
+            }
+        }
+    }
+    Some(invalidated)
+}
+
 /// Production SelectorChecker capability boundary.
 ///
 /// The generic persistent-query boundary deliberately stays narrower than the
@@ -384,26 +529,30 @@ impl ProductionRuleRouting {
         // child rules; inactive groups and all non-style variants are rejected.
         let flat_ordinary_sheet = sheet.diagnostics.is_empty()
             && (0..sheet.contents.RuleCount()).all(|index| {
-                sheet.contents.RuleAt(index).AsStyle().is_some_and(|rule|
-                    rule.ChildRules().is_none_or(|children| children.is_empty()))
+                sheet.contents.RuleAt(index).AsStyle().is_some_and(|rule| {
+                    rule.ChildRules().is_none_or(|children| children.is_empty())
+                })
             });
         routing.ordinary_signature_complete = flat_ordinary_sheet
             && rule_set.AllRuleData().iter().all(|data| {
-            let identity = RuleIdentity(data);
-            routing.authoritative.contains_key(&identity)
-                && routing.ProjectedRuleIndex(identity) == Some(data.GetPosition() as usize)
-                && data.Rule().Selectors().ComplexSelectors().count() == 1
-                && !data.IsStartingStyle()
-                && rule_set.ScopeForRule(data).is_none()
-                && rule_set.ContainerQueriesForRule(data).is_none()
-                && data.Rule().GetMixinParameterBindings().is_none()
-                && !special_rules.contains(&identity)
-                && data.Selector().SimpleSelectors().all(|selector| {
-                    selector.Match() != MatchType::kPseudoElement
-                        && selector.SelectorList().is_none()
-                        && !matches!(selector.GetPseudoType(), PseudoType::kPseudoHost | PseudoType::kPseudoHostContext)
-                })
-        });
+                let identity = RuleIdentity(data);
+                routing.authoritative.contains_key(&identity)
+                    && routing.ProjectedRuleIndex(identity) == Some(data.GetPosition() as usize)
+                    && data.Rule().Selectors().ComplexSelectors().count() == 1
+                    && !data.IsStartingStyle()
+                    && rule_set.ScopeForRule(data).is_none()
+                    && rule_set.ContainerQueriesForRule(data).is_none()
+                    && data.Rule().GetMixinParameterBindings().is_none()
+                    && !special_rules.contains(&identity)
+                    && data.Selector().SimpleSelectors().all(|selector| {
+                        selector.Match() != MatchType::kPseudoElement
+                            && selector.SelectorList().is_none()
+                            && !matches!(
+                                selector.GetPseudoType(),
+                                PseudoType::kPseudoHost | PseudoType::kPseudoHostContext
+                            )
+                    })
+            });
         routing
     }
 
@@ -572,11 +721,12 @@ pub(crate) fn CollectProductionRuleMatchesInto<'d>(
         }),
     );
     let first_result = cascade_result.GetMatchedProperties().len();
+    let selector_filter = runtime.SelectorFilterForElement(context.element);
     let mut collector = ElementRuleCollector::<Backend, _>::new(
         &runtime,
         &context,
         &recalc,
-        &(),
+        &selector_filter,
         cascade_result,
         EInsideLink::kNotInsideLink,
     );
@@ -678,11 +828,12 @@ pub(crate) fn CollectProductionShadowRuleMatchesInto(
         container_runtime.and_then(|runtime| runtime.NearestSizeContainer(element_index)),
     );
     let first_result = cascade_result.GetMatchedProperties().len();
+    let selector_filter = runtime.SelectorFilterForElement(context.element);
     let mut collector = ElementRuleCollector::<Backend, _>::new(
         &runtime,
         &context,
         &recalc,
-        &(),
+        &selector_filter,
         cascade_result,
         EInsideLink::kNotInsideLink,
     );
@@ -834,25 +985,51 @@ mod tests {
         assert!(report.candidates_considered > report.selector_matches);
         assert_eq!(collection.rules.len(), 3);
         assert_eq!(result.GetMatchedProperties().len(), 3);
-        assert_eq!(routing.fallback_report, routing.StaticFallbackReport(&rule_set));
+        assert_eq!(
+            routing.fallback_report,
+            routing.StaticFallbackReport(&rule_set)
+        );
         // Static diagnostics preserve multiplicity for repeated collection,
         // including fallback rules that never enter the translated cascade.
         let fallback_sheet = parse(".hit::cue{color:red}.hit::-webkit-scrollbar{width:7px}");
         let fallback_set = Rc::new(fallback_sheet.BuildRuleSet(&medium));
         let fallback = ProductionRuleRouting::Build(&fallback_set, &fallback_sheet);
         assert!(fallback.fallback_report.skipped_pseudo > 0);
-        assert_eq!(fallback.fallback_report, fallback.StaticFallbackReport(&fallback_set));
+        assert_eq!(
+            fallback.fallback_report,
+            fallback.StaticFallbackReport(&fallback_set)
+        );
         for _ in 0..3 {
             let mut output = MatchResult::default();
-            let actual = CollectProductionRuleMatchesInto(&[ProductionRuleSetInput {
-                sheet_index: 0, rule_set: fallback_set.clone(), routing: &fallback,
-                implicit_scope_trigger: None,
-            }], document, element, &mut selectors, CascadeOrigin::kAuthor,
-                &ProductionPseudoRequest::Element(), None, &mut output).report;
-            assert_eq!(actual.skipped_pseudo, fallback.fallback_report.skipped_pseudo);
-            assert_eq!(actual.skipped_unsupported_selector, fallback.fallback_report.skipped_unsupported_selector);
+            let actual = CollectProductionRuleMatchesInto(
+                &[ProductionRuleSetInput {
+                    sheet_index: 0,
+                    rule_set: fallback_set.clone(),
+                    routing: &fallback,
+                    implicit_scope_trigger: None,
+                }],
+                document,
+                element,
+                &mut selectors,
+                CascadeOrigin::kAuthor,
+                &ProductionPseudoRequest::Element(),
+                None,
+                &mut output,
+            )
+            .report;
+            assert_eq!(
+                actual.skipped_pseudo,
+                fallback.fallback_report.skipped_pseudo
+            );
+            assert_eq!(
+                actual.skipped_unsupported_selector,
+                fallback.fallback_report.skipped_unsupported_selector
+            );
             assert_eq!(actual.skipped_scope, fallback.fallback_report.skipped_scope);
-            assert_eq!(actual.skipped_container_query, fallback.fallback_report.skipped_container_query);
+            assert_eq!(
+                actual.skipped_container_query,
+                fallback.fallback_report.skipped_container_query
+            );
         }
 
         for (transferred, matched) in collection.rules.iter().zip(result.GetMatchedProperties()) {
@@ -944,6 +1121,30 @@ mod tests {
         );
         assert_eq!(collection.report.transferred_property_sets, 1);
         assert_eq!(result.GetMatchedProperties().len(), 1);
+
+        // Invalidation asks about originating elements, not whether this
+        // request can publish a computed style for the pseudo itself.
+        let mut owner = html::html_parser::ParseHTML(
+            "<!doctype html><div class=hit></div><div class=miss></div>",
+        );
+        let document = owner.GetDocumentMut();
+        let elements = (0..document.NodeCount())
+            .filter(|&index| document.Node(index).IsHTMLElement("div"))
+            .collect::<Vec<_>>();
+        assert_eq!(elements.len(), 2);
+        for pseudo in ["::backdrop", "::marker", "::first-line", "::before::marker"] {
+            let sheet = parse(&format!(".hit{pseudo}{{color:red}}"));
+            let rules =
+                Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
+            let invalidated = InvalidateProductionRuleSets(
+                &[rules],
+                document,
+                &mut PersistentSelectorService::default(),
+                &elements,
+            )
+            .expect("translated pseudo selector must not require full-rule fallback");
+            assert_eq!(invalidated, HashSet::from([elements[0]]), "{pseudo}");
+        }
     }
 
     #[test]
@@ -1666,26 +1867,42 @@ mod tests {
     }
     #[test]
     fn svg_use_element_scope_keeps_clone_matching_separate_from_rule_owner() {
-        let sheet = parse(".shape{fill:blue} #source-parent .shape{fill:red} use .shape{fill:green}");
-        let rule_set = Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
+        let sheet =
+            parse(".shape{fill:blue} #source-parent .shape{fill:red} use .shape{fill:green}");
+        let rule_set =
+            Rc::new(sheet.BuildRuleSet(&ProductionMediaQueryEvaluator::Screen(800.0, 600.0)));
         let routing = ProductionRuleRouting::Build(&rule_set, &sheet);
         let mut owner = html::html_parser::ParseHTML(
             r##"<svg><defs id="source-parent"><rect id="box" class="shape" width="10" height="10"/></defs><use href="#box"/></svg>"##,
         );
         let document = owner.GetDocumentMut();
         document.UpdateSVGUseInstances();
-        let host = (0..document.NodeCount()).find(|&i| document.Node(i).IsElement("use", DOMNamespace::kSVG)).unwrap();
+        let host = (0..document.NodeCount())
+            .find(|&i| document.Node(i).IsElement("use", DOMNamespace::kSVG))
+            .unwrap();
         let instance = document.SVGUseInstanceRoot(host).unwrap();
         assert_ne!(document.TreeScopeRoot(instance), document.Root());
         let mut result = MatchResult::default();
         let collection = CollectProductionShadowRuleMatchesInto(
-            &[ProductionRuleSetInput { sheet_index: 0, rule_set, routing: &routing, implicit_scope_trigger: None }],
-            document, instance, &mut PersistentSelectorService::default(), document.Root(),
-            &ProductionShadowRulePass::ElementScope(None), None, &mut result,
+            &[ProductionRuleSetInput {
+                sheet_index: 0,
+                rule_set,
+                routing: &routing,
+                implicit_scope_trigger: None,
+            }],
+            document,
+            instance,
+            &mut PersistentSelectorService::default(),
+            document.Root(),
+            &ProductionShadowRulePass::ElementScope(None),
+            None,
+            &mut result,
         );
-        assert_eq!(collection.report.selector_matches, 1, "match clone attributes, never source ancestors or use host");
+        assert_eq!(
+            collection.report.selector_matches, 1,
+            "match clone attributes, never source ancestors or use host"
+        );
         assert_eq!(collection.report.transferred_property_sets, 1);
         assert_eq!(result.GetMatchedProperties().len(), 1);
     }
-
 }

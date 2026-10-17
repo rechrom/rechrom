@@ -681,7 +681,7 @@ mod tests {
         assert_eq!(resolved.style.width, Some(200.0));
         assert_eq!(resolved.style.padding.left, 24.0);
         ext.effective_zoom = 0.5;
-        resolved.style.extended = Some(ext);
+        resolved.style.extended = Some(ext.into());
         let used = layoutng::internal::css_zoom::ZoomedStyle(&resolved.style);
         assert_eq!(used.width, Some(100.0));
         assert_eq!(used.padding.left, 12.0);

@@ -23,6 +23,8 @@ pub mod error;
 pub mod event_path;
 pub use event_path::{DOMEventPath, DOMEventPathEntry};
 pub mod image_resource;
+pub mod mutation_observers;
+pub mod node_references;
 pub mod persistent_document;
 pub mod resolved_styles;
 pub mod style_state;

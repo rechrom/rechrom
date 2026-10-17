@@ -7,10 +7,10 @@
 //! adapters; rendering remains downstream and independent.
 
 mod connected_resources;
-mod preload;
 #[cfg(test)]
 mod dom_mutation;
 pub mod dynamic_scripts;
+mod preload;
 pub mod script_execution;
 pub mod script_scheduler;
 
@@ -286,7 +286,6 @@ pub struct OpenEngine {
     pipeline: Option<OpenDocumentPipeline>,
     script_executor: Option<ScriptExecutorHandle>,
     resource_completion_budget: Option<usize>,
-    parser_immediate_work_pending: bool,
 }
 
 /// Opaque saved admission state while a rendering opportunity runs. Rendering
@@ -310,7 +309,6 @@ impl OpenEngine {
             pipeline: None,
             script_executor,
             resource_completion_budget: None,
-            parser_immediate_work_pending: false,
         }
     }
 
@@ -449,7 +447,6 @@ impl OpenEngine {
             .is_some()
             .then(std::time::Instant::now);
         let mut effects = Vec::new();
-        self.parser_immediate_work_pending = false;
         if self.loader.Status() == DocumentLoaderStatus::kLoading {
             let Some(response) = self.PollResponse()? else {
                 return Ok(effects);
@@ -487,8 +484,7 @@ impl OpenEngine {
             adapter.WithScriptLoadClient(&mut |client| {
                 result = Some(pipeline.PumpDocument(loader, budget, client));
             });
-            let progress = result.expect("adapter must provide the script load client")?;
-            self.parser_immediate_work_pending = progress.immediate_work_pending;
+            result.expect("adapter must provide the script load client")?;
         }
         let parser_done = profile.map(|start| start.elapsed());
         let parser_finished = if self.loader.Status() == DocumentLoaderStatus::kFinished {
@@ -813,14 +809,6 @@ impl OpenEngine {
 
     pub fn LoaderStatus(&self) -> DocumentLoaderStatus {
         self.loader.Status()
-    }
-
-    /// True only when the last bounded parser task deliberately yielded while
-    /// more parser/input work was already available. Rendering the partial DOM
-    /// in this state would interleave an avoidable full lifecycle between two
-    /// halves of the same input burst.
-    pub fn ParserImmediateWorkPending(&self) -> bool {
-        self.parser_immediate_work_pending
     }
 
     pub fn Resources(&self) -> Rc<ResourceEngine> {

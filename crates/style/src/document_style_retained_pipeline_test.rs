@@ -117,6 +117,15 @@ fn retained_directionality_drives_presentational_hints_and_flat_tree_auto() {
 
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    let probe = owner
+        .GetDocumentMut()
+        .CreateElementDefault(DOMNamespace::kHTML, "canvas".into());
+    assert_eq!(
+        owner.GetDocument().CachedDirectionality(probe),
+        TextDirection::kLtr
+    );
+    assert!(!owner.GetDocument().StyleState().changes.iter().any(|change| matches!(change,
+        dom::style_state::StyleChange::Node(index) | dom::style_state::StyleChange::Directionality(index) if *index == probe)));
     for element in [rtl, inherited, host, shadow_inherited] {
         assert_eq!(
             owner.GetDocument().CachedDirectionality(element),
@@ -171,6 +180,7 @@ fn update_discovers_shadow_scope_and_cascades_host_slotted_and_part_rules() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<!doctype html><style>x-host::part(label){padding-left:104px}</style>\
+         <p id=unrelated>Unchanged document scope</p>\
          <x-host id=host><span id=light class=light slot=named></span>\
          <input id=control slot=named placeholder=hint></x-host>",
     );
@@ -182,7 +192,7 @@ fn update_discovers_shadow_scope_and_cascades_host_slotted_and_part_rules() {
         let shadow = document.AttachShadowRoot(host, DOMShadowRootMode::kOpen);
         let style = document.CreateElementDefault(DOMNamespace::kHTML, "style".into());
         let text = document.CreateText(
-            ":host{width:101px}\
+            "*{box-sizing:border-box}:host{width:101px}\
              ::slotted(.light){height:102px}\
              ::slotted(input)::placeholder{font-size:37px}\
              .inner{width:103px}\
@@ -234,7 +244,15 @@ fn update_discovers_shadow_scope_and_cascades_host_slotted_and_part_rules() {
     };
 
     let mut engine = StyleEngine::new(&owner);
-    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    let ua = [ParseUserAgentCSS("*{color:black}")];
+    engine.Update(&mut owner, &media(800.0), &ua).unwrap();
+    let unrelated = node(&owner, "unrelated");
+    let unrelated_style = owner
+        .GetDocument()
+        .ResolvedStyleFor(unrelated)
+        .unwrap()
+        .native_style
+        .clone();
     let translated = engine.TranslatedRuleShadowStats();
     assert!(translated.translated_style_resolver_applied >= 4);
     assert_eq!(translated.translated_style_resolver_fallbacks, 0);
@@ -270,14 +288,16 @@ fn update_discovers_shadow_scope_and_cascades_host_slotted_and_part_rules() {
 
     owner.GetDocumentMut().SetTextContent(
         shadow_style,
-        ":host{width:121px}\
+        "*{box-sizing:border-box}:host{width:121px}\
          ::slotted(.light){height:122px}\
          ::slotted(input)::placeholder{font-size:47px}\
          .inner{width:123px}\
          :host::part(label){margin-left:125px}"
             .into(),
     );
-    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    engine.Update(&mut owner, &media(800.0), &ua).unwrap();
+    assert_eq!(owner.GetDocument().ResolvedStyleFor(unrelated).unwrap().native_style.Get(), unrelated_style.Get(),
+        "shadow sheet changes must not recalc an unrelated document-scope UA match with the same selector text");
     assert_eq!(width(&owner, host), 121.0);
     assert_eq!(height(&owner, light), 122.0);
     assert_eq!(width(&owner, inner), 123.0);
@@ -519,6 +539,12 @@ fn text_control_placeholder_owner_tracks_visibility_and_suggested_value() {
         .GetDocumentMut()
         .SetControlValue(control, "typed".into());
     engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    // Ordinary hidden placeholder styles are absent. A CSSOM request may
+    // ensure one without reattaching its layout subtree.
+    assert!(owner.GetDocument().ResolvedStyleFor(placeholder).is_none());
+    engine
+        .EnsureComputedStyle(&mut owner, &media(800.0), &[], placeholder)
+        .unwrap();
     assert_eq!(display(&owner, placeholder), EDisplay::kNone);
 
     owner
@@ -1215,7 +1241,11 @@ fn update_discovers_constructed_sheet_adopted_by_shadow_scope() {
         (shadow, inner)
     };
 
+    let parent = owner.GetDocument().Node(host).Parent().unwrap();
+    owner.GetDocumentMut().Remove(host);
     let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    owner.GetDocumentMut().AppendChild(parent, host);
     engine.Update(&mut owner, &media(800.0), &[]).unwrap();
     let translated = engine.TranslatedRuleShadowStats();
     assert!(
@@ -1237,6 +1267,15 @@ fn update_discovers_constructed_sheet_adopted_by_shadow_scope() {
         1
     );
 
+    // A connected-scope change must revoke the active sheet view even when
+    // neither the adopted sequence nor the constructed contents changed.
+    owner.GetDocumentMut().Remove(host);
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    owner.GetDocumentMut().AppendChild(parent, host);
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    assert_eq!(width(&owner, host), 111.0);
+    assert_eq!(height(&owner, inner), 112.0);
+
     owner
         .GetDocumentMut()
         .SetAdoptedStyleSheets(shadow, vec![])
@@ -1248,6 +1287,38 @@ fn update_discovers_constructed_sheet_adopted_by_shadow_scope() {
     assert!(unsafe { &*inner_style.native_style.Get() }
         .Height()
         .IsAuto());
+    let inline = owner
+        .GetDocumentMut()
+        .CreateElement(DOMNamespace::kHTML, "style".into(), vec![]);
+    owner
+        .GetDocumentMut()
+        .AppendText(inline, ":host{height:118px}");
+    owner.GetDocumentMut().AppendChild(shadow, inline);
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    assert_eq!(height(&owner, host), 118.0);
+    owner.GetDocumentMut().Remove(host);
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    owner.GetDocumentMut().AppendChild(parent, host);
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    assert_eq!(height(&owner, host), 118.0);
+
+    // A containing host moves the nested scope, even though its sheet owner
+    // has no ordinary Parent path to that containing host.
+    let outer = owner
+        .GetDocumentMut()
+        .CreateElement(DOMNamespace::kHTML, "div".into(), vec![]);
+    let outer_shadow = owner
+        .GetDocumentMut()
+        .AttachShadowRoot(outer, DOMShadowRootMode::kOpen);
+    owner.GetDocumentMut().AppendChild(parent, outer);
+    owner.GetDocumentMut().AppendChild(outer_shadow, host);
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    assert_eq!(height(&owner, host), 118.0);
+    owner.GetDocumentMut().Remove(outer);
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    owner.GetDocumentMut().AppendChild(parent, outer);
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    assert_eq!(height(&owner, host), 118.0);
 }
 
 #[test]
@@ -1413,13 +1484,11 @@ fn owner_replacement_transfers_a_new_typed_revision_without_reparse() {
 }
 
 #[test]
-fn unsupported_typed_declaration_falls_back_at_the_rule_boundary() {
+fn typed_repeat_declaration_stays_on_the_production_rule_boundary() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<!doctype html><div id=target class=item></div>");
-    // `repeat()` is deliberately unsupported by the translated property
-    // parser today. The diagnostic is scoped to this projected rule, so the
-    // whole declaration block must take the compatibility parser while the
-    // retained RuleSet still owns candidate selection and selector matching.
+    // The translated grid parser now admits repeat(); the whole block must
+    // retain its typed declaration owner rather than force a legacy reparse.
     owner.GetDocumentMut().AppendStyleSheet(ParseCSS(
         ".item { width:37px; grid-template-columns:repeat(2, 1fr) }",
     ));
@@ -1431,8 +1500,8 @@ fn unsupported_typed_declaration_falls_back_at_the_rule_boundary() {
     let stats = engine.TranslatedRuleShadowStats();
     assert_eq!(stats.rule_sets_built, 1, "{stats:?}");
     assert!(stats.selector_matches >= 1, "{stats:?}");
-    assert_eq!(stats.typed_declarations_used, 0, "{stats:?}");
-    assert_eq!(stats.legacy_declaration_fallbacks, 1, "{stats:?}");
+    assert!(stats.typed_declarations_used >= 1, "{stats:?}");
+    assert_eq!(stats.legacy_declaration_fallbacks, 0, "{stats:?}");
 }
 
 #[test]
@@ -1537,4 +1606,86 @@ fn retained_nested_declarations_keep_ua_and_author_cascade_owners() {
     let stats = engine.TranslatedRuleShadowStats();
     assert!(stats.translated_style_resolver_applied >= 3, "{stats:?}");
     assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
+}
+
+#[test]
+fn detached_preparation_does_not_queue_document_invalidation_and_attaches_current_style() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><main id=host></main><style>.prepared { width:61px }</style>",
+    );
+    let host = node(&owner, "host");
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    let prepared = {
+        let document = owner.GetDocumentMut();
+        let root = document.CreateElement(DOMNamespace::kHTML, "section".into(), Vec::new());
+        for i in 0..100 {
+            let child = document.CreateElement(DOMNamespace::kHTML, "div".into(), Vec::new());
+            for (name, value) in [
+                ("id", i.to_string()),
+                ("class", "prepared".into()),
+                ("data-state", "ready".into()),
+                ("style", "height:17px".into()),
+            ] {
+                document.SetAttribute(
+                    child,
+                    DOMAttribute {
+                        local_name: name.into(),
+                        value,
+                        ..Default::default()
+                    },
+                );
+            }
+            document.AppendChild(root, child);
+            document.AppendText(child, "prepared while detached");
+            document.RemoveAttribute(child, "data-state", "");
+        }
+        let shadow = document.AttachShadowRoot(root, DOMShadowRootMode::kOpen);
+        let slot = document.CreateElement(DOMNamespace::kHTML, "slot".into(), Vec::new());
+        document.AppendChild(shadow, slot);
+        let shadow_child = document.CreateElement(DOMNamespace::kHTML, "span".into(), Vec::new());
+        document.AppendChild(shadow, shadow_child);
+        document.SetAttribute(
+            shadow_child,
+            DOMAttribute {
+                local_name: "style".into(),
+                value: "height:29px".into(),
+                ..Default::default()
+            },
+        );
+        let state = document.StyleState();
+        assert!(state.changes.is_empty());
+        assert!(state.attribute_changes.is_empty());
+        assert!(state.sibling_sensitive_nodes.is_empty());
+        assert!(state.descendant_sensitive_nodes.is_empty());
+        assert!(state.non_append_children.is_empty());
+        assert!(state.append_only_children.is_empty());
+        assert!(state.child_change_boundaries.is_empty());
+        assert!(state.inserted_style_subtrees.is_empty());
+        (root, shadow_child)
+    };
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 0);
+    let first = owner.GetDocument().Node(prepared.0).Children()[0];
+    owner.GetDocumentMut().AppendChild(host, prepared.0);
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    assert_eq!(width(&owner, first), 61.0);
+    assert_eq!(height(&owner, first), 17.0);
+    assert_eq!(height(&owner, prepared.1), 29.0);
+    owner.GetDocumentMut().Remove(prepared.0);
+    assert!(owner.GetDocument().ResolvedStyleFor(first).is_none());
+    assert!(owner.GetDocument().ResolvedStyleFor(prepared.1).is_none());
+    owner.GetDocumentMut().SetAttribute(
+        first,
+        DOMAttribute {
+            local_name: "style".into(),
+            value: "width:73px;height:19px".into(),
+            ..Default::default()
+        },
+    );
+    owner.GetDocumentMut().AppendChild(host, prepared.0);
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+    assert_eq!(width(&owner, first), 73.0);
+    assert_eq!(height(&owner, first), 19.0);
 }

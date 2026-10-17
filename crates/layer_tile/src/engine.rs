@@ -312,11 +312,12 @@ fn refresh_readiness(manager: &LayerTileManager, plan: Option<&mut FramePlan>) {
     let Some(plan) = plan else { return };
     // Draw placements and scroll-interest placements are separate copies of
     // the same tile identities. Both must observe completion and eviction.
-    for tile in plan
-        .layers
-        .iter_mut()
-        .flat_map(|layer| layer.tiles.iter_mut().chain(layer.interest_tiles.iter_mut()))
-    {
+    for tile in plan.layers.iter_mut().flat_map(|layer| {
+        layer
+            .tiles
+            .iter_mut()
+            .chain(layer.interest_tiles.iter_mut())
+    }) {
         tile.ready = manager.is_rasterized(tile.tile_id, tile.generation);
     }
 }
@@ -399,7 +400,10 @@ mod tests {
                 .unwrap();
             let layer = &update.frame_plan.layers[0];
             if let Some(previous) = previous_layer {
-                assert_eq!(layer.id, previous, "exercise a retained layer, not replacement");
+                assert_eq!(
+                    layer.id, previous,
+                    "exercise a retained layer, not replacement"
+                );
             }
             previous_layer = Some(layer.id);
             assert_eq!(layer.raster_origin, (x, 115.));
@@ -439,7 +443,10 @@ mod tests {
                 }
             }
             assert!(retained.ApplyRasterResults(&completions) > 0);
-            assert!(retained.layers[0].interest_tiles.iter().any(|tile| tile.tile_id == candidate.tile_id && tile.ready));
+            assert!(retained.layers[0]
+                .interest_tiles
+                .iter()
+                .any(|tile| tile.tile_id == candidate.tile_id && tile.ready));
 
             if let Some(old) = previous {
                 assert_eq!(

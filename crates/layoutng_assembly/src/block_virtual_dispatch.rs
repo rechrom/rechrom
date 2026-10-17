@@ -121,7 +121,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsBox(object: *const LayoutObject) -> b
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
-        | LayoutObjectClass::SvgResourceClipper
+            | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
@@ -157,7 +157,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutBlock(object: *const LayoutObje
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
-        | LayoutObjectClass::SvgResourceClipper
+            | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
@@ -184,7 +184,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutBlockFlow(object: *const Layout
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
-        | LayoutObjectClass::SvgResourceClipper
+            | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
@@ -292,7 +292,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVG(object: *const LayoutObject) -> b
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
-        | LayoutObjectClass::SvgResourceClipper
+            | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgRoot
             | LayoutObjectClass::SvgForeignObject
@@ -312,7 +312,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGContainer(object: *const LayoutObj
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
-        | LayoutObjectClass::SvgResourceClipper
+            | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
     )
 }
@@ -323,8 +323,9 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGContainer(object: *const LayoutObj
 pub extern "Rust" fn DispatchLayoutObjectIsSVGHiddenContainer(object: *const LayoutObject) -> bool {
     matches!(
         class(object),
-        LayoutObjectClass::SvgHiddenContainer | LayoutObjectClass::SvgResourceMasker
-        | LayoutObjectClass::SvgResourceClipper
+        LayoutObjectClass::SvgHiddenContainer
+            | LayoutObjectClass::SvgResourceMasker
+            | LayoutObjectClass::SvgResourceClipper
     )
 }
 
@@ -332,7 +333,10 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGHiddenContainer(object: *const Lay
 pub extern "Rust" fn DispatchLayoutObjectIsSVGResourceContainer(
     object: *const LayoutObject,
 ) -> bool {
-    matches!(class(object), LayoutObjectClass::SvgResourceClipper | LayoutObjectClass::SvgResourceMasker)
+    matches!(
+        class(object),
+        LayoutObjectClass::SvgResourceClipper | LayoutObjectClass::SvgResourceMasker
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -379,7 +383,7 @@ pub extern "Rust" fn DispatchLayoutObjectLocalToSVGParentTransform(
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
-        | LayoutObjectClass::SvgResourceClipper
+            | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgRoot
     ) {
         let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
@@ -629,7 +633,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsEligibleForPaintOrLayoutContainment(
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
-        | LayoutObjectClass::SvgResourceClipper
+            | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
@@ -958,7 +962,7 @@ pub extern "Rust" fn DispatchLayoutBlockFlowCreatesNewFormattingContext(
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
-        | LayoutObjectClass::SvgResourceClipper
+            | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
@@ -1178,7 +1182,7 @@ pub extern "Rust" fn DispatchLayoutObjectRecalcScrollableOverflow(
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
-        | LayoutObjectClass::SvgResourceClipper
+            | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText
@@ -1755,7 +1759,7 @@ fn is_box_class(class: LayoutObjectClass) -> bool {
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
-        | LayoutObjectClass::SvgResourceClipper
+            | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgText

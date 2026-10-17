@@ -127,7 +127,11 @@ impl<'a> PageOpenAdapter<'a> {
 impl OpenDocumentAdapter for PageOpenAdapter<'_> {
     fn CommitURL(&mut self, url: &str) {
         self.resources.SetDocumentURL(url.to_owned());
-        self.state.document.borrow_mut().GetDocumentMut().SetDocumentURL(url.to_owned());
+        self.state
+            .document
+            .borrow_mut()
+            .GetDocumentMut()
+            .SetDocumentURL(url.to_owned());
         if let Some(scripts) = self.scripts.as_ref() {
             scripts.SetURL(url.to_owned());
         }
@@ -136,7 +140,7 @@ impl OpenDocumentAdapter for PageOpenAdapter<'_> {
 
     fn PrepareDocumentServices(&mut self) -> OpenDocumentServices {
         self.state.CancelImageEvents();
-        self.state.measurement.borrow_mut().take();
+        self.state.InvalidateLayoutOutput();
         OpenDocumentServices {
             document: self.state.document.Handle(),
             resources: self.resources.clone(),

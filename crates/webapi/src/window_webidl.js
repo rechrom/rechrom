@@ -289,13 +289,12 @@ globalThis.atob = value => {
   let bits=0,count=0,result=''; for (const char of text) {bits=bits<<6|alphabet.indexOf(char);count+=6;
     if (count>=8) {count-=8;result+=String.fromCharCode(bits>>count&255);} } return result;
 };
-const decodeForm = text => {
-  text = String(text).replace(/\+/g,' ');
-  const bytes=[]; for (let i=0;i<text.length;) {
-    if (text[i]==='%' && /^[0-9a-f]{2}$/i.test(text.slice(i+1,i+3))) { bytes.push(parseInt(text.slice(i+1,i+3),16)); i+=3; }
-    else {const cp=text.codePointAt(i), char=String.fromCodePoint(cp); bytes.push(...new TextEncoder().encode(char)); i+=char.length;}
-  } return new TextDecoder().decode(new Uint8Array(bytes));
-};
+// URLSearchParams takes USVString input before native percent/UTF-8 decoding.
+// Capture the intrinsic conversion and decoder: author codecs/prototypes must
+// not change parsing, and UTF-8 decode without BOM handling preserves U+FEFF.
+const formScalarString = Function.prototype.call.bind(String.prototype.toWellFormed);
+const nativeDecodeForm = __urlDecodeForm;
+const decodeForm = text => nativeDecodeForm(formScalarString(text));
 const encodeForm = text => encodeURIComponent(String(text)).replace(/[!'()~]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase()).replace(/%20/g,'+');
 class URLSearchParams {
   constructor(init = '') {
@@ -825,7 +824,44 @@ class IntersectionObserverEntry {
   get isIntersecting(){return this._isIntersecting;}
   get intersectionRatio(){return this._intersectionRatio;}
 }
-const intersectionObservers = new Set();
+// Blink IntersectionObserverController separates post-layout computation from
+// queued notifications. Unchanged observations must never post timer tasks.
+const intersectionObservers = new Set(), initialIntersectionObservers = new Set(), pendingIntersectionObservers = new Set();
+let intersectionInitialScheduled = false, intersectionDeliveryScheduled = false;
+function computeIntersectionObservations(observers) {
+  // ComputeIntersectionsContext shares root/target geometry for one lifecycle.
+  const rects = new Map(), time = performance.now();
+  const rect = target => {
+    if (target instanceof Document) target = null;
+    if (!rects.has(target)) rects.set(target, target ? observerRect(target.getBoundingClientRect()) :
+      {left:0,top:0,right:innerWidth,bottom:innerHeight,width:innerWidth,height:innerHeight,x:0,y:0});
+    return rects.get(target);
+  };
+  for (const observer of observers) if (intersectionObservers.has(observer)) observer._compute(rect, time);
+}
+function queueIntersectionDelivery(observer) {
+  pendingIntersectionObservers.add(observer);
+  if (intersectionDeliveryScheduled) return;
+  intersectionDeliveryScheduled = true;
+  setTimeout(() => {
+    intersectionDeliveryScheduled = false;
+    const observers = [...pendingIntersectionObservers]; pendingIntersectionObservers.clear();
+    for (const observer of observers) {
+      const entries = observer.takeRecords();
+      if (entries.length) try {observer._callback(entries, observer)} catch(error) {setTimeout(() => {throw error}, 0)}
+    }
+  }, 0);
+}
+function scheduleInitialIntersection(observer) {
+  initialIntersectionObservers.add(observer);
+  if (intersectionInitialScheduled) return;
+  intersectionInitialScheduled = true;
+  setTimeout(() => {
+    intersectionInitialScheduled = false;
+    const observers = [...initialIntersectionObservers]; initialIntersectionObservers.clear();
+    computeIntersectionObservations(observers);
+  }, 0);
+}
 class IntersectionObserver {
   constructor(callback, options = {}) {
     if (typeof callback !== 'function') throw new TypeError('IntersectionObserver callback must be a function');
@@ -835,21 +871,18 @@ class IntersectionObserver {
     const threshold=options.threshold === undefined ? [0] : Array.isArray(options.threshold) ? options.threshold : [options.threshold];
     this.thresholds=[...new Set(threshold.map(Number).sort((a,b)=>a-b))];
     if (this.thresholds.some(value=>!Number.isFinite(value)||value<0||value>1)) throw new RangeError('Invalid threshold');
-    this._targets=new Set(); this._states=new Map(); this._records=[]; this._scheduled=false;
+    this._targets=new Set(); this._states=new Map(); this._records=[];
   }
-  observe(target) { if (!(target instanceof Element)) throw new TypeError('Element required'); this._targets.add(target); intersectionObservers.add(this); this._schedule(); }
+  observe(target) { if (!(target instanceof Element)) throw new TypeError('Element required'); this._targets.add(target); intersectionObservers.add(this); scheduleInitialIntersection(this); }
   unobserve(target) { this._targets.delete(target); this._states.delete(target); if(!this._targets.size)intersectionObservers.delete(this); }
-  disconnect() { this._targets.clear(); this._states.clear(); this._records=[]; intersectionObservers.delete(this); }
+  disconnect() { this._targets.clear(); this._states.clear(); this._records=[]; intersectionObservers.delete(this); initialIntersectionObservers.delete(this); pendingIntersectionObservers.delete(this); }
   takeRecords() { return this._records.splice(0); }
-  _schedule() {
-    if (this._scheduled) return; this._scheduled=true;
-    setTimeout(() => {
-      this._scheduled=false;
-      const unexpandedRoot=this.root?.getBoundingClientRect?.() || {left:0,top:0,right:innerWidth,bottom:innerHeight,width:innerWidth,height:innerHeight,x:0,y:0};
+  _compute(rect, now) {
+      const unexpandedRoot=rect(this.root);
       const root=expandIntersectionRoot(observerRect(unexpandedRoot),this._rootMarginValues);
-      const rootBounds=observerRect(root), now=performance.now();
+      const rootBounds=observerRect(root);
       for (const target of this._targets) {
-        const bounds=observerRect(target.getBoundingClientRect());
+        const bounds=rect(target);
         const left=Math.max(bounds.left,root.left), top=Math.max(bounds.top,root.top);
         const right=Math.min(bounds.right,root.right), bottom=Math.min(bounds.bottom,root.bottom);
         // IntersectionObserver uses edge-inclusive intersection. In
@@ -867,14 +900,13 @@ class IntersectionObserver {
           this._records.push(entry);
         this._states.set(target,{index,isIntersecting:entry.isIntersecting});
       }
-      const records=this.takeRecords(); if(records.length)this._callback(records,this);
-    },0);
+      if (this._records.length) queueIntersectionDelivery(this);
   }
 }
 globalThis.IntersectionObserverEntry=IntersectionObserverEntry;
 globalThis.IntersectionObserver=IntersectionObserver;
 Object.defineProperty(globalThis,'__browserUpdateIntersectionObservations',{
-  value(){for(const observer of intersectionObservers)observer._schedule();},
+  value(){computeIntersectionObservations(intersectionObservers);},
   configurable:true
 });
 class ResizeObserverEntry {

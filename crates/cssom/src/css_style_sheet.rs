@@ -156,6 +156,12 @@ impl fmt::Debug for CSSStyleSheet {
 
 impl PartialEq for CSSStyleSheet {
     fn eq(&self, other: &Self) -> bool {
+        // Retained active-sheet snapshots compare the same immutable sheet
+        // object during ordinary recalc. Avoid walking every rule in that case;
+        // distinct CSSOM projections still require the value comparison below.
+        if std::ptr::eq(self, other) {
+            return true;
+        }
         self.rules == other.rules
             && self.font_faces == other.font_faces
             && self.keyframes == other.keyframes

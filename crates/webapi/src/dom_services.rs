@@ -22,9 +22,12 @@ pub struct DOMBindingsHost {
     >,
     pub sample_animation:
         Option<Box<dyn FnMut(HostObjectId, u64, f64, Vec<cssom::CSSDeclaration>)>>,
-    pub update_style: Option<Box<dyn FnMut()>>,
+    /// Update normal style, then ensure the queried element's computed style.
+    pub update_style: Option<Box<dyn FnMut(HostObjectId)>>,
     pub emit_style_sheet: Option<Box<dyn FnMut(cssom::CSSStyleSheet)>>,
-    pub read_metric: Option<Box<dyn FnMut(HostObjectId, &str) -> f64>>,
+    /// None means this used metric is not applicable (for example CSS width
+    /// on a non-replaced inline); CSSOM then serializes the computed value.
+    pub read_metric: Option<Box<dyn FnMut(HostObjectId, &str) -> Option<f64>>>,
     pub read_viewport_scroll: Option<Box<dyn FnMut() -> Option<ViewportScrollState>>>,
     pub read_geometry: Option<Box<dyn FnMut(HostObjectId) -> Vec<paint::PaintRect>>>,
     pub write_scroll:
@@ -73,32 +76,116 @@ struct SyntheticDispatch {
     handle: HostValue,
 }
 
+// Event::Trace owns target/path references. A dispatch supplies a temporary
+// native root; a retained JS wrapper subsequently owns only the final target.
+#[derive(Default)]
+pub(super) struct BoundEvents {
+    records: HashMap<HostObjectId, BoundEvent>,
+    identities: HashMap<u64, HostObjectId>,
+    active: std::collections::HashSet<HostObjectId>,
+    pending: Vec<javascript::javascript_runtime::HostObjectTraceChange>,
+}
+impl BoundEvents {
+    fn Insert(&mut self, id: HostObjectId, bound: BoundEvent) {
+        use javascript::javascript_runtime::HostObjectTraceChange as C;
+        let started = self.active.insert(id);
+        {
+            let state = bound.event.dispatch_state.borrow();
+            let mut targets = state.path.as_ref().map_or_else(Vec::new, |path| {
+                path.Nodes().filter(|&id| id != 0).collect()
+            });
+            targets.extend(
+                [
+                    Some(bound.target),
+                    Some(bound.current_target),
+                    bound.event.submitter_node_id,
+                    bound.event.related_target_node_id,
+                ]
+                .into_iter()
+                .flatten()
+                .filter(|&id| id != 0),
+            );
+            self.pending.push(C::ReferenceList {
+                owner: id,
+                targets: targets.into(),
+            });
+            if started {
+                self.pending.push(C::Root {
+                    id,
+                    reason: 6,
+                    rooted: true,
+                });
+            }
+        }
+        self.records.insert(id, bound);
+    }
+    pub(super) fn TakeChanges(
+        &mut self,
+    ) -> Vec<javascript::javascript_runtime::HostObjectTraceChange> {
+        use javascript::javascript_runtime::HostObjectTraceChange as C;
+        self.active.retain(|&id| {
+            let bound = &self.records[&id];
+            let state = bound.event.dispatch_state.borrow();
+            if !state.finished {
+                return true;
+            }
+            let targets = [
+                state.final_target,
+                bound.event.submitter_node_id,
+                bound.event.related_target_node_id,
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|&id| id != 0)
+            .collect::<Vec<_>>();
+            self.pending.extend([
+                C::ReferenceList {
+                    owner: id,
+                    targets: targets.into(),
+                },
+                C::Root {
+                    id,
+                    reason: 6,
+                    rooted: false,
+                },
+            ]);
+            false
+        });
+        std::mem::take(&mut self.pending)
+    }
+    pub(super) fn Retire(&mut self, id: HostObjectId) {
+        if let Some(bound) = self.records.remove(&id) {
+            self.identities.remove(&bound.event.identity);
+        }
+        self.active.remove(&id);
+    }
+}
+
 pub(super) struct DOMServices {
     synthetic: Rc<RefCell<Option<SyntheticDispatch>>>,
     // The final helper is looked up after listeners, and listeners may replace
     // it through __domWrap. Share this slot with the detached continuation.
     pub(super) event_state: Rc<RefCell<Option<JavaScriptFunction>>>,
     pub(super) host: DOMBindingsHost,
-    events: HashMap<HostObjectId, BoundEvent>,
-    event_wrappers: HashMap<u64, HostObjectId>,
+    pub(super) events: Rc<RefCell<BoundEvents>>,
     next_event_object_id: HostObjectId,
 }
 impl DOMServices {
     pub(super) fn MemoryCounts(&self) -> (usize, usize) {
-        (self.events.len(), self.event_wrappers.len())
+        let events = self.events.borrow();
+        (events.records.len(), events.identities.len())
     }
     pub fn new(host: DOMBindingsHost) -> Self {
         Self {
             host,
             synthetic: Rc::new(RefCell::new(None)),
             event_state: Rc::new(RefCell::new(None)),
-            events: HashMap::new(),
-            event_wrappers: HashMap::new(),
+            events: Default::default(),
             next_event_object_id: 1 << 63,
         }
     }
     pub fn IsEvent(&self, id: HostObjectId) -> bool {
-        self.events.contains_key(&id)
+        self.events.borrow().records.contains_key(&id)
     }
 }
 
@@ -143,13 +230,13 @@ impl DOMJavaScriptBindings {
     ) -> EventListenerResult {
         let (matching, event_id) = {
             let mut this = bindings.borrow_mut();
-            this.focused_node = invocation.focused_node_id;
+            this.SetFocusedNode(invocation.focused_node_id);
             let kind = if invocation.event.custom_type.is_empty() {
                 EventTypeName(invocation.event.r#type)
             } else {
                 &invocation.event.custom_type
             };
-            let matching: Vec<Listener> = this
+            let matching: Vec<(Listener, JavaScriptFunction)> = this
                 .listeners
                 .borrow()
                 .get(&invocation.current_target_node_id)
@@ -157,20 +244,26 @@ impl DOMJavaScriptBindings {
                 .into_iter()
                 .flatten()
                 .filter(|l| l.capture == invocation.capture_listeners)
-                .cloned()
+                // Dispatch owns a temporary strong callback before once/removal
+                // can revoke the target's traced edge or reenter the collector.
+                .filter_map(|listener| {
+                    listener
+                        .callback
+                        .Resolve()
+                        .map(|callback| (listener.clone(), callback))
+                })
                 .collect();
             if matching.is_empty() {
                 return EventListenerResult::default();
             }
             let services = &mut this.services;
-            let id = if let Some(&id) = services.event_wrappers.get(&invocation.event.identity) {
+            let mut events = services.events.borrow_mut();
+            let id = if let Some(&id) = events.identities.get(&invocation.event.identity) {
                 id
             } else {
                 let id = services.next_event_object_id;
                 services.next_event_object_id += 1;
-                services
-                    .event_wrappers
-                    .insert(invocation.event.identity, id);
+                events.identities.insert(invocation.event.identity, id);
                 id
             };
             let (mut x, mut y, mut dx, mut dy) = (0.0, 0.0, 0.0, 0.0);
@@ -191,7 +284,7 @@ impl DOMJavaScriptBindings {
                 }
                 _ => {}
             }
-            services.events.insert(
+            events.Insert(
                 id,
                 BoundEvent {
                     event: invocation.event.clone(),
@@ -222,7 +315,7 @@ impl DOMJavaScriptBindings {
             .as_ref()
             .map(|(_, handle)| handle.clone())
             .unwrap_or(HostValue::Object(HostObjectRef { id: event_id }));
-        for listener in matching {
+        for (listener, callback) in matching {
             {
                 let mut this = bindings.borrow_mut();
                 // A removed registration stays removed in every in-flight
@@ -232,6 +325,7 @@ impl DOMJavaScriptBindings {
                 }
                 if listener.once {
                     listener.active.set(false);
+                    this.RemoveListenerReference(&listener);
                     let mut targets = this.listeners.borrow_mut();
                     if let Some(kinds) = targets.get_mut(&listener.target) {
                         if let Some(listeners) = kinds.get_mut(&listener.kind) {
@@ -247,6 +341,8 @@ impl DOMJavaScriptBindings {
                 }
                 this.services
                     .events
+                    .borrow_mut()
+                    .records
                     .get_mut(&event_id)
                     .unwrap()
                     .passive_listener = listener.passive;
@@ -296,22 +392,25 @@ impl DOMJavaScriptBindings {
                     &wrapper,
                     &receiver,
                     &[
-                        HostValue::JavaScriptFunction(listener.callback.clone()),
+                        HostValue::JavaScriptFunction(callback.clone()),
                         argument.clone(),
                     ],
                 )
             } else {
-                call(&listener.callback, &receiver, &[argument.clone()])
+                call(&callback, &receiver, &[argument.clone()])
             };
             if let Some(error) = result.exception {
                 report_error(&error);
             }
-            if bindings.borrow().services.events[&event_id].stop_immediate_propagation {
+            if bindings.borrow().services.events.borrow().records[&event_id]
+                .stop_immediate_propagation
+            {
                 break;
             }
         }
-        let mut this = bindings.borrow_mut();
-        let bound = this.services.events.get_mut(&event_id).unwrap();
+        let this = bindings.borrow();
+        let mut events = this.services.events.borrow_mut();
+        let bound = events.records.get_mut(&event_id).unwrap();
         bound.dispatching = false;
         bound.phase = EventPhase::kNone;
         EventListenerResult {
@@ -358,7 +457,13 @@ impl DOMJavaScriptBindings {
         // Redispatch a retained native wrapper through its original identity.
         // Constructed JS Events use the synthetic handle projection below.
         if let HostValue::Object(object) = handle {
-            if let Some(bound) = self.services.events.get_mut(&object.id) {
+            if let Some(bound) = self
+                .services
+                .events
+                .borrow_mut()
+                .records
+                .get_mut(&object.id)
+            {
                 if bound.dispatching {
                     return invalid();
                 }
@@ -461,7 +566,8 @@ impl DOMJavaScriptBindings {
 
     // cpp: webapi/dom_bindings.cc:319-351
     pub(super) fn GetBoundEvent(&self, receiver: HostObjectId, member: &str) -> Option<HostResult> {
-        let bound = self.services.events.get(&receiver)?;
+        let events = self.services.events.borrow();
+        let bound = events.records.get(&receiver)?;
         let event = &bound.event;
         let value = match member {
             "submitter" => event
@@ -548,7 +654,8 @@ impl DOMJavaScriptBindings {
             return self.GetBoundEvent(receiver, name);
         }
         if member == "__eventComposedPath" {
-            let Some(bound) = self.services.events.get(&receiver) else {
+            let events = self.services.events.borrow();
+            let Some(bound) = events.records.get(&receiver) else {
                 return Some(Self::type_error("Illegal invocation"));
             };
             return Some(Self::value(if bound.dispatching {
@@ -557,15 +664,73 @@ impl DOMJavaScriptBindings {
                 HostValue::Record(vec![("length".into(), HostValue::Number(0.0))])
             }));
         }
-        if member == "mutationObserverState" {
-            let [HostValue::Number(count)] = arguments else {
-                return Some(Self::type_error("Invalid mutation observer state"));
+        if member == "__mutationObserverId" {
+            let id = self
+                .document
+                .borrow_mut()
+                .GetDocumentMut()
+                .AllocateMutationObserverId();
+            return Some(Self::value(HostValue::String(id.0.to_string())));
+        }
+        if member == "__mutationObserve" {
+            let [HostValue::String(id), HostValue::Object(target), HostValue::Boolean(child_list), HostValue::Boolean(attributes), HostValue::Boolean(character_data), HostValue::Boolean(subtree), HostValue::Boolean(attribute_old_value), HostValue::Boolean(character_data_old_value), HostValue::Boolean(has_filter), filter @ ..] =
+                arguments
+            else {
+                return Some(Self::type_error("Invalid mutation observer registration"));
             };
-            if !count.is_finite() || *count < 0.0 {
-                return Some(Self::type_error("Invalid mutation observer count"));
+            let Some(id) = id.parse::<u64>().ok().filter(|id| *id != 0) else {
+                return Some(Self::type_error("Invalid mutation observer identity"));
+            };
+            let mut names = std::collections::HashSet::new();
+            for name in filter {
+                let HostValue::String(name) = name else {
+                    return Some(Self::type_error(
+                        "Invalid mutation observer attribute filter",
+                    ));
+                };
+                names.insert(name.clone());
             }
-            self.mutation_observers_active = *count > 0.0;
+            let mut owner = self.document.borrow_mut();
+            let tree = owner.GetDocumentMut();
+            let Some(target) = tree.FindNodeById(target.id) else {
+                return Some(Self::type_error("Mutation observer target must be a Node"));
+            };
+            let registered = tree.RegisterMutationObserver(
+                dom::mutation_observers::MutationObserverId(id),
+                target,
+                dom::mutation_observers::MutationObserverOptions {
+                    child_list: *child_list,
+                    attributes: *attributes,
+                    character_data: *character_data,
+                    subtree: *subtree,
+                    attribute_old_value: *attribute_old_value,
+                    character_data_old_value: *character_data_old_value,
+                    attribute_filter: has_filter.then_some(names),
+                },
+            );
+            return Some(if registered {
+                HostResult::default()
+            } else {
+                Self::type_error("Invalid mutation observer identity")
+            });
+        }
+        if member == "__mutationDisconnect" {
+            let [HostValue::String(id)] = arguments else {
+                return Some(Self::type_error("Invalid mutation observer identity"));
+            };
+            let Ok(id) = id.parse::<u64>() else {
+                return Some(Self::type_error("Invalid mutation observer identity"));
+            };
+            self.document
+                .borrow_mut()
+                .GetDocumentMut()
+                .DisconnectMutationObserver(dom::mutation_observers::MutationObserverId(id));
             return Some(HostResult::default());
+        }
+        if member == "__mutationEmptyNodeList" {
+            return Some(Self::value(HostValue::Object(
+                self.StaticNodeList(Vec::new()),
+            )));
         }
         // cpp: webapi/dom_bindings.cc:562-569
         if member == "animationSample" {
@@ -590,7 +755,7 @@ impl DOMJavaScriptBindings {
             return Some(Self::type_error("Invalid event dispatch"));
         }
         // cpp: webapi/dom_bindings.cc:685-699
-        if let Some(bound) = self.services.events.get_mut(&receiver) {
+        if let Some(bound) = self.services.events.borrow_mut().records.get_mut(&receiver) {
             match member {
                 "preventDefault" => {
                     if bound.event.cancelable && !bound.passive_listener {
@@ -618,7 +783,7 @@ impl DOMJavaScriptBindings {
             // reading its canonical offset (element.cc:2678-2690). The existing
             // native metric boundary performs that measurement/overflow clamp.
             if let Some(read) = self.services.host.read_metric.as_mut() {
-                read(
+                let _ = read(
                     receiver,
                     if axis == "x" {
                         "minimumScrollLeft"
@@ -643,8 +808,8 @@ impl DOMJavaScriptBindings {
                     } else {
                         ("minimumScrollTop", "maximumScrollTop")
                     };
-                    let minimum = read(receiver, minimum);
-                    let maximum = read(receiver, maximum).max(minimum);
+                    let minimum = read(receiver, minimum).unwrap_or(0.0);
+                    let maximum = read(receiver, maximum).unwrap_or(minimum).max(minimum);
                     value = value.clamp(minimum, maximum);
                 }
                 if axis == "x" {
@@ -669,7 +834,7 @@ impl DOMJavaScriptBindings {
         }
         if member == "metric" {
             let value = match (arguments.first(), self.services.host.read_metric.as_mut()) {
-                (Some(HostValue::String(name)), Some(read)) => read(receiver, name),
+                (Some(HostValue::String(name)), Some(read)) => read(receiver, name).unwrap_or(0.0),
                 _ => 0.0,
             };
             return Some(Self::value(HostValue::Number(value)));
@@ -709,22 +874,70 @@ impl DOMJavaScriptBindings {
         else {
             return Some(Self::type_error("Computed style requires an element"));
         };
+        let mut trace = browser_tracing::span("dom", "DOM.ReadComputedStyle");
+        let layout_dependent = matches!(property.as_str(), "width" | "height");
+        trace.set("layout_dependent", layout_dependent as u8 as f64);
         if let Some(update) = &mut self.services.host.update_style {
-            update();
+            update(receiver);
         }
-        // No document borrow survives a measurement callback.
-        let resolved = self
-            .document
-            .borrow()
-            .GetDocument()
-            .ResolvedStyleFor(node)
-            .cloned();
+        // CSSComputedStyleDeclaration::GetPropertyCSSValue updates style and
+        // any required layout before borrowing the current computed style.
+        // No document borrow may survive a reentrant measurement callback.
+        let metric = if layout_dependent {
+            let (has_box, border_box) = {
+                let document = self.document.borrow();
+                let Some(resolved) = document.GetDocument().ResolvedStyleFor(node) else {
+                    return Some(Self::value(HostValue::String(String::new())));
+                };
+                // CSSOM resolved width/height use computed lengths for
+                // display:none/contents, including SVG hidden layout containers.
+                let has_box = resolved.generates_box
+                    && unsafe { resolved.native_style.Get().as_ref() }.is_none_or(|style| {
+                        !matches!(
+                            style.Display(),
+                            foundation::EDisplay::kNone | foundation::EDisplay::kContents
+                        )
+                    });
+                (
+                    has_box,
+                    unsafe { resolved.native_style.Get().as_ref() }.is_some_and(|style| {
+                        style.BoxSizing() == foundation::EBoxSizing::kBorderBox
+                    }),
+                )
+            };
+            if has_box {
+                let name = match (property.as_str(), border_box) {
+                    ("width", true) => "borderBoxWidth",
+                    ("height", true) => "borderBoxHeight",
+                    ("width", false) => "contentWidth",
+                    _ => "contentHeight",
+                };
+                self.services
+                    .host
+                    .read_metric
+                    .as_mut()
+                    .and_then(|read| read(receiver, name))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let _serialization_trace = browser_tracing::span("dom", "DOM.SerializeComputedStyle");
+        let document = self.document.borrow();
+        let resolved = document.GetDocument().ResolvedStyleFor(node);
         let Some(resolved) = resolved else {
             return Some(Self::value(HostValue::String(String::new())));
         };
         let s = &resolved.style;
-        let initial = layoutng_assembly::internal::layout_input::ExtendedStyle::default();
-        let e = s.extended.as_ref().unwrap_or(&initial);
+        let initial;
+        let e = match s.extended.as_ref() {
+            Some(extended) => extended,
+            None => {
+                initial = layoutng_assembly::internal::layout_input::ExtendedStyle::default();
+                &initial
+            }
+        };
         let number = |n: f64| {
             if n.is_nan() {
                 if n.is_sign_negative() {
@@ -794,6 +1007,14 @@ impl DOMJavaScriptBindings {
                 .into()
             }
             "visibility" => if s.paint.visible { "visible" } else { "hidden" }.into(),
+            "box-sizing" => if unsafe { resolved.native_style.Get().as_ref() }
+                .is_some_and(|style| style.BoxSizing() == foundation::EBoxSizing::kBorderBox)
+            {
+                "border-box"
+            } else {
+                "content-box"
+            }
+            .into(),
             "opacity" => number(s.paint.opacity as f64),
             "zoom" => number(e.zoom as f64),
             "font-size" => px(e.font_size),
@@ -804,22 +1025,21 @@ impl DOMJavaScriptBindings {
                 .map(px)
                 .or_else(|| e.line_height_percent.map(|v| px(e.font_size * v / 100.0)))
                 .unwrap_or_else(|| "normal".into()),
-            "width" | "height" => self
-                .services
-                .host
-                .read_metric
-                .as_mut()
-                .map(|read| {
-                    px(read(
-                        receiver,
-                        if property == "width" {
-                            "contentWidth"
-                        } else {
-                            "contentHeight"
-                        },
-                    ))
-                })
-                .unwrap_or_else(|| "auto".into()),
+            "width" | "height" => metric.map(px).unwrap_or_else(|| {
+                // Width/Height::CSSValueFromComputedStyleInternal uses the
+                // computed Length when no layout object supplies a used size.
+                let Some(native) = (unsafe { resolved.native_style.Get().as_ref() }) else {
+                    return "auto".into();
+                };
+                let length = if property == "width" {
+                    native.Width()
+                } else {
+                    native.Height()
+                };
+                style::production_css_value::Value::Create(length, native.EffectiveZoom())
+                    .CssText()
+                    .Utf8()
+            }),
             p if p.starts_with("padding-")
                 || p.starts_with("margin-")
                 || p.starts_with("border-") =>
@@ -1031,7 +1251,7 @@ mod tests {
         let updated = Rc::new(Cell::new(0));
         let count = updated.clone();
         let host = DOMBindingsHost {
-            update_style: Some(Box::new(move || {
+            update_style: Some(Box::new(move |_| {
                 count.set(count.get() + 1);
                 let mut resolved = ResolvedNodeStyle::default();
                 resolved.style.display = Display::kInlineFlex;
@@ -1041,13 +1261,16 @@ mod tests {
                 resolved.style.paint.opacity = 0.25;
                 resolved.style.padding.left = 2.125;
                 resolved.style.border.top = 1.5;
-                resolved.style.extended = Some(ExtendedStyle {
-                    font_size: 20.0,
-                    font_weight: 700.0,
-                    font_italic: true,
-                    line_height_percent: Some(150.0),
-                    ..Default::default()
-                });
+                resolved.style.extended = Some(
+                    ExtendedStyle {
+                        font_size: 20.0,
+                        font_weight: 700.0,
+                        font_italic: true,
+                        line_height_percent: Some(150.0),
+                        ..Default::default()
+                    }
+                    .into(),
+                );
                 std::sync::Arc::make_mut(&mut resolved.custom_properties)
                     .insert("--value".into(), Some(" green ".into()));
                 update_document
@@ -1060,11 +1283,11 @@ mod tests {
                 // Reenter the document to verify no read guard survives a call.
                 let tree = &mut *measure_document.borrow_mut();
                 assert!(tree.GetDocumentMut().FindNodeById(target).is_some());
-                match name {
+                Some(match name {
                     "contentWidth" => 121.234567,
                     "offsetWidth" => 128.0,
                     _ => 0.0,
-                }
+                })
             })),
             ..Default::default()
         };

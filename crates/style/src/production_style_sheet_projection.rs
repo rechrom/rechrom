@@ -108,6 +108,253 @@ pub fn ParseCSSDeclarationList(text: &str) -> Vec<CSSDeclaration> {
     ProjectPropertySet(properties.as_ref())
 }
 
+/// Native CSSOM write result. An unchanged/failed parse still enters the
+/// custom-element style mutation scope, unlike an invalid property/priority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CSSDeclarationMutation {
+    Unchanged,
+    Changed(String),
+    /// Existing declaration with a source SupportsIncrementalStyle property.
+    ChangedIndependent(String),
+}
+
+/// Apply a CSSOM property write through the translated Blink parser and native
+/// property store. None rejects the property/priority before mutation scope;
+/// Unchanged preserves its custom-element notification without style dirtiness.
+/// cpp: AbstractPropertySetCSSStyleDeclaration::setProperty/SetPropertyInternal;
+/// InlineCSSStyleDeclaration::DidMutate.
+/// Retained form of the same mutation used by an element's CSSOM declaration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CSSInlineDeclarationMutation {
+    Unchanged,
+    Changed(cssom::CSSInlineStyle),
+    ChangedIndependent(cssom::CSSInlineStyle),
+}
+
+pub(crate) struct ParsedInlineStyle {
+    mode: crate::parser::css_parser_mode::CSSParserMode,
+    properties: Rc<CSSPropertyValueSet<ProductionCSSValueDispatch>>,
+    declarations:
+        std::cell::OnceCell<Rc<Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>>>,
+}
+
+impl ParsedInlineStyle {
+    pub(crate) fn Declarations(
+        &self,
+    ) -> Rc<Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>> {
+        self.declarations
+            .get_or_init(|| {
+                Rc::new(CSSPropertyValueSetRuleHandle::FromImmutable(
+                    self.properties.clone(),
+                ))
+            })
+            .clone()
+    }
+}
+
+fn RetainInlineProperties(
+    style: &cssom::CSSInlineStyle,
+    properties: Rc<CSSPropertyValueSet<ProductionCSSValueDispatch>>,
+    mode: crate::parser::css_parser_mode::CSSParserMode,
+) -> Rc<ParsedInlineStyle> {
+    let parsed = Rc::new(ParsedInlineStyle {
+        mode,
+        declarations: std::cell::OnceCell::new(),
+        properties,
+    });
+    style.AttachParsedBacking(parsed.clone());
+    parsed
+}
+
+pub(crate) fn ResolveInlineStyle(
+    style: &cssom::CSSInlineStyle,
+    mode: crate::parser::css_parser_mode::CSSParserMode,
+) -> Rc<ParsedInlineStyle> {
+    let mut trace = browser_tracing::span("style", "StyleResolver.ParseInlineStyle");
+    if let Some(parsed) = style
+        .ParsedBacking::<ParsedInlineStyle>()
+        .filter(|p| p.mode == mode)
+    {
+        trace.set("cache_hit", 1.0);
+        return parsed;
+    }
+    trace.set("cache_hit", 0.0);
+    trace.set("source_bytes", style.SourceText().len() as f64);
+    let properties = if style.SourceText().is_empty() {
+        // Element::EnsureMutableInlineStyle creates an empty store directly;
+        // no source needs tokenizing before the first CSSOM property write.
+        trace.set("empty_init", 1.0);
+        crate::css_property_value_set::ImmutableCSSPropertyValueSet::Create(&[], mode, false)
+    } else {
+        let text = foundation::String::FromUtf8(style.SourceText().as_bytes());
+        crate::parser::css_parser_impl::CSSParserImpl::<Backend>::ParseInlineStyleDeclaration(
+            &text,
+            mode,
+            crate::parser::css_parser_context::SecureContextMode::kInsecureContext,
+            None,
+        )
+    };
+    RetainInlineProperties(style, properties, mode)
+}
+
+fn InlineParserMode(standard_mode: bool) -> crate::parser::css_parser_mode::CSSParserMode {
+    use crate::parser::css_parser_mode::CSSParserMode;
+    if standard_mode {
+        CSSParserMode::kHTMLStandardMode
+    } else {
+        CSSParserMode::kHTMLQuirksMode
+    }
+}
+
+fn CSSOMPropertyID(name: &str) -> Option<foundation::CSSPropertyID> {
+    use foundation::{CSSPropertyID, String as CSSString, StringView};
+    if name.starts_with("--") {
+        let source = CSSString::FromUtf8(name.as_bytes());
+        return (crate::parser::css_parser_impl::ParseCustomPropertyName(StringView::from(
+            &source,
+        ))
+        .Utf8()
+            == name)
+            .then_some(CSSPropertyID::kVariable);
+    }
+    let entry = crate::css_property_names::FindProperty(name.to_ascii_lowercase().as_bytes())?;
+    let raw = entry.id_and_exposed_bit & !crate::css_property_names::kNotKnownExposedPropertyBit;
+    if raw <= foundation::kLastCSSProperty as i32 {
+        Some(foundation::ConvertToCSSPropertyID(raw))
+    } else {
+        crate::css_property_names::kCSSPropertyAliasList
+            .get((raw - foundation::kLastCSSProperty as i32 - 1) as usize)
+            .copied()
+    }
+}
+
+/// Read the package's existing CSSOM accepted-declaration view from its
+/// retained property set. This ownership migration keeps that output contract;
+/// the full CSSPropertyValueSet shorthand serializer is not yet connected.
+pub fn GetInlineCSSDeclaration(
+    style: &cssom::CSSInlineStyle,
+    name: &str,
+    standard_mode: bool,
+) -> String {
+    let parsed = ResolveInlineStyle(style, InlineParserMode(standard_mode));
+    parsed
+        .properties
+        .Properties()
+        .iter()
+        .rev()
+        .find(|property| property.Name().ToAtomicString().EqualsUtf8(name))
+        .map_or_else(String::new, |property| property.Value().CssText().Utf8())
+}
+
+/// Keep the native declaration owner across CSSOM -> DOM -> Style. Parsing
+/// an edited value must not reparse the current declaration or discard its
+/// typed result at the attribute boundary.
+pub fn SetInlineCSSDeclaration(
+    style: &cssom::CSSInlineStyle,
+    name: &str,
+    value: &str,
+    priority: &str,
+    standard_mode: bool,
+) -> Option<CSSInlineDeclarationMutation> {
+    use crate::{
+        css_property_value_set::{ImmutableCSSPropertyValueSet, SetResult},
+        parser::{
+            css_parser_context::{CSSParserContext, SecureContextMode},
+            css_parser_impl::CSSParserImpl,
+        },
+    };
+    use foundation::{AtomicString, CSSPropertyID, String as CSSString, StringView};
+    let important = priority.eq_ignore_ascii_case("important");
+    if !priority.is_empty() && !important {
+        return None;
+    }
+    let id = CSSOMPropertyID(name)?;
+    let mode = InlineParserMode(standard_mode);
+    let parsed = ResolveInlineStyle(style, mode);
+    let mut properties = parsed.properties.MutableCopy();
+    let custom_name = AtomicString::from_str(name);
+    let result = if value.is_empty() {
+        let removed = if id == CSSPropertyID::kVariable {
+            properties.RemoveProperty(&custom_name, None)
+        } else {
+            properties.RemoveProperty(crate::css_property_names::ResolveCSSPropertyID(id), None)
+        };
+        if removed {
+            SetResult::kChangedPropertySet
+        } else {
+            SetResult::kUnchanged
+        }
+    } else {
+        let context =
+            CSSParserContext::<Backend>::FromMode(mode, SecureContextMode::kInsecureContext, None);
+        let value = CSSString::FromUtf8(value.as_bytes());
+        if id == CSSPropertyID::kVariable {
+            CSSParserImpl::<Backend>::ParseVariableValue(
+                &mut properties,
+                &custom_name,
+                StringView::from(&value),
+                important,
+                Some(&context),
+                false,
+            )
+        } else {
+            CSSParserImpl::<Backend>::ParseValue(
+                &mut properties,
+                id,
+                StringView::from(&value),
+                important,
+                Some(&context),
+            )
+        }
+    };
+    Some(if result >= SetResult::kModifiedExisting {
+        // Attribute text is still required by the current DOM mutation input.
+        // It is a projection of this property set, never its replacement owner.
+        let text = crate::production_style_sheet::SerializeProperties(&properties).Utf8();
+        let next = cssom::CSSInlineStyle::new(&text);
+        let immutable = ImmutableCSSPropertyValueSet::Create(properties.Properties(), mode, false);
+        RetainInlineProperties(&next, immutable, mode);
+        if result == SetResult::kModifiedExisting
+            && crate::properties::css_property::CSSProperty::Get(
+                crate::css_property_names::ResolveCSSPropertyID(id),
+            )
+            .SupportsIncrementalStyle()
+        {
+            CSSInlineDeclarationMutation::ChangedIndependent(next)
+        } else {
+            CSSInlineDeclarationMutation::Changed(next)
+        }
+    } else {
+        CSSInlineDeclarationMutation::Unchanged
+    })
+}
+
+/// Text adapter for callers that do not own a retained element declaration.
+/// The CSSOM operation and its mutation classification have one implementation.
+pub fn SetCSSDeclaration(
+    text: &str,
+    name: &str,
+    value: &str,
+    priority: &str,
+) -> Option<CSSDeclarationMutation> {
+    SetInlineCSSDeclaration(
+        &cssom::CSSInlineStyle::new(text),
+        name,
+        value,
+        priority,
+        true,
+    )
+    .map(|result| match result {
+        CSSInlineDeclarationMutation::Unchanged => CSSDeclarationMutation::Unchanged,
+        CSSInlineDeclarationMutation::Changed(style) => {
+            CSSDeclarationMutation::Changed(style.SourceText().into())
+        }
+        CSSInlineDeclarationMutation::ChangedIndependent(style) => {
+            CSSDeclarationMutation::ChangedIndependent(style.SourceText().into())
+        }
+    })
+}
+
 /// Project style/font/keyframes/media/layer structure without replacing ownership.
 /// `declarations` contains only accepted typed values and is not an exact author
 /// declaration list; unsupported declarations remain in `declaration_text`.
@@ -502,6 +749,69 @@ mod tests {
         assert!(!declarations
             .iter()
             .any(|value| value.property == "unknown-property"));
+
+        let retained = cssom::CSSInlineStyle::new("margin:1px;width:12px");
+        assert_eq!(GetInlineCSSDeclaration(&retained, "width", true), "12px");
+        assert_eq!(
+            GetInlineCSSDeclaration(&retained, "margin-top", true),
+            "1px"
+        );
+        // Google reads absent shorthand properties during bootstrap. The
+        // established CSSOM view must not enter an unavailable serializer.
+        assert_eq!(
+            GetInlineCSSDeclaration(&cssom::CSSInlineStyle::new(""), "margin", true),
+            ""
+        );
+
+        // CSSOM writes consume the native SetResult, retaining source text on
+        // no change and rejecting values before a DOM mutation is synthesized.
+        let source = "width:200px;color:red";
+        assert_eq!(
+            SetCSSDeclaration(source, "width", "200px", ""),
+            Some(CSSDeclarationMutation::Unchanged)
+        );
+        assert_eq!(
+            SetCSSDeclaration(source, "width", "invalid", ""),
+            Some(CSSDeclarationMutation::Unchanged)
+        );
+        assert_eq!(
+            SetCSSDeclaration(source, "width", "10px;display:none", ""),
+            Some(CSSDeclarationMutation::Unchanged)
+        );
+        assert_eq!(SetCSSDeclaration(source, "width", "201px", "bad"), None);
+        let changed = SetCSSDeclaration(source, "WIDTH", "201px", "IMPORTANT").unwrap();
+        assert_eq!(
+            changed,
+            CSSDeclarationMutation::ChangedIndependent(
+                "width: 201px !important; color: red;".into()
+            )
+        );
+        let shorthand = SetCSSDeclaration("margin-left:9px;color:red", "margin", "", "").unwrap();
+        assert_eq!(
+            shorthand,
+            CSSDeclarationMutation::Changed("color: red;".into())
+        );
+        let custom = SetCSSDeclaration("--X:one;--x:two", "--X", "", "").unwrap();
+        assert_eq!(custom, CSSDeclarationMutation::Changed("--x: two;".into()));
+        let logical = SetCSSDeclaration(
+            "margin-left:1px;margin-inline-start:2px",
+            "margin-left",
+            "1px",
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            logical,
+            CSSDeclarationMutation::Changed("margin-inline-start: 2px; margin-left: 1px;".into())
+        );
+        assert_eq!(SetCSSDeclaration("height:1px", "height", "", "bad"), None);
+        assert_eq!(SetCSSDeclaration("", "not-a-property", "1px", ""), None);
+        assert_eq!(
+            SetCSSDeclaration("", "word-wrap", "break-word", ""),
+            Some(CSSDeclarationMutation::Changed(
+                "overflow-wrap: break-word;".into()
+            ))
+        );
     }
 
     #[test]

@@ -28,6 +28,22 @@ pub(crate) fn LayoutDocumentWithEngine(
     interaction: &UserInteractionState,
     constraints: &ConstraintSpace,
 ) {
+    LayoutDocumentWithEngineAtStage(
+        engine,
+        owner,
+        interaction,
+        constraints,
+        layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Paint,
+    );
+}
+
+pub(crate) fn LayoutDocumentWithEngineAtStage(
+    engine: &mut LayoutEngine,
+    owner: &mut DOM,
+    interaction: &UserInteractionState,
+    constraints: &ConstraintSpace,
+    purpose: layoutng_assembly::layout_boundary_support::LayoutUpdateKind,
+) {
     let _trace = browser_tracing::span("layout", "Page.LayoutDocumentWithEngine");
     // Tree synchronization, layout and export form one synchronous lifecycle.
     // Their nested scopes must not collect every resident Page on this thread.
@@ -41,12 +57,15 @@ pub(crate) fn LayoutDocumentWithEngine(
     owner.EmitConstraints(constraints, |mutation| {
         engine.ApplyMutation(mutation);
     });
-    owner.EmitLayoutMutations(interaction, |mutation| {
-        engine.ApplyMutation(mutation);
-    });
+    owner.EmitLayoutMutations(interaction, |mutation| engine.ApplyMutation(mutation));
     drop(synchronize);
     let build_done = profile.map(|start| start.elapsed());
-    engine.Layout();
+    match purpose {
+        layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Paint => engine.Layout(),
+        layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Layout => {
+            engine.UpdateLayout()
+        }
+    }
     let layout_done = profile.map(|start| start.elapsed());
     heap_scope.DeferCollection();
     {
@@ -63,6 +82,41 @@ pub(crate) fn LayoutDocumentWithEngine(
     }
 }
 
+/// Prove query geometry against current typed attribute inputs. This does not
+/// synchronize paint: the ordinary frame still consumes the document impact.
+pub(crate) fn MeasurementInputsMatch(
+    engine: &LayoutEngine,
+    owner: &mut DOM,
+    interaction: &UserInteractionState,
+) -> bool {
+    use layoutng_assembly::layout_engine::LayoutMutation;
+    let nodes = owner
+        .GetDocument()
+        .StyleState()
+        .geometry_input_nodes
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+    let matches = nodes.into_iter().all(|id| {
+        owner.EmitPaintInputs(id, interaction, |mutation| match mutation {
+            LayoutMutation::PaintInput {
+                node_id,
+                style,
+                element,
+            } => engine.GeometryInputMatches(node_id, style, &element),
+            _ => unreachable!("EmitPaintInputs emits typed inputs"),
+        })
+    });
+    if matches {
+        owner
+            .GetDocumentMut()
+            .StyleStateMut()
+            .geometry_input_nodes
+            .clear();
+    }
+    matches
+}
+
 /// Synchronize paint-only style inputs and export a current fragment snapshot
 /// from the resident layout result. This is Blink's ordinary paint-only style
 /// lifecycle: style and PrePaint/Paint advance, while layout geometry remains
@@ -77,19 +131,21 @@ pub(crate) fn ExportPaintOnlyDocumentWithEngine(
     heap_scope.DeferCollection();
     let state = owner.GetDocument().StyleState();
     let nodes = state.paint_style_nodes.iter().copied().collect::<Vec<_>>();
-    trace.set("requires_export", state.paint_style_requires_export as u8 as f64);
+    trace.set(
+        "requires_export",
+        state.paint_style_requires_export as u8 as f64,
+    );
     trace.set("input_nodes", nodes.len() as f64);
-    let targeted = !state.paint_style_requires_export && !nodes.is_empty()
-        && nodes.iter().all(|&id| owner.EmitPaintInputs(id, interaction, |mutation| {
-            engine.ApplyMutation(mutation)
-        }))
+    let targeted = !state.paint_style_requires_export
+        && !nodes.is_empty()
+        && nodes.iter().all(|&id| {
+            owner.EmitPaintInputs(id, interaction, |mutation| engine.ApplyMutation(mutation))
+        })
         && engine.ExportTargetedPaintInputs();
     if targeted {
         return engine.TakeLayoutResult();
     }
-    owner.EmitLayoutMutations(interaction, |mutation| {
-        engine.ApplyMutation(mutation);
-    });
+    owner.EmitLayoutMutations(interaction, |mutation| engine.ApplyMutation(mutation));
     if !engine.ExportPaintOnly() {
         return None;
     }

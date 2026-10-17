@@ -124,22 +124,47 @@ unsafe fn gc_remove_weak_objects(rt: *mut JSRuntime) {
 unsafe fn JS_RunGCInternal(rt: *mut JSRuntime, remove_weak_objects: i32) {
     let mut trace = browser_tracing::span("gc", "QuickJSGC");
     trace.set("remove_weak_objects", remove_weak_objects as f64);
+    let count = browser_tracing::enabled();
+    trace.set("malloc_bytes_before", (*rt).malloc_ctx.malloc_state.malloc_size as f64);
+    trace.set("gc_threshold", (*rt).malloc_gc_threshold as f64);
     if remove_weak_objects != 0 {
         let _phase = browser_tracing::span("gc", "QuickJSWeakObjects");
         gc_remove_weak_objects(rt);
     }
     {
-        let _phase = browser_tracing::span("gc", "QuickJSDecref");
-        gc_decref(rt);
+        let mut phase = browser_tracing::span("gc", "QuickJSDecref");
+        if count {
+            let counts = gc_decref_counted::<true>(rt);
+            trace.set("gc_nodes", counts.kinds.iter().sum::<usize>() as f64);
+            trace.set("gc_objects", counts.kinds[0] as f64);
+            phase.set("property_slots", counts.property_slots as f64);
+            phase.set("closure_slots", counts.closure_slots as f64);
+            phase.set("array_slots", counts.array_slots as f64);
+            phase.set("constant_slots", counts.constant_slots as f64);
+            phase.set("native_function_slots", counts.native_function_slots as f64);
+            // Each trace event has eight field slots. Keep the type breakdown
+            // separate from parent totals and phase work counters.
+            browser_tracing::instant("gc", "QuickJSTopology", &[
+                ("objects", counts.kinds[0] as f64), ("bytecodes", counts.kinds[1] as f64),
+                ("shapes", counts.kinds[2] as f64), ("var_refs", counts.kinds[3] as f64),
+                ("async_functions", counts.kinds[4] as f64), ("contexts", counts.kinds[5] as f64),
+                ("modules", counts.kinds[6] as f64),
+            ]);
+        } else { gc_decref(rt); }
     }
     {
         let _phase = browser_tracing::span("gc", "QuickJSScan");
-        gc_scan(rt);
+        if count {
+            let counts = gc_scan_counted::<true>(rt);
+            trace.set("live_gc_nodes", counts.iter().sum::<usize>() as f64);
+            trace.set("live_gc_objects", counts[0] as f64);
+        } else { gc_scan(rt); }
     }
     {
         let _phase = browser_tracing::span("gc", "QuickJSFreeCycles");
         gc_free_cycles(rt);
     }
+    trace.set("malloc_bytes_after", (*rt).malloc_ctx.malloc_state.malloc_size as f64);
 }
 pub unsafe fn JS_RunGC(rt: *mut JSRuntime) {
     JS_RunGCInternal(rt, 1);

@@ -219,7 +219,9 @@ URL/input
   Style, Layout, and Script bindings. DOM also supplies immutable event-path
   snapshots from its existing tree/slot owner, including per-scope retargeting
   and closed-root visibility; Interaction owns dispatch lifetime and Window
-  routing, and Script bindings only project those values. DOM does not directly
+  routing, and Script bindings only project those values. DOM owns mutation-observer
+  registration and script-free interest selection; WebAPI owns JavaScript records,
+  callback delivery and its microtask queue. DOM does not directly
   call downstream engines and does not own computed layout or pixels.
 - `javascript`/`webapi`: input is an explicit task, event, or host binding call;
   output is script-visible values and typed DOM/CSSOM/resource effects. The
@@ -234,7 +236,10 @@ URL/input
   `ComputedStyle` ownership plus the projected typed style mutation/impact used
   at the Layout boundary. It does not perform geometry, paint recording,
   raster, or presentation. The native `ComputedStyle` remains the canonical
-  result; projections must not replace or reinterpret it.
+  result; projections must not replace or reinterpret it. Shared immutable UA
+  stylesheet owners cross the input boundary intact and are retained directly;
+  borrowed stylesheet values remain observable by value. Thread placement must
+  not erase this ownership or require recalc to deep-compare shared UA rules.
 - `font_engine`: input is immutable decoded faces, typed font-rule/loading and
   versioned system-query mutations; output is retained ShapeResult/metrics or
   explicit host requests. It owns selection, lazy face admission, fallback and
@@ -245,8 +250,11 @@ URL/input
   Inline still owns item analysis, bidi, line breaking and boundary reshaping.
 - `layoutng`: input is `LayoutMutation` (constraints, tree/style/text/editing or
   scroll changes) containing Style's canonical result; output is a retained,
-  immutable `FragmentNode` snapshot and related geometry indices. It owns the
-  resident LayoutObject tree and translated LayoutNG algorithms. It does not
+  immutable `FragmentNode` paint output and borrowed `LayoutOutput` access to
+  resident geometry. Synchronous geometry queries read the retained native
+  fragments through this output interface; they must not materialize or cache
+  a parallel document-wide measurement tree. Native object ownership stays
+  private. It owns the resident LayoutObject tree and translated LayoutNG algorithms. It does not
   parse CSS, fetch resources, record final paint commands, raster, or present.
 - `paint`: input is the immutable fragment snapshot plus `PaintMutation` or
   immutable resource snapshots; output is an immutable, revisioned
@@ -262,7 +270,15 @@ URL/input
   raster resources and `RasterCompletion` values. It owns Skia replay and tile
   pixel resources. It never calls DOM, Style, Layout, Paint, Page, Viz, or the
   native window.
-- `compositor`: input is immutable artifact/viewport snapshots, BeginFrame,
+- `compositor`: each instance belongs to exactly one Page domain and consumes
+  only that Page's local viewport, recording, input, and resource completions.
+  It has no toolbar/content roles, tab collection, or other Page recordings.
+  Its active/pending tile and raster resources remain private to that instance;
+  the host gives each Page an independent raster executor and routes immutable
+  `CompositorFrame` output plus immutable frame-scoped raster read leases to
+  the window. Tile/raster engines, caches, completion polling, and teardown
+  stay with the Page presentation owner; Viz/Renderer never take those engines.
+  Input is immutable artifact/viewport snapshots, BeginFrame,
   input-scroll, resize, and raster-completion commands; it internally
   coordinates `layer_tile` and `raster`; output is typed effects culminating in
   a `CompositorFrame`. It owns active/pending frame scheduling and compositor
@@ -280,7 +296,24 @@ URL/input
   usage and presentation-ready pixels. Platform surface allocation and actual
   swap/present remain host responsibilities; Renderer never drives Page, DOM,
   Style, Layout, or Paint backward.
-- `browser::Page`: owns and assembles the document-side engines, routes their
+- `browser::Page`: is an independent domain. Pages never reference or invoke
+  each other or share mutable document/rendering state. The embedding owns
+  their execution placement, lifetime, input routing, and surface embedding.
+  Everything before `CompositorFrame` stays in that Page's runtime: its own
+  document task scheduler and executor (DOM/JS/Style/Layout/Paint), compositor
+  executor, and raster executor/pools. The browser host owns only typed handles
+  and policy values; it must not synchronously call a Page or wait for its JS.
+  Shared physical BeginFrame delivery is an enqueue-only clock fanout. Each
+  visible Page receives and schedules frames independently; a blocked Page
+  cannot stall another Page or the window's Viz/Renderer deadlines.
+  Returned errors and unwind panics from a Page's document/compositor/raster
+  executor terminate only that Page's producer. Emit a typed PageError event
+  with view/document identity, URL, stage, kind, and terminal state; native and
+  headless hosts both write one-line structured `rechrom-page-error` JSON to
+  stderr. Keep window/display failures on the separate global Fatal boundary.
+  Browser chrome and popups use the same independent Page presentation
+  contract; window-level Viz/Renderer consume their frames without reaching
+  back into Pages. Page owns and assembles the document-side engines, routes their
   mutations/effects in the order above, and publishes immutable snapshots to
   the compositor boundary. Page contains lifecycle orchestration, not copied
   Style/Layout/Paint/tile/raster algorithms. The application embedding supplies

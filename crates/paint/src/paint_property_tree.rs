@@ -511,14 +511,30 @@ impl PaintPropertyNodeStore {
 
     /// Current sticky values carried by the native property owner. Recording
     /// basis changes may rebase scroll while preserving these existing slots.
-    pub(crate) fn sticky_offsets(&self) -> BTreeMap<PaintPropertyOwner, (Offset, StickyPositionPaintData)> {
-        self.transforms.iter().filter_map(|(key, node)| {
-            (key.role == PaintPropertyRole::StickyTranslation).then(|| {
-                node.sticky_constraint.map(|constraint| (key.owner, (Offset {
-                    x: node.matrix.values[12], y: node.matrix.values[13],
-                }, constraint)))
-            }).flatten()
-        }).collect()
+    pub(crate) fn sticky_offsets(
+        &self,
+    ) -> BTreeMap<PaintPropertyOwner, (Offset, StickyPositionPaintData)> {
+        self.transforms
+            .iter()
+            .filter_map(|(key, node)| {
+                (key.role == PaintPropertyRole::StickyTranslation)
+                    .then(|| {
+                        node.sticky_constraint.map(|constraint| {
+                            (
+                                key.owner,
+                                (
+                                    Offset {
+                                        x: node.matrix.values[12],
+                                        y: node.matrix.values[13],
+                                    },
+                                    constraint,
+                                ),
+                            )
+                        })
+                    })
+                    .flatten()
+            })
+            .collect()
     }
 
     /// Retained native geometry has already proved unchanged owners/topology,
@@ -579,7 +595,8 @@ impl PaintPropertyNodeStore {
         // geometry in Paint, or treat its scroll-dependent position as relayout.
         for owner in sticky.keys() {
             if !self.transforms.contains_key(&PaintPropertyKey {
-                owner: *owner, role: PaintPropertyRole::StickyTranslation,
+                owner: *owner,
+                role: PaintPropertyRole::StickyTranslation,
             }) {
                 return None;
             }
@@ -590,7 +607,8 @@ impl PaintPropertyNodeStore {
             }
             let (offset, constraint) = sticky.get(&key.owner)?;
             let before = node.sticky_constraint?;
-            if !offset.x.is_finite() || !offset.y.is_finite()
+            if !offset.x.is_finite()
+                || !offset.y.is_finite()
                 || node.origin != [0.0; 3]
                 || !before.same_geometry(constraint)
             {
@@ -1507,7 +1525,9 @@ mod retained_scroll_update_tests {
         ));
         assert!(cleared.cleared_change_markers().is_none());
         let offsets = BTreeMap::from([(owner, Offset { x: 0.0, y: 12.5 })]);
-        let (updated, trees) = store.retained_scroll_update(&offsets, &BTreeMap::new()).unwrap();
+        let (updated, trees) = store
+            .retained_scroll_update(&offsets, &BTreeMap::new())
+            .unwrap();
         assert_eq!(
             translation.matrix.values[13], 0.0,
             "old snapshot stays immutable"
@@ -1577,7 +1597,9 @@ mod retained_scroll_update_tests {
             PaintPropertyChangeType::ChangedOnlySimpleValues
         );
         assert!(cleared_updated.cleared_change_markers().is_none());
-        let (_, unchanged) = updated.retained_scroll_update(&offsets, &BTreeMap::new()).unwrap();
+        let (_, unchanged) = updated
+            .retained_scroll_update(&offsets, &BTreeMap::new())
+            .unwrap();
         assert_eq!(
             unchanged.transforms[&2].lifecycle.revision,
             trees.transforms[&2].lifecycle.revision
@@ -1586,7 +1608,9 @@ mod retained_scroll_update_tests {
             unchanged.transforms[&2].lifecycle.changed,
             PaintPropertyChangeType::Unchanged
         );
-        assert!(store.retained_scroll_update(&BTreeMap::new(), &BTreeMap::new()).is_none());
+        assert!(store
+            .retained_scroll_update(&BTreeMap::new(), &BTreeMap::new())
+            .is_none());
         let mut new_owner = offsets.clone();
         new_owner.insert(
             PaintPropertyOwner::NativeFragment {
@@ -1595,34 +1619,59 @@ mod retained_scroll_update_tests {
             },
             Offset { x: 0.0, y: 1.0 },
         );
-        assert!(store.retained_scroll_update(&new_owner, &BTreeMap::new()).is_none());
+        assert!(store
+            .retained_scroll_update(&new_owner, &BTreeMap::new())
+            .is_none());
         let constraint = StickyPositionPaintData {
             owner_client_id: 42,
             vertical: Some(layoutng_assembly::fragment_tree::StickyAxisPaintData {
-                scroll_container_client_id: 42, min_inset: Some(0.0),
+                scroll_container_client_id: 42,
+                min_inset: Some(0.0),
                 ..Default::default()
             }),
             ..Default::default()
         };
         let sticky_node = Arc::new(TransformPaintPropertyNode {
-            id: 7, parent: Some(child.clone()), sticky_constraint: Some(constraint),
+            id: 7,
+            parent: Some(child.clone()),
+            sticky_constraint: Some(constraint),
             ..(*child).clone()
         });
-        store.transforms.insert(key(PaintPropertyRole::StickyTranslation), sticky_node.clone());
+        store.transforms.insert(
+            key(PaintPropertyRole::StickyTranslation),
+            sticky_node.clone(),
+        );
         let mut current = constraint;
         current.vertical.as_mut().unwrap().current_sticky_offset = 10.0;
-        current.vertical.as_mut().unwrap().current_total_sticky_box_offset = 10.0;
+        current
+            .vertical
+            .as_mut()
+            .unwrap()
+            .current_total_sticky_box_offset = 10.0;
         let mut sticky = BTreeMap::from([(owner, (Offset { x: 0.0, y: 10.0 }, current))]);
         let (_, trees) = store.retained_scroll_update(&offsets, &sticky).unwrap();
         assert_eq!(trees.transforms[&7].matrix.values[13], 10.0);
         assert_eq!(trees.transforms[&7].sticky_constraint, Some(current));
         assert_eq!(sticky_node.matrix.values[13], 0.0);
         assert_eq!(sticky_node.sticky_constraint, Some(constraint));
-        assert!(trees.transforms[&7].lifecycle.same_node(&sticky_node.lifecycle));
-        assert!(Arc::ptr_eq(trees.transforms[&7].parent.as_ref().unwrap(), &trees.transforms[&3]));
-        sticky.get_mut(&owner).unwrap().1.vertical.as_mut().unwrap().min_inset = Some(2.0);
+        assert!(trees.transforms[&7]
+            .lifecycle
+            .same_node(&sticky_node.lifecycle));
+        assert!(Arc::ptr_eq(
+            trees.transforms[&7].parent.as_ref().unwrap(),
+            &trees.transforms[&3]
+        ));
+        sticky
+            .get_mut(&owner)
+            .unwrap()
+            .1
+            .vertical
+            .as_mut()
+            .unwrap()
+            .min_inset = Some(2.0);
         assert!(store.retained_scroll_update(&offsets, &sticky).is_none());
-        assert!(store.retained_scroll_update(&offsets, &BTreeMap::new()).is_none());
-
+        assert!(store
+            .retained_scroll_update(&offsets, &BTreeMap::new())
+            .is_none());
     }
 }

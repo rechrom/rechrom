@@ -174,7 +174,22 @@ unsafe fn gc_decref_child(rt: *mut JSRuntime, p: *mut JSGCObjectHeader) {
         list_add_tail(&mut (*p).link, &mut (*rt).tmp_obj_list);
     }
 }
+#[derive(Default)]
+struct GCTraversalCounts {
+    kinds: [usize; 7],
+    property_slots: usize,
+    closure_slots: usize,
+    array_slots: usize,
+    constant_slots: usize,
+    native_function_slots: usize,
+}
 unsafe fn gc_decref(rt: *mut JSRuntime) {
+    gc_decref_counted::<false>(rt);
+}
+// Count during the existing pass only. The ordinary monomorphization contains
+// neither a second heap traversal nor per-object diagnostic accounting.
+unsafe fn gc_decref_counted<const COUNT: bool>(rt: *mut JSRuntime) -> GCTraversalCounts {
+    let mut counts = GCTraversalCounts::default();
     init_list_head(&mut (*rt).tmp_obj_list);
     for el in ListIter::new(&mut (*rt).gc_obj_list, false, true) {
         let p = el
@@ -183,12 +198,35 @@ unsafe fn gc_decref(rt: *mut JSRuntime) {
             .cast::<JSGCObjectHeader>();
         assert_eq!((*js_rc(p.cast())).gc_obj_type_and_mark & 0x80, 0);
         mark_children(rt, p, gc_decref_child);
+        if COUNT {
+            let kind = (*js_rc(p.cast())).gc_obj_type() as usize;
+            counts.kinds[kind] += 1;
+            if kind == JS_GC_OBJ_TYPE_JS_OBJECT as usize {
+                let object = p.cast::<JSObject>();
+                counts.property_slots += (*(*object).shape).prop_count as usize;
+                let class = (*object).class_id as u32;
+                if js_class_has_bytecode(class) != 0 {
+                    let bytecode = (*object).u.func.function_bytecode;
+                    if !bytecode.is_null() && !(*object).u.func.var_refs.is_null() {
+                        counts.closure_slots += (*bytecode).closure_var_count as usize;
+                    }
+                } else if matches!(class, JS_CLASS_ARRAY | JS_CLASS_ARGUMENTS | JS_CLASS_MAPPED_ARGUMENTS) {
+                    counts.array_slots += (*object).u.array.count as usize;
+                } else if class == JS_CLASS_C_FUNCTION_DATA {
+                    let data = (*object).u.opaque.cast::<JSCFunctionDataRecord>();
+                    if !data.is_null() { counts.native_function_slots += (*data).data_len as usize; }
+                }
+            } else if kind == JS_GC_OBJ_TYPE_FUNCTION_BYTECODE as usize {
+                counts.constant_slots += (*p.cast::<JSFunctionBytecode>()).cpool_count as usize;
+            }
+        }
         (*js_rc(p.cast())).gc_obj_type_and_mark |= 0x80;
         if (*js_rc(p.cast())).ref_count == 0 {
             list_del(&mut (*p).link);
             list_add_tail(&mut (*p).link, &mut (*rt).tmp_obj_list);
         }
     }
+    counts
 }
 unsafe fn gc_scan_incref_child(rt: *mut JSRuntime, p: *mut JSGCObjectHeader) {
     (*js_rc(p.cast())).ref_count += 1;
@@ -202,6 +240,10 @@ unsafe fn gc_scan_incref_child2(_rt: *mut JSRuntime, p: *mut JSGCObjectHeader) {
     (*js_rc(p.cast())).ref_count += 1;
 }
 unsafe fn gc_scan(rt: *mut JSRuntime) {
+    gc_scan_counted::<false>(rt);
+}
+unsafe fn gc_scan_counted<const COUNT: bool>(rt: *mut JSRuntime) -> [usize; 7] {
+    let mut counts = [0; 7];
     for el in ListIter::new(&mut (*rt).gc_obj_list, false, false) {
         let p = el
             .cast::<u8>()
@@ -210,6 +252,7 @@ unsafe fn gc_scan(rt: *mut JSRuntime) {
         assert!((*js_rc(p.cast())).ref_count > 0);
         (*js_rc(p.cast())).gc_obj_type_and_mark &= 0x7f;
         mark_children(rt, p, gc_scan_incref_child);
+        if COUNT { counts[(*js_rc(p.cast())).gc_obj_type() as usize] += 1; }
     }
     for el in ListIter::new(&mut (*rt).tmp_obj_list, false, false) {
         let p = el
@@ -218,6 +261,7 @@ unsafe fn gc_scan(rt: *mut JSRuntime) {
             .cast::<JSGCObjectHeader>();
         mark_children(rt, p, gc_scan_incref_child2);
     }
+    counts
 }
 unsafe fn gc_free_cycles(rt: *mut JSRuntime) {
     (*rt).gc_phase = JS_GC_PHASE_REMOVE_CYCLES as u8;

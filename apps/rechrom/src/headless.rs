@@ -116,6 +116,7 @@ fn pump_events(
                 current_location = address;
             }
             UserEvent::Message(message) => eprintln!("page: {message}"),
+            UserEvent::PageError(error) => error.emit_stderr(),
             UserEvent::Fatal(FatalError { source, message }) => {
                 eprintln!(
                     "rechrom-fatal\t{}",
@@ -163,6 +164,20 @@ mod tests {
     fn close_stops_engine_without_waiting_for_a_presented_frame() {
         let (events, receiver) = mpsc::channel();
         let (commands, command_receiver) = mpsc::channel();
+        // A terminal error belongs to this Page; it must not end the headless
+        // host or turn its exit status into a window-level fatal failure.
+        events
+            .send(UserEvent::PageError(crate::page_error::PageError {
+                document: (1, 7),
+                url: "https://page.test/".into(),
+                stage: "compositor",
+                kind: "error",
+                terminal: true,
+                message: "test Page failure".into(),
+                resource_url: None,
+                stack: None,
+            }))
+            .unwrap();
         events.send(UserEvent::CloseWindow).unwrap();
         pump_events(
             receiver,

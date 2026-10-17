@@ -45,6 +45,10 @@ pub(super) fn fixture() -> FramePlan {
         effect.parent = Some(properties.effect.clone());
         effect.local_transform_space = properties.transform.clone();
         effect.opacity = 0.5;
+        // The fixture exercises retained child render passes. A single
+        // translucent layer is flattened by the production surface policy;
+        // explicit isolation supplies the render-surface reason under test.
+        effect.isolates_blending = true;
         properties.effect = Arc::new(effect);
         plan.layers.push(LayerPlan {
             id: LayerId(id),
@@ -116,7 +120,11 @@ fn contributing_inputs_retain_only_unchanged_children_and_successful_build_histo
     let scrolled = builder.BuildFrame(&plan).unwrap();
     assert!(empty(child_damage(&scrolled, &fixed)));
     assert!(!empty(child_damage(&scrolled, &moving)));
-    let moving_pass = scrolled.render_pass_list.iter().find(|pass| pass.id == effect_pass_id(&moving)).unwrap();
+    let moving_pass = scrolled
+        .render_pass_list
+        .iter()
+        .find(|pass| pass.id == effect_pass_id(&moving))
+        .unwrap();
     assert_eq!(moving_pass.output_rect, DeviceRect::new(0, 0, 64, 61));
     assert_eq!(moving_pass.damage_rect, moving_pass.output_rect);
     assert_ne!(
@@ -179,11 +187,52 @@ fn contributing_inputs_retain_only_unchanged_children_and_successful_build_histo
         .all(|pass| !empty(pass.damage_rect)));
     let tiles = std::mem::take(&mut plan.layers[1].tiles);
     let offscreen = builder.BuildFrame(&plan).unwrap();
-    assert!(offscreen.render_pass_list.iter().all(|pass| pass.id != effect_pass_id(&moving)),
-        "empty effect output must not become an unconstrained render-pass quad");
+    assert!(
+        offscreen
+            .render_pass_list
+            .iter()
+            .all(|pass| pass.id != effect_pass_id(&moving)),
+        "empty effect output must not become an unconstrained render-pass quad"
+    );
     plan.layers[1].tiles = tiles;
-    assert!(builder.BuildFrame(&plan).unwrap().render_pass_list.iter()
-        .any(|pass| pass.id == effect_pass_id(&moving)), "returning content recreates its surface");
+    assert!(
+        builder
+            .BuildFrame(&plan)
+            .unwrap()
+            .render_pass_list
+            .iter()
+            .any(|pass| pass.id == effect_pass_id(&moving)),
+        "returning content recreates its surface"
+    );
+    let unchanged = builder.BuildFrame(&plan).unwrap();
+    let output = unchanged.metadata.viewport;
+    let clipped = unchanged.clone().WithRootDamage(DeviceRect::new(
+        output.x + output.width as i32 - 1,
+        output.y,
+        4,
+        output.height + 4,
+    ));
+    let expected = DeviceRect::new(
+        output.x + output.width as i32 - 1,
+        output.y,
+        1,
+        output.height,
+    );
+    assert_eq!(clipped.metadata.root_damage_rect, expected);
+    assert_eq!(
+        clipped.render_pass_list.last().unwrap().damage_rect,
+        expected
+    );
+    let outside = unchanged.WithRootDamage(DeviceRect::new(
+        output.x + output.width as i32 + 1,
+        output.y,
+        2,
+        2,
+    ));
+    assert_eq!(
+        outside.metadata.root_damage_rect,
+        DeviceRect::new(output.x, output.y, 0, 0)
+    );
 }
 
 #[test]

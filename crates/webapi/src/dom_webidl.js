@@ -16,13 +16,16 @@ class EventTarget {
     const object = options != null && (typeof options === 'object' || typeof options === 'function');
     const capture = object ? !!options.capture : !!options;
     const once = object ? !!options.once : false;
-    const passive = object ? !!options.passive : false;
+    // Preserve an absent dictionary member. Blink applies the document/root
+    // passive intervention only when passive was not explicitly supplied.
+    const passiveValue = object ? options.passive : undefined;
+    const passive = passiveValue === undefined ? undefined : !!passiveValue;
     const signal = object ? options.signal : undefined;
     const fn = callbackFunction(callback);
     if (!fn || signal?.aborted) return;
     if (eventTargets.has(this)) {
       const list = eventTargets.get(this); type = String(type);
-      if (!list.some(l => l.type === type && l.fn === fn && l.capture === capture)) list.push({type, fn, capture, once, passive});
+      if (!list.some(l => l.type === type && l.fn === fn && l.capture === capture)) list.push({type, fn, capture, once, passive:!!passive});
     } else invoke(this, 'addEventListener', String(type), fn, capture, once, passive);
     if (signal) signal.addEventListener('abort', () => this.removeEventListener(type, fn, capture), {once:true});
   }
@@ -262,6 +265,7 @@ class Text extends CharacterData {}
 class Comment extends CharacterData {}
 class NodeList { constructor() { throw new TypeError('Illegal constructor'); } }
 class HTMLCollection { constructor() { throw new TypeError('Illegal constructor'); } }
+class HTMLOptionsCollection extends HTMLCollection {}
 for (const [name, value] of Object.entries({ELEMENT_NODE:1, ATTRIBUTE_NODE:2, TEXT_NODE:3,
   CDATA_SECTION_NODE:4, PROCESSING_INSTRUCTION_NODE:7, COMMENT_NODE:8, DOCUMENT_NODE:9,
   DOCUMENT_TYPE_NODE:10, DOCUMENT_FRAGMENT_NODE:11, DOCUMENT_POSITION_DISCONNECTED:1,
@@ -278,7 +282,7 @@ for (const [name, cls] of Object.entries({EventTarget, Node, Element, HTMLElemen
     HTMLDialogElement, HTMLScriptElement, HTMLStyleElement, HTMLLinkElement,
     HTMLMetaElement, HTMLIFrameElement, HTMLImageElement, HTMLCanvasElement, HTMLTemplateElement, HTMLSlotElement,
     HTMLHeadingElement, HTMLAnchorElement, HTMLMediaElement, HTMLVideoElement, HTMLAudioElement,
-    Document, DocumentFragment, ShadowRoot, ElementInternals, CharacterData, Text, Comment, NodeList, HTMLCollection})) {
+    Document, DocumentFragment, ShadowRoot, ElementInternals, CharacterData, Text, Comment, NodeList, HTMLCollection, HTMLOptionsCollection})) {
   Object.defineProperty(globalThis, name, {value:cls, writable:true, configurable:true});
   Object.defineProperty(cls.prototype, Symbol.toStringTag, {value:name, configurable:true});
   install(name, cls.prototype);
@@ -287,8 +291,21 @@ for (const [name, cls] of Object.entries({EventTarget, Node, Element, HTMLElemen
 // Let the engine choose own/author/native descriptors, then validate the native
 // declaring-interface brand of the actual receiver. Never infer it from `instanceof`.
 const attributeString = String, attributeTypeError = TypeError;
+// Blink's generated bindings read an immutable native wrapper type tag in the
+// same call frame. Rechrom's equivalent tag lives behind the host boundary, so
+// retain successful checks by interface instead of crossing that boundary for
+// every method and setter on the same wrapper. Only positive results are
+// cached: author objects and proxies still take the native validation path on
+// every attempted invocation, and changing a prototype never grants a brand.
+const interfaceBrands = new Map();
 function hasInterface(receiver, name) {
-  return invoke(globalThis, '__domHasInterface', receiver, name);
+  if ((typeof receiver !== 'object' || receiver === null) && typeof receiver !== 'function') return false;
+  let branded = interfaceBrands.get(name);
+  if (branded?.has(receiver)) return true;
+  if (!invoke(globalThis, '__domHasInterface', receiver, name)) return false;
+  if (!branded) interfaceBrands.set(name, branded = new WeakSet());
+  branded.add(receiver);
+  return true;
 }
 function requireInterface(receiver, name) {
   if (!hasInterface(receiver, name)) throw new attributeTypeError('Illegal invocation');
@@ -301,17 +318,14 @@ const nullToEmptyString = value => value === null ? '' : attributeDOMString(valu
 const nullableString = value => value == null ? '' : attributeDOMString(value);
 function nativeAttribute(cls, member, convert, options = {}) {
   const interfaceName = cls.name;
-  const descriptor = {configurable:true, enumerable:true, get() {
-    if (options.lenient && !hasInterface(this, interfaceName)) return undefined;
-    return invoke(this, '__domAttributeGet', interfaceName, member);
-  }};
+  const descriptor = {configurable:true, enumerable:true,
+    get: invoke(globalThis, '__domCreateGetter', interfaceName, member, !!options.lenient)};
   if (convert) descriptor.set = function(value) {
     // Web IDL checks the receiver before invoking any user conversion hooks.
     if (options.lenient && !hasInterface(this, interfaceName)) return;
     requireInterface(this, interfaceName);
     invoke(this, '__domAttributeSet', interfaceName, member, convert(value), !!options.reactions);
   };
-  Object.defineProperty(descriptor.get, 'name', {value:'get ' + member, configurable:true});
   if (descriptor.set) Object.defineProperty(descriptor.set, 'name', {value:'set ' + member, configurable:true});
   Object.defineProperty(cls.prototype, member, descriptor);
 }
@@ -337,6 +351,16 @@ for (const member of ['checked','indeterminate']) nativeAttribute(HTMLInputEleme
 nativeAttribute(HTMLInputElement, 'value', nullToEmptyString, {reactions:true});
 nativeAttribute(HTMLTextAreaElement, 'value', nullToEmptyString, {reactions:true});
 nativeAttribute(HTMLSelectElement, 'value', attributeDOMString);
+nativeAttribute(HTMLSelectElement, 'options');
+nativeAttribute(HTMLOptionElement, 'value', attributeDOMString, {reactions:true});
+nativeAttribute(HTMLOptionElement, 'selected', value => !!value);
+for (const [cls, member, attribute] of [
+  [HTMLOptionElement, 'defaultSelected', 'selected'], [HTMLOptionElement, 'disabled', 'disabled'],
+  [HTMLSelectElement, 'multiple', 'multiple'], [HTMLSelectElement, 'disabled', 'disabled']
+]) Object.defineProperty(cls.prototype, member, {configurable:true, enumerable:true,
+  get() {requireInterface(this, cls.name); return this.hasAttribute(attribute)},
+  set(value) {requireInterface(this, cls.name); if (value) this.setAttribute(attribute, ''); else this.removeAttribute(attribute)}
+});
 for (const cls of [HTMLElement, SVGElement, MathMLElement, Document])
   for (const member of ['onload','onerror','onabort','oninput','onchange','onclick','onkeydown','onkeyup',
                         'onkeypress','onfocus','onblur','onsubmit','onreset','onmousedown','onmouseup','onmousemove'])
@@ -346,10 +370,17 @@ for (const cls of [Element, Document])
   for (const member of ['onfullscreenchange','onfullscreenerror']) nativeAttribute(cls, member, value => value);
 function nativeStringMethod(cls, name, arity = 1) {
   const interfaceName = cls.name;
-  const method = function(...args) {
-      requireInterface(this, interfaceName);
-      if (args.length < arity) throw new attributeTypeError(name + ' requires ' + arity + ' arguments');
-      return invoke(this, name, ...args.slice(0, arity).map(attributeDOMString));
+  // Generated Web IDL bindings convert only their declared arguments, in
+  // order. These methods have one or two DOMString arguments; avoid creating
+  // rest/slice/map/spread arrays on every call into the native DOM owner.
+  const method = arity === 2 ? function(first, second) {
+    requireInterface(this, interfaceName);
+    if (arguments.length < 2) throw new attributeTypeError(name + ' requires 2 arguments');
+    return invoke(this, name, attributeDOMString(first), attributeDOMString(second));
+  } : function(first) {
+    requireInterface(this, interfaceName);
+    if (arguments.length < 1) throw new attributeTypeError(name + ' requires 1 arguments');
+    return invoke(this, name, attributeDOMString(first));
   };
   Object.defineProperties(method, {name:{value:name, configurable:true}, length:{value:arity, configurable:true}});
   Object.defineProperty(cls.prototype, name, {configurable:true, enumerable:true, writable:true, value:method});
@@ -362,6 +393,12 @@ for (const cls of [Document, DocumentFragment]) nativeStringMethod(cls, 'getElem
 for (const name of ['matches','closest','getAttribute','hasAttribute','removeAttribute'])
   nativeStringMethod(Element, name);
 nativeStringMethod(Element, 'setAttribute', 2);
+Node.prototype.isEqualNode = function(other) {
+  requireInterface(this, 'Node');
+  if (!arguments.length) throw new TypeError('isEqualNode requires 1 argument');
+  if (other != null) requireInterface(other, 'Node');
+  return invoke(this, 'isEqualNode', other == null ? null : other);
+};
 SVGGeometryElement.prototype.getTotalLength=function(){return invoke(this,'getTotalLength');};
 globalThis.__domUpgradeCustomElement=function(element,constructor){
   customElementConstructionStack.push({element, constructor});
@@ -554,7 +591,10 @@ const NodeFilter=Object.freeze({
   SHOW_PROCESSING_INSTRUCTION:64,SHOW_COMMENT:128,SHOW_DOCUMENT:256,
   SHOW_DOCUMENT_TYPE:512,SHOW_DOCUMENT_FRAGMENT:1024,SHOW_NOTATION:2048
 });
-const nodeTypeMask=node=>({1:1,2:2,3:4,4:8,5:16,6:32,7:64,8:128,9:256,10:512,11:1024,12:2048}[node.nodeType]||0);
+// cpp: NodeIteratorBase::AcceptNode. Use the native node type and its bit,
+// without allocating a table or observing a shadowed JavaScript nodeType.
+const nativeNodeType = Function.prototype.call.bind(Object.getOwnPropertyDescriptor(Node.prototype, 'nodeType').get);
+const nodeTypeMask=node=>1 << (nativeNodeType(node) - 1);
 class TreeWalker {
   constructor(root,whatToShow=NodeFilter.SHOW_ALL,filter=null) {
     if(!(root instanceof Node))throw new TypeError('TreeWalker root must be a Node');
@@ -725,32 +765,61 @@ Object.defineProperty(Element.prototype, 'classList', {get() {
       [Symbol.iterator]() { return tokens()[Symbol.iterator](); }
     }); } return classes.get(this);
 }});
-const observers = new Set(); let mutationDeliveryQueued=false;
-class MutationRecord {constructor(values){Object.assign(this,values);}}
+const observers = new Set(), observerIds = new WeakMap(), mutationRecordLists = new WeakMap();
+let mutationDeliveryQueued=false;
+function observerId(observer) {
+  const id=observerIds.get(observer);
+  if(id===undefined)throw new TypeError('Illegal invocation');
+  return id;
+}
+class MutationRecord {
+  constructor(values) {
+    const {addedNodes,removedNodes,...attributes}=values;
+    Object.assign(this,attributes);
+    mutationRecordLists.set(this,{addedNodes,removedNodes});
+  }
+}
+// RecordWithEmptyNodeLists allocates each stable empty list only when read.
+for(const name of ['addedNodes','removedNodes'])Object.defineProperty(MutationRecord.prototype,name,{
+  configurable:true,enumerable:true,get(){
+    const lists=mutationRecordLists.get(this);
+    if(!lists)throw new TypeError('Illegal invocation');
+    return lists[name]??=invoke(document,'__mutationEmptyNodeList');
+  }
+});
 class MutationObserver {
-  constructor(callback){if(typeof callback!=='function')throw new TypeError('MutationObserver callback required');this._callback=callback;this._targets=new Map();this._records=[];}
+  constructor(callback){
+    if(typeof callback!=='function')throw new TypeError('MutationObserver callback required');
+    this._callback=callback;this._targets=new Set();this._records=[];
+    observerIds.set(this,invoke(document,'__mutationObserverId'));
+  }
   observe(target,options={}) {
+    const id=observerId(this);
     if(!(target instanceof Node))throw new TypeError('MutationObserver target must be a Node');
     const o={...options};
     if(o.attributes===undefined && (o.attributeOldValue!==undefined || o.attributeFilter!==undefined))o.attributes=true;
     if(o.characterData===undefined && o.characterDataOldValue!==undefined)o.characterData=true;
     if(!(o.childList||o.attributes||o.characterData) || (!o.attributes&&(o.attributeOldValue||o.attributeFilter)) || (!o.characterData&&o.characterDataOldValue))throw new TypeError('Invalid mutation observer options');
-    if(o.attributeFilter!==undefined)o.attributeFilter=Array.from(o.attributeFilter,String);
-    this._targets.set(target,o);const changed=!observers.has(this);observers.add(this);if(changed)invoke(document,'mutationObserverState',observers.size);
+    const filter=o.attributeFilter===undefined?null:Array.from(o.attributeFilter,String);
+    invoke(document,'__mutationObserve',id,target,!!o.childList,!!o.attributes,!!o.characterData,
+      !!o.subtree,!!o.attributeOldValue,!!o.characterDataOldValue,filter!==null,...(filter||[]));
+    this._targets.add(target);observers.add(this);
   }
-  disconnect(){this._targets.clear();this._records=[];if(observers.delete(this))invoke(document,'mutationObserverState',observers.size);}
-  takeRecords(){const records=this._records;this._records=[];return records;}
+  disconnect(){
+    invoke(document,'__mutationDisconnect',observerId(this));
+    this._targets.clear();this._records=[];observers.delete(this);
+  }
+  takeRecords(){observerId(this);const records=this._records;this._records=[];return records;}
 }
 Object.assign(globalThis,{MutationObserver,MutationRecord});
-wrap('__mutationRecord',(target,type,attributeName,oldValue,addedNodes,removedNodes,previousSibling,nextSibling)=>{
+wrap('__mutationRecord',(target,type,attributeName,attributeNamespace,oldValue,addedNodes,removedNodes,previousSibling,nextSibling,recipients)=>{
   let queued=false;
-  for(const observer of observers){let matched=false,keepOld=false;
-    for(const [node,o]of observer._targets){
-      if(node!==target && !(o.subtree && node.contains(target)))continue;
-      if(!o[type] || (type==='attributes'&&o.attributeFilter&&!o.attributeFilter.includes(attributeName)))continue;
-      matched=true;keepOld ||= type==='attributes'?!!o.attributeOldValue:!!o.characterDataOldValue;
-    }
-    if(matched){observer._records.push(new MutationRecord({target,type,attributeName,attributeNamespace:null,oldValue:keepOld?oldValue:null,addedNodes,removedNodes,previousSibling,nextSibling}));queued=true;}
+  for(const observer of observers){
+    const id=observerId(observer);
+    if(!Object.hasOwn(recipients,id))continue;
+    observer._records.push(new MutationRecord({target,type,attributeName,attributeNamespace,
+      oldValue:recipients[id]?oldValue:null,addedNodes,removedNodes,previousSibling,nextSibling}));
+    queued=true;
   }
   if(queued&&!mutationDeliveryQueued){mutationDeliveryQueued=true;queueMicrotask(()=>{
     mutationDeliveryQueued=false;
@@ -790,8 +859,10 @@ globalThis.getComputedStyle = function(node) {
     }));
   } return computedStyles.get(node);
 };
-for (const property of ['offsetWidth','offsetHeight','offsetLeft','offsetTop','clientWidth','clientHeight','clientLeft','clientTop','scrollWidth','scrollHeight'])
+for (const property of ['offsetWidth','offsetHeight','offsetLeft','offsetTop'])
   Object.defineProperty(HTMLElement.prototype,property,{get(){return invoke(this,'metric',property);}});
+for (const property of ['clientWidth','clientHeight','clientLeft','clientTop','scrollWidth','scrollHeight'])
+  Object.defineProperty(Element.prototype,property,{get(){return invoke(this,'metric',property);}});
 for (const [property,axis] of [['scrollLeft','x'],['scrollTop','y']])
   Object.defineProperty(Element.prototype,property,{configurable:true,enumerable:true,get(){return invoke(this,'scrollOffset',axis);},set(value){invoke(this,'scrollOffset',axis,Number(value));}});
 Element.prototype.scroll = Element.prototype.scrollTo = function(x=0,y=0) {
@@ -834,7 +905,8 @@ for (const name of ['addEventListener','removeEventListener','dispatchEvent']) {
 // standard per-interface prototype identity, separate from cache performance.
 const collectionString = String, collectionTypeError = TypeError;
 function collectionReceiver(receiver, expected) {
-  if (invoke(receiver, '__domCollectionBrand') !== expected)
+  const brand = invoke(receiver, '__domCollectionBrand');
+  if (brand !== expected && !(expected === 'HTMLCollection' && brand === 'HTMLOptionsCollection'))
     throw new collectionTypeError('Illegal invocation');
 }
 function collectionArgumentCount(count, method, expected) {

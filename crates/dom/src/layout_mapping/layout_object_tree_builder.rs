@@ -9,8 +9,8 @@ use layoutng_assembly::internal::layout_input::{
     ComputedStyle, Display, DocumentRole, ElementData, ExtendedStyle, FrameDimension,
     FrameDimensionType, ListMarkerImage, ListStyleType, MathTokenKind, NodeKind, Offset,
     PaintPathCommand, PaintPathVerb, SvgLengthAdjust, SvgShapeData, SvgShapeGeometry,
-    SvgUseData, SvgTextPathData, SvgViewBoxData, SvgViewportData, SvgViewportLength, TextAreaSizing,
-    TextFieldSizing, WhiteSpace,
+    SvgTextPathData, SvgUseData, SvgViewBoxData, SvgViewportData, SvgViewportLength,
+    TextAreaSizing, TextFieldSizing, WhiteSpace,
 };
 use layoutng_assembly::internal::layout_object::LayoutObject;
 use layoutng_assembly::layout_engine::LayoutTreeUpdate;
@@ -261,7 +261,7 @@ pub(super) fn list_marker_style(item: &ComputedStyle) -> ComputedStyle {
         inherited.list_style_image = extra.list_style_image.clone();
         inherited.list_style_type = extra.list_style_type;
         inherited.list_style_position = extra.list_style_position;
-        marker.extended = Some(inherited);
+        marker.extended = Some(inherited.into());
     }
     marker
 }
@@ -598,7 +598,7 @@ pub(super) fn apply_control_appearance(element: &ElementData, style: &mut Comput
     if appearance == AppearanceValue::kNone {
         return;
     }
-    let extra = style.extended.get_or_insert_with(ExtendedStyle::default);
+    let extra = std::sync::Arc::make_mut(style.extended.get_or_insert_with(Default::default));
     let author_box = extra.has_author_background || extra.has_author_border;
     let author_box_or_shadow = author_box || !style.paint.box_shadows.is_empty();
     let suppress_native = (matches!(
@@ -955,7 +955,7 @@ fn element_kind(
             "foreignObject" => NodeKind::kSvgForeignObject,
             "defs" => NodeKind::kSvgHiddenContainer,
             "clipPath" => NodeKind::kSvgResourceClipper,
-                "mask" => NodeKind::kSvgResourceMasker,
+            "mask" => NodeKind::kSvgResourceMasker,
             "text" => NodeKind::kSvgText,
             // SVGTextPathElement::CreateLayoutObject preserves element identity
             // independently of href resolution. LayoutSVGTextPath::LayoutPath
@@ -1262,7 +1262,7 @@ fn default_list_marker_text(
     style: &ComputedStyle,
 ) -> String {
     let defaults = ExtendedStyle::default();
-    let extra = style.extended.as_ref().unwrap_or(&defaults);
+    let extra = style.extended.as_deref().unwrap_or(&defaults);
     match extra.list_style_type {
         ListStyleType::kNone => return String::new(),
         ListStyleType::kCircle => return "○ ".to_owned(),
@@ -1369,7 +1369,11 @@ fn append_list_marker(
         return;
     }
     let defaults = ExtendedStyle::default();
-    let marker_type = style.extended.as_ref().unwrap_or(&defaults).list_style_type;
+    let marker_type = style
+        .extended
+        .as_deref()
+        .unwrap_or(&defaults)
+        .list_style_type;
     let symbol = matches!(
         marker_type,
         ListStyleType::kDisc | ListStyleType::kCircle | ListStyleType::kSquare
@@ -1817,11 +1821,42 @@ fn append_children(
     }
 }
 
+// cpp: SVGResources::UpdateEffects and StyleMaskSourceImage resource clients.
+// These are resource bindings, not CSS inputs. Ordinary elements must not
+// acquire the entire document's resource snapshot (or copy their style) just
+// because some other element refers to an SVG resource. Keep the fixture-only
+// path without a canonical native style conservative.
+pub(super) fn needs_svg_clip_resources(style: &ComputedStyle) -> bool {
+    unsafe { style.native_style.as_ref() }.is_none_or(|native| {
+        native.ClipPath().is_some_and(|clip| {
+            unsafe { &*clip }.GetType()
+                == layoutng_style::style::clip_path_operation::OperationType::kReference
+        }) || native.HasMask()
+    })
+}
+
+pub(super) fn needs_svg_filter_resources(style: &ComputedStyle) -> bool {
+    if let Some(native) = unsafe { style.native_style.as_ref() } {
+        native.Filter().HasReferenceFilter() || native.BackdropFilter().HasReferenceFilter()
+    } else {
+        use layoutng_assembly::internal::paint_input::PaintFilterType;
+        style
+            .paint
+            .filters
+            .iter()
+            .chain(&style.paint.backdrop_filters)
+            .any(|filter| filter.r#type == PaintFilterType::kReference)
+    }
+}
+
 pub(super) fn resolve_svg_clip_path(
     style: &mut ComputedStyle,
     snapshot: &std::sync::Arc<layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot>,
     scope: layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope,
 ) {
+    if !needs_svg_clip_resources(style) {
+        return;
+    }
     // This is a resource binding, not a second representation of clip-path.
     // Native ComputedStyle remains the sole owner of the actual operation.
     style.svg_clip_resources = layoutng_assembly::internal::paint_input::SvgClipResourceBinding {

@@ -1,12 +1,12 @@
 // C++: foundation/blink_base/heap/{heap.h,heap.cc,visitor.h,persistent.h,garbage_collected.h}.
-// This is the single-thread-owned layout heap. Collection is synchronous at the
-// end of the outermost scope, so pointers stay stable throughout layout.
+// This is the single-thread-owned layout heap. Marking is atomic outside engine
+// scopes; the Page host schedules incremental sweeping on the same owner.
 use crate::{kMemberDeletedValue, Member, UntracedMember, WeakMember};
 use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, Layout};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
 pub trait Traceable {
@@ -181,8 +181,74 @@ struct WeakBacking {
 
 trait RootSlot: Send + Sync {
     fn get(&self) -> *const u8;
-    fn clear(&self);
+    fn clear(&self) -> Option<usize>;
     fn weak(&self) -> bool;
+}
+
+enum PersistentNode {
+    Used(Weak<dyn RootSlot>),
+    Free(Option<usize>),
+}
+
+// cppgc/internal/persistent-node.h: PersistentRegionBase::{AllocateNode,FreeNode}.
+// Slots have stable indices. Retired handles return their slot immediately;
+// transient style/attachment handles must not grow the registry until GC.
+#[derive(Default)]
+struct PersistentRegion {
+    nodes: Vec<PersistentNode>,
+    free: Option<usize>,
+    used: usize,
+}
+impl PersistentRegion {
+    fn allocate(&mut self, root: Weak<dyn RootSlot>) -> usize {
+        self.used += 1;
+        if let Some(index) = self.free {
+            let PersistentNode::Free(next) = self.nodes[index] else {
+                unreachable!()
+            };
+            self.free = next;
+            self.nodes[index] = PersistentNode::Used(root);
+            index
+        } else {
+            let index = self.nodes.len();
+            self.nodes.push(PersistentNode::Used(root));
+            index
+        }
+    }
+    fn release(&mut self, index: usize) {
+        assert!(matches!(self.nodes[index], PersistentNode::Used(_)));
+        self.nodes[index] = PersistentNode::Free(self.free);
+        self.free = Some(index);
+        self.used -= 1;
+    }
+    fn live_roots(&mut self) -> Vec<Arc<dyn RootSlot>> {
+        let mut roots = Vec::with_capacity(self.used);
+        for index in 0..self.nodes.len() {
+            if let PersistentNode::Used(root) = &self.nodes[index] {
+                if let Some(root) = root.upgrade() {
+                    roots.push(root);
+                } else {
+                    // A handle may retire during thread/heap teardown when
+                    // its owner cannot borrow the heap. Normal Clear/Drop
+                    // already returned their slots and never reach this path.
+                    self.release(index);
+                }
+            }
+        }
+        roots
+    }
+    fn iter(&self) -> impl Iterator<Item = &Weak<dyn RootSlot>> {
+        self.nodes.iter().filter_map(|node| match node {
+            PersistentNode::Used(root) => Some(root),
+            PersistentNode::Free(_) => None,
+        })
+    }
+    fn len(&self) -> usize {
+        self.nodes.len()
+    }
+    fn capacity(&self) -> usize {
+        self.nodes.capacity()
+    }
 }
 
 struct HeapState {
@@ -207,12 +273,13 @@ struct HeapState {
     // Exact-address hits are valid only within this collection; collisions miss.
     strong_marked_addresses: [usize; 1024],
     objects: BTreeMap<usize, Allocation>,
-    roots: Vec<Weak<dyn RootSlot>>,
+    roots: PersistentRegion,
     worklist: Vec<TraceWorkItem>,
     weak_slots: Vec<WeakSlot>,
     weak_roots: Vec<Arc<dyn RootSlot>>,
     weak_backings: Vec<WeakBacking>,
     ephemerons: Vec<Ephemeron>,
+    sweep: Option<SweepState>,
 }
 
 impl HeapState {
@@ -224,7 +291,10 @@ impl HeapState {
             heap_bytes: 0,
             allocated_bytes_since_collection: 0,
             collection_requested: false,
-            collections_completed: 0, last_before_bytes: 0, last_after_bytes: 0, last_reclaimed_objects: 0,
+            collections_completed: 0,
+            last_before_bytes: 0,
+            last_after_bytes: 0,
+            last_reclaimed_objects: 0,
             profile_collection: false,
             profile_mark_edges: 0,
             profile_mark_cache_hits: 0,
@@ -232,12 +302,13 @@ impl HeapState {
             next_strong_marked_range: 0,
             strong_marked_addresses: [0; 1024],
             objects: BTreeMap::new(),
-            roots: Vec::new(),
+            roots: PersistentRegion::default(),
             worklist: Vec::new(),
             weak_slots: Vec::new(),
             weak_roots: Vec::new(),
             weak_backings: Vec::new(),
             ephemerons: Vec::new(),
+            sweep: None,
         }
     }
 
@@ -345,18 +416,12 @@ impl HeapState {
         self.activity_since_collection = false;
         self.allocated_bytes_since_collection = 0;
         self.collection_requested = false;
-        // Upgrade and prune the root registry in one pass. Every successful
-        // upgrade remains held through dispatch, including cleared root cells.
-        // A separate strong_count scan would visit the same registry twice.
-        let mut roots = Vec::with_capacity(self.roots.len());
-        self.roots.retain(|root| {
-            if let Some(root) = root.upgrade() {
-                roots.push(root);
-                true
-            } else {
-                false
-            }
-        });
+        let mut root_trace = browser_tracing::span("gc", "LayoutHeap.RootRegistry");
+        root_trace.set("slots", self.roots.len() as f64);
+        let roots = self.roots.live_roots();
+        root_trace.set("live_cells", roots.len() as f64);
+        drop(root_trace);
+        let reset_trace = browser_tracing::span("gc", "LayoutHeap.ResetMarks");
         for object in self.objects.values_mut() {
             object.marked = false;
             object.strongly_marked = false;
@@ -366,6 +431,9 @@ impl HeapState {
         self.weak_roots.clear();
         self.weak_backings.clear();
         self.ephemerons.clear();
+        drop(reset_trace);
+        let mut roots_trace = browser_tracing::span("gc", "LayoutHeap.MarkRoots");
+        roots_trace.set("live_cells", roots.len() as f64);
         for root in roots {
             if root.weak() {
                 self.weak_roots.push(root);
@@ -373,14 +441,14 @@ impl HeapState {
                 self.mark(root.get());
             }
         }
+        drop(roots_trace);
         let roots_done = profile.map(|start| start.elapsed());
+        let mut mark_trace = browser_tracing::span("gc", "LayoutHeap.MarkGraph");
         let mut visitor = Visitor { heap: self };
         let mut traced_objects = 0;
         loop {
             while let Some(item) = visitor.heap.worklist.pop() {
-                if profile.is_some() {
-                    traced_objects += 1;
-                }
+                traced_objects += 1;
                 // The payload stays allocated throughout mark/weak processing;
                 // collection cannot allocate/free/cancel an object while tracing.
                 // The callback was validated when this exact object was marked.
@@ -400,7 +468,10 @@ impl HeapState {
                 break;
             }
         }
+        mark_trace.set("traced_objects", traced_objects as f64);
+        drop(mark_trace);
         let trace_done = profile.map(|start| start.elapsed());
+        let weak_trace = browser_tracing::span("gc", "LayoutHeap.ProcessWeak");
         {
             let broker = LivenessBroker {
                 heap: &*visitor.heap,
@@ -415,19 +486,25 @@ impl HeapState {
                     (slot.clear)(slot.slot);
                 }
             }
-            for root in &visitor.heap.weak_roots {
-                if !broker.IsHeapObjectAlive(root.get()) {
-                    root.clear();
+        }
+        for index in 0..visitor.heap.weak_roots.len() {
+            let root = &visitor.heap.weak_roots[index];
+            if !visitor.heap.alive(root.get()) {
+                if let Some(slot) = root.clear() {
+                    visitor.heap.roots.release(slot);
                 }
             }
         }
+        drop(weak_trace);
         let weak_done = profile.map(|start| start.elapsed());
+        let dead_trace = browser_tracing::span("gc", "LayoutHeap.FindDead");
         let dead: Vec<_> = visitor
             .heap
             .objects
             .iter()
             .filter_map(|(&address, object)| (!object.marked).then_some(address))
             .collect();
+        drop(dead_trace);
         if let Some(start) = profile {
             let elapsed = start.elapsed();
             eprintln!(
@@ -451,56 +528,140 @@ thread_local! {
     static SWEEPING: Cell<bool> = const { Cell::new(false) };
 }
 
-fn collect() {
-    let mut trace = browser_tracing::span("gc", "LayoutHeap.Collect");
-    if browser_tracing::enabled() {
-        HEAP.with(|heap| {
-            let heap = heap.borrow();
-            trace.set("objects", heap.objects.len() as f64);
-            trace.set("roots", heap.roots.len() as f64);
+// cppgc supports atomic marking with incremental sweeping. No mutation may
+// interleave with mark/weak processing. After marking, only the fixed dead set
+// is swept; new allocations and changes to surviving objects belong to the next
+// collection. All finalizers finish before metadata/storage is released, since
+// native destructors can inspect other dead allocations.
+struct SweepState {
+    dead: Vec<usize>,
+    finalized: usize,
+    released: usize,
+    before_bytes: usize,
+}
+
+fn start_collection() {
+    let mut trace = browser_tracing::span("gc", "LayoutHeap.StartCollection");
+    HEAP.with(|heap| {
+        let mut heap = heap.borrow_mut();
+        assert!(
+            heap.sweep.is_none(),
+            "finish sweeping before starting another collection"
+        );
+        trace.set("objects", heap.objects.len() as f64);
+        trace.set("roots", heap.roots.used as f64);
+        trace.set("root_slots", heap.roots.len() as f64);
+        let before_bytes = heap.heap_bytes;
+        let dead = heap.collect_marks();
+        trace.set("reclaimed_objects", dead.len() as f64);
+        heap.sweep = Some(SweepState {
+            dead,
+            finalized: 0,
+            released: 0,
+            before_bytes,
         });
-    }
-    let before_bytes = HEAP.with(|heap| heap.borrow().heap_bytes);
-    let dead = HEAP.with(|heap| heap.borrow_mut().collect_marks());
-    let reclaimed_objects = dead.len();
-    trace.set("reclaimed_objects", dead.len() as f64);
+        heap.collecting = false;
+    });
+}
+
+fn sweep_until(deadline: Option<std::time::Instant>) {
+    let mut state = HEAP.with(|heap| {
+        let mut heap = heap.borrow_mut();
+        assert_eq!(heap.scopes, 0);
+        assert!(!heap.collecting);
+        let state = heap.sweep.take().expect("pending sweep");
+        heap.collecting = true;
+        state
+    });
+    let has_time = || deadline.is_none_or(|limit| std::time::Instant::now() < limit);
     SWEEPING.set(true);
-    // Keep every allocation mapped while native destructors run. Destructors
-    // may query object sizes and release Persistent roots.
-    for address in &dead {
-        let destroy = HEAP.with(|heap| {
-            heap.borrow_mut()
-                .objects
-                .get_mut(address)
-                .unwrap()
-                .destroy
-                .take()
-        });
-        if let Some(destroy) = destroy {
-            unsafe { destroy(*address as *mut u8) };
+    {
+        let mut trace = browser_tracing::span("gc", "LayoutHeap.Finalize");
+        let started = state.finalized;
+        while state.finalized < state.dead.len() && has_time() {
+            let address = state.dead[state.finalized];
+            let destroy = HEAP.with(|heap| {
+                heap.borrow_mut()
+                    .objects
+                    .get_mut(&address)
+                    .unwrap()
+                    .destroy
+                    .take()
+            });
+            if let Some(destroy) = destroy {
+                unsafe { destroy(address as *mut u8) };
+            }
+            state.finalized += 1;
         }
+        trace.set("objects", (state.finalized - started) as f64);
+    }
+    {
+        let mut trace = browser_tracing::span("gc", "LayoutHeap.Sweep");
+        let started = state.released;
+        if state.finalized == state.dead.len() {
+            HEAP.with(|heap| {
+                let mut heap = heap.borrow_mut();
+                while state.released < state.dead.len() && has_time() {
+                    let address = state.dead[state.released];
+                    let object = heap.objects.remove(&address).unwrap();
+                    heap.heap_bytes = heap.heap_bytes.saturating_sub(object.layout.size());
+                    drop(object);
+                    state.released += 1;
+                }
+            });
+        }
+        trace.set("objects", (state.released - started) as f64);
     }
     HEAP.with(|heap| {
         let mut heap = heap.borrow_mut();
-        for address in dead {
-            heap.objects.remove(&address);
+        if state.released == state.dead.len() {
+            heap.weak_slots.clear();
+            heap.weak_roots.clear();
+            heap.weak_backings.clear();
+            heap.ephemerons.clear();
+            heap.collections_completed = heap.collections_completed.saturating_add(1);
+            heap.last_before_bytes = state.before_bytes;
+            heap.last_after_bytes = heap.heap_bytes;
+            heap.last_reclaimed_objects = state.dead.len();
+        } else {
+            heap.sweep = Some(state);
         }
-        heap.heap_bytes = heap
-            .objects
-            .values()
-            .map(|object| object.layout.size())
-            .sum();
-        heap.weak_slots.clear();
-        heap.weak_roots.clear();
-        heap.weak_backings.clear();
-        heap.ephemerons.clear();
-        heap.collections_completed = heap.collections_completed.saturating_add(1);
-        heap.last_before_bytes = before_bytes;
-        heap.last_after_bytes = heap.heap_bytes;
-        heap.last_reclaimed_objects = reclaimed_objects;
         heap.collecting = false;
     });
     SWEEPING.set(false);
+}
+
+fn collect() {
+    let _trace = browser_tracing::span("gc", "LayoutHeap.Collect");
+    if HEAP.with(|heap| heap.borrow().sweep.is_some()) {
+        sweep_until(None);
+    }
+    start_collection();
+    sweep_until(None);
+}
+
+/// Run one non-nestable foreground GC task on the heap owner. This corresponds
+/// to cppgc's atomic marking / incremental sweeping mode. The deadline covers
+/// both mark and sweep; marking and an individual destructor remain atomic.
+/// The owner reposts while IsLayoutHeapCollectionRequested() remains true.
+pub fn CollectLayoutHeapIncrementally(budget: std::time::Duration) {
+    let deadline = std::time::Instant::now() + budget;
+    let mut trace = browser_tracing::span("gc", "LayoutHeap.CollectionTask");
+    let (requested, sweeping) = HEAP.with(|heap| {
+        let heap = heap.borrow();
+        assert_eq!(heap.scopes, 0);
+        assert!(!heap.collecting);
+        (heap.collection_requested, heap.sweep.is_some())
+    });
+    trace.set("starts_collection", (requested && !sweeping) as u8 as f64);
+    if !sweeping {
+        if !requested {
+            return;
+        }
+        start_collection();
+    }
+    sweep_until(Some(deadline));
+    trace.set("pending", IsLayoutHeapCollectionRequested() as u8 as f64);
 }
 
 // cpp: foundation/blink_base/heap/heap.h:61-76
@@ -718,13 +879,16 @@ struct RootCell<T> {
     pointer: AtomicPtr<T>,
     weak: bool,
     owner: std::thread::ThreadId,
+    // Index + 1; zero means that this cleared cell owns no region slot.
+    registration: AtomicUsize,
 }
 impl<T> RootSlot for RootCell<T> {
     fn get(&self) -> *const u8 {
         self.pointer.load(Ordering::Relaxed) as *const u8
     }
-    fn clear(&self) {
+    fn clear(&self) -> Option<usize> {
         self.pointer.store(std::ptr::null_mut(), Ordering::Relaxed);
+        self.registration.swap(0, Ordering::Relaxed).checked_sub(1)
     }
     fn weak(&self) -> bool {
         self.weak
@@ -734,7 +898,6 @@ impl<T> RootSlot for RootCell<T> {
 // cpp: foundation/blink_base/heap/persistent.h:12-78
 pub struct BasicPersistent<T, const WEAK: bool> {
     slot: Arc<RootCell<T>>,
-    registered: bool,
 }
 pub type Persistent<T> = BasicPersistent<T, false>;
 pub type WeakPersistent<T> = BasicPersistent<T, true>;
@@ -746,8 +909,8 @@ impl<T: 'static, const WEAK: bool> BasicPersistent<T, WEAK> {
                 pointer: AtomicPtr::new(std::ptr::null_mut()),
                 weak: WEAK,
                 owner: std::thread::current().id(),
+                registration: AtomicUsize::new(0),
             }),
-            registered: false,
         }
     }
     pub fn from_ptr(pointer: *mut T) -> Self {
@@ -775,6 +938,10 @@ impl<T: 'static, const WEAK: bool> BasicPersistent<T, WEAK> {
     }
     pub fn Assign(&mut self, pointer: *mut T) {
         self.check_thread();
+        if pointer.is_null() {
+            self.Clear();
+            return;
+        }
         if !pointer.is_null() {
             assert!(
                 IsManagedLayoutAddress(pointer),
@@ -782,17 +949,15 @@ impl<T: 'static, const WEAK: bool> BasicPersistent<T, WEAK> {
             );
         }
         if !pointer.is_null() {
-            // cppgc BasicPersistent::Assign reuses its existing PersistentNode.
-            // Our weak-slot registry retains live cells, including cleared
-            // cells, until their owner drops; registration is therefore once
-            // per cell, without scanning every existing root on each Assign.
+            // cppgc BasicPersistent::Assign reuses a non-null handle's node;
+            // assigning null/Clear/Drop returns it to the region's free list.
             HEAP.with(|heap| {
                 let mut heap = heap.borrow_mut();
                 assert!(!heap.collecting);
-                if !self.registered {
+                if self.slot.registration.load(Ordering::Relaxed) == 0 {
                     let slot: Arc<dyn RootSlot> = self.slot.clone();
-                    heap.roots.push(Arc::downgrade(&slot));
-                    self.registered = true;
+                    let index = heap.roots.allocate(Arc::downgrade(&slot));
+                    self.slot.registration.store(index + 1, Ordering::Relaxed);
                 }
             });
         }
@@ -803,12 +968,18 @@ impl<T: 'static, const WEAK: bool> BasicPersistent<T, WEAK> {
     }
     pub fn Clear(&mut self) {
         self.check_thread();
-        if !self.slot.pointer.load(Ordering::Relaxed).is_null() {
-            HEAP.with(|heap| heap.borrow_mut().activity_since_collection = true);
+        if self.slot.get().is_null() && self.slot.registration.load(Ordering::Relaxed) == 0 {
+            return;
         }
-        self.slot
-            .pointer
-            .store(std::ptr::null_mut(), Ordering::Relaxed);
+        HEAP.with(|heap| {
+            let mut heap = heap.borrow_mut();
+            if !self.slot.get().is_null() {
+                heap.activity_since_collection = true;
+            }
+            if let Some(index) = self.slot.clear() {
+                heap.roots.release(index);
+            }
+        });
     }
     pub fn Release(&mut self) -> *mut T {
         let pointer = self.Get();
@@ -829,6 +1000,9 @@ impl<T, const WEAK: bool> Drop for BasicPersistent<T, WEAK> {
             let _ = HEAP.try_with(|heap| {
                 if let Ok(mut heap) = heap.try_borrow_mut() {
                     heap.activity_since_collection = true;
+                    if let Some(index) = self.slot.clear() {
+                        heap.roots.release(index);
+                    }
                 }
             });
         }
@@ -894,7 +1068,10 @@ pub fn CollectLayoutHeapForTesting() {
 /// The query is side-effect free and is valid only on the layout heap's owner
 /// thread, like all other heap operations.
 pub fn IsLayoutHeapCollectionRequested() -> bool {
-    HEAP.with(|heap| heap.borrow().collection_requested)
+    HEAP.with(|heap| {
+        let heap = heap.borrow();
+        heap.collection_requested || heap.sweep.is_some()
+    })
 }
 
 /// Ask the next low-priority owner turn to collect, for example after an
@@ -909,7 +1086,7 @@ pub fn CollectLayoutHeapIfRequested() -> bool {
     let requested = HEAP.with(|heap| {
         let heap = heap.borrow();
         assert_eq!(heap.scopes, 0, "cannot collect inside a layout heap scope");
-        !heap.collecting && heap.collection_requested
+        !heap.collecting && (heap.collection_requested || heap.sweep.is_some())
     });
     if requested {
         collect();
@@ -1225,6 +1402,67 @@ mod reuse_tests {
         weak.Assign(c);
         let keeper_c = Persistent::from_ptr(c);
         assert_eq!(weak.Get(), keeper_c.Get());
+        let slots = HEAP.with(|heap| heap.borrow().roots.len());
+        let registered = HEAP.with(|heap| heap.borrow().roots.used);
+        for _ in 0..100_000 {
+            drop(keeper_c.clone());
+        }
+        HEAP.with(|heap| {
+            let heap = heap.borrow();
+            assert!(heap.roots.len() <= slots + 1);
+            assert_eq!(heap.roots.used, registered);
+            assert!(heap.roots.iter().all(|root| root.upgrade().is_some()));
+        });
+    }
+    #[test]
+    fn incremental_sweep_preserves_new_allocations_and_next_collection_root_changes() {
+        std::thread::spawn(|| {
+            let traces = Rc::new(Cell::new(0));
+            let drops = Rc::new(Cell::new(0));
+            let make = || Counted {
+                traces: traces.clone(),
+                drops: drops.clone(),
+            };
+            let mut keeper;
+            let weak;
+            {
+                let mut scope = LayoutHeapScope::new();
+                scope.DeferCollection();
+                keeper = Persistent::from_ptr(MakeGarbageCollected(make()));
+                weak = WeakPersistent::from_ptr(keeper.Get());
+                for _ in 0..32 {
+                    MakeGarbageCollected(make());
+                }
+            }
+            RequestLayoutHeapCollection();
+            // Mark atomically, then yield before any finalizer. Mutator work
+            // is allowed here; it must not be swept using this cycle's marks.
+            CollectLayoutHeapIncrementally(std::time::Duration::ZERO);
+            assert!(IsLayoutHeapCollectionRequested());
+            assert!(!IsLayoutHeapSweepingOnOwningThread());
+            assert_eq!(drops.get(), 0);
+            let next;
+            {
+                let mut scope = LayoutHeapScope::new();
+                scope.DeferCollection();
+                keeper.Clear();
+                next = Persistent::from_ptr(MakeGarbageCollected(make()));
+            }
+            CollectLayoutHeapIncrementally(std::time::Duration::from_secs(1));
+            assert!(!IsLayoutHeapCollectionRequested());
+            assert_eq!(drops.get(), 32);
+            assert!(!weak.Get().is_null());
+            assert!(!next.Get().is_null());
+            CollectLayoutHeapForTesting();
+            assert!(weak.Get().is_null());
+            assert_eq!(drops.get(), 33);
+            assert_eq!(LayoutHeapAllocationCountForTesting(), 1);
+            drop(next);
+            CollectLayoutHeapForTesting();
+            assert_eq!(drops.get(), 34);
+        })
+        .join()
+        .unwrap();
     }
     #[test]
     fn unchanged_reuse_skips_tracing_but_allocation_and_root_retirement_collect() {
@@ -1548,13 +1786,16 @@ pub fn LayoutHeapMemoryDiagnostics() -> LayoutHeapMemoryDiagnostics {
             allocated_since_collection_bytes: h.allocated_bytes_since_collection,
             allocations: h.objects.len(),
             root_registry_slots: h.roots.len(),
-            root_registry_capacity_bytes: h.roots.capacity() * std::mem::size_of::<Weak<dyn RootSlot>>(),
+            root_registry_capacity_bytes: h.roots.capacity()
+                * std::mem::size_of::<PersistentNode>(),
             worklist_capacity_bytes: h.worklist.capacity() * std::mem::size_of::<TraceWorkItem>(),
             weak_slots_capacity_bytes: h.weak_slots.capacity() * std::mem::size_of::<WeakSlot>(),
-            weak_roots_capacity_bytes: h.weak_roots.capacity() * std::mem::size_of::<Arc<dyn RootSlot>>(),
-            weak_backings_capacity_bytes: h.weak_backings.capacity() * std::mem::size_of::<WeakBacking>(),
+            weak_roots_capacity_bytes: h.weak_roots.capacity()
+                * std::mem::size_of::<Arc<dyn RootSlot>>(),
+            weak_backings_capacity_bytes: h.weak_backings.capacity()
+                * std::mem::size_of::<WeakBacking>(),
             ephemerons_capacity_bytes: h.ephemerons.capacity() * std::mem::size_of::<Ephemeron>(),
-            collection_requested: h.collection_requested,
+            collection_requested: h.collection_requested || h.sweep.is_some(),
             active_scopes: h.scopes,
             collections_completed: h.collections_completed,
             last_before_bytes: h.last_before_bytes,
@@ -1562,7 +1803,7 @@ pub fn LayoutHeapMemoryDiagnostics() -> LayoutHeapMemoryDiagnostics {
             last_reclaimed_objects: h.last_reclaimed_objects,
             ..Default::default()
         };
-        for slot in &h.roots {
+        for slot in h.roots.iter() {
             match slot.upgrade() {
                 None => result.roots_expired += 1,
                 Some(root) if root.get().is_null() => result.roots_cleared += 1,
@@ -1590,16 +1831,30 @@ mod memory_diagnostic_tests {
             drop(root.clone());
             drop(scope);
             let before = LayoutHeapMemoryDiagnostics();
-            assert_eq!((before.roots_strong_nonnull, before.roots_weak_nonnull,
-                before.roots_cleared, before.roots_expired), (1, 1, 1, 1));
-            assert!(before.root_registry_capacity_bytes >= 4 * std::mem::size_of::<Weak<dyn RootSlot>>());
-            for _ in 0..4 { assert_eq!(before, LayoutHeapMemoryDiagnostics()); }
+            assert_eq!(
+                (
+                    before.roots_strong_nonnull,
+                    before.roots_weak_nonnull,
+                    before.roots_cleared,
+                    before.roots_expired
+                ),
+                (1, 1, 0, 0)
+            );
+            assert!(
+                before.root_registry_capacity_bytes
+                    >= 4 * std::mem::size_of::<Weak<dyn RootSlot>>()
+            );
+            for _ in 0..4 {
+                assert_eq!(before, LayoutHeapMemoryDiagnostics());
+            }
             assert_eq!(unsafe { *root.Get() }, 17);
             assert_eq!(weak.Get(), root.Get());
             drop((root, weak, cleared));
             RequestLayoutHeapCollection();
             assert!(CollectLayoutHeapIfRequested());
             assert_eq!(LayoutHeapMemoryDiagnostics().allocations, 0);
-        }).join().unwrap();
+        })
+        .join()
+        .unwrap();
     }
 }

@@ -451,7 +451,7 @@ fn inherited_mask_reference_keeps_originating_scope_across_shadow_root() {
             &browser::CreateBrowserConstraints(320, 240),
         ));
         owner.EmitLayoutMutations(&Default::default(), |mutation| {
-            engine.ApplyMutation(mutation);
+            engine.ApplyMutation(mutation)
         });
         engine.Layout();
         let fragments = engine.GetLayoutResult().unwrap();

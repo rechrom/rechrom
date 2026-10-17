@@ -350,8 +350,7 @@ mod tests {
     }
     #[test]
     fn outlines_offsets_and_limits_match_independent_cpp_ots() {
-        let original =
-            include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
+        let original = include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
         let reference =
             include_bytes!("../../../artifacts/cpp-reference/page-resources/font-sanitized.ttf");
         let mut head = Head(table(original, b"head")).unwrap();

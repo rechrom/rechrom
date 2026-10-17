@@ -20,5 +20,10 @@ pub struct DecodedImage {
 
 // cpp: image_decoder/image_decoder.h:25-29
 pub trait ImageDecoder {
+    fn BackgroundFactory(
+        &self,
+    ) -> Option<std::sync::Arc<dyn Fn() -> Box<dyn ImageDecoder> + Send + Sync>> {
+        None
+    }
     fn Decode(&mut self, input: &ImageDecodeInput<'_>) -> io::Result<DecodedImage>;
 }

@@ -38,6 +38,10 @@ pub enum DOMMutationType {
     kRequestFullscreen,
     kExitFullscreen,
     kAssignSlotNodes,
+    kSetOptionSelected,
+    /// CSSOM mutation scope completed without a changed declaration. Retain
+    /// custom-element notification, without attribute/observer/style mutation.
+    kNotifyInlineStyleUnchanged,
 }
 
 // cpp: dom/dom_mutation.h:40-51
@@ -49,6 +53,12 @@ pub struct DOMMutation {
     pub value: String,
     pub namespace_uri: String,
     pub bool_value: bool,
+    /// CSSOM's existing-declaration mutation classification for a null-namespace
+    /// style attribute. Generic setAttribute/cssText writes leave this false.
+    pub inline_style_independent: bool,
+    /// Parsed declaration ownership travels with a CSSOM style write, before
+    /// mutation callbacks can reenter the document. Concrete types stay private.
+    pub inline_style: Option<cssom::CSSInlineStyle>,
     pub child_node_id: u64,
     /// Source node for an import into target_node_id (the destination document).
     pub source_node_id: u64,
@@ -199,7 +209,9 @@ pub(crate) fn ValidateDOMMutation(
             }
         }
         DOMMutationType::kParseDocument => {}
-        DOMMutationType::kSetAttribute | DOMMutationType::kRemoveAttribute => {
+        DOMMutationType::kSetAttribute
+        | DOMMutationType::kRemoveAttribute
+        | DOMMutationType::kNotifyInlineStyleUnchanged => {
             if document.Node(target).Type() != DOMNodeType::kElement {
                 return Err(DOMException {
                     kind: DOMExceptionKind::InvalidArgument,
@@ -292,6 +304,14 @@ pub(crate) fn ValidateDOMMutation(
                 return Err(DOMException {
                     kind: DOMExceptionKind::InvalidArgument,
                     message: "exitFullscreen target is not a document",
+                });
+            }
+        }
+        DOMMutationType::kSetOptionSelected => {
+            if !document.Node(target).IsHTMLElement("option") {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "selected mutation target is not an option",
                 });
             }
         }
@@ -419,7 +439,7 @@ pub fn TryApplyDOMMutations(
             }
             DOMMutationType::kParseDocument => {}
             DOMMutationType::kSetAttribute => {
-                document.SetAttribute(
+                document.SetAttributeWithInlineStyleChange(
                     target,
                     DOMAttribute {
                         local_name: mutation.name.clone(),
@@ -427,10 +447,31 @@ pub fn TryApplyDOMMutations(
                         value: mutation.value.clone(),
                         ..DOMAttribute::default()
                     },
+                    mutation.inline_style_independent,
                 );
+                if mutation.name == "style" && mutation.namespace_uri.is_empty() {
+                    if let Some(style) = &mutation.inline_style {
+                        document.Node(target).RetainInlineStyle(style.clone());
+                    }
+                }
             }
             DOMMutationType::kRemoveAttribute => {
                 document.RemoveAttribute(target, &mutation.name, &mutation.namespace_uri);
+            }
+            DOMMutationType::kNotifyInlineStyleUnchanged => {
+                // cpp: StyleAttributeMutationScope destructor notifies a custom
+                // element even when SetPropertyInternal returns kNoChanges.
+                let value = document
+                    .Node(target)
+                    .FindAttribute("style")
+                    .map(|a| a.value.clone());
+                document.CustomElementAttributeWillChange(
+                    target,
+                    "style",
+                    "",
+                    value.clone(),
+                    value,
+                );
             }
             DOMMutationType::kSetTextContent => {
                 document.SetTextContent(target, mutation.value.clone());
@@ -461,6 +502,9 @@ pub fn TryApplyDOMMutations(
             }
             DOMMutationType::kExitFullscreen => {
                 document.ExitFullscreen();
+            }
+            DOMMutationType::kSetOptionSelected => {
+                document.SetOptionSelected(target, mutation.bool_value);
             }
             DOMMutationType::kSetControlValue => {
                 document.SetControlValue(target, mutation.value.clone());
@@ -505,11 +549,13 @@ pub fn DOMMutationTypeName(mutation_type: DOMMutationType) -> &'static str {
         DOMMutationType::kSetControlChecked => "set-control-checked",
         DOMMutationType::kSetControlIndeterminate => "set-control-indeterminate",
         DOMMutationType::kSetControlValue => "set-control-value",
+        DOMMutationType::kSetOptionSelected => "set-option-selected",
         DOMMutationType::kSetDialogModal => "set-dialog-modal",
         DOMMutationType::kSetPopoverOpen => "set-popover-open",
         DOMMutationType::kRequestFullscreen => "request-fullscreen",
         DOMMutationType::kExitFullscreen => "exit-fullscreen",
         DOMMutationType::kAssignSlotNodes => "assign-slot-nodes",
+        DOMMutationType::kNotifyInlineStyleUnchanged => "notify-inline-style-unchanged",
     }
 }
 
@@ -540,6 +586,8 @@ pub fn DOMMutationTypeNameRaw(value: u8) -> &'static str {
         DOMMutationType::kRequestFullscreen,
         DOMMutationType::kExitFullscreen,
         DOMMutationType::kAssignSlotNodes,
+        DOMMutationType::kNotifyInlineStyleUnchanged,
+        DOMMutationType::kSetOptionSelected,
     ]
     .into_iter()
     .find(|kind| *kind as u8 == value)

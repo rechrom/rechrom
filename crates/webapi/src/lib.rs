@@ -48,6 +48,24 @@ mod tests {
     }
 
     impl JavaScriptHostBindings for BootstrapHost {
+        fn PrepareInvocation(
+            &mut self,
+            call: &HostCall<'_>,
+        ) -> Option<javascript::javascript_runtime::HostContinuation> {
+            if call.operation == HostOperation::kCall && call.member == "__domInvoke" {
+                if let [HostValue::Object(_), HostValue::String(member), arguments @ ..] =
+                    call.arguments
+                {
+                    if member == "__domCreateGetter" {
+                        return Some(dom_bindings::DOMJavaScriptBindings::PrepareNativeGetter(
+                            arguments,
+                        ));
+                    }
+                }
+            }
+            None
+        }
+
         fn GlobalNames(&self) -> Vec<String> {
             vec![
                 "__domInvoke".into(),
@@ -55,6 +73,7 @@ mod tests {
                 "__domWrap".into(),
                 "__request".into(),
                 "__cancelRequest".into(),
+                "__queueScrollCompletion".into(),
                 "__randomHex".into(),
                 "__urlParts".into(),
                 "__historyUpdate".into(),

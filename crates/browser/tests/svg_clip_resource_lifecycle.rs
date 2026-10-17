@@ -105,14 +105,18 @@ fn fixture(svg: &str) -> Page {
 fn id(page: &Page, name: &str) -> u64 {
     let owner = page.Document();
     let doc = owner.GetDocument();
-    (0..doc.NodeCount())
-        .find_map(|index| {
-            doc.Node(index)
-                .FindAttribute("id")
-                .filter(|attribute| attribute.value == name)
-                .map(|_| doc.Node(index).Id())
-        })
-        .unwrap_or_else(|| panic!("missing DOM node {name}"))
+    let mut stack = vec![doc.Root()];
+    while let Some(index) = stack.pop() {
+        let node = doc.Node(index);
+        if node
+            .FindAttribute("id")
+            .is_some_and(|attribute| attribute.value == name)
+        {
+            return node.Id();
+        }
+        stack.extend(node.Children().iter().rev().copied());
+    }
+    panic!("missing DOM node {name}")
 }
 
 fn native<'a>(page: &'a Page, name: &str) -> &'a LayoutObject {
@@ -425,7 +429,7 @@ fn targeted_layout_update_retains_binding_and_rejects_stale_version() {
         assert!(owner.UpdateSVGResources());
         engine.ApplyMutation(LayoutMutation::Constraints(&constraints));
         owner.EmitLayoutMutations(&Default::default(), |mutation| {
-            engine.ApplyMutation(mutation);
+            engine.ApplyMutation(mutation)
         });
         engine.Layout();
         let old = engine.GetLayoutResult().unwrap().clone();
@@ -606,7 +610,7 @@ fn canonical_inherited_reference_keeps_originating_scope_across_shadow_root() {
             &browser::CreateBrowserConstraints(320, 240),
         ));
         owner.EmitLayoutMutations(&Default::default(), |mutation| {
-            engine.ApplyMutation(mutation);
+            engine.ApplyMutation(mutation)
         });
         engine.Layout();
         let fragments = engine.GetLayoutResult().unwrap();
@@ -756,30 +760,48 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
         use layoutng_assembly::layout_engine::{LayoutEngine, LayoutMutation};
         let _heap = foundation::LayoutHeapScope::new();
         let mut owner = html::html_parser::ParseHTML(&format!(
-            "<!doctype html><body style='margin:0'><div id='label' style='color:red'>label</div>{CLIPPED}"
+            "<!doctype html><style>.wide #geometry{{width:50px}}</style><body style='margin:0'><div id='label' style='color:red'>label</div>{CLIPPED}"
         ));
         let assembly = browser::CreateLayoutAssembly();
         let mut engine = LayoutEngine::new(&assembly);
         let mut constraints = browser::CreateBrowserConstraints(320, 240);
         constraints.fonts = vec![FontFace {
             family: "SvgPaintOwnershipFixture".into(),
-            bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf").as_slice().into(),
+            bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
+                .as_slice()
+                .into(),
             ..Default::default()
         }];
         let mut styles = style::StyleEngine::new(&owner);
-        styles.Update(&mut owner, &Default::default(), &host_styles()).unwrap();
+        styles
+            .Update(&mut owner, &Default::default(), &host_styles())
+            .unwrap();
         owner.UpdateSVGResources();
         engine.ApplyMutation(LayoutMutation::Constraints(&constraints));
-        owner.EmitLayoutMutations(&Default::default(), |m| { engine.ApplyMutation(m); });
+        owner.EmitLayoutMutations(&Default::default(), |m| engine.ApplyMutation(m));
         engine.Layout();
         owner.DidCommitPaint();
         let old = engine.GetLayoutResult().unwrap().clone();
         let catalog = owner.GetDocument().SVGResources().unwrap().clone();
-        let label = (0..owner.GetDocument().NodeCount()).find(|&i| owner.GetDocument().Node(i)
-            .FindAttribute("id").is_some_and(|a| a.value == "label")).unwrap();
+        let label = (0..owner.GetDocument().NodeCount())
+            .find(|&i| {
+                owner
+                    .GetDocument()
+                    .Node(i)
+                    .FindAttribute("id")
+                    .is_some_and(|a| a.value == "label")
+            })
+            .unwrap();
         let label_id = owner.GetDocument().Node(label).Id();
-        let text_id = owner.GetDocument().Node(owner.GetDocument().Node(label).Children()[0]).Id();
-        let glyphs = find_fragment(&old, text_id).unwrap().paint.glyph_runs.clone();
+        let text_id = owner
+            .GetDocument()
+            .Node(owner.GetDocument().Node(label).Children()[0])
+            .Id();
+        let glyphs = find_fragment(&old, text_id)
+            .unwrap()
+            .paint
+            .glyph_runs
+            .clone();
         let native_label = engine.GetLayoutTree().unwrap().Root();
         let mut object = native_label as *const LayoutObject;
         while unsafe { &*object }.OwnerNodeIdDefault() as u64 != label_id {
@@ -787,12 +809,41 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
             assert!(!object.is_null());
         }
         let bound_font = unsafe { &*object }.StyleRef().GetFont();
-        owner.GetDocumentMut().SetAttribute(label, dom::persistent_document::DOMAttribute {
-            local_name: "style".into(), value: "color:blue".into(), ..Default::default()
-        });
-        styles.Update(&mut owner, &Default::default(), &host_styles()).unwrap();
+        owner.GetDocumentMut().SetAttribute(
+            label,
+            dom::persistent_document::DOMAttribute {
+                local_name: "style".into(),
+                value: "color:blue".into(),
+                ..Default::default()
+            },
+        );
+        // Unrelated HTML mutations must preserve validity before UpdateSVGResources;
+        // equal rebuilt contents would hide unnecessary whole-catalog work.
+        assert!(std::sync::Arc::ptr_eq(
+            &catalog,
+            owner.GetDocument().SVGResources().unwrap()
+        ));
+        owner.GetDocumentMut().SetAttribute(
+            label,
+            dom::persistent_document::DOMAttribute {
+                local_name: "class".into(),
+                value: "label".into(),
+                ..Default::default()
+            },
+        );
+        owner.GetDocumentMut().RemoveAttribute(label, "class", "");
+        assert!(std::sync::Arc::ptr_eq(
+            &catalog,
+            owner.GetDocument().SVGResources().unwrap()
+        ));
+        styles
+            .Update(&mut owner, &Default::default(), &host_styles())
+            .unwrap();
         assert!(!owner.UpdateSVGResources());
-        assert!(std::sync::Arc::ptr_eq(&catalog, owner.GetDocument().SVGResources().unwrap()));
+        assert!(std::sync::Arc::ptr_eq(
+            &catalog,
+            owner.GetDocument().SVGResources().unwrap()
+        ));
         assert!(owner.EmitPaintInputs(label_id, &Default::default(), |m| engine.ApplyMutation(m)));
         assert!(engine.ExportTargetedPaintInputs());
         let current = engine.GetLayoutResult().unwrap();
@@ -800,26 +851,303 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
         assert_eq!(text.paint.style.color.blue, 1.0);
         assert_eq!(text.paint.style.color.red, 0.0);
         assert!(text.paint.glyph_runs == glyphs);
-        assert_eq!(text.fragment_instance_id, find_fragment(&old, text_id).unwrap().fragment_instance_id);
+        assert_eq!(
+            text.fragment_instance_id,
+            find_fragment(&old, text_id).unwrap().fragment_instance_id
+        );
         assert_eq!(unsafe { &*object }.StyleRef().GetFont(), bound_font);
-        assert_eq!(find_fragment(&old, text_id).unwrap().paint.style.color.red, 1.0);
-        owner.GetDocumentMut().SetAttribute(label, dom::persistent_document::DOMAttribute {
-            local_name: "style".into(), value: "color:blue;text-decoration:underline".into(), ..Default::default()
-        });
-        styles.Update(&mut owner, &Default::default(), &host_styles()).unwrap();
+        assert_eq!(
+            find_fragment(&old, text_id).unwrap().paint.style.color.red,
+            1.0
+        );
+        owner.GetDocumentMut().SetAttribute(
+            label,
+            dom::persistent_document::DOMAttribute {
+                local_name: "style".into(),
+                value: "color:blue;text-decoration:underline".into(),
+                ..Default::default()
+            },
+        );
+        styles
+            .Update(&mut owner, &Default::default(), &host_styles())
+            .unwrap();
         owner.UpdateSVGResources();
         assert!(owner.EmitPaintInputs(label_id, &Default::default(), |m| engine.ApplyMutation(m)));
         assert!(engine.ExportTargetedPaintInputs());
         let retained = engine.GetLayoutResult().unwrap().clone();
         let text = find_fragment(&retained, text_id).unwrap();
-        assert!(text.paint.style.text_decoration.underline
-            || text.paint.style.applied_text_decorations.iter().any(|decoration| decoration.underline));
+        assert!(
+            text.paint.style.text_decoration.underline
+                || text
+                    .paint
+                    .style
+                    .applied_text_decorations
+                    .iter()
+                    .any(|decoration| decoration.underline)
+        );
         assert!(text.paint.glyph_runs == glyphs);
         assert!(engine.ExportPaintOnly());
         let exported = find_fragment(engine.GetLayoutResult().unwrap(), text_id).unwrap();
         assert!(exported.paint.style == text.paint.style);
-        assert_eq!(exported.paint.self_ink_overflow, text.paint.self_ink_overflow);
+        assert_eq!(
+            exported.paint.self_ink_overflow,
+            text.paint.self_ink_overflow
+        );
         assert_eq!(exported.paint.ink_overflow, text.paint.ink_overflow);
         assert!(exported.paint.glyph_runs == text.paint.glyph_runs);
+        // ID changes in HTML still affect first-target resolution in this scope.
+        owner.GetDocumentMut().SetAttribute(
+            label,
+            dom::persistent_document::DOMAttribute {
+                local_name: "id".into(),
+                value: "renamed-label".into(),
+                ..Default::default()
+            },
+        );
+        assert!(owner.GetDocument().SVGResources().is_none());
+        assert!(owner.UpdateSVGResources());
+        let resources = owner.GetDocument().SVGResources().unwrap();
+        assert!(!resources.entries.iter().any(|entry| entry.id == "label"));
+        assert_eq!(
+            resources
+                .entries
+                .iter()
+                .find(|entry| entry.id == "renamed-label")
+                .unwrap()
+                .target_node_id,
+            label_id
+        );
+        let resources = resources.clone();
+        // Allocating or editing detached nodes cannot change the active catalog.
+        let detached = owner.GetDocumentMut().CreateElementDefault(
+            dom::persistent_document::DOMNamespace::kSVG,
+            "clipPath".into(),
+        );
+        owner.GetDocumentMut().SetAttribute(
+            detached,
+            dom::persistent_document::DOMAttribute {
+                local_name: "id".into(),
+                value: "detached-resource".into(),
+                ..Default::default()
+            },
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &resources,
+            owner.GetDocument().SVGResources().unwrap()
+        ));
+        // HTML ancestor selectors may still change native SVG resource style.
+        let body = owner.GetDocument().Node(label).Parent().unwrap();
+        owner.GetDocumentMut().SetAttribute(
+            body,
+            dom::persistent_document::DOMAttribute {
+                local_name: "class".into(),
+                value: "wide".into(),
+                ..Default::default()
+            },
+        );
+        assert!(owner.GetDocument().SVGResources().is_some());
+        styles
+            .Update(&mut owner, &Default::default(), &host_styles())
+            .unwrap();
+        assert!(owner.GetDocument().SVGResources().is_none());
+        assert!(owner.UpdateSVGResources());
+        let resources = owner.GetDocument().SVGResources().unwrap();
+        let graph = resources
+            .entries
+            .iter()
+            .find(|entry| entry.id == "clip")
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
+        match graph.children[0].geometry.as_ref().unwrap() {
+            layoutng_assembly::internal::paint_input::SvgClipGeometry::kRect { width, .. } => {
+                assert_eq!(width.value, 50.)
+            }
+            _ => panic!("expected rectangle resource"),
+        }
     });
+}
+
+mod active_filter_inventory {
+    use super::*;
+    use dom::persistent_document::{DOMAttribute, DOMNamespace, DOMShadowRootMode};
+    use layoutng_assembly::internal::paint_input::{SvgFilterGraph, SvgFilterPrimitiveKind};
+
+    fn element(
+        owner: &mut dom::DOM,
+        parent: Option<usize>,
+        tag: &str,
+        id: &str,
+        dx: Option<&str>,
+        href: Option<&str>,
+    ) -> usize {
+        let document = owner.GetDocumentMut();
+        let node = document.CreateElementDefault(DOMNamespace::kSVG, tag.into());
+        for (name, value) in [("id", Some(id)), ("dx", dx), ("href", href)] {
+            if let Some(value) = value.filter(|value| !value.is_empty()) {
+                document.SetAttribute(
+                    node,
+                    DOMAttribute {
+                        local_name: name.into(),
+                        value: value.into(),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        if let Some(parent) = parent {
+            document.AppendChild(parent, node);
+        }
+        node
+    }
+    fn graphs(owner: &mut dom::DOM) -> std::sync::Arc<Vec<SvgFilterGraph>> {
+        use layoutng_assembly::layout_engine::{LayoutEngine, LayoutMutation};
+        let mut style = style::StyleEngine::new(owner);
+        style
+            .Update(
+                owner,
+                &style::media_queries::media_values_cached::MediaValuesCachedData {
+                    viewport_width: 320.,
+                    viewport_height: 240.,
+                    ..Default::default()
+                },
+                &host_styles(),
+            )
+            .unwrap();
+        owner.UpdateSVGResources();
+        let assembly = browser::CreateLayoutAssembly();
+        let mut layout = LayoutEngine::new(&assembly);
+        layout.ApplyMutation(LayoutMutation::Constraints(
+            &browser::CreateBrowserConstraints(320, 240),
+        ));
+        owner.EmitLayoutMutations(&Default::default(), |mutation| {
+            layout.ApplyMutation(mutation)
+        });
+        layout.Layout();
+        layout
+            .GetLayoutResult()
+            .unwrap()
+            .paint
+            .style
+            .svg_filter_graphs
+            .clone()
+    }
+    fn offset(owner: &mut dom::DOM, id: &str) -> f64 {
+        let graphs = graphs(owner);
+        let graph = graphs.iter().find(|graph| graph.id == id).unwrap();
+        assert!(graph.unsupported.is_none(), "{:?}", graph.unsupported);
+        match graph.primitives[0].kind {
+            SvgFilterPrimitiveKind::kOffset { dx, .. } => dx,
+            _ => panic!("expected inherited offset"),
+        }
+    }
+    #[test]
+    fn attached_filters_and_href_follow_connection_tree_order_and_scope() {
+        native_test_thread::run(|| {
+            let _heap = foundation::LayoutHeapScope::new();
+            let mut owner = dom::DOM::new();
+            let detached = element(&mut owner, None, "filter", "base", None, None);
+            element(&mut owner, Some(detached), "feOffset", "", Some("9"), None);
+            let root = owner.GetDocument().Root();
+            let svg = element(&mut owner, Some(root), "svg", "", None, None);
+            let base = element(&mut owner, Some(svg), "filter", "base", None, None);
+            element(&mut owner, Some(base), "feOffset", "", Some("3"), None);
+            element(
+                &mut owner,
+                Some(svg),
+                "filter",
+                "derived",
+                None,
+                Some("#base"),
+            );
+            assert_eq!(
+                graphs(&mut owner).len(),
+                2,
+                "detached filters are not resources"
+            );
+            assert_eq!(offset(&mut owner, "derived"), 3.);
+            let first = element(&mut owner, None, "filter", "base", None, None);
+            element(&mut owner, Some(first), "feOffset", "", Some("5"), None);
+            owner.GetDocumentMut().InsertBefore(svg, first, base);
+            assert_eq!(
+                offset(&mut owner, "derived"),
+                5.,
+                "tree order, not arena order"
+            );
+            owner.GetDocumentMut().Remove(first);
+            assert_eq!(offset(&mut owner, "derived"), 3.);
+            owner.GetDocumentMut().Remove(base);
+            assert!(
+                graphs(&mut owner)
+                    .iter()
+                    .find(|graph| graph.id == "derived")
+                    .unwrap()
+                    .unsupported
+                    .is_some(),
+                "detached old ids cannot satisfy href"
+            );
+            owner.GetDocumentMut().AppendChild(svg, detached);
+            assert_eq!(offset(&mut owner, "derived"), 9.);
+            let host = owner
+                .GetDocumentMut()
+                .CreateElementDefault(DOMNamespace::kHTML, "x-host".into());
+            owner.GetDocumentMut().AppendChild(root, host);
+            let shadow = owner
+                .GetDocumentMut()
+                .AttachShadowRoot(host, DOMShadowRootMode::kOpen);
+            let shadow_svg = element(&mut owner, Some(shadow), "svg", "", None, None);
+            let shadow_base = element(&mut owner, Some(shadow_svg), "filter", "base", None, None);
+            element(
+                &mut owner,
+                Some(shadow_base),
+                "feOffset",
+                "",
+                Some("7"),
+                None,
+            );
+            element(
+                &mut owner,
+                Some(shadow_svg),
+                "filter",
+                "shadow-derived",
+                None,
+                Some("#base"),
+            );
+            assert_eq!(offset(&mut owner, "shadow-derived"), 7.);
+            // Default primitive regions must not crop an offset SVG shape
+            // to its original object bounds; retained frames keep old graphs.
+            let mut page = fixture(
+                r##"<svg width="180" height="100"><defs><filter id="shift" filterUnits="userSpaceOnUse" x="0" y="0" width="180" height="100"><feOffset id="offset" dx="12"/></filter></defs><rect id="filtered" x="16" y="16" width="20" height="20" fill="red" filter="url(#shift)"/></svg>"##,
+            );
+            let old = page.CurrentFrame().unwrap().display_items.clone();
+            assert_eq!(pixel(&current_pixels(&page), 32, 20), [255, 0, 0, 255]);
+            set_attribute(&mut page, "offset", "dx", "24");
+            assert_eq!(pixel(&current_pixels(&page), 54, 20), [255, 0, 0, 255]);
+            assert_eq!(pixel(&current_pixels(&page), 30, 20), [255, 255, 255, 255]);
+            assert_eq!(pixel(&pixels(&page, &old), 32, 20), [255, 0, 0, 255]);
+            page_replace_children(
+                &mut page,
+                "shift",
+                r#"<feOffset dx="12" result="first"/><feOffset in="first" dx="12"/>"#,
+            );
+            assert_eq!(pixel(&current_pixels(&page), 54, 20), [255, 0, 0, 255]);
+            assert_eq!(pixel(&current_pixels(&page), 30, 20), [255, 255, 255, 255]);
+            page_replace_children(&mut page, "shift", r#"<feOffset id="offset" dx="-24"/>"#);
+            assert_eq!(pixel(&current_pixels(&page), 4, 20), [255, 0, 0, 255]);
+            assert_eq!(pixel(&current_pixels(&page), 14, 20), [255, 255, 255, 255]);
+            set_attribute(&mut page, "offset", "dy", "12");
+            assert_eq!(pixel(&current_pixels(&page), 4, 32), [255, 0, 0, 255]);
+            assert_eq!(pixel(&current_pixels(&page), 4, 20), [255, 255, 255, 255]);
+            set_attribute(&mut page, "offset", "dy", "-24");
+            assert_eq!(pixel(&current_pixels(&page), 4, 4), [255, 0, 0, 255]);
+            set_attribute(&mut page, "offset", "dx", "180");
+            assert_eq!(pixel(&current_pixels(&page), 20, 20), [255, 255, 255, 255]);
+            set_attribute(&mut page, "offset", "dx", "12");
+            set_attribute(&mut page, "offset", "dy", "0");
+            set_attribute(&mut page, "filtered", "transform", "translate(10 8)");
+            assert_eq!(pixel(&current_pixels(&page), 40, 28), [255, 0, 0, 255]);
+            assert_eq!(pixel(&current_pixels(&page), 30, 20), [255, 255, 255, 255]);
+        });
+    }
 }

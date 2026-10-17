@@ -1571,6 +1571,15 @@ impl Default for PaintStyleData {
 }
 
 // cpp: layoutng/internal/paint_input.cc:7-7
+// base::ValuesEquivalent compares shared immutable groups by identity first.
+// DerefMut below detaches before writing, so a changed group still compares all
+// of its values; this is not a native-style-pointer geometry shortcut.
+impl PartialEq for PaintStyle {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.data, &other.data) || self.data == other.data
+    }
+}
+
 impl Default for PaintStyle {
     fn default() -> Self {
         Self {

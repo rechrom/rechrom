@@ -201,6 +201,195 @@ impl CSSProperty {
     pub fn IsInLogicalPropertyGroup(&self) -> bool {
         self.has(Self::kInLogicalPropertyGroup)
     }
+    // cpp: generated properties/longhands.cc overrides; css_direction_aware_resolver.cc mappings.
+    // Generated logical/physical overrides compare the opposite mapping.
+    pub fn IsInSameLogicalPropertyGroupWithDifferentMappingLogic(&self, id: CSSPropertyID) -> bool {
+        use CSSPropertyID::*;
+        match self.PropertyID() {
+            kInternalVisitedBorderBlockEndColor
+            | kInternalVisitedBorderBlockStartColor
+            | kInternalVisitedBorderInlineEndColor
+            | kInternalVisitedBorderInlineStartColor => matches!(
+                id,
+                kInternalVisitedBorderTopColor
+                    | kInternalVisitedBorderRightColor
+                    | kInternalVisitedBorderBottomColor
+                    | kInternalVisitedBorderLeftColor
+            ),
+            kInternalVisitedBorderBottomColor
+            | kInternalVisitedBorderLeftColor
+            | kInternalVisitedBorderRightColor
+            | kInternalVisitedBorderTopColor => matches!(
+                id,
+                kInternalVisitedBorderBlockStartColor
+                    | kInternalVisitedBorderBlockEndColor
+                    | kInternalVisitedBorderInlineStartColor
+                    | kInternalVisitedBorderInlineEndColor
+            ),
+            kBlockSize | kInlineSize => matches!(id, kWidth | kHeight),
+            kBorderBlockEndColor
+            | kBorderBlockStartColor
+            | kBorderInlineEndColor
+            | kBorderInlineStartColor => matches!(
+                id,
+                kBorderBottomColor | kBorderLeftColor | kBorderRightColor | kBorderTopColor
+            ),
+            kBorderBlockEndStyle
+            | kBorderBlockStartStyle
+            | kBorderInlineEndStyle
+            | kBorderInlineStartStyle => matches!(
+                id,
+                kBorderBottomStyle | kBorderLeftStyle | kBorderRightStyle | kBorderTopStyle
+            ),
+            kBorderBlockEndWidth
+            | kBorderBlockStartWidth
+            | kBorderInlineEndWidth
+            | kBorderInlineStartWidth => matches!(
+                id,
+                kBorderBottomWidth | kBorderLeftWidth | kBorderRightWidth | kBorderTopWidth
+            ),
+            kBorderBottomColor | kBorderLeftColor | kBorderRightColor | kBorderTopColor => {
+                matches!(
+                    id,
+                    kBorderBlockStartColor
+                        | kBorderBlockEndColor
+                        | kBorderInlineStartColor
+                        | kBorderInlineEndColor
+                )
+            }
+            kBorderBottomLeftRadius
+            | kBorderBottomRightRadius
+            | kBorderTopLeftRadius
+            | kBorderTopRightRadius => matches!(
+                id,
+                kBorderStartStartRadius
+                    | kBorderStartEndRadius
+                    | kBorderEndStartRadius
+                    | kBorderEndEndRadius
+            ),
+            kBorderBottomStyle | kBorderLeftStyle | kBorderRightStyle | kBorderTopStyle => {
+                matches!(
+                    id,
+                    kBorderBlockStartStyle
+                        | kBorderBlockEndStyle
+                        | kBorderInlineStartStyle
+                        | kBorderInlineEndStyle
+                )
+            }
+            kBorderBottomWidth | kBorderLeftWidth | kBorderRightWidth | kBorderTopWidth => {
+                matches!(
+                    id,
+                    kBorderBlockStartWidth
+                        | kBorderBlockEndWidth
+                        | kBorderInlineStartWidth
+                        | kBorderInlineEndWidth
+                )
+            }
+            kBorderEndEndRadius
+            | kBorderEndStartRadius
+            | kBorderStartEndRadius
+            | kBorderStartStartRadius => matches!(
+                id,
+                kBorderBottomLeftRadius
+                    | kBorderBottomRightRadius
+                    | kBorderTopLeftRadius
+                    | kBorderTopRightRadius
+            ),
+            kBottom | kLeft | kRight | kTop => matches!(
+                id,
+                kInsetBlockStart | kInsetBlockEnd | kInsetInlineStart | kInsetInlineEnd
+            ),
+            kContainIntrinsicBlockSize | kContainIntrinsicInlineSize => {
+                matches!(id, kContainIntrinsicWidth | kContainIntrinsicHeight)
+            }
+            kCornerBottomLeftShape
+            | kCornerBottomRightShape
+            | kCornerTopLeftShape
+            | kCornerTopRightShape => matches!(
+                id,
+                kCornerStartStartShape
+                    | kCornerStartEndShape
+                    | kCornerEndStartShape
+                    | kCornerEndEndShape
+            ),
+            kCornerEndEndShape
+            | kCornerEndStartShape
+            | kCornerStartEndShape
+            | kCornerStartStartShape => matches!(
+                id,
+                kCornerTopLeftShape
+                    | kCornerTopRightShape
+                    | kCornerBottomRightShape
+                    | kCornerBottomLeftShape
+            ),
+            kHeight | kWidth => matches!(id, kBlockSize | kInlineSize),
+            kInsetBlockEnd | kInsetBlockStart | kInsetInlineEnd | kInsetInlineStart => {
+                matches!(id, kBottom | kLeft | kRight | kTop)
+            }
+            kMarginBlockEnd | kMarginBlockStart | kMarginInlineEnd | kMarginInlineStart => {
+                matches!(id, kMarginBottom | kMarginLeft | kMarginRight | kMarginTop)
+            }
+            kMarginBottom | kMarginLeft | kMarginRight | kMarginTop => matches!(
+                id,
+                kMarginBlockStart | kMarginBlockEnd | kMarginInlineStart | kMarginInlineEnd
+            ),
+            kMaxBlockSize | kMaxInlineSize => matches!(id, kMaxWidth | kMaxHeight),
+            kMaxHeight | kMaxWidth => matches!(id, kMaxBlockSize | kMaxInlineSize),
+            kMinBlockSize | kMinInlineSize => matches!(id, kMinWidth | kMinHeight),
+            kMinHeight | kMinWidth => matches!(id, kMinBlockSize | kMinInlineSize),
+            kOverflowBlock | kOverflowInline => matches!(id, kOverflowX | kOverflowY),
+            kOverflowX | kOverflowY => matches!(id, kOverflowBlock | kOverflowInline),
+            kOverscrollBehaviorBlock | kOverscrollBehaviorInline => {
+                matches!(id, kOverscrollBehaviorX | kOverscrollBehaviorY)
+            }
+            kOverscrollBehaviorX | kOverscrollBehaviorY => {
+                matches!(id, kOverscrollBehaviorBlock | kOverscrollBehaviorInline)
+            }
+            kPaddingBlockEnd | kPaddingBlockStart | kPaddingInlineEnd | kPaddingInlineStart => {
+                matches!(
+                    id,
+                    kPaddingBottom | kPaddingLeft | kPaddingRight | kPaddingTop
+                )
+            }
+            kPaddingBottom | kPaddingLeft | kPaddingRight | kPaddingTop => matches!(
+                id,
+                kPaddingBlockStart | kPaddingBlockEnd | kPaddingInlineStart | kPaddingInlineEnd
+            ),
+            kScrollMarginBlockEnd
+            | kScrollMarginBlockStart
+            | kScrollMarginInlineEnd
+            | kScrollMarginInlineStart => matches!(
+                id,
+                kScrollMarginBottom | kScrollMarginLeft | kScrollMarginRight | kScrollMarginTop
+            ),
+            kScrollMarginBottom | kScrollMarginLeft | kScrollMarginRight | kScrollMarginTop => {
+                matches!(
+                    id,
+                    kScrollMarginBlockStart
+                        | kScrollMarginBlockEnd
+                        | kScrollMarginInlineStart
+                        | kScrollMarginInlineEnd
+                )
+            }
+            kScrollPaddingBlockEnd
+            | kScrollPaddingBlockStart
+            | kScrollPaddingInlineEnd
+            | kScrollPaddingInlineStart => matches!(
+                id,
+                kScrollPaddingBottom | kScrollPaddingLeft | kScrollPaddingRight | kScrollPaddingTop
+            ),
+            kScrollPaddingBottom | kScrollPaddingLeft | kScrollPaddingRight | kScrollPaddingTop => {
+                matches!(
+                    id,
+                    kScrollPaddingBlockStart
+                        | kScrollPaddingBlockEnd
+                        | kScrollPaddingInlineStart
+                        | kScrollPaddingInlineEnd
+                )
+            }
+            _ => false,
+        }
+    }
     pub fn IsRepeated(&self) -> bool {
         self.repetition_separator_ != 0
     }

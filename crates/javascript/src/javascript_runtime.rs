@@ -54,6 +54,35 @@ pub struct JavaScriptFunction {
 pub trait JavaScriptFunctionStorage: Any {
     fn AsAny(&self) -> &dyn Any;
     fn IsSameFunction(&self, other: &dyn JavaScriptFunctionStorage) -> bool;
+    fn Downgrade(&self) -> WeakJavaScriptFunction;
+}
+
+/// A non-owning callback identity. Its native owner must publish the actual
+/// function edge through HostObjectTraceSource before releasing a strong handle.
+#[derive(Clone, Default)]
+pub struct WeakJavaScriptFunction {
+    storage: Option<Rc<dyn WeakJavaScriptFunctionStorage>>,
+}
+pub trait WeakJavaScriptFunctionStorage: Any {
+    fn Upgrade(&self) -> Option<JavaScriptFunction>;
+}
+impl WeakJavaScriptFunction {
+    pub fn new<T: WeakJavaScriptFunctionStorage>(storage: T) -> Self {
+        Self {
+            storage: Some(Rc::new(storage)),
+        }
+    }
+    pub fn Upgrade(&self) -> Option<JavaScriptFunction> {
+        self.storage.as_ref()?.Upgrade()
+    }
+}
+impl std::fmt::Debug for JavaScriptFunction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("JavaScriptFunction")
+            .field("valid", &self.IsValid())
+            .finish_non_exhaustive()
+    }
 }
 
 impl JavaScriptFunction {
@@ -65,6 +94,13 @@ impl JavaScriptFunction {
 
     pub fn IsValid(&self) -> bool {
         self.storage.is_some()
+    }
+    pub fn Downgrade(&self) -> WeakJavaScriptFunction {
+        self.storage
+            .as_ref()
+            .map_or_else(WeakJavaScriptFunction::default, |storage| {
+                storage.Downgrade()
+            })
     }
 
     pub fn Implementation<T: Any>(&self) -> Option<&T> {
@@ -141,6 +177,18 @@ pub struct HostObjectRef {
 pub struct HostMethodRef {
     pub receiver: HostObjectId,
     pub name: String,
+}
+
+/// An ordinary native function. The callback receives the actual JavaScript
+/// `this`, followed by captured data and call arguments. Captured values must
+/// be owned and traced by the JavaScript engine, just like closure captures.
+/// A bound callback receiver is retained through the same engine-owned graph.
+#[derive(Clone)]
+pub struct HostFunctionBinding {
+    pub name: String,
+    pub length: u32,
+    pub callback: HostMethodRef,
+    pub data: Vec<HostValue>,
 }
 
 #[derive(Clone)]
@@ -249,7 +297,56 @@ impl HostResult {
 
 pub type HostContinuation = Box<dyn FnOnce(&mut dyn JavaScriptHostRuntime) -> HostResult>;
 
+/// Immutable native ownership facts consumed on the realm's owner thread.
+/// Slots name native fields, not JS properties; roots name actual host activity.
+/// The host publishes changes before reentering JS. GC never calls the source.
+#[derive(Clone, Debug)]
+pub enum HostObjectTraceChange {
+    Object {
+        id: HostObjectId,
+    },
+    /// Replace an owner's native reference vector (for example a static list).
+    ReferenceList {
+        owner: HostObjectId,
+        targets: std::rc::Rc<[HostObjectId]>,
+    },
+    Reference {
+        owner: HostObjectId,
+        slot: u64,
+        target: Option<HostObjectId>,
+    },
+    /// Transfer a callback edge to an existing native owner. This temporary
+    /// strong handle is released after the engine commits the traced edge.
+    FunctionReference {
+        owner: HostObjectId,
+        slot: u64,
+        function: Option<JavaScriptFunction>,
+    },
+    Root {
+        id: HostObjectId,
+        reason: u64,
+        rooted: bool,
+    },
+    /// Native storage was retired after Released. IDs must not be reused;
+    /// owners remove incoming native references before publishing this fact.
+    Retire {
+        id: HostObjectId,
+    },
+}
+pub trait HostObjectTraceSource {
+    fn TakeChanges(&self) -> Vec<HostObjectTraceChange>;
+    /// Owner-thread notification, never a GC callback. Owners may retire
+    /// ephemeral host records; native DOM storage remains with its own owner.
+    fn Released(&self, _ids: &[HostObjectId]) {}
+}
+
 pub trait JavaScriptHostBindings {
+    /// None preserves ownership for hosts which have not supplied native
+    /// lifetime facts. The JavaScript backend never invents a DOM graph.
+    fn ObjectTraceSource(&self) -> Option<std::rc::Rc<dyn HostObjectTraceSource>> {
+        None
+    }
+
     // Prototype: prepare under a short host borrow; execute after releasing it.
     fn PrepareInvocation(&mut self, _call: &HostCall<'_>) -> Option<HostContinuation> {
         None
@@ -267,6 +364,12 @@ pub trait JavaScriptHostBindings {
     ) -> HostResult {
         self.Invoke(call)
     }
+    /// True when installed JavaScript descriptors implement all property
+    /// semantics. Such host wrappers are ordinary objects; indexed/named or
+    /// otherwise intercepted objects keep the engine's host traps.
+    fn UsesOrdinaryProperties(&self, _id: HostObjectId) -> bool {
+        false
+    }
     fn PrototypeFor(&mut self, _id: HostObjectId) -> HostResult {
         HostResult {
             handled: false,
@@ -276,6 +379,7 @@ pub trait JavaScriptHostBindings {
 }
 
 pub trait JavaScriptHostRuntime {
+    fn CreateHostFunction(&mut self, binding: &HostFunctionBinding) -> HostResult;
     /// Report an author exception through the realm's existing error channel,
     /// without throwing it from a host algorithm that invokes callbacks.
     fn ReportException(&mut self, value: &HostValue) -> HostResult;
@@ -390,15 +494,34 @@ pub struct JavaScriptModuleCompilation {
 /// Read-only runtime accounting. Fields overlap; this is not an additive RSS total.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct JavaScriptMemoryDiagnostics {
-    pub malloc_bytes: i64, pub used_bytes: i64, pub objects: i64,
-    pub strings: i64, pub string_bytes: i64, pub atoms: i64,
-    pub properties: i64, pub property_bytes: i64, pub shapes: i64,
-    pub function_bytes: i64, pub code_bytes: i64, pub array_elements: i64,
-    pub binary_bytes: i64, pub host_wrappers: usize, pub host_identities: usize,
+    pub malloc_bytes: i64,
+    pub used_bytes: i64,
+    pub objects: i64,
+    pub strings: i64,
+    pub string_bytes: i64,
+    pub atoms: i64,
+    pub properties: i64,
+    pub property_bytes: i64,
+    pub shapes: i64,
+    pub function_bytes: i64,
+    pub code_bytes: i64,
+    pub array_elements: i64,
+    pub binary_bytes: i64,
+    pub host_wrappers: usize,
+    pub host_identities: usize,
     pub host_fallbacks: usize,
 }
 pub trait JavaScriptRuntime {
-    fn MemoryDiagnostics(&self, _realm: &JavaScriptRealm) -> Option<JavaScriptMemoryDiagnostics> { None }
+    fn MemoryDiagnostics(&self, _realm: &JavaScriptRealm) -> Option<JavaScriptMemoryDiagnostics> {
+        None
+    }
+    /// True when the engine's cycle collector should be scheduled by the
+    /// embedding. Engines with an internal collector keep the default false.
+    fn GarbageCollectionRequested(&self) -> bool {
+        false
+    }
+    /// Runs an embedding-scheduled cycle collection on the realm owner.
+    fn CollectGarbage(&mut self) {}
     fn CreateRealm(&mut self, host: Rc<RefCell<dyn JavaScriptHostBindings>>) -> JavaScriptRealm;
     fn Evaluate(
         &mut self,
@@ -406,6 +529,18 @@ pub trait JavaScriptRuntime {
         source: &str,
         source_name: &str,
     ) -> JavaScriptResult;
+    /// Prepare an external classic script without executing it. False owns
+    /// pending compiler work; the host returns to its event loop and retries
+    /// after the compilation wake. Evaluate still runs on this realm owner.
+    /// Other backends retain their ordinary synchronous Evaluate behavior.
+    fn PrepareClassicScript(
+        &mut self,
+        _realm: &JavaScriptRealm,
+        _source: &str,
+        _source_name: &str,
+    ) -> bool {
+        true
+    }
     /// Trusted embedder initialization only; page-provided source uses Evaluate.
     fn EvaluateBootstrap(
         &mut self,
@@ -460,6 +595,13 @@ pub trait JavaScriptRuntime {
         )
         .exception
         .unwrap()))
+    }
+    /// Configure compile-only execution before submitting scripts. None keeps
+    /// compilation on the realm owner; the injected executor may also be inline.
+    fn SetCompilationExecutor(
+        &mut self,
+        _executor: Option<std::sync::Arc<dyn executor::Executor>>,
+    ) {
     }
     /// A worker may invoke only this Send + Sync host work notification; it
     /// must never borrow a realm, run JS, or run a microtask in the callback.

@@ -558,7 +558,10 @@ fn source_subtree_and_nested_href_changes_refresh_retained_consumers() {
 fn display_visibility_and_explicit_target_styles_recascade_instances() {
     native_test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
-        let mut p = fixture(SIMPLE);
+        let mut p = fixture(&SIMPLE.replace(
+            "</svg>",
+            r##"<use id="following" href="#geometry" x="50" y="15" fill="blue"/></svg>"##,
+        ));
         let first = instance_root(&p, "instance");
         set_attribute(&mut p, "instance", "visibility", "hidden");
         assert_eq!(pixel(&p, 15, 20), [255, 255, 255, 255]);
@@ -566,6 +569,9 @@ fn display_visibility_and_explicit_target_styles_recascade_instances() {
         set_attribute(&mut p, "geometry", "style", "visibility:visible;fill:red");
         assert_eq!(pixel(&p, 15, 20), [255, 0, 0, 255]);
         set_attribute(&mut p, "instance", "display", "none");
+        // Reusing the following sibling moves it past the removed instance.
+        // Native SVG virtuals must stay installed on this attachment fast path.
+        assert_eq!(pixel(&p, 55, 20), [255, 0, 0, 255]);
         assert_eq!(pixel(&p, 15, 20), [255, 255, 255, 255]);
         set_attribute(&mut p, "instance", "display", "inline");
         assert_eq!(pixel(&p, 15, 20), [255, 0, 0, 255]);

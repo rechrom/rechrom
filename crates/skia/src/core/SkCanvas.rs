@@ -268,7 +268,9 @@ std::thread_local! {
 /// Read-only accounting of the calling raster lane's retained layer scratch.
 /// It neither allocates nor evicts cached pixels.
 pub fn RasterThreadScratchBytes() -> usize {
-    LAYER_SCRATCH.try_with(|pool| pool.borrow().bytes).unwrap_or(0)
+    LAYER_SCRATCH
+        .try_with(|pool| pool.borrow().bytes)
+        .unwrap_or(0)
 }
 /// Per-calling-thread glyph cache observations. Identity bytes are exact Vec
 /// capacities. Strike charges exclude map spare capacity/allocator metadata;
@@ -287,11 +289,25 @@ pub struct RasterThreadGlyphMemory {
     pub scan_accounted_bytes: usize,
 }
 pub fn RasterThreadGlyphMemoryDiagnostics() -> RasterThreadGlyphMemory {
-    let (font_identity_count, font_identity_table_capacity_bytes, font_identity_capacity_bytes, outline_strikes,
-        outline_accounted_bytes, font_identity_shared_bytes) = crate::compat::glyph_paths::memory_diagnostics();
+    let (
+        font_identity_count,
+        font_identity_table_capacity_bytes,
+        font_identity_capacity_bytes,
+        outline_strikes,
+        outline_accounted_bytes,
+        font_identity_shared_bytes,
+    ) = crate::compat::glyph_paths::memory_diagnostics();
     let (scan_strikes, scan_accounted_bytes) = crate::compat::glyph_rasters::memory_diagnostics();
-    RasterThreadGlyphMemory { font_identity_count, font_identity_capacity_bytes, font_identity_shared_bytes, font_identity_table_capacity_bytes,
-        outline_strikes, outline_accounted_bytes, scan_strikes, scan_accounted_bytes }
+    RasterThreadGlyphMemory {
+        font_identity_count,
+        font_identity_capacity_bytes,
+        font_identity_shared_bytes,
+        font_identity_table_capacity_bytes,
+        outline_strikes,
+        outline_accounted_bytes,
+        scan_strikes,
+        scan_accounted_bytes,
+    }
 }
 fn cleared_layer_pixmap(width: u32, height: u32) -> Pixmap {
     if let Some(mut pixmap) = LAYER_SCRATCH
@@ -2532,89 +2548,94 @@ impl SkCanvas {
         };
         let relative_top = top - item.text_blob_origin.y;
         let relative_bottom = bottom - item.text_blob_origin.y;
-        crate::compat::glyph_paths::with_paths(font.bytes, font.shared_bytes(), descriptor, |strike| {
-            let mut face_data = None;
-            let mut intervals = Vec::new();
-            for glyph in &item.glyphs {
-                let cached = strike.prepare_path(
-                    glyph.id as u16,
-                    || {
-                        let (face, hvgl, scale, normalized_axes) =
-                            face_data.get_or_insert_with(|| {
-                                let mut face = Face::parse(&font.bytes, font.face_index & 0xffff)
-                                    .expect("pure Rust rasterizer could not parse the font face");
-                                let hvgl = if face.tables().glyf.is_none()
-                                    && face.tables().cff.is_none()
-                                    && face.tables().cff2.is_none()
-                                {
-                                    // Bitmap-only faces have images, not paths. This is
-                                    // SkScalerContext's neverRequestPath case.
-                                    face.raw_face()
-                                        .table(Tag::from_bytes(b"hvgl"))
-                                        .and_then(|data| HvglTable::parse(data).ok())
-                                } else {
-                                    None
-                                };
-                                for axis in variations {
-                                    let _ = face.set_variation(
-                                        Tag::from_bytes(&axis.tag.to_be_bytes()),
-                                        axis.value,
-                                    );
-                                }
-                                let optical_size = Tag::from_bytes(b"opsz");
-                                if !variations
-                                    .iter()
-                                    .any(|axis| axis.tag == u32::from_be_bytes(*b"opsz"))
-                                    && face
-                                        .variation_axes()
-                                        .into_iter()
-                                        .any(|axis| axis.tag == optical_size)
-                                {
-                                    let _ = face.set_variation(optical_size, item.font_size as f32);
-                                }
-                                let scale = item.font_size as f32 / f32::from(face.units_per_em());
-                                let normalized_axes: Vec<f32> = face
-                                    .variation_coordinates()
-                                    .iter()
-                                    .map(|coordinate| f32::from(coordinate.get()) / 16384.0)
-                                    .collect();
-                                (face, hvgl, scale, normalized_axes)
-                            });
-                        let id = GlyphId(glyph.id as u16);
-                        let mut outline =
-                            GlyphPathBuilder::new(0.0, 0.0, *scale, item.synthetic_italic);
-                        let has_outline = if let Some(table) = hvgl {
-                            table
-                                .outline_glyph(id.0, normalized_axes, &mut outline)
-                                .expect("invalid HVGL glyph outline")
-                        } else {
-                            face.outline_glyph(id, &mut outline).is_some()
-                        };
-                        if !has_outline {
-                            return None;
-                        }
-                        outline
-                            .path
-                            .finish()
-                            .map(|fill| crate::compat::glyph_paths::GlyphPaths {
-                                fill,
-                                stroke: None,
+        crate::compat::glyph_paths::with_paths(
+            font.bytes,
+            font.shared_bytes(),
+            descriptor,
+            |strike| {
+                let mut face_data = None;
+                let mut intervals = Vec::new();
+                for glyph in &item.glyphs {
+                    let cached = strike.prepare_path(
+                        glyph.id as u16,
+                        || {
+                            let (face, hvgl, scale, normalized_axes) = face_data
+                                .get_or_insert_with(|| {
+                                    let mut face =
+                                        Face::parse(&font.bytes, font.face_index & 0xffff).expect(
+                                            "pure Rust rasterizer could not parse the font face",
+                                        );
+                                    let hvgl = if face.tables().glyf.is_none()
+                                        && face.tables().cff.is_none()
+                                        && face.tables().cff2.is_none()
+                                    {
+                                        // Bitmap-only faces have images, not paths. This is
+                                        // SkScalerContext's neverRequestPath case.
+                                        face.raw_face()
+                                            .table(Tag::from_bytes(b"hvgl"))
+                                            .and_then(|data| HvglTable::parse(data).ok())
+                                    } else {
+                                        None
+                                    };
+                                    for axis in variations {
+                                        let _ = face.set_variation(
+                                            Tag::from_bytes(&axis.tag.to_be_bytes()),
+                                            axis.value,
+                                        );
+                                    }
+                                    let optical_size = Tag::from_bytes(b"opsz");
+                                    if !variations
+                                        .iter()
+                                        .any(|axis| axis.tag == u32::from_be_bytes(*b"opsz"))
+                                        && face
+                                            .variation_axes()
+                                            .into_iter()
+                                            .any(|axis| axis.tag == optical_size)
+                                    {
+                                        let _ =
+                                            face.set_variation(optical_size, item.font_size as f32);
+                                    }
+                                    let scale =
+                                        item.font_size as f32 / f32::from(face.units_per_em());
+                                    let normalized_axes: Vec<f32> = face
+                                        .variation_coordinates()
+                                        .iter()
+                                        .map(|coordinate| f32::from(coordinate.get()) / 16384.0)
+                                        .collect();
+                                    (face, hvgl, scale, normalized_axes)
+                                });
+                            let id = GlyphId(glyph.id as u16);
+                            let mut outline =
+                                GlyphPathBuilder::new(0.0, 0.0, *scale, item.synthetic_italic);
+                            let has_outline = if let Some(table) = hvgl {
+                                table
+                                    .outline_glyph(id.0, normalized_axes, &mut outline)
+                                    .expect("invalid HVGL glyph outline")
+                            } else {
+                                face.outline_glyph(id, &mut outline).is_some()
+                            };
+                            if !has_outline {
+                                return None;
+                            }
+                            outline.path.finish().map(|fill| {
+                                crate::compat::glyph_paths::GlyphPaths { fill, stroke: None }
                             })
-                    },
-                    crate::compat::glyph_paths::GlyphPaths::heap_bytes,
-                );
-                let Some(path) = cached else { continue };
-                let glyph_top = (relative_top - glyph.offset.y) as f32;
-                let glyph_bottom = (relative_bottom - glyph.offset.y) as f32;
-                if let Some((left, right)) = path_gap(&path.fill, glyph_top, glyph_bottom) {
-                    intervals.push((
-                        item.text_blob_origin.x + glyph.offset.x + f64::from(left),
-                        item.text_blob_origin.x + glyph.offset.x + f64::from(right),
-                    ));
+                        },
+                        crate::compat::glyph_paths::GlyphPaths::heap_bytes,
+                    );
+                    let Some(path) = cached else { continue };
+                    let glyph_top = (relative_top - glyph.offset.y) as f32;
+                    let glyph_bottom = (relative_bottom - glyph.offset.y) as f32;
+                    if let Some((left, right)) = path_gap(&path.fill, glyph_top, glyph_bottom) {
+                        intervals.push((
+                            item.text_blob_origin.x + glyph.offset.x + f64::from(left),
+                            item.text_blob_origin.x + glyph.offset.x + f64::from(right),
+                        ));
+                    }
                 }
-            }
-            intervals
-        })
+                intervals
+            },
+        )
     }
 
     fn draw_embedded_bitmap_glyph(
@@ -2927,277 +2948,286 @@ impl SkCanvas {
         };
         // SkStrike keeps generated paths across full redraws. Their color, clip,
         // placement and framebuffer remain draw-local and are replayed each time.
-        crate::compat::glyph_paths::with_paths(font.bytes, font.shared_bytes(), descriptor, |strike| {
-            let mut face_data = None;
-            let mut bitmap_face = None;
-            for glyph in &item.glyphs {
-                // SkScalerContext's image branch precedes generatePath. Images
-                // and outlines share the same exact-font strike owner.
-                let bitmap = strike.prepare_image(
-                    glyph.id as u16,
-                    || {
-                        let face = bitmap_face.get_or_insert_with(|| {
-                            Face::parse(font.bytes, font.face_index & 0xffff).ok()
-                        });
-                        let image = face.as_ref()?.glyph_raster_image(
-                            GlyphId(glyph.id as u16),
-                            (item.font_size as f32 * resolution)
-                                .ceil()
-                                .clamp(1.0, 65535.0) as u16,
-                        )?;
-                        crate::compat::glyph_bitmaps::GlyphBitmap::decode(image)
-                    },
-                    crate::compat::glyph_bitmaps::GlyphBitmap::heap_bytes,
-                );
-                if let Some(bitmap) = bitmap {
-                    self.draw_embedded_bitmap_glyph(item, glyph, &bitmap);
-                    continue;
-                }
-                let cached = strike.prepare_path(
-                    glyph.id as u16,
-                    || {
-                        let (face, hvgl, scale, normalized_axes) =
-                            face_data.get_or_insert_with(|| {
-                                let mut face = Face::parse(&font.bytes, font.face_index & 0xffff)
-                                    .expect("pure Rust rasterizer could not parse the font face");
-                                let hvgl = if face.tables().glyf.is_none()
-                                    && face.tables().cff.is_none()
-                                    && face.tables().cff2.is_none()
-                                {
-                                    // Bitmap-only faces have images, not paths. This is
-                                    // SkScalerContext's neverRequestPath case.
-                                    face.raw_face()
-                                        .table(Tag::from_bytes(b"hvgl"))
-                                        .and_then(|data| HvglTable::parse(data).ok())
-                                } else {
-                                    None
-                                };
-                                for axis in variations {
-                                    let _ = face.set_variation(
-                                        Tag::from_bytes(&axis.tag.to_be_bytes()),
-                                        axis.value,
-                                    );
-                                }
-                                let optical_size = Tag::from_bytes(b"opsz");
-                                if !variations
-                                    .iter()
-                                    .any(|axis| axis.tag == u32::from_be_bytes(*b"opsz"))
-                                    && face
-                                        .variation_axes()
-                                        .into_iter()
-                                        .any(|axis| axis.tag == optical_size)
-                                {
-                                    let _ = face.set_variation(optical_size, item.font_size as f32);
-                                }
-                                let scale = item.font_size as f32 / f32::from(face.units_per_em());
-                                let antialias = item.font_smoothing != FontSmoothing::kNone;
-                                let normalized_axes: Vec<f32> = face
-                                    .variation_coordinates()
-                                    .iter()
-                                    .map(|coordinate| f32::from(coordinate.get()) / 16384.0)
-                                    .collect();
-
-                                (face, hvgl, scale, normalized_axes)
+        crate::compat::glyph_paths::with_paths(
+            font.bytes,
+            font.shared_bytes(),
+            descriptor,
+            |strike| {
+                let mut face_data = None;
+                let mut bitmap_face = None;
+                for glyph in &item.glyphs {
+                    // SkScalerContext's image branch precedes generatePath. Images
+                    // and outlines share the same exact-font strike owner.
+                    let bitmap = strike.prepare_image(
+                        glyph.id as u16,
+                        || {
+                            let face = bitmap_face.get_or_insert_with(|| {
+                                Face::parse(font.bytes, font.face_index & 0xffff).ok()
                             });
-                        let id = GlyphId(glyph.id as u16);
-                        let mut outline =
-                            GlyphPathBuilder::new(0.0, 0.0, *scale, item.synthetic_italic);
-                        let has_outline = if let Some(table) = hvgl {
-                            table
-                                .outline_glyph(id.0, normalized_axes, &mut outline)
-                                .expect("invalid HVGL glyph outline")
-                        } else {
-                            face.outline_glyph(id, &mut outline).is_some()
-                        };
-                        if !has_outline {
-                            if face.is_color_glyph(id) || face.glyph_svg_image(id).is_some() {
-                                log::warn!(
+                            let image = face.as_ref()?.glyph_raster_image(
+                                GlyphId(glyph.id as u16),
+                                (item.font_size as f32 * resolution)
+                                    .ceil()
+                                    .clamp(1.0, 65535.0) as u16,
+                            )?;
+                            crate::compat::glyph_bitmaps::GlyphBitmap::decode(image)
+                        },
+                        crate::compat::glyph_bitmaps::GlyphBitmap::heap_bytes,
+                    );
+                    if let Some(bitmap) = bitmap {
+                        self.draw_embedded_bitmap_glyph(item, glyph, &bitmap);
+                        continue;
+                    }
+                    let cached = strike.prepare_path(
+                        glyph.id as u16,
+                        || {
+                            let (face, hvgl, scale, normalized_axes) = face_data
+                                .get_or_insert_with(|| {
+                                    let mut face =
+                                        Face::parse(&font.bytes, font.face_index & 0xffff).expect(
+                                            "pure Rust rasterizer could not parse the font face",
+                                        );
+                                    let hvgl = if face.tables().glyf.is_none()
+                                        && face.tables().cff.is_none()
+                                        && face.tables().cff2.is_none()
+                                    {
+                                        // Bitmap-only faces have images, not paths. This is
+                                        // SkScalerContext's neverRequestPath case.
+                                        face.raw_face()
+                                            .table(Tag::from_bytes(b"hvgl"))
+                                            .and_then(|data| HvglTable::parse(data).ok())
+                                    } else {
+                                        None
+                                    };
+                                    for axis in variations {
+                                        let _ = face.set_variation(
+                                            Tag::from_bytes(&axis.tag.to_be_bytes()),
+                                            axis.value,
+                                        );
+                                    }
+                                    let optical_size = Tag::from_bytes(b"opsz");
+                                    if !variations
+                                        .iter()
+                                        .any(|axis| axis.tag == u32::from_be_bytes(*b"opsz"))
+                                        && face
+                                            .variation_axes()
+                                            .into_iter()
+                                            .any(|axis| axis.tag == optical_size)
+                                    {
+                                        let _ =
+                                            face.set_variation(optical_size, item.font_size as f32);
+                                    }
+                                    let scale =
+                                        item.font_size as f32 / f32::from(face.units_per_em());
+                                    let antialias = item.font_smoothing != FontSmoothing::kNone;
+                                    let normalized_axes: Vec<f32> = face
+                                        .variation_coordinates()
+                                        .iter()
+                                        .map(|coordinate| f32::from(coordinate.get()) / 16384.0)
+                                        .collect();
+
+                                    (face, hvgl, scale, normalized_axes)
+                                });
+                            let id = GlyphId(glyph.id as u16);
+                            let mut outline =
+                                GlyphPathBuilder::new(0.0, 0.0, *scale, item.synthetic_italic);
+                            let has_outline = if let Some(table) = hvgl {
+                                table
+                                    .outline_glyph(id.0, normalized_axes, &mut outline)
+                                    .expect("invalid HVGL glyph outline")
+                            } else {
+                                face.outline_glyph(id, &mut outline).is_some()
+                            };
+                            if !has_outline {
+                                if face.is_color_glyph(id) || face.glyph_svg_image(id).is_some() {
+                                    log::warn!(
                                     "glyph {} in {} requires an unsupported color outline renderer",
                                     id.0,
                                     font.family
                                 );
+                                }
+                                return None;
                             }
-                            return None;
-                        }
-                        let path = outline.path.finish()?;
-                        let stroke = if expand_stroke {
-                            path.stroke(
-                                &Stroke {
-                                    width: stroke_width,
-                                    ..Stroke::default()
-                                },
-                                resolution,
-                            )
-                        } else {
-                            None
-                        };
-                        Some(crate::compat::glyph_paths::GlyphPaths { fill: path, stroke })
-                    },
-                    crate::compat::glyph_paths::GlyphPaths::heap_bytes,
-                );
-                let Some(cached) = cached else {
-                    continue;
-                };
-                let glyph_transform = crate::cpu::glyph_position::position_transform(
-                    self.state.transform,
-                    item.text_blob_origin.x as f32 + glyph.offset.x as f32,
-                    item.text_blob_origin.y as f32 + glyph.offset.y as f32,
-                );
-                let antialias = item.font_smoothing != FontSmoothing::kNone;
-                let paint = solid_paint(item.color, antialias);
-                // The strike image's run blitter accepts a BW region directly.
-                // Avoid expanding an alpha plane even when a glyph crosses the
-                // clip edge; its ordered runs are cropped by that region.
-                if cache_glyph_scans && !item.stroke_glyphs && !item.synthetic_bold {
-                    if self
-                        .state
-                        .clip_summary
-                        .is_some_and(|c| c.getBounds().is_none())
-                    {
-                        continue;
-                    }
-                    if crate::compat::glyph_rasters::draw_with_bw_clip(
-                        &mut self.pixmap,
-                        &cached,
-                        false,
-                        &paint,
-                        glyph_transform,
-                        self.state.clip.as_deref(),
-                        self.state
-                            .clip_summary
-                            .as_ref()
-                            .filter(|c| c.isRect())
-                            .and_then(|c| c.getBounds()),
-                    ) {
-                        continue;
-                    }
-                }
-                // SkDraw's BW rectangular clip can be omitted only when it
-                // contains the conservative bounds of every path in this glyph.
-                let mut omit_clip = false;
-                if glyph_transform.kx == 0.0
-                    && glyph_transform.ky == 0.0
-                    && glyph_transform.sx > 0.0
-                    && glyph_transform.sy > 0.0
-                {
-                    if let Some(bounds) = self
-                        .state
-                        .clip_summary
-                        .as_ref()
-                        .filter(|c| c.isRect())
-                        .and_then(|c| c.getBounds())
-                    {
-                        let contains = |path: &Path, pad: f32| {
-                            let p = path.bounds();
-                            p.left() * glyph_transform.sx + glyph_transform.tx - pad
-                                >= bounds.left() as f32
-                                && p.top() * glyph_transform.sy + glyph_transform.ty - pad
-                                    >= bounds.top() as f32
-                                && p.right() * glyph_transform.sx + glyph_transform.tx + pad
-                                    <= bounds.right() as f32
-                                && p.bottom() * glyph_transform.sy + glyph_transform.ty + pad
-                                    <= bounds.bottom() as f32
-                        };
-                        let pad = if item.stroke_glyphs {
-                            item.stroke_width as f32 * resolution * 4.0 + 2.0
-                        } else if item.synthetic_bold && !expand_stroke {
-                            stroke_width * resolution * 4.0 + 2.0
-                        } else {
-                            2.0
-                        };
-                        if contains(&cached.fill, pad)
-                            && cached.stroke.as_ref().is_none_or(|p| contains(p, 2.0))
-                        {
-                            omit_clip = true;
-                        }
-                    }
-                }
-                if !omit_clip {
-                    self.ensure_clip_mask();
-                }
-                let clip = if omit_clip {
-                    None
-                } else {
-                    self.state.clip.as_deref()
-                };
-                if item.stroke_glyphs {
-                    self.pixmap.stroke_path(
-                        &cached.fill,
-                        &paint,
-                        &Stroke {
-                            width: item.stroke_width as f32,
-                            ..Stroke::default()
+                            let path = outline.path.finish()?;
+                            let stroke = if expand_stroke {
+                                path.stroke(
+                                    &Stroke {
+                                        width: stroke_width,
+                                        ..Stroke::default()
+                                    },
+                                    resolution,
+                                )
+                            } else {
+                                None
+                            };
+                            Some(crate::compat::glyph_paths::GlyphPaths { fill: path, stroke })
                         },
-                        glyph_transform,
-                        clip,
+                        crate::compat::glyph_paths::GlyphPaths::heap_bytes,
                     );
-                } else {
-                    if !cache_glyph_scans
-                        || !crate::compat::glyph_rasters::draw_with_bw_clip(
+                    let Some(cached) = cached else {
+                        continue;
+                    };
+                    let glyph_transform = crate::cpu::glyph_position::position_transform(
+                        self.state.transform,
+                        item.text_blob_origin.x as f32 + glyph.offset.x as f32,
+                        item.text_blob_origin.y as f32 + glyph.offset.y as f32,
+                    );
+                    let antialias = item.font_smoothing != FontSmoothing::kNone;
+                    let paint = solid_paint(item.color, antialias);
+                    // The strike image's run blitter accepts a BW region directly.
+                    // Avoid expanding an alpha plane even when a glyph crosses the
+                    // clip edge; its ordered runs are cropped by that region.
+                    if cache_glyph_scans && !item.stroke_glyphs && !item.synthetic_bold {
+                        if self
+                            .state
+                            .clip_summary
+                            .is_some_and(|c| c.getBounds().is_none())
+                        {
+                            continue;
+                        }
+                        if crate::compat::glyph_rasters::draw_with_bw_clip(
                             &mut self.pixmap,
                             &cached,
                             false,
                             &paint,
                             glyph_transform,
-                            clip,
+                            self.state.clip.as_deref(),
                             self.state
                                 .clip_summary
                                 .as_ref()
                                 .filter(|c| c.isRect())
                                 .and_then(|c| c.getBounds()),
-                        )
+                        ) {
+                            continue;
+                        }
+                    }
+                    // SkDraw's BW rectangular clip can be omitted only when it
+                    // contains the conservative bounds of every path in this glyph.
+                    let mut omit_clip = false;
+                    if glyph_transform.kx == 0.0
+                        && glyph_transform.ky == 0.0
+                        && glyph_transform.sx > 0.0
+                        && glyph_transform.sy > 0.0
                     {
-                        self.pixmap.fill_path(
+                        if let Some(bounds) = self
+                            .state
+                            .clip_summary
+                            .as_ref()
+                            .filter(|c| c.isRect())
+                            .and_then(|c| c.getBounds())
+                        {
+                            let contains = |path: &Path, pad: f32| {
+                                let p = path.bounds();
+                                p.left() * glyph_transform.sx + glyph_transform.tx - pad
+                                    >= bounds.left() as f32
+                                    && p.top() * glyph_transform.sy + glyph_transform.ty - pad
+                                        >= bounds.top() as f32
+                                    && p.right() * glyph_transform.sx + glyph_transform.tx + pad
+                                        <= bounds.right() as f32
+                                    && p.bottom() * glyph_transform.sy + glyph_transform.ty + pad
+                                        <= bounds.bottom() as f32
+                            };
+                            let pad = if item.stroke_glyphs {
+                                item.stroke_width as f32 * resolution * 4.0 + 2.0
+                            } else if item.synthetic_bold && !expand_stroke {
+                                stroke_width * resolution * 4.0 + 2.0
+                            } else {
+                                2.0
+                            };
+                            if contains(&cached.fill, pad)
+                                && cached.stroke.as_ref().is_none_or(|p| contains(p, 2.0))
+                            {
+                                omit_clip = true;
+                            }
+                        }
+                    }
+                    if !omit_clip {
+                        self.ensure_clip_mask();
+                    }
+                    let clip = if omit_clip {
+                        None
+                    } else {
+                        self.state.clip.as_deref()
+                    };
+                    if item.stroke_glyphs {
+                        self.pixmap.stroke_path(
                             &cached.fill,
                             &paint,
-                            FillRule::Winding,
+                            &Stroke {
+                                width: item.stroke_width as f32,
+                                ..Stroke::default()
+                            },
                             glyph_transform,
                             clip,
                         );
-                    }
-                    if item.synthetic_bold {
-                        if expand_stroke {
-                            if let Some(stroke) = &cached.stroke {
-                                if !cache_glyph_scans
-                                    || !crate::compat::glyph_rasters::draw_with_bw_clip(
-                                        &mut self.pixmap,
-                                        &cached,
-                                        true,
-                                        &paint,
-                                        glyph_transform,
-                                        clip,
-                                        self.state
-                                            .clip_summary
-                                            .as_ref()
-                                            .filter(|c| c.isRect())
-                                            .and_then(|c| c.getBounds()),
-                                    )
-                                {
-                                    self.pixmap.fill_path(
-                                        stroke,
-                                        &paint,
-                                        FillRule::Winding,
-                                        glyph_transform,
-                                        clip,
-                                    );
-                                }
-                            }
-                        } else {
-                            self.pixmap.stroke_path(
+                    } else {
+                        if !cache_glyph_scans
+                            || !crate::compat::glyph_rasters::draw_with_bw_clip(
+                                &mut self.pixmap,
+                                &cached,
+                                false,
+                                &paint,
+                                glyph_transform,
+                                clip,
+                                self.state
+                                    .clip_summary
+                                    .as_ref()
+                                    .filter(|c| c.isRect())
+                                    .and_then(|c| c.getBounds()),
+                            )
+                        {
+                            self.pixmap.fill_path(
                                 &cached.fill,
                                 &paint,
-                                &Stroke {
-                                    width: stroke_width,
-                                    ..Stroke::default()
-                                },
+                                FillRule::Winding,
                                 glyph_transform,
                                 clip,
                             );
                         }
+                        if item.synthetic_bold {
+                            if expand_stroke {
+                                if let Some(stroke) = &cached.stroke {
+                                    if !cache_glyph_scans
+                                        || !crate::compat::glyph_rasters::draw_with_bw_clip(
+                                            &mut self.pixmap,
+                                            &cached,
+                                            true,
+                                            &paint,
+                                            glyph_transform,
+                                            clip,
+                                            self.state
+                                                .clip_summary
+                                                .as_ref()
+                                                .filter(|c| c.isRect())
+                                                .and_then(|c| c.getBounds()),
+                                        )
+                                    {
+                                        self.pixmap.fill_path(
+                                            stroke,
+                                            &paint,
+                                            FillRule::Winding,
+                                            glyph_transform,
+                                            clip,
+                                        );
+                                    }
+                                }
+                            } else {
+                                self.pixmap.stroke_path(
+                                    &cached.fill,
+                                    &paint,
+                                    &Stroke {
+                                        width: stroke_width,
+                                        ..Stroke::default()
+                                    },
+                                    glyph_transform,
+                                    clip,
+                                );
+                            }
+                        }
                     }
                 }
-            }
-        });
+            },
+        );
     }
 }
 
@@ -5997,7 +6027,6 @@ mod variable_glyph_damage_tests {
     }
 }
 
-
 #[cfg(test)]
 mod exact_matrix_clip_tests {
     use super::*;
@@ -6010,18 +6039,29 @@ mod exact_matrix_clip_tests {
         canvas.set_matrix(base);
         canvas.save();
         canvas.set_matrix(base.pre_concat(Transform::from_rotate(37.0)));
-        canvas.replay_item(&DrawCommand {
-            r#type: CommandKind::kClipRect,
-            rect: PaintRect {x:4.0,y:2.0,width:24.0,height:28.0},
-            antialias:true,
-            ..Default::default()
-        }, &resources);
+        canvas.replay_item(
+            &DrawCommand {
+                r#type: CommandKind::kClipRect,
+                rect: PaintRect {
+                    x: 4.0,
+                    y: 2.0,
+                    width: 24.0,
+                    height: 28.0,
+                },
+                antialias: true,
+                ..Default::default()
+            },
+            &resources,
+        );
         let clipped = canvas.state.clip.clone();
         let encoding = format!("{:?}", canvas.state.clip_summary);
         assert!(clipped.is_some());
         canvas.set_matrix(base);
         assert_eq!(canvas.local_to_device(), base);
-        assert!(std::sync::Arc::ptr_eq(canvas.state.clip.as_ref().unwrap(), clipped.as_ref().unwrap()));
+        assert!(std::sync::Arc::ptr_eq(
+            canvas.state.clip.as_ref().unwrap(),
+            clipped.as_ref().unwrap()
+        ));
         assert_eq!(format!("{:?}", canvas.state.clip_summary), encoding);
         canvas.restore();
         assert_eq!(canvas.local_to_device(), base);

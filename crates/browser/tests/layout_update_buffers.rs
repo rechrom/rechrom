@@ -142,26 +142,53 @@ fn retained_style_inputs_survive_dom_replacement_and_collection() {
         let old;
         {
             let _heap = foundation::LayoutHeapScope::new();
-            styles.SetUserInteractionState(&mut owner, interaction.clone()).unwrap();
+            styles
+                .SetUserInteractionState(&mut owner, interaction.clone())
+                .unwrap();
             styles.Update(&mut owner, &Default::default(), &[]).unwrap();
             browser::LayoutPersistentDocument(&mut engine, &mut owner, &interaction, &space);
-            let canonical = owner.GetDocument().ResolvedStyleFor(html).unwrap().native_style.Get();
+            let canonical = owner
+                .GetDocument()
+                .ResolvedStyleFor(html)
+                .unwrap()
+                .native_style
+                .Get();
             old = foundation::WeakPersistent::from_ptr(canonical);
-            assert_ne!(engine.GetLayoutTree().unwrap().Root().StyleRef() as *const _,
-                canonical.cast_const(), "font binding must exercise a distinct native style");
-            owner.GetDocumentMut().SetAttribute(html, dom::persistent_document::DOMAttribute {
-                local_name: "style".into(), value: "font-size:19px; gap:7px; color:blue".into(),
-                ..Default::default()
-            });
+            assert_ne!(
+                engine.GetLayoutTree().unwrap().Root().StyleRef() as *const _,
+                canonical.cast_const(),
+                "font binding must exercise a distinct native style"
+            );
+            owner.GetDocumentMut().SetAttribute(
+                html,
+                dom::persistent_document::DOMAttribute {
+                    local_name: "style".into(),
+                    value: "font-size:19px; gap:7px; color:blue".into(),
+                    ..Default::default()
+                },
+            );
             styles.Update(&mut owner, &Default::default(), &[]).unwrap();
-            assert_ne!(owner.GetDocument().ResolvedStyleFor(html).unwrap().native_style.Get(),
-                old.Get(), "DOM must have replaced the canonical style before GC");
+            assert_ne!(
+                owner
+                    .GetDocument()
+                    .ResolvedStyleFor(html)
+                    .unwrap()
+                    .native_style
+                    .Get(),
+                old.Get(),
+                "DOM must have replaced the canonical style before GC"
+            );
         }
         foundation::CollectLayoutHeapForTesting();
-        assert!(!old.Get().is_null(), "resident comparison inputs must survive collection");
-        let actual = browser::LayoutPersistentDocument(&mut engine, &mut owner, &interaction, &space);
+        assert!(
+            !old.Get().is_null(),
+            "resident comparison inputs must survive collection"
+        );
+        let actual =
+            browser::LayoutPersistentDocument(&mut engine, &mut owner, &interaction, &space);
         let mut fresh = LayoutEngine::new(&assembly);
-        let expected = browser::LayoutPersistentDocument(&mut fresh, &mut owner, &interaction, &space);
+        let expected =
+            browser::LayoutPersistentDocument(&mut fresh, &mut owner, &interaction, &space);
         let mut actual_geometry = Vec::new();
         let mut expected_geometry = Vec::new();
         geometry(&actual, &mut actual_geometry);
@@ -287,6 +314,18 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
                 9 => owner.GetDocumentMut().Remove(extra.unwrap()),
                 _ => {}
             }
+            // An unchanged lifecycle can retain the tree without visiting its
+            // objects. Check the output owners, not a full-walk reuse counter.
+            let retained_clients = (step == 1).then(|| {
+                let output = engine.Output().unwrap();
+                let document = owner.GetDocument();
+                (0..document.NodeCount())
+                    .filter_map(|index| {
+                        let id = document.Node(index).Id();
+                        output.Node(id).map(|node| (id, node.PaintClientId()))
+                    })
+                    .collect::<Vec<_>>()
+            });
             let mut style_engine = style::StyleEngine::new(&owner);
             style_engine
                 .Update(&mut owner, &Default::default(), &[])
@@ -297,11 +336,16 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
                 &Default::default(),
                 &space,
             );
-            let resident = engine.GetLayoutTree().unwrap();
-            if step == 1 {
-                assert!(resident.UpdateStats().reused > 5);
-                assert_eq!(resident.UpdateStats().created, 0);
-                assert_eq!(resident.UpdateStats().updated, 0);
+            if let Some(retained_clients) = retained_clients {
+                assert!(retained_clients.len() > 5);
+                let output = engine.Output().unwrap();
+                for (id, client) in retained_clients {
+                    assert_eq!(
+                        output.Node(id).unwrap().PaintClientId(),
+                        client,
+                        "unchanged output owner {id}"
+                    );
+                }
             }
             let mut fresh_engine = LayoutEngine::new(&assembly);
             let fresh = browser::LayoutPersistentDocument(
@@ -326,6 +370,94 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
                 };
                 assert_eq!(pixels(&actual), pixels(&fresh), "paint step {step}");
             }
+        }
+    });
+}
+
+#[test]
+fn dirty_subtree_updates_match_fresh_and_retain_clean_sibling_identity() {
+    native_test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        fn branch(
+            tree: &mut LayoutTreeUpdate<'_>,
+            parent: &mut LayoutObject,
+            ids: &[u64],
+            width: f64,
+        ) {
+            let style = ComputedStyle {
+                width: Some(width),
+                ..Default::default()
+            };
+            let root = tree.AddBoxDefault(parent, 2, &style) as *mut LayoutObject;
+            for &id in ids {
+                tree.AddBoxDefault(
+                    unsafe { &mut *root },
+                    id,
+                    &ComputedStyle {
+                        width: Some(20.),
+                        height: Some(id as f64),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        fn complete(engine: &mut LayoutEngine, ids: &[u64], width: f64) {
+            engine.ApplyMutation(LayoutMutation::TreeUpdate(&mut |tree| {
+                let parent = tree.CreateRootDefault(
+                    1,
+                    &ComputedStyle {
+                        width: Some(200.),
+                        height: Some(200.),
+                        ..Default::default()
+                    },
+                ) as *mut LayoutObject;
+                branch(tree, unsafe { &mut *parent }, ids, width);
+                tree.AddBoxDefault(
+                    unsafe { &mut *parent },
+                    3,
+                    &ComputedStyle {
+                        width: Some(150.),
+                        height: Some(20.),
+                        ..Default::default()
+                    },
+                );
+            }));
+        }
+        let space = browser::CreateBrowserConstraints(320, 240);
+        let mut engine = new_engine(&space);
+        assert!(!engine.ApplyMutation(LayoutMutation::RetainTree));
+        complete(&mut engine, &[7, 8], 80.);
+        let before = layout_geometry(&mut engine);
+        assert!(engine.ApplyMutation(LayoutMutation::RetainTree));
+        let clean = engine.Output().unwrap().Node(3).unwrap().PaintClientId();
+        assert!(!engine.ApplyMutation(LayoutMutation::SubtreeUpdate {
+            node_id: 2,
+            parent_id: 999,
+            update: &mut |_, _| panic!("invalid parent was admitted"),
+        }));
+        let mut unchanged = Vec::new();
+        geometry(engine.GetLayoutResult().unwrap(), &mut unchanged);
+        assert_eq!(before, unchanged);
+        for (ids, width) in [
+            (&[7, 8][..], 80.),
+            (&[8], 95.),
+            (&[], 100.),
+            (&[9, 7], 70.),
+            (&[7, 9], 85.),
+        ] {
+            assert!(engine.ApplyMutation(LayoutMutation::SubtreeUpdate {
+                node_id: 2,
+                parent_id: 1,
+                update: &mut |tree, parent| branch(tree, parent, ids, width),
+            }));
+            let actual = layout_geometry(&mut engine);
+            let mut fresh = new_engine(&space);
+            complete(&mut fresh, ids, width);
+            assert_eq!(actual, layout_geometry(&mut fresh));
+            assert_eq!(
+                engine.Output().unwrap().Node(3).unwrap().PaintClientId(),
+                clean
+            );
         }
     });
 }

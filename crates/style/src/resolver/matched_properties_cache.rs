@@ -160,15 +160,18 @@ impl CachedMatchedPropertiesKey {
 }
 // cpp: matched_properties_cache.h:59-90
 #[derive(Clone)]
-pub struct Entry<E> {
+pub struct Entry<E, D = ()> {
     pub computed_style: ComputedStyleHandle,
     pub parent_computed_style: ComputedStyleHandle,
     pub layout_parent_style: ComputedStyleHandle,
     pub originating_element_computed_style: Option<ComputedStyleHandle>,
     pub element_type: E,
     pub last_used: u32,
+    /// Typed computed-style data retained outside the native style owner.
+    /// Eviction and weak-key cleanup release it with the source cache entry.
+    pub additional_data: D,
 }
-impl<E> Entry<E> {
+impl<E, D> Entry<E, D> {
     pub fn HasRunStyleAdjuster<B: MatchedPropertiesCacheBackend<ElementTypeForCache = E>>(
         &self,
         backend: &B,
@@ -177,13 +180,13 @@ impl<E> Entry<E> {
     }
 }
 // cpp: matched_properties_cache.h:45-57,98-117
-pub struct CachedMatchedProperties<E> {
+pub struct CachedMatchedProperties<E, D = ()> {
     pub matched_properties: Vec<CachedMatchedPropertiesKey>,
-    pub entries: Vec<Entry<E>>,
+    pub entries: Vec<Entry<E, D>>,
 }
-impl<E> CachedMatchedProperties<E> {
+impl<E, D> CachedMatchedProperties<E, D> {
     // cpp: matched_properties_cache.cc:64-79
-    fn new(entry: Entry<E>, properties: &[MatchedProperties]) -> Self {
+    fn new(entry: Entry<E, D>, properties: &[MatchedProperties]) -> Self {
         Self {
             matched_properties: properties
                 .iter()
@@ -349,12 +352,12 @@ fn style(handle: &ComputedStyleHandle) -> &ComputedStyle {
     unsafe { &*pointer }
 }
 // cpp: matched_properties_cache.h:119-201
-pub struct MatchedPropertiesCache<E> {
-    cache_: HashMap<u32, CachedMatchedProperties<E>>,
+pub struct MatchedPropertiesCache<E, D = ()> {
+    cache_: HashMap<u32, CachedMatchedProperties<E, D>>,
     cache_entries_: u32,
     clock_: u32,
 }
-impl<E: Eq> MatchedPropertiesCache<E> {
+impl<E: Eq, D: Clone + Default> MatchedPropertiesCache<E, D> {
     // cpp: matched_properties_cache.cc:86
     pub fn new() -> Self {
         Self {
@@ -371,7 +374,7 @@ impl<E: Eq> MatchedPropertiesCache<E> {
         style_type: PseudoId,
         state: &StyleResolverState<'_, B>,
         backend: &B,
-    ) -> Option<&Entry<E>> {
+    ) -> Option<&Entry<E, D>> {
         let item = self.cache_.get(&key.hash_)?;
         if !item.CorrespondsTo(key.result_.GetMatchedProperties()) {
             self.cache_entries_ = self.cache_entries_.wrapping_sub(item.entries.len() as u32);
@@ -477,7 +480,39 @@ impl<E: Eq> MatchedPropertiesCache<E> {
             &ComputedStyle,
             &ComputedStyle,
         ) -> bool,
-    ) -> Option<Entry<E>>
+    ) -> Option<Entry<E, D>>
+    where
+        E: Clone,
+    {
+        self.FindForNonHighlightWithStylesAndData(
+            key,
+            element_type,
+            style_type,
+            parent,
+            layout_parent,
+            is_at_shadow_boundary,
+            is_style_adjusted,
+            |_| true,
+            is_cache_compatible,
+        )
+    }
+    pub(crate) fn FindForNonHighlightWithStylesAndData(
+        &mut self,
+        key: &OwnedKey,
+        element_type: &E,
+        style_type: PseudoId,
+        parent: &ComputedStyleHandle,
+        layout_parent: &ComputedStyleHandle,
+        is_at_shadow_boundary: bool,
+        is_style_adjusted: impl Fn(&E) -> bool,
+        inherited_data_equal: impl Fn(&D) -> bool,
+        is_cache_compatible: impl Fn(
+            &ComputedStyle,
+            &ComputedStyle,
+            &ComputedStyle,
+            &ComputedStyle,
+        ) -> bool,
+    ) -> Option<Entry<E, D>>
     where
         E: Clone,
     {
@@ -495,6 +530,9 @@ impl<E: Eq> MatchedPropertiesCache<E> {
         let mut hit = None;
         for index in (0..item.entries.len()).rev() {
             let entry = &item.entries[index];
+            if !inherited_data_equal(&entry.additional_data) {
+                continue;
+            }
             let adjusted = is_style_adjusted(&entry.element_type);
             if adjusted && *element_type != entry.element_type {
                 continue;
@@ -557,6 +595,7 @@ impl<E: Eq> MatchedPropertiesCache<E> {
             originating_element_computed_style,
             element_type,
             last_used: self.clock_,
+            additional_data: D::default(),
         };
         self.clock_ = self.clock_.wrapping_add(1);
         match self.cache_.entry(key.hash_) {
@@ -582,6 +621,26 @@ impl<E: Eq> MatchedPropertiesCache<E> {
         layout_parent_style: ComputedStyleHandle,
         originating_element_computed_style: Option<ComputedStyleHandle>,
     ) {
+        self.AddOwnedWithData(
+            key,
+            element_type,
+            computed_style,
+            parent_computed_style,
+            layout_parent_style,
+            originating_element_computed_style,
+            D::default(),
+        );
+    }
+    pub(crate) fn AddOwnedWithData(
+        &mut self,
+        key: &OwnedKey,
+        element_type: E,
+        computed_style: ComputedStyleHandle,
+        parent_computed_style: ComputedStyleHandle,
+        layout_parent_style: ComputedStyleHandle,
+        originating_element_computed_style: Option<ComputedStyleHandle>,
+        additional_data: D,
+    ) {
         let entry = Entry {
             computed_style,
             parent_computed_style,
@@ -589,6 +648,7 @@ impl<E: Eq> MatchedPropertiesCache<E> {
             originating_element_computed_style,
             element_type,
             last_used: self.clock_,
+            additional_data,
         };
         self.clock_ = self.clock_.wrapping_add(1);
         match self.cache_.entry(key.hash_) {
@@ -667,7 +727,7 @@ impl<E: Eq> MatchedPropertiesCache<E> {
         true
     }
     // cpp: matched_properties_cache.cc:433-451
-    fn EraseEntriesIf(&mut self, mut predicate: impl FnMut(&Entry<E>) -> bool) {
+    fn EraseEntriesIf(&mut self, mut predicate: impl FnMut(&Entry<E, D>) -> bool) {
         self.cache_.retain(|_, item| {
             let before = item.entries.len();
             item.entries.retain(|entry| !predicate(entry));

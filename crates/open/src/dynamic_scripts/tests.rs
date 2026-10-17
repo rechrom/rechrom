@@ -256,7 +256,9 @@ fn base_url_delayed_external_redirect_and_resource_failure_keep_source_events() 
                 requests.borrow()[0].url,
                 "https://assets.test/scripts/ok.js"
             );
-            assert_eq!(requests.borrow()[0].referrer, "https://example.test/page");
+            // The default strict-origin-when-cross-origin policy strips the
+            // path when the script's base URL points at another origin.
+            assert_eq!(requests.borrow()[0].referrer, "https://example.test/");
             assert_eq!(
                 requests.borrow()[0].destination,
                 RequestDestination::kScript

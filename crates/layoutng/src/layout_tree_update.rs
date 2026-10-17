@@ -22,6 +22,11 @@ impl<'a> LayoutTreeUpdate<'a> {
         Self { tree }
     }
 
+    /// Consume Style's per-node reattachment decision before creating inputs.
+    pub fn Reattach(&mut self, node_ids: &[u64]) {
+        self.tree.Reattach(node_ids);
+    }
+
     pub fn CreateRoot(
         &mut self,
         id: u64,

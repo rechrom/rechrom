@@ -170,11 +170,9 @@ fn body() {
     let mut constraints = crate::CreateBrowserConstraints(160, 96);
     constraints.fonts = vec![FontFace {
         family: "sans-serif".into(),
-        bytes: include_bytes!(
-            "../../../assets/fonts/Roboto-Regular.ttf"
-        )
-        .as_slice()
-        .into(),
+        bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
+            .as_slice()
+            .into(),
         ..Default::default()
     }];
     let constraints = Rc::new(RefCell::new(constraints));

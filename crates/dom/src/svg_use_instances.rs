@@ -95,13 +95,23 @@ impl PersistentDocument {
         if self.svg_use_inputs_revision == Some(self.collection_membership_revision) {
             return false;
         }
-        let hosts = (0..self.arena.len())
-            .filter(|&node| {
-                self.arena[node].IsElement("use", DOMNamespace::kSVG)
-                    && self.CorrespondingSVGElement(node).is_none()
-                    && self.IsConnectedToDocument(node)
-            })
-            .collect::<Vec<_>>();
+        // SVGUseElement's document lifecycle visits connected source hosts.
+        // Allocation history and generated instance trees cannot add pending
+        // source elements. Traverse the active DOM/shadow ownership edges.
+        let mut hosts = Vec::new();
+        let mut pending = vec![self.root];
+        while let Some(node) = pending.pop() {
+            if self.CorrespondingSVGElement(node).is_some() {
+                continue;
+            }
+            if self.arena[node].IsElement("use", DOMNamespace::kSVG) {
+                hosts.push(node);
+            }
+            pending.extend_from_slice(self.arena[node].Children());
+            if let Some(root) = self.ShadowRoot(node) {
+                pending.push(root);
+            }
+        }
         let active = hosts.iter().copied().collect::<HashSet<_>>();
         let obsolete = self
             .svg_use_instances
@@ -144,7 +154,7 @@ impl PersistentDocument {
                 self.AppendChild(root, instance);
             }
             self.svg_use_instances.insert(host, plan);
-            self.RecordFlatTreeChange();
+            self.RecordFlatTreeChange(host);
             self.InvalidateNodeStyle(host);
             changed = true;
         }

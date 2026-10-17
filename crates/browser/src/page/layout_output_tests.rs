@@ -1,14 +1,12 @@
 use super::*;
 use crate::page::{Page, PageClient, PageState};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layoutng_assembly::{
-    fragment_tree::FragmentKind,
-    internal::layout_input::{ConstraintSpace, Offset, PaintImage, Size},
-};
+use layoutng_assembly::internal::layout_input::{ConstraintSpace, Offset, PaintImage, Size};
 use page_mutation::{
     AnimationStyleSample, AnimationTick, InteractionStateMutation, PageMutation,
     ResourceLoadFailed, ResourceMutation, ScrollMutation, ViewportMutation,
 };
+use paint::paint_engine::PaintRect;
 use std::cell::RefCell;
 
 struct Client;
@@ -36,99 +34,65 @@ fn id(state: &PageState, name: &str) -> u64 {
         .unwrap()
 }
 fn geometry(state: &PageState, id: u64) -> Vec<PaintRect> {
-    state.EnsureMeasurement();
-    state.measurement.borrow().as_ref().unwrap().ClientRects(id)
-}
-fn held(state: &PageState) -> Rc<FragmentNode> {
-    state.EnsureMeasurement();
+    state.EnsureLayoutOutput();
     state
-        .measurement
+        .layout_engine
         .borrow()
-        .as_ref()
+        .Output()
         .unwrap()
-        .fragments
-        .clone()
+        .Node(id)
+        .unwrap()
+        .ClientRects()
+        .into_iter()
+        .map(|r| PaintRect {
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+        })
+        .collect()
+}
+fn held(state: &PageState) -> u64 {
+    state.EnsureLayoutOutput();
+    state.layout_revision.get().unwrap()
 }
 #[test]
-fn rect_index_builds_once_for_all_nodes_preserves_order_and_returns_independent_values() {
-    let root = Rc::new(FragmentNode {
-        node_id: 1,
-        size: Size {
-            width: 320.,
-            height: 200.,
-        },
-        children: vec![
-            FragmentNode {
-                node_id: 2,
-                offset: Offset { x: 10., y: 20. },
-                size: Size {
-                    width: 25.,
-                    height: 10.,
-                },
-                ..Default::default()
-            },
-            FragmentNode {
-                node_id: 2,
-                offset: Offset { x: 50., y: 50. },
-                size: Size {
-                    width: 20.,
-                    height: 5.,
-                },
-                ..Default::default()
-            },
-            FragmentNode {
-                node_id: 3,
-                kind: FragmentKind::kText,
-                ..Default::default()
-            },
-        ],
-        ..Default::default()
-    });
-    let snapshot = MeasurementSnapshot::new(root);
-    assert!(snapshot.rects.get().is_none());
-    // Explicit fixture coordinates are independent of either paint walker.
-    let expected_root = vec![PaintRect {
-        x: 0.,
-        y: 0.,
-        width: 320.,
-        height: 200.,
-    }];
-    let expected_repeated = vec![
-        PaintRect {
-            x: 10.,
-            y: 20.,
-            width: 25.,
-            height: 10.,
-        },
-        PaintRect {
-            x: 50.,
-            y: 50.,
-            width: 20.,
-            height: 5.,
-        },
-    ];
-    for _ in 0..20 {
-        assert_eq!(snapshot.ClientRects(1), expected_root);
-        assert_eq!(snapshot.ClientRects(2), expected_repeated);
-        assert!(snapshot.ClientRects(3).is_empty());
-        assert!(snapshot.ClientRects(999).is_empty());
-    }
-    assert_eq!(snapshot.index_builds.get(), 1);
-    let mut returned = snapshot.ClientRects(2);
-    assert_eq!(returned.len(), 2);
-    returned[0].x = 999.;
-    returned.clear();
-    assert_eq!(snapshot.ClientRects(2), expected_repeated);
-    assert_eq!(snapshot.index_builds.get(), 1);
-}
-#[test]
-fn empty_animation_tick_same_scroll_same_interaction_and_failed_resource_keep_snapshot() {
+fn empty_animation_tick_same_scroll_same_interaction_and_failed_resource_keep_layout() {
     crate::native_test_thread::run(|| {
         let state =
             state("<html><body><div id=b style='width:40px;height:20px'></div></body></html>");
         let node = id(&state, "b");
         let expected = geometry(&state, node);
         let before = held(&state);
+        state.ApplyDOMMutation(
+            &DOMMutation {
+                mutation_type: DOMMutationType::kSetTextContent,
+                target_node_id: node,
+                value: String::new(),
+                ..Default::default()
+            },
+            &mut || {},
+            &mut |_, _| panic!("unexpected image callback"),
+        );
+        let (document_id, next_id) = {
+            let owner = state.document.borrow();
+            (
+                owner.GetDocument().Node(owner.GetDocument().Root()).Id(),
+                owner.GetDocument().NextNodeId(),
+            )
+        };
+        state.ApplyDOMMutation(
+            &DOMMutation {
+                mutation_type: DOMMutationType::kCreateElement,
+                target_node_id: document_id,
+                child_node_id: next_id,
+                name: "div".into(),
+                ..Default::default()
+            },
+            &mut || {},
+            &mut |_, _| panic!("unexpected image callback"),
+        );
+        assert_eq!(before, held(&state));
         state.ApplyMutation(PageMutation::AnimationTick(AnimationTick {
             monotonic_time: 1.,
             ..Default::default()
@@ -143,18 +107,8 @@ fn empty_animation_tick_same_scroll_same_interaction_and_failed_resource_keep_sn
         state.ApplyMutation(PageMutation::ResourceMutation(
             ResourceMutation::ResourceLoadFailed(ResourceLoadFailed::default()),
         ));
-        assert!(Rc::ptr_eq(&before, &held(&state)));
+        assert_eq!(before, held(&state));
         assert_eq!(geometry(&state, node), expected);
-        assert_eq!(
-            state
-                .measurement
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .index_builds
-                .get(),
-            1
-        );
     });
 }
 #[test]
@@ -178,23 +132,13 @@ fn actual_dom_change_flushes_style_before_synchronous_notification_reads_geometr
             },
             &mut |_, _| panic!("unexpected image callback"),
         );
-        assert!(!Rc::ptr_eq(&before, &held(&state)));
+        assert_ne!(before, held(&state));
         assert_eq!(geometry(&state, node)[0].width, 80.);
-        assert_eq!(
-            state
-                .measurement
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .index_builds
-                .get(),
-            1
-        );
     });
 }
 
 #[test]
-fn paint_selector_attribute_mutations_preserve_provisional_measurement_geometry() {
+fn paint_selector_attribute_mutations_preserve_resident_layout_geometry() {
     crate::native_test_thread::run(|| {
         let state = state(
             "<html><body><div id=b class=stable style='width:40px;height:20px'></div></body></html>",
@@ -213,7 +157,7 @@ fn paint_selector_attribute_mutations_preserve_provisional_measurement_geometry(
             &mut || {},
             &mut |_, _| panic!("unexpected image callback"),
         );
-        assert!(Rc::ptr_eq(&before, &held(&state)));
+        assert_eq!(before, held(&state));
         assert_eq!(geometry(&state, node), expected);
         state.ApplyDOMMutation(
             &DOMMutation {
@@ -226,13 +170,13 @@ fn paint_selector_attribute_mutations_preserve_provisional_measurement_geometry(
             &mut || {},
             &mut |_, _| panic!("unexpected image callback"),
         );
-        assert!(Rc::ptr_eq(&before, &held(&state)));
+        assert_eq!(before, held(&state));
         assert_eq!(geometry(&state, node), expected);
     });
 }
 
 #[test]
-fn changed_scroll_animation_viewport_font_and_image_invalidate_snapshot() {
+fn changed_scroll_animation_viewport_font_and_image_invalidate_layout() {
     crate::native_test_thread::run(|| {
         let state = state(
             "<html><body><div id=s style='width:80px;height:20px;overflow:hidden'><div id=b style='width:40px;height:100px'></div></div></body></html>",
@@ -244,7 +188,7 @@ fn changed_scroll_animation_viewport_font_and_image_invalidate_snapshot() {
             target_node_id: scroller,
             offset: Offset { x: 0., y: 10. },
         }));
-        assert!(state.measurement.borrow().is_none());
+        assert!(state.layout_revision.get().is_none());
         assert_eq!(geometry(&state, node)[0].y, y - 10.);
         state.ApplyMutation(PageMutation::AnimationTick(AnimationTick {
             monotonic_time: 1.,
@@ -256,7 +200,7 @@ fn changed_scroll_animation_viewport_font_and_image_invalidate_snapshot() {
             }],
             ..Default::default()
         }));
-        assert!(state.measurement.borrow().is_none());
+        assert!(state.layout_revision.get().is_none());
         let _ = geometry(&state, node);
         state.ApplyMutation(PageMutation::ViewportMutation(ViewportMutation {
             size: Size {
@@ -264,13 +208,13 @@ fn changed_scroll_animation_viewport_font_and_image_invalidate_snapshot() {
                 height: 200.,
             },
         }));
-        assert!(state.measurement.borrow().is_none());
+        assert!(state.layout_revision.get().is_none());
         let _ = geometry(&state, node);
         let font = state.constraints.borrow().fonts[0].clone();
         state.ApplyResourceMutation(ResourceMutation::FontResourceReady(
             page_mutation::FontResourceReady { font },
         ));
-        assert!(state.measurement.borrow().is_none());
+        assert!(state.layout_revision.get().is_none());
         let _ = geometry(&state, node);
         state.ApplyResourceMutation(ResourceMutation::ImageResourceReady(
             page_mutation::ImageResourceReady {
@@ -285,7 +229,7 @@ fn changed_scroll_animation_viewport_font_and_image_invalidate_snapshot() {
                 },
             },
         ));
-        assert!(state.measurement.borrow().is_none());
+        assert!(state.layout_revision.get().is_none());
     });
 }
 struct NoNetwork;
@@ -298,7 +242,7 @@ impl url_loader::URLLoader for NoNetwork {
     }
 }
 #[test]
-fn completed_frame_publishes_same_snapshot_without_a_second_measurement_layout() {
+fn completed_frame_retains_layout_output_without_a_second_measurement_layout() {
     crate::native_test_thread::run(|| {
         let assembly = crate::CreateLayoutAssembly();
         let mut page = Page::Create(
@@ -306,9 +250,7 @@ fn completed_frame_publishes_same_snapshot_without_a_second_measurement_layout()
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
-                &assembly,
-            ))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
             constraints(),
             None,
             None,
@@ -324,7 +266,7 @@ fn completed_frame_publishes_same_snapshot_without_a_second_measurement_layout()
             .expect("completed frame")
             .fragments
             .clone();
-        assert!(Rc::ptr_eq(&frame, &held(&page.state)));
+        assert!(page.state.layout_engine.borrow().Output().is_some());
         let node = id(&page.state, "b");
         assert_eq!(geometry(&page.state, node)[0].width, 40.);
         // An effective CSSOM change must still invalidate the shared frame.
@@ -333,12 +275,12 @@ fn completed_frame_publishes_same_snapshot_without_a_second_measurement_layout()
                 style_sheet: style::ParseCSS("#b {width:42px!important}"),
                 base_url: "https://fixture.test/".into(),
             }));
-        assert!(page.state.measurement.borrow().is_none());
+        assert!(!page.state.styles_resolved.get());
         assert_eq!(geometry(&page.state, node)[0].width, 42.);
     });
 }
 #[test]
-fn style_write_geometry_and_frame_share_one_layout_snapshot_and_match_fresh_pixels() {
+fn style_write_geometry_and_frame_share_native_layout_and_match_fresh_pixels() {
     crate::native_test_thread::run(|| {
         let assembly = crate::CreateLayoutAssembly();
         let mut page = Page::Create(
@@ -346,9 +288,7 @@ fn style_write_geometry_and_frame_share_one_layout_snapshot_and_match_fresh_pixe
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
-                &assembly,
-            ))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
             constraints(),
             None,
             None,
@@ -378,24 +318,9 @@ fn style_write_geometry_and_frame_share_one_layout_snapshot_and_match_fresh_pixe
         assert_eq!(
             page.state.full_layout_lifecycles.get(),
             2,
-            "the CSSOM query already performed build/layout/export"
+            "the CSSOM query already updated native layout"
         );
-        assert!(Rc::ptr_eq(
-            &measured,
-            &page.frame.as_ref().unwrap().fragments
-        ));
-        assert!(Rc::ptr_eq(&measured, &held(&page.state)));
-        assert_eq!(
-            page.state
-                .measurement
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .index_builds
-                .get(),
-            1,
-            "frame must retain the geometry index"
-        );
+        assert_eq!(measured, held(&page.state));
         let actual = raster::pure_replay::RasterizeDisplayItemList(
             &page.frame.as_ref().unwrap().display_items,
             320,
@@ -435,9 +360,7 @@ fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
-                &assembly,
-            ))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
             constraints(),
             None,
             None,
@@ -463,14 +386,7 @@ fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
                 &mut |_, _| {},
             );
             assert_eq!(geometry(&page.state, node), before);
-            assert!(Rc::ptr_eq(&original, &held(&page.state)));
-            assert!(!page
-                .state
-                .measurement
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .PaintCurrent());
+            assert_eq!(original, held(&page.state));
             assert_eq!(
                 page.state.full_layout_lifecycles.get(),
                 1,
@@ -507,12 +423,5 @@ fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
                 200
             )
         );
-        assert!(page
-            .state
-            .measurement
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .PaintCurrent());
     });
 }

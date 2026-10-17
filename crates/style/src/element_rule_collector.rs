@@ -235,12 +235,12 @@ pub trait ElementRuleCollectorRuntime<R: RuleSetBackend>: Sized {
     fn IdForStyleResolution(&self, e: &Self::Element) -> AtomicString;
     fn IsStyledElement(&self, e: &Self::Element) -> bool;
     fn HasClass(&self, e: &Self::Element) -> bool;
-    fn ClassNames(&self, e: &Self::Element) -> Vec<AtomicString>;
+    fn ClassNames(&self, e: &Self::Element) -> Rc<[AtomicString]>;
     fn IsHTMLElement(&self, e: &Self::Element) -> bool;
     fn IsHTMLDocument(&self, d: &Self::RuntimeDocument) -> bool;
-    fn Attributes(&self, e: &Self::Element) -> Vec<Rc<Self::Attribute>>;
-    fn AttributesWithoutStyleUpdate(&self, e: &Self::Element) -> Vec<Rc<Self::Attribute>>;
-    fn AttributesWithoutUpdate(&self, e: &Self::Element) -> Vec<Rc<Self::Attribute>>;
+    fn Attributes(&self, e: &Self::Element) -> &[Self::Attribute];
+    fn AttributesWithoutStyleUpdate(&self, e: &Self::Element) -> &[Self::Attribute];
+    fn AttributesWithoutUpdate(&self, e: &Self::Element) -> &[Self::Attribute];
     fn AttributeLocalName(&self, a: &Self::Attribute) -> AtomicString;
     fn AttributeNamespaceURI(&self, a: &Self::Attribute) -> AtomicString;
     fn AttributeValue(&self, a: &Self::Attribute) -> AtomicString;
@@ -1234,7 +1234,7 @@ where
             }
         }
         if self.backend.IsStyledElement(&element) && self.backend.HasClass(&element) {
-            for name in self.backend.ClassNames(&element) {
+            for name in self.backend.ClassNames(&element).iter() {
                 for bundle in request.AllRuleSets() {
                     if self.CollectMatchingRulesForList::<STOP>(
                         bundle.rule_set.ClassRules(&name),
@@ -1253,10 +1253,11 @@ where
                 && self
                     .backend
                     .IsHTMLDocument(&self.backend.ElementDocument(&element));
+            let backend = self.backend;
             let mut attributes = if request.NeedStyleSynchronized() {
-                self.backend.Attributes(&element)
+                backend.Attributes(&element)
             } else {
-                self.backend.AttributesWithoutStyleUpdate(&element)
+                backend.AttributesWithoutStyleUpdate(&element)
             };
             let mut index = 0;
             while index < attributes.len() {
@@ -1273,8 +1274,11 @@ where
                 };
                 for bundle in request.RuleSetsWithAttrRules() {
                     let list = bundle.rule_set.AttrRules(&name);
+                    if list.is_empty() {
+                        continue;
+                    }
                     let value = self.backend.AttributeValue(&attributes[index]);
-                    if list.is_empty() || bundle.rule_set.CanIgnoreEntireList(list, &name, &value) {
+                    if bundle.rule_set.CanIgnoreEntireList(list, &name, &value) {
                         continue;
                     }
                     if self.CollectMatchingRulesForList::<STOP>(
@@ -1286,7 +1290,7 @@ where
                     ) {
                         return true;
                     }
-                    attributes = self.backend.AttributesWithoutUpdate(&element);
+                    attributes = backend.AttributesWithoutUpdate(&element);
                 }
                 index += 1;
             }

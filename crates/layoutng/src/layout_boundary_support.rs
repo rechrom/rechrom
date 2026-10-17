@@ -13,6 +13,14 @@ pub trait LayoutBoundaryEnvironment {
     fn Commit(&mut self, root: &mut LayoutObject);
 }
 
+/// Layout updates retain native fragments for borrowed queries. Paint also
+/// materializes the current paint boundary output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutUpdateKind {
+    Layout,
+    Paint,
+}
+
 // cpp: layoutng/layout_boundary_support.h:25-35
 #[derive(Clone, Copy, Default)]
 pub struct LayoutBoundarySupport {

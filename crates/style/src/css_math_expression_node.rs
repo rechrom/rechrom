@@ -148,22 +148,37 @@ impl CSSMathExpressionNode {
         };
 
         fn pixels_and_percent(value: PixelsAndPercent, zoom: f32) -> CSSMathExpressionNode {
-            let pixels = CSSMathExpressionNode::Numeric(CSSNumericLiteralValue::Create(
-                value.pixels as f64 / zoom as f64,
-                UnitType::kPixels,
-            ));
+            // cpp: CSSMathExpressionNode::Create(PixelsAndPercent). Computed
+            // serialization puts the percentage first and subtracts negative px.
             let percent = CSSMathExpressionNode::Numeric(CSSNumericLiteralValue::Create(
                 value.percent as f64,
                 UnitType::kPercentage,
             ));
-            if value.has_explicit_pixels && value.has_explicit_percent {
-                CSSMathExpressionNode::Operation(CSSMathOperator::Add, vec![pixels, percent])
-                    .expect("length and percentage form a valid typed sum")
-            } else if value.has_explicit_percent {
-                percent
-            } else {
-                pixels
+            if !value.has_explicit_pixels {
+                return percent;
             }
+            let mixed = value.has_explicit_percent;
+            let pixels = CSSMathExpressionNode::Numeric(CSSNumericLiteralValue::Create(
+                (if mixed {
+                    value.pixels.abs()
+                } else {
+                    value.pixels
+                }) as f64
+                    / zoom as f64,
+                UnitType::kPixels,
+            ));
+            if !mixed {
+                return pixels;
+            }
+            CSSMathExpressionNode::Operation(
+                if value.pixels < 0.0 {
+                    CSSMathOperator::Subtract
+                } else {
+                    CSSMathOperator::Add
+                },
+                vec![percent, pixels],
+            )
+            .expect("length and percentage form a valid typed sum")
         }
 
         fn convert(node: &Node, zoom: f32) -> Result<CSSMathExpressionNode, MathError> {

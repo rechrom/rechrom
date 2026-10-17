@@ -34,7 +34,12 @@ pub(crate) fn attach_screenshots(mailbox: FrameMailbox) {
         };
         let (width, height) = surface.size();
         if crate::engine::memory_diagnostics_enabled() {
-            eprintln!("pipeline-capture time_ns={} target={} provenance={:?}", crate::engine::diagnostic_time_ns(), target_id, frame.provenance);
+            eprintln!(
+                "pipeline-capture time_ns={} target={} provenance={:?}",
+                crate::engine::diagnostic_time_ns(),
+                target_id,
+                frame.provenance
+            );
         }
         // Page.captureScreenshot returns the composited page against its
         // default canvas background. Keep the protocol image opaque like
@@ -155,11 +160,16 @@ pub(crate) fn attach_commands(commands: &mpsc::Sender<Command>) {
                         } else {
                             button
                         },
-                        // DevTools coordinates address the page target; the
-                        // native queue uses full-window coordinates.
+                        // Both Page targets use local CSS coordinates. The
+                        // native queue uses full-window CSS coordinates.
                         position: Offset {
                             x: mouse.x,
-                            y: mouse.y + crate::chrome::HEIGHT,
+                            y: mouse.y
+                                + if mouse.target_id == 1 {
+                                    crate::chrome::HEIGHT
+                                } else {
+                                    0.0
+                                },
                         },
                         ..Default::default()
                     }),
@@ -177,6 +187,42 @@ pub(crate) fn attach_commands(commands: &mpsc::Sender<Command>) {
             .send(Command::QueuedInput {
                 input: InputEvent::TextInput(TextInputEvent {
                     text,
+                    ..Default::default()
+                }),
+                queued_at: Instant::now(),
+                samples: 1,
+            })
+            .map_err(|error| error.to_string())
+    }));
+    let key_commands = commands.clone();
+    devtools::set_key_handler(Arc::new(move |key| {
+        use interaction::input_event::{EventModifiers, InputEvent, KeyEvent, KeyEventType};
+        let down = key.event_type != "keyUp";
+        let modifiers = EventModifiers {
+            alt: key.modifiers & 1 != 0,
+            control: key.modifiers & 2 != 0,
+            meta: key.modifiers & 4 != 0,
+            shift: key.modifiers & 8 != 0,
+        };
+        // Native input strips control characters and command-modified text;
+        // Enter is a key/default action, not an inserted carriage return.
+        let text = if down && !modifiers.control && !modifiers.meta {
+            key.text.chars().filter(|c| !c.is_control()).collect()
+        } else {
+            String::new()
+        };
+        key_commands
+            .send(Command::QueuedInput {
+                input: InputEvent::Key(KeyEvent {
+                    r#type: if down {
+                        KeyEventType::kDown
+                    } else {
+                        KeyEventType::kUp
+                    },
+                    key: key.key,
+                    text,
+                    modifiers,
+                    repeat: key.repeat,
                     ..Default::default()
                 }),
                 queued_at: Instant::now(),

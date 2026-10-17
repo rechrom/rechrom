@@ -47,9 +47,15 @@ enum HostTaskCallback {
     Plain(Box<dyn FnOnce()>),
     WithRuntime(RuntimeTask),
 }
+type RuntimeTaskReady = Rc<dyn Fn(&mut dyn JavaScriptRuntime, &JavaScriptRealm) -> bool>;
+#[derive(Clone)]
+enum HostTaskReady {
+    Plain(Rc<dyn Fn() -> bool>),
+    WithRuntime(RuntimeTaskReady),
+}
 struct HostTask {
     run: Option<HostTaskCallback>,
-    ready: Option<Rc<dyn Fn() -> bool>>,
+    ready: Option<HostTaskReady>,
 }
 /// Navigation is handed to the embedder; it must start after active script returns.
 #[derive(Clone, Debug)]
@@ -172,6 +178,7 @@ impl WindowJavaScriptBindings {
             "__request",
             "__cancelRequest",
             "__urlParts",
+            "__urlDecodeForm",
             "__historyUpdate",
             "__queueScrollCompletion",
             "__randomHex",
@@ -268,10 +275,11 @@ impl WindowJavaScriptBindings {
             wake = Some(wake.map_or(due, |current| current.min(due)));
         }
         if !self.host_tasks.is_empty() {
-            let ready = self
-                .host_tasks
-                .iter()
-                .any(|task| task.ready.as_ref().is_none_or(|ready| ready()));
+            let ready = self.host_tasks.iter().any(|task| match &task.ready {
+                None => true,
+                Some(HostTaskReady::Plain(ready)) => ready(),
+                Some(HostTaskReady::WithRuntime(_)) => false,
+            });
             let due = if ready {
                 now
             } else {
@@ -312,7 +320,7 @@ impl WindowJavaScriptBindings {
     pub fn EnqueueTask(&mut self, task: Box<dyn FnOnce()>, ready: Option<Rc<dyn Fn() -> bool>>) {
         self.host_tasks.push(HostTask {
             run: Some(HostTaskCallback::Plain(task)),
-            ready,
+            ready: ready.map(HostTaskReady::Plain),
         });
     }
 
@@ -326,7 +334,16 @@ impl WindowJavaScriptBindings {
     ) {
         self.host_tasks.push(HostTask {
             run: Some(HostTaskCallback::WithRuntime(task)),
-            ready,
+            ready: ready.map(HostTaskReady::Plain),
+        });
+    }
+
+    /// Prepare/poll runtime-owned resources before a task becomes runnable.
+    /// Called without a Window borrow. Readiness must not execute page script.
+    pub fn EnqueueTaskWithRuntimeReadiness(&mut self, task: RuntimeTask, ready: RuntimeTaskReady) {
+        self.host_tasks.push(HostTask {
+            run: Some(HostTaskCallback::WithRuntime(task)),
+            ready: Some(HostTaskReady::WithRuntime(ready)),
         });
     }
 
@@ -457,12 +474,44 @@ impl WindowJavaScriptBindings {
                 let resolve = resolve.clone();
                 // ScrollPromiseResolver posts instant completion after the
                 // synchronous native offset write, using the host task source.
-                self.EnqueueTaskWithRuntime(Box::new(move |runtime, realm| {
-                    let _ = runtime.Call(realm, &resolve, &HostValue::default(), &[
-                        HostValue::Record(vec![("interrupted".into(), HostValue::Boolean(false))]),
-                    ]);
-                }), None);
+                self.EnqueueTaskWithRuntime(
+                    Box::new(move |runtime, realm| {
+                        let _ = runtime.Call(
+                            realm,
+                            &resolve,
+                            &HostValue::default(),
+                            &[HostValue::Record(vec![(
+                                "interrupted".into(),
+                                HostValue::Boolean(false),
+                            )])],
+                        );
+                    }),
+                    None,
+                );
                 return HostResult::default();
+            }
+        }
+        // URLSearchParams::DecodeString (core/url/url_search_params.cc:136):
+        // replace '+' before percent decoding, then UTF-8 decode without BOM
+        // handling. The bootstrap supplies string slices, not author codecs.
+        if receiver == 0 && name == "__urlDecodeForm" {
+            if call.operation == HostOperation::kGet {
+                return method(0, name);
+            }
+            if call.operation == HostOperation::kCall {
+                let Some(input) = text_arg(args, 0) else {
+                    return error("Form decoding requires a string");
+                };
+                let input = if input.as_bytes().contains(&b'+') {
+                    std::borrow::Cow::Owned(input.replace('+', " "))
+                } else {
+                    std::borrow::Cow::Borrowed(input)
+                };
+                return value(HostValue::String(
+                    percent_encoding::percent_decode_str(&input)
+                        .decode_utf8_lossy()
+                        .into_owned(),
+                ));
             }
         }
         if receiver == 0 && matches!(name, "__urlParts" | "__historyUpdate") {
@@ -744,6 +793,16 @@ impl WindowJavaScriptBindings {
                 let id = self.next_timer;
                 self.next_timer += 1;
                 let due = Instant::now() + milliseconds(delay);
+                browser_tracing::instant(
+                    "timer",
+                    "TimerInstalled",
+                    &[
+                        ("id", id as f64),
+                        ("delay_ms", delay),
+                        ("nesting", nesting_level as f64),
+                        ("repeating", (name == "setInterval") as u8 as f64),
+                    ],
+                );
                 let replaced = self.timers.insert(
                     id,
                     Timer {
@@ -894,6 +953,12 @@ impl WindowJavaScriptBindings {
 }
 
 impl JavaScriptHostBindings for WindowJavaScriptBindings {
+    fn ObjectTraceSource(
+        &self,
+    ) -> Option<Rc<dyn javascript::javascript_runtime::HostObjectTraceSource>> {
+        self.dom.borrow().ObjectTraceSource()
+    }
+
     fn PrepareInvocation(&mut self, call: &HostCall<'_>) -> Option<HostContinuation> {
         let location_call = call.receiver == LOCATION
             && call.operation == HostOperation::kCall
@@ -958,6 +1023,12 @@ impl JavaScriptHostBindings for WindowJavaScriptBindings {
         runtime: &mut dyn JavaScriptHostRuntime,
     ) -> HostResult {
         self.invoke(call, Some(runtime))
+    }
+    fn UsesOrdinaryProperties(&self, id: u64) -> bool {
+        // Window still supplies Document's location/URL/cookie/domain access
+        // through property interception. Its other DOM wrappers use the
+        // already installed ordinary IDL descriptors supplied by DOM.
+        id != self.document_id && self.dom.borrow().UsesOrdinaryProperties(id)
     }
     fn PrototypeFor(&mut self, id: u64) -> HostResult {
         self.dom.borrow_mut().PrototypeFor(id)
@@ -1137,7 +1208,12 @@ impl WindowJavaScriptBindings {
                             let Some(ready) = ready else {
                                 break;
                             };
-                            if ready.is_none_or(|f| f()) {
+                            let runnable = match ready {
+                                None => true,
+                                Some(HostTaskReady::Plain(ready)) => ready(),
+                                Some(HostTaskReady::WithRuntime(ready)) => ready(runtime, realm),
+                            };
+                            if runnable {
                                 task = Some(Task::Host(
                                     window
                                         .borrow_mut()
@@ -1186,7 +1262,12 @@ impl WindowJavaScriptBindings {
                     task_id,
                     ..Default::default()
                 });
-                let _task_trace = browser_tracing::span("task", task_kind);
+                let mut _task_trace = browser_tracing::span("task", task_kind);
+                if let Task::Timer(timer) = &task {
+                    _task_trace.set("nesting", timer.nesting_level as f64);
+                    _task_trace.set("interval_ms", timer.interval_ms);
+                    _task_trace.set("repeating", timer.repeating as u8 as f64);
+                }
                 let timer_task = matches!(&task, Task::Timer(_));
                 let result = match task {
                     Task::Network(job) => {
@@ -1536,7 +1617,9 @@ mod tests {
     }
     #[test]
     fn composed_window_bootstrap_url_globals_tasks_and_network() {
-        let owner = Rc::new(RefCell::new(dom::DOM::new()));
+        let owner = Rc::new(RefCell::new(html::html_parser::ParseHTML(
+            "<!doctype html><div></div>",
+        )));
         let dom = Rc::new(RefCell::new(DOMJavaScriptBindings::new(
             owner,
             Box::new(|_| {}),
@@ -1565,6 +1648,32 @@ mod tests {
             "window-webidl",
         );
         assert!(result.Succeeded(), "{:?}", result.exception);
+        realm
+            .WithImplementation::<javascript::quickjs_javascript_runtime::QuickJsRealm, _>(
+                |realm| {
+                    let element = realm
+                        .context
+                        .eval("document.querySelector('div')")
+                        .unwrap_or_else(|error| {
+                            panic!("{}", realm.context.format_exception(&error))
+                        });
+                    assert!(
+                        !realm.context.is_proxy(&element),
+                        "composed host must preserve ordinary Node wrapping"
+                    );
+                    let collection = realm.context.eval("document.childNodes").unwrap();
+                    assert!(
+                        realm.context.is_proxy(&collection),
+                        "indexed collection still needs interception"
+                    );
+                    let document = realm.context.eval("document").unwrap();
+                    assert!(
+                        realm.context.is_proxy(&document),
+                        "Window owns additional Document accessors"
+                    );
+                },
+            )
+            .unwrap();
         assert_script(
             &mut runtime,
             &realm,
@@ -1585,6 +1694,13 @@ mod tests {
             if (!rejected || document.domain !== 'example.test') throw Error('domain');
             var parts=__urlParts('../next?q=2#h');
             if (parts.href !== 'https://www.example.test/next?q=2#h' || parts.pathname !== '/next' || parts.search !== '?q=2' || parts.hash !== '#h') throw Error('relative URL');
+            const form=new URLSearchParams('plain=a+b&plus=%2B&eq=a=b&bad=%FF%C0%AF&bom=%EF%BB%BF&emoji=%F0%9F%98%80&bare=%zz&nil=%00&dup=first&dup=last');
+            if(form.get('plain')!=='a b'||form.get('plus')!=='+'||form.get('eq')!=='a=b'||form.get('bad')!=='\ufffd\ufffd\ufffd'||form.get('bom')!=='\ufeff'||form.get('emoji')!=='😀'||form.get('bare')!=='%zz'||form.get('nil')!=='\0'||form.getAll('dup').join(',')!=='first,last')throw Error('form decoding');
+            if(new URLSearchParams('q=\ud800').get('q')!=='\ufffd'||new URLSearchParams('q=%ED%A0%80').get('q')!=='\ufffd\ufffd\ufffd')throw Error('form scalar conversion');
+            const encoder=globalThis.TextEncoder,decoder=globalThis.TextDecoder;
+            globalThis.TextEncoder=globalThis.TextDecoder=function(){throw Error('author codec called')};
+            try{if(new URLSearchParams('q=plain+%E4%B8%AD').get('q')!=='plain 中')throw Error('native form decoder')}
+            finally{globalThis.TextEncoder=encoder;globalThis.TextDecoder=decoder;}
             __historyUpdate('/same?q=3');
             if(location.pathname !== '/same') throw Error('history update');
             rejected=false; try {__historyUpdate('https://other.test/')} catch(e) {rejected=e instanceof TypeError}

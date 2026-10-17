@@ -12,6 +12,8 @@ use layoutng_assembly::{
     internal::layout_input::{Offset, Overflow},
 };
 use paint::paint_engine::PaintRect;
+use paint::paint_property_tree::PropertyTreeState;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ScrollNode {
@@ -30,6 +32,7 @@ pub(crate) struct ScrollNode {
 pub(crate) struct ScrollTreeSnapshot {
     pub nodes: Vec<ScrollNode>,
     root_id: Option<u64>,
+    main_thread_hit_test_regions: BTreeMap<u64, PropertyTreeState>,
 }
 
 impl ScrollTreeSnapshot {
@@ -51,7 +54,11 @@ impl ScrollTreeSnapshot {
                     .total_cmp(&((b.maximum.x - b.minimum.x) + (b.maximum.y - b.minimum.y)))
             })
             .map(|node| node.id);
-        Self { nodes, root_id }
+        Self {
+            nodes,
+            root_id,
+            main_thread_hit_test_regions: BTreeMap::new(),
+        }
     }
 
     pub fn root(&self) -> Option<ScrollNode> {
@@ -59,20 +66,58 @@ impl ScrollTreeSnapshot {
         self.nodes.iter().find(|node| node.id == id).copied()
     }
 
-    /// This compositor currently owns one mutable scroll offset. Do not admit
-    /// a root-only gesture when the immutable property tree contains another
-    /// scrollable node: Page will target and chain that gesture on the main
-    /// thread. Treating it as root scroll here moves both nodes when Page's
-    /// committed nested offset arrives.
-    pub fn supports_root_only_input(&self) -> bool {
+    pub fn with_hit_test_regions(mut self, regions: BTreeMap<u64, PropertyTreeState>) -> Self {
+        self.main_thread_hit_test_regions = regions;
+        self
+    }
+
+    /// cc::InputHandler::HitTestScrollNode / PointHitsMainThreadScrollHitTestRegion.
+    /// Nested scroll ownership is still resolved by Page, but only a hit in
+    /// that node's clipped container needs that fallback. A nested sidebar
+    /// cannot disable compositor scrolling everywhere in the viewport.
+    pub fn supports_root_input_at(&self, point: Offset, delta: Offset) -> bool {
         let Some(root) = self.root() else {
             return false;
         };
-        !self.nodes.iter().any(|node| {
-            node.id != root.id
-                && ((node.user_scrollable_horizontal && node.maximum.x > node.minimum.x)
+        let scroll_override = Some(layer_tile::CompositorScrollOffset {
+            scroll_node_id: root.id,
+            translation_x: -delta.x,
+            translation_y: -delta.y,
+        });
+        for node in &self.nodes {
+            if node.id == root.id
+                || !((node.user_scrollable_horizontal && node.maximum.x > node.minimum.x)
                     || (node.user_scrollable_vertical && node.maximum.y > node.minimum.y))
-        })
+            {
+                continue;
+            }
+            let Some(properties) = self.main_thread_hit_test_regions.get(&node.id) else {
+                return false;
+            };
+            // Use the same transform/clip owner as drawing, including fixed,
+            // sticky, transformed ancestors and the outstanding impl delta.
+            let Ok((matrix, clip)) = layer_tile::resolved_compositor_transform_with_scroll(
+                properties,
+                1.0,
+                scroll_override,
+            ) else {
+                return false;
+            };
+            let Some(rect) = paint::geometry_mapper::MapRectToRoot(node.container_rect, &[matrix])
+            else {
+                return false;
+            };
+            let contains = |r: PaintRect| {
+                point.x >= r.x
+                    && point.x < r.x + r.width
+                    && point.y >= r.y
+                    && point.y < r.y + r.height
+            };
+            if contains(rect) && clip.is_none_or(contains) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -545,6 +590,12 @@ mod tests {
         let nested = ScrollNode {
             id: 8,
             parent_id: Some(7),
+            container_rect: PaintRect {
+                x: 0.,
+                y: 0.,
+                width: 100.,
+                height: 100.,
+            },
             maximum: Offset { x: 0., y: 1000. },
             ..root()
         };
@@ -554,6 +605,21 @@ mod tests {
                 .unwrap()
                 .id,
             7
+        );
+        let snapshot = ScrollTreeSnapshot::new(vec![nested, root()]);
+        assert!(
+            !snapshot.supports_root_input_at(Offset { x: 500., y: 50. }, Offset::default()),
+            "unmapped nested geometry must keep the main-thread fallback"
+        );
+        let snapshot =
+            snapshot.with_hit_test_regions(BTreeMap::from([(8, PropertyTreeState::default())]));
+        assert!(
+            snapshot.supports_root_input_at(Offset { x: 500., y: 50. }, Offset::default()),
+            "a sidebar cannot block unrelated root input"
+        );
+        assert!(
+            !snapshot.supports_root_input_at(Offset { x: 50., y: 50. }, Offset::default()),
+            "input inside the sidebar still needs nested target selection"
         );
     }
 }

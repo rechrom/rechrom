@@ -154,7 +154,7 @@ impl LayoutSVGInlineText {
         }
         let input = InputStyleForFont(object);
         let defaults = ExtendedStyle::default();
-        let extra = input.extended.as_ref().unwrap_or(&defaults);
+        let extra = input.extended.as_deref().unwrap_or(&defaults);
         let description = style.GetFontDescription();
         let factor = *scaling_factor as f64;
         let request = NativeFontRequest::new_auto(

@@ -157,29 +157,40 @@ impl production_style_builder::URLImageResolver for DocumentURLImageResolver<'_>
     }
 
     fn ResolveMaskSource(
-        &self, value: &crate::production_css_value::CSSImageValue,
+        &self,
+        value: &crate::production_css_value::CSSImageValue,
     ) -> Result<std::ptr::NonNull<StyleImage>, LonghandApplicationError> {
         use layoutng_style::style::style_mask_source_image::StyleMaskSourceImage;
         let local = value.url_data.unresolved_url.starts_with('#') || {
             let parsed = url::Url::parse(value.url_data.resolved_url.as_ref()).ok();
             let document = url::Url::parse(self.document.DocumentURL()).ok();
             match (parsed, document) {
-                (Some(mut a), Some(mut b)) => { a.set_fragment(None); b.set_fragment(None); a == b },
+                (Some(mut a), Some(mut b)) => {
+                    a.set_fragment(None);
+                    b.set_fragment(None);
+                    a == b
+                }
                 _ => false,
             }
         };
-        crate::resolver::element_style_resources::LoadMaskSourceBranch(local, || {
-            let image = foundation::MakeGarbageCollected(StyleMaskSourceImage::Local(
-                value.url_data.clone(), self.document.SVGResourceScope(self.originating_index),
-            ));
-            Ok(std::ptr::NonNull::new(image.cast()).unwrap())
-        }, || {
-            let fetched = self.ResolveImage(value)?;
-            let image = foundation::MakeGarbageCollected(StyleMaskSourceImage::Fetched(
-                value.url_data.clone(), fetched.Image().as_ptr(),
-            ));
-            Ok(std::ptr::NonNull::new(image.cast()).unwrap())
-        })
+        crate::resolver::element_style_resources::LoadMaskSourceBranch(
+            local,
+            || {
+                let image = foundation::MakeGarbageCollected(StyleMaskSourceImage::Local(
+                    value.url_data.clone(),
+                    self.document.SVGResourceScope(self.originating_index),
+                ));
+                Ok(std::ptr::NonNull::new(image.cast()).unwrap())
+            },
+            || {
+                let fetched = self.ResolveImage(value)?;
+                let image = foundation::MakeGarbageCollected(StyleMaskSourceImage::Fetched(
+                    value.url_data.clone(),
+                    fetched.Image().as_ptr(),
+                ));
+                Ok(std::ptr::NonNull::new(image.cast()).unwrap())
+            },
+        )
     }
 
     fn ResolveImage(
@@ -277,6 +288,9 @@ impl fmt::Display for DocumentStyleError {
 }
 impl std::error::Error for DocumentStyleError {}
 struct MatchedRule {
+    /// DefaultPseudoElementStyle is admitted only for an actual pseudo style
+    /// request; its defaults do not advertise author pseudos on the origin.
+    user_agent_pseudo_sheet: bool,
     specificity: u32,
     proximity: u32,
     order: usize,
@@ -340,6 +354,9 @@ fn ConsumeProductionRuleCollection(
         );
         stats.typed_declarations_used += 1;
         direct_rules.push(MatchedRule {
+            user_agent_pseudo_sheet: transferred.matched.data_.origin == CascadeOrigin::kUserAgent
+                && sheets[transferred.sheet_index].0.UserAgentStyleSheetRole()
+                    == Some(CSSUserAgentStyleSheetRole::kMarker),
             specificity: transferred.specificity,
             proximity: transferred.proximity,
             order: sheet_base + transferred.position as usize + 1,
@@ -374,7 +391,7 @@ struct ProductionResolverRuleSets {
         Option<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>,
     mathml_user_agent:
         Option<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>,
-    author: Vec<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>,
+    author: Rc<Vec<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>>,
 }
 
 #[derive(Default)]
@@ -383,9 +400,149 @@ struct ProductionHighlightRuleCandidates {
     custom_names: Vec<AtomicString>,
 }
 
+// RuleSet and routing are immutable compiled owners. Retain their identities
+// with the aggregate pseudo inventory, so repeated style/layout queries do not
+// scan every selector again. Holding the owners also prevents pointer reuse
+// from making a stale inventory appear current.
+struct ProductionPseudoRuleInput {
+    rules: Rc<crate::rule_set::RuleSet<crate::production_style_sheet::Backend>>,
+    routing: Option<Rc<crate::production_rule_matching::ProductionRuleRouting>>,
+    compatibility: bool,
+}
+// This is only the finite selector request space, not an element match cache.
+// Retain the immutable RuleSet/routing owners so identity cannot be recycled;
+// their order and compatibility role cover every input to both inventories.
+struct ProductionPseudoRuleCandidates {
+    inputs: Vec<ProductionPseudoRuleInput>,
+    compatibility: Rc<HashMap<PseudoStyleKind, Vec<SelectorBucket>>>,
+    highlights: Rc<ProductionHighlightRuleCandidates>,
+}
+impl ProductionPseudoRuleCandidates {
+    fn Matches(&self, rules: &ProductionResolverRuleSets) -> bool {
+        let mut inputs = rules.PseudoRuleInputs();
+        self.inputs.iter().all(|old| {
+            inputs.next().is_some_and(|(new, compatibility)| {
+                old.compatibility == compatibility
+                    && Rc::ptr_eq(&old.rules, &new.rule_set)
+                    && match (&old.routing, &new.routing) {
+                        (None, None) => true,
+                        (Some(old), Some(new)) => Rc::ptr_eq(old, new),
+                        _ => false,
+                    }
+            })
+        }) && inputs.next().is_none()
+    }
+    fn new(rules: &ProductionResolverRuleSets) -> Self {
+        Self {
+            inputs: rules
+                .PseudoRuleInputs()
+                .map(|(input, compatibility)| ProductionPseudoRuleInput {
+                    rules: input.rule_set.clone(),
+                    routing: input.routing.clone(),
+                    compatibility,
+                })
+                .collect(),
+            compatibility: Rc::new(rules.CompatibilityPseudoCandidates()),
+            highlights: Rc::new(rules.HighlightRuleCandidates()),
+        }
+    }
+}
+
 impl ProductionResolverRuleSets {
+    fn PseudoRuleInputs(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &crate::resolver::production_style_resolver::ProductionResolverRuleSetInput,
+            bool,
+        ),
+    > {
+        std::iter::once((&self.html_user_agent, true))
+            .chain(
+                [
+                    self.html_quirks_user_agent
+                        .as_ref()
+                        .map(|input| (input, true)),
+                    self.forced_colors_user_agent
+                        .as_ref()
+                        .map(|input| (input, true)),
+                    self.marker_user_agent.as_ref().map(|input| (input, false)),
+                    self.fullscreen_user_agent
+                        .as_ref()
+                        .map(|input| (input, true)),
+                    self.svg_user_agent.as_ref().map(|input| (input, true)),
+                    self.mathml_user_agent.as_ref().map(|input| (input, false)),
+                ]
+                .into_iter()
+                .flatten(),
+            )
+            .chain(self.author.iter().map(|input| (input, true)))
+    }
+    // The translated ordinary collector already records dynamic pseudo flags.
+    // Keep a bounded subject index only for rules its typed routing cannot own
+    // yet (notably nested generated markers); never re-probe all seven pseudo
+    // kinds just to discover that the ordinary match had no such rule.
+    fn CompatibilityPseudoCandidates(&self) -> HashMap<PseudoStyleKind, Vec<SelectorBucket>> {
+        let mut candidates = HashMap::<PseudoStyleKind, Vec<SelectorBucket>>::new();
+        for input in std::iter::once(&self.html_user_agent)
+            .chain(self.html_quirks_user_agent.iter())
+            .chain(self.forced_colors_user_agent.iter())
+            .chain(self.fullscreen_user_agent.iter())
+            .chain(self.svg_user_agent.iter())
+            .chain(self.mathml_user_agent.iter())
+            .chain(self.author.iter())
+        {
+            for data in input.rule_set.AllRuleData() {
+                if input
+                    .routing
+                    .as_ref()
+                    .is_some_and(|routing| routing.IsAuthoritativeRetainedRule(data.Rule()))
+                {
+                    continue;
+                }
+                let ids = data
+                    .Selector()
+                    .SimpleSelectors()
+                    .filter(|s| s.Match() == MatchType::kPseudoElement)
+                    .map(|s| GetPseudoId(s.GetPseudoType()))
+                    .collect::<Vec<_>>();
+                for id in &ids {
+                    let kind = match *id {
+                        PseudoId::kPseudoIdBefore => PseudoStyleKind::Before,
+                        PseudoId::kPseudoIdAfter => PseudoStyleKind::After,
+                        PseudoId::kPseudoIdFirstLetter => PseudoStyleKind::FirstLetter,
+                        PseudoId::kPseudoIdPlaceholder => PseudoStyleKind::Placeholder,
+                        PseudoId::kPseudoIdMarker if ids.contains(&PseudoId::kPseudoIdBefore) => {
+                            PseudoStyleKind::BeforeMarker
+                        }
+                        PseudoId::kPseudoIdMarker if ids.contains(&PseudoId::kPseudoIdAfter) => {
+                            PseudoStyleKind::AfterMarker
+                        }
+                        PseudoId::kPseudoIdMarker => PseudoStyleKind::Marker,
+                        _ => continue,
+                    };
+                    let cross_tree = data.Selector().SimpleSelectors().any(|s| {
+                        matches!(
+                            s.GetPseudoType(),
+                            PseudoType::kPseudoPart
+                                | PseudoType::kPseudoSlotted
+                                | PseudoType::kPseudoHost
+                                | PseudoType::kPseudoHostContext
+                        )
+                    });
+                    candidates.entry(kind).or_default().push(if cross_tree {
+                        SelectorBucket::Universal
+                    } else {
+                        SelectorBucketForComplexSubject(data.Selector())
+                    });
+                }
+            }
+        }
+        candidates
+    }
+
     /// Collect the finite request space from retained typed selectors once per
-    /// update. Actual element matching remains wholly owned by
+    /// active RuleSet configuration. Actual element matching remains wholly owned by
     /// ElementRuleCollector; this list only avoids probing names which cannot
     /// occur in any active RuleSet.
     fn HighlightRuleCandidates(&self) -> ProductionHighlightRuleCandidates {
@@ -604,6 +761,12 @@ fn SelectorBucketForSubject(selectors: &CSSSelectorList) -> SelectorBucket {
     let Some(subject) = selectors.First() else {
         return SelectorBucket::Universal;
     };
+    SelectorBucketForComplexSubject(subject)
+}
+
+fn SelectorBucketForComplexSubject(
+    subject: crate::css_selector::CSSSelectorComplex<'_>,
+) -> SelectorBucket {
     let mut class_name = None;
     let mut attribute = None;
     let mut tag = None;
@@ -625,7 +788,10 @@ fn SelectorBucketForSubject(selectors: &CSSSelectorList) -> SelectorBucket {
             MatchType::kTag if tag.is_none() => tag = Some(selector.TagQName().LocalName().Utf8()),
             _ => {}
         }
-        if selector.Relation() != RelationType::kSubSelector {
+        if !matches!(
+            selector.Relation(),
+            RelationType::kSubSelector | RelationType::kPseudoChild
+        ) {
             break;
         }
     }
@@ -640,7 +806,9 @@ impl SelectorBucket {
     fn Matches(&self, document: &Document, index: usize, quirks: bool) -> bool {
         let node = document.Node(index);
         match self {
-            Self::CustomPseudo(expected) => document.ShadowPseudoId(index).is_some_and(|name| name == expected),
+            Self::CustomPseudo(expected) => document
+                .ShadowPseudoId(index)
+                .is_some_and(|name| name == expected),
             Self::Id(expected) => node.FindAttribute("id").is_some_and(|attribute| {
                 if quirks {
                     attribute.value.eq_ignore_ascii_case(expected)
@@ -733,19 +901,34 @@ impl RuleCandidateBuckets {
 /// require ordinary resolution instead of manufacturing a matching signature.
 #[derive(Clone)]
 struct RetainedRuleSignature {
+    native_style_complete: bool,
+    base_len: usize,
     values: Vec<(usize, u32, u32)>,
     complete: bool,
 }
 impl RetainedRuleSignature {
-    fn new(mut values: Vec<(usize, u32, u32)>, complete: bool) -> Self {
+    fn new(values: Vec<(usize, u32, u32)>, complete: bool) -> Self {
+        let base_len = values.len();
+        Self::with_base(values, base_len, complete)
+    }
+    fn with_base(mut values: Vec<(usize, u32, u32)>, base_len: usize, complete: bool) -> Self {
         for (_, _, proximity) in &mut values {
             *proximity = crate::element_rule_collector::CanonicalMatchedRuleProximity(*proximity);
         }
-        values.sort_unstable();
-        Self { values, complete }
+        values[..base_len].sort_unstable();
+        values[base_len..].sort_unstable();
+        Self {
+            native_style_complete: false,
+            base_len,
+            values,
+            complete,
+        }
     }
     fn Equivalent(&self, other: &Self) -> bool {
-        self.complete && other.complete && self.values == other.values
+        self.complete
+            && other.complete
+            && self.base_len == other.base_len
+            && self.values == other.values
     }
 }
 
@@ -765,6 +948,7 @@ struct RuleCandidateIndex {
 /// the real cascade.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TranslatedRuleShadowStats {
+    pub incremental_style_updates: usize,
     pub rule_sets_built: usize,
     /// Matched author or user-agent rules whose retained typed declaration
     /// vector fed the real cascade. These rules never pass through declaration
@@ -887,6 +1071,62 @@ impl ResolverDependencyState {
     }
 }
 
+/// UA input preserves immutable stylesheet ownership across the host boundary.
+/// Borrowed CSSOM values still compare by value; shared sheets are retained
+/// directly, like CSSDefaultStyleSheets' owners in Blink. An edit through
+/// Rc::make_mut creates a different owner while the engine retains the old one.
+#[derive(Clone, Copy)]
+pub enum UserAgentStyleSheetInput<'a> {
+    Borrowed(&'a [CSSStyleSheet]),
+    Shared(&'a [Rc<CSSStyleSheet>]),
+}
+
+impl<'a> From<&'a [CSSStyleSheet]> for UserAgentStyleSheetInput<'a> {
+    fn from(sheets: &'a [CSSStyleSheet]) -> Self {
+        Self::Borrowed(sheets)
+    }
+}
+impl<'a, const N: usize> From<&'a [CSSStyleSheet; N]> for UserAgentStyleSheetInput<'a> {
+    fn from(sheets: &'a [CSSStyleSheet; N]) -> Self {
+        Self::Borrowed(sheets)
+    }
+}
+impl<'a> From<&'a Vec<CSSStyleSheet>> for UserAgentStyleSheetInput<'a> {
+    fn from(sheets: &'a Vec<CSSStyleSheet>) -> Self {
+        Self::Borrowed(sheets)
+    }
+}
+impl<'a> From<&'a [Rc<CSSStyleSheet>]> for UserAgentStyleSheetInput<'a> {
+    fn from(sheets: &'a [Rc<CSSStyleSheet>]) -> Self {
+        Self::Shared(sheets)
+    }
+}
+impl<'a> From<&'a Vec<Rc<CSSStyleSheet>>> for UserAgentStyleSheetInput<'a> {
+    fn from(sheets: &'a Vec<Rc<CSSStyleSheet>>) -> Self {
+        Self::Shared(sheets)
+    }
+}
+impl<'a> UserAgentStyleSheetInput<'a> {
+    fn len(self) -> usize {
+        match self {
+            Self::Borrowed(sheets) => sheets.len(),
+            Self::Shared(sheets) => sheets.len(),
+        }
+    }
+    fn sheet(self, index: usize) -> &'a CSSStyleSheet {
+        match self {
+            Self::Borrowed(sheets) => &sheets[index],
+            Self::Shared(sheets) => &sheets[index],
+        }
+    }
+    fn shared(self, index: usize) -> Option<&'a Rc<CSSStyleSheet>> {
+        match self {
+            Self::Borrowed(_) => None,
+            Self::Shared(sheets) => Some(&sheets[index]),
+        }
+    }
+}
+
 // cpp: document.h:729,2856; document.cc:1103; style_engine.cc:StyleEngine,
 // UpdateActiveStyleSheets/UpdateStyleAndLayoutTree; style_resolver.cc:ResolveStyle.
 // The source's platform/page services are outside this document-only assembly.
@@ -897,8 +1137,9 @@ pub struct DocumentStyleEngine {
     selectors: Rc<RefCell<PersistentSelectorService>>,
     interaction_changed_nodes: HashSet<u64>,
     interaction_changed_pseudos: BTreeSet<PseudoType>,
+    interaction_invalidation_roots: std::collections::BTreeMap<PseudoType, HashSet<usize>>,
     diagnostics: Vec<DocumentStyleError>,
-    active_sheets: Arc<Vec<(CSSStyleSheet, CascadeOrigin)>>,
+    active_sheets: Arc<Vec<(Rc<CSSStyleSheet>, CascadeOrigin)>>,
     /// TreeScope owner aligned with `active_sheets`; UA entries have no
     /// author scope. Retaining the previous sequence lets stylesheet removal
     /// invalidate the old ShadowRoot even after CSSOM drops the owner.
@@ -908,6 +1149,18 @@ pub struct DocumentStyleEngine {
     // can retain the translated typed sheet without exposing it across the
     // package boundary or reparsing its source projection.
     typed_sheets: HashMap<(u64, u64), Rc<crate::production_style_sheet::ProductionStyleSheet>>,
+    // cpp: StyleEngine::FindStyleSheetContents/CreateSheet. Inline sheets in
+    // different shadow roots share immutable parsed contents, not CSSOM owners.
+    inline_sheet_contents:
+        HashMap<u64, std::rc::Weak<crate::production_style_sheet::ProductionStyleSheet>>,
+    shared_rule_sets: HashMap<
+        (usize, bool),
+        (
+            std::rc::Weak<crate::production_style_sheet::ProductionStyleSheet>,
+            Rc<crate::rule_set::RuleSet<crate::production_style_sheet::Backend>>,
+            Rc<crate::production_rule_matching::ProductionRuleRouting>,
+        ),
+    >,
     typed_sheet_fallback_parses: usize,
     translated_rule_sets:
         HashMap<(u64, u64), Rc<crate::rule_set::RuleSet<crate::production_style_sheet::Backend>>>,
@@ -915,11 +1168,14 @@ pub struct DocumentStyleEngine {
         HashMap<(u64, u64), Rc<crate::production_rule_matching::ProductionRuleRouting>>,
     matched_properties_cache:
         crate::resolver::production_style_resolver::ProductionMatchedPropertiesCache,
+    declarations: Rc<crate::resolver::production_style_resolver::ProductionDeclarationCache>,
     resolver_dependencies: ResolverDependencyState,
     // Immutable per-family font inputs are derived from this Style-owned
     // document-author registry, never from Layout or a Page-side CSS scan.
     font_feature_values: crate::font_feature_values_registry::FontFeatureValuesRegistry,
     translated_rule_set_environment: Option<MediaValuesCachedData>,
+    pseudo_rule_candidates: Option<ProductionPseudoRuleCandidates>,
+    container_dependent_elements: HashSet<usize>,
     translated_rule_shadow_stats: TranslatedRuleShadowStats,
     sheet_revision: Option<u64>,
     environment: Option<(MediaValuesCachedData, CompatibilityMode)>,
@@ -927,6 +1183,15 @@ pub struct DocumentStyleEngine {
     cascade_values: HashMap<usize, HashMap<CSSPropertyID, Rc<Value>>>,
     custom_properties: HashMap<usize, Rc<CustomProperties>>,
     sheet_dependencies: Vec<SelectorDependencies>,
+    // RuleFeatureSet-style metadata belongs to immutable parsed contents, not
+    // its position or CSSOM attachment. Weak ownership follows the text cache.
+    shared_selector_dependencies: HashMap<
+        usize,
+        (
+            std::rc::Weak<crate::production_style_sheet::ProductionStyleSheet>,
+            SelectorDependencies,
+        ),
+    >,
     // Source text owns a small set of compatibility/nesting variants.  Keep
     // it as the outer key so hot candidate lookups can borrow `&str` without
     // allocating a fresh String for every rule/element pair.
@@ -951,6 +1216,7 @@ pub struct DocumentStyleEngine {
     declaration_cache: HashMap<(String, u8), Rc<Vec<PropertyValue>>>,
     container_states: HashMap<usize, ContainerState>,
     layout_container_nodes: HashSet<usize>,
+    invalidated_container_nodes: HashSet<usize>,
     property_registry: crate::property_registry::PropertyRegistry,
     registered_container_properties: Option<Rc<dyn RegisteredContainerPropertyResolver>>,
     color_scheme_settings: production_style_builder::ColorSchemeSettings,
@@ -974,21 +1240,37 @@ pub struct CustomPropertyMemoryDiagnostics {
 }
 impl DocumentStyleEngine {
     pub fn CustomPropertyMemoryDiagnostics(&self) -> CustomPropertyMemoryDiagnostics {
-        let mut stats = CustomPropertyMemoryDiagnostics { node_entries: self.custom_properties.len(), ..Default::default() };
-        let (mut records, mut maps, mut registered, mut data) = (HashSet::new(), HashSet::new(), HashSet::new(), HashSet::new());
+        let mut stats = CustomPropertyMemoryDiagnostics {
+            node_entries: self.custom_properties.len(),
+            ..Default::default()
+        };
+        let (mut records, mut maps, mut registered, mut data) = (
+            HashSet::new(),
+            HashSet::new(),
+            HashSet::new(),
+            HashSet::new(),
+        );
         for custom in self.custom_properties.values() {
-            if !records.insert(Rc::as_ptr(custom)) { continue; }
+            if !records.insert(Rc::as_ptr(custom)) {
+                continue;
+            }
             stats.custom_records += 1;
             if maps.insert(Rc::as_ptr(&custom.values)) {
                 stats.value_maps += 1;
                 stats.value_entries += custom.values.len();
-                stats.value_key_capacity += custom.values.keys().map(std::string::String::capacity).sum::<usize>();
-                stats.value_bucket_payload_capacity_estimate += custom.values.capacity() * std::mem::size_of::<(std::string::String, ComputedVariableValue)>();
+                stats.value_key_capacity += custom
+                    .values
+                    .keys()
+                    .map(std::string::String::capacity)
+                    .sum::<usize>();
+                stats.value_bucket_payload_capacity_estimate += custom.values.capacity()
+                    * std::mem::size_of::<(std::string::String, ComputedVariableValue)>();
                 for value in custom.values.values() {
                     if let ComputedVariableValue::Data(value) = value {
                         if data.insert(Rc::as_ptr(value)) {
                             stats.variable_data_owners += 1;
-                            stats.token_inline_capacity += value.tokens.capacity() * std::mem::size_of::<crate::production_css_value::VariableToken>();
+                            stats.token_inline_capacity += value.tokens.capacity()
+                                * std::mem::size_of::<crate::production_css_value::VariableToken>();
                         }
                     }
                 }
@@ -996,7 +1278,11 @@ impl DocumentStyleEngine {
             if registered.insert(Rc::as_ptr(&custom.registered_values)) {
                 stats.registered_maps += 1;
                 stats.registered_entries += custom.registered_values.len();
-                stats.registered_key_capacity += custom.registered_values.keys().map(std::string::String::capacity).sum::<usize>();
+                stats.registered_key_capacity += custom
+                    .registered_values
+                    .keys()
+                    .map(std::string::String::capacity)
+                    .sum::<usize>();
             }
         }
         stats
@@ -1008,17 +1294,23 @@ impl DocumentStyleEngine {
             selectors: Default::default(),
             interaction_changed_nodes: HashSet::new(),
             interaction_changed_pseudos: BTreeSet::new(),
+            interaction_invalidation_roots: std::collections::BTreeMap::new(),
             diagnostics: vec![],
             active_sheets: Default::default(),
             active_sheet_scopes: Default::default(),
             typed_sheets: HashMap::new(),
+            inline_sheet_contents: HashMap::new(),
+            shared_rule_sets: HashMap::new(),
             typed_sheet_fallback_parses: 0,
             translated_rule_sets: HashMap::new(),
             translated_rule_routing: HashMap::new(),
             matched_properties_cache: Default::default(),
+            declarations: Default::default(),
             resolver_dependencies: Default::default(),
             font_feature_values: Default::default(),
             translated_rule_set_environment: None,
+            pseudo_rule_candidates: None,
+            container_dependent_elements: HashSet::new(),
             translated_rule_shadow_stats: Default::default(),
             sheet_revision: None,
             environment: None,
@@ -1026,12 +1318,14 @@ impl DocumentStyleEngine {
             cascade_values: HashMap::new(),
             custom_properties: HashMap::new(),
             sheet_dependencies: vec![],
+            shared_selector_dependencies: HashMap::new(),
             style_selectors: HashMap::new(),
             rule_candidate_index: None,
             media_query_cache: HashMap::new(),
             declaration_cache: HashMap::new(),
             container_states: HashMap::new(),
             layout_container_nodes: HashSet::new(),
+            invalidated_container_nodes: HashSet::new(),
             property_registry: Default::default(),
             registered_container_properties: None,
             color_scheme_settings: Default::default(),
@@ -1055,7 +1349,7 @@ impl DocumentStyleEngine {
             } else {
                 self.container_states.remove(&node);
             }
-            owner.GetDocumentMut().StyleStateMut().all_dirty = true;
+            self.invalidated_container_nodes.insert(node);
         }
         Ok(changed)
     }
@@ -1165,10 +1459,89 @@ impl DocumentStyleEngine {
     pub fn Diagnostics(&self) -> &[DocumentStyleError] {
         &self.diagnostics
     }
+    // cpp: Element::SetHovered/SetActive/FocusWithinStateChanged and
+    // AffectedByPseudoStateChange (element.cc:6880-6998,9140-9151,13146-13192).
+    // SelectorChecker's retained flags select local and relational invalidation;
+    // a state change on an unrelated ancestor does not dirty the document.
+    fn RecordUserActionChange(&mut self, document: &Document, id: u64, pseudo: PseudoType) {
+        use crate::resolver::match_flags::MatchFlag;
+        use crate::selector_checker::ElementInvalidationFlag as F;
+        let Some(index) = document.FindNodeById(id) else {
+            return;
+        };
+        let style = document
+            .ResolvedStyleFor(index)
+            .and_then(|style| unsafe { style.native_style.Get().as_ref() });
+        let selectors = self.selectors.borrow();
+        let subject = selectors.SubjectMatchFlags(index);
+        let (local, children, ancestors) = match pseudo {
+            PseudoType::kPseudoHover => (
+                style.is_none_or(|s| s.AffectedByHover() || s.HasEffectiveAppearance())
+                    || subject & MatchFlag::kAffectedByHover as u8 != 0,
+                Some(F::ChildrenOrSiblingsAffectedByHover),
+                Some(F::AncestorsOrSiblingsAffectedByHoverInHas),
+            ),
+            PseudoType::kPseudoActive => (
+                style.is_none_or(|s| s.AffectedByActive() || s.HasEffectiveAppearance())
+                    || subject & MatchFlag::kAffectedByActive as u8 != 0,
+                Some(F::ChildrenOrSiblingsAffectedByActive),
+                Some(F::AncestorsOrSiblingsAffectedByActiveInHas),
+            ),
+            PseudoType::kPseudoFocusWithin => (
+                style.is_some_and(|s| s.AffectedByFocusWithin())
+                    || subject & MatchFlag::kAffectedByFocusWithin as u8 != 0,
+                Some(F::ChildrenOrSiblingsAffectedByFocusWithin),
+                Some(F::AncestorsOrSiblingsAffectedByFocusInHas),
+            ),
+            PseudoType::kPseudoFocus => (
+                true,
+                Some(F::ChildrenOrSiblingsAffectedByFocus),
+                Some(F::AncestorsOrSiblingsAffectedByFocusInHas),
+            ),
+            PseudoType::kPseudoFocusVisible => (
+                true,
+                Some(F::ChildrenOrSiblingsAffectedByFocusVisible),
+                Some(F::AncestorsOrSiblingsAffectedByFocusVisibleInHas),
+            ),
+            _ => (true, None, None),
+        };
+        if local {
+            self.interaction_changed_nodes.insert(id);
+        }
+        let relational = children
+            .into_iter()
+            .chain(ancestors)
+            .any(|flag| selectors.ElementHasInvalidationFlag(index, flag));
+        // Scope activation uses the separate compiled scope dependency owner.
+        let scoped = self
+            .translated_rule_sets
+            .values()
+            .any(|rules| rules.Features().scope_pseudo_states.contains(&pseudo));
+        if relational || scoped {
+            self.interaction_changed_pseudos.insert(pseudo);
+            self.interaction_invalidation_roots
+                .entry(pseudo)
+                .or_default()
+                .insert(index);
+        }
+        if browser_tracing::enabled() {
+            browser_tracing::instant(
+                "style",
+                "StyleUserActionInvalidation",
+                &[
+                    ("node_id", id as f64),
+                    ("pseudo", pseudo as u16 as f64),
+                    ("local", local as u8 as f64),
+                    ("relational", relational as u8 as f64),
+                    ("scoped", scoped as u8 as f64),
+                ],
+            );
+        }
+    }
+
     /// Publish the immutable interaction snapshot used by selector matching.
-    /// cpp: Document::FocusedElement; HTMLOptionElement::IsMultiSelectFocused.
-    /// Interaction owns event transitions; StyleEngine only retains the value
-    /// for one update and invalidates the affected selector result broadly.
+    /// Interaction owns transitions; the document retains matching dependency
+    /// flags and schedules the corresponding local and relational invalidation.
     pub fn SetUserInteractionState(
         &mut self,
         owner: &mut DOM,
@@ -1186,8 +1559,7 @@ impl DocumentStyleEngine {
             let mut selectors = self.selectors.borrow_mut();
             let session = selectors.StyleMatchSession(owner.GetDocument());
             let backend = session.Backend();
-            (0..owner.GetDocument().NodeCount())
-                .filter(|&index| ConnectedElement(owner.GetDocument(), index))
+            ConnectedElements(owner.GetDocument())
                 .map(|index| {
                     (
                         index,
@@ -1236,18 +1608,21 @@ impl DocumentStyleEngine {
             ),
         ] {
             if old != new {
-                self.interaction_changed_pseudos.insert(pseudo);
-                if pseudo == PseudoType::kPseudoFocus {
-                    self.interaction_changed_pseudos.extend([
-                        PseudoType::kPseudoFocusVisible,
-                        PseudoType::kPseudoSpatialNavigationFocus,
-                        PseudoType::kPseudoActiveOption,
-                    ]);
+                for id in [old, new].into_iter().flatten() {
+                    self.RecordUserActionChange(owner.GetDocument(), id, pseudo);
+                    if pseudo == PseudoType::kPseudoFocus {
+                        for related in [
+                            PseudoType::kPseudoFocusVisible,
+                            PseudoType::kPseudoSpatialNavigationFocus,
+                            PseudoType::kPseudoActiveOption,
+                        ] {
+                            self.RecordUserActionChange(owner.GetDocument(), id, related);
+                        }
+                    }
                 }
-                self.interaction_changed_nodes
-                    .extend([old, new].into_iter().flatten());
             }
         }
+        let mut transitions = Vec::new();
         {
             // Reuse the production user-action traversal, including label
             // controls, flat-tree ancestry and top-layer boundaries. Blink
@@ -1271,12 +1646,13 @@ impl DocumentStyleEngine {
                     ),
                 ] {
                     if changed {
-                        self.interaction_changed_pseudos.insert(pseudo);
-                        self.interaction_changed_nodes
-                            .insert(owner.GetDocument().Node(index).Id());
+                        transitions.push((owner.GetDocument().Node(index).Id(), pseudo));
                     }
                 }
             }
+        }
+        for (id, pseudo) in transitions {
+            self.RecordUserActionChange(owner.GetDocument(), id, pseudo);
         }
         Ok(true)
     }
@@ -1299,21 +1675,72 @@ impl DocumentStyleEngine {
     pub fn TranslatedRuleShadowStats(&self) -> TranslatedRuleShadowStats {
         self.translated_rule_shadow_stats
     }
-    pub fn Update(
+    pub fn Update<'a>(
         &mut self,
         owner: &mut DOM,
         media: &MediaValuesCachedData,
-        ua: &[CSSStyleSheet],
+        ua: impl Into<UserAgentStyleSheetInput<'a>>,
     ) -> Result<StyleUpdateImpact, DocumentStyleError> {
         self.UpdateWithEnvironment(owner, media, ua, None)
     }
-    pub fn UpdateWithEnvironment(
+    pub fn UpdateWithEnvironment<'a>(
         &mut self,
         owner: &mut DOM,
         media: &MediaValuesCachedData,
-        ua: &[CSSStyleSheet],
+        ua: impl Into<UserAgentStyleSheetInput<'a>>,
         environment_variables: Option<&dyn EnvironmentVariableResolver>,
     ) -> Result<StyleUpdateImpact, DocumentStyleError> {
+        self.UpdateForStyleRequest(owner, media, ua.into(), environment_variables, None)
+    }
+
+    /// Element::EnsureComputedStyle: after normal style update, resolve only the
+    /// missing flat-tree ancestor chain of a script-query target. Ensured styles
+    /// are query caches, not layout styles, and are invalidated by normal recalc.
+    pub fn EnsureComputedStyle<'a>(
+        &mut self,
+        owner: &mut DOM,
+        media: &MediaValuesCachedData,
+        ua: impl Into<UserAgentStyleSheetInput<'a>>,
+        node: usize,
+    ) -> Result<(), DocumentStyleError> {
+        if owner.GetDocument().RootHandle() != self.document {
+            return Err(DocumentStyleError::WrongDocument);
+        }
+        let document = owner.GetDocument();
+        if !ConnectedElement(document, node) || document.ResolvedStyleFor(node).is_some() {
+            return Ok(());
+        }
+        let mut top = node;
+        while let Some(parent) = FlatTreeStyleParentElement(document, top) {
+            if document.ResolvedStyleFor(parent).is_some() {
+                break;
+            }
+            top = parent;
+        }
+        if FlatTreeStyleParentElement(document, top).is_none()
+            && document.Node(top).Parent() != Some(document.Root())
+        {
+            return Ok(());
+        }
+        // Like Blink, callers first update the document's normal lifecycle.
+        // Detached mutations may leave DOM facts pending without dirtying the
+        // active style tree; the embedding need not schedule a lifecycle for them.
+        debug_assert!(!document.StyleState().all_dirty);
+        self.UpdateForStyleRequest(owner, media, ua.into(), None, Some(node))?;
+        Ok(())
+    }
+
+    fn UpdateForStyleRequest(
+        &mut self,
+        owner: &mut DOM,
+        media: &MediaValuesCachedData,
+        ua: UserAgentStyleSheetInput<'_>,
+        environment_variables: Option<&dyn EnvironmentVariableResolver>,
+        ensure_target: Option<usize>,
+    ) -> Result<StyleUpdateImpact, DocumentStyleError> {
+        let _update_trace = browser_tracing::span("style", "StyleEngine.Update");
+        let mut sheets_trace =
+            browser_tracing::span("style", "StyleEngine.UpdateActiveStyleSheets");
         self.diagnostics.clear();
         self.translated_rule_shadow_stats = Default::default();
         if owner.GetDocument().RootHandle() != self.document {
@@ -1333,10 +1760,6 @@ impl DocumentStyleEngine {
         if state.all_dirty
             || !state.dirty_style_elements.is_empty()
             || !state.inserted_style_subtrees.is_empty()
-            || state
-                .changes
-                .iter()
-                .any(|c| matches!(c, StyleChange::Children(_)))
         {
             self.SynchronizeStyleSheets(owner);
         }
@@ -1348,40 +1771,122 @@ impl DocumentStyleEngine {
         // Retain exact source snapshots: removals and source-order/layer changes
         // are observable even when the DOM and declaration text are unchanged.
         let revision = document.StyleState().sheet_revision;
-        let ua_unchanged = self
+        let mut previous_ua = self
             .active_sheets
             .iter()
             .filter(|(_, origin)| *origin == CascadeOrigin::kUserAgent)
-            .map(|(s, _)| s)
-            .eq(ua.iter());
-        let active_scope_sheets = document.ActiveStyleSheetsWithTreeScopes();
-        let active_sheets = if self.sheet_revision == Some(revision) && ua_unchanged {
-            self.active_sheets.clone()
+            .map(|(sheet, _)| sheet);
+        let mut shared_checks = 0;
+        let mut value_comparisons = 0;
+        let ua_unchanged = (0..ua.len()).all(|index| {
+            let Some(previous) = previous_ua.next() else {
+                return false;
+            };
+            if let Some(shared) = ua.shared(index) {
+                shared_checks += 1;
+                Rc::ptr_eq(previous, shared)
+            } else {
+                value_comparisons += 1;
+                previous.as_ref() == ua.sheet(index)
+            }
+        }) && previous_ua.next().is_none();
+        sheets_trace.set("ua_shared_owner_checks", shared_checks as f64);
+        sheets_trace.set("ua_value_comparisons", value_comparisons as f64);
+        // cpp: StyleEngine::UpdateActiveStyleSheets / NeedsActiveStyleSheetUpdate.
+        // The DOM version includes owner connectivity, order and adoption. Reuse
+        // both retained outputs when none of those inputs changed.
+        let (active_sheets, active_sheet_scopes) = if self.sheet_revision == Some(revision)
+            && ua_unchanged
+        {
+            (self.active_sheets.clone(), self.active_sheet_scopes.clone())
         } else {
-            Arc::new(
-                ua.iter()
-                    .cloned()
-                    .map(|s| (s, CascadeOrigin::kUserAgent))
-                    .chain(
-                        active_scope_sheets
-                            .iter()
-                            .map(|(_, sheet)| (*sheet).clone())
-                            .map(|s| (s, CascadeOrigin::kAuthor)),
-                    )
-                    .collect::<Vec<_>>(),
-            )
-        };
-        let active_sheet_scopes = Arc::new(
-            std::iter::repeat_n(None, ua.len())
+            let active_scope_sheets = document.ActiveStyleSheetsWithTreeScopes();
+            // ActiveStyleSheets holds stylesheet owners in Blink, not copies
+            // of their rule/declaration projections. Reuse immutable snapshots
+            // across list changes while retaining value checks for directly
+            // edited CSSOM projections and owner metadata.
+            let mut trace = browser_tracing::span("style", "StyleEngine.SnapshotActiveSheets");
+            let previous = self
+                .active_sheets
+                .iter()
+                .map(|(sheet, origin)| ((sheet.Identity(), sheet.Revision(), *origin as u8), sheet))
+                .collect::<HashMap<_, _>>();
+            let mut reused = 0;
+            let mut copied = 0;
+            let mut retain = |sheet: &CSSStyleSheet, origin: CascadeOrigin| {
+                let key = (sheet.Identity(), sheet.Revision(), origin as u8);
+                if let Some(previous) = previous.get(&key).filter(|previous| {
+                    previous.HasCurrentSource() == sheet.HasCurrentSource()
+                        && previous.as_ref() == sheet
+                }) {
+                    reused += 1;
+                    (*previous).clone()
+                } else {
+                    copied += 1;
+                    Rc::new(sheet.clone())
+                }
+            };
+            let mut sheets = Vec::with_capacity(ua.len() + active_scope_sheets.len());
+            let mut shared_ua = 0;
+            for index in 0..ua.len() {
+                let sheet = if let Some(shared) = ua.shared(index) {
+                    shared_ua += 1;
+                    shared.clone()
+                } else {
+                    retain(ua.sheet(index), CascadeOrigin::kUserAgent)
+                };
+                sheets.push((sheet, CascadeOrigin::kUserAgent));
+            }
+            for (_, sheet) in &active_scope_sheets {
+                sheets.push((
+                    retain(sheet, CascadeOrigin::kAuthor),
+                    CascadeOrigin::kAuthor,
+                ));
+            }
+            trace.set("reused", reused as f64);
+            trace.set("copied", copied as f64);
+            trace.set("shared_ua", shared_ua as f64);
+            let scopes = std::iter::repeat_n(None, ua.len())
                 .chain(active_scope_sheets.iter().map(|(scope, _)| Some(*scope)))
-                .collect::<Vec<_>>(),
-        );
-        self.SynchronizeTypedSheets(&active_sheets);
+                .collect::<Vec<_>>();
+            (Arc::new(sheets), Arc::new(scopes))
+        };
+        // Preserve old RuleSet identities across synchronization/pruning for
+        // Blink's active-sheet comparison below.
+        let old_rule_sets = (!Arc::ptr_eq(&self.active_sheets, &active_sheets)).then(|| {
+            self.active_sheets
+                .iter()
+                .map(|(sheet, _)| {
+                    self.translated_rule_sets
+                        .get(&(sheet.Identity(), sheet.Revision()))
+                        .cloned()
+                })
+                .collect::<Vec<_>>()
+        });
+        self.SynchronizeTypedSheets(document, &active_sheets);
         // Ordinary standards-mode author and UA-mode user-agent matching
         // consume these retained RuleSets below. Rebuild only when the sheet
         // revision or media environment changes; advanced recalc contexts
         // remain explicit compatibility-collector fallbacks.
         self.SynchronizeTranslatedRuleSets(&active_sheets, media);
+        // DOM invalidations were recorded while the previous active RuleSets
+        // still owned their feature data. Keep those owners through this
+        // batch, just as mutation-time PendingInvalidations do in Blink; sheet
+        // synchronization may already have pruned their old revision keys.
+        // New rules participate too when sheet and DOM changes are batched.
+        let attribute_invalidation_rules = active_sheets
+            .iter()
+            .map(|(sheet, _)| {
+                self.translated_rule_sets
+                    .get(&(sheet.Identity(), sheet.Revision()))
+                    .cloned()
+            })
+            .chain(old_rule_sets.iter().flatten().cloned())
+            .collect::<Option<Vec<_>>>();
+        drop(sheets_trace);
+        let invalidation_trace = browser_tracing::span("style", "StyleEngine.Invalidate");
+        let global_invalidation =
+            browser_tracing::span("style", "StyleEngine.InvalidateGlobalInputs");
         let font_features_changed = self.SynchronizeFontFeatureValues(
             document,
             media,
@@ -1404,16 +1909,32 @@ impl DocumentStyleEngine {
             .UpdateDeclaredProperties(&active_sheets, &DocumentMediaValues::new(document, media));
         let environment = (media.clone(), document.GetCompatibilityMode());
         let all_dirty = font_features_changed || registry_changed || document.StyleState().all_dirty || self.environment.as_ref() != Some(&environment)
-            // Container ancestry, scope activation and computed custom values are query inputs.
-            // Until per-container dependency sets are retained, any DOM/style
-            // mutation revisits conditional-rule subjects against current ancestors.
-            || (active_sheets.iter().any(|(s,_)|s.rules.iter().any(|r|!r.container_conditions.is_empty() || !r.scope_conditions.is_empty()))
-                && !document.StyleState().changes.is_empty());
+            // Scope activation still requires the conservative compatibility
+            // invalidation. Translated container rules carry dependency flags
+            // on ComputedStyle, including a currently false query result.
+            || (active_sheets.iter().any(|(sheet,_)| sheet.rules.iter().enumerate().any(|(index, rule)|
+                !rule.scope_conditions.is_empty()
+                    || !rule.container_conditions.is_empty()
+                        && self.translated_rule_routing.get(&(sheet.Identity(), sheet.Revision()))
+                            .is_none_or(|routing| !routing.IsAuthoritativeProjectedRule(index))))
+                && (!document.StyleState().changes.is_empty() || !self.invalidated_container_nodes.is_empty()));
         let sheet_changes = ChangedSheets(&self.active_sheets, &active_sheets);
         if font_features_changed
             || registry_changed
             || self.environment.as_ref() != Some(&environment)
-            || !sheet_changes.is_empty()
+            // cpp: StyleEngine::ApplyRuleSetChanges. MatchResult keys own
+            // property-set identity, order and cascade metadata. Appending
+            // ordinary document or shadow rules does not invalidate unrelated
+            // entries. Global at-rule/environment/resource inputs still do.
+            || sheet_changes.iter().any(|&i| {
+                [&self.active_sheets, &active_sheets].into_iter()
+                    .any(|sheets| sheets.get(i).is_some_and(|(sheet, _)| {
+                        !sheet.layer_order.is_empty() || !sheet.font_faces.is_empty()
+                            || !sheet.property_rules.is_empty()
+                            || sheet.ParsedBacking::<crate::production_style_sheet::ProductionStyleSheet>()
+                                .is_none_or(|typed| !typed.functions.is_empty() || !typed.mixins.is_empty())
+                    }))
+            })
             || environment_variables.is_some()
             || resource_changed
         {
@@ -1423,58 +1944,154 @@ impl DocumentStyleEngine {
         // the Oilpan weak callback; the retained Rust document owner reaches
         // the same lifecycle point once per style update.
         self.matched_properties_cache.Clean();
-        let changed_tree_scopes = sheet_changes
+        // cpp: StyleEngine::ApplyRuleSetChanges(TreeScope&, old, new, diffs).
+        // Sheet order is local to a TreeScope. Inserting a shadow sheet can
+        // shift every later slot in the flattened host projection without
+        // changing any of those scopes' sheets.
+        let changed_tree_scopes = self
+            .active_sheet_scopes
             .iter()
-            .flat_map(|&index| {
-                [
-                    self.active_sheet_scopes.get(index).copied().flatten(),
-                    active_sheet_scopes.get(index).copied().flatten(),
-                ]
-            })
+            .chain(active_sheet_scopes.iter())
             .flatten()
+            .copied()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .filter(|scope| {
+                let old = self
+                    .active_sheets
+                    .iter()
+                    .zip(self.active_sheet_scopes.iter())
+                    .filter(|(_, candidate)| **candidate == Some(*scope))
+                    .map(|(sheet, _)| sheet);
+                let new = active_sheets
+                    .iter()
+                    .zip(active_sheet_scopes.iter())
+                    .filter(|(_, candidate)| **candidate == Some(*scope))
+                    .map(|(sheet, _)| sheet);
+                !old.eq(new)
+            })
             .collect::<HashSet<_>>();
+        let document_sheets_changed =
+            changed_tree_scopes.contains(&document.Root()) || !ua_unchanged;
+        if !sheet_changes.is_empty() && !document_sheets_changed {
+            // This equality-only sidecar stores flattened rule positions.
+            // Revoke its certificates after reindexing; existing native styles
+            // stay valid. Recalc below visits only the affected shadow scopes,
+            // hosts/slotted elements and exposed descendant scopes.
+            self.matches.clear();
+        }
         let quirks_changed = self
             .environment
             .as_ref()
             .is_none_or(|(_, mode)| *mode != environment.1);
-        if quirks_changed || !sheet_changes.is_empty()
-            || self.active_sheet_scopes.as_slice() != active_sheet_scopes.as_slice() {
+        if quirks_changed
+            || !sheet_changes.is_empty()
+            || self.active_sheet_scopes.as_slice() != active_sheet_scopes.as_slice()
+        {
             self.rule_candidate_index = None;
         }
         // A document stylesheet may be inserted/removed without changing its
         // TreeScope owner. Shadow scopes never use the cross-revision empty case.
-        let signature_non_rule_context_unchanged = self.active_sheet_scopes.iter().flatten()
-            .chain(active_sheet_scopes.iter().flatten()).all(|scope| *scope == document.Root())
+        let signature_non_rule_context_unchanged = self
+            .active_sheet_scopes
+            .iter()
+            .flatten()
+            .chain(active_sheet_scopes.iter().flatten())
+            .all(|scope| *scope == document.Root())
             && self.environment.as_ref() == Some(&environment)
-            && !font_features_changed && !registry_changed && environment_variables.is_none();
+            && !font_features_changed
+            && !registry_changed
+            && environment_variables.is_none();
         let signature_context_unchanged = signature_non_rule_context_unchanged
             && self.active_sheet_scopes.as_slice() == active_sheet_scopes.as_slice()
             && sheet_changes.is_empty();
         let ordinary_signature_complete = environment_variables.is_none()
-            && active_sheet_scopes.iter().flatten().all(|scope| *scope == document.Root())
-            && active_sheets.iter().all(|(sheet, _)| self.translated_rule_routing
-                .get(&(sheet.Identity(), sheet.Revision()))
-                .is_some_and(|routing| routing.OrdinarySignatureComplete()
-                    && routing.AuthoritativeRuleCount() == sheet.rules.len()));
+            && active_sheet_scopes
+                .iter()
+                .flatten()
+                .all(|scope| *scope == document.Root())
+            && active_sheets.iter().all(|(sheet, _)| {
+                self.translated_rule_routing
+                    .get(&(sheet.Identity(), sheet.Revision()))
+                    .is_some_and(|routing| {
+                        routing.OrdinarySignatureComplete()
+                            && routing.AuthoritativeRuleCount() == sheet.rules.len()
+                    })
+            });
+        let quirks = document.GetCompatibilityMode() == CompatibilityMode::kQuirks;
+        // This compatibility counter counts dependency scans, not native
+        // RuleSet compilation. The latter is owned by shared_rule_sets above.
         let mut rule_sets_built = 0;
+        let mut dependency_trace =
+            browser_tracing::span("style", "StyleEngine.SelectorDependencies");
+        let mut retained_hits = 0;
+        let mut contents_hits = 0;
+        let mut legacy_parses = 0;
+        self.shared_selector_dependencies
+            .retain(|_, (contents, _)| contents.strong_count() != 0);
+        let retained = self
+            .active_sheets
+            .iter()
+            .zip(&self.sheet_dependencies)
+            .map(|((sheet, origin), dependencies)| {
+                (
+                    (Rc::as_ptr(sheet) as usize, *origin as u8),
+                    dependencies.clone(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
         let sheet_dependencies: Vec<_> = active_sheets
             .iter()
-            .enumerate()
-            .map(|(index, sheet)| {
-                if !quirks_changed && self.active_sheets.get(index) == Some(sheet) {
-                    if let Some(retained) = self.sheet_dependencies.get(index) {
-                        return retained.clone();
+            .map(|(sheet, origin)| {
+                if !quirks_changed {
+                    if let Some(dependencies) =
+                        retained.get(&(Rc::as_ptr(sheet) as usize, *origin as u8))
+                    {
+                        retained_hits += 1;
+                        return dependencies.clone();
                     }
                 }
-                rule_sets_built += 1;
-                SelectorDependencies::ForSheets(document, std::slice::from_ref(sheet))
+                // CSSOM edits without a canonical backing keep their existing
+                // parser/diagnostic route. Standards-mode retained contents carry
+                // the exact selectors which produced this projection.
+                let parsed = (!quirks && sheet.HasCurrentSource())
+                    .then(|| {
+                        self.typed_sheets
+                            .get(&(sheet.Identity(), sheet.Revision()))
+                            .cloned()
+                    })
+                    .flatten();
+                if let Some(parsed) = parsed {
+                    let key = Rc::as_ptr(&parsed) as usize;
+                    if let Some((_, dependencies)) = self.shared_selector_dependencies.get(&key) {
+                        contents_hits += 1;
+                        return dependencies.clone();
+                    }
+                    rule_sets_built += 1;
+                    let dependencies = SelectorDependencies::ForParsedSheet(&parsed);
+                    self.shared_selector_dependencies
+                        .insert(key, (Rc::downgrade(&parsed), dependencies.clone()));
+                    dependencies
+                } else {
+                    rule_sets_built += 1;
+                    legacy_parses += 1;
+                    SelectorDependencies::ForSheets(document, &[(sheet.clone(), *origin)])
+                }
             })
             .collect();
+        dependency_trace.set("retained_hits", retained_hits as f64);
+        dependency_trace.set("contents_hits", contents_hits as f64);
+        dependency_trace.set("dependency_sets_built", rule_sets_built as f64);
+        dependency_trace.set("legacy_parses", legacy_parses as f64);
+        drop(dependency_trace);
         let mut dependencies = SelectorDependencies::default();
         for sheet in &sheet_dependencies {
             dependencies.Merge(sheet);
         }
-        let sheets: Vec<_> = active_sheets.iter().map(|(s, o)| (s, *o)).collect();
+        let sheets: Vec<_> = active_sheets
+            .iter()
+            .map(|(s, o)| (s.as_ref(), *o))
+            .collect();
         // cpp: style_engine.cc:290-316. This is the retained equivalent of one
         // StyleSheetCollection/ScopedStyleResolver per active TreeScope. UA
         // sheets are document-wide; author sheets remain in their owner scope.
@@ -1482,29 +2099,153 @@ impl DocumentStyleEngine {
             .ActiveTreeScopes()
             .into_iter()
             .map(|scope| {
-                let owned = ua
+                let owned = active_sheets
                     .iter()
-                    .map(|sheet| (sheet, CascadeOrigin::kUserAgent))
-                    .chain(
-                        active_scope_sheets
-                            .iter()
-                            .filter(move |(candidate, _)| *candidate == scope)
-                            .map(|(_, sheet)| (*sheet, CascadeOrigin::kAuthor)),
-                    )
+                    .zip(active_sheet_scopes.iter())
+                    .filter(|((_, origin), candidate)| {
+                        *origin == CascadeOrigin::kUserAgent || **candidate == Some(scope)
+                    })
+                    .map(|((sheet, origin), _)| (sheet.as_ref(), *origin))
                     .collect::<Vec<_>>();
                 (scope, owned)
             })
             .collect::<HashMap<_, _>>();
+        drop(global_invalidation);
         let mut dirty = HashSet::new();
+        let mut inline_dirty = HashSet::new();
         let mut candidates = HashSet::new();
         let mut refreshed_matches = HashMap::new();
+        let mut candidate_checks = 0;
+        let mut incomplete_candidates = 0;
         if all_dirty {
             AddSubtree(document, document.Root(), &mut dirty);
         } else {
             let state = document.StyleState();
+            let dom_invalidation =
+                browser_tracing::span("style", "StyleEngine.InvalidateDOMChanges");
             for change in &state.changes {
+                let index = match *change {
+                    StyleChange::PlaceholderShown(index)
+                    | StyleChange::Directionality(index)
+                    | StyleChange::Node(index)
+                    | StyleChange::AttributeValue(index)
+                    | StyleChange::ControlPseudo(index, _)
+                    | StyleChange::ExportParts(index)
+                    | StyleChange::InlineStyle(index)
+                    | StyleChange::Animation(index)
+                    | StyleChange::Resource(index)
+                    | StyleChange::Children(index) => index,
+                };
+                // cpp: StyleEngine::ShouldSkipInvalidationFor. Removed nodes
+                // cannot affect the active tree; their former parent's child
+                // change remains independently recorded. Reinsertion supplies
+                // its own inserted subtree invalidation.
+                if !document.IsConnectedToDocument(index) {
+                    continue;
+                }
+                let candidates_before = candidates.len();
+                let dirty_before = dirty.len();
+                if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
+                    let index = match *change {
+                        StyleChange::PlaceholderShown(index)
+                        | StyleChange::Directionality(index)
+                        | StyleChange::Node(index)
+                        | StyleChange::AttributeValue(index)
+                        | StyleChange::ControlPseudo(index, _)
+                        | StyleChange::ExportParts(index)
+                        | StyleChange::InlineStyle(index)
+                        | StyleChange::Animation(index)
+                        | StyleChange::Resource(index)
+                        | StyleChange::Children(index) => index,
+                    };
+                    let node = document.Node(index);
+                    eprintln!("style invalidation {change:?} node_id={} tag={} id={} class={} connected={}",
+                        node.Id(), node.Name(), node.FindAttribute("id").map_or("", |a| &a.value),
+                        node.FindAttribute("class").map_or("", |a| &a.value), document.IsConnectedToDocument(index));
+                }
                 match *change {
-                    StyleChange::Node(index) | StyleChange::Attribute(index, _) => {
+                    StyleChange::Directionality(index) => {
+                        dirty.insert(index);
+                        self.interaction_changed_nodes
+                            .insert(document.Node(index).Id());
+                        self.interaction_changed_pseudos
+                            .insert(PseudoType::kPseudoDir);
+                        self.interaction_invalidation_roots
+                            .entry(PseudoType::kPseudoDir)
+                            .or_default()
+                            .insert(index);
+                    }
+                    StyleChange::ControlPseudo(index, state) => {
+                        use dom::style_state::ControlPseudoState;
+                        let pseudo = match state {
+                            ControlPseudoState::Default => PseudoType::kPseudoDefault,
+                            ControlPseudoState::HasDatalist => PseudoType::kPseudoHasDatalist,
+                            ControlPseudoState::Indeterminate => PseudoType::kPseudoIndeterminate,
+                        };
+                        dirty.insert(index);
+                        self.interaction_changed_nodes
+                            .insert(document.Node(index).Id());
+                        self.interaction_changed_pseudos.insert(pseudo);
+                        self.interaction_invalidation_roots
+                            .entry(pseudo)
+                            .or_default()
+                            .insert(index);
+                    }
+                    StyleChange::PlaceholderShown(index) => {
+                        dirty.insert(index);
+                        self.interaction_changed_nodes
+                            .insert(document.Node(index).Id());
+                        self.interaction_changed_pseudos
+                            .insert(PseudoType::kPseudoPlaceholderShown);
+                        self.interaction_invalidation_roots
+                            .entry(PseudoType::kPseudoPlaceholderShown)
+                            .or_default()
+                            .insert(index);
+                    }
+                    StyleChange::AttributeValue(index) => {
+                        dirty.insert(index);
+                        InvalidateSlotAssignmentForNode(document, index, &mut dirty);
+                        // HTML href changes also change link pseudo states,
+                        // independently of CSS [href] attribute dependencies.
+                        if document
+                            .StyleState()
+                            .attribute_changes
+                            .get(&index)
+                            .is_some_and(|change| change.names.contains("href"))
+                            && matches!(document.Node(index).Name(), "a" | "area" | "link")
+                        {
+                            self.interaction_changed_nodes
+                                .insert(document.Node(index).Id());
+                            for pseudo in [
+                                PseudoType::kPseudoAnyLink,
+                                PseudoType::kPseudoWebkitAnyLink,
+                                PseudoType::kPseudoLink,
+                                PseudoType::kPseudoVisited,
+                            ] {
+                                self.interaction_changed_pseudos.insert(pseudo);
+                                self.interaction_invalidation_roots
+                                    .entry(pseudo)
+                                    .or_default()
+                                    .insert(index);
+                            }
+                        }
+                        if !self.InvalidateAttributeRelations(
+                            document,
+                            index,
+                            attribute_invalidation_rules.as_deref(),
+                            &mut candidates,
+                        ) {
+                            self.InvalidateRelations(
+                                document,
+                                index,
+                                &dependencies,
+                                &mut candidates,
+                            );
+                        } else if dependencies.has {
+                            self.InvalidateHasForAttribute(document, index, &mut candidates);
+                        }
+                    }
+                    StyleChange::Node(index) => {
                         dirty.insert(index);
                         InvalidateSlotAssignmentForNode(document, index, &mut dirty);
                         self.InvalidateRelations(document, index, &dependencies, &mut candidates);
@@ -1523,14 +2264,28 @@ impl DocumentStyleEngine {
                         }
                     }
                     StyleChange::InlineStyle(index) => {
-                        dirty.insert(index);
+                        if state.independent_inline_styles.contains(&index) {
+                            inline_dirty.insert(index);
+                        } else {
+                            dirty.insert(index);
+                        }
                         if dependencies.inline_selector {
-                            self.InvalidateRelations(
+                            // Attribute selectors can upgrade this subject to a
+                            // full recalc; compare their retained signature too.
+                            candidates.insert(index);
+                            if !self.InvalidateAttributeRelations(
                                 document,
                                 index,
-                                &dependencies,
+                                attribute_invalidation_rules.as_deref(),
                                 &mut candidates,
-                            );
+                            ) {
+                                self.InvalidateRelations(
+                                    document,
+                                    index,
+                                    &dependencies,
+                                    &mut candidates,
+                                );
+                            }
                         }
                     }
                     StyleChange::Animation(index) => {
@@ -1545,93 +2300,357 @@ impl DocumentStyleEngine {
                         dirty.insert(index);
                     }
                     StyleChange::Children(parent) => {
+                        use crate::selector_checker::{
+                            ContainerInvalidationFlag as C, ElementInvalidationFlag as E,
+                        };
+                        let selectors = self.selectors.borrow();
+                        let affected = |flag| selectors.ContainerHasInvalidationFlag(parent, flag);
+                        let forward = affected(C::ChildrenAffectedByForwardPositionalRules);
+                        let backward = affected(C::ChildrenAffectedByBackwardPositionalRules);
+                        let first = affected(C::ChildrenAffectedByFirstChildRules);
+                        let last = affected(C::ChildrenAffectedByLastChildRules);
+                        let adjacent = affected(C::ChildrenAffectedByDirectAdjacentRules)
+                            || affected(C::ChildrenAffectedByIndirectAdjacentRules);
+                        let empty =
+                            selectors.ElementHasInvalidationFlag(parent, E::StyleAffectedByEmpty);
+                        drop(selectors);
                         candidates.insert(parent);
                         InvalidateSlotAssignmentForChildren(document, parent, &mut dirty);
                         // Child-state subjects such as :empty can be on the
                         // left side of a sibling combinator.
-                        if dependencies.sibling {
+                        if dependencies.sibling && empty {
                             if let Some(grandparent) = document.Node(parent).Parent() {
-                                AddSubtree(document, grandparent, &mut candidates);
+                                let siblings = document.Node(grandparent).Children();
+                                if let Some(position) = siblings.iter().position(|&i| i == parent) {
+                                    for &sibling in &siblings[position + 1..] {
+                                        AddSubtree(document, sibling, &mut candidates);
+                                    }
+                                }
                             }
                         }
-                        if state.non_append_children.contains(&parent)
-                            && (dependencies.positional || dependencies.sibling)
-                        {
-                            AddSubtree(document, parent, &mut candidates);
-                        } else if dependencies.reverse_positional {
-                            AddSubtree(document, parent, &mut candidates);
-                        } else if dependencies.last {
-                            for &index in &state.append_affected_subtrees {
-                                AddSubtree(document, index, &mut candidates);
+                        // cpp: ContainerNode::CheckForSiblingStyleChanges.
+                        // End insertion/removal has no succeeding sibling, so
+                        // forward positional and adjacent rules cannot change
+                        // existing siblings. Preserve that boundary fact.
+                        if let Some(Some(boundaries)) = state.child_change_boundaries.get(&parent) {
+                            for boundary in boundaries {
+                                if (forward && boundary.after.is_some())
+                                    || (backward && boundary.before.is_some())
+                                {
+                                    AddSubtree(document, parent, &mut candidates);
+                                    continue;
+                                }
+                                if first && boundary.before.is_none() {
+                                    if let Some(after) = boundary.after {
+                                        AddSubtree(document, after, &mut candidates);
+                                    }
+                                }
+                                if last && boundary.after.is_none() {
+                                    if let Some(before) = boundary.before {
+                                        AddSubtree(document, before, &mut candidates);
+                                    }
+                                }
+                                if adjacent {
+                                    if let Some(after) = boundary.after {
+                                        let siblings = document.Node(parent).Children();
+                                        if let Some(position) =
+                                            siblings.iter().position(|&i| i == after)
+                                        {
+                                            for &sibling in &siblings[position..] {
+                                                AddSubtree(document, sibling, &mut candidates);
+                                            }
+                                        }
+                                    }
+                                }
                             }
+                        } else if forward || backward || first || last || adjacent {
+                            AddSubtree(document, parent, &mut candidates);
+                        }
+                        if browser_tracing::enabled() {
+                            browser_tracing::instant(
+                                "style",
+                                "StyleChildrenInvalidation",
+                                &[
+                                    ("parent_id", document.Node(parent).Id() as f64),
+                                    ("forward", forward as u8 as f64),
+                                    ("backward", backward as u8 as f64),
+                                    ("first", first as u8 as f64),
+                                    ("last", last as u8 as f64),
+                                    ("adjacent", adjacent as u8 as f64),
+                                    ("empty", empty as u8 as f64),
+                                    ("candidates", candidates.len() as f64),
+                                ],
+                            );
                         }
                         if dependencies.has {
                             self.InvalidateHasAncestors(document, parent, &mut candidates);
                         }
                     }
                 }
+                if browser_tracing::enabled()
+                    && (candidates.len() != candidates_before || dirty.len() != dirty_before)
+                {
+                    let index = match *change {
+                        StyleChange::PlaceholderShown(index)
+                        | StyleChange::Directionality(index)
+                        | StyleChange::Node(index)
+                        | StyleChange::AttributeValue(index)
+                        | StyleChange::ControlPseudo(index, _)
+                        | StyleChange::ExportParts(index)
+                        | StyleChange::InlineStyle(index)
+                        | StyleChange::Animation(index)
+                        | StyleChange::Resource(index)
+                        | StyleChange::Children(index) => index,
+                    };
+                    let node = document.Node(index);
+                    let attributes = state.attribute_changes.get(&index);
+                    browser_tracing::instant_with_text(
+                        "style",
+                        "StyleChangeInvalidation",
+                        &format!(
+                            "{change:?} tag={} id={} attrs={:?}",
+                            node.Name(),
+                            node.FindAttribute("id").map_or("", |a| &a.value),
+                            attributes.map(|a| &a.names)
+                        ),
+                        &[
+                            ("node_id", node.Id() as f64),
+                            ("candidates_before", candidates_before as f64),
+                            ("candidates_after", candidates.len() as f64),
+                            (
+                                "candidates_added",
+                                candidates.len().saturating_sub(candidates_before) as f64,
+                            ),
+                            (
+                                "dirty_added",
+                                dirty.len().saturating_sub(dirty_before) as f64,
+                            ),
+                        ],
+                    );
+                }
             }
             for &index in &state.inserted_style_subtrees {
                 AddSubtree(document, index, &mut dirty);
             }
+            drop(dom_invalidation);
             // Rule-set invalidation checks both previously matched rules and
             // current matches. The former survives simultaneous DOM mutations.
-            if !sheet_changes.is_empty() {
-                let mut changed_selectors = HashSet::new();
-                for &i in &sheet_changes {
-                    for source in [&self.active_sheets, &active_sheets] {
-                        if let Some((sheet, _)) = source.get(i) {
-                            changed_selectors
-                                .extend(sheet.rules.iter().map(|r| r.selector_text.clone()));
+            if !sheet_changes.is_empty() && document_sheets_changed {
+                let _trace = browser_tracing::span("style", "StyleEngine.InvalidateChangedSheets");
+                let precise_changes = old_rule_sets.as_ref().and_then(|old_rules| {
+                    ChangedRuleSetSheetIdentities(
+                        &self.active_sheets,
+                        &active_sheets,
+                        old_rules,
+                        &self.translated_rule_sets,
+                    )
+                });
+                let mut old_sheets_changed = false;
+                let mut old_highlight_pseudos = HashSet::new();
+                let native_changed_rules = precise_changes.as_ref().and_then(|changed| {
+                    if !signature_non_rule_context_unchanged || !ua_unchanged {
+                        return None;
+                    }
+                    let mut rules = Vec::new();
+                    for (position, (sheet, _)) in self.active_sheets.iter().enumerate() {
+                        if changed.contains(&(sheet.Identity(), sheet.Revision())) {
+                            let typed = sheet.ParsedBacking::<crate::production_style_sheet::ProductionStyleSheet>()?;
+                            if !typed.functions.is_empty() || !typed.mixins.is_empty() { return None; }
+                            let old = old_rule_sets.as_ref()?.get(position)?.as_ref()?;
+                            old_sheets_changed = true;
+                            // Highlights contribute originating-style metadata,
+                            // not ordinary transferred declarations/signatures.
+                            // Preserve that positive old-match evidence too.
+                            for data in old.AllRuleData() {
+                                for selector in data.Selector().SimpleSelectors() {
+                                    let pseudo = GetPseudoId(selector.GetPseudoType());
+                                    if layoutng_style::style::computed_style_constants::IsHighlightPseudoElement(pseudo) {
+                                        old_highlight_pseudos.insert(pseudo);
+                                    }
+                                }
+                            }
+                            rules.push(old.clone());
                         }
                     }
-                }
-                let old_selectors: Vec<_> = self
-                    .active_sheets
-                    .iter()
-                    .flat_map(|(s, _)| s.rules.iter().map(|r| r.selector_text.clone()))
-                    .collect();
-                let current_selectors: Vec<_> = active_sheets
-                    .iter()
-                    .flat_map(|(s, _)| s.rules.iter().map(|r| &r.selector_text))
-                    .collect();
+                    for (sheet, _) in active_sheets.iter() {
+                        if changed.contains(&(sheet.Identity(), sheet.Revision())) {
+                            let typed = sheet.ParsedBacking::<crate::production_style_sheet::ProductionStyleSheet>()?;
+                            if !typed.functions.is_empty() || !typed.mixins.is_empty() { return None; }
+                            let ruleset = self.translated_rule_sets.get(&(sheet.Identity(), sheet.Revision()))?;
+                            if !rules.iter().any(|old| Rc::ptr_eq(old, ruleset)) { rules.push(ruleset.clone()); }
+                        }
+                    }
+                    Some(rules)
+                });
                 let mut elements = HashSet::new();
                 AddSubtree(document, document.Root(), &mut elements);
-                for index in elements {
-                    let element_scope = document.TreeScopeRoot(document.CorrespondingSVGElement(index).unwrap_or(index));
-                    let element_sheets = scoped_sheets
-                        .get(&element_scope)
-                        .map_or(&[][..], Vec::as_slice);
-                    let matches = self.MatchingRules(
+                let native_invalidated = native_changed_rules.as_ref().and_then(|rules| {
+                    crate::production_rule_matching::InvalidateProductionRuleSets(
+                        rules,
                         document,
-                        index,
-                        media,
-                        element_sheets,
-                        None,
-                        None,
-                        environment_variables,
-                    );
-                    let was_matched = self.matches.get(&index).is_some_and(|matches| {
-                        matches.values.iter().any(|(order, _, _)| {
-                            old_selectors
+                        &mut self.selectors.borrow_mut(),
+                        &elements
+                            .iter()
+                            .copied()
+                            .filter(|index| !dirty.contains(index))
+                            .collect::<Vec<_>>(),
+                    )
+                });
+                if let Some(invalidated) = native_invalidated {
+                    dirty.extend(invalidated);
+                    // Numeric positions are only a projection of sheet-owned
+                    // rules. Reindex unchanged sheets by retained identity and
+                    // revision; never compare their old/new numeric positions.
+                    // Preserve positive old matches for a later removal batched
+                    // with a DOM mutation, even if this update changed no style.
+                    let mut new_offsets = HashMap::new();
+                    let mut offset = 1;
+                    for (sheet, _) in active_sheets.iter() {
+                        new_offsets
+                            .entry((sheet.Identity(), sheet.Revision()))
+                            .or_insert_with(std::collections::VecDeque::new)
+                            .push_back(offset);
+                        offset += sheet.rules.len();
+                    }
+                    let mut positions = vec![None];
+                    for (sheet, _) in self.active_sheets.iter() {
+                        let start = new_offsets
+                            .get_mut(&(sheet.Identity(), sheet.Revision()))
+                            .and_then(|offsets| offsets.pop_front());
+                        let changed = precise_changes
+                            .as_ref()
+                            .unwrap()
+                            .contains(&(sheet.Identity(), sheet.Revision()));
+                        positions.extend((0..sheet.rules.len()).map(|local| {
+                            (!changed)
+                                .then_some(start)
+                                .flatten()
+                                .map(|start| start + local)
+                        }));
+                    }
+                    self.matches.retain(|index, signature| {
+                        if signature
+                            .values
+                            .iter()
+                            .any(|(order, _, _)| positions.get(*order).copied().flatten().is_none())
+                        {
+                            dirty.insert(*index);
+                            return false;
+                        }
+                        for (order, _, _) in &mut signature.values {
+                            *order = positions[*order].unwrap();
+                        }
+                        signature.values[..signature.base_len].sort_unstable();
+                        signature.values[signature.base_len..].sort_unstable();
+                        true
+                    });
+                    if old_sheets_changed {
+                        for &index in &elements {
+                            if dirty.contains(&index) {
+                                continue;
+                            }
+                            // The DOM adapter batches mutation facts. Losing a
+                            // current selector match cannot revoke a committed
+                            // old match, as mutation-time pending invalidation
+                            // already protects it in Blink. Missing provenance
+                            // must conservatively recalc; stable node IDs alone
+                            // never prove that an old rule did not apply.
+                            // An element with no committed ComputedStyle has
+                            // no old rule effects to retain. Chromium still
+                            // tests the changed RuleSets on that element, but
+                            // does not manufacture a recalc for missing style.
+                            let old_style = document.ResolvedStyleFor(index);
+                            let missing_old_match =
+                                old_style.is_some() && !self.matches.contains_key(&index);
+                            let old_highlight = old_style
+                                .and_then(|style| unsafe { style.native_style.Get().as_ref() })
+                                .is_some_and(|style| {
+                                    old_highlight_pseudos
+                                        .iter()
+                                        .any(|pseudo| style.HasPseudoElementStyle(*pseudo))
+                                });
+                            if missing_old_match || old_highlight {
+                                dirty.insert(index);
+                            }
+                        }
+                    }
+                } else {
+                    let mut fallback_trace =
+                        browser_tracing::span("style", "StyleEngine.InvalidateFallbackRules");
+                    fallback_trace.set("elements", elements.len() as f64);
+                    let mut changed_selectors = HashSet::new();
+                    if let Some(changed) = precise_changes {
+                        for (sheet, _) in self.active_sheets.iter().chain(active_sheets.iter()) {
+                            if changed.contains(&(sheet.Identity(), sheet.Revision())) {
+                                changed_selectors
+                                    .extend(sheet.rules.iter().map(|r| r.selector_text.clone()));
+                            }
+                        }
+                    } else {
+                        for &i in &sheet_changes {
+                            for source in [&self.active_sheets, &active_sheets] {
+                                if let Some((sheet, _)) = source.get(i) {
+                                    changed_selectors.extend(
+                                        sheet.rules.iter().map(|r| r.selector_text.clone()),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    let old_selectors: Vec<_> = self
+                        .active_sheets
+                        .iter()
+                        .flat_map(|(s, _)| s.rules.iter().map(|r| r.selector_text.clone()))
+                        .collect();
+                    let current_selectors: Vec<_> = active_sheets
+                        .iter()
+                        .flat_map(|(s, _)| s.rules.iter().map(|r| &r.selector_text))
+                        .collect();
+                    for index in elements {
+                        let element_scope = document.TreeScopeRoot(
+                            document.CorrespondingSVGElement(index).unwrap_or(index),
+                        );
+                        let element_sheets = scoped_sheets
+                            .get(&element_scope)
+                            .map_or(&[][..], Vec::as_slice);
+                        let matches = self.MatchingRules(
+                            document,
+                            index,
+                            media,
+                            element_sheets,
+                            None,
+                            None,
+                            environment_variables,
+                        );
+                        let was_matched = self.matches.get(&index).is_some_and(|matches| {
+                            matches.values.iter().any(|(order, _, _)| {
+                                old_selectors
+                                    .get(order - 1)
+                                    .is_some_and(|s| changed_selectors.contains(s))
+                            })
+                        });
+                        let is_matched = matches.iter().any(|(order, _, _)| {
+                            current_selectors
                                 .get(order - 1)
-                                .is_some_and(|s| changed_selectors.contains(s))
-                        })
-                    });
-                    let is_matched = matches.iter().any(|(order, _, _)| {
-                        current_selectors
-                            .get(order - 1)
-                            .is_some_and(|selector| changed_selectors.contains(*selector))
-                    });
-                    // Refreshing match IDs is not a style resolution. Preserve an
-                    // old incomplete certificate until this element is resolved;
-                    // removing a global at-rule cannot silently upgrade it.
-                    let previously_complete = self.matches.get(&index).is_some_and(|old| old.complete);
-                    refreshed_matches.insert(index, RetainedRuleSignature::new(matches,
-                        previously_complete && ordinary_signature_complete
-                            && OrdinarySignatureElement(document, index)));
-                    if was_matched || is_matched {
-                        dirty.insert(index);
+                                .is_some_and(|selector| changed_selectors.contains(*selector))
+                        });
+                        // Refreshing match IDs is not a style resolution. Preserve an
+                        // old incomplete certificate until this element is resolved;
+                        // removing a global at-rule cannot silently upgrade it.
+                        let previously_complete =
+                            self.matches.get(&index).is_some_and(|old| old.complete);
+                        refreshed_matches.insert(
+                            index,
+                            RetainedRuleSignature::new(
+                                matches,
+                                previously_complete
+                                    && ordinary_signature_complete
+                                    && OrdinarySignatureElement(document, index),
+                            ),
+                        );
+                        if was_matched || is_matched {
+                            dirty.insert(index);
+                        }
                     }
                 }
                 // Rule order in the retained match signatures changed. Refresh
@@ -1667,10 +2686,7 @@ impl DocumentStyleEngine {
                         if let Some(host) = document.ShadowHost(scope) {
                             dirty.insert(host);
                         }
-                        for candidate in 0..document.NodeCount() {
-                            if document.Node(candidate).Type() != DOMNodeType::kElement {
-                                continue;
-                            }
+                        for candidate in ConnectedElements(document) {
                             let mut slot = document.AssignedSlot(candidate);
                             while let Some(current) = slot {
                                 if document.TreeScopeRoot(current) == scope {
@@ -1690,6 +2706,10 @@ impl DocumentStyleEngine {
                 // even when a sheet cannot certify a complete match signature.
                 let mut buckets = Vec::new();
                 let mut whole_scope = false;
+                let mut pending =
+                    crate::invalidation::pending_invalidations::PendingInvalidations::default();
+                let mut invalidation_dom =
+                    crate::persistent_invalidation::PersistentInvalidationDom::new(document);
                 for (sheet, _) in active_sheets.iter() {
                     let Some(rules) = self
                         .translated_rule_sets
@@ -1699,9 +2719,39 @@ impl DocumentStyleEngine {
                         continue;
                     };
                     for pseudo in &self.interaction_changed_pseudos {
-                        let Some(set) = rules.Features().user_action_invalidation.get(pseudo) else {
+                        let Some(set) = rules.Features().pseudo_state_invalidation.get(pseudo)
+                        else {
                             continue;
                         };
+                        let unscoped_descendants =
+                            !rules.Features().scope_pseudo_states.contains(pseudo)
+                                && !rules
+                                    .Features()
+                                    .non_descendant_pseudo_states
+                                    .contains(pseudo);
+                        if unscoped_descendants {
+                            assert!(
+                                set.borrow().IsDescendantInvalidationSet()
+                                    && !set.borrow().InvalidatesNth()
+                            );
+                            // cpp: StyleEngine::PseudoStateChangedForElement ->
+                            // PendingInvalidations::ScheduleInvalidationSetsForNode.
+                            // WholeSubtreeInvalid belongs to this changed element,
+                            // never to the complete document.
+                            if let Some(roots) = self.interaction_invalidation_roots.get(pseudo) {
+                                for &root in roots {
+                                    pending.ScheduleInvalidationSetsForNode(
+                                        &crate::invalidation::invalidation_set::InvalidationLists {
+                                            descendants: vec![set.clone()],
+                                            siblings: Vec::new(),
+                                        },
+                                        &root,
+                                        &mut invalidation_dom,
+                                    );
+                                }
+                            }
+                            continue;
+                        }
                         let set = set.borrow();
                         whole_scope |= set.WholeSubtreeInvalid();
                         buckets.extend(set.Ids().into_iter().map(|s| SelectorBucket::Id(s.Utf8())));
@@ -1727,11 +2777,40 @@ impl DocumentStyleEngine {
                         );
                     }
                 }
-                let quirks = document.GetCompatibilityMode() == CompatibilityMode::kQuirks;
-                for index in 0..document.NodeCount() {
-                    if !ConnectedElement(document, index) {
-                        continue;
+                {
+                    use crate::invalidation::invalidation_dom::InvalidationDom;
+                    let root = document.Root();
+                    let element = invalidation_dom.document_element(&root);
+                    crate::invalidation::style_invalidator::StyleInvalidator::new(
+                        pending.GetPendingInvalidationMap(),
+                    )
+                    .Invalidate(&root, element, &mut invalidation_dom);
+                    for (index, change) in invalidation_dom.changes {
+                        if change == crate::invalidation::invalidation_dom::StyleChangeType::SubtreeStyleChange {
+                            AddSubtree(document, index, &mut candidates);
+                        } else {
+                            candidates.insert(index);
+                        }
                     }
+                }
+                browser_tracing::instant(
+                    "style",
+                    "StyleInteractionInvalidation",
+                    &[
+                        ("whole_scope", whole_scope as u8 as f64),
+                        ("buckets", buckets.len() as f64),
+                        ("candidates", candidates.len() as f64),
+                        (
+                            "pseudo",
+                            self.interaction_changed_pseudos
+                                .iter()
+                                .next()
+                                .map_or(0.0, |p| *p as u16 as f64),
+                        ),
+                    ],
+                );
+                let quirks = document.GetCompatibilityMode() == CompatibilityMode::kQuirks;
+                for index in ConnectedElements(document) {
                     if whole_scope
                         || buckets
                             .iter()
@@ -1749,33 +2828,168 @@ impl DocumentStyleEngine {
                     }
                 }
             }
+            let _trace = browser_tracing::span("style", "StyleEngine.InvalidateCandidates");
             for index in candidates {
                 if dirty.contains(&index) || !ConnectedElement(document, index) {
                     continue;
                 }
-                let element_scope = document.TreeScopeRoot(document.CorrespondingSVGElement(index).unwrap_or(index));
+                candidate_checks += 1;
+                incomplete_candidates += usize::from(
+                    self.matches
+                        .get(&index)
+                        .is_some_and(|signature| !signature.complete),
+                );
+                let element_scope = document
+                    .TreeScopeRoot(document.CorrespondingSVGElement(index).unwrap_or(index));
                 let element_sheets = scoped_sheets
                     .get(&element_scope)
                     .map_or(&[][..], Vec::as_slice);
-                if self.CandidateRequiresRecalc(document, index, media, element_sheets,
-                    environment_variables, signature_context_unchanged,
-                    signature_non_rule_context_unchanged, ordinary_signature_complete) {
+                if self.CandidateRequiresRecalc(
+                    document,
+                    index,
+                    media,
+                    element_sheets,
+                    environment_variables,
+                    signature_context_unchanged,
+                    signature_non_rule_context_unchanged,
+                    ordinary_signature_complete,
+                ) {
                     dirty.insert(index);
                 }
             }
         }
-        // SVGElement::InvalidateInstances: cloned declarations match within
-        // the instance tree but use their corresponding element's RuleSets.
-        // Conservatively revisit connected instances at each style lifecycle,
-        // including CSSOM, ancestor selector and host-inheritance changes.
-        for index in 0..document.NodeCount() {
-            if document.CorrespondingSVGElement(index).is_some()
-                && ConnectedElement(document, index)
-            {
-                dirty.insert(index);
+        // cpp: StyleRecalcChange::RecalcContainerQueryDependent and
+        // ShouldUpdatePseudoElement. Keep container-dependent subjects in the
+        // retained traversal when DOM/style changes can affect container
+        // selection or computed query values. Other elements are not dirtied
+        // merely because a sheet contains @container. A size/state publication
+        // starts at its owning container and reaches flat-tree descendants.
+        let container_invalidation =
+            browser_tracing::span("style", "StyleEngine.InvalidateContainerDependents");
+        let mut container_dependents = 0;
+        let container_selection_changed = !document.StyleState().changes.is_empty();
+        self.container_dependent_elements
+            .retain(|&index| ConnectedElement(document, index));
+        if !all_dirty
+            && (container_selection_changed || !self.invalidated_container_nodes.is_empty())
+        {
+            for &index in &self.container_dependent_elements {
+                if !ConnectedElement(document, index) {
+                    continue;
+                }
+                let in_changed_container = container_selection_changed || {
+                    let mut ancestor = Some(index);
+                    let mut affected = false;
+                    while let Some(node) = ancestor {
+                        if self.invalidated_container_nodes.contains(&node) {
+                            affected = true;
+                            break;
+                        }
+                        ancestor = FlatTreeStyleParentElement(document, node);
+                    }
+                    affected
+                };
+                if in_changed_container {
+                    dirty.insert(index);
+                    container_dependents += 1;
+                }
             }
         }
+        // cpp: Node::SetNeedsStyleRecalc -> SVGElement::SetNeedsStyleRecalcForInstances.
+        // Source dirtiness reaches its corresponding instances. Unrelated
+        // lifecycle work must not dirty every <use> shadow tree. Host inheritance
+        // propagates through the normal flat-tree traversal, and changed sheets
+        // already invalidate their exposed TreeScopes above.
+        let mut svg_instance_dependents = 0;
+        if !all_dirty {
+            for index in document.SVGInstanceElements() {
+                if ConnectedElement(document, index)
+                    && document
+                        .CorrespondingSVGElement(index)
+                        .is_some_and(|source| dirty.contains(&source))
+                    && dirty.insert(index)
+                {
+                    svg_instance_dependents += 1;
+                }
+            }
+        }
+        // Keep independently modified declarations separate until every other
+        // invalidation source has upgraded its subjects to ordinary recalc.
+        let incremental_style_candidates = inline_dirty
+            .difference(&dirty)
+            .copied()
+            .collect::<HashSet<_>>();
+        dirty.extend(inline_dirty);
         dirty.retain(|&index| ConnectedElement(document, index));
+        drop(container_invalidation);
+        if browser_tracing::enabled() {
+            let state = document.StyleState();
+            browser_tracing::instant(
+                "style",
+                "StyleRecalcInvalidation",
+                &[
+                    ("all_dirty", all_dirty as u8 as f64),
+                    (
+                        "state_all_dirty",
+                        document.StyleState().all_dirty as u8 as f64,
+                    ),
+                    ("container_dependents", container_dependents as f64),
+                    ("svg_instance_dependents", svg_instance_dependents as f64),
+                    ("candidate_checks", candidate_checks as f64),
+                    ("incomplete_candidates", incomplete_candidates as f64),
+                    (
+                        "ordinary_signature_complete",
+                        ordinary_signature_complete as u8 as f64,
+                    ),
+                    (
+                        "signature_context_unchanged",
+                        signature_context_unchanged as u8 as f64,
+                    ),
+                    ("dirty_elements", dirty.len() as f64),
+                    (
+                        "interaction_nodes",
+                        self.interaction_changed_nodes.len() as f64,
+                    ),
+                    (
+                        "interaction_pseudos",
+                        self.interaction_changed_pseudos.len() as f64,
+                    ),
+                    ("changes", state.changes.len() as f64),
+                    (
+                        "animation_changes",
+                        state
+                            .changes
+                            .iter()
+                            .filter(|c| matches!(c, StyleChange::Animation(_)))
+                            .count() as f64,
+                    ),
+                    (
+                        "node_changes",
+                        state
+                            .changes
+                            .iter()
+                            .filter(|c| {
+                                matches!(c, StyleChange::Node(_) | StyleChange::AttributeValue(_))
+                            })
+                            .count() as f64,
+                    ),
+                    ("sheet_changes", sheet_changes.len() as f64),
+                ],
+            );
+        }
+        let mut ensure_path = HashSet::new();
+        if let Some(target) = ensure_target {
+            let mut ancestor = Some(target);
+            while let Some(index) = ancestor {
+                if document.ResolvedStyleFor(index).is_some() {
+                    break;
+                }
+                ensure_path.insert(index);
+                ancestor = FlatTreeStyleParentElement(document, index);
+            }
+            dirty.clear();
+            dirty.extend(ensure_path.iter().copied());
+        }
         // ChildNeedsStyleRecalc equivalent: enter only paths to dirty elements;
         // inherited differences can extend traversal during style resolution.
         let mut visit = HashSet::new();
@@ -1800,8 +3014,10 @@ impl DocumentStyleEngine {
             }
         }
         if visit.is_empty() {
+            self.invalidated_container_nodes.clear();
             self.interaction_changed_nodes.clear();
             self.interaction_changed_pseudos.clear();
+            self.interaction_invalidation_roots.clear();
             self.sheet_revision = Some(revision);
             self.active_sheets = active_sheets;
             self.active_sheet_scopes = active_sheet_scopes;
@@ -1824,10 +3040,32 @@ impl DocumentStyleEngine {
             &sheets,
             active_sheet_scopes.as_slice(),
         );
-        let production_highlight_candidates = production_resolver_rule_sets
-            .as_ref()
-            .map(ProductionResolverRuleSets::HighlightRuleCandidates)
-            .unwrap_or_default();
+        drop(invalidation_trace);
+        let _recalc_trace = browser_tracing::span("style", "StyleEngine.RecalcStyle");
+        // The batch owns a bounded set of immutable preparation records.
+        // No DOM/session state or previous stylesheet revision survives here.
+        let rule_collections = Rc::new(
+            crate::resolver::production_style_resolver::ProductionRuleCollectionCache::default(),
+        );
+        let resolver_batch =
+            Rc::new(crate::resolver::production_style_resolver::ProductionResolverBatch::default());
+        let (compatibility_pseudo_candidates, production_highlight_candidates) =
+            if let Some(rules) = production_resolver_rule_sets.as_ref() {
+                let mut trace =
+                    browser_tracing::span("style", "StyleEngine.PreparePseudoCandidates");
+                let hit = self
+                    .pseudo_rule_candidates
+                    .as_ref()
+                    .is_some_and(|cache| cache.Matches(rules));
+                trace.set("cache_hit", hit as u8 as f64);
+                if !hit {
+                    self.pseudo_rule_candidates = Some(ProductionPseudoRuleCandidates::new(rules));
+                }
+                let cache = self.pseudo_rule_candidates.as_ref().unwrap();
+                (cache.compatibility.clone(), cache.highlights.clone())
+            } else {
+                (Rc::default(), Rc::default())
+            };
         // Build all immutable styles before publishing. The translated
         // StyleResolver owns Blink's initial-style lifecycle; this engine only
         // supplies its immutable host environment through a private adapter.
@@ -1836,7 +3074,11 @@ impl DocumentStyleEngine {
             self.color_scheme_settings,
         );
         let initial_root_ref = unsafe { &*initial_root.Get() };
-        let mut pending = Vec::<(usize, ResolvedNodeStyle)>::new();
+        // Styles are large boundary projections. Avoid repeatedly relocating
+        // all earlier results while accumulating the known dirty subjects.
+        let mut pending = Vec::<(usize, ResolvedNodeStyle)>::with_capacity(dirty.len());
+        let mut pending_reattach = HashSet::new();
+        let mut cleared = Vec::new();
         let mut native = HashMap::<usize, Persistent<ComputedStyle>>::new();
         let mut stack = vec![(document.Root(), None, false, false, false, false, false)];
         let mut stats = StyleUpdateStats {
@@ -1847,6 +3089,7 @@ impl DocumentStyleEngine {
         let mut pending_matches = refreshed_matches;
         let mut pending_values = HashMap::new();
         let mut pending_custom_properties = HashMap::new();
+        let mut pending_container_dependencies = Vec::new();
         let mut custom_properties = HashMap::<usize, Rc<CustomProperties>>::new();
         let mut root_font = media.em_size;
         while let Some((
@@ -1861,7 +3104,8 @@ impl DocumentStyleEngine {
         {
             let node = document.Node(index);
             let element = node.Type() == DOMNodeType::kElement;
-            let element_scope = document.TreeScopeRoot(document.CorrespondingSVGElement(index).unwrap_or(index));
+            let element_scope =
+                document.TreeScopeRoot(document.CorrespondingSVGElement(index).unwrap_or(index));
             let element_sheets = scoped_sheets
                 .get(&element_scope)
                 .map_or(&[][..], Vec::as_slice);
@@ -1872,111 +3116,148 @@ impl DocumentStyleEngine {
             let mut child_subtree = subtree;
             if element {
                 let old = document.ResolvedStyleFor(index);
-                let must_resolve = dirty.contains(&index)
-                    || inherited
-                    || subtree
-                    || old.is_none_or(|s| s.native_style.Get().is_null())
-                    || (explicit && old.is_none_or(|s| s.has_explicit_inheritance != Some(false)));
-                if !must_resolve {
-                    let old = old.unwrap();
-                    native.insert(index, old.native_style.clone());
-                    custom_properties.insert(
-                        index,
-                        self.custom_properties
-                            .get(&index)
-                            .cloned()
-                            .unwrap_or_default(),
-                    );
-                    none |= unsafe { &*old.native_style.Get() }.Display() == EDisplay::kNone;
-                    if parent_index.is_none() {
-                        root_font = unsafe { &*old.native_style.Get() }
-                            .GetFontDescription()
-                            .SpecifiedSize();
+                // Element::RecalcOwnStyle only resolves with a stored parent
+                // style. A display:none parent normally stores no style; its
+                // descendants lose old/ensured styles without selector matching.
+                if ensure_target.is_none()
+                    && parent_index.is_some_and(|parent| !native.contains_key(&parent))
+                {
+                    if let Some(old) = old {
+                        if !unsafe { old.native_style.Get().as_ref() }
+                            .is_some_and(|style| style.IsEnsuredInDisplayNone())
+                        {
+                            impact.Merge(StyleUpdateImpact::TREE);
+                        }
+                        stats.changed_nodes += 1;
+                        child_subtree = true;
                     }
+                    cleared.push(index);
                     next_parent = Some(index);
                     child_inherited = false;
                     child_explicit = false;
                 } else {
-                    stats.resolved_nodes += 1;
-                    let parent = parent_index
-                        .and_then(|p| native.get(&p))
-                        .map(|p| unsafe { &*p.Get() });
-                    let root_style = document
-                        .Node(document.Root())
-                        .Children()
-                        .iter()
-                        .copied()
-                        .find(|&candidate| document.Node(candidate).Type() == DOMNodeType::kElement)
-                        .and_then(|root_index| native.get(&root_index))
-                        .map(|style| unsafe { &*style.Get() });
-                    let mut builder = if let Some(parent) = parent {
-                        ComputedStyleBuilder::from_initial_and_parent(
-                            initial_root_ref,
-                            parent,
-                            if at_shadow_boundary {
-                                IsAtShadowBoundary::kAtShadowBoundary
-                            } else {
-                                IsAtShadowBoundary::kNotAtShadowBoundary
-                            },
-                        )
+                    let must_resolve = if ensure_target.is_some() {
+                        ensure_path.contains(&index)
                     } else {
-                        ComputedStyleBuilder::from_style(initial_root_ref)
+                        dirty.contains(&index)
+                            || inherited
+                            || subtree
+                            || old.is_none_or(|s| {
+                                s.native_style.Get().is_null()
+                                    || unsafe { &*s.native_style.Get() }.IsEnsuredInDisplayNone()
+                            })
+                            || (explicit
+                                && old.is_none_or(|s| s.has_explicit_inheritance != Some(false)))
                     };
-                    let inherited_custom = parent_index
-                        .and_then(|parent| custom_properties.get(&parent))
-                        .cloned();
-                    // cpp: StyleResolver::ApplyBaseStyleNoCache
-                    // (style_resolver.cc:1736-1944). A complete owner
-                    // bundle enters the translated resolver before the
-                    // compatibility collector/cascade. HTML, SVG and MathML
-                    // each retain the namespace-specific default RuleSet that
-                    // MatchUARules selects. Its typed result owns
-                    // both native style and computed custom properties, so a
-                    // successful MatchAllRules -> StyleCascade operation is
-                    // published without replaying either phase. Any typed
-                    // fallback discards the whole trial, then the compatibility
-                    // path below computes both outputs atomically.
-                    let mut translated_output = None;
-                    if let Some(rule_sets) = production_resolver_rule_sets.as_ref() {
-                        if matches!(
-                            node.Namespace(),
-                            DOMNamespace::kHTML | DOMNamespace::kSVG | DOMNamespace::kMathML
-                        ) {
-                            self.translated_rule_shadow_stats
-                                .translated_style_resolver_attempts += 1;
-                            let resolver_environment =
-                                CascadeEnvironment::new(environment_variables);
-                            let resolver_attribute_source =
-                                PersistentAttributeSource::new(document, index, true);
-                            let resolver_attribute_state = CascadeAttributeState::new();
-                            let resolver_attributes = AttributeResolver::new(
-                                &resolver_attribute_source,
-                                &resolver_attribute_state,
-                                false,
-                            );
-                            let resolver_substitution = SubstitutionContext {
-                                environment: Some(&resolver_environment),
-                                attributes: Some(&resolver_attributes),
-                            };
-                            let resolver_images = DocumentURLImageResolver {
-                                document,
-                                originating_index: index,
-                            };
-                            let parent_handle = parent.map(|style| {
-                                Persistent::from_ptr(
-                                    style as *const ComputedStyle as *mut ComputedStyle,
-                                )
+                    if !must_resolve {
+                        let old = old.unwrap();
+                        native.insert(index, old.native_style.clone());
+                        custom_properties.insert(
+                            index,
+                            self.custom_properties
+                                .get(&index)
+                                .cloned()
+                                .unwrap_or_default(),
+                        );
+                        let old_native = unsafe { &*old.native_style.Get() };
+                        none |= old_native.Display() == EDisplay::kNone
+                            && !UsesSVGHiddenContainer(document, index, old_native);
+                        if parent_index.is_none() {
+                            root_font = unsafe { &*old.native_style.Get() }
+                                .GetFontDescription()
+                                .SpecifiedSize();
+                        }
+                        next_parent = Some(index);
+                        child_inherited = false;
+                        child_explicit = false;
+                    } else {
+                        stats.resolved_nodes += 1;
+                        let incremental_style = incremental_style_candidates.contains(&index)
+                            && ensure_target.is_none()
+                            && !inherited
+                            && !explicit
+                            && !subtree
+                            && !resource_changed
+                            && environment_variables.is_none()
+                            && self
+                                .matches
+                                .get(&index)
+                                .is_some_and(|signature| signature.native_style_complete)
+                            && old.is_some_and(|old| {
+                                !unsafe { &*old.native_style.Get() }.IsEnsuredInDisplayNone()
                             });
-                            let root_handle = root_style.map(|style| {
-                                Persistent::from_ptr(
-                                    style as *const ComputedStyle as *mut ComputedStyle,
-                                )
-                            });
-                            let registered_container_properties = self
-                                .registered_container_properties
-                                .as_deref()
-                                .unwrap_or(&self.property_registry);
-                            let container_runtime = crate::resolver::production_container_runtime::ProductionContainerRuntime {
+                        if !incremental_style {
+                            self.selectors.borrow().ResetSubjectMatchFlags(index);
+                        }
+                        let parent = parent_index
+                            .and_then(|p| native.get(&p))
+                            .map(|p| unsafe { &*p.Get() });
+                        let root_style = document
+                            .Node(document.Root())
+                            .Children()
+                            .iter()
+                            .copied()
+                            .find(|&candidate| {
+                                document.Node(candidate).Type() == DOMNodeType::kElement
+                            })
+                            .and_then(|root_index| native.get(&root_index))
+                            .map(|style| unsafe { &*style.Get() });
+                        let inherited_custom = parent_index
+                            .and_then(|parent| custom_properties.get(&parent))
+                            .cloned();
+                        // cpp: StyleResolver::ApplyBaseStyleNoCache
+                        // (style_resolver.cc:1736-1944). A complete owner
+                        // bundle enters the translated resolver before the
+                        // compatibility collector/cascade. HTML, SVG and MathML
+                        // each retain the namespace-specific default RuleSet that
+                        // MatchUARules selects. Its typed result owns
+                        // both native style and computed custom properties, so a
+                        // successful MatchAllRules -> StyleCascade operation is
+                        // published without replaying either phase. Any typed
+                        // fallback discards the whole trial, then the compatibility
+                        // path below computes both outputs atomically.
+                        let mut translated_output = None;
+                        if let Some(rule_sets) = production_resolver_rule_sets.as_ref() {
+                            if matches!(
+                                node.Namespace(),
+                                DOMNamespace::kHTML | DOMNamespace::kSVG | DOMNamespace::kMathML
+                            ) {
+                                self.translated_rule_shadow_stats.elements_probed += 1;
+                                self.translated_rule_shadow_stats
+                                    .translated_style_resolver_attempts += 1;
+                                let resolver_environment =
+                                    CascadeEnvironment::new(environment_variables);
+                                let resolver_attribute_source =
+                                    PersistentAttributeSource::new(document, index, true);
+                                let resolver_attribute_state = CascadeAttributeState::new();
+                                let resolver_attributes = AttributeResolver::new(
+                                    &resolver_attribute_source,
+                                    &resolver_attribute_state,
+                                    false,
+                                );
+                                let resolver_substitution = SubstitutionContext {
+                                    environment: Some(&resolver_environment),
+                                    attributes: Some(&resolver_attributes),
+                                };
+                                let resolver_images = DocumentURLImageResolver {
+                                    document,
+                                    originating_index: index,
+                                };
+                                let parent_handle = parent.map(|style| {
+                                    Persistent::from_ptr(
+                                        style as *const ComputedStyle as *mut ComputedStyle,
+                                    )
+                                });
+                                let root_handle = root_style.map(|style| {
+                                    Persistent::from_ptr(
+                                        style as *const ComputedStyle as *mut ComputedStyle,
+                                    )
+                                });
+                                let registered_container_properties = self
+                                    .registered_container_properties
+                                    .as_deref()
+                                    .unwrap_or(&self.property_registry);
+                                let container_runtime = crate::resolver::production_container_runtime::ProductionContainerRuntime {
                                 document,
                                 media,
                                 states: &self.container_states,
@@ -1986,85 +3267,101 @@ impl DocumentStyleEngine {
                                 environment: environment_variables,
                                 registered: Some(registered_container_properties),
                             };
-                            let mut collaborators = crate::resolver::production_style_resolver::ProductionBaseStyleCollaborators::ordinary(root_font);
-                            collaborators.html_quirks_user_agent_rules =
-                                rule_sets.html_quirks_user_agent.clone();
-                            collaborators.forced_colors_user_agent_rules =
-                                rule_sets.forced_colors_user_agent.clone();
-                            collaborators.fullscreen_user_agent_rules =
-                                rule_sets.fullscreen_user_agent.clone();
-                            collaborators.root_style = root_handle;
-                            collaborators.color_scheme_settings = self.color_scheme_settings;
-                            collaborators.text_link_text_color =
-                                self.resolver_dependencies.text_link_text_color;
-                            collaborators.is_document_element = parent.is_none();
-                            collaborators.subject_node = Some(index);
-                            collaborators.container_runtime = Some(&container_runtime);
-                            collaborators.parent_custom_properties = inherited_custom.as_deref();
-                            collaborators.substitution_context = resolver_substitution;
-                            collaborators.image_resolver = Some(&resolver_images);
-                            collaborators.property_registry = Some(&self.property_registry);
-                            collaborators.function_registry = Some(&function_registry);
-                            let animation_samples =
-                                document.AnimationStyles(document.Node(index).Id());
-                            let animation_interpolations = if animation_samples.is_empty() {
-                                Ok(None)
-                            } else {
-                                crate::resolver::production_style_cascade::ParseAnimationInterpolations(
+                                let mut collaborators = crate::resolver::production_style_resolver::ProductionBaseStyleCollaborators::ordinary(root_font);
+                                collaborators.rule_collections = Some(rule_collections.clone());
+                                collaborators.resolver_batch = Some(resolver_batch.clone());
+                                collaborators.declarations = Some(self.declarations.clone());
+                                collaborators.html_quirks_user_agent_rules =
+                                    rule_sets.html_quirks_user_agent.clone();
+                                collaborators.forced_colors_user_agent_rules =
+                                    rule_sets.forced_colors_user_agent.clone();
+                                collaborators.fullscreen_user_agent_rules =
+                                    rule_sets.fullscreen_user_agent.clone();
+                                collaborators.root_style = root_handle;
+                                collaborators.color_scheme_settings = self.color_scheme_settings;
+                                collaborators.text_link_text_color =
+                                    self.resolver_dependencies.text_link_text_color;
+                                collaborators.is_document_element = parent.is_none();
+                                collaborators.subject_node = Some(index);
+                                collaborators.is_ensuring_style = ensure_target.is_some();
+                                if incremental_style {
+                                    collaborators.incremental_style = Some(
+                                    crate::resolver::production_style_resolver::ProductionIncrementalStyle {
+                                        custom_properties: self.custom_properties.get(&index).cloned().unwrap_or_default(),
+                                        matched_signatures: &self.matches[&index].values[..self.matches[&index].base_len],
+                                    });
+                                }
+                                collaborators.container_runtime = Some(&container_runtime);
+                                collaborators.parent_custom_properties =
+                                    inherited_custom.as_deref();
+                                collaborators.substitution_context = resolver_substitution;
+                                collaborators.image_resolver = Some(&resolver_images);
+                                collaborators.property_registry = Some(&self.property_registry);
+                                collaborators.function_registry = Some(&function_registry);
+                                let animation_samples =
+                                    document.AnimationStyles(document.Node(index).Id());
+                                let animation_interpolations = if animation_samples.is_empty() {
+                                    Ok(None)
+                                } else {
+                                    crate::resolver::production_style_cascade::ParseAnimationInterpolations(
                                     animation_samples,
                                     DocumentParserMode(document),
                                 )
                                 .map(Some)
-                            };
-                            let animation_interpolations = match animation_interpolations {
-                                Ok(interpolations) => interpolations,
-                                Err(fallbacks) => {
-                                    self.translated_rule_shadow_stats
-                                        .translated_style_resolver_fallbacks += 1;
-                                    if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
-                                        eprintln!(
+                                };
+                                let animation_interpolations = match animation_interpolations {
+                                    Ok(interpolations) => interpolations,
+                                    Err(fallbacks) => {
+                                        self.translated_rule_shadow_stats
+                                            .translated_style_resolver_fallbacks += 1;
+                                        if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER")
+                                            .is_some()
+                                        {
+                                            eprintln!(
                                             "translated StyleResolver interpolation fallback node={index}: {fallbacks:?}"
                                         );
+                                        }
+                                        None
                                     }
-                                    None
-                                }
-                            };
-                            let transition_samples =
-                                document.TransitionStyles(document.Node(index).Id());
-                            let transition_interpolations = if transition_samples.is_empty() {
-                                Ok(None)
-                            } else {
-                                crate::resolver::production_style_cascade::ParseTransitionInterpolations(
+                                };
+                                let transition_samples =
+                                    document.TransitionStyles(document.Node(index).Id());
+                                let transition_interpolations = if transition_samples.is_empty() {
+                                    Ok(None)
+                                } else {
+                                    crate::resolver::production_style_cascade::ParseTransitionInterpolations(
                                     transition_samples,
                                     DocumentParserMode(document),
                                 )
                                 .map(Some)
-                            };
-                            let transition_interpolations = match transition_interpolations {
-                                Ok(interpolations) => interpolations,
-                                Err(fallbacks) => {
-                                    self.translated_rule_shadow_stats
-                                        .translated_style_resolver_fallbacks += 1;
-                                    if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
-                                        eprintln!(
+                                };
+                                let transition_interpolations = match transition_interpolations {
+                                    Ok(interpolations) => interpolations,
+                                    Err(fallbacks) => {
+                                        self.translated_rule_shadow_stats
+                                            .translated_style_resolver_fallbacks += 1;
+                                        if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER")
+                                            .is_some()
+                                        {
+                                            eprintln!(
                                             "translated StyleResolver transition fallback node={index}: {fallbacks:?}"
                                         );
+                                        }
+                                        None
                                     }
-                                    None
-                                }
-                            };
-                            collaborators.animations = animation_interpolations.as_ref();
-                            collaborators.transitions = transition_interpolations.as_ref();
-                            collaborators.matched_properties_cache =
-                                Some(self.matched_properties_cache.clone());
-                            collaborators.selectors = Some(self.selectors.clone());
-                            collaborators.interaction = self.selectors.borrow().interaction;
-                            let may_apply = (animation_samples.is_empty()
-                                || animation_interpolations.is_some())
-                                && (transition_samples.is_empty()
-                                    || transition_interpolations.is_some());
-                            if may_apply {
-                                match crate::resolver::production_style_resolver::ApplyBaseStyleForElement(
+                                };
+                                collaborators.animations = animation_interpolations.as_ref();
+                                collaborators.transitions = transition_interpolations.as_ref();
+                                collaborators.matched_properties_cache =
+                                    Some(self.matched_properties_cache.clone());
+                                collaborators.selectors = Some(self.selectors.clone());
+                                collaborators.interaction = self.selectors.borrow().interaction;
+                                let may_apply = (animation_samples.is_empty()
+                                    || animation_interpolations.is_some())
+                                    && (transition_samples.is_empty()
+                                        || transition_interpolations.is_some());
+                                if may_apply {
+                                    match crate::resolver::production_style_resolver::ApplyBaseStyleForElement(
                                 crate::resolver::production_style_resolver::ProductionBaseStyleInputs {
                                     matching: crate::resolver::production_style_resolver::ProductionRuleMatchingInputs {
                                         document,
@@ -2086,6 +3383,7 @@ impl DocumentStyleEngine {
                                     resolver_environment.ApplyState(&mut translated);
                                     resolver_attribute_state.ApplyState(&mut translated);
                                     let metrics = &output.metrics;
+                                    self.translated_rule_shadow_stats.incremental_style_updates += metrics.incremental_style_updates;
                                     self.resolver_dependencies.Merge(metrics);
                                     self.translated_rule_shadow_stats.translated_collector_calls +=
                                         metrics.collector_calls;
@@ -2145,42 +3443,54 @@ impl DocumentStyleEngine {
                                     }
                                 }
                             }
+                                }
                             }
                         }
-                    }
-                    let translated_resolver_applied = translated_output.is_some();
-                    let (values, computed_custom, mut matched_signatures) = if let Some((
-                        translated,
-                        computed_custom,
-                        signatures,
-                    )) =
-                        translated_output
-                    {
-                        builder = translated;
-                        (HashMap::new(), computed_custom, signatures)
-                    } else {
-                        let rules = self.CollectRules(
-                            document,
-                            index,
-                            media,
-                            element_sheets,
-                            &scoped_sheets,
-                            None,
-                            Some(&native),
-                            Some(&custom_properties),
-                            environment_variables,
-                        )?;
-                        let signatures = rules
-                            .rules
-                            .iter()
-                            .filter(|rule| rule.order != 0 && rule.order != usize::MAX)
-                            .map(|rule| (rule.order, rule.specificity, rule.proximity))
-                            .collect();
-                        let registered_container_properties = self
-                            .registered_container_properties
-                            .as_deref()
-                            .unwrap_or(&self.property_registry);
-                        let container_runtime = crate::resolver::production_container_runtime::ProductionContainerRuntime {
+                        let translated_resolver_applied = translated_output.is_some();
+                        let (mut builder, values, computed_custom, mut matched_signatures) =
+                            if let Some((translated, computed_custom, signatures)) =
+                                translated_output
+                            {
+                                (translated, HashMap::new(), computed_custom, signatures)
+                            } else {
+                                // The translated resolver owns initial/inherited style
+                                // construction. Build this compatibility state only if
+                                // that resolver actually declined the request.
+                                let mut builder = if let Some(parent) = parent {
+                                    ComputedStyleBuilder::from_initial_and_parent(
+                                        initial_root_ref,
+                                        parent,
+                                        if at_shadow_boundary {
+                                            IsAtShadowBoundary::kAtShadowBoundary
+                                        } else {
+                                            IsAtShadowBoundary::kNotAtShadowBoundary
+                                        },
+                                    )
+                                } else {
+                                    ComputedStyleBuilder::from_style(initial_root_ref)
+                                };
+                                let rules = self.CollectRules(
+                                    document,
+                                    index,
+                                    media,
+                                    element_sheets,
+                                    &scoped_sheets,
+                                    None,
+                                    Some(&native),
+                                    Some(&custom_properties),
+                                    environment_variables,
+                                )?;
+                                let signatures = rules
+                                    .rules
+                                    .iter()
+                                    .filter(|rule| rule.order != 0 && rule.order != usize::MAX)
+                                    .map(|rule| (rule.order, rule.specificity, rule.proximity))
+                                    .collect();
+                                let registered_container_properties = self
+                                    .registered_container_properties
+                                    .as_deref()
+                                    .unwrap_or(&self.property_registry);
+                                let container_runtime = crate::resolver::production_container_runtime::ProductionContainerRuntime {
                             document,
                             media,
                             states: &self.container_states,
@@ -2190,254 +3500,329 @@ impl DocumentStyleEngine {
                             environment: environment_variables,
                             registered: Some(registered_container_properties),
                         };
-                        let (values, computed_custom) = Self::Cascade(
-                            document,
-                            index,
-                            &rules,
-                            &mut builder,
-                            parent,
-                            root_style,
-                            inherited_custom.as_ref(),
-                            root_font,
-                            media,
-                            environment_variables,
-                            Some(&container_runtime),
-                            &self.property_registry,
-                            Some(&function_registry),
-                            self.color_scheme_settings,
-                            self.resolver_dependencies.text_link_text_color,
-                            &mut self.diagnostics,
-                            &mut self.translated_rule_shadow_stats,
-                        )?;
-                        (values, computed_custom, signatures)
-                    };
-                    ApplyTextControlInnerEditorCustomStyle(document, index, &mut builder);
-                    // cpp: MatchResult::SetHasPseudoElementStyle and
-                    // StyleResolver::ApplyBaseStyleNoCache (1928). Public pseudo bits
-                    // describe matched rules, independently of generated boxes.
-                    let mut pseudo_rules = Vec::new();
-                    let mut pseudo_flags = PseudoIdFlags::default();
-                    for (pseudo_index, kind) in
-                        PseudoStyleKind::MATCH_TARGETS.into_iter().enumerate()
-                    {
-                        let rules = self.CollectRules(
-                            document,
-                            index,
-                            media,
-                            element_sheets,
-                            &scoped_sheets,
-                            Some(kind),
-                            Some(&native),
-                            Some(&custom_properties),
-                            environment_variables,
-                        )?;
-                        matched_signatures.extend(
-                            rules
-                                .rules
-                                .iter()
-                                .filter(|rule| rule.order != 0 && rule.order != usize::MAX)
-                                .map(|rule| {
-                                    (
-                                        rule.order,
-                                        rule.specificity | (((pseudo_index + 1) as u32) << 24),
-                                        rule.proximity,
-                                    )
-                                }),
-                        );
-                        if !kind.IsNestedMarker() && !rules.rules.is_empty() {
-                            pseudo_flags.MaybeSet(kind.Id());
-                        }
-                        pseudo_rules.push((kind, rules));
-                    }
-                    // The translated MatchResult also carries non-box pseudo
-                    // metadata (highlight names and highlight pseudo bits).
-                    // Replacing it with the compatibility collector's four
-                    // generated-pseudo bits loses Element::RecalcHighlightStyles'
-                    // input. Compatibility owns the bits only when the complete
-                    // translated resolver declined this element.
-                    if translated_resolver_applied {
-                        // The translated resolver already populated flags for
-                        // rules it owns. Merge compatibility-owned pseudos
-                        // (including a StyleRule routed here because it also
-                        // contains ::before::marker) without discarding those
-                        // production flags.
-                        for value in PseudoId::kFirstPublicPseudoId.value()
-                            ..=PseudoId::kLastTrackedPublicPseudoId.value()
+                                let (values, computed_custom) = Self::Cascade(
+                                    document,
+                                    index,
+                                    &rules,
+                                    &mut builder,
+                                    parent,
+                                    root_style,
+                                    inherited_custom.as_ref(),
+                                    root_font,
+                                    media,
+                                    environment_variables,
+                                    Some(&container_runtime),
+                                    &self.property_registry,
+                                    Some(&function_registry),
+                                    self.color_scheme_settings,
+                                    self.resolver_dependencies.text_link_text_color,
+                                    &mut self.diagnostics,
+                                    &mut self.translated_rule_shadow_stats,
+                                )?;
+                                (builder, values, computed_custom, signatures)
+                            };
+                        let base_signature_len = matched_signatures.len();
+                        ApplyTextControlInnerEditorCustomStyle(document, index, &mut builder);
+                        // cpp: MatchResult::SetHasPseudoElementStyle and
+                        // StyleResolver::ApplyBaseStyleNoCache (1928). Public pseudo bits
+                        // describe matched rules, independently of generated boxes.
+                        let mut pseudo_rules = Vec::new();
+                        let mut pseudo_flags = PseudoIdFlags::default();
+                        for (pseudo_index, kind) in
+                            PseudoStyleKind::MATCH_TARGETS.into_iter().enumerate()
                         {
-                            let pseudo_id = PseudoId::from_bits(value);
-                            if builder.HasPseudoElementStyle(pseudo_id) {
-                                pseudo_flags.MaybeSet(pseudo_id);
+                            if translated_resolver_applied {
+                                let compatibility = compatibility_pseudo_candidates
+                                    .get(&kind)
+                                    .is_some_and(|buckets| {
+                                        buckets.iter().any(|bucket| {
+                                            bucket.Matches(
+                                                document,
+                                                index,
+                                                document.GetCompatibilityMode()
+                                                    == CompatibilityMode::kQuirks,
+                                            )
+                                        })
+                                    });
+                                let can_match = match kind {
+                                    PseudoStyleKind::Marker => {
+                                        compatibility
+                                            || matches!(
+                                                builder.Display(),
+                                                EDisplay::kListItem
+                                                    | EDisplay::kInlineListItem
+                                                    | EDisplay::kFlowRootListItem
+                                                    | EDisplay::kInlineFlowRootListItem
+                                            )
+                                    }
+                                    PseudoStyleKind::Placeholder => {
+                                        node.IsHTMLElement("input")
+                                            || node.IsHTMLElement("textarea")
+                                    }
+                                    PseudoStyleKind::BeforeMarker
+                                    | PseudoStyleKind::AfterMarker => {
+                                        let origin = if kind == PseudoStyleKind::BeforeMarker {
+                                            PseudoStyleKind::Before
+                                        } else {
+                                            PseudoStyleKind::After
+                                        };
+                                        compatibility
+                                            || builder.HasPseudoElementStyle(origin.Id())
+                                            || compatibility_pseudo_candidates
+                                                .get(&origin)
+                                                .is_some_and(|buckets| {
+                                                    buckets.iter().any(|bucket| {
+                                                        bucket.Matches(
+                                                            document,
+                                                            index,
+                                                            document.GetCompatibilityMode()
+                                                                == CompatibilityMode::kQuirks,
+                                                        )
+                                                    })
+                                                })
+                                    }
+                                    _ => builder.HasPseudoElementStyle(kind.Id()) || compatibility,
+                                };
+                                if !can_match {
+                                    continue;
+                                }
+                            }
+                            let rules = self.CollectRules(
+                                document,
+                                index,
+                                media,
+                                element_sheets,
+                                &scoped_sheets,
+                                Some(kind),
+                                Some(&native),
+                                Some(&custom_properties),
+                                environment_variables,
+                            )?;
+                            matched_signatures.extend(
+                                rules
+                                    .rules
+                                    .iter()
+                                    .filter(|rule| rule.order != 0 && rule.order != usize::MAX)
+                                    .map(|rule| {
+                                        (
+                                            rule.order,
+                                            rule.specificity | (((pseudo_index + 1) as u32) << 24),
+                                            rule.proximity,
+                                        )
+                                    }),
+                            );
+                            // cpp: StyleResolver::ForEachUARulesForElement.
+                            // Default marker rules are requested for the generated
+                            // marker itself. Counting them on every ordinary
+                            // element creates a marker bit with no cached style,
+                            // making even equal styles differ as kPseudoElementStyle.
+                            if !kind.IsNestedMarker()
+                                && rules.rules.iter().any(|rule| !rule.user_agent_pseudo_sheet)
+                            {
+                                pseudo_flags.MaybeSet(kind.Id());
+                            }
+                            pseudo_rules.push((kind, rules));
+                        }
+                        // The translated MatchResult also carries non-box pseudo
+                        // metadata (highlight names and highlight pseudo bits).
+                        // Replacing it with the compatibility collector's four
+                        // generated-pseudo bits loses Element::RecalcHighlightStyles'
+                        // input. Compatibility owns the bits only when the complete
+                        // translated resolver declined this element.
+                        if translated_resolver_applied {
+                            // The translated resolver already populated flags for
+                            // rules it owns. Merge compatibility-owned pseudos
+                            // (including a StyleRule routed here because it also
+                            // contains ::before::marker) without discarding those
+                            // production flags.
+                            for value in PseudoId::kFirstPublicPseudoId.value()
+                                ..=PseudoId::kLastTrackedPublicPseudoId.value()
+                            {
+                                let pseudo_id = PseudoId::from_bits(value);
+                                if builder.HasPseudoElementStyle(pseudo_id) {
+                                    pseudo_flags.MaybeSet(pseudo_id);
+                                }
                             }
                         }
-                    }
-                    builder.SetPseudoElementStyles(pseudo_flags.Bits());
-                    // cpp: StyleAdjuster::AdjustStyleForDisplay. The final computed
-                    // display depends on the layout parent: flex/grid children are
-                    // blockified in addition to roots, floats and out-of-flow boxes.
-                    // Keep this in StyleEngine so Layout consumes the same immutable
-                    // ComputedStyle object that Paint and invalidation observe.
-                    let display_parent = parent.unwrap_or(initial_root_ref);
-                    AdjustComputedDisplayForLayout(
-                        &mut builder,
-                        display_parent,
-                        &DisplayAdjustmentContext {
-                            is_root: parent.is_none(),
-                            ..Default::default()
-                        },
-                    );
-                    if !translated_resolver_applied {
-                        // The compatibility cascade publishes the same native
-                        // style and must run the same StyleAdjuster branch.
-                        crate::resolver::style_adjuster::AdjustStyleForZIndex(
+                        builder.SetPseudoElementStyles(pseudo_flags.Bits());
+                        // cpp: StyleAdjuster::AdjustStyleForDisplay. The final computed
+                        // display depends on the layout parent: flex/grid children are
+                        // blockified in addition to roots, floats and out-of-flow boxes.
+                        // Keep this in StyleEngine so Layout consumes the same immutable
+                        // ComputedStyle object that Paint and invalidation observe.
+                        let display_parent = parent.unwrap_or(initial_root_ref);
+                        AdjustComputedDisplayForLayout(
                             &mut builder,
                             display_parent,
+                            &DisplayAdjustmentContext {
+                                is_root: parent.is_none(),
+                                ..Default::default()
+                            },
                         );
-                    }
-                    // cpp: Element::RecalcHighlightStyles (element.cc:6747-6828)
-                    // and StyleResolver::StyleForHighlightPseudoElement
-                    // (style_resolver.cc:10642-10652). Highlight pseudos are
-                    // native cached styles on the originating ComputedStyle;
-                    // they are not generated PseudoElement boxes. Each request
-                    // inherits highlight properties from the parent's matching
-                    // highlight style and initializes the remaining properties
-                    // from this element's ordinary originating style.
-                    self.ResolveFontFeatureValues(&mut builder);
-                    let ordinary_style =
-                        Persistent::from_ptr(builder.TakeStyle() as *mut ComputedStyle);
-                    let originating_style = unsafe { &*ordinary_style.Get() };
-                    let mut style = ordinary_style.clone();
-                    if production_resolver_rule_sets.is_some() {
-                        let mut requests = Vec::<(
-                            PseudoId,
-                            Option<AtomicString>,
-                            SearchTextRequest,
-                            *const ComputedStyle,
-                        )>::new();
-                        let parent_highlights = parent.map(|style| style.HighlightData());
-                        if production_highlight_candidates
-                            .pseudos
-                            .Has(PseudoId::kPseudoIdSelection)
-                        {
-                            requests.push((
-                                PseudoId::kPseudoIdSelection,
-                                None,
-                                SearchTextRequest::kNone,
-                                parent_highlights.map_or(std::ptr::null(), |data| data.Selection()),
-                            ));
+                        if !translated_resolver_applied {
+                            // The compatibility cascade publishes the same native
+                            // style and must run the same StyleAdjuster branch.
+                            crate::resolver::style_adjuster::AdjustStyleForZIndex(
+                                &mut builder,
+                                display_parent,
+                            );
                         }
-                        if production_highlight_candidates
-                            .pseudos
-                            .Has(PseudoId::kPseudoIdSearchText)
-                        {
-                            requests.push((
-                                PseudoId::kPseudoIdSearchText,
-                                None,
-                                SearchTextRequest::kCurrent,
-                                parent_highlights
-                                    .map_or(std::ptr::null(), |data| data.SearchTextCurrent()),
-                            ));
-                            requests.push((
-                                PseudoId::kPseudoIdSearchText,
-                                None,
-                                SearchTextRequest::kNotCurrent,
-                                parent_highlights
-                                    .map_or(std::ptr::null(), |data| data.SearchTextNotCurrent()),
-                            ));
+                        // cpp: Element::RecalcHighlightStyles (element.cc:6747-6828)
+                        // and StyleResolver::StyleForHighlightPseudoElement
+                        // (style_resolver.cc:10642-10652). Highlight pseudos are
+                        // native cached styles on the originating ComputedStyle;
+                        // they are not generated PseudoElement boxes. Each request
+                        // inherits highlight properties from the parent's matching
+                        // highlight style and initializes the remaining properties
+                        // from this element's ordinary originating style.
+                        self.ResolveFontFeatureValues(&mut builder);
+                        if ensure_target.is_some() {
+                            builder.SetIsEnsuredInDisplayNone();
                         }
-                        if production_highlight_candidates
-                            .pseudos
-                            .Has(PseudoId::kPseudoIdTargetText)
-                        {
-                            requests.push((
-                                PseudoId::kPseudoIdTargetText,
-                                None,
-                                SearchTextRequest::kNone,
-                                parent_highlights
-                                    .map_or(std::ptr::null(), |data| data.TargetText()),
-                            ));
-                        }
-                        if production_highlight_candidates
-                            .pseudos
-                            .Has(PseudoId::kPseudoIdSpellingError)
-                        {
-                            requests.push((
-                                PseudoId::kPseudoIdSpellingError,
-                                None,
-                                SearchTextRequest::kNone,
-                                parent_highlights
-                                    .map_or(std::ptr::null(), |data| data.SpellingError()),
-                            ));
-                        }
-                        if production_highlight_candidates
-                            .pseudos
-                            .Has(PseudoId::kPseudoIdGrammarError)
-                        {
-                            requests.push((
-                                PseudoId::kPseudoIdGrammarError,
-                                None,
-                                SearchTextRequest::kNone,
-                                parent_highlights
-                                    .map_or(std::ptr::null(), |data| data.GrammarError()),
-                            ));
-                        }
-                        if production_highlight_candidates
-                            .pseudos
-                            .Has(PseudoId::kPseudoIdHighlight)
-                        {
-                            for name in &production_highlight_candidates.custom_names {
+                        let ordinary_style =
+                            Persistent::from_ptr(builder.TakeStyle() as *mut ComputedStyle);
+                        let originating_style = unsafe { &*ordinary_style.Get() };
+                        let mut style = ordinary_style.clone();
+                        if production_resolver_rule_sets.is_some() {
+                            let mut requests = Vec::<(
+                                PseudoId,
+                                Option<AtomicString>,
+                                SearchTextRequest,
+                                *const ComputedStyle,
+                            )>::new();
+                            let parent_highlights = parent.map(|style| style.HighlightData());
+                            // cpp: Element::RecalcHighlightStyles. The ordinary
+                            // collector marks highlights matching this element;
+                            // a document-wide rule inventory is not that match.
+                            // Unmatched elements retain inherited HighlightData.
+                            // Keep conservative requests when the ordinary resolver
+                            // used the compatibility cascade and has no such proof.
+                            let has_highlight = |id| {
+                                if translated_resolver_applied {
+                                    originating_style.HasPseudoElementStyle(id)
+                                } else {
+                                    production_highlight_candidates.pseudos.Has(id)
+                                }
+                            };
+                            if has_highlight(PseudoId::kPseudoIdSelection) {
                                 requests.push((
-                                    PseudoId::kPseudoIdHighlight,
-                                    Some(name.clone()),
+                                    PseudoId::kPseudoIdSelection,
+                                    None,
                                     SearchTextRequest::kNone,
+                                    parent_highlights
+                                        .map_or(std::ptr::null(), |data| data.Selection()),
+                                ));
+                            }
+                            if has_highlight(PseudoId::kPseudoIdSearchText) {
+                                requests.push((
+                                    PseudoId::kPseudoIdSearchText,
+                                    None,
+                                    SearchTextRequest::kCurrent,
+                                    parent_highlights
+                                        .map_or(std::ptr::null(), |data| data.SearchTextCurrent()),
+                                ));
+                                requests.push((
+                                    PseudoId::kPseudoIdSearchText,
+                                    None,
+                                    SearchTextRequest::kNotCurrent,
                                     parent_highlights.map_or(std::ptr::null(), |data| {
-                                        data.CustomHighlight(name)
+                                        data.SearchTextNotCurrent()
                                     }),
                                 ));
                             }
-                        }
+                            if has_highlight(PseudoId::kPseudoIdTargetText) {
+                                requests.push((
+                                    PseudoId::kPseudoIdTargetText,
+                                    None,
+                                    SearchTextRequest::kNone,
+                                    parent_highlights
+                                        .map_or(std::ptr::null(), |data| data.TargetText()),
+                                ));
+                            }
+                            if has_highlight(PseudoId::kPseudoIdSpellingError) {
+                                requests.push((
+                                    PseudoId::kPseudoIdSpellingError,
+                                    None,
+                                    SearchTextRequest::kNone,
+                                    parent_highlights
+                                        .map_or(std::ptr::null(), |data| data.SpellingError()),
+                                ));
+                            }
+                            if has_highlight(PseudoId::kPseudoIdGrammarError) {
+                                requests.push((
+                                    PseudoId::kPseudoIdGrammarError,
+                                    None,
+                                    SearchTextRequest::kNone,
+                                    parent_highlights
+                                        .map_or(std::ptr::null(), |data| data.GrammarError()),
+                                ));
+                            }
+                            if has_highlight(PseudoId::kPseudoIdHighlight) {
+                                for name in &production_highlight_candidates.custom_names {
+                                    if translated_resolver_applied
+                                        && unsafe {
+                                            originating_style.CustomHighlightNames().as_ref()
+                                        }
+                                        .is_none_or(|names| !names.contains(name))
+                                    {
+                                        continue;
+                                    }
+                                    requests.push((
+                                        PseudoId::kPseudoIdHighlight,
+                                        Some(name.clone()),
+                                        SearchTextRequest::kNone,
+                                        parent_highlights.map_or(std::ptr::null(), |data| {
+                                            data.CustomHighlight(name)
+                                        }),
+                                    ));
+                                }
+                            }
 
-                        if !requests.is_empty() {
-                            if let Some(rule_sets) = production_resolver_rule_sets.as_ref() {
-                                let mut highlight_builder =
-                                    ComputedStyleBuilder::from_style(originating_style);
-                                let mut resolved_custom_names =
-                                    foundation::HashSet::<AtomicString>::new();
-                                // Keep every produced style rooted until the
-                                // completed originating style owns the Member
-                                // edges in StyleHighlightData.
-                                let mut highlight_roots = Vec::with_capacity(requests.len());
-                                for (pseudo_id, argument, search_text, highlight_parent) in requests
-                                {
-                                    let resolver_environment =
-                                        CascadeEnvironment::new(environment_variables);
-                                    let resolver_attribute_source =
-                                        PersistentAttributeSource::new(document, index, true);
-                                    let resolver_attribute_state = CascadeAttributeState::new();
-                                    let resolver_attributes = AttributeResolver::new(
-                                        &resolver_attribute_source,
-                                        &resolver_attribute_state,
-                                        false,
-                                    );
-                                    let resolver_substitution = SubstitutionContext {
-                                        environment: Some(&resolver_environment),
-                                        attributes: Some(&resolver_attributes),
-                                    };
-                                    let resolver_images = DocumentURLImageResolver {
-                                        document,
-                                        originating_index: index,
-                                    };
-                                    let root_handle = root_style.map(|root| {
-                                        Persistent::from_ptr(
-                                            root as *const ComputedStyle as *mut ComputedStyle,
-                                        )
-                                    });
-                                    let highlight_parent = (!highlight_parent.is_null())
-                                        .then(|| Persistent::from_ptr(highlight_parent.cast_mut()));
-                                    let registered_container_properties = self
-                                        .registered_container_properties
-                                        .as_deref()
-                                        .unwrap_or(&self.property_registry);
-                                    let container_runtime = crate::resolver::production_container_runtime::ProductionContainerRuntime {
+                            if !requests.is_empty() {
+                                if let Some(rule_sets) = production_resolver_rule_sets.as_ref() {
+                                    let mut highlight_builder =
+                                        ComputedStyleBuilder::from_style(originating_style);
+                                    let mut resolved_custom_names =
+                                        foundation::HashSet::<AtomicString>::new();
+                                    // Keep every produced style rooted until the
+                                    // completed originating style owns the Member
+                                    // edges in StyleHighlightData.
+                                    let mut highlight_roots = Vec::with_capacity(requests.len());
+                                    for (pseudo_id, argument, search_text, highlight_parent) in
+                                        requests
+                                    {
+                                        let resolver_environment =
+                                            CascadeEnvironment::new(environment_variables);
+                                        let resolver_attribute_source =
+                                            PersistentAttributeSource::new(document, index, true);
+                                        let resolver_attribute_state = CascadeAttributeState::new();
+                                        let resolver_attributes = AttributeResolver::new(
+                                            &resolver_attribute_source,
+                                            &resolver_attribute_state,
+                                            false,
+                                        );
+                                        let resolver_substitution = SubstitutionContext {
+                                            environment: Some(&resolver_environment),
+                                            attributes: Some(&resolver_attributes),
+                                        };
+                                        let resolver_images = DocumentURLImageResolver {
+                                            document,
+                                            originating_index: index,
+                                        };
+                                        let root_handle = root_style.map(|root| {
+                                            Persistent::from_ptr(
+                                                root as *const ComputedStyle as *mut ComputedStyle,
+                                            )
+                                        });
+                                        let highlight_parent =
+                                            (!highlight_parent.is_null()).then(|| {
+                                                Persistent::from_ptr(highlight_parent.cast_mut())
+                                            });
+                                        let registered_container_properties = self
+                                            .registered_container_properties
+                                            .as_deref()
+                                            .unwrap_or(&self.property_registry);
+                                        let container_runtime = crate::resolver::production_container_runtime::ProductionContainerRuntime {
                                         document,
                                         media,
                                         states: &self.container_states,
@@ -2447,39 +3832,47 @@ impl DocumentStyleEngine {
                                         environment: environment_variables,
                                         registered: Some(registered_container_properties),
                                     };
-                                    let mut collaborators = crate::resolver::production_style_resolver::ProductionBaseStyleCollaborators::ordinary(root_font);
-                                    collaborators.html_quirks_user_agent_rules =
-                                        rule_sets.html_quirks_user_agent.clone();
-                                    collaborators.forced_colors_user_agent_rules =
-                                        rule_sets.forced_colors_user_agent.clone();
-                                    collaborators.fullscreen_user_agent_rules =
-                                        rule_sets.fullscreen_user_agent.clone();
-                                    collaborators.root_style = root_handle;
-                                    collaborators.color_scheme_settings =
-                                        self.color_scheme_settings;
-                                    collaborators.text_link_text_color =
-                                        self.resolver_dependencies.text_link_text_color;
-                                    collaborators.pseudo_id = pseudo_id;
-                                    collaborators.pseudo_argument = argument.clone();
-                                    collaborators.search_text = search_text;
-                                    collaborators.originating_style = Some(ordinary_style.clone());
-                                    collaborators.subject_node = Some(index);
-                                    collaborators.container_runtime = Some(&container_runtime);
-                                    // Highlight custom properties inherit from
-                                    // the originating element, per the source
-                                    // highlight cascade path; highlight color
-                                    // properties inherit through `parent`.
-                                    collaborators.parent_custom_properties =
-                                        Some(computed_custom.as_ref());
-                                    collaborators.substitution_context = resolver_substitution;
-                                    collaborators.image_resolver = Some(&resolver_images);
-                                    collaborators.property_registry = Some(&self.property_registry);
-                                    collaborators.function_registry = Some(&function_registry);
-                                    collaborators.matched_properties_cache =
-                                        Some(self.matched_properties_cache.clone());
-                                    collaborators.selectors = Some(self.selectors.clone());
-                                    collaborators.interaction = self.selectors.borrow().interaction;
-                                    match crate::resolver::production_style_resolver::ApplyBaseStyleForElement(
+                                        let mut collaborators = crate::resolver::production_style_resolver::ProductionBaseStyleCollaborators::ordinary(root_font);
+                                        collaborators.rule_collections =
+                                            Some(rule_collections.clone());
+                                        collaborators.resolver_batch = Some(resolver_batch.clone());
+                                        collaborators.declarations =
+                                            Some(self.declarations.clone());
+                                        collaborators.html_quirks_user_agent_rules =
+                                            rule_sets.html_quirks_user_agent.clone();
+                                        collaborators.forced_colors_user_agent_rules =
+                                            rule_sets.forced_colors_user_agent.clone();
+                                        collaborators.fullscreen_user_agent_rules =
+                                            rule_sets.fullscreen_user_agent.clone();
+                                        collaborators.root_style = root_handle;
+                                        collaborators.color_scheme_settings =
+                                            self.color_scheme_settings;
+                                        collaborators.text_link_text_color =
+                                            self.resolver_dependencies.text_link_text_color;
+                                        collaborators.pseudo_id = pseudo_id;
+                                        collaborators.pseudo_argument = argument.clone();
+                                        collaborators.search_text = search_text;
+                                        collaborators.originating_style =
+                                            Some(ordinary_style.clone());
+                                        collaborators.subject_node = Some(index);
+                                        collaborators.container_runtime = Some(&container_runtime);
+                                        // Highlight custom properties inherit from
+                                        // the originating element, per the source
+                                        // highlight cascade path; highlight color
+                                        // properties inherit through `parent`.
+                                        collaborators.parent_custom_properties =
+                                            Some(computed_custom.as_ref());
+                                        collaborators.substitution_context = resolver_substitution;
+                                        collaborators.image_resolver = Some(&resolver_images);
+                                        collaborators.property_registry =
+                                            Some(&self.property_registry);
+                                        collaborators.function_registry = Some(&function_registry);
+                                        collaborators.matched_properties_cache =
+                                            Some(self.matched_properties_cache.clone());
+                                        collaborators.selectors = Some(self.selectors.clone());
+                                        collaborators.interaction =
+                                            self.selectors.borrow().interaction;
+                                        match crate::resolver::production_style_resolver::ApplyBaseStyleForElement(
                                         crate::resolver::production_style_resolver::ProductionBaseStyleInputs {
                                             matching: crate::resolver::production_style_resolver::ProductionRuleMatchingInputs {
                                                 document,
@@ -2573,198 +3966,280 @@ impl DocumentStyleEngine {
                                             }
                                         }
                                     }
-                                }
-                                if !translated_resolver_applied {
-                                    highlight_builder.SetPseudoElementStyles(pseudo_flags.Bits());
-                                    if !resolved_custom_names.is_empty() {
+                                    }
+                                    if !translated_resolver_applied {
                                         highlight_builder
-                                            .SetCustomHighlightNames(&resolved_custom_names);
+                                            .SetPseudoElementStyles(pseudo_flags.Bits());
+                                        if !resolved_custom_names.is_empty() {
+                                            highlight_builder
+                                                .SetCustomHighlightNames(&resolved_custom_names);
+                                        }
+                                    }
+                                    style = Persistent::from_ptr(
+                                        highlight_builder.TakeStyle() as *mut ComputedStyle
+                                    );
+                                    drop(highlight_roots);
+                                }
+                            }
+                        }
+                        let mut signature = RetainedRuleSignature::with_base(
+                            matched_signatures,
+                            base_signature_len,
+                            ordinary_signature_complete
+                                && OrdinarySignatureElement(document, index),
+                        );
+                        signature.native_style_complete = translated_resolver_applied;
+                        pending_matches.insert(index, signature);
+                        let final_style = unsafe { &*style.Get() };
+                        if parent.is_none() {
+                            root_font = final_style.GetFontDescription().SpecifiedSize()
+                        }
+                        if ensure_target.is_none()
+                            && !ShouldStoreComputedStyle(document, index, final_style)
+                        {
+                            if let Some(old) = old {
+                                if !unsafe { old.native_style.Get().as_ref() }
+                                    .is_some_and(|style| style.IsEnsuredInDisplayNone())
+                                {
+                                    impact.Merge(StyleUpdateImpact::TREE);
+                                }
+                                stats.changed_nodes += 1;
+                                child_subtree = true;
+                            }
+                            cleared.push(index);
+                            none = true;
+                            next_parent = Some(index);
+                            child_inherited = false;
+                            child_explicit = false;
+                        } else {
+                            let own_none = final_style.Display() == EDisplay::kNone;
+                            // cpp: SVGGElement::CreateLayoutObject. display:none g
+                            // attaches LayoutSVGHiddenContainer; that object suppresses
+                            // drawing while keeping descendant resource objects alive.
+                            let svg_hidden_container =
+                                UsesSVGHiddenContainer(document, index, final_style);
+                            none |= own_none && !svg_hidden_container;
+                            let mut resolved = ResolvedNodeStyle::default();
+                            resolved.own_display_contents =
+                                final_style.Display() == EDisplay::kContents;
+                            resolved.display_contents = resolved.own_display_contents;
+                            resolved.own_generates_box = svg_hidden_container
+                                || (!own_none && !resolved.own_display_contents);
+                            resolved.generates_box = !none && resolved.own_generates_box;
+                            ProjectForLayoutBoundary(final_style, &mut resolved)?;
+                            resolved.has_explicit_inheritance =
+                                Some(final_style.HasExplicitInheritance());
+                            resolved.SetNativeStyle(style.clone());
+                            let compare_trace =
+                                browser_tracing::span("style", "StyleEngine.CompareResolvedStyle");
+                            let old_native =
+                                old.and_then(|s| unsafe { s.native_style.Get().as_ref() });
+                            // cpp: computed_style.cc:407-500; element.cc:5562-5583.
+                            // Propagation is decided by the translated native style
+                            // difference, not by a hand-maintained projection subset.
+                            let native_difference = old_native
+                                .map_or(ComputedStyleDifference::kDescendantAffecting, |old| {
+                                    ComputedStyle::ComputeDifference(old, final_style)
+                                });
+                            let custom_changed =
+                                self.custom_properties.get(&index).is_none_or(|old| {
+                                    !CustomPropertiesEquivalent(old, &computed_custom)
+                                });
+                            // A child's highlight style inherits from the matching
+                            // highlight style on its flat-tree parent. That dependency
+                            // is separate from ordinary CSS inheritance and therefore
+                            // must explicitly schedule descendants when the native
+                            // highlight cache changes.
+                            let highlight_changed = old_native.is_none_or(|old| {
+                                old.HighlightData() != final_style.HighlightData()
+                            });
+                            let suppression_changed = old
+                                .is_none_or(|s| s.generates_box != resolved.generates_box)
+                                || old_native.is_some_and(|old| {
+                                    (old.Display() == EDisplay::kNone) != own_none
+                                });
+                            drop(compare_trace);
+                            if browser_tracing::enabled() {
+                                browser_tracing::instant(
+                                    "style",
+                                    "StylePropagation",
+                                    &[
+                                        ("node_id", node.Id() as f64),
+                                        ("ancestor_display_none", ancestor_none as u8 as f64),
+                                        ("had_style", old_native.is_some() as u8 as f64),
+                                        ("native_difference", native_difference as u8 as f64),
+                                        ("custom_changed", custom_changed as u8 as f64),
+                                        ("highlight_changed", highlight_changed as u8 as f64),
+                                        ("suppression_changed", suppression_changed as u8 as f64),
+                                        (
+                                            "initial_data_changed",
+                                            old_native.is_none_or(|old| {
+                                                old.InitialData() != final_style.InitialData()
+                                            }) as u8
+                                                as f64,
+                                        ),
+                                    ],
+                                );
+                            }
+                            child_inherited = native_difference
+                                >= ComputedStyleDifference::kIndependentInherited
+                                || custom_changed
+                                || highlight_changed;
+                            child_subtree |= suppression_changed
+                                || native_difference
+                                    == ComputedStyleDifference::kDescendantAffecting;
+                            // cpp: StyleResolver::ResolveStyle(StyleRequest),
+                            // Element::GetCachedPseudoElementStyle. Pseudos inherit from
+                            // their originating element and have a separate match result.
+                            let before_has_marker = pseudo_rules.iter().any(|(kind, rules)| {
+                                *kind == PseudoStyleKind::BeforeMarker && !rules.rules.is_empty()
+                            });
+                            let after_has_marker = pseudo_rules.iter().any(|(kind, rules)| {
+                                *kind == PseudoStyleKind::AfterMarker && !rules.rules.is_empty()
+                            });
+                            let mut before_custom = None;
+                            let mut after_custom = None;
+                            for (kind, rules) in pseudo_rules
+                                .iter()
+                                .filter(|(kind, _)| !kind.IsNestedMarker())
+                            {
+                                let output = self.ResolvePseudoStyle(
+                                    document,
+                                    index,
+                                    *kind,
+                                    &resolved,
+                                    &computed_custom,
+                                    initial_root_ref,
+                                    root_font,
+                                    media,
+                                    environment_variables,
+                                    &rules,
+                                    Some(&function_registry),
+                                    !none,
+                                    match kind {
+                                        PseudoStyleKind::Before => before_has_marker,
+                                        PseudoStyleKind::After => after_has_marker,
+                                        _ => false,
+                                    },
+                                )?;
+                                match kind {
+                                    PseudoStyleKind::Before => {
+                                        if let Some(output) = output {
+                                            before_custom = Some(output.custom_properties);
+                                            resolved.before = Some(output.pseudo);
+                                        }
+                                    }
+                                    PseudoStyleKind::After => {
+                                        if let Some(output) = output {
+                                            after_custom = Some(output.custom_properties);
+                                            resolved.after = Some(output.pseudo);
+                                        }
+                                    }
+                                    PseudoStyleKind::FirstLetter => {
+                                        resolved.first_letter = output.map(|output| output.pseudo)
+                                    }
+                                    PseudoStyleKind::Placeholder => {
+                                        resolved.placeholder = output.map(|output| output.pseudo)
+                                    }
+                                    PseudoStyleKind::Marker => {
+                                        resolved.marker = output.map(|output| output.pseudo)
+                                    }
+                                    PseudoStyleKind::BeforeMarker
+                                    | PseudoStyleKind::AfterMarker => {
+                                        unreachable!(
+                                            "nested markers resolve after their originating pseudo"
+                                        )
                                     }
                                 }
-                                style = Persistent::from_ptr(
-                                    highlight_builder.TakeStyle() as *mut ComputedStyle
-                                );
-                                drop(highlight_roots);
                             }
-                        }
-                    }
-                    pending_matches.insert(index, RetainedRuleSignature::new(matched_signatures,
-                        ordinary_signature_complete && OrdinarySignatureElement(document, index)));
-                    let final_style = unsafe { &*style.Get() };
-                    if parent.is_none() {
-                        root_font = final_style.GetFontDescription().SpecifiedSize()
-                    }
-                    let own_none = final_style.Display() == EDisplay::kNone;
-                    none |= own_none;
-                    let mut resolved = ResolvedNodeStyle::default();
-                    resolved.own_display_contents = final_style.Display() == EDisplay::kContents;
-                    resolved.display_contents = resolved.own_display_contents;
-                    resolved.own_generates_box = !own_none && !resolved.own_display_contents;
-                    resolved.generates_box = !none && resolved.own_generates_box;
-                    ProjectForLayoutBoundary(final_style, &mut resolved)?;
-                    resolved.has_explicit_inheritance = Some(final_style.HasExplicitInheritance());
-                    resolved.SetNativeStyle(style.clone());
-                    let old_native = old.and_then(|s| unsafe { s.native_style.Get().as_ref() });
-                    // cpp: computed_style.cc:407-500; element.cc:5562-5583.
-                    // Propagation is decided by the translated native style
-                    // difference, not by a hand-maintained projection subset.
-                    let native_difference = old_native
-                        .map_or(ComputedStyleDifference::kDescendantAffecting, |old| {
-                            ComputedStyle::ComputeDifference(old, final_style)
-                        });
-                    let custom_changed = self
-                        .custom_properties
-                        .get(&index)
-                        .is_none_or(|old| !CustomPropertiesEquivalent(old, &computed_custom));
-                    // A child's highlight style inherits from the matching
-                    // highlight style on its flat-tree parent. That dependency
-                    // is separate from ordinary CSS inheritance and therefore
-                    // must explicitly schedule descendants when the native
-                    // highlight cache changes.
-                    let highlight_changed = old_native
-                        .is_none_or(|old| old.HighlightData() != final_style.HighlightData());
-                    let suppression_changed = old
-                        .is_none_or(|s| s.generates_box != resolved.generates_box)
-                        || old_native
-                            .is_some_and(|old| (old.Display() == EDisplay::kNone) != own_none);
-                    child_inherited = native_difference
-                        >= ComputedStyleDifference::kIndependentInherited
-                        || custom_changed
-                        || highlight_changed;
-                    child_subtree |= suppression_changed
-                        || native_difference == ComputedStyleDifference::kDescendantAffecting;
-                    // cpp: StyleResolver::ResolveStyle(StyleRequest),
-                    // Element::GetCachedPseudoElementStyle. Pseudos inherit from
-                    // their originating element and have a separate match result.
-                    let before_has_marker = pseudo_rules.iter().any(|(kind, rules)| {
-                        *kind == PseudoStyleKind::BeforeMarker && !rules.rules.is_empty()
-                    });
-                    let after_has_marker = pseudo_rules.iter().any(|(kind, rules)| {
-                        *kind == PseudoStyleKind::AfterMarker && !rules.rules.is_empty()
-                    });
-                    let mut before_custom = None;
-                    let mut after_custom = None;
-                    for (kind, rules) in pseudo_rules
-                        .iter()
-                        .filter(|(kind, _)| !kind.IsNestedMarker())
-                    {
-                        let output = self.ResolvePseudoStyle(
-                            document,
-                            index,
-                            *kind,
-                            &resolved,
-                            &computed_custom,
-                            initial_root_ref,
-                            root_font,
-                            media,
-                            environment_variables,
-                            &rules,
-                            Some(&function_registry),
-                            !none,
-                            match kind {
-                                PseudoStyleKind::Before => before_has_marker,
-                                PseudoStyleKind::After => after_has_marker,
-                                _ => false,
-                            },
-                        )?;
-                        match kind {
-                            PseudoStyleKind::Before => {
-                                if let Some(output) = output {
-                                    before_custom = Some(output.custom_properties);
-                                    resolved.before = Some(output.pseudo);
+                            for kind in
+                                [PseudoStyleKind::BeforeMarker, PseudoStyleKind::AfterMarker]
+                            {
+                                let Some((_, rules)) =
+                                    pseudo_rules.iter().find(|(target, _)| *target == kind)
+                                else {
+                                    continue;
+                                };
+                                let (parent_pseudo, parent_custom, old_marker) = match kind {
+                                    PseudoStyleKind::BeforeMarker => (
+                                        resolved.before.as_ref(),
+                                        before_custom.as_ref(),
+                                        old.and_then(|style| style.before.as_ref())
+                                            .and_then(|pseudo| pseudo.marker.as_deref()),
+                                    ),
+                                    PseudoStyleKind::AfterMarker => (
+                                        resolved.after.as_ref(),
+                                        after_custom.as_ref(),
+                                        old.and_then(|style| style.after.as_ref())
+                                            .and_then(|pseudo| pseudo.marker.as_deref()),
+                                    ),
+                                    _ => unreachable!(),
+                                };
+                                let (Some(parent_pseudo), Some(parent_custom)) =
+                                    (parent_pseudo, parent_custom)
+                                else {
+                                    continue;
+                                };
+                                let marker = self.ResolveNestedMarkerStyle(
+                                    document,
+                                    index,
+                                    parent_pseudo,
+                                    parent_custom,
+                                    old_marker,
+                                    initial_root_ref,
+                                    root_font,
+                                    media,
+                                    environment_variables,
+                                    rules,
+                                    Some(&function_registry),
+                                    !none,
+                                )?;
+                                match kind {
+                                    PseudoStyleKind::BeforeMarker => {
+                                        resolved.before.as_mut().unwrap().marker =
+                                            marker.map(Box::new)
+                                    }
+                                    PseudoStyleKind::AfterMarker => {
+                                        resolved.after.as_mut().unwrap().marker =
+                                            marker.map(Box::new)
+                                    }
+                                    _ => unreachable!(),
                                 }
                             }
-                            PseudoStyleKind::After => {
-                                if let Some(output) = output {
-                                    after_custom = Some(output.custom_properties);
-                                    resolved.after = Some(output.pseudo);
-                                }
-                            }
-                            PseudoStyleKind::FirstLetter => {
-                                resolved.first_letter = output.map(|output| output.pseudo)
-                            }
-                            PseudoStyleKind::Placeholder => {
-                                resolved.placeholder = output.map(|output| output.pseudo)
-                            }
-                            PseudoStyleKind::Marker => {
-                                resolved.marker = output.map(|output| output.pseudo)
-                            }
-                            PseudoStyleKind::BeforeMarker | PseudoStyleKind::AfterMarker => {
-                                unreachable!(
-                                    "nested markers resolve after their originating pseudo"
-                                )
-                            }
-                        }
-                    }
-                    for kind in [PseudoStyleKind::BeforeMarker, PseudoStyleKind::AfterMarker] {
-                        let Some((_, rules)) =
-                            pseudo_rules.iter().find(|(target, _)| *target == kind)
-                        else {
-                            continue;
-                        };
-                        let (parent_pseudo, parent_custom, old_marker) = match kind {
-                            PseudoStyleKind::BeforeMarker => (
-                                resolved.before.as_ref(),
-                                before_custom.as_ref(),
-                                old.and_then(|style| style.before.as_ref())
-                                    .and_then(|pseudo| pseudo.marker.as_deref()),
-                            ),
-                            PseudoStyleKind::AfterMarker => (
-                                resolved.after.as_ref(),
-                                after_custom.as_ref(),
-                                old.and_then(|style| style.after.as_ref())
-                                    .and_then(|pseudo| pseudo.marker.as_deref()),
-                            ),
-                            _ => unreachable!(),
-                        };
-                        let (Some(parent_pseudo), Some(parent_custom)) =
-                            (parent_pseudo, parent_custom)
-                        else {
-                            continue;
-                        };
-                        let marker = self.ResolveNestedMarkerStyle(
-                            document,
-                            index,
-                            parent_pseudo,
-                            parent_custom,
-                            old_marker,
-                            initial_root_ref,
-                            root_font,
-                            media,
-                            environment_variables,
-                            rules,
-                            Some(&function_registry),
-                            !none,
-                        )?;
-                        match kind {
-                            PseudoStyleKind::BeforeMarker => {
-                                resolved.before.as_mut().unwrap().marker = marker.map(Box::new)
-                            }
-                            PseudoStyleKind::AfterMarker => {
-                                resolved.after.as_mut().unwrap().marker = marker.map(Box::new)
-                            }
-                            _ => unreachable!(),
-                        }
-                    }
-                    let mut normalized = resolved.clone();
-                    if let Some(old) = old {
-                        normalized.SetNativeStyle(old.native_style.clone());
-                    }
-                    // The preliminary difference controls inheritance. Compare
-                    // again after cache population so pseudo content changes
-                    // participate in the native public-pseudo difference.
-                    let final_difference = old_native
-                        .map_or(ComputedStyleDifference::kDescendantAffecting, |old| {
-                            ComputedStyle::ComputeDifference(old, final_style)
-                        });
-                    let equal = final_difference == ComputedStyleDifference::kEqual
+                            let mut finalize_trace =
+                                browser_tracing::span("style", "StyleEngine.FinalizeResolvedStyle");
+                            // The preliminary difference controls inheritance. Compare
+                            // again after cache population so pseudo content changes
+                            // participate in the native public-pseudo difference.
+                            let final_difference = if pseudo_rules.is_empty() {
+                                // No generated-pseudo cache was touched since the
+                                // preliminary comparison; the same immutable inputs
+                                // cannot produce a different native style difference.
+                                native_difference
+                            } else {
+                                old_native
+                                    .map_or(ComputedStyleDifference::kDescendantAffecting, |old| {
+                                        ComputedStyle::ComputeDifference(old, final_style)
+                                    })
+                            };
+                            let equal = final_difference == ComputedStyleDifference::kEqual
                         // Generated style equality deliberately excludes these
                         // derived flags. A real page/preference update still
                         // publishes their newly computed native values.
                         && old_native.is_some_and(|old| {
-                            old.DarkColorScheme() == final_style.DarkColorScheme()
+                            // A query cache must become an ordinary style even
+                            // when its physical box stays suppressed (SVG g).
+                            old.IsEnsuredInDisplayNone() == final_style.IsEnsuredInDisplayNone()
+                                && old.DarkColorScheme() == final_style.DarkColorScheme()
                                 && old.ColorSchemeForced() == final_style.ColorSchemeForced()
                                 && old.ColorSchemeFlagsIsNormal() == final_style.ColorSchemeFlagsIsNormal()
+                                && old.DependsOnSizeContainerQueries() == final_style.DependsOnSizeContainerQueries()
+                                && old.FirstLineDependsOnSizeContainerQueries() == final_style.FirstLineDependsOnSizeContainerQueries()
+                                && old.HighlightsDependOnSizeContainerQueries() == final_style.HighlightsDependOnSizeContainerQueries()
+                                && old.DependsOnStyleContainerQueries() == final_style.DependsOnStyleContainerQueries()
+                                && old.DependsOnScrollStateContainerQueries() == final_style.DependsOnScrollStateContainerQueries()
+                                && old.DependsOnAnchoredContainerQueries() == final_style.DependsOnAnchoredContainerQueries()
+                                && old.HighlightPseudoElementStylesDependOnContainerUnits() == final_style.HighlightPseudoElementStylesDependOnContainerUnits()
                         })
                         // ::placeholder uses an internal PseudoId and is not
                         // covered by ComputedStyle's public-pseudo flag loop.
@@ -2773,35 +4248,64 @@ impl DocumentStyleEngine {
                             old.GetCachedPseudoElementStyleWithoutArgument(kind.Id())
                                 == final_style.GetCachedPseudoElementStyleWithoutArgument(kind.Id())
                         }))
-                        && !subtree
-                        && old == Some(&normalized);
-                    child_explicit = !equal;
-                    pending_values.insert(index, values);
-                    pending_custom_properties.insert(index, computed_custom.clone());
-                    custom_properties.insert(index, computed_custom);
-                    // A root font change also invalidates rem users outside ordinary
-                    // inheritance. Until unit dependency flags are retained, visit
-                    // the connected document for that source-defined dependency.
-                    if parent.is_none()
-                        && old_native.is_some_and(|old| {
-                            old.GetFontDescription().SpecifiedSize()
-                                != final_style.GetFontDescription().SpecifiedSize()
-                        })
-                    {
-                        child_subtree = true;
+                        // ApplyComputedStyleDiff keeps forced descendant
+                        // traversal separate from value equality. child_subtree
+                        // already carries that traversal below; it must not
+                        // force publishing an unchanged style on every child.
+                        && old.is_some_and(|old| {
+                            // Normalize only this unpublished result, and only
+                            // after native equality has been established. A
+                            // changed style needs no cloned comparison payload.
+                            // Equal styles retain the committed native owner;
+                            // a projection mismatch restores the new owner.
+                            resolved.SetNativeStyle(old.native_style.clone());
+                            if old == &resolved { true } else {
+                                resolved.SetNativeStyle(style.clone());
+                                false
+                            }
+                        });
+                            finalize_trace.set("equal", equal as u8 as f64);
+                            child_explicit = !equal;
+                            pending_values.insert(index, values);
+                            pending_custom_properties.insert(index, computed_custom.clone());
+                            custom_properties.insert(index, computed_custom);
+                            // A root font change also invalidates rem users outside ordinary
+                            // inheritance. Until unit dependency flags are retained, visit
+                            // the connected document for that source-defined dependency.
+                            if parent.is_none()
+                                && old_native.is_some_and(|old| {
+                                    old.GetFontDescription().SpecifiedSize()
+                                        != final_style.GetFontDescription().SpecifiedSize()
+                                })
+                            {
+                                child_subtree = true;
+                            }
+                            // Equality above already retained the committed owner.
+                            // Retain the native dependency facts for the next targeted
+                            // container recalc; no arena-wide style/flag scan is needed.
+                            pending_container_dependencies.push((
+                                index,
+                                ContainerQueryDependent(unsafe { &*resolved.native_style.Get() }),
+                            ));
+                            native.insert(index, resolved.native_style.clone());
+                            // `equal` already proved full projection equality. Avoid
+                            // traversing the same large boundary payload a second time.
+                            if !equal && old != Some(&resolved) {
+                                stats.changed_nodes += 1;
+                                if ensure_target.is_none() {
+                                    let (change, reattach) =
+                                        StyleImpact(document, index, old, &resolved);
+                                    impact.Merge(change);
+                                    if reattach {
+                                        pending_reattach.insert(node.Id());
+                                    }
+                                }
+                                pending.push((index, resolved));
+                            }
+                            next_parent = Some(index);
+                            drop(finalize_trace);
+                        }
                     }
-                    if equal {
-                        // Keep pointer identity and existing Arc for equal styles.
-                        let old = old.unwrap();
-                        resolved.SetNativeStyle(old.native_style.clone());
-                    }
-                    native.insert(index, resolved.native_style.clone());
-                    if old != Some(&resolved) {
-                        stats.changed_nodes += 1;
-                        impact.Merge(StyleImpact(old, &resolved));
-                        pending.push((index, resolved));
-                    }
-                    next_parent = Some(index);
                 }
             }
             let mut push_child = |child: usize,
@@ -2811,7 +4315,12 @@ impl DocumentStyleEngine {
                                   explicit: bool,
                                   subtree: bool,
                                   at_shadow_boundary: bool| {
-                if inherited || explicit || subtree || visit.contains(&child) {
+                let should_visit = if ensure_target.is_some() {
+                    visit.contains(&child)
+                } else {
+                    inherited || explicit || subtree || visit.contains(&child)
+                };
+                if should_visit {
                     stack.push((
                         child,
                         parent,
@@ -2891,8 +4400,21 @@ impl DocumentStyleEngine {
                 }
             }
         }
-        ResolveSVGPaintServers(document, &mut pending, &mut stats, &mut impact);
         drop(sheets);
+        // Remove obsolete resource styles before resolving paint-server clients;
+        // the pending batch must never fall back to a discarded document style.
+        for &index in &cleared {
+            owner.GetDocumentMut().ClearResolvedStyle(index);
+        }
+        if ensure_target.is_none() {
+            ResolveSVGPaintServers(
+                owner.GetDocument(),
+                &mut pending,
+                &mut stats,
+                &mut impact,
+                &mut pending_reattach,
+            );
+        }
         self.sheet_revision = Some(revision);
         self.active_sheets = active_sheets;
         self.active_sheet_scopes = active_sheet_scopes;
@@ -2901,22 +4423,49 @@ impl DocumentStyleEngine {
         self.matches.extend(pending_matches);
         self.cascade_values.extend(pending_values);
         self.custom_properties.extend(pending_custom_properties);
+        self.invalidated_container_nodes.clear();
         self.interaction_changed_nodes.clear();
         self.interaction_changed_pseudos.clear();
+        self.interaction_invalidation_roots.clear();
+        for (index, dependent) in pending_container_dependencies {
+            if dependent {
+                self.container_dependent_elements.insert(index);
+            } else {
+                self.container_dependent_elements.remove(&index);
+            }
+        }
         let document = owner.GetDocumentMut();
+        let _publish_trace = browser_tracing::span("style", "StyleEngine.PublishStyles");
+        for index in cleared {
+            self.matches.remove(&index);
+            self.cascade_values.remove(&index);
+            self.custom_properties.remove(&index);
+            self.container_dependent_elements.remove(&index);
+        }
         for (index, style) in pending {
             document.SetResolvedStyle(index, style)
         }
+        document
+            .StyleStateMut()
+            .layout_reattach_nodes
+            .extend(pending_reattach);
         FinishUpdate(document, stats, impact);
         Ok(impact)
     }
-    fn SynchronizeTypedSheets(&mut self, sheets: &[(CSSStyleSheet, CascadeOrigin)]) {
+    fn SynchronizeTypedSheets(
+        &mut self,
+        document: &Document,
+        sheets: &[(Rc<CSSStyleSheet>, CascadeOrigin)],
+    ) {
+        let mut trace = browser_tracing::span("style", "StyleEngine.SynchronizeTypedSheets");
+        let mut inline_hits = 0;
         let active_keys = sheets
             .iter()
             .map(|(sheet, _)| (sheet.Identity(), sheet.Revision()))
             .filter(|(identity, _)| *identity != 0)
             .collect::<HashSet<_>>();
-        self.typed_sheets.retain(|key, _| active_keys.contains(key));
+        // Old canonical contents must stay alive until new attachments have
+        // consulted the weak text cache, including replacing all old owners.
         for (sheet, _) in sheets {
             let key = (sheet.Identity(), sheet.Revision());
             if key.0 == 0 || self.typed_sheets.contains_key(&key) {
@@ -2946,17 +4495,64 @@ impl DocumentStyleEngine {
                     crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
                 ))
             };
+            let parsed = if document
+                .FindNodeById(sheet.owner_node_id)
+                .is_some_and(|index| document.Node(index).IsHTMLElement("style"))
+            {
+                // Parser-delivered sheets already carry a typed backing and
+                // bypass SynchronizeStyleSheets. They must consume the same
+                // document-owned contents cache as DOM text replacements.
+                let (parsed, hit) = self.InternInlineSheetContents(parsed);
+                inline_hits += usize::from(hit);
+                parsed
+            } else {
+                parsed
+            };
             self.typed_sheets.insert(key, parsed);
         }
+        self.typed_sheets.retain(|key, _| active_keys.contains(key));
+        trace.set("inline_hits", inline_hits as f64);
+    }
+
+    // cpp: StyleEngine::FindStyleSheetContents / AddStyleSheetContents. CSSOM
+    // attachment identity stays distinct; only immutable parse contents share.
+    fn InternInlineSheetContents(
+        &mut self,
+        parsed: Rc<crate::production_style_sheet::ProductionStyleSheet>,
+    ) -> (
+        Rc<crate::production_style_sheet::ProductionStyleSheet>,
+        bool,
+    ) {
+        if !parsed.contents.IsCacheableForStyleElement() {
+            return (parsed, false);
+        }
+        let source = parsed.source.Utf8();
+        let key = InlineSheetContentsKey(&source);
+        if let Some(cached) = self
+            .inline_sheet_contents
+            .get(&key)
+            .and_then(std::rc::Weak::upgrade)
+            .filter(|cached| {
+                cached.contents.IsCacheableForStyleElement()
+                    && cached.source.Utf8() == source
+                    && cached.contents.ParserContext() == parsed.contents.ParserContext()
+            })
+        {
+            return (cached, true);
+        }
+        self.inline_sheet_contents
+            .insert(key, Rc::downgrade(&parsed));
+        (parsed, false)
     }
     fn SynchronizeTranslatedRuleSets(
         &mut self,
-        sheets: &[(CSSStyleSheet, CascadeOrigin)],
+        sheets: &[(Rc<CSSStyleSheet>, CascadeOrigin)],
         media: &MediaValuesCachedData,
     ) {
         if self.translated_rule_set_environment.as_ref() != Some(media) {
             self.translated_rule_sets.clear();
             self.translated_rule_routing.clear();
+            self.shared_rule_sets.clear();
             self.translated_rule_set_environment = Some(media.clone());
         }
         let active_keys = sheets
@@ -2968,6 +4564,8 @@ impl DocumentStyleEngine {
             .retain(|key, _| active_keys.contains(key));
         self.translated_rule_routing
             .retain(|key, _| active_keys.contains(key));
+        self.shared_rule_sets
+            .retain(|_, (contents, _, _)| contents.strong_count() != 0);
         let evaluator =
             crate::production_style_sheet::ProductionMediaQueryEvaluator::FromCachedData(media);
         let forced_colors_evaluator =
@@ -2986,6 +4584,15 @@ impl DocumentStyleEngine {
             let Some(typed) = self.typed_sheets.get(&key) else {
                 continue;
             };
+            let contents_key = (
+                Rc::as_ptr(typed) as usize,
+                sheet.UserAgentStyleSheetRole() == Some(CSSUserAgentStyleSheetRole::kForcedColors),
+            );
+            if let Some((_, rules, routing)) = self.shared_rule_sets.get(&contents_key) {
+                self.translated_rule_sets.insert(key, rules.clone());
+                self.translated_rule_routing.insert(key, routing.clone());
+                continue;
+            }
             let medium = if sheet.UserAgentStyleSheetRole()
                 == Some(CSSUserAgentStyleSheetRole::kForcedColors)
             {
@@ -2996,6 +4603,10 @@ impl DocumentStyleEngine {
             let rule_set = Rc::new(typed.BuildRuleSet(medium));
             let routing = Rc::new(
                 crate::production_rule_matching::ProductionRuleRouting::Build(&rule_set, typed),
+            );
+            self.shared_rule_sets.insert(
+                contents_key,
+                (Rc::downgrade(typed), rule_set.clone(), routing.clone()),
             );
             self.translated_rule_sets.insert(key, rule_set);
             self.translated_rule_routing.insert(key, routing);
@@ -3011,7 +4622,7 @@ impl DocumentStyleEngine {
         &mut self,
         document: &Document,
         media: &MediaValuesCachedData,
-        sheets: &[(CSSStyleSheet, CascadeOrigin)],
+        sheets: &[(Rc<CSSStyleSheet>, CascadeOrigin)],
         sheet_scopes: &[Option<usize>],
     ) -> bool {
         let values = DocumentMediaValues::new(document, media);
@@ -3134,6 +4745,7 @@ impl DocumentStyleEngine {
                     .clone();
                 evaluator.Eval(query.as_ref())
             }) {
+                self.translated_rule_shadow_stats.skipped_owner_media += 1;
                 continue;
             }
             let key = (sheet.Identity(), sheet.Revision());
@@ -3156,6 +4768,9 @@ impl DocumentStyleEngine {
             if typed.contents.ParserContext().Mode() != expected_mode {
                 return None;
             }
+            self.translated_rule_shadow_stats.rule_sets_consulted += 1;
+            self.translated_rule_shadow_stats.authoritative_rules +=
+                routing.AuthoritativeRuleCount();
             let implicit_scope_trigger = tree_scope_root
                 .and_then(|scope| {
                     document.AdoptedStyleSheetImplicitScopeTrigger(sheet.Identity(), scope)
@@ -3208,12 +4823,117 @@ impl DocumentStyleEngine {
             fullscreen_user_agent,
             svg_user_agent,
             mathml_user_agent,
-            author,
+            author: Rc::new(author),
         })
     }
     // Source's invalidation traversal is separate from the style resolver.
     // Relations widen candidates; retained matched-rule signatures decide which
     // candidates need a cascade. This includes losing a selector match.
+    // cpp: StyleEngine::{Class,Id,Attribute}ChangedForElement ->
+    // PendingInvalidations -> StyleInvalidator. DOM supplies changed keys,
+    // RuleSet supplies retained subject sets. HTML state/presentation and
+    // cross-tree changes keep the existing conservative route.
+    fn InvalidateAttributeRelations(
+        &self,
+        document: &Document,
+        index: usize,
+        rule_sets: Option<&[RetainedRuleSet]>,
+        candidates: &mut HashSet<usize>,
+    ) -> bool {
+        use crate::invalidation::{
+            invalidation_dom::{InvalidationDom, StyleChangeType},
+            invalidation_set::InvalidationLists,
+        };
+        use crate::production_style_sheet::AttributeInvalidationKey as Key;
+        let Some(change) = document.StyleState().attribute_changes.get(&index) else {
+            return false;
+        };
+        if document.GetCompatibilityMode() == CompatibilityMode::kQuirks
+            // HTML control/flat-tree attributes also drive implicit pseudo
+            // state, so retain their conservative route. Ordinary metadata
+            // attributes use the same compiled attribute sets as class/id;
+            // an unrecognized HTML attribute cannot become a whole-subtree
+            // invalidation merely because it has no special DOM semantics.
+            || change.names.iter().any(|name| matches!(name.as_str(),
+                "disabled"|"checked"|"selected"|"readonly"|"required"|"multiple"|"size"|"type"
+                |"value"|"min"|"max"|"step"|"pattern"|"minlength"|"maxlength"|"placeholder"
+                |"dir"|"lang"|"contenteditable"|"inert"|"popover"|"open"
+                |"form"|"name"|"slot"|"part"|"exportparts"|"tabindex"|"autofocus"|"is"))
+        {
+            return false;
+        }
+        let keys = change
+            .names
+            .iter()
+            .map(|s| Key::Attribute(AtomicString::from_str(s)))
+            .chain(
+                change
+                    .classes
+                    .iter()
+                    .map(|s| Key::Class(AtomicString::from_str(s))),
+            )
+            .chain(
+                change
+                    .ids
+                    .iter()
+                    .map(|s| Key::Id(AtomicString::from_str(s))),
+            )
+            .collect::<Vec<_>>();
+        let mut work = Vec::new();
+        let Some(rule_sets) = rule_sets else {
+            return false;
+        };
+        // `hidden` is a local presentation hint (HTMLElement::CollectStyleFor-
+        // PresentationAttribute). The caller dirties this element; native style
+        // difference propagates display/inherited changes. Only compiled
+        // selectors such as [hidden] .child invalidate additional subjects.
+        for rules in rule_sets {
+            for key in &keys {
+                let Some(set) = rules.Features().attribute_invalidation.get(key) else {
+                    continue;
+                };
+                if set.cross_tree {
+                    return false;
+                }
+                let root = if set.siblings {
+                    document.ParentOrShadowHostElement(index).unwrap_or(index)
+                } else {
+                    index
+                };
+                work.push((root, set.set.clone()));
+            }
+        }
+        if work.is_empty() {
+            return true;
+        }
+        let mut dom = crate::persistent_invalidation::PersistentInvalidationDom::new(document);
+        let mut pending =
+            crate::invalidation::pending_invalidations::PendingInvalidations::default();
+        for (root, set) in work {
+            pending.ScheduleInvalidationSetsForNode(
+                &InvalidationLists {
+                    descendants: vec![set],
+                    siblings: Vec::new(),
+                },
+                &root,
+                &mut dom,
+            );
+        }
+        let root = document.Root();
+        let element = dom.document_element(&root);
+        crate::invalidation::style_invalidator::StyleInvalidator::new(
+            pending.GetPendingInvalidationMap(),
+        )
+        .Invalidate(&root, element, &mut dom);
+        for (index, change) in dom.changes {
+            if change == StyleChangeType::SubtreeStyleChange {
+                AddSubtree(document, index, candidates);
+            } else {
+                candidates.insert(index);
+            }
+        }
+        true
+    }
     fn InvalidateRelations(
         &self,
         document: &Document,
@@ -3222,6 +4942,7 @@ impl DocumentStyleEngine {
         candidates: &mut HashSet<usize>,
     ) {
         let state = document.StyleState();
+        let before = candidates.len();
         if dependencies.descendant && state.descendant_sensitive_nodes.contains(&index) {
             AddSubtree(document, index, candidates);
         }
@@ -3232,22 +4953,232 @@ impl DocumentStyleEngine {
                 AddSubtree(document, parent, candidates);
             }
         }
+        if browser_tracing::enabled() && candidates.len().saturating_sub(before) > 32 {
+            browser_tracing::instant_with_text(
+                "style",
+                "StyleRelationInvalidation",
+                document.Node(index).Name(),
+                &[
+                    ("node_id", document.Node(index).Id() as f64),
+                    (
+                        "parent_id",
+                        document
+                            .Node(index)
+                            .Parent()
+                            .map_or(0, |p| document.Node(p).Id()) as f64,
+                    ),
+                    ("added", candidates.len().saturating_sub(before) as f64),
+                    ("descendant_rules", dependencies.descendant as u8 as f64),
+                    ("sibling_rules", dependencies.sibling as u8 as f64),
+                    ("positional_rules", dependencies.positional as u8 as f64),
+                    (
+                        "sibling_sensitive",
+                        state.sibling_sensitive_nodes.contains(&index) as u8 as f64,
+                    ),
+                ],
+            );
+        }
         if dependencies.has {
-            self.InvalidateHasAncestors(document, index, candidates);
+            self.InvalidateHasForAttribute(document, index, candidates);
         }
     }
+    // cpp: PseudoHasInvalidationTraversalContext::ForAttributeOrPseudoStateChange
+    // and StyleEngine::InvalidateAncestorsOrSiblingsAffectedByHas (1580-1606,
+    // 1708-1752). SelectorChecker retains the same ancestor and sibling flags.
+    fn InvalidateHasForAttribute(
+        &self,
+        document: &Document,
+        changed: usize,
+        candidates: &mut HashSet<usize>,
+    ) {
+        use crate::selector_checker::ElementInvalidationFlag as F;
+        let selectors = self.selectors.borrow();
+        let flag = |index, flag| selectors.ElementHasInvalidationFlag(index, flag);
+        let previous = |index| {
+            let parent = document.Node(index).Parent()?;
+            let siblings = document.Node(parent).Children();
+            let position = siblings.iter().position(|&i| i == index)?;
+            siblings[..position]
+                .iter()
+                .rev()
+                .copied()
+                .find(|&i| document.Node(i).Type() == DOMNodeType::kElement)
+        };
+        let mut to_parent = flag(changed, F::AncestorsOrAncestorSiblingsAffectedByHas);
+        let parent = document
+            .Node(changed)
+            .Parent()
+            .filter(|&i| document.Node(i).Type() == DOMNodeType::kElement);
+        let mut shadow_host = if to_parent && parent.is_none() {
+            document.ParentOrShadowHostElement(changed)
+        } else {
+            None
+        };
+        let mut current = if to_parent { parent } else { None };
+        if selectors.SiblingsAffectedByHasFlags(changed) != 0 {
+            if let Some(sibling) = previous(changed) {
+                current = Some(sibling);
+                shadow_host = None;
+            }
+        }
+        let invalidate = |index, candidates: &mut HashSet<usize>| {
+            if flag(index, F::AffectedBySubjectHas) {
+                candidates.insert(index);
+            }
+            if flag(index, F::AffectedByNonSubjectHas) {
+                self.InvalidateNonSubjectHas(document, index, candidates);
+            }
+        };
+        if flag(changed, F::AffectedByLogicalCombinationsInHas) {
+            invalidate(changed, candidates);
+        }
+        while let Some(index) = current {
+            to_parent |= flag(index, F::AncestorsOrAncestorSiblingsAffectedByHas);
+            invalidate(index, candidates);
+            if selectors.SiblingsAffectedByHasFlags(index) != 0 {
+                if let Some(sibling) = previous(index) {
+                    current = Some(sibling);
+                    continue;
+                }
+            }
+            if !to_parent {
+                return;
+            }
+            current = document
+                .Node(index)
+                .Parent()
+                .filter(|&i| document.Node(i).Type() == DOMNodeType::kElement);
+            if current.is_none() {
+                shadow_host = document.ParentOrShadowHostElement(index);
+            }
+            to_parent = false;
+        }
+        if let Some(host) = shadow_host {
+            invalidate(host, candidates);
+        }
+    }
+
     fn InvalidateHasAncestors(
         &self,
         document: &Document,
         index: usize,
         candidates: &mut HashSet<usize>,
     ) {
-        let mut ancestor = Some(index);
-        while let Some(index) = ancestor {
-            // :has subjects can themselves be ancestors of a final target, or
-            // precede it through a sibling relation. Exact matching filters it.
-            AddSubtree(document, index, candidates);
-            ancestor = document.Node(index).Parent();
+        // cpp: ScheduleInvalidationsForHasPseudoAffectedByInsertion/Removal.
+        // DOM batches child-list facts by parent, so conservatively inspect
+        // every retained child as a possible previous sibling. The selector
+        // flags still gate the source traversal; unrelated parent mutations
+        // must never promote the entire document to style recalc.
+        use crate::selector_checker::ElementInvalidationFlag as F;
+        for changed in std::iter::once(index).chain(document.Node(index).Children().iter().copied())
+        {
+            if document.Node(changed).Type() != DOMNodeType::kElement {
+                continue;
+            }
+            let selectors = self.selectors.borrow();
+            let subject = selectors.ElementHasInvalidationFlag(changed, F::AffectedBySubjectHas);
+            let non_subject =
+                selectors.ElementHasInvalidationFlag(changed, F::AffectedByNonSubjectHas);
+            drop(selectors);
+            if subject {
+                candidates.insert(changed);
+            }
+            if non_subject {
+                self.InvalidateNonSubjectHas(document, changed, candidates);
+            }
+            self.InvalidateHasForAttribute(document, changed, candidates);
+        }
+    }
+
+    // cpp: StyleEngine::InvalidateElementAffectedByHas. Non-subject Has
+    // schedules the compiled kPseudoHas descendant sets on the affected
+    // anchor, rather than promoting the complete document to style recalc.
+    fn InvalidateNonSubjectHas(
+        &self,
+        document: &Document,
+        anchor: usize,
+        candidates: &mut HashSet<usize>,
+    ) {
+        use crate::invalidation::{
+            invalidation_dom::{InvalidationDom, StyleChangeType},
+            invalidation_set::InvalidationLists,
+        };
+        let mut descendants = Vec::new();
+        for (sheet_index, (sheet, _)) in self.active_sheets.iter().enumerate() {
+            let Some(rules) = self
+                .translated_rule_sets
+                .get(&(sheet.Identity(), sheet.Revision()))
+            else {
+                browser_tracing::instant(
+                    "style",
+                    "StyleHasInvalidationFallback",
+                    &[
+                        ("anchor_id", document.Node(anchor).Id() as f64),
+                        ("sheet", sheet_index as f64),
+                        ("reason", 1.0),
+                    ],
+                );
+                AddSubtree(document, document.Root(), candidates);
+                return;
+            };
+            let features = rules.Features();
+            if features.non_descendant_has_invalidation
+                || features
+                    .scope_pseudo_states
+                    .contains(&PseudoType::kPseudoHas)
+            {
+                browser_tracing::instant(
+                    "style",
+                    "StyleHasInvalidationFallback",
+                    &[
+                        ("anchor_id", document.Node(anchor).Id() as f64),
+                        ("sheet", sheet_index as f64),
+                        (
+                            "reason",
+                            if features.non_descendant_has_invalidation {
+                                2.0
+                            } else {
+                                3.0
+                            },
+                        ),
+                    ],
+                );
+                AddSubtree(document, document.Root(), candidates);
+                return;
+            }
+            if let Some(set) = features
+                .pseudo_state_invalidation
+                .get(&PseudoType::kPseudoHas)
+            {
+                descendants.push(set.clone());
+            }
+        }
+        if descendants.is_empty() {
+            return;
+        }
+        let mut dom = crate::persistent_invalidation::PersistentInvalidationDom::new(document);
+        let mut pending =
+            crate::invalidation::pending_invalidations::PendingInvalidations::default();
+        pending.ScheduleInvalidationSetsForNode(
+            &InvalidationLists {
+                descendants,
+                siblings: Vec::new(),
+            },
+            &anchor,
+            &mut dom,
+        );
+        let root = document.Root();
+        let element = dom.document_element(&root);
+        crate::invalidation::style_invalidator::StyleInvalidator::new(
+            pending.GetPendingInvalidationMap(),
+        )
+        .Invalidate(&root, element, &mut dom);
+        for (index, change) in dom.changes {
+            if change == StyleChangeType::SubtreeStyleChange {
+                AddSubtree(document, index, candidates);
+            } else {
+                candidates.insert(index);
+            }
         }
     }
     fn BuildRuleCandidateIndex(
@@ -3265,8 +5196,8 @@ impl DocumentStyleEngine {
         for (sheet_index, &(sheet, _)) in sheets.iter().enumerate() {
             for (rule_index, rule) in sheet.rules.iter().enumerate() {
                 order += 1;
-                index.matching_may_report_diagnostics |= !rule.scope_conditions.is_empty()
-                    || !rule.container_conditions.is_empty();
+                index.matching_may_report_diagnostics |=
+                    !rule.scope_conditions.is_empty() || !rule.container_conditions.is_empty();
                 index.locations.push((sheet_index, rule_index));
                 let variant = (quirks, !rule.scope_conditions.is_empty());
                 self.EnsureCompiledSelectors(&rule.selector_text, &rule.scope_conditions, quirks);
@@ -3285,29 +5216,68 @@ impl DocumentStyleEngine {
         index
     }
     fn CandidateRequiresRecalc(
-        &mut self, document: &Document, index: usize, media: &MediaValuesCachedData,
+        &mut self,
+        document: &Document,
+        index: usize,
+        media: &MediaValuesCachedData,
         sheets: &[(&CSSStyleSheet, CascadeOrigin)],
         environment_variables: Option<&dyn EnvironmentVariableResolver>,
-        context_unchanged: bool, non_rule_context_unchanged: bool, ordinary_complete: bool,
+        context_unchanged: bool,
+        non_rule_context_unchanged: bool,
+        ordinary_complete: bool,
     ) -> bool {
-        if context_unchanged && environment_variables.is_none()
-            && OrdinarySignatureElement(document, index)
-            && self.matches.get(&index).is_some_and(|old| !old.complete)
-            && self.rule_candidate_index.as_ref()
-                .is_some_and(|index| !index.matching_may_report_diagnostics) {
-            // Full resolution is already required. Do not build and discard
-            // an incomplete prepass result; the native resolver still runs.
+        if document.ResolvedStyleFor(index).is_none_or(|resolved| {
+            unsafe { resolved.native_style.Get().as_ref() }
+                .is_some_and(|style| style.IsEnsuredInDisplayNone())
+        }) {
             return true;
         }
-        let current = self.MatchingRules(document, index, media, sheets, None, None, environment_variables);
-        let current = RetainedRuleSignature::new(current,
-            ordinary_complete && OrdinarySignatureElement(document, index));
+        // ApplyRuleSetChanges already invalidated this candidate. If its old
+        // rule signature cannot be compared in the new context, no matching
+        // prepass can prove reuse: normal style resolution is required. Keep
+        // the empty/empty exception below, but do not match and discard rules
+        // merely to discover the context mismatch a second time.
+        let Some(old) = self.matches.get(&index) else {
+            return true;
+        };
+        if !context_unchanged && !(non_rule_context_unchanged && old.values.is_empty()) {
+            return true;
+        }
+        if context_unchanged
+            && environment_variables.is_none()
+            && OrdinarySignatureElement(document, index)
+            && self.matches.get(&index).is_none_or(|old| !old.complete)
+            && self
+                .rule_candidate_index
+                .as_ref()
+                .is_some_and(|index| !index.matching_may_report_diagnostics)
+        {
+            // Full resolution is already required without a complete retained
+            // signature. Do not build and discard a prepass result; the native
+            // resolver still runs.
+            return true;
+        }
+        let current = self.MatchingRules(
+            document,
+            index,
+            media,
+            sheets,
+            None,
+            None,
+            environment_variables,
+        );
+        let current = RetainedRuleSignature::new(
+            current,
+            ordinary_complete && OrdinarySignatureElement(document, index),
+        );
         self.matches.get(&index).is_none_or(|old| {
             // Numeric rule IDs never compare across revisions. The only safe
             // exception is no matched rules in either certified flat sheet;
             // there are then neither rule values nor global sheet inputs.
-            let comparable = context_unchanged || (non_rule_context_unchanged
-                && old.values.is_empty() && current.values.is_empty());
+            let comparable = context_unchanged
+                || (non_rule_context_unchanged
+                    && old.values.is_empty()
+                    && current.values.is_empty());
             !comparable || !old.Equivalent(&current)
         })
     }
@@ -3327,6 +5297,9 @@ impl DocumentStyleEngine {
         let evaluator = MediaQueryEvaluator::<MediaQueryValueBackend>::ForMediaValues(&values);
         let mut matches = vec![];
         let document_scope = document.TreeScopeRoot(index) == document.Root();
+        if document_scope && self.rule_candidate_index.is_none() {
+            self.rule_candidate_index = Some(self.BuildRuleCandidateIndex(document, sheets));
+        }
         let had_index = document_scope && self.rule_candidate_index.is_some();
         let quirks = document.GetCompatibilityMode() == CompatibilityMode::kQuirks;
         let work = if had_index {
@@ -3423,18 +5396,42 @@ impl DocumentStyleEngine {
                 }
             }
         }
-        if !had_index && document_scope {
-            self.rule_candidate_index = Some(self.BuildRuleCandidateIndex(document, sheets));
-        }
         matches
     }
     // cpp: HTMLStyleElement::ProcessStyleSheet; StyleEngine::UpdateActiveStyleSheets.
     // CSSOM owns the parsed sheets; owner-node replacement preserves source order.
     fn SynchronizeStyleSheets(&mut self, owner: &mut DOM) {
+        let mut trace = browser_tracing::span("style", "StyleEngine.SynchronizeStyleSheets");
+        self.inline_sheet_contents
+            .retain(|_, contents| contents.strong_count() != 0);
         let document = owner.GetDocument();
-        let mut stack = vec![document.Root()];
+        let parser_context = crate::production_style_sheet::InlineStyleSheetParserContext();
+        // StyleElement::Process and StyleSheetCandidateNode changes are already
+        // recorded by DOM. Discover new candidates only in inserted subtrees;
+        // text/media/type edits revisit their existing style owner directly.
+        let state = document.StyleState();
+        let mut stack = if state.all_dirty {
+            vec![document.Root()]
+        } else {
+            state
+                .inserted_style_subtrees
+                .iter()
+                .copied()
+                .chain(
+                    state
+                        .dirty_style_elements
+                        .iter()
+                        .filter_map(|&id| document.FindNodeById(id)),
+                )
+                .filter(|&index| document.IsConnectedToDocument(index))
+                .collect()
+        };
+        let mut visited = HashSet::new();
         let mut sheets = vec![];
         while let Some(index) = stack.pop() {
+            if !visited.insert(index) {
+                continue;
+            }
             let node = document.Node(index);
             if node.IsHTMLElement("style") && owner.NeedsStyleSheetParsing(node.Id()) {
                 fn text(document: &Document, index: usize, result: &mut String) {
@@ -3451,7 +5448,31 @@ impl DocumentStyleEngine {
                 let valid_type = node
                     .FindAttribute("type")
                     .is_none_or(|a| a.value.is_empty() || a.value.eq_ignore_ascii_case("text/css"));
-                let mut sheet = crate::ParseCSS(if valid_type { &css } else { "" });
+                let source = if valid_type { css.as_str() } else { "" };
+                let key = InlineSheetContentsKey(source);
+                let cached = self
+                    .inline_sheet_contents
+                    .get(&key)
+                    .and_then(std::rc::Weak::upgrade)
+                    .filter(|contents| {
+                        contents.contents.IsCacheableForStyleElement()
+                            && contents.source.Utf8() == source
+                            && contents.contents.ParserContext() == &parser_context
+                    });
+                let mut sheet = if let Some(contents) = cached {
+                    let mut projection =
+                        crate::production_style_sheet_projection::ProjectStyleSheet(&contents);
+                    projection.AttachParsedBacking(source, contents);
+                    projection
+                } else {
+                    let sheet = crate::ParseCSS(source);
+                    if let Some(contents) =
+                        sheet.ParsedBacking::<crate::production_style_sheet::ProductionStyleSheet>()
+                    {
+                        self.InternInlineSheetContents(contents);
+                    }
+                    sheet
+                };
                 sheet.owner_node_id = node.Id();
                 if let Some(media) = node.FindAttribute("media") {
                     if !media.value.is_empty() {
@@ -3474,6 +5495,8 @@ impl DocumentStyleEngine {
                 stack.push(shadow_root);
             }
         }
+        trace.set("visited_nodes", visited.len() as f64);
+        trace.set("parsed_sheets", sheets.len() as f64);
         for sheet in sheets {
             owner.GetDocumentMut().AppendStyleSheet(sheet)
         }
@@ -3490,6 +5513,10 @@ impl DocumentStyleEngine {
         custom: Option<&HashMap<usize, Rc<CustomProperties>>>,
         environment_variables: Option<&dyn EnvironmentVariableResolver>,
     ) -> Result<CollectedRules, DocumentStyleError> {
+        let mut trace = browser_tracing::span("style", "StyleEngine.CollectRules");
+        trace.set("node_id", document.Node(index).Id() as f64);
+        trace.set("pseudo", pseudo.map_or(0, |kind| kind.Id().value()) as f64);
+        trace.set("sheets", sheets.len() as f64);
         let node = document.Node(index);
         let values = DocumentMediaValues::new(document, media);
         let evaluator = MediaQueryEvaluator::<MediaQueryValueBackend>::ForMediaValues(&values);
@@ -3812,7 +5839,8 @@ impl DocumentStyleEngine {
                 }
 
                 if pseudo.is_none() {
-                    let element_scope = document.TreeScopeRoot(document.CorrespondingSVGElement(index).unwrap_or(index));
+                    let element_scope = document
+                        .TreeScopeRoot(document.CorrespondingSVGElement(index).unwrap_or(index));
                     collect_scope(
                         element_scope,
                         crate::production_rule_matching::ProductionShadowRulePass::ElementScope(
@@ -3896,6 +5924,9 @@ impl DocumentStyleEngine {
         // sheet sequence. Shadow TreeScopes have independent sheet indices and
         // must iterate their own scoped RuleSets.
         let document_scope = document.TreeScopeRoot(index) == document.Root();
+        if document_scope && self.rule_candidate_index.is_none() {
+            self.rule_candidate_index = Some(self.BuildRuleCandidateIndex(document, sheets));
+        }
         let had_index = document_scope && self.rule_candidate_index.is_some();
         let quirks = document.GetCompatibilityMode() == CompatibilityMode::kQuirks;
         let mut work = if had_index {
@@ -3938,6 +5969,9 @@ impl DocumentStyleEngine {
                     .is_some_and(|routing| routing.IsAuthoritativeProjectedRule(rule_index));
             if translated_owns_rule {
                 continue;
+            }
+            if !had_index {
+                self.EnsureCompiledSelectors(&rule.selector_text, &rule.scope_conditions, quirks);
             }
             // The ordinary collection pass compiles every active rule and
             // records which pseudo target its selector addresses. A later
@@ -4070,6 +6104,8 @@ impl DocumentStyleEngine {
                     ))?
             };
             result.push(MatchedRule {
+                user_agent_pseudo_sheet: origin == CascadeOrigin::kUserAgent
+                    && sheet.UserAgentStyleSheetRole() == Some(CSSUserAgentStyleSheetRole::kMarker),
                 specificity,
                 proximity,
                 order,
@@ -4094,9 +6130,6 @@ impl DocumentStyleEngine {
                 transferred: None,
             });
         }
-        if document_scope && !had_index {
-            self.rule_candidate_index = Some(self.BuildRuleCandidateIndex(document, sheets));
-        }
         // cpp: svg/svg_element.cc:574-592 and
         // svg/svg_transformable_element.cc:45-53. SVG presentation
         // attributes are author-cascade input below ordinary author rules.
@@ -4105,6 +6138,7 @@ impl DocumentStyleEngine {
                 crate::svg_presentation_attributes::CollectPresentationAttributes(document, index);
             if !properties.is_empty() {
                 result.push(MatchedRule {
+                    user_agent_pseudo_sheet: false,
                     specificity: 0,
                     proximity: 0,
                     order: 0,
@@ -4125,6 +6159,7 @@ impl DocumentStyleEngine {
             .filter(|_| pseudo.is_none())
         {
             result.push(MatchedRule {
+                user_agent_pseudo_sheet: false,
                 specificity: u32::MAX,
                 proximity: u32::MAX,
                 order: usize::MAX,
@@ -4763,6 +6798,22 @@ impl DocumentStyleEngine {
         // This preserves the StyleEngine boundary while removing the document
         // engine's former declaration-priority reimplementation.
         let match_result = &collected.match_result;
+        // cpp: StyleResolver::ApplyBaseStyleNoCache. These flags survive
+        // even when a query is false or this cascade uses compatibility
+        // property application; they are lifecycle inputs, not CSS values.
+        builder.SetDependsOnSizeContainerQueries(match_result.DependsOnSizeContainerQueries());
+        builder.SetFirstLineDependsOnSizeContainerQueries(
+            match_result.FirstLineDependsOnSizeContainerQueries(),
+        );
+        builder.SetHighlightsDependOnSizeContainerQueries(
+            match_result.HighlightsDependOnSizeContainerQueries(),
+        );
+        builder.SetDependsOnStyleContainerQueries(match_result.DependsOnStyleContainerQueries());
+        builder.SetDependsOnScrollStateContainerQueries(
+            match_result.DependsOnScrollStateContainerQueries(),
+        );
+        builder
+            .SetDependsOnAnchoredContainerQueries(match_result.DependsOnAnchoredContainerQueries());
         let custom_winners =
             WinningCustomProperties(rules, match_result, builder.GetWritingDirection())?;
         let environment = CascadeEnvironment::new(environment_variables);
@@ -5257,19 +7308,35 @@ fn ResolveSVGPaintServers(
     pending: &mut Vec<(usize, ResolvedNodeStyle)>,
     stats: &mut StyleUpdateStats,
     impact: &mut StyleUpdateImpact,
+    pending_reattach: &mut HashSet<u64>,
 ) {
+    let mut trace = browser_tracing::span("style", "StyleEngine.ResolveSVGPaintServers");
     let snapshot = pending
         .iter()
-        .map(|(node, style)| (*node, style.clone()))
-        .collect::<HashMap<_, _>>();
-    let mut positions = pending
-        .iter()
-        .enumerate()
-        .map(|(position, (node, _))| (*node, position))
-        .collect::<HashMap<_, _>>();
-    for node in 0..document.NodeCount() {
+        .map(|(node, style)| (*node, style))
+        .collect::<crate::svg_paint_server::PendingStyles<'_>>();
+    let mut updates = Vec::new();
+    let mut svg_nodes = 0;
+    let mut clients = 0;
+    // SVGResources clients own live ComputedStyles. Pending results can
+    // introduce new clients; resident results supply unchanged dependents.
+    // Removed nodes have already released their style through DOM::Remove.
+    for node in snapshot.keys().copied().chain(
+        document
+            .ResolvedStyles()
+            .map(|(node, _)| node)
+            .filter(|node| !snapshot.contains_key(node)),
+    ) {
+        // cpp: LayoutSVGShape/Inline/Text/TransformableContainer::StyleDidChange
+        // -> SVGResources::UpdatePaints. HTML's inherited fill/stroke remains
+        // canonical CSS, but it has no SVG paint-server client of its own.
+        if document.Node(node).Namespace() != DOMNamespace::kSVG {
+            continue;
+        }
+        svg_nodes += 1;
         let Some(current) = snapshot
             .get(&node)
+            .copied()
             .or_else(|| document.ResolvedStyleFor(node))
         else {
             continue;
@@ -5287,7 +7354,8 @@ fn ResolveSVGPaintServers(
         let marker_mid = native.and_then(|style| marker_url(style.MarkerMidResource()));
         let marker_end = native.and_then(|style| marker_url(style.MarkerEndResource()));
         let mask_definition = document.Node(node).IsElement("mask", DOMNamespace::kSVG);
-        if !mask_definition && fill_reference.is_none()
+        if !mask_definition
+            && fill_reference.is_none()
             && stroke_reference.is_none()
             && marker_start.is_none()
             && marker_mid.is_none()
@@ -5295,6 +7363,7 @@ fn ResolveSVGPaintServers(
         {
             continue;
         }
+        clients += 1;
         let fill_opacity = native.map_or(1.0, |style| style.FillOpacity());
         let stroke_opacity = native.map_or(1.0, |style| style.StrokeOpacity());
         let fill = fill_reference.and_then(|reference| {
@@ -5316,7 +7385,8 @@ fn ResolveSVGPaintServers(
             marker_end.as_deref(),
             current.style.paint.svg_stroke_width,
         );
-        let mask_graph = mask_definition.then(|| crate::svg_paint_server::ResolveMaskDefinition(document, &snapshot, node));
+        let mask_graph = mask_definition
+            .then(|| crate::svg_paint_server::ResolveMaskDefinition(document, &snapshot, node));
         if current.style.paint.svg_mask_resource == mask_graph
             && current.style.paint.svg_fill_server == fill
             && current.style.paint.svg_stroke_server == stroke
@@ -5329,7 +7399,28 @@ fn ResolveSVGPaintServers(
         updated.style.paint.svg_fill_server = fill;
         updated.style.paint.svg_stroke_server = stroke;
         updated.style.paint.svg_markers = markers;
-        impact.Merge(StyleImpact(document.ResolvedStyleFor(node), &updated));
+        let (change, reattach) =
+            StyleImpact(document, node, document.ResolvedStyleFor(node), &updated);
+        impact.Merge(change);
+        if reattach {
+            pending_reattach.insert(document.Node(node).Id());
+        }
+        updates.push((node, updated));
+    }
+    trace.set("arena_nodes", document.NodeCount() as f64);
+    trace.set("svg_nodes", svg_nodes as f64);
+    trace.set("clients", clients as f64);
+    trace.set("updated", updates.len() as f64);
+    drop(snapshot);
+    if updates.is_empty() {
+        return;
+    }
+    let mut positions = pending
+        .iter()
+        .enumerate()
+        .map(|(position, (node, _))| (*node, position))
+        .collect::<HashMap<_, _>>();
+    for (node, updated) in updates {
         if let Some(&position) = positions.get(&node) {
             pending[position].1 = updated;
         } else {
@@ -5561,6 +7652,7 @@ fn ProjectForLayoutBoundary(
     native: &ComputedStyle,
     resolved: &mut ResolvedNodeStyle,
 ) -> Result<(), DocumentStyleError> {
+    let _trace = browser_tracing::span("style", "StyleEngine.ProjectForLayoutBoundary");
     let font = native.GetFontDescription();
     let mut ext = layoutng::internal::layout_input::ExtendedStyle::default();
     use layoutng::internal::layout_input::{
@@ -5597,8 +7689,8 @@ fn ProjectForLayoutBoundary(
         EDisplay::kRubyText => Display::kRubyText,
         EDisplay::kGridLanes | EDisplay::kInlineGridLanes => Display::kGridLanes,
         EDisplay::kLayoutCustom | EDisplay::kInlineLayoutCustom => Display::kCustom,
-        // No LayoutObject is constructed for either value; own_generates_box
-        // and display_contents preserve their structural distinction.
+        // Box generation/contents flags carry the structural distinction;
+        // SVG's display:none g uses its dedicated hidden-container object.
         EDisplay::kNone | EDisplay::kContents => Display::kInline,
     };
     resolved.style.position = match native.GetPosition() {
@@ -5810,7 +7902,7 @@ fn ProjectForLayoutBoundary(
     resolved.style.paint.outline_style = border(native.OutlineStyle());
     crate::resolver::layout_projection::ProjectGeometry(native, resolved, &mut ext);
     crate::resolver::layout_projection::ProjectShapeOutside(native, &mut ext);
-    resolved.style.extended = Some(ext);
+    resolved.style.extended = Some(ext.into());
     Ok(())
 }
 
@@ -5845,7 +7937,27 @@ impl SelectorDependencies {
         self.part |= other.part;
     }
 
-    fn ForSheets(document: &Document, sheets: &[(CSSStyleSheet, CascadeOrigin)]) -> Self {
+    // cpp: RuleSet::AddRule / RuleInvalidationDataVisitor. Reuse parser-owned
+    // selectors instead of serializing and reparsing a CSSOM selector string.
+    fn ForParsedSheet(sheet: &crate::production_style_sheet::ProductionStyleSheet) -> Self {
+        let mut result = Self::default();
+        for rule in &sheet.rules {
+            result.AddList(rule.rule.Selectors());
+        }
+        for rule in &sheet.nested_declarations {
+            result.AddList(rule.rule.InnerStyleRule().Selectors());
+        }
+        result
+    }
+    fn AddList(&mut self, list: &crate::css_selector_list::CSSSelectorList) {
+        for complex in list.ComplexSelectors() {
+            for selector in complex.SimpleSelectors() {
+                self.Add(selector);
+            }
+        }
+    }
+
+    fn ForSheets(document: &Document, sheets: &[(Rc<CSSStyleSheet>, CascadeOrigin)]) -> Self {
         let context = SelectorParserContext {
             html: true,
             quirks: document.GetCompatibilityMode()
@@ -5905,15 +8017,32 @@ impl SelectorDependencies {
         {
             self.inline_selector = true;
         }
-        if let Some(list) = selector.SelectorList() {
-            for complex in list.ComplexSelectors() {
-                for selector in complex.SimpleSelectors() {
-                    self.Add(selector);
-                }
+        if selector.GetPseudoType() == PseudoType::kPseudoParent {
+            if let Some(parent) = selector.ParentRule() {
+                self.AddList(parent.Selectors());
             }
+        }
+        if let Some(list) = selector.SelectorList() {
+            self.AddList(&list);
         }
     }
 }
+// cpp: ElementTraversal and TreeScope traversal. Historical arena entries
+// have no role in active selector invalidation. Each connected shadow scope is
+// entered once through its existing DOM owner, including hidden DOM elements.
+fn ConnectedElements(document: &Document) -> impl Iterator<Item = usize> + '_ {
+    let mut stack = document.ActiveTreeScopes();
+    stack.reverse();
+    std::iter::from_fn(move || loop {
+        let index = stack.pop()?;
+        let node = document.Node(index);
+        stack.extend(node.Children().iter().rev().copied());
+        if node.Type() == DOMNodeType::kElement {
+            return Some(index);
+        }
+    })
+}
+
 fn ConnectedElement(document: &Document, index: usize) -> bool {
     if index >= document.NodeCount() || document.Node(index).Type() != DOMNodeType::kElement {
         return false;
@@ -5997,9 +8126,124 @@ fn AddSubtree(document: &Document, root: usize, targets: &mut HashSet<usize>) {
         }
     }
 }
+// Immutable owner metadata used by the translated active-sheet comparison.
+struct SheetQueryMetadata {
+    queries: bool,
+    unit_flags: u32,
+}
+impl crate::active_style_sheets::StyleSheetMediaQueries for SheetQueryMetadata {
+    fn HasMediaQueryResults(&self) -> bool {
+        self.queries
+    }
+    fn HasMediaQueries(&self) -> bool {
+        self.queries
+    }
+    fn HasDynamicViewportDependentMediaQueries(&self) -> bool {
+        self.unit_flags
+            & crate::media_queries::media_query_exp::MediaQueryExpValue::<()>::kDynamicViewport
+            != 0
+    }
+}
+type RetainedRuleSet = Rc<crate::rule_set::RuleSet<crate::production_style_sheet::Backend>>;
+// No CSSOM RuleSetDiff is published through this contract yet. An empty diff
+// list invokes Chromium's complete old/new RuleSet branch.
+enum NoRuleSetDiff {}
+impl
+    crate::active_style_sheets::RuleSetDiff<
+        crate::rule_set::RuleSet<crate::production_style_sheet::Backend>,
+    > for NoRuleSetDiff
+{
+    fn Matches(
+        &self,
+        _: &crate::rule_set::RuleSet<crate::production_style_sheet::Backend>,
+        _: &crate::rule_set::RuleSet<crate::production_style_sheet::Backend>,
+    ) -> bool {
+        match *self {}
+    }
+    fn CreateDiffRuleset(&self) -> Option<RetainedRuleSet> {
+        match *self {}
+    }
+}
+fn ChangedRuleSetSheetIdentities(
+    old: &[(Rc<CSSStyleSheet>, CascadeOrigin)],
+    new: &[(Rc<CSSStyleSheet>, CascadeOrigin)],
+    old_rules: &[Option<RetainedRuleSet>],
+    current_rules: &HashMap<(u64, u64), RetainedRuleSet>,
+) -> Option<HashSet<(u64, u64)>> {
+    use crate::active_style_sheets::{ActiveStyleSheet, ChangedRuleSets, CompareActiveStyleSheets};
+    // Layer reordering retains the existing full invalidation boundary.
+    if old
+        .iter()
+        .flat_map(|(s, o)| s.layer_order.iter().map(move |n| (o, n)))
+        .ne(new
+            .iter()
+            .flat_map(|(s, o)| s.layer_order.iter().map(move |n| (o, n))))
+    {
+        return None;
+    }
+    let old_rules = old_rules.iter().cloned().collect::<Option<Vec<_>>>()?;
+    let new_rules = new
+        .iter()
+        .map(|(s, _)| current_rules.get(&(s.Identity(), s.Revision())).cloned())
+        .collect::<Option<Vec<_>>>()?;
+    let mut owners = HashMap::<(u64, u64, u8), (Rc<CSSStyleSheet>, Rc<SheetQueryMetadata>)>::new();
+    let mut entries = |sheets: &[(Rc<CSSStyleSheet>, CascadeOrigin)], rules: &[RetainedRuleSet]| {
+        sheets
+            .iter()
+            .zip(rules)
+            .map(|((sheet, origin), rules)| {
+                let key = (sheet.Identity(), sheet.Revision(), *origin as u8);
+                let owner = owners
+                    .get(&key)
+                    .filter(|(old, _)| old == sheet)
+                    .map(|(_, owner)| owner.clone())
+                    .unwrap_or_else(|| {
+                        let metadata = Rc::new(SheetQueryMetadata {
+                            queries: !sheet.owner_media_conditions.is_empty()
+                                || sheet.rules.iter().any(|r| !r.media_conditions.is_empty()),
+                            unit_flags: rules.Features().media_query_result_flags.unit_flags,
+                        });
+                        owners.insert(key, (sheet.clone(), metadata.clone()));
+                        metadata
+                    });
+                ActiveStyleSheet::new(owner, Some(rules.clone()))
+            })
+            .collect::<Vec<_>>()
+    };
+    let old_entries = entries(old, &old_rules);
+    let new_entries = entries(new, &new_rules);
+    let mut changed = ChangedRuleSets::default();
+    CompareActiveStyleSheets(
+        &old_entries,
+        &new_entries,
+        &[] as &[NoRuleSetDiff],
+        &mut changed,
+    );
+    Some(
+        old.iter()
+            .zip(old_rules.iter())
+            .chain(new.iter().zip(new_rules.iter()))
+            .filter(|(_, rules)| {
+                changed
+                    .Values()
+                    .iter()
+                    .any(|changed| Rc::ptr_eq(changed, rules))
+            })
+            .map(|((sheet, _), _)| (sheet.Identity(), sheet.Revision()))
+            .collect(),
+    )
+}
+
+fn InlineSheetContentsKey(source: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut hash);
+    hash.finish()
+}
+
 fn ChangedSheets(
-    old: &[(CSSStyleSheet, CascadeOrigin)],
-    new: &[(CSSStyleSheet, CascadeOrigin)],
+    old: &[(Rc<CSSStyleSheet>, CascadeOrigin)],
+    new: &[(Rc<CSSStyleSheet>, CascadeOrigin)],
 ) -> Vec<usize> {
     if std::ptr::eq(old, new) {
         return vec![];
@@ -6016,10 +8260,77 @@ fn ChangedSheets(
         .filter(|&i| layers_changed || old.get(i) != new.get(i))
         .collect()
 }
-fn StyleImpact(old: Option<&ResolvedNodeStyle>, new: &ResolvedNodeStyle) -> StyleUpdateImpact {
+// cpp: Element::ShouldStoreComputedStyle, SVGGElement/SVGMarkerElement::
+// LayoutObjectIsNeeded. Resource containers still inherit and style descendants
+// inside display:none <g>; SVGStopElement retains style without a layout object.
+fn UsesSVGHiddenContainer(document: &Document, index: usize, style: &ComputedStyle) -> bool {
+    let node = document.Node(index);
+    style.Display() == EDisplay::kNone
+        && node.IsElement("g", DOMNamespace::kSVG)
+        && FlatTreeStyleParentElement(document, index)
+            .is_some_and(|parent| document.Node(parent).Namespace() == DOMNamespace::kSVG)
+}
+
+fn ShouldStoreComputedStyle(document: &Document, index: usize, style: &ComputedStyle) -> bool {
+    if style.Display() != EDisplay::kNone {
+        return true;
+    }
+    let node = document.Node(index);
+    if node.IsHTMLElement("area") {
+        return true;
+    }
+    if node.Namespace() == DOMNamespace::kSVG {
+        let has_svg_parent = FlatTreeStyleParentElement(document, index)
+            .is_some_and(|parent| document.Node(parent).Namespace() == DOMNamespace::kSVG);
+        return has_svg_parent && matches!(node.Name(), "g" | "marker" | "stop");
+    }
+    false
+}
+
+struct ReattachElement<'a> {
+    document: &'a Document,
+    index: usize,
+}
+impl layoutng_style::style::computed_style::LayoutTreeElement for ReattachElement<'_> {
+    fn IsHTMLProgressElement(&self) -> bool {
+        self.document.Node(self.index).IsHTMLElement("progress")
+    }
+    fn IsHTMLLegendElement(&self) -> bool {
+        self.document.Node(self.index).IsHTMLElement("legend")
+    }
+    fn SupportsBaseAppearance(
+        &self,
+        appearance: layoutng_style::style::appearance::AppearanceValue,
+    ) -> bool {
+        crate::resolver::production_style_cascade::SupportsBaseAppearance(
+            self.document,
+            self.index,
+            appearance,
+        )
+    }
+}
+
+fn StyleImpact(
+    document: &Document,
+    index: usize,
+    old: Option<&ResolvedNodeStyle>,
+    new: &ResolvedNodeStyle,
+) -> (StyleUpdateImpact, bool) {
     let Some(old) = old else {
-        return StyleUpdateImpact::TREE;
+        return (StyleUpdateImpact::TREE, true);
     };
+    let (Some(old_native), Some(new_native)) =
+        (unsafe { old.native_style.Get().as_ref() }, unsafe {
+            new.native_style.Get().as_ref()
+        })
+    else {
+        return (StyleUpdateImpact::TREE, true);
+    };
+    let reattach = ComputedStyle::NeedsReattachLayoutTree(
+        &ReattachElement { document, index },
+        old_native,
+        new_native,
+    );
     let mut pseudo_impact = StyleUpdateImpact::default();
     for (old, new) in [
         (&old.before, &new.before),
@@ -6047,20 +8358,19 @@ fn StyleImpact(old: Option<&ResolvedNodeStyle>, new: &ResolvedNodeStyle) -> Styl
                 pseudo_impact.layout |= layout;
                 pseudo_impact.paint |= layout || fields != 0 || old.style.paint != new.style.paint;
             }
-            _ => return StyleUpdateImpact::TREE,
+            _ => return (StyleUpdateImpact::TREE, reattach),
         }
     }
-    if old.generates_box != new.generates_box
+    if reattach
+        || old.generates_box != new.generates_box
         || old.own_generates_box != new.own_generates_box
         || old.own_display_contents != new.own_display_contents
+        || old_native.Display() != new_native.Display()
         || old.style.display != new.style.display
-        || old.style.position != new.style.position
-        || old.style.floating != new.style.floating
+        || ComputedStyle::NeedsReinsertLayoutTree(old_native, new_native)
     {
-        return StyleUpdateImpact::TREE;
+        return (StyleUpdateImpact::TREE, reattach);
     }
-    let old_native = unsafe { &*old.native_style.Get() };
-    let new_native = unsafe { &*new.native_style.Get() };
     let native_difference = ComputedStyle::ComputeDifference(old_native, new_native);
     let fields = ComputedStyleBase::FieldInvalidationDiff(old_native, new_native);
     // cpp: ComputedStyle::VisualInvalidationDiff, computed_style.cc:753-757.
@@ -6068,15 +8378,37 @@ fn StyleImpact(old: Option<&ResolvedNodeStyle>, new: &ResolvedNodeStyle) -> Styl
     // when the projected font size/family/weight fields remain unchanged.
     let layout = fields & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits()) != 0
         || !old.style.LayoutEquivalent(&new.style);
-    StyleUpdateImpact {
-        reattach: false,
-        layout: pseudo_impact.layout || layout,
-        paint: pseudo_impact.paint
-            || native_difference != ComputedStyleDifference::kEqual
-            || fields != 0
-            || old.style.paint != new.style.paint
-            || layout,
-    }
+    (
+        StyleUpdateImpact {
+            reattach: false,
+            layout: pseudo_impact.layout || layout,
+            paint: pseudo_impact.paint
+                || native_difference != ComputedStyleDifference::kEqual
+                || fields != 0
+                || old.style.paint != new.style.paint
+                || layout,
+        },
+        reattach,
+    )
+}
+
+// cpp: StyleRecalcChange::RecalcContainerQueryDependentStyle and
+// Element::RecalcStyle. Match flags, including false queries and cached
+// pseudos, stay owned by the canonical style; this is only their subject set.
+fn ContainerQueryDependent(style: &ComputedStyle) -> bool {
+    let change =
+        crate::style_recalc_change::StyleRecalcChange::default().ForceRecalcDescendantContainers();
+    change.RecalcContainerQueryDependentStyle(style)
+        || style.FirstLineDependsOnSizeContainerQueries()
+        || style.HighlightsDependOnSizeContainerQueries()
+        || PseudoStyleKind::DIRECT.into_iter().any(|kind| {
+            unsafe {
+                style
+                    .GetCachedPseudoElementStyleWithoutArgument(kind.Id())
+                    .as_ref()
+            }
+            .is_some_and(|pseudo| change.RecalcContainerQueryDependentStyle(pseudo))
+        })
 }
 
 fn OrdinarySignatureElement(document: &Document, index: usize) -> bool {
@@ -6107,7 +8439,9 @@ fn CustomPropertiesEquivalent(a: &CustomProperties, b: &CustomProperties) -> boo
         let Some(right) = b.values.get(name) else {
             return false;
         };
-        crate::resolver::production_style_builder::custom_properties::ComputedVariablesEquivalent(left, right)
+        crate::resolver::production_style_builder::custom_properties::ComputedVariablesEquivalent(
+            left, right,
+        )
     })
 }
 
@@ -6115,10 +8449,13 @@ fn FinishUpdate(document: &mut Document, stats: StyleUpdateStats, impact: StyleU
     let state = document.StyleStateMut();
     state.all_dirty = false;
     state.changes.clear();
+    state.independent_inline_styles.clear();
+    state.attribute_changes.clear();
     state.sibling_sensitive_nodes.clear();
     state.descendant_sensitive_nodes.clear();
     state.append_only_children.clear();
     state.non_append_children.clear();
+    state.child_change_boundaries.clear();
     state.inserted_style_subtrees.clear();
     state.append_affected_subtrees.clear();
     state.stats = stats;

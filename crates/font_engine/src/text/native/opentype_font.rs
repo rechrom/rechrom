@@ -598,9 +598,7 @@ mod shared_bytes_tests {
             io::Write,
             sync::atomic::{AtomicUsize, Ordering},
         };
-        let reference = include_bytes!(
-            "../../../../../assets/fonts/Roboto-Regular.ttf"
-        );
+        let reference = include_bytes!("../../../../../assets/fonts/Roboto-Regular.ttf");
         let path =
             std::env::temp_dir().join(format!("harfbuzz-font-map-{}.ttf", std::process::id()));
         let mut file = std::fs::OpenOptions::new()
@@ -642,11 +640,9 @@ mod shared_bytes_tests {
 
     #[test]
     fn native_blob_retains_shared_backing_after_font_owner_is_dropped() {
-        let bytes: Arc<[u8]> = include_bytes!(
-            "../../../../../assets/fonts/Roboto-Regular.ttf"
-        )
-        .as_slice()
-        .into();
+        let bytes: Arc<[u8]> = include_bytes!("../../../../../assets/fonts/Roboto-Regular.ttf")
+            .as_slice()
+            .into();
         let weak = Arc::downgrade(&bytes);
         let original_pointer = bytes.as_ptr();
         let original_length = bytes.len();
@@ -671,9 +667,7 @@ mod shared_bytes_tests {
             unsafe { std::slice::from_raw_parts(native_pointer.cast::<u8>(), length as usize) };
         assert_eq!(
             retained,
-            include_bytes!(
-                "../../../../../assets/fonts/Roboto-Regular.ttf"
-            )
+            include_bytes!("../../../../../assets/fonts/Roboto-Regular.ttf")
         );
         drop(retained_blob);
         assert!(weak.upgrade().is_none());

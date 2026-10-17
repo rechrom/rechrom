@@ -91,7 +91,8 @@ pub extern "Rust" fn LayoutTextStyleDidChange(
     // Blink LayoutText::StyleDidChange starts only faces needed by this
     // transformed text. The Font source emits pure resource requests.
     if let Some(text) = this.TransformedText().Span16() {
-        if text.iter().any(|&c| !matches!(c, 0x09..=0x0d | 0x20)) && !new_style.GetFont().is_null() {
+        if text.iter().any(|&c| !matches!(c, 0x09..=0x0d | 0x20)) && !new_style.GetFont().is_null()
+        {
             unsafe { &*new_style.GetFont() }.WillUseFontData(text);
         }
     }

@@ -9,7 +9,7 @@ use layer_tile::{
     TileResourceRelease,
 };
 use skia::src::core::SkCanvas::RasterImageCache;
-use std::{collections::HashMap, io};
+use std::{collections::HashMap, io, sync::Arc};
 
 /// Read-only component accounting; enabled explicitly for ownership diagnosis.
 /// Shared image owners may appear in more than one lane's accounting.
@@ -171,8 +171,43 @@ pub trait RasterResourceProvider {
     fn prepared_frame_id(&self) -> Option<u64>;
     fn prepared_damage_pixels(&self) -> usize;
     fn resource(&self, id: TileId) -> Option<&RasterResource>;
-    fn resources(&self) -> &HashMap<TileId, RasterResource>;
+    fn resources(&self) -> &HashMap<TileId, Arc<RasterResource>>;
     fn resident_bytes(&self) -> usize;
+}
+
+/// Immutable, frame-scoped export. CPU pixels are shared read leases; no
+/// engine, tile manager, cache, executor, or mutable worker state is exported.
+/// Mirrors ClientResourceProvider's exported-resource lifetime: a producer may
+/// reuse storage only after all consumers release the previous generation.
+#[derive(Clone)]
+pub struct RasterResourceSnapshot {
+    resources: HashMap<TileId, Arc<RasterResource>>,
+    stats: RasterStats,
+    frame_id: Option<u64>,
+    damage_pixels: usize,
+}
+impl RasterResourceProvider for RasterResourceSnapshot {
+    fn stats(&self) -> RasterStats {
+        self.stats
+    }
+    fn prepared_frame_id(&self) -> Option<u64> {
+        self.frame_id
+    }
+    fn prepared_damage_pixels(&self) -> usize {
+        self.damage_pixels
+    }
+    fn resource(&self, id: TileId) -> Option<&RasterResource> {
+        self.resources.get(&id).map(Arc::as_ref)
+    }
+    fn resources(&self) -> &HashMap<TileId, Arc<RasterResource>> {
+        &self.resources
+    }
+    fn resident_bytes(&self) -> usize {
+        self.resources
+            .values()
+            .map(|resource| resource_bytes(resource))
+            .sum()
+    }
 }
 
 struct PendingPrepaint {
@@ -183,11 +218,12 @@ struct PendingPrepaint {
 }
 
 pub struct RasterEngine {
+    executor: Arc<dyn executor::Executor>,
     memory_diagnostic_id: Option<usize>,
     layer_tree_id: Option<LayerTreeId>,
     prepared_frame_id: Option<u64>,
     prepared_damage_pixels: usize,
-    resources: HashMap<TileId, RasterResource>,
+    resources: HashMap<TileId, Arc<RasterResource>>,
     halo_scratch: Vec<u8>,
     worker_pool: Option<RasterWorkerPool>,
     prepaint_worker_pool: Option<RasterWorkerPool>,
@@ -200,6 +236,7 @@ pub struct RasterEngine {
 impl Default for RasterEngine {
     fn default() -> Self {
         Self {
+            executor: executor::inline(),
             memory_diagnostic_id: memory_diagnostics_enabled().then(next_memory_diagnostic_id),
             layer_tree_id: None,
             prepared_frame_id: None,
@@ -227,9 +264,9 @@ impl RasterResourceProvider for RasterEngine {
         self.prepared_damage_pixels
     }
     fn resource(&self, id: TileId) -> Option<&RasterResource> {
-        self.resources.get(&id)
+        self.resources.get(&id).map(Arc::as_ref)
     }
-    fn resources(&self) -> &HashMap<TileId, RasterResource> {
+    fn resources(&self) -> &HashMap<TileId, Arc<RasterResource>> {
         &self.resources
     }
     fn resident_bytes(&self) -> usize {
@@ -237,7 +274,32 @@ impl RasterResourceProvider for RasterEngine {
     }
 }
 
-impl RasterEngine {
+impl RasterEngine {    pub fn SetExecutor(&mut self, executor: Arc<dyn executor::Executor>) {
+        if Arc::ptr_eq(&self.executor, &executor) { return; }
+        assert!(self.worker_pool.is_none() && self.prepaint_worker_pool.is_none(),
+            "configure raster executor before submitting work");
+        self.executor = executor;
+    }
+
+    /// Export only the tiles referenced by a completed immutable frame.
+    pub fn ExportResources(
+        &self,
+        tiles: impl IntoIterator<Item = TileId>,
+    ) -> RasterResourceSnapshot {
+        RasterResourceSnapshot {
+            resources: tiles
+                .into_iter()
+                .filter_map(|id| {
+                    self.resources
+                        .get(&id)
+                        .map(|resource| (id, resource.clone()))
+                })
+                .collect(),
+            stats: self.stats,
+            frame_id: self.prepared_frame_id,
+            damage_pixels: self.prepared_damage_pixels,
+        }
+    }
     fn report_memory(&self, phase: &str) {
         let Some(id) = self.memory_diagnostic_id else {
             return;
@@ -323,7 +385,7 @@ impl RasterEngine {
             });
             self.resources.insert(
                 product.task.tile_id,
-                RasterResource::from_product(frame_id, product),
+                Arc::new(RasterResource::from_product(frame_id, product)),
             );
         }
         Ok(completions)
@@ -334,7 +396,7 @@ impl RasterEngine {
     pub fn PollCompletedRaster(&mut self) -> io::Result<Vec<RasterCompletion>> {
         let completions = self.collect_prepaint(&[])?;
         if !completions.is_empty() {
-            self.stats.resident_bytes = self.resources.values().map(resource_bytes).sum();
+            self.stats.resident_bytes = self.resources.values().map(|resource| resource_bytes(resource)).sum();
         }
         Ok(completions)
     }
@@ -404,6 +466,7 @@ impl RasterEngine {
             let reuse = task
                 .previous_tile_id
                 .and_then(|id| self.resources.remove(&id))
+                .and_then(|resource| Arc::try_unwrap(resource).ok())
                 .map(|resource| resource.rgba)
                 .unwrap_or_default();
             jobs.push(RasterJob {
@@ -423,7 +486,7 @@ impl RasterEngine {
         }
         if self.prepaint_worker_pool.is_none() {
             let limit = (self.clip_cache.accounting().configured_byte_limit / 2).min(1024 * 1024);
-            self.prepaint_worker_pool = Some(RasterWorkerPool::new_prepaint(limit)?);
+            self.prepaint_worker_pool = Some(RasterWorkerPool::new_prepaint(limit, self.executor.clone())?);
         }
         let count = jobs.len();
         let pending = self
@@ -534,7 +597,7 @@ impl RasterEngine {
         let eligible = layers.iter().filter(|layer| layer.is_some()).count();
         if self.worker_pool.is_none() && eligible >= 4 {
             let limit = (self.clip_cache.accounting().configured_byte_limit / 2).min(1024 * 1024);
-            self.worker_pool = Some(RasterWorkerPool::new(limit)?);
+            self.worker_pool = Some(RasterWorkerPool::new(limit, self.executor.clone())?);
         }
         let parallel = eligible >= 2
             && self
@@ -548,6 +611,7 @@ impl RasterEngine {
             let reuse = task
                 .previous_tile_id
                 .and_then(|id| self.resources.remove(&id))
+                .and_then(|resource| Arc::try_unwrap(resource).ok())
                 .map(|resource| resource.rgba)
                 .unwrap_or_default();
             if let Some(layer) = layer.filter(|_| parallel) {
@@ -638,7 +702,7 @@ impl RasterEngine {
             damage_pixels = damage_pixels.saturating_add(tile_bytes(task.pixel_size)? / 4);
             staged.insert(
                 task.tile_id,
-                RasterResource::from_product(plan.frame_id, product),
+                Arc::new(RasterResource::from_product(plan.frame_id, product)),
             );
         }
         self.resources.extend(staged);
@@ -653,7 +717,7 @@ impl RasterEngine {
         self.prepared_damage_pixels = damage_pixels;
         self.stats.raster_tasks = tasks.len();
         self.stats.reused_tiles = self.stats.tiles.saturating_sub(tasks.len());
-        self.stats.resident_bytes = self.resources.values().map(resource_bytes).sum();
+        self.stats.resident_bytes = self.resources.values().map(|resource| resource_bytes(resource)).sum();
         self.report_memory("prepared");
         Ok(RasterUpdate {
             mode: "tile-raster",
@@ -681,7 +745,7 @@ impl RasterEngine {
         for tile in release.tile_ids.iter() {
             self.resources.remove(tile);
         }
-        self.stats.resident_bytes = self.resources.values().map(resource_bytes).sum();
+        self.stats.resident_bytes = self.resources.values().map(|resource| resource_bytes(resource)).sum();
         self.report_memory("released");
         Ok(release.clone())
     }

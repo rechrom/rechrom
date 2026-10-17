@@ -20,6 +20,7 @@ profile_native = ["profile_paint", "raster/source_replay"]
 foundation = { package = "layoutng_foundation", path = "../../crates/foundation" }
 
 [dependencies]
+executor = { path = "../../crates/executor" }
 browser_tracing = { path = "../../crates/tracing" }
 event_loop = { path = "../../crates/event_loop" }
 devtools = { path = "../../crates/devtools" }

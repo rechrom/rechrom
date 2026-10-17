@@ -1559,7 +1559,7 @@ impl Default for SvgViewportData {
 // cpp: layoutng/internal/layout_input.h:734-754
 // The concrete PaintStyleData is defined by paint_input.h in this package.
 // Mutable dereference detaches shared storage, as the C++ accessors do.
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub struct PaintStyle {
     pub(super) data: std::sync::Arc<super::paint_input::PaintStyleData>,
 }
@@ -1911,7 +1911,7 @@ pub struct CssClipRect {
     pub left: Option<f64>,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub struct ComputedStyle {
     /// The Chromium `ComputedStyle` produced by StyleEngine for this
     /// projection.  DOM-to-layout metadata below remains the renderer-neutral
@@ -1949,8 +1949,16 @@ pub struct ComputedStyle {
     pub floating: FloatSide,
     pub column_count: u32,
     pub grid_template_columns: Vec<f64>,
-    pub extended: Option<ExtendedStyle>,
+    /// Published style data is immutable. Layout projections share this
+    /// payload; anonymous/theme/zoom derivations use Arc::make_mut locally.
+    pub extended: Option<std::sync::Arc<ExtendedStyle>>,
     pub paint: PaintStyle,
+}
+impl PartialEq for ComputedStyle {
+    fn eq(&self, other: &Self) -> bool {
+        self.native_style == other.native_style && self.paint == other.paint
+            && self.GeometryInputsEqual(other)
+    }
 }
 impl ComputedStyle {
     /// Compare the inputs consumed by layout. Paint data may require paint or
@@ -1958,9 +1966,6 @@ impl ComputedStyle {
     /// invalidate geometry. Keep the few transitions which change the native
     /// box/containing-block model in this implementation.
     pub fn LayoutEquivalent(&self, other: &Self) -> bool {
-        if self == other {
-            return true;
-        }
         // Chromium ComputedStyle::VisualInvalidationDiff/ DiffNeedsFullLayout
         // consume the generated FieldInvalidationDiff kLayout/kReshape bits. Native
         // styles are canonical at this boundary; the minimal projection does
@@ -2010,12 +2015,31 @@ impl ComputedStyle {
         {
             return false;
         }
-        let mut normalized = self.clone();
-        normalized.paint = other.paint.clone();
-        // The native difference above decides geometry, not pointer identity.
-        // Distinct immutable styles with only paint changes remain equivalent.
-        normalized.native_style = other.native_style;
-        normalized == *other
+        self.GeometryInputsEqual(other)
+    }
+
+    // Published groups are immutable. Match base::ValuesEquivalent: identical
+    // shared storage proves equality, while distinct storage compares values.
+    fn GeometryInputsEqual(&self, other: &Self) -> bool {
+        let extended_equal = match (&self.extended, &other.extended) {
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b) || a == b,
+            (None, None) => true,
+            _ => false,
+        };
+        // Exhaustive destructuring forces new fields to enter this comparison.
+        macro_rules! same_inputs {
+            ($($field:ident),* $(,)?) => {{
+                let Self { native_style: _, paint: _, extended: _, $($field),* } = self;
+                $($field == &other.$field)&&*
+            }};
+        }
+        extended_equal && same_inputs!(
+            svg_clip_resources, display, width, height, min_height, max_height,
+            flex_basis, flex_grow, flex_shrink, min_width, max_width, margin,
+            border, border_styles, padding, gap, flex_direction, flex_wrap,
+            align_items, direction, writing_mode, position, left, top, right,
+            bottom, css_clip, floating, column_count, grid_template_columns,
+        )
     }
 }
 

@@ -12,7 +12,42 @@ use std::{
 use raster::RasterResourceProvider;
 use viz::{AggregatedFrame, RenderPassId, SurfaceId};
 
-use crate::render_pass::RenderPassRenderer;
+use crate::render_pass::{effect_opacity_has_output, RenderPassRenderer};
+
+fn reachable_render_passes(frame: &AggregatedFrame) -> HashSet<(SurfaceId, RenderPassId)> {
+    let by_key: HashMap<_, _> = frame
+        .RenderPasses()
+        .iter()
+        .map(|pass| ((pass.Surface(), pass.RenderPassId()), pass))
+        .collect();
+    let mut reachable = HashSet::new();
+    let mut pending = frame
+        .RenderPasses()
+        .iter()
+        .filter(|pass| pass.IsRoot())
+        .map(|pass| (pass.Surface(), pass.RenderPassId()))
+        .collect::<Vec<_>>();
+    while let Some(key) = pending.pop() {
+        if !reachable.insert(key) {
+            continue;
+        }
+        let Some(pass) = by_key.get(&key) else {
+            continue;
+        };
+        for quad in pass.Quads() {
+            let viz::DrawQuad::RenderPass(quad) = quad else {
+                continue;
+            };
+            let Some(state) = pass.SharedQuadStates().get(quad.shared_quad_state_index) else {
+                continue;
+            };
+            if effect_opacity_has_output(state.properties.effect.opacity) {
+                pending.push((pass.Surface(), quad.render_pass_id));
+            }
+        }
+    }
+    reachable
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct RenderUpdate {
@@ -136,15 +171,18 @@ impl Renderer {
         // aggregates every pass, including undamaged retained children, for
         // each represented surface. Omitted surfaces have an independent
         // lifetime and remain owned by InvalidateSurface.
-        let required: HashSet<_> = frame
-            .RenderPasses()
-            .iter()
-            .map(|pass| (pass.Surface(), pass.RenderPassId()))
-            .collect();
+        // Walk the render-pass DAG from each surface root. An N32-quantized
+        // transparent RenderPassDrawQuad cannot contribute, so neither its
+        // backing nor any pass reachable only through it needs to execute.
+        let required = reachable_render_passes(frame);
         let represented: HashSet<_> = required.iter().map(|key| key.0).collect();
         // Admission precedes reconciliation. A missing/mismatched provider
         // cannot discard backings from a candidate which will not render.
-        for pass in frame.RenderPasses() {
+        for pass in frame
+            .RenderPasses()
+            .iter()
+            .filter(|pass| required.contains(&(pass.Surface(), pass.RenderPassId())))
+        {
             let provider = resources.ResourcesFor(pass.Surface()).ok_or_else(|| {
                 io::Error::other("aggregated render pass has no raster resource provider")
             })?;
@@ -176,7 +214,7 @@ impl Renderer {
         let covers_output = frame
             .RenderPasses()
             .iter()
-            .filter(|pass| pass.IsRoot())
+            .filter(|pass| pass.IsRoot() && !pass.HasTransparentBackground())
             .all(|pass| {
                 let destination = pass.Destination();
                 destination.x == 0 && destination.width == width
@@ -185,7 +223,7 @@ impl Renderer {
                 let mut rows: Vec<_> = frame
                     .RenderPasses()
                     .iter()
-                    .filter(|pass| pass.IsRoot())
+                    .filter(|pass| pass.IsRoot() && !pass.HasTransparentBackground())
                     .map(|pass| {
                         let destination = pass.Destination();
                         (destination.y, destination.y + destination.height as i32)
@@ -212,6 +250,9 @@ impl Renderer {
         let mut completed_children = HashSet::new();
         let mut temporary_output_peak = 0usize;
         for pass in frame.RenderPasses() {
+            if !required.contains(&(pass.Surface(), pass.RenderPassId())) {
+                continue;
+            }
             let destination = pass.Destination();
             let provider = resources.ResourcesFor(pass.Surface()).ok_or_else(|| {
                 io::Error::other("aggregated render pass has no raster resource provider")
@@ -243,6 +284,47 @@ impl Renderer {
                         &local_outputs,
                         force_full_damage,
                     );
+                }
+                if pass.HasTransparentBackground() {
+                    // SoftwareRenderer clears a transparent render-pass backing,
+                    // then samples it with SrcOver in the embedding output.
+                    let mut update = renderer.compose_retained(
+                        pass,
+                        provider,
+                        destination.width,
+                        destination.height,
+                        &local_outputs,
+                        force_full_damage,
+                    )?;
+                    let pixels = renderer
+                        .backing_pixels()
+                        .ok_or_else(|| io::Error::other("transparent pass has no backing"))?;
+                    let left = usize::try_from(destination.x)
+                        .map_err(|_| io::Error::other("negative surface destination"))?;
+                    let top = usize::try_from(destination.y)
+                        .map_err(|_| io::Error::other("negative surface destination"))?;
+                    for (row, source) in pixels.chunks_exact(destination.width as usize).enumerate()
+                    {
+                        let start = (top + row) * row_stride + left;
+                        let target = &mut buffer[start..start + source.len()];
+                        // SAFETY: disjoint initialized N32 rows, viewed only for
+                        // this call; the retained backing uses RGBA8888 bytes.
+                        let (destination_bytes, source_bytes) = unsafe {
+                            (
+                                std::slice::from_raw_parts_mut(
+                                    target.as_mut_ptr().cast::<u8>(),
+                                    std::mem::size_of_val(target),
+                                ),
+                                std::slice::from_raw_parts(
+                                    source.as_ptr().cast::<u8>(),
+                                    std::mem::size_of_val(source),
+                                ),
+                            )
+                        };
+                        skia::blend_premultiplied_rgba_row(destination_bytes, source_bytes, format);
+                    }
+                    update.copied_bytes = pixels.len() * std::mem::size_of::<u32>();
+                    return Ok(update);
                 }
                 if destination.x == 0 && destination.width == width {
                     let top = usize::try_from(destination.y)

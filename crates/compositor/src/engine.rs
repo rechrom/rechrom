@@ -27,7 +27,7 @@ fn memory_diagnostics_enabled() -> bool {
 fn report_pipeline<V, M>(phase: &str, snapshot: &ArtifactSnapshot<V, M>) {
     if memory_diagnostics_enabled() {
         eprintln!("pipeline-memory time_ns={} phase={} tab={} generation={} sequence={} revision={} ack={} artifact_owners={} resource_owners={}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()), phase,
-            snapshot.document.0, snapshot.document.1, snapshot.signature.1,
+            snapshot.document.0, snapshot.document.1, snapshot.sequence,
             snapshot.content.as_ref().map_or(0, |a| a.recording_revision), snapshot.compositor_scroll_sequence,
             snapshot.content.as_ref().map_or(0, Arc::strong_count),
             snapshot.content.as_ref().and_then(|a| a.resources.as_ref()).map_or(0, Arc::strong_count));
@@ -58,16 +58,8 @@ pub trait CompositorViewport: Copy + PartialEq {
         f64::from(self.Width()) / self.Scale()
     }
 
-    fn ToolbarPixels(self, toolbar_height: f64) -> u32 {
-        (toolbar_height * self.Scale()).round() as u32
-    }
-
-    fn ContentHeight(self, toolbar_height: f64) -> f64 {
-        f64::from(
-            self.Height()
-                .saturating_sub(self.ToolbarPixels(toolbar_height))
-                .max(1),
-        ) / self.Scale()
+    fn LogicalHeight(self) -> f64 {
+        f64::from(self.Height()) / self.Scale()
     }
 }
 
@@ -95,16 +87,36 @@ impl BlockingWheelEventRegions {
 }
 
 #[derive(Clone)]
+pub enum ContentUpdate {
+    /// No content commit. Existing content belongs to the compositor owner.
+    Unchanged,
+    Replace(Arc<PaintArtifact>),
+    Clear,
+}
+impl ContentUpdate {
+    pub fn as_ref(&self) -> Option<&Arc<PaintArtifact>> {
+        match self {
+            Self::Replace(artifact) => Some(artifact),
+            _ => None,
+        }
+    }
+}
+impl From<Option<Arc<PaintArtifact>>> for ContentUpdate {
+    fn from(content: Option<Arc<PaintArtifact>>) -> Self {
+        content.map_or(Self::Clear, Self::Replace)
+    }
+}
+
+#[derive(Clone)]
 pub struct ArtifactSnapshot<V, M> {
     pub document: (u64, u64),
     pub viewport: V,
-    pub toolbar_height: f64,
     pub frame_time: Instant,
-    pub signature: (u64, u64, V),
+    pub sequence: u64,
     /// Compositor delta batch reflected by this exact content commit.
     pub compositor_scroll_sequence: u64,
-    pub toolbar: Arc<PaintArtifact>,
-    pub content: Option<Arc<PaintArtifact>>,
+    pub content: ContentUpdate,
+    pub transparent_background: bool,
     pub metadata: M,
     pub async_root_scroll: bool,
     pub blocking_wheel_regions: BlockingWheelEventRegions,
@@ -134,10 +146,25 @@ impl<V, M> ArtifactSnapshot<V, M> {
                 .content
                 .as_ref()
                 .map(|artifact| ContentFrameProvenance {
-                    sequence: self.signature.1,
+                    sequence: self.sequence,
                     recording_revision: artifact.recording_revision,
                 }),
         }
+    }
+}
+
+impl<V: PartialEq, M> ArtifactSnapshot<V, M> {
+    fn SameRasterInputs(&self, other: &Self) -> bool {
+        self.document == other.document
+            && self.sequence == other.sequence
+            && self.viewport == other.viewport
+            && self.transparent_background == other.transparent_background
+            && self.compositor_scroll_sequence == other.compositor_scroll_sequence
+            && match (self.content.as_ref(), other.content.as_ref()) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
     }
 }
 
@@ -205,7 +232,6 @@ pub enum Effect<V, F, M> {
 #[derive(Clone)]
 pub struct PlannedFrame<V, M> {
     pub snapshot: ArtifactSnapshot<V, M>,
-    pub toolbar: FramePlan,
     pub content: Option<FramePlan>,
     scroll_tree: ScrollTreeSnapshot,
     visual_scroll: Option<(u64, Offset)>,
@@ -216,17 +242,20 @@ pub struct PlannedFrame<V, M> {
 pub struct SubmittedFrame<V, M> {
     pub provenance: FrameProvenance,
     pub viewport: V,
-    pub toolbar: CompositorFrame,
     pub content: Option<CompositorFrame>,
     pub metadata: M,
 }
 
 pub struct RasterBundle {
     tile_size: u32,
-    pub toolbar_tiles: LayerTileEngine,
-    pub content_tiles: LayerTileEngine,
-    pub toolbar_raster: raster::RasterEngine,
-    pub content_raster: raster::RasterEngine,
+    pub tiles: LayerTileEngine,
+    pub raster: raster::RasterEngine,
+}
+
+struct CommittedContent {
+    sequence: u64,
+    scroll_sequence: u64,
+    artifact: Arc<PaintArtifact>,
 }
 
 impl Default for RasterBundle {
@@ -239,10 +268,8 @@ impl RasterBundle {
     fn new(tile_size: u32) -> Self {
         Self {
             tile_size,
-            toolbar_tiles: LayerTileEngine::new(tile_size),
-            content_tiles: LayerTileEngine::new(tile_size),
-            toolbar_raster: raster::RasterEngine::default(),
-            content_raster: raster::RasterEngine::default(),
+            tiles: LayerTileEngine::new(tile_size),
+            raster: raster::RasterEngine::default(),
         }
     }
 }
@@ -260,9 +287,13 @@ pub struct RasterReady<V, M> {
 
 impl<V: CompositorViewport, M> PlannedFrame<V, M> {
     fn RootScrollbarQuads(&self) -> Option<(Vec<SolidColorDrawQuad>, DeviceRect)> {
-        if self.root_scrollbars.is_empty() { return None; }
+        if self.root_scrollbars.is_empty() {
+            return None;
+        }
         let root = self.scroll_tree.root()?;
-        let current = self.visual_scroll.filter(|(id, _)| *id == root.id)
+        let current = self
+            .visual_scroll
+            .filter(|(id, _)| *id == root.id)
             .map_or(root.committed, |(_, offset)| offset);
         let zoom = self.content.as_ref()?.config.layout_zoom_factor;
         let mut quads = Vec::new();
@@ -271,10 +302,14 @@ impl<V: CompositorViewport, M> PlannedFrame<V, M> {
             bounds.union(layer.track);
             let (position, minimum, maximum) = if layer.horizontal {
                 (current.x, root.minimum.x, root.maximum.x)
-            } else { (current.y, root.minimum.y, root.maximum.y) };
+            } else {
+                (current.y, root.minimum.y, root.maximum.y)
+            };
             let ratio = if maximum > minimum {
                 ((position - minimum) / (maximum - minimum)).clamp(0.0, 1.0)
-            } else { 0.0 };
+            } else {
+                0.0
+            };
             for part in &layer.parts {
                 let mut rect = part.rect;
                 if part.is_thumb {
@@ -283,26 +318,54 @@ impl<V: CompositorViewport, M> PlannedFrame<V, M> {
                     // dimensions independently of main-thread paint.
                     if layer.horizontal {
                         rect.width = (rect.width / zoom).round() * zoom;
-                        let travel = ((layer.track.width - layer.start_inset - layer.end_inset - rect.width) / zoom).max(0.0);
-                        rect.x = layer.track.x + layer.start_inset +
-                            ((travel as f32 * ratio as f32) as i32 as f64) * zoom;
+                        let travel = ((layer.track.width
+                            - layer.start_inset
+                            - layer.end_inset
+                            - rect.width)
+                            / zoom)
+                            .max(0.0);
+                        rect.x = layer.track.x
+                            + layer.start_inset
+                            + ((travel as f32 * ratio as f32) as i32 as f64) * zoom;
                     } else {
                         rect.height = (rect.height / zoom).round() * zoom;
-                        let travel = ((layer.track.height - layer.start_inset - layer.end_inset - rect.height) / zoom).max(0.0);
-                        rect.y = layer.track.y + layer.start_inset +
-                            ((travel as f32 * ratio as f32) as i32 as f64) * zoom;
+                        let travel = ((layer.track.height
+                            - layer.start_inset
+                            - layer.end_inset
+                            - rect.height)
+                            / zoom)
+                            .max(0.0);
+                        rect.y = layer.track.y
+                            + layer.start_inset
+                            + ((travel as f32 * ratio as f32) as i32 as f64) * zoom;
                     }
                 }
-                let rect = PaintRect { x: rect.x / zoom, y: rect.y / zoom,
-                    width: rect.width / zoom, height: rect.height / zoom };
-                quads.push(SolidColorDrawQuad { rect, visible_rect: rect, color: part.color, corner_radius: 0.0 });
+                let rect = PaintRect {
+                    x: rect.x / zoom,
+                    y: rect.y / zoom,
+                    width: rect.width / zoom,
+                    height: rect.height / zoom,
+                };
+                quads.push(SolidColorDrawQuad {
+                    rect,
+                    visible_rect: rect,
+                    color: part.color,
+                    corner_radius: 0.0,
+                });
             }
         }
         let scale = self.snapshot.viewport.Scale() / zoom;
-        let x = (bounds.x * scale).floor(); let y = (bounds.y * scale).floor();
-        Some((quads, DeviceRect::new(x as i32, y as i32,
-            (((bounds.x + bounds.width) * scale).ceil() - x).max(0.0) as u32,
-            (((bounds.y + bounds.height) * scale).ceil() - y).max(0.0) as u32)))
+        let x = (bounds.x * scale).floor();
+        let y = (bounds.y * scale).floor();
+        Some((
+            quads,
+            DeviceRect::new(
+                x as i32,
+                y as i32,
+                (((bounds.x + bounds.width) * scale).ceil() - x).max(0.0) as u32,
+                (((bounds.y + bounds.height) * scale).ceil() - y).max(0.0) as u32,
+            ),
+        ))
     }
     fn RootOverlayScrollbarQuad(&self) -> Option<(SolidColorDrawQuad, DeviceRect)> {
         let root = self.scroll_tree.root()?;
@@ -332,11 +395,7 @@ impl<V: CompositorViewport, M> PlannedFrame<V, M> {
             .filter(|(id, _)| *id == root.id)
             .map_or(root.committed.y, |(_, value)| value.y)
             .clamp(root.minimum.y, root.maximum.y);
-        let viewport = self
-            .snapshot
-            .viewport
-            .ContentHeight(self.snapshot.toolbar_height)
-            .max(1.0);
+        let viewport = self.snapshot.viewport.LogicalHeight().max(1.0);
         let layout_zoom = self
             .content
             .as_ref()
@@ -362,11 +421,7 @@ impl<V: CompositorViewport, M> PlannedFrame<V, M> {
         let scale = self.snapshot.viewport.Scale();
         let strip_width = (14.0 * scale).ceil() as u32;
         let width = self.snapshot.viewport.Width();
-        let height = self.snapshot.viewport.Height().saturating_sub(
-            self.snapshot
-                .viewport
-                .ToolbarPixels(self.snapshot.toolbar_height),
-        );
+        let height = self.snapshot.viewport.Height();
         Some((
             SolidColorDrawQuad {
                 rect,
@@ -385,10 +440,9 @@ impl<V: CompositorViewport, M> PlannedFrame<V, M> {
 }
 
 pub struct CompositorEngine<V, F, M> {
-    toolbar_frame_builder: FrameBuilder,
     content_frame_builder: FrameBuilder,
     spare_bundle: Option<RasterBundle>,
-    display_has_bundle: bool,
+    active_bundle_installed: bool,
     raster_in_flight: bool,
     raster_in_flight_main_commit: bool,
     main_frame_in_flight: Option<(u64, u64)>,
@@ -397,6 +451,8 @@ pub struct CompositorEngine<V, F, M> {
     snapshot: Option<ArtifactSnapshot<V, M>>,
     planned: Option<PlannedFrame<V, M>>,
     scroll_tree: CompositorScrollTree,
+    // A compositor instance owns one Page; other Page state never enters it.
+    committed_content: Option<CommittedContent>,
     overlay_scrollbar_damage: Option<DeviceRect>,
     current_begin_frame: Option<F>,
     dirty: bool,
@@ -405,10 +461,9 @@ pub struct CompositorEngine<V, F, M> {
 impl<V, F, M> Default for CompositorEngine<V, F, M> {
     fn default() -> Self {
         Self {
-            toolbar_frame_builder: FrameBuilder::default(),
             content_frame_builder: FrameBuilder::default(),
             spare_bundle: Some(RasterBundle::default()),
-            display_has_bundle: false,
+            active_bundle_installed: false,
             raster_in_flight: false,
             raster_in_flight_main_commit: false,
             main_frame_in_flight: None,
@@ -417,6 +472,7 @@ impl<V, F, M> Default for CompositorEngine<V, F, M> {
             snapshot: None,
             planned: None,
             scroll_tree: CompositorScrollTree::default(),
+            committed_content: Default::default(),
             overlay_scrollbar_damage: None,
             current_begin_frame: None,
             dirty: true,
@@ -433,39 +489,45 @@ where
     pub fn Handle(&mut self, command: Command<V, F, M>) -> io::Result<Vec<Effect<V, F, M>>> {
         let mut effects = Vec::new();
         match command {
-            Command::Snapshot(snapshot) => {
-                report_pipeline("snapshot", &snapshot);
-                let document_changed = self
+            Command::Snapshot(mut snapshot) => {
+                if self
                     .snapshot
                     .as_ref()
-                    .is_some_and(|old| old.document != snapshot.document);
-                let raster_changed = self.snapshot.as_ref().is_none_or(|old| {
-                    old.document != snapshot.document
-                        || old.signature != snapshot.signature
-                        || old.compositor_scroll_sequence != snapshot.compositor_scroll_sequence
-                }) || (!self.snapshot_matches_active(&snapshot)
-                    && !self.raster_in_flight
-                    && self.pending_snapshot.is_none());
-                if document_changed {
-                    self.toolbar_frame_builder.Invalidate();
-                    self.content_frame_builder.Invalidate();
-                    // Paint property node ids are scoped to a document.  A
-                    // newly created Page commonly starts its root scroll node
-                    // at the same small numeric id as the preceding Page; that
-                    // is not identity continuity.  Keep the old active pixels
-                    // until the replacement tree is ready, but do not carry
-                    // any of its scroll state into the replacement.
-                    self.scroll_tree.reset_document();
-                    self.pending_activation_target = None;
-                    browser_tracing::instant(
-                        "input",
-                        "CompositorDocumentScrollReset",
-                        &[
-                            ("tab", snapshot.document.0 as f64),
-                            ("generation", snapshot.document.1 as f64),
-                        ],
-                    );
+                    .is_some_and(|old| old.document != snapshot.document)
+                {
+                    return Err(io::Error::other(
+                        "a Page compositor cannot accept another Page's document",
+                    ));
                 }
+                match &snapshot.content {
+                    ContentUpdate::Unchanged => {
+                        snapshot.content = if let Some(content) = &self.committed_content {
+                            snapshot.sequence = content.sequence;
+                            snapshot.compositor_scroll_sequence = content.scroll_sequence;
+                            ContentUpdate::Replace(content.artifact.clone())
+                        } else {
+                            ContentUpdate::Clear
+                        };
+                    }
+                    ContentUpdate::Replace(artifact) => {
+                        self.committed_content = Some(CommittedContent {
+                            sequence: snapshot.sequence,
+                            scroll_sequence: snapshot.compositor_scroll_sequence,
+                            artifact: artifact.clone(),
+                        });
+                    }
+                    ContentUpdate::Clear => {
+                        self.committed_content = None;
+                    }
+                }
+                report_pipeline("snapshot", &snapshot);
+                let raster_changed = self
+                    .snapshot
+                    .as_ref()
+                    .is_none_or(|old| !old.SameRasterInputs(&snapshot))
+                    || (!self.snapshot_matches_active(&snapshot)
+                        && !self.raster_in_flight
+                        && self.pending_snapshot.is_none());
                 // SyncedScrollOffset preserves deltas newer than this frame's
                 // acknowledgement. A commit need not catch every in-flight
                 // input packet before it can provide new paint/tile coverage.
@@ -503,13 +565,7 @@ where
                     input_id: browser_tracing::instant_id(queued_at),
                     ..Default::default()
                 });
-                let toolbar_height = self
-                    .snapshot
-                    .as_ref()
-                    .map_or(0.0, |snapshot| snapshot.toolbar_height);
-                if event.position.y < toolbar_height
-                    || event.delta_units != ScrollGranularity::kScrollByPrecisePixel
-                {
+                if event.delta_units != ScrollGranularity::kScrollByPrecisePixel {
                     event.compositor_handled = false;
                     effects.push(Effect::MainThread(MainThreadEvent::Wheel {
                         event,
@@ -536,13 +592,23 @@ where
                         planned.snapshot.async_root_scroll
                             && planned.snapshot.blocking_wheel_regions.Contains(
                                 event.position.x,
-                                event.position.y - planned.snapshot.toolbar_height,
+                                event.position.y,
                                 Offset {
                                     x: self.scroll_tree.pending_delta().x / layout_zoom,
                                     y: self.scroll_tree.pending_delta().y / layout_zoom,
                                 },
                             )
                     });
+                let root_input_allowed = self.planned.as_ref().is_some_and(|planned| {
+                    planned.snapshot.async_root_scroll
+                        && planned.scroll_tree.supports_root_input_at(
+                            Offset {
+                                x: event.position.x * layout_zoom,
+                                y: event.position.y * layout_zoom,
+                            },
+                            self.scroll_tree.pending_delta(),
+                        )
+                });
                 let overlay_before = self.visible_overlay_rect();
                 let mut drawable_changed = false;
                 let constrained = event.DefaultScrollDelta();
@@ -552,10 +618,7 @@ where
                         x: constrained.x * layout_zoom,
                         y: constrained.y * layout_zoom,
                     },
-                    self.planned.as_ref().is_some_and(|planned| {
-                        planned.snapshot.async_root_scroll
-                            && planned.scroll_tree.supports_root_only_input()
-                    }),
+                    root_input_allowed,
                     blocks_main,
                 );
                 if update.did_scroll {
@@ -573,7 +636,10 @@ where
                             })
                         });
                         let applied = apply_scroll_offset(
-                            planned, root, desired, ScrollTileSelection::ActiveTree,
+                            planned,
+                            root,
+                            desired,
+                            ScrollTileSelection::ActiveTree,
                         );
                         let has_new_scroll_content =
                             planned.content.as_ref().is_some_and(|content| {
@@ -602,6 +668,9 @@ where
                     "WheelCompositorDisposition",
                     &[
                         ("blocked_on_main", update.blocked_on_main as u8 as f64),
+                        ("root_input_allowed", root_input_allowed as u8 as f64),
+                        ("compositor_ready", compositor_ready as u8 as f64),
+                        ("listener_blocks_main", blocks_main as u8 as f64),
                         (
                             "region_rects",
                             self.planned.as_ref().map_or(0.0, |planned| {
@@ -632,7 +701,6 @@ where
             Command::Resize(viewport) => {
                 if let Some(mut snapshot) = self.snapshot.clone() {
                     snapshot.viewport = viewport;
-                    snapshot.signature.2 = viewport;
                     self.snapshot = Some(snapshot.clone());
                     self.pending_snapshot = Some(snapshot);
                     self.ScheduleRaster(&mut effects);
@@ -648,12 +716,18 @@ where
             Command::RasterReady(ready) => self.InstallRaster(ready, &mut effects)?,
             Command::ActiveRasterReady(completions) => {
                 if let Some(planned) = &mut self.planned {
-                    let changed = planned.toolbar.ApplyRasterResults(&completions)
-                        + planned.content.as_mut().map_or(0, |plan| plan.ApplyRasterResults(&completions));
-                    browser_tracing::instant("raster", "ActiveRasterReady", &[
-                        ("completed_tiles", completions.len() as f64),
-                        ("updated_placements", changed as f64),
-                    ]);
+                    let changed = planned
+                        .content
+                        .as_mut()
+                        .map_or(0, |plan| plan.ApplyRasterResults(&completions));
+                    browser_tracing::instant(
+                        "raster",
+                        "ActiveRasterReady",
+                        &[
+                            ("completed_tiles", completions.len() as f64),
+                            ("updated_placements", changed as f64),
+                        ],
+                    );
                     if changed != 0 {
                         self.dirty = true;
                         effects.push(Effect::VisualDamage);
@@ -744,11 +818,9 @@ where
     }
 
     fn snapshot_matches_active(&self, snapshot: &ArtifactSnapshot<V, M>) -> bool {
-        self.planned.as_ref().is_some_and(|active| {
-            active.snapshot.document == snapshot.document
-                && active.snapshot.signature == snapshot.signature
-                && active.snapshot.compositor_scroll_sequence == snapshot.compositor_scroll_sequence
-        })
+        self.planned
+            .as_ref()
+            .is_some_and(|active| active.snapshot.SameRasterInputs(snapshot))
     }
 
     fn ScheduleRaster(&mut self, effects: &mut Vec<Effect<V, F, M>>) {
@@ -757,9 +829,9 @@ where
         }
         // RasterBundle is the retained pending-tree resource owner: its
         // LayerTileEngines and RasterEngines carry tile identities, pixels and
-        // raster caches across updates. While Display owns the active
-        // bundle and the raster owner owns the pending bundle, wait for
-        // Display::Install to return the old active bundle.  Creating a third,
+        // raster caches across updates. While the Page's output owner retains
+        // the active bundle and its raster executor owns the pending bundle,
+        // wait for that owner to return the previous active bundle. A third,
         // empty bundle here loses every retained tile and turns an otherwise
         // local image/layout update into a full visible-viewport raster.  cc
         // likewise bounds active/pending tree resources instead of replacing
@@ -828,11 +900,11 @@ where
         // A Page commit may overtake raster work. Chromium never activates a
         // pending tree whose source revision is older than the current commit:
         // doing so would move the scroll transform backwards for one frame.
-        if self.snapshot.as_ref().is_some_and(|current| {
-            current.document != planned.snapshot.document
-                || current.signature != planned.snapshot.signature
-                || current.compositor_scroll_sequence != planned.snapshot.compositor_scroll_sequence
-        }) {
+        if self
+            .snapshot
+            .as_ref()
+            .is_some_and(|current| !current.SameRasterInputs(&planned.snapshot))
+        {
             browser_tracing::instant(
                 "raster",
                 "StaleRasterTreeDiscarded",
@@ -892,12 +964,12 @@ where
         let tile_size = ready.bundle.tile_size;
         effects.push(Effect::InstallRasterBundle(ready.bundle));
         // Bootstrap the second half of the fixed active/pending pair.  The
-        // first Display::Install has no preceding active bundle to return;
+        // first activation has no preceding active bundle to return;
         // every later install does.  Create exactly this one second owner,
         // then retain and exchange the same two bundles for the document's
         // lifetime.
-        if !self.display_has_bundle {
-            self.display_has_bundle = true;
+        if !self.active_bundle_installed {
+            self.active_bundle_installed = true;
             debug_assert!(self.spare_bundle.is_none());
             self.spare_bundle = Some(RasterBundle::new(tile_size));
         }
@@ -912,15 +984,25 @@ where
         self.scroll_tree
             .is_active()
             .then(|| {
-                self.planned
-                    .as_ref()
-                    .and_then(|frame| frame.RootScrollbarQuads().map(|(quads, _)| {
-                        let mut bounds = PaintRect::default();
-                        for (part, quad) in frame.root_scrollbars.iter().flat_map(|layer| &layer.parts).zip(quads) {
-                            if part.is_thumb { bounds.union(quad.rect); }
-                        }
-                        bounds
-                    }).or_else(|| frame.RootOverlayScrollbarQuad().map(|(quad, _)| quad.rect)))
+                self.planned.as_ref().and_then(|frame| {
+                    frame
+                        .RootScrollbarQuads()
+                        .map(|(quads, _)| {
+                            let mut bounds = PaintRect::default();
+                            for (part, quad) in frame
+                                .root_scrollbars
+                                .iter()
+                                .flat_map(|layer| &layer.parts)
+                                .zip(quads)
+                            {
+                                if part.is_thumb {
+                                    bounds.union(quad.rect);
+                                }
+                            }
+                            bounds
+                        })
+                        .or_else(|| frame.RootOverlayScrollbarQuad().map(|(quad, _)| quad.rect))
+                })
             })
             .flatten()
     }
@@ -946,9 +1028,8 @@ where
         if let Some(root) = self.scroll_tree.root() {
             let desired = self.scroll_tree.visual_offset_for(root);
             if let Some(planned) = &mut self.planned {
-                let _ = apply_scroll_offset(
-                    planned, root, desired, ScrollTileSelection::ActiveTree,
-                );
+                let _ =
+                    apply_scroll_offset(planned, root, desired, ScrollTileSelection::ActiveTree);
             }
         }
         let Some(planned) = self.planned.clone() else {
@@ -959,18 +1040,17 @@ where
             sequence_number: args.sequence_number,
             has_damage: true,
         };
-        let toolbar = self
-            .toolbar_frame_builder
-            .BuildFrame(&planned.toolbar)
-            .map_err(io::Error::other)?
-            .WithBeginFrameAck(ack);
         let mut content = if let Some(plan) = planned.content.as_ref() {
             Some(
                 self.content_frame_builder
                     .BuildFrame(&{
                         let mut draw = plan.clone();
                         for layer in &mut draw.layers {
-                            if planned.root_scrollbars.iter().any(|scrollbar| scrollbar.layer_id == layer.id) {
+                            if planned
+                                .root_scrollbars
+                                .iter()
+                                .any(|scrollbar| scrollbar.layer_id == layer.id)
+                            {
                                 layer.tiles.clear();
                             }
                         }
@@ -984,18 +1064,34 @@ where
             None
         };
         if !planned.root_scrollbars.is_empty() {
-            browser_tracing::instant("input", "ScrollbarImplPosition", &[
-                ("offset_y", planned.visual_scroll.map_or(0.0, |(_, offset)| offset.y)),
-                ("layers", planned.root_scrollbars.len() as f64),
-            ]);
+            browser_tracing::instant(
+                "input",
+                "ScrollbarImplPosition",
+                &[
+                    (
+                        "offset_y",
+                        planned.visual_scroll.map_or(0.0, |(_, offset)| offset.y),
+                    ),
+                    ("layers", planned.root_scrollbars.len() as f64),
+                ],
+            );
         }
-        let overlay = planned.RootScrollbarQuads().or_else(|| self.scroll_tree.is_active()
-            .then(|| planned.RootOverlayScrollbarQuad().map(|(quad, damage)| (vec![quad], damage))).flatten());
+        let overlay = planned.RootScrollbarQuads().or_else(|| {
+            self.scroll_tree
+                .is_active()
+                .then(|| {
+                    planned
+                        .RootOverlayScrollbarQuad()
+                        .map(|(quad, damage)| (vec![quad], damage))
+                })
+                .flatten()
+        });
         let next_overlay_damage = overlay.as_ref().map(|(_, damage)| *damage);
         if let Some(frame) = content.take() {
             content = Some(match overlay {
-                Some((quads, damage)) => quads.into_iter().fold(frame,
-                    |frame, quad| frame.WithSolidColorQuad(quad, damage)),
+                Some((quads, damage)) => quads
+                    .into_iter()
+                    .fold(frame, |frame, quad| frame.WithSolidColorQuad(quad, damage)),
                 None => match self.overlay_scrollbar_damage {
                     Some(damage) => frame.WithRootDamage(damage),
                     None => frame,
@@ -1006,10 +1102,15 @@ where
         if content.is_none() {
             self.overlay_scrollbar_damage = None;
         }
+        if let Some(root) = content
+            .as_mut()
+            .and_then(|frame| frame.render_pass_list.last_mut())
+        {
+            root.has_transparent_background = planned.snapshot.transparent_background;
+        }
         let submitted = SubmittedFrame {
             provenance: planned.snapshot.Provenance(),
             viewport: planned.snapshot.viewport,
-            toolbar,
             content,
             metadata: planned.snapshot.metadata.clone(),
         };
@@ -1054,41 +1155,21 @@ where
             .map_or(1.0, |resources| resources.layout_zoom_factor)
             .max(f64::MIN_POSITIVE)
     };
-    let toolbar_layout_zoom = artifact_scale(&snapshot.toolbar);
-    let toolbar_raster_scale = snapshot.viewport.Scale() / toolbar_layout_zoom;
-    let toolbar_config = FrameConfig {
-        viewport: PaintRect {
-            x: 0.0,
-            y: 0.0,
-            width: snapshot.viewport.LogicalWidth() * toolbar_layout_zoom,
-            height: snapshot.toolbar_height * toolbar_layout_zoom,
-        },
-        raster_scale: toolbar_raster_scale,
-        device_scale_factor: snapshot.viewport.Scale(),
-        layout_zoom_factor: toolbar_layout_zoom,
-        activation_scroll: None,
-        frame_time: Some(snapshot.frame_time),
-    };
-    let toolbar_update = bundle
-        .toolbar_tiles
-        .UpdatePending(&snapshot.toolbar, toolbar_config)
-        .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error.reason()))?;
-    if toolbar_update.frame_plan.unsupported == Some(UnsupportedReason::TileBudgetExceeded) {
-        return Err(io::Error::new(
-            io::ErrorKind::OutOfMemory,
-            "toolbar tile budget exceeded",
-        ));
-    }
     let source_root_scroll = snapshot
         .content
         .as_ref()
         .and_then(|artifact| build_artifact_scroll_tree(artifact).root());
     let raster_scroll = source_root_scroll.map(|root| (root.id, root.committed));
-    let content = if let Some(artifact) = &snapshot.content {
+    if matches!(snapshot.content, ContentUpdate::Unchanged) {
+        return Err(io::Error::other(
+            "content update was not resolved by its compositor owner",
+        ));
+    }
+    let content = if let Some(artifact) = snapshot.content.as_ref() {
         let layout_zoom = artifact_scale(artifact);
         let raster_scale = snapshot.viewport.Scale() / layout_zoom;
         let content_update = bundle
-            .content_tiles
+            .tiles
             .UpdatePending(
                 artifact,
                 FrameConfig {
@@ -1096,8 +1177,7 @@ where
                         x: 0.0,
                         y: 0.0,
                         width: snapshot.viewport.LogicalWidth() * layout_zoom,
-                        height: snapshot.viewport.ContentHeight(snapshot.toolbar_height)
-                            * layout_zoom,
+                        height: snapshot.viewport.LogicalHeight() * layout_zoom,
                     },
                     raster_scale,
                     device_scale_factor: snapshot.viewport.Scale(),
@@ -1127,48 +1207,23 @@ where
             "content tile budget exceeded",
         ));
     }
-    let toolbar_raster = bundle.toolbar_raster.prepare(
-        &toolbar_update.frame_plan,
-        &toolbar_update.raster_batch,
-        snapshot.viewport.Width(),
-        snapshot.viewport.ToolbarPixels(snapshot.toolbar_height),
-    )?;
-    bundle
-        .toolbar_tiles
-        .ApplyRasterResults(&toolbar_raster.completions);
-    let toolbar_release = bundle
-        .toolbar_tiles
-        .ActivatePending()
-        .ok_or_else(|| io::Error::other("toolbar tiles are not ready for activation"))?;
-    let toolbar_released = bundle.toolbar_raster.release_resources(&toolbar_release)?;
-    bundle
-        .toolbar_tiles
-        .AcknowledgeResourceRelease(&toolbar_released);
-    let toolbar = bundle
-        .toolbar_tiles
-        .GetActiveFramePlan()
-        .expect("activated toolbar plan")
-        .clone();
     let content = if let Some(content) = &content {
-        let raster = bundle.content_raster.prepare(
+        let raster = bundle.raster.prepare(
             &content.frame_plan,
             &content.raster_batch,
             snapshot.viewport.Width(),
-            snapshot
-                .viewport
-                .Height()
-                .saturating_sub(snapshot.viewport.ToolbarPixels(snapshot.toolbar_height)),
+            snapshot.viewport.Height(),
         )?;
-        bundle.content_tiles.ApplyRasterResults(&raster.completions);
+        bundle.tiles.ApplyRasterResults(&raster.completions);
         let content_release = bundle
-            .content_tiles
+            .tiles
             .ActivatePending()
             .ok_or_else(|| io::Error::other("content tiles are not ready for activation"))?;
-        let released = bundle.content_raster.release_resources(&content_release)?;
-        bundle.content_tiles.AcknowledgeResourceRelease(&released);
+        let released = bundle.raster.release_resources(&content_release)?;
+        bundle.tiles.AcknowledgeResourceRelease(&released);
         Some(
             bundle
-                .content_tiles
+                .tiles
                 .GetActiveFramePlan()
                 .expect("activated content plan")
                 .clone(),
@@ -1185,17 +1240,22 @@ where
             "pipeline-raster-time tab={} generation={} sequence={} elapsed_ms={:.3}",
             snapshot.document.0,
             snapshot.document.1,
-            snapshot.signature.1,
+            snapshot.sequence,
             start.elapsed().as_secs_f64() * 1000.0
         );
     }
-    let root_scrollbars = content.as_ref().zip(root_scroll)
+    let root_scrollbars = content
+        .as_ref()
+        .zip(root_scroll)
         .map_or_else(Vec::new, |(plan, root)| plan.SolidScrollbarLayers(root.id));
-    browser_tracing::instant("input", "ScrollbarLayersCommitted", &[("layers", root_scrollbars.len() as f64)]);
+    browser_tracing::instant(
+        "input",
+        "ScrollbarLayersCommitted",
+        &[("layers", root_scrollbars.len() as f64)],
+    );
     Ok(PlannedFrame {
         root_scrollbars,
         snapshot,
-        toolbar,
         content,
         scroll_tree,
         visual_scroll: root_scroll.map(|root| (root.id, root.committed)),
@@ -1205,10 +1265,20 @@ where
 
 fn build_scroll_tree(plan: &FramePlan) -> ScrollTreeSnapshot {
     let mut nodes = std::collections::BTreeMap::new();
+    let mut hit_test_regions = std::collections::BTreeMap::new();
     for layer in &plan.layers {
         let mut node = Some(&layer.properties.transform);
         while let Some(transform) = node {
             if let Some(scroll) = &transform.scroll {
+                if let Some(clip) = &scroll.overflow_clip {
+                    hit_test_regions.entry(scroll.id).or_insert_with(|| {
+                        paint::paint_property_tree::PropertyTreeState {
+                            transform: clip.local_transform_space.clone(),
+                            clip: clip.clone(),
+                            effect: layer.properties.effect.clone(),
+                        }
+                    });
+                }
                 nodes.entry(scroll.id).or_insert_with(|| {
                     let minimum = scroll.minimum_scroll_offset;
                     let maximum = Offset {
@@ -1234,15 +1304,25 @@ fn build_scroll_tree(plan: &FramePlan) -> ScrollTreeSnapshot {
             node = transform.parent.as_ref();
         }
     }
-    ScrollTreeSnapshot::new(nodes.into_values().collect())
+    ScrollTreeSnapshot::new(nodes.into_values().collect()).with_hit_test_regions(hit_test_regions)
 }
 
 fn build_artifact_scroll_tree(artifact: &PaintArtifact) -> ScrollTreeSnapshot {
     let mut nodes = std::collections::BTreeMap::new();
+    let mut hit_test_regions = std::collections::BTreeMap::new();
     for chunk in &artifact.chunks {
         let mut node = Some(&chunk.properties.transform);
         while let Some(transform) = node {
             if let Some(scroll) = &transform.scroll {
+                if let Some(clip) = &scroll.overflow_clip {
+                    hit_test_regions.entry(scroll.id).or_insert_with(|| {
+                        paint::paint_property_tree::PropertyTreeState {
+                            transform: clip.local_transform_space.clone(),
+                            clip: clip.clone(),
+                            effect: chunk.properties.effect.clone(),
+                        }
+                    });
+                }
                 nodes.entry(scroll.id).or_insert_with(|| {
                     let minimum = scroll.minimum_scroll_offset;
                     let maximum = Offset {
@@ -1268,7 +1348,7 @@ fn build_artifact_scroll_tree(artifact: &PaintArtifact) -> ScrollTreeSnapshot {
             node = transform.parent.as_ref();
         }
     }
-    ScrollTreeSnapshot::new(nodes.into_values().collect())
+    ScrollTreeSnapshot::new(nodes.into_values().collect()).with_hit_test_regions(hit_test_regions)
 }
 
 fn layer_has_scroll(transform: &Arc<TransformPaintPropertyNode>, id: u64) -> bool {
@@ -1463,7 +1543,8 @@ fn select_ready_scroll_tiles(
             .filter(|tile| plan.TileIsReady(tile))
             .cloned()
             .collect();
-        let viewport_covered = tiles_cover_rect(required_visible, &wanted, layer.raster_origin, scale);
+        let viewport_covered =
+            tiles_cover_rect(required_visible, &wanted, layer.raster_origin, scale);
         if selected.len() == wanted.len() && viewport_covered {
             // Activate a complete visible tiling in one property-tree state.
             plan.layers[layer_index].tiles = selected;
@@ -1531,24 +1612,35 @@ fn select_ready_scroll_tiles(
 // PictureLayerTiling::CoverageIterator accounts for the entire visible rect,
 // including grid slots absent from the interest set. Checking only known tile
 // readiness admits a partial viewport when input outruns the pending tiling.
-fn tiles_cover_rect(required: PaintRect, tiles: &[layer_tile::TilePlacement], origin: (f64, f64), scale: f64) -> bool {
-    if required.is_empty() { return true; }
+fn tiles_cover_rect(
+    required: PaintRect,
+    tiles: &[layer_tile::TilePlacement],
+    origin: (f64, f64),
+    scale: f64,
+) -> bool {
+    if required.is_empty() {
+        return true;
+    }
     // CoverageIterator walks integer raster-content pixels. Restore those
     // original tile coordinates before checking adjacency; accumulating CSS
     // widths at fractional scale need not reproduce the shared edge exactly.
     let x = ((required.x - origin.0) * scale).floor();
     let y = ((required.y - origin.1) * scale).floor();
     let required = PaintRect {
-        x, y,
+        x,
+        y,
         width: ((required.x + required.width - origin.0) * scale).ceil() - x,
         height: ((required.y + required.height - origin.1) * scale).ceil() - y,
     };
-    let tiles = tiles.iter().map(|tile| PaintRect {
-        x: ((tile.tile_rect.x - origin.0) * scale).round(),
-        y: ((tile.tile_rect.y - origin.1) * scale).round(),
-        width: tile.pixel_size.0 as f64,
-        height: tile.pixel_size.1 as f64,
-    }).collect::<Vec<_>>();
+    let tiles = tiles
+        .iter()
+        .map(|tile| PaintRect {
+            x: ((tile.tile_rect.x - origin.0) * scale).round(),
+            y: ((tile.tile_rect.y - origin.1) * scale).round(),
+            width: tile.pixel_size.0 as f64,
+            height: tile.pixel_size.1 as f64,
+        })
+        .collect::<Vec<_>>();
     let bottom = required.y + required.height;
     let right = required.x + required.width;
     let mut rows = vec![required.y, bottom];
@@ -1559,19 +1651,28 @@ fn tiles_cover_rect(required: PaintRect, tiles: &[layer_tile::TilePlacement], or
     rows.sort_by(f64::total_cmp);
     rows.dedup();
     for row in rows.windows(2) {
-        let mut intervals = tiles.iter().filter_map(|tile| {
-            let rect = *tile;
-            (rect.y <= row[0] && rect.y + rect.height >= row[1])
-                .then_some((rect.x, rect.x + rect.width))
-        }).collect::<Vec<_>>();
+        let mut intervals = tiles
+            .iter()
+            .filter_map(|tile| {
+                let rect = *tile;
+                (rect.y <= row[0] && rect.y + rect.height >= row[1])
+                    .then_some((rect.x, rect.x + rect.width))
+            })
+            .collect::<Vec<_>>();
         intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut covered = required.x;
         for (left, end) in intervals {
-            if left > covered { break; }
+            if left > covered {
+                break;
+            }
             covered = covered.max(end);
-            if covered >= right { break; }
+            if covered >= right {
+                break;
+            }
         }
-        if covered < right { return false; }
+        if covered < right {
+            return false;
+        }
     }
     true
 }
@@ -1605,18 +1706,23 @@ mod provenance_tests {
     fn snapshot(generation: u64, content: bool) -> ArtifactSnapshot<(), ()> {
         ArtifactSnapshot {
             document: (7, generation),
+
             viewport: (),
-            toolbar_height: 0.0,
+
             frame_time: Instant::now(),
-            signature: (3, 1, ()),
+            sequence: 1,
             compositor_scroll_sequence: 0,
-            toolbar: Arc::new(PaintArtifact::default()),
-            content: content.then(|| {
-                Arc::new(PaintArtifact {
-                    recording_revision: 19,
-                    ..Default::default()
+            transparent_background: false,
+
+            content: content
+                .then(|| {
+                    Arc::new(PaintArtifact {
+                        recording_revision: 19,
+                        ..Default::default()
+                    })
                 })
-            }),
+                .into(),
+
             metadata: (),
             async_root_scroll: false,
             blocking_wheel_regions: Default::default(),
@@ -1624,7 +1730,7 @@ mod provenance_tests {
     }
 
     #[test]
-    fn toolbar_only_snapshot_has_no_content_provenance() {
+    fn empty_page_snapshot_has_no_content_provenance() {
         let provenance = snapshot(4, false).Provenance();
         assert_eq!(provenance.document, (7, 4));
         assert_eq!(provenance.content, None);
@@ -1679,13 +1785,16 @@ mod lifecycle_tests {
     fn snapshot(sequence: u64) -> ArtifactSnapshot<Viewport, ()> {
         ArtifactSnapshot {
             document: (1, 1),
+
             viewport: Viewport,
-            toolbar_height: 0.0,
+
             frame_time: Instant::now(),
-            signature: (0, sequence, Viewport),
+            sequence,
             compositor_scroll_sequence: 0,
-            toolbar: Arc::new(PaintArtifact::default()),
-            content: None,
+            transparent_background: false,
+
+            content: ContentUpdate::Clear,
+
             metadata: (),
             async_root_scroll: false,
             blocking_wheel_regions: Default::default(),
@@ -1747,6 +1856,35 @@ mod lifecycle_tests {
         assert!(requests_main(
             &engine.Handle(Command::BeginFrame(frame(5))).unwrap()
         ));
+        // Separate instances retain only their own Page state.
+        let mut updates = Engine::default();
+        let artifact = Arc::new(PaintArtifact::default());
+        let mut committed = snapshot(7);
+        committed.content = ContentUpdate::Replace(artifact.clone());
+        updates.Handle(Command::Snapshot(committed)).unwrap();
+        let mut unchanged = snapshot(0);
+        unchanged.content = ContentUpdate::Unchanged;
+        updates
+            .Handle(Command::Snapshot(unchanged.clone()))
+            .unwrap();
+        let retained = updates.snapshot.as_ref().unwrap();
+        assert_eq!(retained.sequence, 7);
+        assert!(Arc::ptr_eq(retained.content.as_ref().unwrap(), &artifact));
+        let mut other_page = Engine::default();
+        let mut other = unchanged.clone();
+        other.document = (2, 1);
+        other_page.Handle(Command::Snapshot(other.clone())).unwrap();
+        assert!(other_page
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .content
+            .as_ref()
+            .is_none());
+        assert!(updates.Handle(Command::Snapshot(other)).is_err());
+        unchanged.content = ContentUpdate::Clear;
+        updates.Handle(Command::Snapshot(unchanged)).unwrap();
+        assert!(updates.committed_content.is_none());
     }
     #[test]
     fn impl_coverage_raster_allows_main_but_a_distinct_commit_waits_for_activation() {
@@ -1796,7 +1934,7 @@ mod lifecycle_tests {
             }))
             .unwrap();
         assert!(effects.is_empty());
-        assert_eq!(engine.planned.as_ref().unwrap().snapshot.signature.1, 1);
+        assert_eq!(engine.planned.as_ref().unwrap().snapshot.sequence, 1);
         assert!(engine.pending_snapshot.is_none());
         assert!(!engine.raster_in_flight_main_commit);
         assert!(requests_main(
@@ -1846,7 +1984,7 @@ mod lifecycle_tests {
             engine.snapshot = Some(snapshot.clone());
             engine.planned = Some(PlannedFrame {
                 snapshot,
-                toolbar: content.clone(),
+
                 content: Some(content),
                 scroll_tree: ScrollTreeSnapshot::new(vec![root]),
                 visual_scroll: Some((2, Offset::default())),
@@ -1889,22 +2027,45 @@ mod lifecycle_tests {
         // a prefix of the newly visible viewport. Pending activation must keep
         // the complete active tree rather than publishing that partial strip.
         let mut partial = scrolling_engine(true);
-        for tile in &mut partial.planned.as_mut().unwrap().content.as_mut().unwrap().layers[1].interest_tiles {
+        for tile in &mut partial
+            .planned
+            .as_mut()
+            .unwrap()
+            .content
+            .as_mut()
+            .unwrap()
+            .layers[1]
+            .interest_tiles
+        {
             tile.tile_rect.height = 16.;
             tile.pixel_size.1 = 16;
         }
         let root = partial.scroll_tree.root().unwrap();
-        assert!(!apply_scroll_offset(partial.planned.as_mut().unwrap(), root,
-            Offset { x: 0., y: 3. }, ScrollTileSelection::PendingTree));
-        assert_eq!(partial.planned.as_ref().unwrap().visual_scroll.unwrap().1.y, 0.);
+        assert!(!apply_scroll_offset(
+            partial.planned.as_mut().unwrap(),
+            root,
+            Offset { x: 0., y: 3. },
+            ScrollTileSelection::PendingTree
+        ));
+        assert_eq!(
+            partial.planned.as_ref().unwrap().visual_scroll.unwrap().1.y,
+            0.
+        );
         for ready in [false, true] {
             let mut engine = scrolling_engine(ready);
             assert!(engine.Prepare(frame(1)).unwrap().is_empty());
             if !ready {
                 let root = engine.scroll_tree.root().unwrap();
-                assert!(!apply_scroll_offset(engine.planned.as_mut().unwrap(), root,
-                    Offset { x: 0., y: 3. }, ScrollTileSelection::PendingTree));
-                assert_eq!(engine.planned.as_ref().unwrap().visual_scroll.unwrap().1.y, 0.);
+                assert!(!apply_scroll_offset(
+                    engine.planned.as_mut().unwrap(),
+                    root,
+                    Offset { x: 0., y: 3. },
+                    ScrollTileSelection::PendingTree
+                ));
+                assert_eq!(
+                    engine.planned.as_ref().unwrap().visual_scroll.unwrap().1.y,
+                    0.
+                );
             }
             let effects = engine.Handle(wheel(3.)).unwrap();
             assert_eq!(
@@ -1937,8 +2098,40 @@ mod lifecycle_tests {
             engine.scroll_tree.pull_delta_for_main().unwrap();
             assert!(engine.scroll_tree.has_unacknowledged_batch(0));
             engine.Handle(Command::Snapshot(snapshot(2))).unwrap();
-            assert_eq!(engine.snapshot.as_ref().unwrap().signature.1, 2,
-                "unacknowledged impl input must not reject a new main snapshot");
+            assert_eq!(
+                engine.snapshot.as_ref().unwrap().sequence,
+                2,
+                "unacknowledged impl input must not reject a new main snapshot"
+            );
         }
+        // Hiding a Page leaves its compositor instance and SyncedProperty intact.
+        let mut returning = scrolling_engine(true);
+        let mut other = scrolling_engine(true);
+        for expected in 1..=3 {
+            returning.Handle(wheel(3.)).unwrap();
+            let packet = returning.scroll_tree.pull_delta_for_main().unwrap();
+            assert_eq!(packet.sequence, expected);
+            let mut root = returning.scroll_tree.root().unwrap();
+            root.committed.y += packet.delta.y;
+            returning.scroll_tree.activate(Some(root), expected);
+            other.Handle(wheel(1.)).unwrap();
+            assert_eq!(
+                other.scroll_tree.pull_delta_for_main().unwrap().sequence,
+                expected
+            );
+            let mut root = other.scroll_tree.root().unwrap();
+            root.committed.y += 1.;
+            other.scroll_tree.activate(Some(root), expected);
+        }
+        let mut navigated = scrolling_engine(true);
+        navigated.Handle(wheel(3.)).unwrap();
+        assert_eq!(
+            navigated
+                .scroll_tree
+                .pull_delta_for_main()
+                .unwrap()
+                .sequence,
+            1
+        );
     }
 }

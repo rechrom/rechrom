@@ -248,11 +248,9 @@ fn create_page(
     let mut space = crate::CreateBrowserConstraints(160, 96);
     space.fonts = vec![FontFace {
         family: "sans-serif".into(),
-        bytes: include_bytes!(
-            "../../../assets/fonts/Roboto-Regular.ttf"
-        )
-        .as_slice()
-        .into(),
+        bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
+            .as_slice()
+            .into(),
         ..Default::default()
     }];
     Page::Create(
@@ -1104,11 +1102,9 @@ fn without_javascript(mode: &str) {
     let mut space = crate::CreateBrowserConstraints(160, 96);
     space.fonts = vec![FontFace {
         family: "sans-serif".into(),
-        bytes: include_bytes!(
-            "../../../assets/fonts/Roboto-Regular.ttf"
-        )
-        .as_slice()
-        .into(),
+        bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
+            .as_slice()
+            .into(),
         ..Default::default()
     }];
     let mut page = Page::Create(
@@ -1378,11 +1374,9 @@ fn create_image_fixture_page(
     let mut space = crate::CreateBrowserConstraints(160, 96);
     space.fonts = vec![FontFace {
         family: "sans-serif".into(),
-        bytes: include_bytes!(
-            "../../../assets/fonts/Roboto-Regular.ttf"
-        )
-        .as_slice()
-        .into(),
+        bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
+            .as_slice()
+            .into(),
         ..Default::default()
     }];
     let loader = Rc::new(RefCell::new(Loader(root.to_path_buf(), trace.clone())));

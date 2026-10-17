@@ -298,6 +298,16 @@ impl PersistentDocument {
         self.custom_elements.HasPending()
     }
 
+    /// Nodes retained by the native custom-element reaction queues.
+    pub fn PendingCustomElementReferenceRoots(&self) -> Vec<u64> {
+        self.custom_elements
+            .reactions
+            .iter()
+            .filter(|(_, queue)| !queue.is_empty())
+            .map(|(&element, _)| self.Node(element).Id())
+            .collect()
+    }
+
     /// Embeddings schedule a microtask when the backup queue acquires work.
     /// A nested CEReactions scope must not hide this scheduling signal.
     pub fn HasPendingCustomElementBackupReactions(&self) -> bool {

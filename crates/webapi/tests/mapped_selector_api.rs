@@ -34,7 +34,7 @@ fn mapped_selector_api_uses_real_dom_and_errors() {
         for(const operation of [()=>a.matches('p >'),()=>a.closest(''),()=>root.querySelector('['),()=>root.querySelectorAll('p,')]){
             let threw=false;try{operation()}catch(e){threw=e instanceof SyntaxError}check(threw,'syntax error');
         }
-        let pending=false;try{root.querySelector(':playing')}catch(e){pending=String(e).includes('NotSupportedError')}check(pending,'explicit unsupported collaborator');
+        let pending=false;try{root.querySelector(':fullscreen')}catch(e){pending=String(e).includes('NotSupportedError')}check(pending,'explicit unsupported collaborator');
     "#,"mapped-selector-test.js");
     assert!(result.Succeeded(), "{:?}", result.exception);
 }

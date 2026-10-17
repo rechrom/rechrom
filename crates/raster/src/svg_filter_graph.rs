@@ -2,8 +2,8 @@
 
 use layoutng_assembly::internal::paint_input::{
     SvgBlendMode, SvgColorMatrixType, SvgCompositeOperator, SvgFilterGraph, SvgFilterInput,
-    SvgFilterLength, SvgFilterPrimitiveKind, SvgFilterRegion, SvgFilterUnits, SvgLightSource,
-    SvgLightingType,
+    SvgFilterLength, SvgFilterPrimitive, SvgFilterPrimitiveKind, SvgFilterRegion, SvgFilterUnits,
+    SvgLightSource, SvgLightingType,
 };
 use paint::paint_engine::PaintRect;
 use skia::cpu::layer_filters::{
@@ -11,6 +11,7 @@ use skia::cpu::layer_filters::{
     RenderSvgFilterKind, RenderSvgFilterPrimitive, RenderSvgLight, RenderSvgLightingType,
     RenderSvgTransfer,
 };
+use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
@@ -25,6 +26,66 @@ fn svg_input(input: &SvgFilterInput) -> String {
         SvgFilterInput::kNamed(value) => value.clone(),
     }
 }
+// cpp: SVGFilterPrimitiveStandardAttributes::DefaultFilterPrimitiveSubregion.
+// Standard inputs and input-free effects use the filter region. Other effects
+// inherit the union of their input subregions, before explicit attributes
+// override individual coordinates in SetStandardAttributes.
+fn default_primitive_subregion(
+    primitive: &SvgFilterPrimitive,
+    filter: [f32; 4],
+    previous: Option<[f32; 4]>,
+    named: &HashMap<&str, [f32; 4]>,
+) -> [f32; 4] {
+    use SvgFilterPrimitiveKind::*;
+    if matches!(
+        primitive.kind,
+        kFlood { .. } | kTurbulence { .. } | kImage { .. } | kTile
+    ) {
+        return filter;
+    }
+    let mut union: Option<[f32; 4]> = None;
+    let mut count = 0;
+    let mut add = |input: &SvgFilterInput| {
+        count += 1;
+        let region = match input {
+            SvgFilterInput::kNamed(name) if name.is_empty() => previous,
+            SvgFilterInput::kNamed(name) => named.get(name.as_str()).copied(),
+            _ => None,
+        };
+        let Some(region) = region else {
+            return false;
+        };
+        if region[2] > 0. && region[3] > 0. {
+            union = Some(match union {
+                None => region,
+                Some(old) => {
+                    let x = old[0].min(region[0]);
+                    let y = old[1].min(region[1]);
+                    [
+                        x,
+                        y,
+                        (old[0] + old[2]).max(region[0] + region[2]) - x,
+                        (old[1] + old[3]).max(region[1] + region[3]) - y,
+                    ]
+                }
+            });
+        }
+        true
+    };
+    let inherited = match &primitive.kind {
+        kMerge { inputs } => inputs.iter().all(&mut add),
+        kBlend { input2, .. } | kComposite { input2, .. } | kDisplacementMap { input2, .. } => {
+            add(&primitive.input) && add(input2)
+        }
+        _ => add(&primitive.input),
+    };
+    if inherited && count != 0 {
+        union.unwrap_or([0.; 4])
+    } else {
+        filter
+    }
+}
+
 pub fn TranslateSvgFilterGraph(
     graph: &SvgFilterGraph,
     reference: PaintRect,
@@ -116,8 +177,20 @@ pub fn TranslateSvgFilterGraphWithTransform(
         [rx - rw * 0.1, ry - rh * 0.1, rw * 1.2, rh * 1.2],
     );
     let mut primitives = Vec::with_capacity(graph.primitives.len());
+    let mut named_regions = HashMap::new();
+    let mut previous_region = None;
     for primitive in &graph.primitives {
-        let region = resolve_region(&primitive.region, graph.primitive_units, [rx, ry, rw, rh]);
+        let defaults =
+            default_primitive_subregion(primitive, filter_region, previous_region, &named_regions);
+        let region = resolve_region(
+            &primitive.region,
+            graph.primitive_units,
+            defaults.map(f64::from),
+        );
+        if !primitive.result.is_empty() {
+            named_regions.insert(primitive.result.as_str(), region);
+        }
+        previous_region = Some(region);
         let kind = match &primitive.kind {
             SvgFilterPrimitiveKind::kGaussianBlur {
                 sigma_x,
@@ -395,11 +468,7 @@ pub fn TranslateSvgFilterGraphWithTransform(
                 let (sx, sy, sz) = if object_units {
                     (rw, rh, (rw.mul_add(rw, rh * rh) * 0.5).sqrt())
                 } else {
-                    (
-                        user_scale_x,
-                        user_scale_y,
-                        user_scale_x.max(user_scale_y),
-                    )
+                    (user_scale_x, user_scale_y, user_scale_x.max(user_scale_y))
                 };
                 let point =
                     |x: f64, y: f64, z: f64| [(x * sx) as f32, (y * sy) as f32, (z * sz) as f32];

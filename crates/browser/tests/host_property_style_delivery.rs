@@ -77,9 +77,7 @@ fn fixture() -> (Page, Rc<RefCell<Vec<String>>>) {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(
-            &assembly,
-        ))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
         constraints,
         Some(ScriptEnvironment {
             runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(

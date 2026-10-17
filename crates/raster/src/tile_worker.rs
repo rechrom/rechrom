@@ -42,18 +42,16 @@ struct Batch {
     reply: mpsc::Sender<(u64, io::Result<Vec<RasterProduct>>, bool)>,
 }
 struct Worker {
-    sender: Option<mpsc::Sender<Batch>>,
-    thread: Option<thread::JoinHandle<()>>,
+    executor: Arc<dyn executor::Executor>,
+    state: Arc<Mutex<WorkerState>>,
 }
-impl Drop for Worker {
-    fn drop(&mut self) {
-        // Closing the queue finishes any accepted work before shutdown. Join
-        // also releases the lane's caches and thread-local raster scratch.
-        self.sender.take();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
+struct WorkerState {
+    scratch: Vec<u8>,
+    images: RasterImageCache,
+    clips: skia::RasterClipProductCache,
+    memory_id: Option<usize>,
+    clip_limit: usize,
+    image_limit: usize,
 }
 pub(crate) struct RasterWorkerPool {
     workers: Vec<Worker>,
@@ -69,7 +67,9 @@ pub(crate) struct PendingTiles {
 }
 impl PendingTiles {
     fn accept(&mut self, frame: u64, result: io::Result<Vec<RasterProduct>>, complete: bool) {
-        if complete { self.outstanding -= 1; }
+        if complete {
+            self.outstanding -= 1;
+        }
         if frame != self.frame {
             self.error
                 .get_or_insert_with(|| io::Error::other("raster worker returned another frame"));
@@ -86,14 +86,18 @@ impl PendingTiles {
     /// for those tile generations. Other accepted work retains its owner and
     /// is collected at subsequent CheckForCompletedTasks opportunities.
     pub fn collect_required(
-        &mut self, required: &[(layer_tile::TileId, u64)],
+        &mut self,
+        required: &[(layer_tile::TileId, u64)],
     ) -> io::Result<Vec<RasterProduct>> {
         let mut wanted: std::collections::HashSet<_> = required.iter().copied().collect();
         {
-            let mut jobs = self.jobs.lock()
+            let mut jobs = self
+                .jobs
+                .lock()
                 .map_err(|_| io::Error::other("raster task queue poisoned"))?;
             let queued = std::mem::take(&mut *jobs);
-            let (now, soon): (VecDeque<_>, VecDeque<_>) = queued.into_iter()
+            let (now, soon): (VecDeque<_>, VecDeque<_>) = queued
+                .into_iter()
                 .partition(|job| wanted.contains(&(job.task.tile_id, job.task.generation)));
             jobs.extend(now);
             jobs.extend(soon);
@@ -101,7 +105,8 @@ impl PendingTiles {
         for product in &self.products {
             wanted.remove(&(product.task.tile_id, product.task.generation));
         }
-        let _wait = (!wanted.is_empty()).then(|| browser_tracing::span("raster", "RasterRequiredTileWait"));
+        let _wait =
+            (!wanted.is_empty()).then(|| browser_tracing::span("raster", "RasterRequiredTileWait"));
         while self.outstanding != 0 {
             let response = if wanted.is_empty() {
                 match self.receiver.try_recv() {
@@ -109,7 +114,9 @@ impl PendingTiles {
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
                         self.outstanding = 0;
-                        self.error.get_or_insert_with(|| io::Error::other("raster worker exited before completing its batch"));
+                        self.error.get_or_insert_with(|| {
+                            io::Error::other("raster worker exited before completing its batch")
+                        });
                         break;
                     }
                 }
@@ -118,7 +125,9 @@ impl PendingTiles {
                     Ok(response) => response,
                     Err(_) => {
                         self.outstanding = 0;
-                        self.error.get_or_insert_with(|| io::Error::other("raster worker exited before completing its batch"));
+                        self.error.get_or_insert_with(|| {
+                            io::Error::other("raster worker exited before completing its batch")
+                        });
                         break;
                     }
                 }
@@ -128,11 +137,17 @@ impl PendingTiles {
             }
             self.accept(response.0, response.1, response.2);
         }
-        if let Some(error) = self.error.take() { return Err(error); }
-        if !wanted.is_empty() { return Err(io::Error::other("required raster tile did not complete")); }
+        if let Some(error) = self.error.take() {
+            return Err(error);
+        }
+        if !wanted.is_empty() {
+            return Err(io::Error::other("required raster tile did not complete"));
+        }
         Ok(std::mem::take(&mut self.products))
     }
-    pub fn is_finished(&self) -> bool { self.outstanding == 0 }
+    pub fn is_finished(&self) -> bool {
+        self.outstanding == 0
+    }
     pub fn finish(mut self) -> io::Result<Vec<RasterProduct>> {
         let _wait = browser_tracing::span("raster", "RasterWorkerWait");
         // Drain every accepted batch even when another lane failed. No reply,
@@ -159,38 +174,53 @@ impl Drop for PendingTiles {
     fn drop(&mut self) {
         while self.outstanding != 0 {
             match self.receiver.recv() {
-                Ok((_, _, complete)) => { if complete { self.outstanding -= 1; } }
+                Ok((_, _, complete)) => {
+                    if complete {
+                        self.outstanding -= 1;
+                    }
+                }
                 Err(_) => break,
             }
         }
     }
 }
 impl RasterWorkerPool {
-    pub fn new(clip_limit: usize) -> io::Result<Self> {
+    pub fn new(clip_limit: usize, executor: Arc<dyn executor::Executor>) -> io::Result<Self> {
         // content/browser/gpu/compositor_util.cc::NumberOfRendererRasterThreads:
         // half the logical processors, clamped to [1, 4].
         let count = thread::available_parallelism()
             .map_or(1, usize::from)
             .saturating_div(2)
             .clamp(1, 4);
-        Self::new_with_count(clip_limit, 16 * 1024 * 1024, count)
+        Self::new_with_count(clip_limit, 16 * 1024 * 1024, count, executor)
     }
     /// SOON work uses a distinct single lane so it cannot occupy the NOW
     /// workers which the next frame may need at its display deadline.
-    pub fn new_prepaint(clip_limit: usize) -> io::Result<Self> {
-        Self::new_with_count(clip_limit, 16 * 1024 * 1024, 1)
+    pub fn new_prepaint(
+        clip_limit: usize,
+        executor: Arc<dyn executor::Executor>,
+    ) -> io::Result<Self> {
+        Self::new_with_count(clip_limit, 16 * 1024 * 1024, 1, executor)
     }
-    fn new_with_count(clip_limit: usize, image_limit: usize, count: usize) -> io::Result<Self> {
+    fn new_with_count(
+        clip_limit: usize,
+        image_limit: usize,
+        count: usize,
+        executor: Arc<dyn executor::Executor>,
+    ) -> io::Result<Self> {
         let mut workers = Vec::with_capacity(count);
-        for index in 0..count {
-            let (sender, receiver) = mpsc::channel::<Batch>();
-            let thread = thread::Builder::new()
-                .name(format!("cpu-tile-raster-{index}"))
-                .stack_size(8 * 1024 * 1024)
-                .spawn(move || worker_loop(receiver, clip_limit, image_limit))?;
+        for _ in 0..count {
             workers.push(Worker {
-                sender: Some(sender),
-                thread: Some(thread),
+                executor: executor.clone(),
+                state: Arc::new(Mutex::new(WorkerState {
+                    scratch: Vec::new(),
+                    images: RasterImageCache::with_pixel_byte_limit(image_limit),
+                    clips: skia::RasterClipProductCache::with_byte_limit(clip_limit),
+                    memory_id: crate::engine::memory_diagnostics_enabled()
+                        .then(crate::engine::next_memory_diagnostic_id),
+                    clip_limit,
+                    image_limit,
+                })),
             });
         }
         Ok(Self {
@@ -235,11 +265,13 @@ impl RasterWorkerPool {
                 layers: layers.clone(),
                 reply: reply.clone(),
             };
+            let state = worker.state.clone();
             if worker
-                .sender
-                .as_ref()
-                .expect("live worker queue")
-                .send(batch)
+                .executor
+                .execute(Box::new(move || {
+                    let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+                    worker_batch(batch, &mut state);
+                }))
                 .is_err()
             {
                 pending
@@ -264,108 +296,115 @@ fn panic_message(value: Box<dyn Any + Send>) -> String {
         "non-string panic payload".to_owned()
     }
 }
-fn worker_loop(receiver: mpsc::Receiver<Batch>, clip_limit: usize, image_limit: usize) {
-    let mut scratch = Vec::new();
-    // Decoded sources and mip products remain warm on the same persistent
-    // raster lane. Their catalog owners are immutable Arcs.
-    let memory_id =
-        crate::engine::memory_diagnostics_enabled().then(crate::engine::next_memory_diagnostic_id);
-    let mut images = RasterImageCache::with_pixel_byte_limit(image_limit);
-    let mut clips = skia::RasterClipProductCache::with_byte_limit(clip_limit);
-    while let Ok(batch) = receiver.recv() {
-        let frame = batch.frame;
-        let reply = batch.reply.clone();
-        let outcome = catch_unwind(AssertUnwindSafe(|| {
-            let _scope = browser_tracing::scope(batch.trace_context);
-            let mut trace = browser_tracing::span("raster", "RasterWorkerBatch");
-            let list = PaintArtifact {
-                resources: batch.resources,
-                ..Default::default()
-            };
-            // One borrowed immutable resource directory per batch. Image/font
-            // owners and all command payloads are shared Arcs, never byte copies.
-            let resources = resources(&list);
-            let documents = crate::layer_replay::document_records(&list);
-            let mut replay = LayerReplay::for_worker(
-                resources,
-                documents,
-                (*batch.layers).clone(),
-                std::mem::take(&mut scratch),
-            );
-            let result = (|| {
-                let products: Vec<RasterProduct> = Vec::new();
-                let mut task_count = 0;
-                loop {
-                    let Some(job) = batch
-                        .jobs
-                        .lock()
-                        .map_err(|_| io::Error::other("raster task queue poisoned"))?
-                        .pop_front()
-                    else {
-                        break;
-                    };
-                    let mut trace = browser_tracing::span("raster", "RasterTile");
-                    trace.set("tile_id", job.task.tile_id.0 as f64);
-                    trace.set("layer_id", job.task.layer_id.0 as f64);
-                    let composition = replay
-                        .composition(job.task.layer_id)
-                        .ok_or_else(|| io::Error::other("worker job has no prepared layer"))?;
-                    let product = if let Some(premul_rgba) = job.solid_color {
-                        crate::solid::raster_product(
-                            job.plan_index, &job.task, composition, premul_rgba, job.reuse,
-                        )?
-                    } else {
-                        let rgba = replay.raster_tile_with_pixels(
-                            &job.task, &mut images, &mut clips, job.reuse,
-                        )?;
-                        let row_support = crate::engine::tile_row_support(
-                            &rgba, job.task.pixel_size.0 as usize, composition.white_backing,
-                        );
-                        let bgra = crate::engine::cached_bgra(&rgba);
-                        RasterProduct {
-                            plan_index: job.plan_index, task: job.task, composition,
-                            rgba, bgra, row_support,
-                        }
-                    };
-                    // TileManager publishes each completed task. A NOW tile
-                    // must not wait behind the rest of an unrelated SOON batch.
-                    let _ = reply.send((frame, Ok(vec![product]), false));
-                    task_count += 1;
-                }
-                trace.set("raster_tasks", task_count as f64);
-                Ok(products)
-            })();
-            scratch = replay.take_scratch();
-            result
-        }));
-        let result = match outcome {
-            Ok(result) => result,
-            Err(panic) => {
-                scratch.clear();
-                images = RasterImageCache::with_pixel_byte_limit(image_limit);
-                clips = skia::RasterClipProductCache::with_byte_limit(clip_limit);
-                Err(io::Error::other(format!(
-                    "CPU tile raster worker panicked: {}",
-                    panic_message(panic)
-                )))
-            }
+fn worker_batch(batch: Batch, state: &mut WorkerState) {
+    let WorkerState {
+        scratch,
+        images,
+        clips,
+        memory_id,
+        clip_limit,
+        image_limit,
+    } = state;
+    let memory_id = *memory_id;
+    let clip_limit = *clip_limit;
+    let image_limit = *image_limit;
+    let frame = batch.frame;
+    let reply = batch.reply.clone();
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let _scope = browser_tracing::scope(batch.trace_context);
+        let mut trace = browser_tracing::span("raster", "RasterWorkerBatch");
+        let list = PaintArtifact {
+            resources: batch.resources,
+            ..Default::default()
         };
-        if let Some(id) = memory_id {
-            let product_capacity = result.as_ref().map_or(0, |products| {
-                products
-                    .iter()
-                    .map(|p| p.rgba.capacity() + p.bgra.capacity() * std::mem::size_of::<u32>())
-                    .sum::<usize>()
-            });
-            eprintln!("raster-memory-worker time_ns={} thread={:?} lane={} batch={} image_accounted={} clip_accounted={} halo_capacity={} thread_scratch={} completed_product_capacity={} glyphs={:?}",
+        // One borrowed immutable resource directory per batch. Image/font
+        // owners and all command payloads are shared Arcs, never byte copies.
+        let resources = resources(&list);
+        let documents = crate::layer_replay::document_records(&list);
+        let mut replay = LayerReplay::for_worker(
+            resources,
+            documents,
+            (*batch.layers).clone(),
+            std::mem::take(scratch),
+        );
+        let result = (|| {
+            let products: Vec<RasterProduct> = Vec::new();
+            let mut task_count = 0;
+            loop {
+                let Some(job) = batch
+                    .jobs
+                    .lock()
+                    .map_err(|_| io::Error::other("raster task queue poisoned"))?
+                    .pop_front()
+                else {
+                    break;
+                };
+                let mut trace = browser_tracing::span("raster", "RasterTile");
+                trace.set("tile_id", job.task.tile_id.0 as f64);
+                trace.set("layer_id", job.task.layer_id.0 as f64);
+                let composition = replay
+                    .composition(job.task.layer_id)
+                    .ok_or_else(|| io::Error::other("worker job has no prepared layer"))?;
+                let product = if let Some(premul_rgba) = job.solid_color {
+                    crate::solid::raster_product(
+                        job.plan_index,
+                        &job.task,
+                        composition,
+                        premul_rgba,
+                        job.reuse,
+                    )?
+                } else {
+                    let rgba =
+                        replay.raster_tile_with_pixels(&job.task, images, clips, job.reuse)?;
+                    let row_support = crate::engine::tile_row_support(
+                        &rgba,
+                        job.task.pixel_size.0 as usize,
+                        composition.white_backing,
+                    );
+                    let bgra = crate::engine::cached_bgra(&rgba);
+                    RasterProduct {
+                        plan_index: job.plan_index,
+                        task: job.task,
+                        composition,
+                        rgba,
+                        bgra,
+                        row_support,
+                    }
+                };
+                // TileManager publishes each completed task. A NOW tile
+                // must not wait behind the rest of an unrelated SOON batch.
+                let _ = reply.send((frame, Ok(vec![product]), false));
+                task_count += 1;
+            }
+            trace.set("raster_tasks", task_count as f64);
+            Ok(products)
+        })();
+        *scratch = replay.take_scratch();
+        result
+    }));
+    let result = match outcome {
+        Ok(result) => result,
+        Err(panic) => {
+            scratch.clear();
+            *images = RasterImageCache::with_pixel_byte_limit(image_limit);
+            *clips = skia::RasterClipProductCache::with_byte_limit(clip_limit);
+            Err(io::Error::other(format!(
+                "CPU tile raster worker panicked: {}",
+                panic_message(panic)
+            )))
+        }
+    };
+    if let Some(id) = memory_id {
+        let product_capacity = result.as_ref().map_or(0, |products| {
+            products
+                .iter()
+                .map(|p| p.rgba.capacity() + p.bgra.capacity() * std::mem::size_of::<u32>())
+                .sum::<usize>()
+        });
+        eprintln!("raster-memory-worker time_ns={} thread={:?} lane={} batch={} image_accounted={} clip_accounted={} halo_capacity={} thread_scratch={} completed_product_capacity={} glyphs={:?}",
                 crate::engine::diagnostic_time_ns(), std::thread::current().id(), id, frame, images.resident_pixel_bytes(), clips.accounting().resident_requested_bytes,
                 scratch.capacity(), skia::src::core::SkCanvas::RasterThreadScratchBytes(), product_capacity,
                 skia::src::core::SkCanvas::RasterThreadGlyphMemoryDiagnostics());
-        }
-        let _ = reply.send((frame, result, true));
     }
-    if let Some(id) = memory_id {
-        eprintln!("raster-memory-worker-exit time_ns={} thread={:?} lane={}",
-            crate::engine::diagnostic_time_ns(), std::thread::current().id(), id);
-    }
+    let _ = reply.send((frame, result, true));
 }

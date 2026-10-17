@@ -15,7 +15,10 @@ use crate::parser::literal_buffer::UCharLiteralBuffer;
 use crate::parser::segmented_string::{PrependType, SegmentedString};
 use crate::preload_scanner::{HTMLPreloadScanner, PreloadScanResult};
 use dom::error::{invalid_argument, logic_error};
-use std::pin::Pin;
+use std::{
+    pin::Pin,
+    time::{Duration, Instant},
+};
 
 /// Main scanner survives parser/script resumes. Script insertion has its own
 /// tokenizer/input lifetime and is never appended to the main network scanner.
@@ -2145,6 +2148,20 @@ impl HTMLDocumentParserState {
     ) -> HTMLParserResult {
         self.WithParser(document, host, |parser| parser.Pump(token_budget))
     }
+    /// Pump an asynchronous parser task until either its token or wall-time
+    /// budget expires. Blink uses a 10 ms timed budget for the early parser
+    /// yields so the event loop can service the next visual update.
+    pub fn PumpWithTimeBudget(
+        &mut self,
+        document: &mut PersistentDocument,
+        host: &mut dyn HTMLParserHost,
+        token_budget: usize,
+        time_budget: Duration,
+    ) -> HTMLParserResult {
+        self.WithParser(document, host, |parser| {
+            parser.PumpWithTimeBudget(token_budget, time_budget)
+        })
+    }
     /// Temporarily attach existing parser/script adapters. The same DOM must
     /// be supplied each time; the continuation is restored on normal return
     /// and unwinding. No frame, resource wait or lifecycle event is implied.
@@ -2515,6 +2532,22 @@ impl<'a> HTMLDocumentParser<'a> {
     // CurrentLine/CurrentColumn retain their source calls; those
     // SegmentedString methods await foundation::OrdinalNumber.
     pub fn Pump(&mut self, token_budget: usize) -> HTMLParserResult {
+        self.PumpBounded(token_budget, None)
+    }
+
+    pub fn PumpWithTimeBudget(
+        &mut self,
+        token_budget: usize,
+        time_budget: Duration,
+    ) -> HTMLParserResult {
+        self.PumpBounded(token_budget, Some(time_budget))
+    }
+
+    fn PumpBounded(
+        &mut self,
+        token_budget: usize,
+        time_budget: Option<Duration>,
+    ) -> HTMLParserResult {
         let storage = &mut self.storage_;
         if storage.finished {
             return HTMLParserResult {
@@ -2538,6 +2571,7 @@ impl<'a> HTMLDocumentParser<'a> {
             };
         }
 
+        let started = Instant::now();
         let mut processed = 0;
         while processed < token_budget {
             let token_position = HTMLSourcePosition {
@@ -2580,6 +2614,19 @@ impl<'a> HTMLDocumentParser<'a> {
                 storage.finished = true;
                 return HTMLParserResult {
                     status: HTMLParserStatus::kFinished,
+                    script: None,
+                };
+            }
+            // Like HTMLDocumentParser::PumpTokenizer, finish the head before
+            // yielding so preload and render-blocking resource discovery is
+            // not delayed. Once a body exists, a visual update may paint the
+            // DOM accumulated by this parser task while its continuation is
+            // queued independently.
+            if storage.tree_builder.body_.is_some()
+                && time_budget.is_some_and(|budget| started.elapsed() >= budget)
+            {
+                return HTMLParserResult {
+                    status: HTMLParserStatus::kYielded,
                     script: None,
                 };
             }

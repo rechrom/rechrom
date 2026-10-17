@@ -31,8 +31,12 @@ pub fn InteractionStateNeedsPaint(
     // HTML/SVG hover alone is not a blanket paint invalidation; StyleEngine
     // determines whether the resulting CSS diff actually needs Paint.
     let appearance = |id: Option<u64>| {
-        let Some(id) = id else { return false; };
-        let Some(mut index) = document.FindNodeById(id) else { return false; };
+        let Some(id) = id else {
+            return false;
+        };
+        let Some(mut index) = document.FindNodeById(id) else {
+            return false;
+        };
         loop {
             if let Some(resolved) = document.ResolvedStyleFor(index) {
                 if unsafe { resolved.native_style.Get().as_ref() }
@@ -41,7 +45,9 @@ pub fn InteractionStateNeedsPaint(
                     return true;
                 }
             }
-            let Some(parent) = document.FlatTreeParentElement(index) else { return false; };
+            let Some(parent) = document.FlatTreeParentElement(index) else {
+                return false;
+            };
             index = parent;
         }
     };

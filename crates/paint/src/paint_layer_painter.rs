@@ -176,10 +176,18 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             );
             self.PaintForegroundPhases();
         }
+        // Blink paints the self outline with LocalBorderBoxProperties, outside
+        // ScopedBoxContentsPaintState (box_fragment_painter.cc:759-799). Mirror
+        // that scope in the flat recording too; children still need this layer's
+        // overflow clip when their own paint phases resume below.
+        self.context.borrow_mut().EndEscapableGeometry(self.layer);
         BoxFragmentPainter::PaintFragment(
             self.layer,
             &PaintInfo::new(self.context, PaintPhase::kSelfOutlineOnly),
         );
+        self.context
+            .borrow_mut()
+            .BeginEscapableGeometry(self.layer, None);
         if include_descendant_layers {
             self.PaintLayerChildren(children);
         }

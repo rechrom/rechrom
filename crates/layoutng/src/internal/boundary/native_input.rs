@@ -2498,7 +2498,7 @@ pub fn PrepareNativeStyle(
     let zoomed = crate::internal::css_zoom::ZoomedStyle(&node.style);
     let input = zoomed.as_ref();
     let defaults = ExtendedStyle::default();
-    let extra = input.extended.as_ref().unwrap_or(&defaults);
+    let extra = input.extended.as_deref().unwrap_or(&defaults);
     let mut builder = BeginNativeStyle(input, extra);
     ApplyNativeStyleListAndPosition(&mut builder, input, extra);
     ApplyNativeStyleShape(&mut builder, extra);

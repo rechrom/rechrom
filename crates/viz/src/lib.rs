@@ -177,6 +177,7 @@ pub struct AggregatedRenderPass {
     surface_id: SurfaceId,
     render_pass_id: RenderPassId,
     is_root: bool,
+    has_transparent_background: bool,
     owner_effect: Option<Arc<EffectPaintPropertyNode>>,
     destination: DeviceRect,
     frame_token: u64,
@@ -204,6 +205,10 @@ impl AggregatedRenderPass {
 
     pub fn IsRoot(&self) -> bool {
         self.is_root
+    }
+
+    pub fn HasTransparentBackground(&self) -> bool {
+        self.has_transparent_background
     }
 
     pub fn OwnerEffect(&self) -> Option<&Arc<EffectPaintPropertyNode>> {
@@ -483,6 +488,7 @@ impl VizEngine {
                     surface_id: placement.surface_id,
                     render_pass_id: pass.id,
                     is_root,
+                    has_transparent_background: pass.has_transparent_background,
                     owner_effect: pass.owner_effect.clone(),
                     destination: placement.destination,
                     frame_token: surface.frame_token,
@@ -619,6 +625,7 @@ mod tests {
             render_pass_list: vec![CompositorRenderPass {
                 id: RenderPassId(1),
                 owner_effect: None,
+                has_transparent_background: false,
                 output_rect: viewport,
                 damage_rect: viewport,
                 shared_quad_state_list: Vec::new(),

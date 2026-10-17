@@ -268,11 +268,16 @@ fn fetched_svg_hidden_definitions_match_inline_recording() {
 }
 
 #[test]
-fn generated_pseudos_keep_the_originating_clip_resource_snapshot() {
+fn generated_pseudos_bind_only_referenced_clip_resources_in_the_originating_scope() {
     native_test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
-        let page = fixture(
-            r##"
+        for referenced in [false, true] {
+            let binding_rules = if referenced {
+                "#before,#letter,#marker,#placeholder{clip-path:url(#resource)} #before::before{clip-path:inherit}"
+            } else {
+                ""
+            };
+            let markup = r##"
             <style>
               body { font-family: SvgHiddenContainerFixture; }
               #before::before { content: 'B'; }
@@ -285,42 +290,55 @@ fn generated_pseudos_keep_the_originating_clip_resource_snapshot() {
             <div id="letter">Letter</div>
             <ul><li id="marker">Item</li></ul>
             <input id="placeholder" placeholder="Hint">
-        "##,
-        );
-        let assembly = browser::CreateLayoutAssembly();
-        let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
-        let engine = page.GetLayoutEngine();
-        let root = engine.GetLayoutTree().unwrap().Root();
-        let mut bindings = std::collections::HashMap::new();
-        let mut object = root as *const LayoutObject;
-        while let Some(current) = unsafe { object.as_ref() } {
-            if let Some(node) = unsafe { current.GetNode().as_ref() } {
-                bindings.insert(node.InputId(), node.InputStyle().svg_clip_resources.clone());
+        "##;
+            let markup = markup.replace("</style>", &format!("{binding_rules}</style>"));
+            let page = fixture(&markup);
+            let assembly = browser::CreateLayoutAssembly();
+            let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
+            let engine = page.GetLayoutEngine();
+            let root = engine.GetLayoutTree().unwrap().Root();
+            let mut bindings = std::collections::HashMap::new();
+            let mut object = root as *const LayoutObject;
+            while let Some(current) = unsafe { object.as_ref() } {
+                if let Some(node) = unsafe { current.GetNode().as_ref() } {
+                    bindings.insert(node.InputId(), node.InputStyle().svg_clip_resources.clone());
+                }
+                object = current.NextInPreOrder(root);
             }
-            object = current.NextInPreOrder(root);
-        }
-        for (owner, bit) in [
-            ("before", 50),
-            ("letter", 46),
-            ("marker", 63),
-            ("placeholder", 54),
-        ] {
-            let owner_id = id(&page, owner);
-            let owner_binding = &bindings[&owner_id];
-            assert!(owner_binding
-                .snapshot
-                .entries
-                .iter()
-                .any(|entry| entry.id == "resource"));
-            let pseudo_id = owner_id | (1_u64 << bit);
-            let pseudo_binding = bindings
-                .get(&pseudo_id)
-                .unwrap_or_else(|| panic!("missing generated owner for {owner}"));
-            assert_eq!(pseudo_binding.scope, owner_binding.scope, "{owner} scope");
-            assert!(
-                std::sync::Arc::ptr_eq(&pseudo_binding.snapshot, &owner_binding.snapshot),
-                "{owner} lost its retained resource snapshot"
-            );
+            for (owner, bit) in [
+                ("before", 50),
+                ("letter", 46),
+                ("marker", 63),
+                ("placeholder", 54),
+            ] {
+                let owner_id = id(&page, owner);
+                let owner_binding = &bindings[&owner_id];
+                assert_eq!(
+                    owner_binding
+                        .snapshot
+                        .entries
+                        .iter()
+                        .any(|entry| entry.id == "resource"),
+                    referenced,
+                    "{owner} resource ownership"
+                );
+                let pseudo_id = owner_id | (1_u64 << bit);
+                let pseudo_binding = bindings
+                    .get(&pseudo_id)
+                    .unwrap_or_else(|| panic!("missing generated owner for {owner}"));
+                if referenced {
+                    assert_eq!(pseudo_binding.scope, owner_binding.scope, "{owner} scope");
+                    assert!(
+                        std::sync::Arc::ptr_eq(&pseudo_binding.snapshot, &owner_binding.snapshot),
+                        "{owner} lost its referenced resource catalog"
+                    );
+                } else {
+                    assert!(
+                        pseudo_binding.snapshot.entries.is_empty(),
+                        "{owner} retained an unrelated resource catalog"
+                    );
+                }
+            }
         }
     });
 }

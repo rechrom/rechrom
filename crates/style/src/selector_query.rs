@@ -457,7 +457,7 @@ impl SelectorQuery {
                 backend.SynchronizeAttribute(e, name.LocalName());
             }
             let mut matched = false;
-            for attr in backend.AttributesWithoutUpdate(e) {
+            for attr in backend.AttributesWithoutUpdate(e).iter() {
                 if !backend.AttributeMatchesName(&attr, name)
                     && (backend.IsHTMLElement(e)
                         || !html
@@ -1100,28 +1100,38 @@ impl SelectorQueryCache {
     }
     /// Direct dependency used by Document's selector cache. The selector
     /// parser does not require declaration/color/stylesheet backend methods.
-    pub fn AddForSelectorParser<B: SelectorQueryFilterBackend>(
+    /// Admit backend capabilities against the parsed selectors only on a
+    /// cache miss, before publishing the query. Cache hits must not parse again.
+    pub(crate) fn AddForSelectorParser<
+        B: SelectorQueryFilterBackend,
+        E: From<SelectorQuerySyntaxError>,
+    >(
         &mut self,
         selectors: &AtomicString,
         context: &crate::parser::css_selector_parser::SelectorParserContext,
         backend: &B,
-    ) -> Result<Rc<SelectorQuery>, SelectorQuerySyntaxError> {
+        admit: impl FnOnce(&[CSSSelector]) -> Result<(), E>,
+    ) -> Result<Rc<SelectorQuery>, E> {
         if selectors.empty() {
             return Err(SelectorQuerySyntaxError {
                 message: "The provided selector is empty.".into(),
-            });
+            }
+            .into());
         }
         if let Some(query) = self.entries_.get(selectors) {
             return Ok(query.clone());
         }
+        let _parse_trace = browser_tracing::span("style", "SelectorQuery.Parse");
         let text = String::from_utf16(selectors.utf16_units().unwrap());
         let vector =
             crate::parser::css_selector_parser::CSSSelectorParser::ParseSelector(&text, context);
         if vector.is_empty() {
             return Err(SelectorQuerySyntaxError {
                 message: format!("'{}' is not a valid selector.", text.Utf8()).into(),
-            });
+            }
+            .into());
         }
+        admit(&vector)?;
         let query = Rc::new(SelectorQuery::new(
             CSSSelectorList::AdoptSelectorVector(vector),
             backend,

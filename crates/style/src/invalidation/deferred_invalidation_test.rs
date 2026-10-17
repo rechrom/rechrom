@@ -130,6 +130,7 @@ impl Dom {
 impl InvalidationDom for Dom {
     type Node = usize;
     type Element = Element;
+    type ElementRef<'a> = &'a Element;
     fn element(&self, node: &usize) -> Option<&Element> {
         self.nodes[*node].element.as_ref()
     }

@@ -224,8 +224,12 @@ pub trait URLImageResolver {
     }
 
     fn ResolveMaskSource(
-        &self, value: &crate::production_css_value::CSSImageValue,
-    ) -> std::result::Result<std::ptr::NonNull<layoutng_style::style::style_image::StyleImage>, LonghandApplicationError> {
+        &self,
+        value: &crate::production_css_value::CSSImageValue,
+    ) -> std::result::Result<
+        std::ptr::NonNull<layoutng_style::style::style_image::StyleImage>,
+        LonghandApplicationError,
+    > {
         self.ResolveImage(value).map(|binding| binding.Image())
     }
 
@@ -719,9 +723,10 @@ fn ResolveStyleImage(
         CSSValuePayload::kIdentifierClass(keyword) if keyword.0 == CSSValueID::kNone => {
             std::ptr::null_mut()
         }
-        CSSValuePayload::kImageClass(url) if id == CSSPropertyID::kMaskImage => {
-            images.ok_or(LonghandApplicationError::Unsupported(id))?.ResolveMaskSource(url)?.as_ptr()
-        }
+        CSSValuePayload::kImageClass(url) if id == CSSPropertyID::kMaskImage => images
+            .ok_or(LonghandApplicationError::Unsupported(id))?
+            .ResolveMaskSource(url)?
+            .as_ptr(),
         CSSValuePayload::kImageClass(url) => ResolveFetchedImage(id, images, url, None)?,
         CSSValuePayload::kImageSetClass(set) => {
             let mut options = set

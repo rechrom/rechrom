@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_char;
 use std::io;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,7 +44,7 @@ pub struct SVGImageDecoder {
     // as any other document (StyleResolver::ForEachUARulesForElement). Keep
     // the embedding's typed, parser-backed sheets rather than reconstructing
     // defaults in Layout or Paint.
-    user_agent_sheets_: Vec<CSSStyleSheet>,
+    user_agent_sheets_: Vec<Rc<CSSStyleSheet>>,
 }
 
 #[derive(Clone)]
@@ -67,7 +68,7 @@ struct SVGDocumentAnimation {
     resource_id: ImageId,
     document: DOM,
     style_engine: style::StyleEngine,
-    user_agent_sheets: Vec<CSSStyleSheet>,
+    user_agent_sheets: Vec<Rc<CSSStyleSheet>>,
     engine: layoutng_assembly::layout_engine::LayoutEngine,
     paint_engine: paint::paint_engine::PaintEngine,
     constraints: layoutng_assembly::internal::layout_input::ConstraintSpace,
@@ -528,7 +529,7 @@ impl SVGImageDecoder {
     pub fn new_with_constraints(
         assembly: &LayoutAssembly,
         constraints: &layoutng_assembly::internal::layout_input::ConstraintSpace,
-        user_agent_sheets: &[CSSStyleSheet],
+        user_agent_sheets: &[Rc<CSSStyleSheet>],
     ) -> Self {
         Self {
             assembly_: *assembly,
@@ -780,7 +781,7 @@ impl SVGDocumentAnimation {
             });
         self.document
             .EmitLayoutMutations(&dom::UserInteractionState::default(), |mutation| {
-                self.engine.ApplyMutation(mutation);
+                self.engine.ApplyMutation(mutation)
             });
         self.engine.Layout();
         let fragments = self

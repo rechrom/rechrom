@@ -43,12 +43,14 @@ struct PendingFontFace {
     loaded: bool,
     selected: bool,
     resource: Option<ResourceLoader>,
+    decode: Option<decode::DecodeJob<Vec<u8>>>,
 }
 // cpp: browser/browser.cc:1241-1245
 struct PendingImage {
     source: String,
     url: String,
     resource: ResourceLoader,
+    decode: Option<decode::ImageDecodeJob>,
     blocks_load: bool,
 }
 
@@ -369,6 +371,7 @@ impl ResourceFetcher {
             // Fetch only after FontEngine reports actual text demand.
             selected: false,
             resource: None,
+            decode: None,
         });
         Ok(())
     }
@@ -378,16 +381,26 @@ impl ResourceFetcher {
     // cpp: core/css/font_face_set_document.cc; core/css/css_font_selector.cc
     pub fn PrepareFontFaces(&self) {
         let faces = self.pending_fonts.borrow();
-        let metadata = faces.iter().enumerate().map(|(index, face)| font_engine::WebFontFace {
-            rule_id: index as u64,
-            family: face.metadata.family.clone(),
-            weight: face.metadata.weight,
-            italic: face.metadata.italic,
-            unicode_ranges: face.metadata.unicode_ranges.clone(),
-            loaded: face.loaded,
-            failed: !face.loaded && face.resource.is_none() && face.next_url == face.metadata.urls.len(),
-        }).collect();
-        self.constraints.borrow_mut().font_queries.get_or_insert_with(Default::default)
+        let metadata = faces
+            .iter()
+            .enumerate()
+            .map(|(index, face)| font_engine::WebFontFace {
+                rule_id: index as u64,
+                family: face.metadata.family.clone(),
+                weight: face.metadata.weight,
+                italic: face.metadata.italic,
+                unicode_ranges: face.metadata.unicode_ranges.clone(),
+                loaded: face.loaded,
+                failed: !face.loaded
+                    && face.resource.is_none()
+                    && face.decode.is_none()
+                    && face.next_url == face.metadata.urls.len(),
+            })
+            .collect();
+        self.constraints
+            .borrow_mut()
+            .font_queries
+            .get_or_insert_with(Default::default)
             .RegisterWebFonts(metadata);
     }
     // cpp: browser/browser.cc:1198-1208
@@ -403,7 +416,7 @@ impl ResourceFetcher {
             }
         }
         for face in &mut *self.pending_fonts.borrow_mut() {
-            if face.resource.is_some() || !face.selected {
+            if face.resource.is_some() || face.decode.is_some() || !face.selected {
                 continue;
             }
             if face.loaded || face.next_url == face.metadata.urls.len() {
@@ -420,7 +433,7 @@ impl ResourceFetcher {
     fn ApplyFontResult(
         &self,
         face: &mut PendingFontFace,
-        result: ResourceLoadResult,
+        decoded: io::Result<Vec<u8>>,
         client: &mut dyn ResourceFetcherClient,
     ) {
         let url = face.metadata.urls[face.next_url].clone();
@@ -433,16 +446,7 @@ impl ResourceFetcher {
                 error: message,
             }))
         };
-        let Some(response) = result.response else {
-            fail(result.error, client);
-            return;
-        };
-        let decoded = self
-            .engine
-            .GetDecodeEngine()
-            .GetWebFontDecoder()
-            .Decode(response.body)
-            .and_then(font_engine::AcceptDecodedWebFont);
+        let decoded = decoded.and_then(font_engine::AcceptDecodedWebFont);
         match decoded {
             Ok(bytes) => {
                 client.ApplyResourceMutation(ResourceMutation::FontResourceReady(
@@ -521,6 +525,7 @@ impl ResourceFetcher {
                         source: image.source,
                         url: image.url,
                         resource,
+                        decode: None,
                         blocks_load: true,
                     });
                 }
@@ -545,6 +550,7 @@ impl ResourceFetcher {
             source: source.into(),
             url,
             resource,
+            decode: None,
             blocks_load,
         });
         Ok(())
@@ -570,145 +576,82 @@ impl ResourceFetcher {
                 source: image.source,
                 url: image.url,
                 resource,
+                decode: None,
                 blocks_load: false,
             });
         }
         count
     }
     // cpp: browser/browser.cc:1260-1291
+    fn BeginImageResult(
+        &self,
+        image: &PendingImage,
+        result: ResourceLoadResult,
+    ) -> io::Result<decode::ImageDecodeJob> {
+        let Some(response) = result.response else {
+            return Err(io::Error::other(result.error));
+        };
+        ImageResultBoundary(|| {
+            let mut container =
+                ContainerKey::new(0, 0, 1.0, self.constraints.borrow().device_pixel_ratio);
+            container.view_specification = SVGImageViewSpecification(&image.source).to_owned();
+            self.engine
+                .BeginImageDecode(Arc::from(response.body), &response.mime_type, &container)
+        })
+    }
     fn ApplyImageResult(
         &self,
         image: PendingImage,
-        result: ResourceLoadResult,
+        result: io::Result<DecodedImageResource>,
         client: &mut dyn ResourceFetcherClient,
     ) {
-        let Some(response) = result.response else {
-            client.ApplyResourceMutation(ResourceMutation::ResourceLoadFailed(
-                ResourceLoadFailed {
-                    kind: ResourceKind::kImage,
-                    source: Some(image.source.clone()),
-                    url: image.url,
-                    error: result.error,
-                },
-            ));
-            self.DispatchImageEvents(&image.source, false, client);
-            return;
-        };
-        let decoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || -> io::Result<_> {
-                let profile =
-                    std::env::var_os("BROWSER_PROFILE_INPUT").map(|_| std::time::Instant::now());
-                let constraints = self.constraints.borrow();
-                let mut container = ContainerKey::new(
-                    // The resource is decoded before any particular paint
-                    // client has a resolved replaced-content box. Zero asks
-                    // document_image to use the SVG intrinsic viewport;
-                    // a later typed SetContainer mutation selects a
-                    // client-specific responsive recording.
-                    0,
-                    0,
-                    1.0,
-                    constraints.device_pixel_ratio,
-                );
-                // cpp: SVGImageForContainer::CreateViewInfo(KURL). The request
-                // URL may fetch the same bytes for several fragment uses, but
-                // the decoded frame and every later variant retain the exact
-                // fragment belonging to this source.
-                container.view_specification = SVGImageViewSpecification(&image.source).to_owned();
-                drop(constraints);
-                let decoded_resource = self.engine.DecodeImage(
-                    Arc::from(response.body.clone()),
-                    &response.mime_type,
-                    &container,
-                )?;
-                let (id, decoded, document_image) = match decoded_resource {
-                    DecodedImageResource::Document { resource_id, frame } => {
-                        let paint_image = PaintImage {
-                            id: resource_id,
-                            revision: frame.revision,
-                            width: frame.intrinsic_size.width,
-                            height: frame.intrinsic_size.height,
-                            document_container_key: Some(frame.container_key.clone()),
-                            content: PaintImageContent::Document(Arc::new(
-                                DocumentPaintContent::new(
-                                    frame.container_key.clone(),
-                                    frame.record.clone(),
-                                ),
-                            )),
-                            ..Default::default()
-                        };
-                        (resource_id, paint_image, true)
-                    }
-                    DecodedImageResource::Bitmap {
-                        resource_id,
-                        image: bitmap,
-                    } => (
-                        resource_id,
-                        PaintImage {
-                            id: resource_id,
-                            revision: 1,
-                            width: bitmap.width,
-                            height: bitmap.height,
-                            orientation: bitmap.orientation,
-                            content: PaintImageContent::Bitmap(bitmap.rgba8.into()),
-                            ..Default::default()
-                        },
-                        false,
-                    ),
-                };
-                let decode_done = profile.map(|start| start.elapsed());
-                // Source catches validation while committing the decoded image,
-                // as well as decoder failures. Keep the consumed id and continue
-                // loading other resources after a rejected image.
-                self.CommitImage(image.source.clone(), decoded, client);
-                if document_image {
-                    self.document_image_sources
-                        .borrow_mut()
-                        .insert(id, image.source.clone());
+        let decoded = ImageResultBoundary(|| -> io::Result<_> {
+            let decoded_resource = result?;
+            let (id, decoded, document_image) = match decoded_resource {
+                DecodedImageResource::Document { resource_id, frame } => {
+                    let paint_image = PaintImage {
+                        id: resource_id,
+                        revision: frame.revision,
+                        width: frame.intrinsic_size.width,
+                        height: frame.intrinsic_size.height,
+                        document_container_key: Some(frame.container_key.clone()),
+                        content: PaintImageContent::Document(Arc::new(DocumentPaintContent::new(
+                            frame.container_key.clone(),
+                            frame.record.clone(),
+                        ))),
+                        ..Default::default()
+                    };
+                    (resource_id, paint_image, true)
                 }
-                let commit_done = profile.map(|start| start.elapsed());
-                self.DispatchImageEvents(&image.source, true, client);
-                if let Some(start) = profile {
-                    if start.elapsed() > std::time::Duration::from_millis(5) {
-                        eprintln!("image-completion-profile bytes={} mime={} decode_ms={:.3} commit_ms={:.3} events_ms={:.3}",
-                            response.body.len(), response.mime_type,
-                            decode_done.unwrap().as_secs_f64()*1000.0,
-                            (commit_done.unwrap()-decode_done.unwrap()).as_secs_f64()*1000.0,
-                            (start.elapsed()-commit_done.unwrap()).as_secs_f64()*1000.0);
-                    }
-                }
-                Ok(())
-            },
-        ));
-        // Source's resource exception boundary catches known engine errors.
-        // Internal Rust invariants remain visible rather than being relabeled
-        // as a broken network image and silently discarded.
-        let decoded = match decoded {
-            Ok(result) => result,
-            Err(error) => {
-                if let Some(error) = error.downcast_ref::<dom::error::DOMException>() {
-                    Err(io::Error::other(error.to_string()))
-                } else if let Some(error) = error.downcast_ref::<foundation::UnsupportedLayout>() {
-                    Err(io::Error::new(
-                        io::ErrorKind::Unsupported,
-                        error.to_string(),
-                    ))
-                } else if let Some(error) =
-                    error.downcast_ref::<layoutng_assembly::layout_engine::LayoutEngineError>()
-                {
-                    match error {
-                        layoutng_assembly::layout_engine::LayoutEngineError::InvalidArgument(
-                            message,
-                        ) => Err(io::Error::new(io::ErrorKind::InvalidInput, *message)),
-                        layoutng_assembly::layout_engine::LayoutEngineError::RuntimeError(
-                            message,
-                        ) => Err(io::Error::other(*message)),
-                    }
-                } else {
-                    std::panic::resume_unwind(error)
-                }
+                DecodedImageResource::Bitmap {
+                    resource_id,
+                    image: bitmap,
+                } => (
+                    resource_id,
+                    PaintImage {
+                        id: resource_id,
+                        revision: 1,
+                        width: bitmap.width,
+                        height: bitmap.height,
+                        orientation: bitmap.orientation,
+                        content: PaintImageContent::Bitmap(bitmap.rgba8.into()),
+                        ..Default::default()
+                    },
+                    false,
+                ),
+            };
+            // Source catches validation while committing the decoded image,
+            // as well as decoder failures. Keep the consumed id and continue
+            // loading other resources after a rejected image.
+            self.CommitImage(image.source.clone(), decoded, client);
+            if document_image {
+                self.document_image_sources
+                    .borrow_mut()
+                    .insert(id, image.source.clone());
             }
-        };
+            self.DispatchImageEvents(&image.source, true, client);
+            Ok(())
+        });
         match decoded {
             Ok(()) => {}
             Err(e) => {
@@ -1140,6 +1083,7 @@ impl ResourceFetcher {
     pub fn HasPendingFonts(&self) -> bool {
         self.pending_fonts.borrow().iter().any(|face| {
             face.resource.is_some()
+                || face.decode.is_some()
                 || (face.selected && !face.loaded && face.next_url < face.metadata.urls.len())
         })
     }
@@ -1160,25 +1104,43 @@ impl ResourceFetcher {
             .then(std::time::Instant::now);
         let count = self.pending_images.borrow().len();
         let mut completed = 0;
+        let mut admitted = 0;
         let mut index = 0;
         for _ in 0..count {
-            if completed >= max_completions {
+            if completed + admitted >= max_completions {
                 break;
             }
-            let image = {
+            let mut image = {
                 let mut images = self.pending_images.borrow_mut();
                 if index >= images.len() {
                     break;
                 }
-                if !images[index].resource.Poll() {
-                    index += 1;
-                    continue;
-                }
-                let mut image = images.remove(index);
-                let result = image.resource.TakeResult();
-                (image, result)
+                images.remove(index)
             };
-            self.ApplyImageResult(image.0, image.1, client);
+            let result = if let Some(job) = &mut image.decode {
+                job.poll()
+            } else if image.resource.Poll() {
+                let response = image.resource.TakeResult();
+                match self.BeginImageResult(&image, response) {
+                    Ok(mut job) => {
+                        let result = job.poll();
+                        if result.is_none() {
+                            admitted += 1;
+                        }
+                        image.decode = Some(job);
+                        result
+                    }
+                    Err(error) => Some(Err(error)),
+                }
+            } else {
+                None
+            };
+            let Some(result) = result else {
+                self.pending_images.borrow_mut().insert(index, image);
+                index += 1;
+                continue;
+            };
+            self.ApplyImageResult(image, result, client);
             completed += 1;
         }
         if std::env::var_os("BROWSER_TRACE_LOADING_STATE").is_some() {
@@ -1215,34 +1177,48 @@ impl ResourceFetcher {
         self.StartPendingFonts();
         let count = self.pending_fonts.borrow().len();
         let mut completed = 0;
+        let mut admitted = 0;
         let mut index = 0;
         for _ in 0..count {
-            if completed >= max_completions {
+            if completed + admitted >= max_completions {
                 break;
             }
-            let face = {
+            let mut face = {
                 let mut faces = self.pending_fonts.borrow_mut();
                 if index >= faces.len() {
                     break;
                 }
-                let Some(resource) = faces[index].resource.as_mut() else {
-                    index += 1;
-                    continue;
-                };
-                if !resource.Poll() {
-                    index += 1;
-                    continue;
-                }
-                let result = resource.TakeResult();
-                let mut face = faces.remove(index);
-                face.resource = None;
-                (face, result)
+                faces.remove(index)
             };
-            let mut face = face;
-            self.ApplyFontResult(&mut face.0, face.1, client);
-            self.pending_fonts.borrow_mut().insert(index, face.0);
+            let result = if let Some(job) = &mut face.decode {
+                job.poll()
+            } else if face
+                .resource
+                .as_mut()
+                .is_some_and(|resource| resource.Poll())
+            {
+                let result = face.resource.take().unwrap().TakeResult();
+                if let Some(response) = result.response {
+                    let mut job = self.engine.GetDecodeEngine().BeginFontDecode(response.body);
+                    let result = job.poll();
+                    if result.is_none() {
+                        admitted += 1;
+                    }
+                    face.decode = Some(job);
+                    result
+                } else {
+                    Some(Err(io::Error::other(result.error)))
+                }
+            } else {
+                None
+            };
+            if let Some(result) = result {
+                face.decode = None;
+                self.ApplyFontResult(&mut face, result, client);
+                completed += 1;
+            }
+            self.pending_fonts.borrow_mut().insert(index, face);
             index += 1;
-            completed += 1;
         }
         self.PrepareFontFaces();
         if std::env::var_os("BROWSER_TRACE_LOADING_STATE").is_some() {
@@ -1277,5 +1253,37 @@ impl ResourceFetcher {
         }
         // Keep dormant and completed faces available for later text demand.
         // Resource handles are released by PollPendingFonts at completion.
+    }
+}
+
+// Preserve the existing known resource-error boundary for document images and
+// owner-side commit. Unknown invariant failures remain Page failures.
+fn ImageResultBoundary<T>(work: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+    let decoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
+    match decoded {
+        Ok(result) => result,
+        Err(error) => {
+            if let Some(error) = error.downcast_ref::<dom::error::DOMException>() {
+                Err(io::Error::other(error.to_string()))
+            } else if let Some(error) = error.downcast_ref::<foundation::UnsupportedLayout>() {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    error.to_string(),
+                ))
+            } else if let Some(error) =
+                error.downcast_ref::<layoutng_assembly::layout_engine::LayoutEngineError>()
+            {
+                match error {
+                    layoutng_assembly::layout_engine::LayoutEngineError::InvalidArgument(
+                        message,
+                    ) => Err(io::Error::new(io::ErrorKind::InvalidInput, *message)),
+                    layoutng_assembly::layout_engine::LayoutEngineError::RuntimeError(message) => {
+                        Err(io::Error::other(*message))
+                    }
+                }
+            } else {
+                std::panic::resume_unwind(error)
+            }
+        }
     }
 }

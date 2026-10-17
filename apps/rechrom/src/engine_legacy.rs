@@ -1,0 +1,8001 @@
+//! Previous synchronous host, retained only by existing integration fixtures.
+use super::*;
+struct PageBeginFrameSource {
+    native: Arc<dyn BeginFrameSource>,
+    demand: Arc<Mutex<PageFrameDemand>>,
+}
+impl BeginFrameSource for PageBeginFrameSource {
+    fn request_begin_frame(&self) {
+        self.demand.lock().unwrap().Request();
+        self.native.request_begin_frame();
+    }
+    fn set_display(&self, display_id: u32) {
+        self.native.set_display(display_id);
+    }
+}
+
+/// Demand shared by Page and the two host delivery routes. A boolean loses the
+/// distinction between a request made for the next native pulse and an older
+/// pulse which is still travelling through Compositor: either delivery route
+/// could clear the bit and strand Page's own `requested` state forever.
+///
+/// Chromium's BeginFrame plumbing acknowledges a concrete frame against the
+/// current observer demand. Keep the same rule here: one native frame may
+/// acknowledge the generations visible when it is selected, while a request
+/// arriving after that selection remains pending for a later frame. The frame
+/// identity also makes the direct-host and compositor callbacks idempotent.
+#[derive(Default)]
+struct PageFrameDemand {
+    requested_generation: u64,
+    acknowledged_generation: u64,
+    last_delivered: Option<(u64, u64)>,
+}
+
+impl PageFrameDemand {
+    fn InitiallyRequested() -> Self {
+        Self {
+            requested_generation: 1,
+            ..Self::default()
+        }
+    }
+
+    fn Request(&mut self) {
+        self.requested_generation = self.requested_generation.wrapping_add(1);
+    }
+
+    fn TakeFor(&mut self, frame: NativeBeginFrame) -> bool {
+        let identity = (frame.source_id, frame.sequence_number);
+        if self.last_delivered.is_some_and(|(source, sequence)| {
+            source == frame.source_id && sequence >= frame.sequence_number
+        }) || self.requested_generation == self.acknowledged_generation
+        {
+            return false;
+        }
+        self.acknowledged_generation = self.requested_generation;
+        self.last_delivered = Some(identity);
+        true
+    }
+}
+
+pub fn spawn(
+    viewport: Viewport,
+    address: String,
+    output: Output,
+    window_target: crate::window_surface::DisplayTarget,
+    fallback_interval: Duration,
+    display_id: Option<u32>,
+    presentation_config: crate::presentation_runtime::Config,
+) -> io::Result<mpsc::Sender<Command>> {
+    let (sender, receiver) = mpsc::channel();
+    let page_frame_demand = Arc::new(Mutex::new(PageFrameDemand::InitiallyRequested()));
+    let frame_source = if window_target.is_native() {
+        crate::begin_frame_source::create(fallback_interval, display_id)?
+    } else {
+        crate::begin_frame_source::create_offscreen(fallback_interval)?
+    };
+    let input_frames = frame_source.GetFrameSource(0)?;
+    let compositor_frames = frame_source.GetFrameSource(1)?;
+    let display_frames = frame_source.GetFrameSource(2)?;
+    let page_frame_source: Arc<dyn BeginFrameSource> = Arc::new(PageBeginFrameSource {
+        native: frame_source.clone(),
+        demand: page_frame_demand.clone(),
+    });
+    let (page_sender, page_receiver) = mpsc::channel();
+    let begin_frame_page = page_sender.clone();
+    let begin_frame_demand = page_frame_demand.clone();
+    let main_thread: crate::presentation_runtime::MainThreadClient =
+        Arc::new(move |event| match event {
+            ::compositor::MainThreadEvent::BeginFrame {
+                frame,
+                document,
+                scroll,
+            } => {
+                if let (Some(document), Some(update)) = (document, scroll) {
+                    let _ = begin_frame_page.send(Command::CompositorScroll { document, update });
+                }
+                // Every request gets an explicit completion, including a
+                // clean frame, parser deferral and navigation paint holding.
+                begin_frame_demand.lock().unwrap().TakeFor(frame);
+                let _ = begin_frame_page.send(Command::BeginFrame(frame));
+            }
+            ::compositor::MainThreadEvent::Wheel {
+                event,
+                queued_at,
+                samples,
+            } => {
+                let _ = begin_frame_page.send(Command::QueuedInput {
+                    input: InputEvent::Wheel(event),
+                    queued_at,
+                    samples,
+                });
+            }
+        });
+    let compositor = crate::presentation_runtime::Spawn(
+        presentation_config,
+        window_target,
+        output.clone(),
+        input_frames,
+        display_frames,
+        main_thread,
+    )?;
+    let begin_frame_compositor = compositor.clone();
+    compositor_frames.SetClient(Arc::new(move |frame| {
+        let _ = begin_frame_compositor.send(
+            crate::presentation_runtime::CompositorCommand::BeginFrame(frame),
+        );
+    }))?;
+    let loading_sender = page_sender.clone();
+    let compositor_dispatch = compositor.clone();
+    let page_dispatch = page_sender.clone();
+    std::thread::Builder::new()
+        .name("browser-host-dispatch".into())
+        .spawn(move || {
+            while let Ok(command) = receiver.recv() {
+                match &command {
+                    Command::BeginFrame(frame) => {
+                        let _ = compositor_dispatch.send(
+                            crate::presentation_runtime::CompositorCommand::BeginFrame(*frame),
+                        );
+                        continue;
+                    }
+                    Command::QueuedInput {
+                        input: InputEvent::Wheel(event),
+                        queued_at,
+                        samples,
+                    } => {
+                        let _ = compositor_dispatch.send(
+                            crate::presentation_runtime::CompositorCommand::Wheel {
+                                event: event.clone(),
+                                queued_at: *queued_at,
+                                samples: *samples,
+                            },
+                        );
+                        continue;
+                    }
+                    Command::Input(InputEvent::Wheel(event)) => {
+                        let _ = compositor_dispatch.send(
+                            crate::presentation_runtime::CompositorCommand::Wheel {
+                                event: event.clone(),
+                                queued_at: Instant::now(),
+                                samples: 1,
+                            },
+                        );
+                        continue;
+                    }
+                    Command::Resize(viewport) => {
+                        let _ = compositor_dispatch.send(
+                            crate::presentation_runtime::CompositorCommand::Resize(*viewport),
+                        );
+                    }
+                    Command::Redraw => {
+                        let _ = compositor_dispatch
+                            .send(crate::presentation_runtime::CompositorCommand::Redraw);
+                    }
+                    Command::Stop => {
+                        let _ = compositor_dispatch
+                            .send(crate::presentation_runtime::CompositorCommand::Stop);
+                    }
+                    _ => {}
+                }
+                let stop = matches!(command, Command::Stop);
+                if page_dispatch.send(command).is_err() || stop {
+                    break;
+                }
+            }
+        })?;
+    std::thread::Builder::new()
+        .name("browser-page".into())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            set_page_thread_presentation_priority();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run(
+                    page_receiver,
+                    loading_sender,
+                    viewport,
+                    address,
+                    output.clone(),
+                    page_frame_source,
+                    compositor,
+                )
+            }));
+            match outcome {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => (output.notify)(UserEvent::Fatal(FatalError::new("page", error))),
+                Err(payload) => (output.notify)(UserEvent::Fatal(FatalError::new(
+                    "page",
+                    panic_message(payload),
+                ))),
+            }
+        })?;
+    Ok(sender)
+}
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    // Preserve the engine's typed unsupported boundary at the application
+    // thread handoff. A generic non-string panic hides the actual capability
+    // gap (including SVG use features that deliberately reject rendering).
+    if let Some(error) = payload.downcast_ref::<foundation::UnsupportedLayout>() {
+        return format!("unsupported layout: {error}");
+    }
+    if let Some(error) = payload.downcast_ref::<dom::error::DOMException>() {
+        return format!("browser thread {:?}: {}", error.kind, error.message);
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return format!("browser thread panicked: {message}");
+    }
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        return format!("browser thread panicked: {message}");
+    }
+    "browser thread panicked with a non-string payload".into()
+}
+
+fn run(
+    receiver: mpsc::Receiver<Command>,
+    loading_sender: mpsc::Sender<Command>,
+    viewport: Viewport,
+    address: String,
+    output: Output,
+    frame_source: Arc<dyn BeginFrameSource>,
+    compositor_sender: mpsc::Sender<crate::presentation_runtime::CompositorCommand>,
+) -> io::Result<()> {
+    let _target_scope = browser_tracing::scope(browser_tracing::Context {
+        target_id: 1,
+        ..Default::default()
+    });
+    let mut state = BrowserState::WithPresentation(
+        viewport,
+        output,
+        PresentationHost::Composited(compositor_sender),
+    )?;
+    state.loading_sender = Some(loading_sender);
+    state
+        .toolbar
+        .SetBeginFrameSource(Some(frame_source.clone()));
+    state.frame_source = Some(frame_source);
+    state.navigate(&address, true)?;
+    let mut pending = VecDeque::new();
+    let mut event_loop = EventLoopEngine::<BrowserEventLoopTask, NativeBeginFrame>::New();
+    let mut scheduling = BrowserEventLoopScheduling::default();
+    QueueForegroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+    loop {
+        if state
+            .late_scroll
+            .as_ref()
+            .is_some_and(|frame| Instant::now() >= frame.deadline)
+        {
+            if let Err(error) = state.finish_late_scroll(false) {
+                state.output.message(error);
+            }
+        }
+        let now = Instant::now();
+        QueueRequestedNativeGC(&mut event_loop, &mut scheduling, now);
+        let event_loop_deadline = match event_loop.NextWakeRequest(now) {
+            WakeRequest::Now => Some(now),
+            WakeRequest::At(deadline) => Some(deadline),
+            WakeRequest::None => state.NextTaskDeadline(now),
+            WakeRequest::Stop => break,
+        };
+        let timeout = state.late_scroll.as_ref().map_or_else(
+            || {
+                event_loop_deadline.map_or(Duration::from_secs(60 * 60), |deadline| {
+                    deadline.saturating_duration_since(now)
+                })
+            },
+            |frame| {
+                let frame_deadline = frame
+                    .input_deadline
+                    .filter(|deadline| now < *deadline)
+                    .unwrap_or(frame.deadline)
+                    .min(frame.deadline);
+                event_loop_deadline
+                    .map_or(frame_deadline, |deadline| deadline.min(frame_deadline))
+                    .saturating_duration_since(now)
+            },
+        );
+        let mut received_external_work = false;
+        match receive_command(&receiver, &mut pending, timeout) {
+            Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Ok(Command::BeginFrame(frame)) => {
+                if browser_tracing::diagnostics::enabled() {
+                    eprintln!(
+                        "owner-frame-received time_ns={} source={} sequence={}",
+                        diagnostic_time_ns(),
+                        frame.args.source_id,
+                        frame.args.sequence_number
+                    );
+                }
+                event_loop.Apply(
+                    EventLoopMutation::BeginMainFrame {
+                        context: ExecutionContextId(1),
+                        frame,
+                    },
+                    Instant::now(),
+                );
+                received_external_work = true;
+            }
+            Ok(command) => {
+                let priority = BrowserTaskPriority(&command);
+                QueueBrowserTask(
+                    &mut event_loop,
+                    &mut scheduling,
+                    priority,
+                    BrowserEventLoopTask::Command(command),
+                    None,
+                    Instant::now(),
+                );
+                received_external_work = true;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if state
+                    .late_scroll
+                    .as_ref()
+                    .is_some_and(|frame| Instant::now() >= frame.deadline)
+                {
+                    if let Err(error) = state.finish_late_scroll(false) {
+                        state.output.message(error);
+                    }
+                } else if state.late_scroll.as_ref().is_some_and(|frame| {
+                    frame
+                        .input_deadline
+                        .is_some_and(|deadline| Instant::now() >= deadline)
+                }) {
+                    // WAIT_FOR_SCROLL ends frame-production blocking. It does
+                    // not end the display cycle or force an early submit.
+                    if let Err(error) = state.resume_late_scroll_production(false) {
+                        state.output.message(error);
+                    }
+                } else if matches!(
+                    event_loop.NextWakeRequest(Instant::now()),
+                    WakeRequest::None
+                ) {
+                    // A Page task source reached the exact deadline returned
+                    // by NextTaskDeadline. Execute one complete foreground
+                    // turn; further ready work requests another immediate wake.
+                    QueueForegroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+                }
+            }
+        }
+
+        if state.late_scroll.is_none()
+            && received_external_work
+            && matches!(
+                event_loop.NextWakeRequest(Instant::now()),
+                WakeRequest::None
+            )
+        {
+            QueueForegroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+        }
+
+        if !matches!(event_loop.NextWakeRequest(Instant::now()), WakeRequest::Now) {
+            continue;
+        }
+        let mut executor = BrowserEventLoopExecutor {
+            state: &mut state,
+            receiver: &receiver,
+            pending: &mut pending,
+            scheduling: &mut scheduling,
+            request_foreground: false,
+            request_background: false,
+        };
+        if let Err(error) = event_loop.OnWake(Instant::now(), &mut executor) {
+            executor.state.output.message(error);
+        }
+        let request_foreground = executor.request_foreground;
+        let request_background = executor.request_background;
+        drop(executor);
+        QueueRequestedNativeGC(&mut event_loop, &mut scheduling, Instant::now());
+        if state.late_scroll.is_none() && request_foreground {
+            QueueForegroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+        }
+        if request_background {
+            QueueBackgroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+        }
+    }
+    Ok(())
+}
+
+enum BrowserEventLoopTask {
+    Command(Command),
+    Foreground,
+    Background,
+    NativeGC { queued_at: Instant },
+}
+
+#[derive(Default)]
+struct BrowserEventLoopScheduling {
+    next_task_id: u64,
+    foreground_queued: bool,
+    background_queued: bool,
+    native_gc_queued: bool,
+}
+
+fn BrowserTaskPriority(command: &Command) -> TaskPriority {
+    if command.input().is_some()
+        || matches!(
+            command,
+            Command::CompositorScroll { .. }
+                | Command::FocusAddress
+                | Command::Navigate(_)
+                | Command::Reload
+                | Command::NewTab
+                | Command::CloseActiveTab
+                | Command::CycleTab(_)
+                | Command::Back
+                | Command::Forward
+        )
+    {
+        TaskPriority::UserBlocking
+    } else {
+        TaskPriority::Normal
+    }
+}
+
+fn QueueBrowserTask(
+    event_loop: &mut EventLoopEngine<BrowserEventLoopTask, NativeBeginFrame>,
+    scheduling: &mut BrowserEventLoopScheduling,
+    priority: TaskPriority,
+    payload: BrowserEventLoopTask,
+    ready_at: Option<Instant>,
+    now: Instant,
+) {
+    let token = TaskToken(scheduling.next_task_id);
+    scheduling.next_task_id = scheduling.next_task_id.wrapping_add(1);
+    event_loop.Apply(
+        EventLoopMutation::PostTask(ScheduledTask {
+            token,
+            context: ExecutionContextId(1),
+            priority,
+            ready_at,
+            payload,
+        }),
+        now,
+    );
+}
+
+fn QueueForegroundTurn(
+    event_loop: &mut EventLoopEngine<BrowserEventLoopTask, NativeBeginFrame>,
+    scheduling: &mut BrowserEventLoopScheduling,
+    now: Instant,
+) {
+    if scheduling.foreground_queued {
+        return;
+    }
+    scheduling.foreground_queued = true;
+    QueueBrowserTask(
+        event_loop,
+        scheduling,
+        TaskPriority::Normal,
+        BrowserEventLoopTask::Foreground,
+        None,
+        now,
+    );
+}
+
+// cppgc precise GC and V8 marking jobs post a coalesced, non-nestable
+// foreground task. Background-only service can starve behind a loading stream.
+// EventLoopEngine already serializes complete tasks and gives input/rendering
+// priority over this Normal FIFO; no Page or GC policy enters that engine.
+fn QueueRequestedNativeGC(
+    event_loop: &mut EventLoopEngine<BrowserEventLoopTask, NativeBeginFrame>,
+    scheduling: &mut BrowserEventLoopScheduling,
+    now: Instant,
+) {
+    if scheduling.native_gc_queued || !foundation::IsLayoutHeapCollectionRequested() {
+        return;
+    }
+    scheduling.native_gc_queued = true;
+    QueueBrowserTask(
+        event_loop,
+        scheduling,
+        TaskPriority::Normal,
+        BrowserEventLoopTask::NativeGC { queued_at: now },
+        None,
+        now,
+    );
+}
+
+fn QueueBackgroundTurn(
+    event_loop: &mut EventLoopEngine<BrowserEventLoopTask, NativeBeginFrame>,
+    scheduling: &mut BrowserEventLoopScheduling,
+    now: Instant,
+) {
+    if scheduling.background_queued {
+        return;
+    }
+    scheduling.background_queued = true;
+    QueueBrowserTask(
+        event_loop,
+        scheduling,
+        TaskPriority::Background,
+        BrowserEventLoopTask::Background,
+        None,
+        now,
+    );
+}
+
+struct BrowserEventLoopExecutor<'a> {
+    state: &'a mut BrowserState,
+    receiver: &'a mpsc::Receiver<Command>,
+    pending: &'a mut VecDeque<Command>,
+    scheduling: &'a mut BrowserEventLoopScheduling,
+    request_foreground: bool,
+    request_background: bool,
+}
+
+impl EventLoopExecutor<BrowserEventLoopTask, NativeBeginFrame> for BrowserEventLoopExecutor<'_> {
+    type Error = io::Error;
+
+    fn RunTask(
+        &mut self,
+        _context: ExecutionContextId,
+        _priority: TaskPriority,
+        task: BrowserEventLoopTask,
+    ) -> io::Result<()> {
+        let observe = browser_tracing::enabled()
+            || browser_tracing::diagnostics::enabled()
+            || cfg!(feature = "allocation_diagnostics");
+        let _context = observe.then(|| {
+            browser_tracing::scope(browser_tracing::Context {
+                task_id: browser_tracing::next_id(),
+                ..Default::default()
+            })
+        });
+        let name = match &task {
+            BrowserEventLoopTask::Command(command) => command.diagnostic_name(),
+            BrowserEventLoopTask::Foreground => "Host.Foreground",
+            BrowserEventLoopTask::Background => "Host.Background",
+            BrowserEventLoopTask::NativeGC { .. } => "Host.NativeGC",
+        };
+        let _execution = browser_tracing::span("owner_task", name);
+        match task {
+            BrowserEventLoopTask::Command(command) => {
+                dispatch_host_command(self.state, command, self.receiver, self.pending)?;
+                self.request_foreground = true;
+            }
+            BrowserEventLoopTask::Foreground => {
+                self.scheduling.foreground_queued = false;
+                self.state.publish()?;
+                let gesture_frame_pending = self.state.has_priority_frame();
+                self.state.tick_foreground(|| {
+                    native_command_waiting(self.receiver, self.pending, gesture_frame_pending)
+                })?;
+                self.state.publish()?;
+                self.request_background = true;
+            }
+            BrowserEventLoopTask::NativeGC { queued_at } => {
+                self.scheduling.native_gc_queued = false;
+                if !native_command_waiting(
+                    self.receiver,
+                    self.pending,
+                    self.state.has_priority_frame(),
+                ) {
+                    if memory_diagnostics_enabled() {
+                        eprintln!(
+                            "native-gc-task time_ns={} queue_ms={:.3} requested={}",
+                            diagnostic_time_ns(),
+                            queued_at.elapsed().as_secs_f64() * 1000.0,
+                            foundation::IsLayoutHeapCollectionRequested()
+                        );
+                    }
+                    self.state.collect_native_heap_if_requested();
+                }
+                // A priority yield leaves the heap request intact. The host's
+                // post-turn request poll requeues one task; a stale task after
+                // another scope collected is a requested-only no-op.
+            }
+            BrowserEventLoopTask::Background => {
+                self.scheduling.background_queued = false;
+                if native_command_waiting(
+                    self.receiver,
+                    self.pending,
+                    self.state.has_priority_frame(),
+                ) {
+                    self.request_background = true;
+                } else {
+                    self.state.tick_background()?;
+                    self.state.publish()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn UpdateRendering(
+        &mut self,
+        _context: ExecutionContextId,
+        frame: NativeBeginFrame,
+    ) -> io::Result<()> {
+        let observe = browser_tracing::enabled()
+            || browser_tracing::diagnostics::enabled()
+            || cfg!(feature = "allocation_diagnostics");
+        let _context = observe.then(|| {
+            browser_tracing::scope(browser_tracing::Context {
+                task_id: browser_tracing::next_id(),
+                source_id: frame.args.source_id,
+                frame_id: frame.args.sequence_number,
+                ..Default::default()
+            })
+        });
+        let _execution = browser_tracing::span("owner_frame", "Host.UpdateRendering");
+        dispatch_host_command(
+            self.state,
+            Command::BeginFrame(frame),
+            self.receiver,
+            self.pending,
+        )?;
+        self.request_foreground = true;
+        Ok(())
+    }
+}
+fn dispatch_host_command(
+    state: &mut BrowserState,
+    command: Command,
+    receiver: &mpsc::Receiver<Command>,
+    pending: &mut VecDeque<Command>,
+) -> io::Result<()> {
+    let Command::BeginFrame(args) = command else {
+        let wheel = matches!(command.input(), Some(InputEvent::Wheel(_)));
+        let aligned = command.input().is_some_and(
+            interaction::frame_aligned_input_queue::FrameAlignedInputQueue::IsFrameAligned,
+        );
+        // Preserve discrete input/browser-action ordering before the held draw.
+        if state.late_scroll.is_some()
+            && !wheel
+            && !aligned
+            && !matches!(&command, Command::Wake(_))
+        {
+            state.finish_late_scroll(false)?;
+        }
+        if matches!(
+            &command,
+            Command::Reload
+                | Command::NewTab
+                | Command::CloseActiveTab
+                | Command::CycleTab(_)
+                | Command::Back
+                | Command::Forward
+                | Command::FocusAddress
+                | Command::SetActive(false)
+                | Command::Resize(_)
+        ) {
+            state.scroll_active = false;
+        }
+        state.command(command)?;
+        return Ok(());
+    };
+    state.finish_late_scroll(false)?;
+    let args = prepare_begin_frame(args, receiver, pending, |input| {
+        if let Err(error) = state.command(input) {
+            state.output.message(error);
+        }
+    });
+    state.command(Command::BeginFrame(args))
+}
+
+// Chromium's main-thread input queue snapshots ready continuous input when
+// dispatching its frame callback. Our input and pulses share a host channel:
+// transfer the already-ready continuous prefix into Page before that callback,
+// rather than rendering the old offset and leaving wheel for the next tick.
+// Discrete events remain ordering boundaries; cap work so incoming input cannot
+// indefinitely postpone this frame. This only enqueues input, not its JS task.
+fn prepare_begin_frame(
+    mut args: NativeBeginFrame,
+    receiver: &mpsc::Receiver<Command>,
+    pending: &mut VecDeque<Command>,
+    mut queue_input: impl FnMut(Command),
+) -> NativeBeginFrame {
+    for _ in 0..64 {
+        let Some(next) = pending.pop_front().or_else(|| receiver.try_recv().ok()) else {
+            break;
+        };
+        if let Command::BeginFrame(newer) = next {
+            args = latest_native_frame(args, newer);
+        } else if next.input().is_some_and(
+            interaction::frame_aligned_input_queue::FrameAlignedInputQueue::IsFrameAligned,
+        ) {
+            queue_input(next);
+        } else {
+            pending.push_front(next);
+            break;
+        }
+    }
+    args
+}
+
+fn latest_native_frame(current: NativeBeginFrame, next: NativeBeginFrame) -> NativeBeginFrame {
+    // Current-cycle demand and CV callbacks can enqueue from different threads.
+    // A delayed older notification must not replace a newer pulse.
+    if current.source_id == next.source_id && current.sequence_number >= next.sequence_number {
+        current
+    } else {
+        next
+    }
+}
+// Ordinary tasks remain independent of display ticks. publish only requests
+// a frame here; native raster/compose/present runs inside BeginFrame.
+#[cfg(test)]
+fn finish_host_turn(
+    state: &mut BrowserState,
+    receiver: &mpsc::Receiver<Command>,
+    pending: &mut VecDeque<Command>,
+) -> io::Result<()> {
+    state.publish()?;
+    // Input dispatch is itself a task with its microtask checkpoint. Like
+    // Chromium's main-thread gesture priority, choose queued input before
+    // another ordinary task. Probe after raster, since events can arrive
+    // during it; retain the command so ordering and delivery stay intact.
+    let priority_waiting = native_command_waiting(receiver, pending, state.has_priority_frame());
+    if defer_foreground_for_priority(priority_waiting) {
+        return Ok(());
+    }
+    // A completed foreground task must reach the window before an unrelated
+    // background task. Both remain ordinary, uninterruptible Page tasks.
+    let gesture_frame_pending = state.has_priority_frame();
+    // If new input arrives while toolbar work runs, leave the complete content
+    // task queued for the next host turn rather than starting behind it.
+    if let Err(error) = state.tick_foreground(|| {
+        !priority_waiting && native_command_waiting(receiver, pending, gesture_frame_pending)
+    }) {
+        state.output.message(error);
+    }
+    state.publish()?;
+    if native_command_waiting(receiver, pending, state.has_priority_frame()) {
+        return Ok(());
+    }
+    if let Err(error) = state.tick_background() {
+        state.output.message(error);
+    }
+    state.publish()
+}
+fn native_command_waiting(
+    receiver: &mpsc::Receiver<Command>,
+    pending: &mut VecDeque<Command>,
+    gesture_frame_pending: bool,
+) -> bool {
+    // MainThreadSchedulerImpl::kMainThreadGesture prioritizes compositor work
+    // for the active gesture, including a pulse between wheel samples.
+    // Animation-only pulses still leave loading/script tasks runnable.
+    let priority = |command: &Command| {
+        !matches!(command, Command::Wake(_) | Command::BeginFrame(_))
+            || (gesture_frame_pending && matches!(command, Command::BeginFrame(_)))
+    };
+    // Loading wakes and animation-only frame pulses are control work.
+    // A continuing animation must leave ordinary loading/JS tasks runnable.
+    // Look through the bounded wake prefix without reordering or consuming it:
+    // a queued wake must not conceal a mouse/key/resize behind it.
+    if pending.iter().any(priority) {
+        return true;
+    }
+    for _ in 0..64 {
+        let Ok(command) = receiver.try_recv() else {
+            return false;
+        };
+        let native = priority(&command);
+        pending.push_back(command);
+        if native {
+            return true;
+        }
+    }
+    // Yield on an unexpectedly long control prefix too; the normal dispatcher
+    // will process it, and this bounded scan never drains an unbounded queue.
+    true
+}
+// The host's ScheduleWork notification is separate from URL/body events.
+// Chromium's WorkDeduplicator coalesces requests while a wake is pending.
+fn engine_wake_callback(
+    sender: mpsc::Sender<Command>,
+    pending: Arc<AtomicBool>,
+    token: EngineWakeToken,
+) -> Arc<dyn Fn() + Send + Sync> {
+    Arc::new(move || {
+        if !pending.swap(true, Ordering::AcqRel) {
+            if sender.send(Command::Wake(token)).is_err() {
+                pending.store(false, Ordering::Release);
+            }
+        }
+    })
+}
+
+// Like a browser input queue, adjacent mouse moves retain the latest position.
+// Blink WebMouseWheelEvent coalesces compatible wheel deltas before dispatch.
+// This host keeps native phases, modifiers, units and pointer/target fixed.
+// A redundant same-position move between wheels is retained once after the
+// merged wheel so hover sees the scrolled content; real moves remain boundaries.
+fn receive_command(
+    receiver: &mpsc::Receiver<Command>,
+    pending: &mut VecDeque<Command>,
+    timeout: Duration,
+) -> Result<Command, mpsc::RecvTimeoutError> {
+    let mut command = match pending.pop_front() {
+        Some(command) => command,
+        None => receiver.recv_timeout(timeout)?,
+    };
+    if matches!(command, Command::BeginFrame(_)) {
+        while let Some(next) = pending.pop_front().or_else(|| receiver.try_recv().ok()) {
+            if let Command::BeginFrame(next_args) = next {
+                let Command::BeginFrame(current_args) = command else {
+                    unreachable!()
+                };
+                command = Command::BeginFrame(latest_native_frame(current_args, next_args));
+            } else {
+                pending.push_front(next);
+                break;
+            }
+        }
+        return Ok(command);
+    }
+    // Resize represents the newest visual properties, not a task for every
+    // intermediate native drag size. Like RenderWidgetHost's deferred visual
+    // properties update, consume only the pending adjacent resize/redraw run.
+    // Input, activation, navigation, loading wakes and Stop remain boundaries.
+    if matches!(&command, Command::Resize(viewport) if viewport.valid())
+        || matches!(&command, Command::Redraw)
+    {
+        for _ in 0..4096 {
+            let next = match pending.pop_front().or_else(|| receiver.try_recv().ok()) {
+                Some(next) => next,
+                None => break,
+            };
+            match next {
+                Command::Resize(viewport) if viewport.valid() => {
+                    command = Command::Resize(viewport)
+                }
+                Command::Redraw => {} // The selected resize also requires a full repaint.
+                next => {
+                    pending.push_front(next);
+                    break;
+                }
+            }
+        }
+        return Ok(command);
+    }
+    if !matches!(command.input(), Some(InputEvent::Mouse(event)) if event.r#type == MouseEventType::kMove)
+        && !matches!(command.input(), Some(InputEvent::Wheel(event)) if matches!(event.phase, WheelPhase::kNone | WheelPhase::kChanged))
+    {
+        return Ok(command);
+    }
+    let mut stationary_move = None;
+    for _ in 0..4096 {
+        let next = match pending.pop_front().or_else(|| receiver.try_recv().ok()) {
+            Some(next) => next,
+            None => break,
+        };
+        match (command.input_mut(), next.input()) {
+            (Some(InputEvent::Mouse(a)), Some(InputEvent::Mouse(b)))
+                if b.r#type == MouseEventType::kMove
+                    && a.button == b.button
+                    && a.target_node_id == b.target_node_id
+                    && a.modifiers == b.modifiers =>
+            {
+                *a = b.clone();
+            }
+            (Some(InputEvent::Wheel(a)), Some(InputEvent::Mouse(b)))
+                if b.r#type == MouseEventType::kMove
+                    && b.button == MouseButton::kNone
+                    && a.position == b.position
+                    && a.target_node_id == b.target_node_id
+                    && a.modifiers == b.modifiers =>
+            {
+                stationary_move = Some(next);
+                continue;
+            }
+            (Some(InputEvent::Wheel(a)), Some(InputEvent::Wheel(b)))
+                if a.CanCoalesce(b)
+                    && a.position == b.position
+                    && a.target_node_id == b.target_node_id
+                    && compatible_wheel_delta(a.delta, b.delta) =>
+            {
+                a.delta.x += b.delta.x;
+                a.delta.y += b.delta.y;
+                a.native = b.native.clone();
+            }
+            _ => {
+                pending.push_front(next);
+                break;
+            }
+        }
+        command.merge_input_timing(&next);
+    }
+    if let Some(moved) = stationary_move {
+        pending.push_front(moved);
+    }
+    Ok(command)
+}
+fn compatible_wheel_delta(a: Offset, b: Offset) -> bool {
+    let axis = |a: f64, b: f64| a.is_finite() && b.is_finite() && (a + b).is_finite();
+    axis(a.x, b.x) && axis(a.y, b.y)
+}
+
+// Page publishes platform-independent feedback at the input boundary. The
+// adapter routes only the page currently under the pointer to the native view.
+struct HostFeedback {
+    in_toolbar: Cell<bool>,
+    active_tab: Cell<u64>,
+    navigations: RefCell<VecDeque<(u64, u64, browser::page::NavigationRequest)>>,
+    cursor: Cell<browser::page::Cursor>,
+    output: Output,
+}
+impl HostFeedback {
+    fn publish(&self, cursor: browser::page::Cursor, toolbar: bool, force: bool) {
+        if self.in_toolbar.get() != toolbar {
+            return;
+        }
+        let changed = self.cursor.replace(cursor) != cursor;
+        // Native focus/leave handling can reset the OS cursor independently.
+        // Reassert feedback for a fresh input, even if Page's value is cached.
+        if force || changed {
+            if std::env::var_os("BROWSER_APP_TRACE_INPUT").is_some() {
+                eprintln!("cursor-notify {cursor:?}");
+            }
+            (self.output.notify)(UserEvent::CursorChanged(cursor));
+        }
+    }
+}
+
+struct Client {
+    pointer: Rc<HostFeedback>,
+    toolbar: bool,
+    tab_id: u64,
+    document_generation: u64,
+    trace: bool,
+    started: Instant,
+}
+impl PageClient for Client {
+    fn DidFail(&mut self, message: &str) {
+        browser_tracing::instant_with_text(
+            "navigation",
+            "DocumentLoadFailed",
+            message,
+            &[
+                ("tab_id", self.tab_id as f64),
+                ("document_generation", self.document_generation as f64),
+                ("toolbar", self.toolbar as u8 as f64),
+            ],
+        );
+        if self.trace {
+            eprintln!(
+                "loading-failed ms={:.3} message={message}",
+                self.started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+    fn DidRequestNavigation(&mut self, request: &browser::page::NavigationRequest) {
+        if !self.toolbar {
+            self.pointer.navigations.borrow_mut().push_back((
+                self.tab_id,
+                self.document_generation,
+                request.clone(),
+            ));
+        }
+    }
+    fn DidChangeCursor(&mut self, cursor: browser::page::Cursor) {
+        if self.toolbar || self.pointer.active_tab.get() == self.tab_id {
+            self.pointer.publish(cursor, self.toolbar, true);
+        }
+    }
+    fn DidCommit(&mut self, url: &str) {
+        browser_tracing::instant(
+            "navigation",
+            "DocumentCommitted",
+            &[
+                ("tab_id", self.tab_id as f64),
+                ("document_generation", self.document_generation as f64),
+                ("toolbar", self.toolbar as u8 as f64),
+            ],
+        );
+        if self.trace {
+            eprintln!(
+                "loading-commit ms={:.3} url={url}",
+                self.started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+    fn DidPresentFrame(&mut self, frame: &browser::page::PageFrame) {
+        // This callback publishes immutable paint input, not pixels. Keep the
+        // artifact identity so Display's completed output can be correlated
+        // without treating the document lifecycle as a presentation event.
+        browser_tracing::instant(
+            "paint",
+            "DocumentPaintArtifact",
+            &[
+                ("tab_id", self.tab_id as f64),
+                ("document_generation", self.document_generation as f64),
+                ("toolbar", self.toolbar as u8 as f64),
+                ("content_sequence", frame.sequence as f64),
+                (
+                    "content_recording_revision",
+                    frame.display_items.recording_revision as f64,
+                ),
+                ("display_items", frame.display_items.items.len() as f64),
+            ],
+        );
+        if std::env::var_os("BROWSER_APP_TRACE_INPUT").is_some() {
+            if let Some(caret) = frame.display_items.caret {
+                eprintln!(
+                    "caret-paint sequence={} node={} visible={} rect={:?}",
+                    frame.sequence, caret.node_id, caret.visible, caret.rect
+                );
+            }
+        }
+        if self.trace {
+            eprintln!(
+                "loading-frame ms={:.3} sequence={} items={}",
+                self.started.elapsed().as_secs_f64() * 1000.0,
+                frame.sequence,
+                frame.display_items.items.len()
+            );
+        }
+    }
+    fn DidFinishLoad(&mut self) {
+        browser_tracing::instant(
+            "navigation",
+            "DocumentLoadFinished",
+            &[
+                ("tab_id", self.tab_id as f64),
+                ("document_generation", self.document_generation as f64),
+                ("toolbar", self.toolbar as u8 as f64),
+            ],
+        );
+        if self.trace {
+            eprintln!(
+                "loading-finish ms={:.3}",
+                self.started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+    fn DidFailResource(&mut self, url: &str, error: &str) {
+        eprintln!("resource: {url}: {error}");
+    }
+    fn DidReportScriptError(
+        &mut self,
+        error: &javascript::javascript_runtime::JavaScriptException,
+    ) {
+        eprintln!("script: {}: {}", error.source_name, error.message);
+        if std::env::var_os("BROWSER_APP_TRACE_INPUT").is_some() {
+            eprintln!("script-stack: {}", error.stack);
+        }
+    }
+}
+fn configure_scrollbar_mode(
+    metrics: &mut layoutng_assembly::internal::layout_input_types::ScrollbarThemeMetrics,
+    mode: Option<&str>,
+) -> io::Result<()> {
+    match mode {
+        None => {}
+        Some("classic") => metrics.uses_overlay_scrollbars = false,
+        Some("overlay") => metrics.uses_overlay_scrollbars = true,
+        Some(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "RECHROM_SCROLLBAR_MODE must be classic or overlay",
+            ))
+        }
+    }
+    Ok(())
+}
+
+fn create_page(
+    width: f64,
+    height: f64,
+    scale: f64,
+    scripting: bool,
+    pointer: Rc<HostFeedback>,
+    toolbar: bool,
+    tab_id: u64,
+    document_generation: u64,
+) -> io::Result<Page> {
+    let mut options = url_loader::DefaultURLLoaderOptions::default();
+    // Chromium can multiplex many subresource requests over HTTP/2. Keep the
+    // embedder-wide scheduler from letting deferred scripts and media occupy
+    // every slot while render-blocking stylesheets wait behind them.
+    options.max_parallel_requests = 32;
+    options.trace_requests = std::env::var_os("BROWSER_APP_TRACE_NETWORK").is_some();
+    let loader = Rc::new(RefCell::new(url_loader::DefaultURLLoader::new(
+        options.clone(),
+    )?));
+    let images = Rc::new(RefCell::new(
+        image_decoder::skia_image_decoder::SkiaImageDecoder,
+    ));
+    let assembly = browser::CreateLayoutAssembly();
+    let mut constraints =
+        browser::CreateBrowserConstraints(width.ceil() as u32, height.ceil() as u32);
+    // The host selects a theme; pure layout receives only immutable metrics.
+    // Leave the established overlay default unchanged unless explicitly asked.
+    let scrollbar_mode = std::env::var("RECHROM_SCROLLBAR_MODE")
+        .map(Some)
+        .or_else(|error| match error {
+            std::env::VarError::NotPresent => Ok(None),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid RECHROM_SCROLLBAR_MODE",
+            )),
+        })?;
+    configure_scrollbar_mode(
+        constraints
+            .scrollbar_theme
+            .as_mut()
+            .expect("browser scrollbar metrics"),
+        scrollbar_mode.as_deref(),
+    )?;
+    constraints.available_size = Size { width, height };
+    constraints.device_pixel_ratio = scale;
+    // The embedder supplies the viewport in CSS pixels. Device scale belongs
+    // to media-resolution evaluation and the raster transform; applying it a
+    // second time as layout zoom makes Layout see a 640 CSS-pixel viewport
+    // while media queries see 1280 CSS pixels at DPR 2. Chromium's
+    // use-zoom-for-dsf path compensates by changing the LayoutView input size
+    // as well. Rechrom keeps the equivalent, simpler CSS-pixel contract at
+    // this boundary and reserves layout_zoom_factor for actual page zoom.
+    constraints.layout_zoom_factor = 1.0;
+    let document_images = Rc::new(RefCell::new(browser::CreateSVGImageDecoderWithConstraints(
+        &assembly,
+        &constraints,
+    )));
+    let environment = if scripting {
+        Some(browser::page::ScriptEnvironment {
+            // This embedding owns a 16 MiB thread. The unoptimized translated
+            // VM uses about 87 KiB per call; retain 8 MiB for host/layout frames.
+            runtime: Box::new(javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(8 * 1024 * 1024)),
+            xhr: xhr_transport::CreateHTTPXMLHttpRequestTransport(&options)?,
+            user_agent: options.user_agent,
+        })
+    } else {
+        None
+    };
+    let mut page = Page::Create(
+        loader,
+        images,
+        document_images,
+        constraints,
+        environment,
+        Some(Rc::new(RefCell::new(Client {
+            pointer,
+            toolbar,
+            tab_id,
+            document_generation,
+            trace: scripting && std::env::var_os("BROWSER_APP_TRACE_LOADING").is_some(),
+            started: Instant::now(),
+        }))),
+    );
+    if !toolbar && std::env::var("RECHROM_DIAGNOSTIC_READ_AHEAD").as_deref() == Ok("1") {
+        page.EnableDiagnosticReadAhead(scripting);
+    }
+    Ok(page)
+}
+struct ChromePopup {
+    page: Page,
+    generation: u64,
+    x: f64,
+    width: f64,
+    height: f64,
+    actions: Vec<String>,
+    selected: Option<usize>,
+    hovered: Option<u64>,
+}
+#[derive(Clone, Copy)]
+struct NativeInputTrace {
+    queued_at: Instant,
+    samples: usize,
+    commands: usize,
+}
+impl NativeInputTrace {
+    fn merge(&mut self, queued_at: Instant, samples: usize) {
+        self.queued_at = self.queued_at.min(queued_at);
+        self.samples += samples;
+        self.commands += 1;
+    }
+}
+struct LateScrollFrame {
+    frame: NativeBeginFrame,
+    started: Instant,
+    opened_at: Instant,
+    input_deadline: Option<Instant>,
+    // DisplayScheduler deadline after reserving the final third for draw/swap.
+    deadline: Instant,
+    submitted_before: u64,
+    input_attempted_at: Option<Instant>,
+    input_dispatched: bool,
+    production_started: bool,
+    // Completion of Page/paint-artifact production, before the window
+    // compositor rasterizes and composes the final IOSurface.
+    compositor_input_ready_at: Option<Instant>,
+}
+
+enum PresentationHost {
+    Readback,
+    Composited(mpsc::Sender<crate::presentation_runtime::CompositorCommand>),
+}
+
+impl PresentationHost {
+    fn IsComposited(&self) -> bool {
+        matches!(self, Self::Composited(_))
+    }
+
+    fn Compositor(&self) -> Option<&mpsc::Sender<crate::presentation_runtime::CompositorCommand>> {
+        match self {
+            Self::Readback => None,
+            Self::Composited(sender) => Some(sender),
+        }
+    }
+}
+
+fn late_scroll_deadline(
+    frame: NativeBeginFrame,
+    active: bool,
+    has_wheel: bool,
+    now: Instant,
+) -> Option<Instant> {
+    // cc::Scheduler WAIT_FOR_SCROLL and kWaitForLateScrollEventsDeadlineRatio.
+    // Ready input is never held. Only an empty active-scroll cycle can accept
+    // real late input; no extrapolated deltas or additional frame are created.
+    if !active || has_wheel {
+        return None;
+    }
+    let window = frame.interval.checked_mul(333)? / 1000;
+    let deadline = frame.frame_time.checked_add(window)?.min(frame.deadline);
+    (now < deadline).then_some(deadline)
+}
+
+fn display_draw_deadline(frame: NativeBeginFrame) -> Instant {
+    viz::FrameTiming {
+        frame_time: frame.frame_time,
+        interval: frame.interval,
+        source_deadline: frame.deadline,
+    }
+    .Deadlines()
+    .draw_and_swap
+}
+
+// Chromium raises compositor/input work above ordinary main-thread work during
+// a gesture; it does not suspend the main-thread queues for the whole gesture.
+// This single-owner host therefore yields while priority work is actually
+// queued, then uses the first queue gap for one complete Page task. Keeping the
+// gesture bit itself as a blanket veto loses DocumentLoader wakeups and can
+// leave a progressively loaded page frozen until scrolling stops.
+#[cfg(test)]
+fn defer_foreground_for_priority(priority_waiting: bool) -> bool {
+    priority_waiting
+}
+
+struct BrowserState {
+    loading_sender: Option<mpsc::Sender<Command>>,
+    loading_wake_pending: Arc<AtomicBool>,
+    viewport: Viewport,
+    toolbar: Page,
+    popup: Option<ChromePopup>,
+    next_popup_generation: u64,
+    chrome_hovered: Vec<u64>,
+    reload_loading: Option<bool>,
+    content_press_discarded: bool,
+    presented_sequence: u64,
+    pending_native_input: Option<NativeInputTrace>,
+    dispatching_native_input: bool,
+    dispatch_input_timing: Option<(Instant, usize)>,
+    deferred_native_input: bool,
+    frame_source: Option<Arc<dyn BeginFrameSource>>,
+    handling_begin_frame: bool,
+    scroll_active: bool,
+    late_scroll: Option<LateScrollFrame>,
+    address_id: u64,
+    // Static toolbar controls survive tabstrip replacement, like address_id.
+    chrome_id: u64,
+    omnibox_id: u64,
+    dragspace_id: u64,
+    tabs: crate::tabs::Tabs<Page>,
+    // Navigation detaches the old document immediately, while final Realm and
+    // DOM destruction runs as low-priority owner work after the replacement
+    // has produced a frame. Chromium likewise keeps GC/finalization out of the
+    // navigation input task.
+    retired_documents: VecDeque<Page>,
+    tabstrip_id: u64,
+    tabstrip_html: String,
+    background_turn: usize,
+    toolbar_focused: bool,
+    content_pointer_position: Option<Offset>,
+    pointer: Rc<HostFeedback>,
+    caret_rect: Option<browser::page::CaretRect>,
+    active: bool,
+    last_frame: Option<(u64, u64, Viewport)>,
+    failed_frame: Option<(u64, u64, Viewport)>,
+    output: Output,
+    presentation: PresentationHost,
+}
+impl BrowserState {
+    fn NextTaskDeadline(&self, now: Instant) -> Option<Instant> {
+        let mut wake = self.toolbar.NextTaskDeadline(now);
+        let mut include = |candidate: Option<Instant>| {
+            if let Some(candidate) = candidate {
+                wake = Some(wake.map_or(candidate, |current| current.min(candidate)));
+            }
+        };
+        include(
+            self.tabs
+                .active
+                .page
+                .as_ref()
+                .and_then(|page| page.NextTaskDeadline(now)),
+        );
+        if let Some(popup) = &self.popup {
+            include(popup.page.NextTaskDeadline(now));
+        }
+        for tab in &self.tabs.background {
+            include(
+                tab.page
+                    .as_ref()
+                    .and_then(|page| page.NextTaskDeadline(now)),
+            );
+        }
+        wake
+    }
+    #[cfg(test)]
+    fn new(viewport: Viewport, output: Output) -> io::Result<Self> {
+        Self::WithPresentation(viewport, output, PresentationHost::Readback)
+    }
+
+    fn WithPresentation(
+        viewport: Viewport,
+        output: Output,
+        presentation: PresentationHost,
+    ) -> io::Result<Self> {
+        if !viewport.valid() {
+            return Err(io::Error::other("invalid window viewport"));
+        }
+        let pointer = Rc::new(HostFeedback {
+            in_toolbar: Cell::new(false),
+            active_tab: Cell::new(1),
+            navigations: RefCell::new(VecDeque::new()),
+            cursor: Cell::new(browser::page::Cursor::kDefault),
+            output: output.clone(),
+        });
+        let mut toolbar = create_page(
+            viewport.logical_width(),
+            TOOLBAR_HEIGHT,
+            viewport.scale,
+            false,
+            pointer.clone(),
+            true,
+            0,
+            0,
+        )?;
+        // Open runs the normal stylesheet collection path, including <style>.
+        toolbar.Open(&data_url(&crate::chrome::document()), 16384, 4096)?;
+        while toolbar.IsLoading() {
+            toolbar.RunTask()?;
+        }
+        toolbar.SetActive(false)?;
+        let address_id = find_id(&toolbar, "address")
+            .ok_or_else(|| io::Error::other("toolbar has no address input"))?;
+        let tabstrip_id = find_id(&toolbar, "tabs").unwrap();
+        let chrome_id = find_id(&toolbar, "chrome").unwrap();
+        let omnibox_id = find_id(&toolbar, "omnibox").unwrap();
+        let dragspace_id = find_id(&toolbar, "dragspace").unwrap();
+        Ok(Self {
+            loading_sender: None,
+            loading_wake_pending: Arc::new(AtomicBool::new(false)),
+            viewport,
+            toolbar,
+            popup: None,
+            next_popup_generation: 0,
+            chrome_hovered: Vec::new(),
+            reload_loading: None,
+            content_press_discarded: false,
+            presented_sequence: 0,
+            pending_native_input: None,
+            dispatching_native_input: false,
+            dispatch_input_timing: None,
+            deferred_native_input: false,
+            frame_source: None,
+            handling_begin_frame: false,
+            scroll_active: false,
+            late_scroll: None,
+            address_id,
+            chrome_id,
+            omnibox_id,
+            dragspace_id,
+            tabs: crate::tabs::Tabs::new(),
+            retired_documents: VecDeque::new(),
+            tabstrip_id,
+            tabstrip_html: String::new(),
+            background_turn: 0,
+            toolbar_focused: false,
+            content_pointer_position: None,
+            pointer,
+            caret_rect: None,
+            active: true,
+            last_frame: None,
+            failed_frame: None,
+            output,
+            presentation,
+        })
+    }
+    #[cfg(test)]
+    fn tick(&mut self) -> io::Result<()> {
+        self.tick_foreground(|| false)?;
+        self.tick_background()?;
+        self.collect_native_heap_if_requested();
+        Ok(())
+    }
+    fn has_pending_frame_input(&self) -> bool {
+        self.toolbar.HasPendingFrameInput()
+            || self
+                .tabs
+                .active
+                .page
+                .as_ref()
+                .is_some_and(Page::HasPendingFrameInput)
+            || self
+                .popup
+                .as_ref()
+                .is_some_and(|popup| popup.page.HasPendingFrameInput())
+    }
+    fn async_root_scroll_eligible(&self) -> bool {
+        self.presentation.IsComposited() && self.popup.is_none()
+    }
+    fn has_priority_frame(&self) -> bool {
+        if !self.async_root_scroll_eligible()
+            || self
+                .tabs
+                .active
+                .page
+                .as_ref()
+                .is_some_and(Page::HasBlockingWheelListener)
+        {
+            return self.scroll_active || self.has_pending_frame_input();
+        }
+        // Threaded scrolling is already consumed by the display owner.  Its
+        // matching main-thread wheel delivery must make forward progress, but
+        // must not classify every following BeginFrame as a reason to starve
+        // DocumentLoader/JS.  Non-wheel input retains main-thread priority.
+        self.toolbar.HasPendingFrameInput()
+            || self
+                .popup
+                .as_ref()
+                .is_some_and(|popup| popup.page.HasPendingFrameInput())
+            || self.tabs.active.page.as_ref().is_some_and(|page| {
+                page.HasPendingFrameInput() && !page.HasPendingWheelFrameInput()
+            })
+    }
+    fn report_memory_diagnostics(&self) {
+        let _census = browser_tracing::span("diagnostic", "Host.MemoryCensus");
+        let _allocation = browser_tracing::diagnostics::AllocationScope::new(17);
+        if !memory_diagnostics_enabled() {
+            return;
+        }
+        thread_local! { static LAST: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) }; }
+        let now = Instant::now();
+        if !LAST.with(|last| {
+            if last
+                .get()
+                .is_some_and(|previous| now.duration_since(previous) < Duration::from_secs(1))
+            {
+                return false;
+            }
+            last.set(Some(now));
+            true
+        }) {
+            return;
+        }
+        let time_ns = diagnostic_time_ns();
+        crate::memory_diagnostics::report_allocator(time_ns, "sample");
+        eprintln!(
+            "native-heap-memory time_ns={} active_loading={} usage={:?}",
+            time_ns,
+            self.tabs.active.page.as_ref().is_some_and(Page::IsLoading),
+            foundation::LayoutHeapMemoryDiagnostics()
+        );
+        if let Some(page) = &self.tabs.active.page {
+            eprintln!(
+                "page-memory time_ns={} tab={} generation={} usage={:?}",
+                time_ns,
+                self.tabs.active.id,
+                self.tabs.active.document_generation,
+                page.MemoryDiagnostics()
+            );
+        }
+        eprintln!(
+            "toolbar-memory time_ns={} usage={:?}",
+            time_ns,
+            self.toolbar.MemoryDiagnostics()
+        );
+    }
+    fn tick_foreground(
+        &mut self,
+        mut native_input_waiting: impl FnMut() -> bool,
+    ) -> io::Result<()> {
+        self.report_memory_diagnostics();
+        let _trace = browser_tracing::span("task", "ForegroundTasks");
+        let started = Instant::now();
+        {
+            let _target = browser_tracing::scope(browser_tracing::Context {
+                target_id: 2,
+                ..Default::default()
+            });
+            let _trace = browser_tracing::span("task", "ToolbarTasks");
+            self.toolbar.RunTask()?;
+        }
+        // Chrome and content are separate complete Page tasks. Input which
+        // arrived during Chrome's task gets the next host turn before starting
+        // another content task; never interrupt either task/checkpoint.
+        if native_input_waiting() {
+            return Ok(());
+        }
+        let result = if let Some(page) = &mut self.tabs.active.page {
+            let _trace = browser_tracing::span("task", "ContentTasks");
+            page.RunTask()
+        } else {
+            Ok(())
+        };
+        if std::env::var_os("BROWSER_APP_TRACE_LOADING").is_some()
+            && started.elapsed() >= Duration::from_millis(16)
+        {
+            eprintln!(
+                "loading-task ms={:.3}",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        if let Err(error) = result {
+            self.output.message(&error);
+            // Blink DocumentLoader::LoadFailed stops the parser after commit;
+            // it does not replace a received document with a navigation error.
+            let committed_load_failure =
+                self.tabs.active.page.as_ref().is_some_and(|page| {
+                    page.HasCommittedDocument() && page.LoadingFailure().is_some()
+                });
+            if !committed_load_failure {
+                if let Some(mut old) = self.tabs.active.page.take() {
+                    old.StopLoading();
+                    self.retired_documents.push_back(old);
+                }
+                self.tabs.active.document_generation =
+                    self.tabs.active.document_generation.wrapping_add(1);
+                let html = format!("<!doctype html><style>body{{font:16px sans-serif;padding:32px}}h1{{font-size:26px}}</style><h1>Unable to load page</h1><p>{}</p><pre>{}</pre>", escape(&self.tabs.active.location), escape(&error.to_string()));
+                let mut page = create_page(
+                    self.viewport.logical_width(),
+                    self.viewport.content_height(),
+                    self.viewport.scale,
+                    false,
+                    self.pointer.clone(),
+                    false,
+                    self.tabs.active.id,
+                    self.tabs.active.document_generation,
+                )?;
+                page.Open(&data_url(&html), 16384, 4096)?;
+                page.SetActive(self.active && !self.toolbar_focused)?;
+                page.SetBeginFrameSource(self.frame_source.clone());
+                self.tabs.active.page = Some(page);
+                self.last_frame = None;
+                self.failed_frame = None;
+                return Ok(());
+            }
+        }
+        if let Some(page) = &self.tabs.active.page {
+            let url = page.URL();
+            if !url.is_empty()
+                && !url.starts_with("data:")
+                && !self.tabs.active.location.starts_with("about:")
+                && self.tabs.active.location != url
+            {
+                self.tabs.active.location = url.to_owned();
+                if let Some(entry) = self
+                    .tabs
+                    .active
+                    .history
+                    .get_mut(self.tabs.active.history_index)
+                {
+                    *entry = self.tabs.active.location.clone();
+                }
+                self.set_address(&self.tabs.active.location.clone())?;
+                (self.output.notify)(UserEvent::Location(self.tabs.active.location.clone()));
+            }
+        }
+        update_tab_metadata(&mut self.tabs.active);
+        self.refresh_tabstrip()?;
+        self.drain_navigation_requests()?;
+        Ok(())
+    }
+
+    fn produce_frame_lifecycle(
+        &mut self,
+        args: BeginFrameArgs,
+        run_toolbar: bool,
+    ) -> io::Result<()> {
+        if run_toolbar {
+            let _target = browser_tracing::scope(browser_tracing::Context {
+                target_id: 2,
+                ..Default::default()
+            });
+            self.toolbar.UpdateRendering(args)?;
+        }
+        if let Some(page) = &mut self.tabs.active.page {
+            page.UpdateRendering(args)?;
+        }
+        if let Some(popup) = &mut self.popup {
+            popup.page.UpdateRendering(args)?;
+        }
+        self.record_frame_input_dispatches();
+        self.drain_navigation_requests()?;
+        Ok(())
+    }
+
+    fn prepare_compositor_input(&self) -> io::Result<()> {
+        if self.presentation.IsComposited() {
+            return self.send_compositor_snapshot();
+        }
+        // Protocol readback renders through Page::PaintInto when publish()
+        // materializes its image. It has no native presentation surface.
+        Ok(())
+    }
+
+    fn send_compositor_snapshot(&self) -> io::Result<()> {
+        let Some(sender) = self.presentation.Compositor() else {
+            return Ok(());
+        };
+        let toolbar = self
+            .toolbar
+            .CurrentFrame()
+            .ok_or_else(|| io::Error::other("toolbar has no frame"))?;
+        let page = self.tabs.active.page.as_ref().and_then(Page::CurrentFrame);
+        let mut drag_regions = vec![crate::chrome::DragRegion {
+            x: 92.0,
+            y: 0.0,
+            width: (self.viewport.logical_width() - 92.0).max(0.0),
+            height: 6.0,
+        }];
+        let id = self.dragspace_id;
+        fn bounds(
+            fragment: &FragmentNode,
+            id: u64,
+            parent: Offset,
+            layout_zoom: f64,
+        ) -> Option<crate::chrome::DragRegion> {
+            let origin = Offset {
+                x: parent.x + fragment.offset.x,
+                y: parent.y + fragment.offset.y,
+            };
+            if fragment.node_id == id {
+                return Some(crate::chrome::DragRegion {
+                    x: origin.x / layout_zoom,
+                    y: origin.y / layout_zoom,
+                    width: fragment.size.width / layout_zoom,
+                    height: fragment.size.height / layout_zoom,
+                });
+            }
+            fragment
+                .children
+                .iter()
+                .find_map(|child| bounds(child, id, origin, layout_zoom))
+        }
+        let toolbar_layout_zoom = toolbar
+            .fragments
+            .paint
+            .resources
+            .as_ref()
+            .map_or(1.0, |resources| resources.layout_zoom_factor)
+            .max(f64::MIN_POSITIVE);
+        if let Some(region) = bounds(
+            &toolbar.fragments,
+            id,
+            Offset::default(),
+            toolbar_layout_zoom,
+        ) {
+            drag_regions.push(region);
+        }
+        let toolbar_pixels = self.viewport.toolbar_pixels();
+        let toolbar_viewport = Viewport {
+            height: toolbar_pixels,
+            ..self.viewport
+        };
+        let content_viewport = Viewport {
+            height: self.viewport.height.saturating_sub(toolbar_pixels).max(1),
+            ..self.viewport
+        };
+        let mut pages = vec![crate::page_presentation::PageSnapshot {
+            document: (0, 0),
+            viewport: toolbar_viewport,
+            frame_time: Instant::now(),
+            sequence: toolbar.sequence,
+            compositor_scroll_sequence: 0,
+            content: ::compositor::ContentUpdate::Replace(toolbar.display_items.clone()),
+            transparent_background: false,
+            metadata: (),
+            async_root_scroll: false,
+            blocking_wheel_regions: Default::default(),
+        }];
+        let mut placements = vec![crate::page_presentation::Placement {
+            document: (0, 0),
+            destination: ::compositor::DeviceRect::new(0, 0, self.viewport.width, toolbar_pixels),
+        }];
+        let mut live_documents = self
+            .tabs
+            .background
+            .iter()
+            .chain(std::iter::once(&self.tabs.active))
+            .filter(|tab| tab.page.is_some())
+            .map(|tab| (tab.id, tab.document_generation))
+            .collect::<Vec<_>>();
+        live_documents.push((0, 0));
+        let document = (self.tabs.active.id, self.tabs.active.document_generation);
+        let content_destination = ::compositor::DeviceRect::new(
+            0,
+            toolbar_pixels as i32,
+            content_viewport.width,
+            content_viewport.height,
+        );
+        if self.tabs.active.page.is_some() {
+            placements.push(crate::page_presentation::Placement {
+                document,
+                destination: content_destination,
+            });
+        }
+        if let Some(frame) = page {
+            let blocking = self
+                .tabs
+                .active
+                .page
+                .as_ref()
+                .map(Page::BlockingWheelEventRegions)
+                .unwrap_or_default();
+            pages.push(crate::page_presentation::PageSnapshot {
+                document,
+                viewport: content_viewport,
+                frame_time: Instant::now(),
+                sequence: frame.sequence,
+                compositor_scroll_sequence: frame.compositor_scroll_sequence,
+                content: ::compositor::ContentUpdate::Replace(frame.display_items.clone()),
+                transparent_background: false,
+                metadata: (),
+                async_root_scroll: self.async_root_scroll_eligible(),
+                blocking_wheel_regions: ::compositor::BlockingWheelEventRegions {
+                    covers_viewport: blocking.covers_viewport,
+                    scrolling_rects: blocking.scrolling_rects,
+                    fixed_rects: blocking.fixed_rects,
+                },
+            });
+        }
+        if let Some(popup) = &self.popup {
+            let document = (u64::MAX, popup.generation);
+            live_documents.push(document);
+            placements.push(crate::page_presentation::Placement {
+                document,
+                destination: content_destination,
+            });
+            if let Some(frame) = popup.page.CurrentFrame() {
+                pages.push(crate::page_presentation::PageSnapshot {
+                    document,
+                    viewport: content_viewport,
+                    frame_time: Instant::now(),
+                    sequence: frame.sequence,
+                    compositor_scroll_sequence: 0,
+                    content: ::compositor::ContentUpdate::Replace(frame.display_items.clone()),
+                    transparent_background: true,
+                    metadata: (),
+                    async_root_scroll: false,
+                    blocking_wheel_regions: Default::default(),
+                });
+            }
+        }
+        sender
+            .send(crate::presentation_runtime::CompositorCommand::Snapshot(
+                crate::presentation_runtime::ArtifactSnapshot {
+                    scene: crate::page_presentation::Scene {
+                        viewport: self.viewport,
+                        placements,
+                        live_documents,
+                        metadata: drag_regions,
+                    },
+                    pages,
+                },
+            ))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "compositor stopped"))
+    }
+
+    fn resume_late_scroll_production(&mut self, input_arrived: bool) -> io::Result<()> {
+        let args = {
+            let Some(frame) = &mut self.late_scroll else {
+                return Ok(());
+            };
+            if frame.production_started {
+                return Ok(());
+            }
+            frame.production_started = true;
+            frame.input_deadline = None;
+            if input_arrived {
+                frame.input_attempted_at.get_or_insert_with(Instant::now);
+                frame.input_dispatched = true;
+            }
+            frame.frame.args
+        };
+        let previous = std::mem::replace(&mut self.handling_begin_frame, true);
+        let result = self
+            .produce_frame_lifecycle(args, false)
+            .and_then(|_| self.prepare_compositor_input());
+        if result.is_ok() {
+            // Once WAIT_FOR_SCROLL closes, this cycle's compositor input is
+            // immutable. Produce the native candidate now, during the middle
+            // third of the interval, but keep publication at the fixed display
+            // deadline. This preserves cadence while avoiding a full software
+            // composition starting only after the draw deadline.
+            if let Some(frame) = &mut self.late_scroll {
+                frame.compositor_input_ready_at = Some(Instant::now());
+            }
+        }
+        self.handling_begin_frame = previous;
+        result
+    }
+
+    fn begin_frame(&mut self, frame: impl Into<NativeBeginFrame>) -> io::Result<()> {
+        let frame = frame.into();
+        let args = frame.args;
+        let _frame_scope = browser_tracing::scope(browser_tracing::Context {
+            target_id: 1,
+            source_id: args.source_id,
+            frame_id: args.sequence_number,
+            input_id: self
+                .pending_native_input
+                .as_ref()
+                .map_or(0, |input| browser_tracing::instant_id(input.queued_at)),
+            ..Default::default()
+        });
+        let mut frame_trace = browser_tracing::span("frame", "BeginFrame");
+        let started = Instant::now();
+        let draw_deadline = display_draw_deadline(frame);
+        frame_trace.set("scroll_active", self.scroll_active as u8 as f64);
+        frame_trace.set("interval_ms", args.interval.as_secs_f64() * 1000.0);
+        frame_trace.set(
+            "source_deadline_ms",
+            args.deadline
+                .saturating_duration_since(args.frame_time)
+                .as_secs_f64()
+                * 1000.0,
+        );
+        frame_trace.set(
+            "deadline_ms",
+            draw_deadline
+                .saturating_duration_since(args.frame_time)
+                .as_secs_f64()
+                * 1000.0,
+        );
+        frame_trace.set(
+            "start_age_ms",
+            started
+                .saturating_duration_since(args.frame_time)
+                .as_secs_f64()
+                * 1000.0,
+        );
+        browser_tracing::interval("frame", "BeginFrameQueue", args.frame_time, started, &[]);
+        if self.presentation.IsComposited() {
+            // Threaded scrolling and Draw/Swap have their own display owner.
+            // A BeginMainFrame performs only main-thread input/lifecycle and
+            // publishes an immutable artifact; it never waits for Viz's draw
+            // deadline.  This is the essential scheduler boundary in Chromium.
+            self.handling_begin_frame = true;
+            let result = self
+                .produce_frame_lifecycle(args, true)
+                .and_then(|_| self.send_compositor_snapshot());
+            self.handling_begin_frame = false;
+            if let Some(sender) = self.presentation.Compositor() {
+                let _ = sender.send(
+                    crate::presentation_runtime::CompositorCommand::MainFrameComplete {
+                        source_id: args.source_id,
+                        sequence_number: args.sequence_number,
+                    },
+                );
+            }
+            let finished = Instant::now();
+            browser_tracing::interval(
+                "frame",
+                "MainFrameCycle",
+                started,
+                finished,
+                &[
+                    ("interval_ms", args.interval.as_secs_f64() * 1000.0),
+                    (
+                        "start_age_ms",
+                        started
+                            .saturating_duration_since(args.frame_time)
+                            .as_secs_f64()
+                            * 1000.0,
+                    ),
+                    ("succeeded", result.is_ok() as u8 as f64),
+                ],
+            );
+            frame_trace.set("succeeded", result.is_ok() as u8 as f64);
+            return result;
+        }
+        let submitted_before = self.presented_sequence;
+        // LayerTreeHostImpl::WillBeginImplFrame uses HasQueuedInput, not
+        // whether input was received in the preceding cycle. A dispatched
+        // gesture boundary must not close this frame's late-input window.
+        let has_wheel = self
+            .tabs
+            .active
+            .page
+            .as_ref()
+            .is_some_and(Page::HasPendingWheelFrameInput);
+        let retained = self.presentation.IsComposited()
+            && self.popup.is_none()
+            && self
+                .tabs
+                .active
+                .page
+                .as_ref()
+                .and_then(Page::CurrentFrame)
+                .is_some();
+        let input_deadline = late_scroll_deadline(
+            frame,
+            self.scroll_active && retained,
+            has_wheel,
+            Instant::now(),
+        );
+        let schedule_draw = self.scroll_active && retained && Instant::now() < draw_deadline;
+        browser_tracing::instant(
+            "frame",
+            "ScrollFrameDecision",
+            &[
+                ("scroll_active", self.scroll_active as u8 as f64),
+                ("retained_content", retained as u8 as f64),
+                ("has_wheel", has_wheel as u8 as f64),
+                ("toolbar_focused", self.toolbar_focused as u8 as f64),
+                (
+                    "display_target_known",
+                    frame.display_time.is_some() as u8 as f64,
+                ),
+                ("late_window_open", input_deadline.is_some() as u8 as f64),
+                ("display_draw_scheduled", schedule_draw as u8 as f64),
+                ("input_deadline_ms", frame.interval.as_secs_f64() * 333.0),
+                (
+                    "draw_deadline_ms",
+                    draw_deadline
+                        .saturating_duration_since(frame.frame_time)
+                        .as_secs_f64()
+                        * 1000.0,
+                ),
+                (
+                    "source_deadline_ms",
+                    frame
+                        .deadline
+                        .saturating_duration_since(frame.frame_time)
+                        .as_secs_f64()
+                        * 1000.0,
+                ),
+            ],
+        );
+        self.handling_begin_frame = true;
+        let result = (|| {
+            {
+                let _target = browser_tracing::scope(browser_tracing::Context {
+                    target_id: 2,
+                    ..Default::default()
+                });
+                self.toolbar.UpdateRendering(args)?;
+            }
+            if schedule_draw && input_deadline.is_some() {
+                // Chromium blocks BeginMainFrame while WAIT_FOR_SCROLL is
+                // active, so main-thread effects observe the accepted scroll.
+                self.late_scroll = Some(LateScrollFrame {
+                    frame,
+                    started,
+                    opened_at: Instant::now(),
+                    input_deadline,
+                    deadline: draw_deadline,
+                    submitted_before,
+                    input_attempted_at: None,
+                    input_dispatched: false,
+                    production_started: false,
+                    compositor_input_ready_at: None,
+                });
+            } else {
+                self.produce_frame_lifecycle(args, false)?;
+                self.prepare_compositor_input()?;
+                if schedule_draw {
+                    let compositor_input_ready_at = Instant::now();
+                    self.late_scroll = Some(LateScrollFrame {
+                        frame,
+                        started,
+                        opened_at: Instant::now(),
+                        input_deadline: None,
+                        deadline: draw_deadline,
+                        submitted_before,
+                        input_attempted_at: has_wheel.then(Instant::now),
+                        input_dispatched: has_wheel,
+                        production_started: true,
+                        compositor_input_ready_at: Some(compositor_input_ready_at),
+                    });
+                } else {
+                    let draw_started = Instant::now();
+                    self.publish()?;
+                    self.profile_begin_frame(
+                        frame,
+                        started,
+                        draw_started,
+                        submitted_before,
+                        Duration::ZERO,
+                    );
+                }
+            }
+            // Keep the compositor's native cycle alive during a real gesture,
+            // so the next empty cycle can receive an input that arrives late.
+            if self.scroll_active {
+                if let Some(source) = &self.frame_source {
+                    source.request_begin_frame();
+                }
+            }
+            Ok(())
+        })();
+        self.handling_begin_frame = false;
+        frame_trace.set(
+            "submitted",
+            if self.presented_sequence != submitted_before {
+                1.0
+            } else {
+                0.0
+            },
+        );
+        frame_trace.set(
+            "late_scroll_pending",
+            if self.late_scroll.is_some() { 1.0 } else { 0.0 },
+        );
+        frame_trace.set("succeeded", if result.is_ok() { 1.0 } else { 0.0 });
+        if std::env::var_os("BROWSER_PROFILE_FRAMES").is_some() && result.is_err() {
+            eprintln!("begin-frame source={} sequence={} interval_ms={:.3} age_ms={:.3} present_failed=true",
+                args.source_id, args.sequence_number, args.interval.as_secs_f64() * 1000.0,
+                args.frame_time.elapsed().as_secs_f64() * 1000.0);
+        }
+        result
+    }
+    fn finish_late_scroll(&mut self, input_arrived: bool) -> io::Result<()> {
+        // Remove the held cycle before dispatch, so an input/navigation error
+        // cannot leave it open for a second dispatch in the same native cycle.
+        let Some(mut frame) = self.late_scroll.take() else {
+            return Ok(());
+        };
+        let _frame_scope = browser_tracing::scope(browser_tracing::Context {
+            target_id: 1,
+            source_id: frame.frame.source_id,
+            frame_id: frame.frame.sequence_number,
+            input_id: self
+                .pending_native_input
+                .as_ref()
+                .map_or(0, |input| browser_tracing::instant_id(input.queued_at)),
+            ..Default::default()
+        });
+        let mut frame_trace = browser_tracing::span("frame", "LateScrollFinish");
+        let draw_started = Instant::now();
+        let input_wait_end = frame.input_attempted_at.unwrap_or_else(|| {
+            frame
+                .input_deadline
+                .unwrap_or(draw_started)
+                .min(draw_started)
+        });
+        let input_wait = input_wait_end.saturating_duration_since(frame.opened_at);
+        let wait = draw_started.saturating_duration_since(frame.opened_at);
+        let display_wait_start = frame
+            .compositor_input_ready_at
+            .unwrap_or(frame.opened_at)
+            .min(draw_started);
+        frame_trace.set("source_id", frame.frame.source_id as f64);
+        frame_trace.set("input_arrived", if input_arrived { 1.0 } else { 0.0 });
+        frame_trace.set("input_dispatched", frame.input_dispatched as u8 as f64);
+        frame_trace.set("wait_ms", wait.as_secs_f64() * 1000.0);
+        frame_trace.set("input_wait_ms", input_wait.as_secs_f64() * 1000.0);
+        browser_tracing::interval(
+            "frame",
+            "LateScrollWait",
+            frame.opened_at,
+            input_wait_end,
+            &[],
+        );
+        // Candidate production may now overlap the middle third of the frame.
+        // Show only the time after a complete candidate exists as display wait;
+        // PrepareWindowFrame/ComposeDraw already account for active CPU work.
+        browser_tracing::interval(
+            "frame",
+            "DisplayDrawWait",
+            display_wait_start,
+            draw_started,
+            &[],
+        );
+        self.handling_begin_frame = true;
+        let result = (|| {
+            if !frame.production_started {
+                frame.production_started = true;
+                self.produce_frame_lifecycle(frame.frame.args, false)?;
+                self.prepare_compositor_input()?;
+                frame.compositor_input_ready_at = Some(Instant::now());
+            } else if frame.input_dispatched {
+                self.drain_navigation_requests()?;
+            }
+            let ready_at = frame.compositor_input_ready_at.unwrap_or_else(Instant::now);
+            let ready_before_deadline_ms = if frame.deadline >= ready_at {
+                frame.deadline.duration_since(ready_at).as_secs_f64() * 1000.0
+            } else {
+                -ready_at.duration_since(frame.deadline).as_secs_f64() * 1000.0
+            };
+            browser_tracing::instant_at(
+                "frame",
+                "CompositorInputReady",
+                ready_at,
+                &[("ready_before_draw_deadline_ms", ready_before_deadline_ms)],
+            );
+            if ready_at > frame.deadline {
+                // At the regular DisplayScheduler deadline no fresh upstream
+                // frame was available. Repeat the previous display frame and
+                // let the following BeginFrame consume the latest state. This
+                // is the readiness decision; final window composition has not
+                // started and therefore no completed IOSurface is discarded.
+                browser_tracing::instant(
+                    "frame",
+                    "FrameRepeated",
+                    &[
+                        ("reason", 2.0),
+                        (
+                            "compositor_input_late_by_ms",
+                            ready_at.duration_since(frame.deadline).as_secs_f64() * 1000.0,
+                        ),
+                    ],
+                );
+                if let Some(source) = &self.frame_source {
+                    source.request_begin_frame();
+                }
+                Ok(())
+            } else {
+                // Display owns DrawAndSwap and swap throttling. Page only
+                // publishes the immutable compositor input selected for this
+                // frame; there is no second native presentation path here.
+                Ok(())
+            }
+        })();
+        self.handling_begin_frame = false;
+        frame_trace.set("succeeded", if result.is_ok() { 1.0 } else { 0.0 });
+        self.profile_begin_frame(
+            frame.frame,
+            frame.started,
+            draw_started,
+            frame.submitted_before,
+            wait,
+        );
+        result
+    }
+    fn profile_begin_frame(
+        &self,
+        frame: NativeBeginFrame,
+        started: Instant,
+        draw_started: Instant,
+        submitted_before: u64,
+        waited: Duration,
+    ) {
+        let profile = std::env::var_os("BROWSER_PROFILE_FRAMES").is_some();
+        if !profile && !browser_tracing::enabled() {
+            return;
+        }
+        let args = frame.args;
+        let draw_deadline = display_draw_deadline(frame);
+        let submitted = self.presented_sequence != submitted_before;
+        // Native readiness and swap timing belong to Display and are traced
+        // there. Page owns only main-frame/compositor-input readiness.
+        let ready_margin_ms = f64::NAN;
+        let target_offset_ms = frame.display_time.map_or(f64::NAN, |target| {
+            target
+                .saturating_duration_since(args.frame_time)
+                .as_secs_f64()
+                * 1000.0
+        });
+        let finished = Instant::now();
+        browser_tracing::interval(
+            "frame",
+            "FrameCycle",
+            started,
+            finished,
+            &[
+                ("scroll_active", self.scroll_active as u8 as f64),
+                ("interval_ms", args.interval.as_secs_f64() * 1000.0),
+                (
+                    "source_deadline_ms",
+                    args.deadline
+                        .saturating_duration_since(args.frame_time)
+                        .as_secs_f64()
+                        * 1000.0,
+                ),
+                (
+                    "deadline_ms",
+                    draw_deadline
+                        .saturating_duration_since(args.frame_time)
+                        .as_secs_f64()
+                        * 1000.0,
+                ),
+                (
+                    "start_age_ms",
+                    started
+                        .saturating_duration_since(args.frame_time)
+                        .as_secs_f64()
+                        * 1000.0,
+                ),
+                (
+                    "draw_start_age_ms",
+                    draw_started
+                        .saturating_duration_since(args.frame_time)
+                        .as_secs_f64()
+                        * 1000.0,
+                ),
+                (
+                    "deadline_missed",
+                    if draw_started > draw_deadline {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                ),
+                ("submitted", if submitted { 1.0 } else { 0.0 }),
+                ("late_scroll_wait_ms", waited.as_secs_f64() * 1000.0),
+                ("ready_to_target_ms", ready_margin_ms),
+            ],
+        );
+        if !profile {
+            return;
+        }
+        eprintln!("begin-frame source={} sequence={} interval_ms={:.3} age_ms={:.3} presented_sequence={} start_age_ms={:.3} work_ms={:.3} deadline_missed={} submitted={} display_target_offset_ms={:.3} ready_to_target_ms={:.3} late_scroll_wait_ms={:.3}",
+            args.source_id, args.sequence_number, args.interval.as_secs_f64() * 1000.0,
+            args.frame_time.elapsed().as_secs_f64() * 1000.0, self.presented_sequence,
+            started.saturating_duration_since(args.frame_time).as_secs_f64() * 1000.0,
+            started.elapsed().saturating_sub(waited).as_secs_f64() * 1000.0, draw_started > draw_deadline,
+            submitted, target_offset_ms, ready_margin_ms, waited.as_secs_f64() * 1000.0);
+    }
+    fn record_frame_input_dispatches(&mut self) {
+        let profile = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
+        let record = |target_id, event: browser::page::DispatchedFrameInput| {
+            let _input_scope = browser_tracing::scope(browser_tracing::Context {
+                target_id,
+                input_id: browser_tracing::instant_id(event.queued_at),
+                ..Default::default()
+            });
+            browser_tracing::interval(
+                "input",
+                "InputQueue",
+                event.queued_at,
+                event.dispatch_started,
+                &[("samples", event.samples as f64), ("frame_aligned", 1.0)],
+            );
+            browser_tracing::interval(
+                "input",
+                "InputDispatch",
+                event.dispatch_started,
+                event.dispatch_finished,
+                &[("samples", event.samples as f64), ("frame_aligned", 1.0)],
+            );
+            if !profile {
+                return;
+            }
+            let kind = match event.input {
+                InputEvent::Wheel(_) => "wheel",
+                InputEvent::Mouse(_) => "mouse",
+                _ => "other",
+            };
+            eprintln!(
+                "native-input-dispatch kind={kind} samples={} queue_ms={:.3} frame_aligned=true",
+                event.samples,
+                event
+                    .dispatch_started
+                    .saturating_duration_since(event.queued_at)
+                    .as_secs_f64()
+                    * 1000.0
+            );
+            eprintln!("native-input-complete kind={kind} samples={} dispatch_ms={:.3} enqueue_to_dispatch_complete_ms={:.3}", event.samples,
+                event.dispatch_finished.duration_since(event.dispatch_started).as_secs_f64() * 1000.0,
+                event.dispatch_finished.saturating_duration_since(event.queued_at).as_secs_f64() * 1000.0);
+        };
+        for event in self.toolbar.TakeDispatchedFrameInputs() {
+            record(2, event);
+        }
+        if let Some(page) = &mut self.tabs.active.page {
+            for event in page.TakeDispatchedFrameInputs() {
+                record(1, event);
+            }
+        }
+        if let Some(popup) = &mut self.popup {
+            for event in popup.page.TakeDispatchedFrameInputs() {
+                record(1, event);
+            }
+        }
+    }
+    fn collect_native_heap_if_requested(&mut self) {
+        let mut trace = browser_tracing::span("task", "NativeHeapCollection");
+        // Service heap pressure after Page tasks and their native scopes unwind.
+        // Loading is not a no-GC scope: cppgc/V8's loading optimization is
+        // bounded and allocation-pressure overridable (see docs/native-gc-loading.md).
+        // The heap owns request policy. A coalesced foreground task supplies
+        // an owner-thread FIFO opportunity after input/frame priority; later
+        // normal loading tasks cannot keep overtaking the requested service.
+        let gc_diagnostic = (memory_diagnostics_enabled()
+            && foundation::IsLayoutHeapCollectionRequested())
+        .then(|| {
+            let time_ns = diagnostic_time_ns();
+            eprintln!(
+                "native-heap-before-gc time_ns={} active_loading={} usage={:?}",
+                time_ns,
+                self.tabs.active.page.as_ref().is_some_and(Page::IsLoading),
+                foundation::LayoutHeapMemoryDiagnostics()
+            );
+            crate::memory_diagnostics::report_allocator(time_ns, "before_gc");
+            Instant::now()
+        });
+        if foundation::CollectLayoutHeapIfRequested() {
+            trace.set("layout_gc", 1.0);
+            if let Some(started) = gc_diagnostic {
+                let pause_ms = started.elapsed().as_secs_f64() * 1000.0;
+                let time_ns = diagnostic_time_ns();
+                eprintln!(
+                    "native-heap-after-gc time_ns={} active_loading={} pause_ms={:.3} usage={:?}",
+                    time_ns,
+                    self.tabs.active.page.as_ref().is_some_and(Page::IsLoading),
+                    pause_ms,
+                    foundation::LayoutHeapMemoryDiagnostics()
+                );
+                crate::memory_diagnostics::report_allocator(time_ns, "after_gc");
+            }
+        }
+    }
+    fn tick_background(&mut self) -> io::Result<()> {
+        self.report_memory_diagnostics();
+        if self.tabs.background.is_empty()
+            && (self.retired_documents.is_empty() || self.last_frame.is_none())
+        {
+            return Ok(());
+        }
+        let mut trace = browser_tracing::span("task", "BackgroundTasks");
+        let started = Instant::now();
+        // One background Page task per host turn, round robin. Do not drain a
+        // background document's task queue before yielding to native input.
+        if !self.tabs.background.is_empty() {
+            let index = self.background_turn % self.tabs.background.len();
+            self.background_turn = self.background_turn.wrapping_add(1);
+            let tab = &mut self.tabs.background[index];
+            trace.set("tab_id", tab.id as f64);
+            if let Some(page) = &mut tab.page {
+                if let Err(error) = page.RunTask() {
+                    self.output.message(error);
+                }
+            }
+            update_tab_metadata(tab);
+        }
+        if self.last_frame.is_some() {
+            if let Some(retired) = self.retired_documents.pop_front() {
+                let _trace =
+                    browser_tracing::span("navigation", "NavigationDisposeRetiredDocument");
+                drop(retired);
+                foundation::RequestLayoutHeapCollection();
+            }
+        }
+        if std::env::var_os("BROWSER_APP_TRACE_LOADING").is_some()
+            && started.elapsed() >= Duration::from_millis(16)
+        {
+            eprintln!(
+                "background-task ms={:.3}",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        self.refresh_tabstrip()?;
+        self.drain_navigation_requests()?;
+        Ok(())
+    }
+    fn navigate(&mut self, address: &str, record: bool) -> io::Result<()> {
+        self.navigate_request(
+            url_loader::URLRequest {
+                url: address.into(),
+                ..Default::default()
+            },
+            record,
+            true,
+        )
+    }
+    fn navigate_request(
+        &mut self,
+        mut request: url_loader::URLRequest,
+        record: bool,
+        present: bool,
+    ) -> io::Result<()> {
+        let _open_trace = browser_tracing::span("navigation", "Open");
+        self.scroll_active = false;
+        if present {
+            self.popup = None;
+        }
+        let address = crate::options::normalize_address(&request.url)?;
+        if present {
+            let _phase = browser_tracing::span("navigation", "NavigationNotifyLoading");
+            self.set_address(&address)?;
+            (self.output.notify)(UserEvent::Location(format!("Loading — {address}")));
+            self.publish()?;
+        }
+        {
+            let _phase = browser_tracing::span("navigation", "NavigationRetireDocument");
+            if let Some(mut old) = self.tabs.active.page.take() {
+                old.StopLoading(); // Navigation discards this document/realm only.
+                self.retired_documents.push_back(old);
+            }
+        }
+        // ScheduleWork coalescing belongs to the document loader which issued
+        // the wake. A user-blocking navigation can overtake the old loader's
+        // normal-priority Wake command; do not let that retired document's
+        // still-set bit suppress the replacement document's first resource
+        // wake. The stale Wake may clear this bit again later, which only
+        // permits an extra coalesced notification and cannot hide ready work.
+        self.loading_wake_pending.store(false, Ordering::Release);
+        self.tabs.active.document_generation = self.tabs.active.document_generation.wrapping_add(1);
+        let mut page = {
+            let _phase = browser_tracing::span("navigation", "NavigationCreateDocument");
+            create_page(
+                self.viewport.logical_width(),
+                self.viewport.content_height(),
+                self.viewport.scale,
+                true,
+                self.pointer.clone(),
+                false,
+                self.tabs.active.id,
+                self.tabs.active.document_generation,
+            )?
+        };
+        request.url = match address.as_str() {
+            "about:home" => data_url(HOME),
+            "about:blank" => data_url("<!doctype html><html><body></body></html>"),
+            _ => address.clone(),
+        };
+        if let Some(sender) = &self.loading_sender {
+            page.SetLoadingWakeCallback(engine_wake_callback(
+                sender.clone(),
+                self.loading_wake_pending.clone(),
+                OPEN_ENGINE_WAKE,
+            ));
+        }
+        let open_result = {
+            let _phase = browser_tracing::span("navigation", "NavigationStartRequest");
+            page.OpenRequest(&request, 16384, 4096)
+        };
+        if let Err(error) = open_result {
+            self.output.message(&error);
+            drop(page);
+            page = create_page(
+                self.viewport.logical_width(),
+                self.viewport.content_height(),
+                self.viewport.scale,
+                false,
+                self.pointer.clone(),
+                false,
+                self.tabs.active.id,
+                self.tabs.active.document_generation,
+            )?;
+            let html = format!("<!doctype html><style>body{{font:16px sans-serif;padding:32px;color:#263445}}h1{{font-size:26px}}</style><h1>Unable to load page</h1><p>{}</p><pre>{}</pre>", escape(&address), escape(&error.to_string()));
+            page.Open(&data_url(&html), 16384, 4096)?;
+        }
+        self.tabs.active.location = if address.starts_with("about:")
+            || page.URL().starts_with("data:")
+            || page.URL().is_empty()
+        {
+            address
+        } else {
+            page.URL().to_owned()
+        };
+        page.SetActive(present && self.active)?;
+        page.SetLastMousePosition(self.content_pointer_position);
+        page.SetBeginFrameSource(self.frame_source.clone());
+        self.tabs.active.page = Some(page);
+        self.tabs.active.viewport = Some(self.viewport);
+        self.tabs.active.title = location_title(&self.tabs.active.location);
+        self.tabs.active.title_node_id = None;
+        self.tabs.active.metadata_nodes = 0;
+        self.tabs.active.metadata_sequence = 0;
+        if present {
+            self.toolbar_focused = false;
+            self.toolbar.SetActive(false)?;
+            self.last_frame = None;
+            self.failed_frame = None;
+        }
+        if record {
+            if !self.tabs.active.history.is_empty() {
+                self.tabs
+                    .active
+                    .history
+                    .truncate(self.tabs.active.history_index + 1);
+            }
+            self.tabs
+                .active
+                .history
+                .push(self.tabs.active.location.clone());
+            self.tabs.active.history_index = self.tabs.active.history.len() - 1;
+        }
+        if present {
+            let _phase = browser_tracing::span("navigation", "NavigationCommitHostState");
+            self.set_address(&self.tabs.active.location.clone())?;
+            self.refresh_tabstrip()?;
+            (self.output.notify)(UserEvent::Location(self.tabs.active.location.clone()));
+            self.publish()?;
+        }
+        Ok(())
+    }
+    fn replace_current_history_entry(&mut self) {
+        if let Some(entry) = self
+            .tabs
+            .active
+            .history
+            .get_mut(self.tabs.active.history_index)
+        {
+            *entry = self.tabs.active.location.clone();
+        }
+    }
+    fn drain_navigation_requests(&mut self) -> io::Result<()> {
+        // These callbacks can run inside JS/input dispatch. Start navigation
+        // only after that Page call has returned, retaining its source tab and
+        // document generation so closed/replaced documents cannot navigate it.
+        loop {
+            let next = self.pointer.navigations.borrow_mut().pop_front();
+            let Some((tab_id, generation, navigation)) = next else {
+                return Ok(());
+            };
+            let valid = self
+                .tabs
+                .ordered()
+                .iter()
+                .any(|tab| tab.id == tab_id && tab.document_generation == generation);
+            if !valid {
+                continue;
+            }
+            if navigation.target.eq_ignore_ascii_case("_blank") {
+                self.new_tab_request(navigation.request, false)?;
+            } else if tab_id == self.tabs.active.id {
+                self.navigate_request(navigation.request, !navigation.replace_history, true)?;
+                if navigation.replace_history {
+                    self.replace_current_history_entry();
+                }
+            } else {
+                let foreground = self.tabs.active.id;
+                self.tabs.activate(tab_id);
+                let result =
+                    self.navigate_request(navigation.request, !navigation.replace_history, false);
+                if result.is_ok() && navigation.replace_history {
+                    self.replace_current_history_entry();
+                }
+                self.tabs.activate(foreground);
+                result?;
+                self.refresh_tabstrip()?;
+            }
+            // One navigation per host turn; later requests stay queued. This
+            // preserves task/input yielding even when script opens many tabs.
+            return Ok(());
+        }
+    }
+    fn refresh_tabstrip(&mut self) -> io::Result<()> {
+        let html = crate::chrome::tab_strip(&self.tabs);
+        let loading = self.tabs.active.page.as_ref().is_some_and(Page::IsLoading);
+        if self.reload_loading != Some(loading) {
+            let id = find_id(&self.toolbar, "reload").unwrap();
+            self.toolbar.Apply(PageMutation::DOMMutation(DOMMutation {
+                mutation_type: DOMMutationType::kSetInnerHTML,
+                target_node_id: id,
+                value: crate::chrome::reload_icon(loading).into(),
+                ..Default::default()
+            }))?;
+            self.set_chrome_attribute(
+                "reload",
+                "aria-label",
+                Some(if loading { "Stop loading" } else { "Reload" }),
+            )?;
+            self.set_chrome_attribute(
+                "reload",
+                "title",
+                Some(if loading {
+                    "Stop loading"
+                } else {
+                    "Reload (⌘R)"
+                }),
+            )?;
+            self.reload_loading = Some(loading);
+        }
+        self.set_navigation_enabled("back", self.tabs.active.history_index > 0)?;
+        self.set_navigation_enabled(
+            "forward",
+            self.tabs.active.history_index + 1 < self.tabs.active.history.len(),
+        )?;
+        self.set_chrome_attribute(
+            "tabs",
+            "style",
+            Some(&format!(
+                "flex-basis:{}px",
+                self.tabs.ordered().len() * 238 - 6
+            )),
+        )?;
+        if html == self.tabstrip_html {
+            return Ok(());
+        }
+        self.toolbar.Apply(PageMutation::DOMMutation(DOMMutation {
+            mutation_type: DOMMutationType::kSetInnerHTML,
+            target_node_id: self.tabstrip_id,
+            value: html.clone(),
+            ..Default::default()
+        }))?;
+        self.tabstrip_html = html;
+        Ok(())
+    }
+    fn set_navigation_enabled(&mut self, name: &str, enabled: bool) -> io::Result<()> {
+        self.set_chrome_attribute(name, "disabled", (!enabled).then_some(""))?;
+        // Views changes icon ink alongside Button::SetEnabled. Use SVG's
+        // presentation attribute so this does not depend on :disabled support.
+        let paths = {
+            let owner = self.toolbar.Document();
+            let doc = owner.GetDocument();
+            fn visit(
+                doc: &dom::persistent_document::PersistentDocument,
+                i: usize,
+                out: &mut Vec<u64>,
+            ) {
+                let node = doc.Node(i);
+                if node.Name() == "path" {
+                    out.push(node.Id());
+                }
+                for &child in node.Children() {
+                    visit(doc, child, out);
+                }
+            }
+            let mut paths = Vec::new();
+            if let Some(id) = find_id(&self.toolbar, name) {
+                visit(doc, doc.FindNodeById(id).unwrap(), &mut paths);
+            }
+            paths
+        };
+        let ink = if enabled { "#444746" } else { "#bfc1c3" };
+        for id in paths {
+            let equal = {
+                let owner = self.toolbar.Document();
+                let doc = owner.GetDocument();
+                doc.Node(doc.FindNodeById(id).unwrap())
+                    .FindAttribute("fill")
+                    .is_some_and(|attr| attr.value == ink)
+            };
+            if !equal {
+                self.toolbar.Apply(PageMutation::DOMMutation(DOMMutation {
+                    mutation_type: DOMMutationType::kSetAttribute,
+                    target_node_id: id,
+                    name: "fill".into(),
+                    value: ink.into(),
+                    ..Default::default()
+                }))?;
+            }
+        }
+        Ok(())
+    }
+    fn open_popup(&mut self, kind: &str) -> io::Result<()> {
+        if self.popup.take().is_some() {
+            self.last_frame = None;
+            self.failed_frame = None;
+            return Ok(());
+        }
+        let rows = match kind {
+            "tabsearch" => self
+                .tabs
+                .ordered()
+                .iter()
+                .map(|tab| {
+                    (
+                        format!("activate-{}", tab.id),
+                        tab.title.clone(),
+                        String::new(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            "site" => vec![(
+                "info".into(),
+                self.tabs.active.location.clone(),
+                String::new(),
+            )],
+            _ => vec![
+                ("newtab".into(), "New tab".into(), "⌘T".into()),
+                ("reload".into(), "Reload".into(), "⌘R".into()),
+                ("devtools".into(), "Developer tools".into(), "F12".into()),
+                ("home".into(), "Home".into(), String::new()),
+                ("close".into(), "Close tab".into(), "⌘W".into()),
+            ],
+        };
+        let width = 280.0_f64.min(self.viewport.logical_width() - 16.0);
+        let x = if kind == "tabsearch" {
+            92.0_f64.min(self.viewport.logical_width() - width - 8.0)
+        } else if kind == "site" {
+            121.0_f64.min(self.viewport.logical_width() - width - 8.0)
+        } else {
+            self.viewport.logical_width() - width - 8.0
+        };
+        let mut page = create_page(
+            self.viewport.logical_width(),
+            self.viewport.content_height(),
+            self.viewport.scale,
+            false,
+            self.pointer.clone(),
+            true,
+            0,
+            0,
+        )?;
+        page.Open(
+            &data_url(&crate::chrome::popup_document(&rows, width, x)),
+            16384,
+            4096,
+        )?;
+        while page.IsLoading() {
+            page.RunTask()?;
+        }
+        page.SetBeginFrameSource(self.frame_source.clone());
+        self.next_popup_generation += 1;
+        self.popup = Some(ChromePopup {
+            page,
+            generation: self.next_popup_generation,
+            x,
+            width,
+            height: (rows.len() as f64 * 32.0 + 18.0).min(self.viewport.content_height()),
+            actions: rows.iter().map(|row| row.0.clone()).collect(),
+            selected: None,
+            hovered: None,
+        });
+        self.last_frame = None;
+        self.failed_frame = None;
+        Ok(())
+    }
+    fn chrome_action(&mut self, id: &str) -> io::Result<()> {
+        match id {
+            "devtools" => {
+                self.popup = None;
+                (self.output.notify)(UserEvent::OpenDevTools);
+                Ok(())
+            }
+            "back" => self.history(-1),
+            "forward" => self.history(1),
+            "reload" if self.tabs.active.page.as_ref().is_some_and(Page::IsLoading) => {
+                if let Some(page) = &mut self.tabs.active.page {
+                    page.StopLoading();
+                }
+                self.refresh_tabstrip()
+            }
+            "reload" => self.navigate(&self.tabs.active.location.clone(), false),
+            "home" => self.navigate("about:home", true),
+            "go" => self.navigate(&self.address(), true),
+            "newtab" => self.new_tab("about:home", true),
+            "close" => self.close_tab(self.tabs.active.id),
+            "menu" | "tabsearch" | "site" => self.open_popup(id),
+            id if id.starts_with("close-") => {
+                id[6..].parse().map_or(Ok(()), |id| self.close_tab(id))
+            }
+            id if id.starts_with("activate-") => {
+                id[9..].parse().map_or(Ok(()), |id| self.activate_tab(id))
+            }
+            id if id.starts_with("tab-") || id.starts_with("title-") => id
+                .split_once('-')
+                .and_then(|(_, id)| id.parse().ok())
+                .map_or(Ok(()), |id| self.activate_tab(id)),
+            _ => Ok(()),
+        }
+    }
+    fn set_chrome_attribute(
+        &mut self,
+        name: &str,
+        attribute: &str,
+        value: Option<&str>,
+    ) -> io::Result<()> {
+        let id = match name {
+            "chrome" => self.chrome_id,
+            "omnibox" => self.omnibox_id,
+            _ => {
+                let Some(id) = find_id(&self.toolbar, name) else {
+                    return Ok(());
+                };
+                id
+            }
+        };
+        let unchanged = {
+            let owner = self.toolbar.Document();
+            let doc = owner.GetDocument();
+            let node = doc.Node(doc.FindNodeById(id).unwrap());
+            node.FindAttribute(attribute).map(|a| a.value.as_str()) == value
+        };
+        if unchanged {
+            return Ok(());
+        }
+        self.toolbar.Apply(PageMutation::DOMMutation(DOMMutation {
+            mutation_type: if value.is_some() {
+                DOMMutationType::kSetAttribute
+            } else {
+                DOMMutationType::kRemoveAttribute
+            },
+            target_node_id: id,
+            name: attribute.into(),
+            value: value.unwrap_or_default().into(),
+            ..Default::default()
+        }))
+    }
+    fn deactivate_tab(&mut self) -> io::Result<()> {
+        if let Some(page) = &mut self.tabs.active.page {
+            page.FlushFrameInputs()?;
+            page.SetActive(false)?;
+            // Hidden pages retain the injected source. Ordinary tasks continue,
+            // but rAF/lifecycle wait until the page receives frames again.
+            // Detaching would enable the headless timer/paint fallback.
+        }
+        Ok(())
+    }
+    fn activate_tab(&mut self, id: u64) -> io::Result<()> {
+        if self.tabs.active.id == id {
+            return self.show_active_tab();
+        }
+        if !self.tabs.background.iter().any(|tab| tab.id == id) {
+            return Ok(());
+        }
+        self.deactivate_tab()?;
+        self.tabs.activate(id);
+        self.show_active_tab()
+    }
+    fn show_active_tab(&mut self) -> io::Result<()> {
+        self.popup = None;
+        self.pointer.active_tab.set(self.tabs.active.id);
+        self.toolbar_focused = false;
+        self.last_frame = None;
+        self.failed_frame = None;
+        if self.tabs.active.page.is_none() {
+            return self.navigate("about:home", true);
+        }
+        if let Some(page) = &mut self.tabs.active.page {
+            page.SetBeginFrameSource(self.frame_source.clone());
+        }
+        // Hidden tabs retain their layout at its last viewport. Apply the
+        // current visual properties before this Page receives input again.
+        if self.tabs.active.viewport != Some(self.viewport) {
+            if let Some(page) = &mut self.tabs.active.page {
+                page.ResizeViewport(
+                    self.viewport.logical_width(),
+                    self.viewport.content_height(),
+                    self.viewport.scale,
+                )?;
+                let _ = page.Evaluate(
+                    "window.dispatchEvent(new Event('resize'))",
+                    "rechrom:activate-resize",
+                );
+            }
+            self.tabs.active.viewport = Some(self.viewport);
+        }
+        self.update_active_pages()?;
+        self.set_address(&self.tabs.active.location.clone())?;
+        self.refresh_tabstrip()?;
+        (self.output.notify)(UserEvent::Location(self.tabs.active.location.clone()));
+        self.publish()
+    }
+    fn new_tab(&mut self, address: &str, focus_address: bool) -> io::Result<()> {
+        self.new_tab_request(
+            url_loader::URLRequest {
+                url: address.into(),
+                ..Default::default()
+            },
+            focus_address,
+        )
+    }
+    fn new_tab_request(
+        &mut self,
+        request: url_loader::URLRequest,
+        focus_address: bool,
+    ) -> io::Result<()> {
+        // Validate first so a malformed URL cannot replace the visible tab.
+        crate::options::normalize_address(&request.url)?;
+        self.deactivate_tab()?;
+        self.tabs.add();
+        self.pointer.active_tab.set(self.tabs.active.id);
+        self.last_frame = None;
+        self.failed_frame = None;
+        self.navigate_request(request, true, true)?;
+        if focus_address {
+            self.command(Command::FocusAddress)?;
+        }
+        Ok(())
+    }
+    fn close_tab(&mut self, id: u64) -> io::Result<()> {
+        if id == self.tabs.active.id {
+            if let Some(page) = &mut self.tabs.active.page {
+                page.StopLoading();
+            }
+        } else if let Some(tab) = self.tabs.background.iter_mut().find(|tab| tab.id == id) {
+            if let Some(page) = &mut tab.page {
+                page.StopLoading();
+            }
+        }
+        if self.tabs.is_only(id) {
+            (self.output.notify)(UserEvent::CloseWindow);
+            return Ok(());
+        }
+        if self.tabs.close(id) {
+            self.show_active_tab()
+        } else {
+            self.toolbar_focused = false;
+            self.update_active_pages()?;
+            self.refresh_tabstrip()
+        }
+    }
+    fn follow_link(&mut self, request: crate::navigation::NavigationRequest) -> io::Result<()> {
+        match request.disposition {
+            crate::navigation::Disposition::CurrentTab => self.navigate(&request.url, true),
+            crate::navigation::Disposition::NewTab => self.new_tab(&request.url, false),
+        }
+    }
+    fn set_address(&mut self, value: &str) -> io::Result<()> {
+        self.toolbar.Apply(PageMutation::DOMMutation(DOMMutation {
+            mutation_type: DOMMutationType::kSetControlValue,
+            target_node_id: self.address_id,
+            value: value.into(),
+            ..Default::default()
+        }))
+    }
+    fn address(&self) -> String {
+        let owner = self.toolbar.Document();
+        let doc = owner.GetDocument();
+        doc.ControlValue(doc.FindNodeById(self.address_id).unwrap())
+    }
+    fn select_all_address(&mut self) -> io::Result<()> {
+        self.toolbar.Dispatch(&InputEvent::Key(KeyEvent {
+            key: "a".into(),
+            modifiers: EventModifiers {
+                control: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }))?;
+        Ok(())
+    }
+    fn flush_frame_inputs(&mut self) -> io::Result<()> {
+        self.toolbar.FlushFrameInputs()?;
+        if let Some(page) = &mut self.tabs.active.page {
+            page.FlushFrameInputs()?;
+        }
+        if let Some(popup) = &mut self.popup {
+            popup.page.FlushFrameInputs()?;
+        }
+        self.record_frame_input_dispatches();
+        Ok(())
+    }
+    fn command(&mut self, command: Command) -> io::Result<()> {
+        // Cross-Page browser actions must not overtake queued content input.
+        // Frame pulses and ordinary loading wakes are not input boundaries.
+        if matches!(
+            &command,
+            Command::FocusAddress
+                | Command::SetActive(_)
+                | Command::Navigate(_)
+                | Command::Reload
+                | Command::NewTab
+                | Command::CloseActiveTab
+                | Command::CycleTab(_)
+                | Command::Back
+                | Command::Forward
+                | Command::Resize(_)
+        ) {
+            self.flush_frame_inputs()?;
+        }
+        match command {
+            Command::Navigate(address) => self.navigate(&address, true),
+            Command::Redraw => {
+                self.last_frame = None;
+                self.failed_frame = None;
+                Ok(())
+            }
+            Command::Reload => self.navigate(&self.tabs.active.location.clone(), false),
+            Command::Evaluate { source, reply } => {
+                let result = match self.tabs.active.page.as_mut() {
+                    Some(page) => match page.Evaluate(&source, "devtools:Runtime.evaluate") {
+                        Ok(result) => match result.exception {
+                            Some(exception) => Err(exception.message),
+                            None => Ok(()),
+                        },
+                        Err(error) => Err(error.to_string()),
+                    },
+                    None => Err("No active page".into()),
+                };
+                let _ = reply.send(result);
+                Ok(())
+            }
+            Command::Back => self.history(-1),
+            Command::Forward => self.history(1),
+            Command::NewTab => self.new_tab("about:home", true),
+            Command::CloseActiveTab => self.close_tab(self.tabs.active.id),
+            Command::CycleTab(delta) => {
+                let tabs = self.tabs.ordered();
+                let index = tabs
+                    .iter()
+                    .position(|tab| tab.id == self.tabs.active.id)
+                    .unwrap();
+                let next = (index as isize + delta).rem_euclid(tabs.len() as isize) as usize;
+                self.activate_tab(tabs[next].id)
+            }
+            Command::Resize(viewport) => {
+                self.popup = None;
+                if !viewport.valid() {
+                    return Ok(());
+                }
+                // An adjacent native redraw may have been merged with this
+                // visual-properties update, including one at the current size.
+                self.last_frame = None;
+                self.failed_frame = None;
+                if viewport == self.viewport {
+                    return Ok(());
+                }
+                #[cfg(feature = "profile_paint")]
+                let started = Instant::now();
+                self.viewport = viewport;
+                self.toolbar.ResizeViewport(
+                    viewport.logical_width(),
+                    TOOLBAR_HEIGHT,
+                    viewport.scale,
+                )?;
+                #[cfg(feature = "profile_paint")]
+                let toolbar_done = Instant::now();
+                #[cfg(feature = "profile_paint")]
+                let mut page_layout_ms = 0.0;
+                if let Some(page) = &mut self.tabs.active.page {
+                    page.ResizeViewport(
+                        viewport.logical_width(),
+                        viewport.content_height(),
+                        viewport.scale,
+                    )?;
+                    #[cfg(feature = "profile_paint")]
+                    {
+                        page_layout_ms = toolbar_done.elapsed().as_secs_f64() * 1000.0;
+                    }
+                    let _ = page.Evaluate(
+                        "window.dispatchEvent(new Event('resize'))",
+                        "rechrom:resize",
+                    );
+                }
+                self.tabs.active.viewport = Some(viewport);
+                #[cfg(feature = "profile_paint")]
+                if std::env::var_os("BROWSER_APP_PROFILE_RESIZE").is_some() {
+                    eprintln!("window-resize width={} height={} scale={} toolbar_ms={:.3} page_layout_ms={:.3} resize_js_ms={:.3} total_ms={:.3}", viewport.width, viewport.height, viewport.scale,
+                        (toolbar_done-started).as_secs_f64()*1000.0, page_layout_ms,
+                        toolbar_done.elapsed().as_secs_f64()*1000.0-page_layout_ms,
+                        started.elapsed().as_secs_f64()*1000.0);
+                }
+                Ok(())
+            }
+            Command::FocusAddress => {
+                self.popup = None;
+                self.last_frame = None;
+                self.failed_frame = None;
+                self.toolbar_focused = true;
+                self.update_active_pages()?;
+                self.toolbar.Dispatch(&InputEvent::Focus(FocusEvent {
+                    r#type: FocusEventType::kFocus,
+                    target_node_id: self.address_id,
+                    ..Default::default()
+                }))?;
+                self.select_all_address()
+            }
+            Command::SetActive(active) => {
+                if !active {
+                    self.popup = None;
+                    self.last_frame = None;
+                    self.failed_frame = None;
+                    self.content_press_discarded = false;
+                }
+                self.active = active;
+                self.update_active_pages()
+            }
+            Command::BeginFrame(args) => self.begin_frame(args),
+            Command::CompositorScroll { document, update } => {
+                // The impl batch belongs to its document, even if a tab click
+                // hid that Page before this mailbox command was consumed.
+                // Visibility does not retire a renderer's scroll state.
+                let tab = if document == (self.tabs.active.id, self.tabs.active.document_generation)
+                {
+                    Some(&mut self.tabs.active)
+                } else {
+                    self.tabs
+                        .background
+                        .iter_mut()
+                        .find(|tab| document == (tab.id, tab.document_generation))
+                };
+                if let Some(tab) = tab {
+                    if let Some(page) = &mut tab.page {
+                        page.ApplyCompositorScrollDelta(
+                            update.sequence,
+                            update.owner_client_id,
+                            update.delta,
+                        )?;
+                    }
+                }
+                Ok(())
+            }
+            Command::VSyncDisplayChanged(display_id) => {
+                if let Some(source) = &self.frame_source {
+                    source.set_display(display_id);
+                }
+                Ok(())
+            }
+            Command::Input(input) => self.input(input),
+            Command::QueuedInput {
+                input,
+                queued_at,
+                samples,
+            } => {
+                let profile = std::env::var_os("BROWSER_APP_TRACE_INPUT").is_some()
+                    || std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
+                let toolbar = match &input {
+                    InputEvent::Mouse(event) if event.r#type == MouseEventType::kLeave => {
+                        self.pointer.in_toolbar.get()
+                    }
+                    InputEvent::Mouse(event) => event.position.y < TOOLBAR_HEIGHT,
+                    InputEvent::Wheel(event) => event.position.y < TOOLBAR_HEIGHT,
+                    _ => self.toolbar_focused,
+                };
+                let _input_scope = browser_tracing::scope(browser_tracing::Context {
+                    target_id: if toolbar { 2 } else { 1 },
+                    input_id: browser_tracing::instant_id(queued_at),
+                    ..Default::default()
+                });
+                let mut input_trace = browser_tracing::span("input", "NativeInputReceive");
+                input_trace.set("samples", samples as f64);
+                input_trace.set(
+                    "kind",
+                    match &input {
+                        InputEvent::Wheel(_) => 1.0,
+                        InputEvent::Mouse(_) => 2.0,
+                        _ => 3.0,
+                    },
+                );
+                if let InputEvent::Wheel(wheel) = &input {
+                    browser_tracing::instant_at(
+                        "input",
+                        "WheelSample",
+                        queued_at,
+                        &[
+                            ("samples", samples as f64),
+                            ("delta_x", wheel.delta.x),
+                            ("delta_y", wheel.delta.y),
+                            ("phase", wheel.phase as u8 as f64),
+                            (
+                                "precise",
+                                (wheel.delta_units == ScrollGranularity::kScrollByPrecisePixel)
+                                    as u8 as f64,
+                            ),
+                            (
+                                "native_phase",
+                                wheel.native.as_ref().map_or(f64::NAN, |n| n.phase as f64),
+                            ),
+                            (
+                                "momentum_phase",
+                                wheel
+                                    .native
+                                    .as_ref()
+                                    .map_or(f64::NAN, |n| n.momentum_phase as f64),
+                            ),
+                            (
+                                "native_timestamp_seconds",
+                                wheel
+                                    .native
+                                    .as_ref()
+                                    .map_or(f64::NAN, |n| n.timestamp_seconds),
+                            ),
+                        ],
+                    );
+                }
+                if profile || browser_tracing::enabled() {
+                    match &mut self.pending_native_input {
+                        Some(trace) => trace.merge(queued_at, samples),
+                        None => {
+                            self.pending_native_input = Some(NativeInputTrace {
+                                queued_at,
+                                samples,
+                                commands: 1,
+                            })
+                        }
+                    }
+                }
+                self.dispatching_native_input = true;
+                self.dispatch_input_timing = Some((queued_at, samples));
+                self.deferred_native_input = false;
+                let started = Instant::now();
+                browser_tracing::interval(
+                    "input",
+                    "InputOwnerQueue",
+                    queued_at,
+                    started,
+                    &[("samples", samples as f64)],
+                );
+                let kind = match &input {
+                    InputEvent::Mouse(_) => "mouse",
+                    InputEvent::Wheel(_) => "wheel",
+                    InputEvent::Key(_) => "key",
+                    InputEvent::TextInput(_) => "text",
+                    _ => "other",
+                };
+                // Timestamp is captured by the native UI thread, before mpsc.
+                // A coalesced event retains the oldest enqueue time, so long
+                // script tasks cannot disappear from the queue-latency trace.
+                if profile {
+                    eprintln!(
+                        "native-input-received kind={kind} samples={samples} queue_ms={:.3}",
+                        (started - queued_at).as_secs_f64() * 1000.0
+                    );
+                    if let InputEvent::Wheel(wheel) = &input {
+                        eprintln!(
+                            "native-wheel-sample phase={:?} units={:?} delta_x={:.3} delta_y={:.3}",
+                            wheel.phase, wheel.delta_units, wheel.delta.x, wheel.delta.y
+                        );
+                    }
+                }
+                let dispatch_started = Instant::now();
+                let result = self.input(input);
+                let dispatch_finished = Instant::now();
+                self.dispatching_native_input = false;
+                self.dispatch_input_timing = None;
+                self.record_frame_input_dispatches();
+                input_trace.set(
+                    "deferred",
+                    if self.deferred_native_input { 1.0 } else { 0.0 },
+                );
+                input_trace.set("succeeded", if result.is_ok() { 1.0 } else { 0.0 });
+                if !self.deferred_native_input {
+                    browser_tracing::interval(
+                        "input",
+                        "InputQueue",
+                        queued_at,
+                        dispatch_started,
+                        &[("samples", samples as f64), ("frame_aligned", 0.0)],
+                    );
+                    browser_tracing::interval(
+                        "input",
+                        "InputDispatch",
+                        dispatch_started,
+                        dispatch_finished,
+                        &[("samples", samples as f64), ("frame_aligned", 0.0)],
+                    );
+                    if profile {
+                        eprintln!("native-input-complete kind={kind} samples={samples} dispatch_ms={:.3} enqueue_to_dispatch_complete_ms={:.3}",
+                        started.elapsed().as_secs_f64() * 1000.0, queued_at.elapsed().as_secs_f64() * 1000.0);
+                    }
+                }
+                result
+            }
+            Command::Wake(token) => {
+                if token == OPEN_ENGINE_WAKE {
+                    // A wake announces ready work, not one unit of body data.
+                    // Acknowledge before pumping so newly arriving work can
+                    // wake the following turn. Data stays in its owner queue.
+                    self.loading_wake_pending.store(false, Ordering::Release);
+                }
+                Ok(())
+            }
+            Command::Stop => Ok(()),
+        }
+    }
+    fn history(&mut self, delta: isize) -> io::Result<()> {
+        let index = self.tabs.active.history_index as isize + delta;
+        if index < 0 || index >= self.tabs.active.history.len() as isize {
+            return Ok(());
+        }
+        let index = index as usize;
+        self.navigate(&self.tabs.active.history[index].clone(), false)?;
+        self.tabs.active.history_index = index;
+        self.refresh_tabstrip()
+    }
+    fn input(&mut self, mut input: InputEvent) -> io::Result<()> {
+        if let InputEvent::Wheel(wheel) = &input {
+            // Wheel targets follow pointer location, independently of keyboard
+            // focus. Only a content gesture drives the retained content cycle.
+            let content = wheel.position.y >= TOOLBAR_HEIGHT;
+            match wheel.phase {
+                WheelPhase::kBegan
+                    if content && wheel.delta_units == ScrollGranularity::kScrollByPrecisePixel =>
+                {
+                    self.scroll_active = true
+                }
+                WheelPhase::kEnded | WheelPhase::kCancelled => self.scroll_active = false,
+                _ => {}
+            }
+        }
+        if !interaction::frame_aligned_input_queue::FrameAlignedInputQueue::IsFrameAligned(&input) {
+            self.flush_frame_inputs()?;
+        }
+        if let Some(popup) = &mut self.popup {
+            if matches!(&input, InputEvent::Key(event) if event.r#type == KeyEventType::kDown && event.key == "Escape")
+            {
+                self.popup = None;
+                self.last_frame = None;
+                self.failed_frame = None;
+                return Ok(());
+            }
+            if let InputEvent::Key(event) = &input {
+                if (event.r#type == KeyEventType::kDown
+                    || (event.r#type == KeyEventType::kUp && event.key == " "))
+                    && !popup.actions.is_empty()
+                {
+                    match event.key.as_str() {
+                        "ArrowDown" | "ArrowUp" | "Tab" => {
+                            let reverse = event.key == "ArrowUp"
+                                || (event.key == "Tab" && event.modifiers.shift);
+                            let index = popup.selected.map_or(
+                                if reverse { popup.actions.len() - 1 } else { 0 },
+                                |index| {
+                                    if reverse {
+                                        (index + popup.actions.len() - 1) % popup.actions.len()
+                                    } else {
+                                        (index + 1) % popup.actions.len()
+                                    }
+                                },
+                            );
+                            popup.selected = Some(index);
+                            let id = find_id(&popup.page, &popup.actions[index]).unwrap();
+                            if let Some(old) = popup.hovered.replace(id) {
+                                set_hover_class(&mut popup.page, old, false)?;
+                            }
+                            set_hover_class(&mut popup.page, id, true)?;
+                            popup.page.Dispatch(&InputEvent::Focus(FocusEvent {
+                                r#type: FocusEventType::kFocus,
+                                target_node_id: id,
+                                ..Default::default()
+                            }))?;
+                            return Ok(());
+                        }
+                        "Enter" | " "
+                            if event.key == "Enter" || event.r#type == KeyEventType::kUp =>
+                        {
+                            if let Some(index) = popup.selected {
+                                let id = popup.actions[index].clone();
+                                self.popup = None;
+                                self.last_frame = None;
+                                self.failed_frame = None;
+                                return self.chrome_action(&id);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if matches!(
+                &input,
+                InputEvent::TextInput(_) | InputEvent::Composition(_)
+            ) {
+                return Ok(());
+            }
+            if let InputEvent::Mouse(event) = &input {
+                let point = event.position;
+                let inside = point.x >= popup.x
+                    && point.x < popup.x + popup.width
+                    && point.y >= TOOLBAR_HEIGHT + 4.0
+                    && point.y < TOOLBAR_HEIGHT + 4.0 + popup.height;
+                if inside {
+                    let mut local = event.clone();
+                    local.position.y -= TOOLBAR_HEIGHT;
+                    let result = popup.page.Dispatch(&InputEvent::Mouse(local))?;
+                    if event.r#type == MouseEventType::kMove {
+                        let id = result
+                            .target_node_id
+                            .and_then(|id| element_id(&popup.page, id))
+                            .and_then(|name| find_id(&popup.page, &name));
+                        if id != popup.hovered {
+                            if let Some(old) = popup.hovered {
+                                set_hover_class(&mut popup.page, old, false)?;
+                            }
+                            if let Some(id) = id {
+                                set_hover_class(&mut popup.page, id, true)?;
+                            }
+                            popup.hovered = id;
+                        }
+                    }
+                    if event.r#type == MouseEventType::kClick {
+                        let id = result
+                            .target_node_id
+                            .and_then(|id| element_id(&popup.page, id));
+                        self.popup = None;
+                        self.last_frame = None;
+                        self.failed_frame = None;
+                        if let Some(id) = id {
+                            return self.chrome_action(&id);
+                        }
+                    }
+                    return Ok(());
+                }
+                if event.r#type == MouseEventType::kDown && point.y >= TOOLBAR_HEIGHT {
+                    self.popup = None;
+                    self.last_frame = None;
+                    self.failed_frame = None;
+                }
+            }
+        }
+        let was_in_toolbar = self.pointer.in_toolbar.get();
+        let toolbar = match &mut input {
+            InputEvent::Mouse(event) => {
+                let toolbar = if event.r#type == MouseEventType::kLeave {
+                    self.pointer.in_toolbar.get()
+                } else {
+                    event.position.y < TOOLBAR_HEIGHT
+                };
+                self.pointer.in_toolbar.set(toolbar);
+                if event.r#type == MouseEventType::kDown {
+                    self.toolbar_focused = toolbar;
+                    self.content_press_discarded = false;
+                }
+                if !toolbar {
+                    event.position.y -= TOOLBAR_HEIGHT;
+                }
+                self.content_pointer_position = if event.r#type == MouseEventType::kLeave || toolbar
+                {
+                    None
+                } else {
+                    Some(event.position)
+                };
+                toolbar
+            }
+            InputEvent::Wheel(event) => {
+                let toolbar = event.position.y < TOOLBAR_HEIGHT;
+                if !toolbar {
+                    event.position.y -= TOOLBAR_HEIGHT;
+                }
+                toolbar
+            }
+            _ => self.toolbar_focused,
+        };
+        // The toolbar and content are separate Page roots. Crossing that host
+        // boundary must leave the old content document even though the native
+        // window itself only delivered a move.
+        if toolbar && !was_in_toolbar && matches!(&input, InputEvent::Mouse(_)) {
+            if let Some(page) = &mut self.tabs.active.page {
+                if page.CurrentFrame().is_some() {
+                    page.Dispatch(&InputEvent::Mouse(MouseEvent {
+                        r#type: MouseEventType::kLeave,
+                        position: Offset { x: -1.0, y: -1.0 },
+                        ..Default::default()
+                    }))?;
+                }
+            }
+        }
+        if !toolbar && matches!(&input, InputEvent::Mouse(_)) {
+            for id in std::mem::take(&mut self.chrome_hovered) {
+                set_hover_class(&mut self.toolbar, id, false)?;
+            }
+        }
+        // RenderWidgetHostImpl::InitializePaintHolding keeps the replacement
+        // renderer's input router inactive while the content view shows its
+        // previous surface. Toolbar input remains active in its own Page.
+        if !toolbar
+            && self
+                .tabs
+                .active
+                .page
+                .as_ref()
+                .is_some_and(|page| page.CurrentFrame().is_none())
+        {
+            self.scroll_active = false;
+            self.pointer
+                .publish(browser::page::Cursor::kDefault, false, false);
+            return Ok(());
+        }
+        self.update_active_pages()?;
+        if toolbar {
+            let address_was_focused = self.toolbar.FocusedNodeId() == Some(self.address_id);
+            let result = self.toolbar.Dispatch(&input)?;
+            if matches!(&input, InputEvent::Mouse(event)
+                if event.r#type == MouseEventType::kDown
+                    && event.button == MouseButton::kPrimary)
+                && result.target_node_id == Some(self.address_id)
+                && !address_was_focused
+            {
+                self.select_all_address()?;
+            }
+            if matches!(&input, InputEvent::Mouse(event)
+                if event.r#type == MouseEventType::kDoubleClick
+                    && event.button == MouseButton::kPrimary)
+                && result.target_node_id == Some(self.address_id)
+                && !result.default_prevented
+            {
+                self.select_all_address()?;
+            }
+            if matches!(&input, InputEvent::Mouse(event) if matches!(event.r#type, MouseEventType::kMove | MouseEventType::kLeave))
+            {
+                let target = if matches!(&input, InputEvent::Mouse(event) if event.r#type == MouseEventType::kLeave)
+                {
+                    None
+                } else {
+                    result.target_node_id
+                };
+                let hovered = chrome_hover_chain(&self.toolbar, target);
+                if hovered != self.chrome_hovered {
+                    for id in std::mem::take(&mut self.chrome_hovered) {
+                        set_hover_class(&mut self.toolbar, id, false)?;
+                    }
+                    for &id in &hovered {
+                        set_hover_class(&mut self.toolbar, id, true)?;
+                    }
+                    self.chrome_hovered = hovered;
+                }
+            }
+            if let InputEvent::Key(event) = &input {
+                if !result.default_prevented {
+                    let focus = self.toolbar.FocusedNodeId();
+                    if event.r#type == KeyEventType::kDown
+                        && event.key == "Enter"
+                        && focus == Some(self.address_id)
+                    {
+                        return self.navigate(&self.address(), true);
+                    }
+                    if (event.r#type == KeyEventType::kDown && event.key == "Enter")
+                        || (event.r#type == KeyEventType::kUp
+                            && event.key == " "
+                            && focus != Some(self.address_id))
+                    {
+                        if let Some(id) = focus.and_then(|id| element_id(&self.toolbar, id)) {
+                            return self.chrome_action(&id);
+                        }
+                    }
+                }
+            }
+            if let InputEvent::Mouse(event) = &input {
+                if event.r#type == MouseEventType::kDown && self.popup.is_some() {
+                    let id = result
+                        .target_node_id
+                        .and_then(|id| element_id(&self.toolbar, id));
+                    if matches!(id.as_deref(), Some("dragspace" | "tabrow" | "tabs")) {
+                        self.popup = None;
+                        self.last_frame = None;
+                        self.failed_frame = None;
+                    }
+                }
+                if event.r#type == MouseEventType::kClick && !result.default_prevented {
+                    if let Some(id) = result
+                        .target_node_id
+                        .and_then(|id| element_id(&self.toolbar, id))
+                    {
+                        return self.chrome_action(&id);
+                    }
+                }
+            }
+        } else if let Some(page) = &mut self.tabs.active.page {
+            // There is no content hit-test tree before first paint. Native
+            // pointer input during streaming navigation is not a fatal error.
+            if page.CurrentFrame().is_none() {
+                if matches!(&input, InputEvent::Mouse(event) if event.r#type == MouseEventType::kDown)
+                {
+                    self.content_press_discarded = true;
+                }
+                self.pointer
+                    .publish(browser::page::Cursor::kDefault, false, false);
+                return Ok(());
+            }
+            if self.content_press_discarded {
+                if let InputEvent::Mouse(event) = &input {
+                    if matches!(
+                        event.r#type,
+                        MouseEventType::kClick
+                            | MouseEventType::kContextMenu
+                            | MouseEventType::kDoubleClick
+                    ) {
+                        self.content_press_discarded = false;
+                        return Ok(());
+                    }
+                    if event.r#type == MouseEventType::kUp {
+                        return Ok(());
+                    }
+                }
+            }
+            let continuous = matches!(&input, InputEvent::Wheel(event) if matches!(event.phase, WheelPhase::kNone | WheelPhase::kChanged))
+                || matches!(&input, InputEvent::Mouse(event) if event.r#type == MouseEventType::kMove);
+            if continuous && self.frame_source.is_some() {
+                let (queued_at, samples) = self
+                    .dispatch_input_timing
+                    .unwrap_or_else(|| (Instant::now(), 1));
+                let wheel = matches!(&input, InputEvent::Wheel(_));
+                page.QueueFrameInput(input, queued_at, samples)?;
+                self.deferred_native_input = true;
+                if wheel {
+                    if let Some(frame) = &mut self.late_scroll {
+                        let now = Instant::now();
+                        let live_deadline = frame.input_deadline;
+                        let admitted = live_deadline.is_some_and(|deadline| now < deadline);
+                        let deadline_margin_ms = live_deadline.map_or(f64::NAN, |deadline| {
+                            if deadline >= now {
+                                deadline.duration_since(now).as_secs_f64() * 1000.0
+                            } else {
+                                -now.duration_since(deadline).as_secs_f64() * 1000.0
+                            }
+                        });
+                        let _decision_scope = browser_tracing::scope(browser_tracing::Context {
+                            target_id: 1,
+                            source_id: frame.frame.source_id,
+                            frame_id: frame.frame.sequence_number,
+                            input_id: browser_tracing::instant_id(queued_at),
+                            ..Default::default()
+                        });
+                        browser_tracing::instant(
+                            "input",
+                            "LateScrollAdmissionDecision",
+                            &[
+                                ("admitted", admitted as u8 as f64),
+                                ("window_open", live_deadline.is_some() as u8 as f64),
+                                (
+                                    "arrival_age_ms",
+                                    now.saturating_duration_since(frame.frame.frame_time)
+                                        .as_secs_f64()
+                                        * 1000.0,
+                                ),
+                                (
+                                    "input_deadline_ms",
+                                    frame.frame.interval.as_secs_f64() * 333.0,
+                                ),
+                                ("deadline_margin_ms", deadline_margin_ms),
+                            ],
+                        );
+                        if !admitted {
+                            return Ok(());
+                        }
+                        // InputHandlerProxy queues, checks its live deadline,
+                        // then resumes frame production immediately. Page's
+                        // BeginMainFrame has not run yet, so this wheel is
+                        // drained before rAF and lifecycle work.
+                        frame.input_attempted_at = Some(now);
+                        self.resume_late_scroll_production(true)?;
+                    }
+                }
+                return Ok(());
+            }
+            let result = page.Dispatch(&input)?;
+            if std::env::var_os("BROWSER_APP_TRACE_INPUT").is_some() {
+                let owner = page.Document();
+                let document = owner.GetDocument();
+                let node = result
+                    .target_node_id
+                    .and_then(|id| document.FindNodeById(id))
+                    .map(|i| document.Node(i));
+                eprintln!("input-trace event={input:?} target={:?} tag={:?} id={:?} class={:?} cursor={:?} prevented={}",result.target_node_id,node.map(|n|n.Name()),node.and_then(|n|n.FindAttribute("id")).map(|a|a.value.as_str()),node.and_then(|n|n.FindAttribute("class")).map(|a|a.value.as_str()),page.Cursor(),result.default_prevented);
+                eprintln!(
+                    "input-state value={:?} rendering_ready={} caret={:?}",
+                    result
+                        .target_node_id
+                        .and_then(|id| document.FindNodeById(id))
+                        .filter(|&i| document.Node(i).IsHTMLElement("input")
+                            || document.Node(i).IsHTMLElement("textarea"))
+                        .map(|i| document.ControlValue(i)),
+                    page.IsRenderingReady(),
+                    page.Caret()
+                );
+            }
+            if !result.default_prevented {
+                if let InputEvent::Wheel(event) = &input {
+                    let started = Instant::now();
+                    let mut targeted = event.clone();
+                    targeted.target_node_id = result.target_node_id;
+                    scroll(page, &targeted, self.viewport.content_height())?;
+                    if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+                        eprintln!(
+                            "scroll-default-profile ms={:.3} sequence={}",
+                            started.elapsed().as_secs_f64() * 1000.0,
+                            page.CurrentFrame().map_or(0, |frame| frame.sequence)
+                        );
+                    }
+                }
+                if let InputEvent::Mouse(event) = &input {
+                    if event.r#type == MouseEventType::kClick
+                        && event.button == MouseButton::kPrimary
+                    {
+                        if let Some(address) = result
+                            .target_node_id
+                            .and_then(|id| crate::navigation::link_request(page, id))
+                        {
+                            return self.follow_link(address);
+                        }
+                    }
+                }
+            }
+        }
+        // Deliver pointer feedback before the host drains more commands or runs loading tasks.
+        self.publish_cursor();
+        self.drain_navigation_requests()?;
+        Ok(())
+    }
+    fn update_active_pages(&mut self) -> io::Result<()> {
+        self.toolbar
+            .SetActive(self.active && self.toolbar_focused)?;
+        if let Some(page) = &mut self.tabs.active.page {
+            page.SetActive(self.active && !self.toolbar_focused)?;
+        }
+        Ok(())
+    }
+    fn publish_caret(&mut self) {
+        let caret = if self.toolbar_focused {
+            self.toolbar.Caret().map(|caret| caret.rect)
+        } else {
+            self.tabs
+                .active
+                .page
+                .as_ref()
+                .and_then(Page::Caret)
+                .map(|caret| browser::page::CaretRect {
+                    y: caret.rect.y + TOOLBAR_HEIGHT,
+                    ..caret.rect
+                })
+        };
+        if caret != self.caret_rect {
+            self.caret_rect = caret;
+            (self.output.notify)(UserEvent::CaretChanged(caret));
+        }
+    }
+    fn publish_cursor(&mut self) {
+        let toolbar = self.pointer.in_toolbar.get();
+        let cursor = if toolbar {
+            self.toolbar.Cursor()
+        } else {
+            self.tabs
+                .active
+                .page
+                .as_ref()
+                .map_or(browser::page::Cursor::kDefault, Page::Cursor)
+        };
+        self.pointer.publish(cursor, toolbar, false);
+    }
+    fn finish_native_input_trace(&mut self, outcome: &str, submitted_at: Instant) {
+        // A no-op publish within navigation dispatch is not the final input
+        // outcome. Wait until dispatch has returned and the host flushes it.
+        if outcome == "no-frame" && self.dispatching_native_input {
+            return;
+        }
+        let Some(trace) = self.pending_native_input.take() else {
+            return;
+        };
+        let _input_scope = browser_tracing::scope(browser_tracing::Context {
+            input_id: browser_tracing::instant_id(trace.queued_at),
+            ..Default::default()
+        });
+        let event_name = match outcome {
+            "no-frame" => "InputNoFrame",
+            "presentation-failed" => "InputPresentationFailed",
+            "headless-raster-only" => "InputHeadlessRaster",
+            _ => "InputOutcome",
+        };
+        browser_tracing::interval(
+            "input",
+            event_name,
+            trace.queued_at,
+            submitted_at,
+            &[
+                ("samples", trace.samples as f64),
+                ("commands", trace.commands as f64),
+                ("present_sequence", self.presented_sequence as f64),
+            ],
+        );
+        if std::env::var_os("BROWSER_APP_TRACE_INPUT").is_none()
+            && std::env::var_os("BROWSER_PROFILE_INPUT").is_none()
+        {
+            return;
+        }
+        let elapsed_ms = submitted_at.duration_since(trace.queued_at).as_secs_f64() * 1000.0;
+        eprintln!("native-input-frame outcome={outcome} frame_sequence={} samples={} commands={} enqueue_to_outcome_ms={elapsed_ms:.3}",
+            self.presented_sequence, trace.samples, trace.commands);
+    }
+
+    fn publish(&mut self) -> io::Result<()> {
+        self.set_chrome_attribute(
+            "chrome",
+            "class",
+            Some(if self.active { "" } else { "inactive" }),
+        )?;
+        let address_focused = self.active
+            && self.toolbar_focused
+            && self.toolbar.FocusedNodeId() == Some(self.address_id);
+        self.set_chrome_attribute(
+            "omnibox",
+            "class",
+            Some(if address_focused {
+                "focused"
+            } else if self.chrome_hovered.contains(&self.omnibox_id) {
+                "hovered"
+            } else {
+                ""
+            }),
+        )?;
+        // Pointer feedback must be delivered even when the frame is unchanged.
+        self.publish_cursor();
+        self.publish_caret();
+        if self.late_scroll.is_some() {
+            return Ok(());
+        }
+        if self.presentation.IsComposited() {
+            if !self.handling_begin_frame {
+                if let Some(source) = &self.frame_source {
+                    source.request_begin_frame();
+                }
+            } else {
+                self.send_compositor_snapshot()?;
+            }
+            return Ok(());
+        }
+        // This test-only readback adapter has no replacement document frame
+        // until an ordinary Page task completes. Match Surface paint holding.
+        if self
+            .tabs
+            .active
+            .page
+            .as_ref()
+            .is_some_and(|page| page.CurrentFrame().is_none())
+        {
+            return Ok(());
+        }
+        // This is an explicit protocol readback host. The
+        // native application always uses the compositor/Viz/Display pipeline;
+        // there is no Page-direct window fallback.
+        let toolbar = self
+            .toolbar
+            .CurrentFrame()
+            .ok_or_else(|| io::Error::other("toolbar has no frame"))?;
+        let page = self.tabs.active.page.as_ref().and_then(Page::CurrentFrame);
+        let signature = (
+            toolbar.sequence
+                + self
+                    .popup
+                    .as_ref()
+                    .map_or(0, |popup| popup.page.CurrentFrame().unwrap().sequence),
+            page.map_or(0, |frame| frame.sequence),
+            self.viewport,
+        );
+        if self.last_frame == Some(signature) {
+            if !self
+                .tabs
+                .active
+                .page
+                .as_ref()
+                .is_some_and(Page::HasPendingFrameInput)
+            {
+                self.finish_native_input_trace("no-frame", Instant::now());
+            }
+            return Ok(());
+        }
+        // A permanently unsupported paint artifact cannot become renderable by
+        // requesting another display tick. Report its failure once; a newer
+        // artifact/viewport or explicit redraw permits another attempt.
+        if self.failed_frame == Some(signature) {
+            self.finish_native_input_trace("presentation-failed", Instant::now());
+            return Ok(());
+        }
+        if !self.handling_begin_frame {
+            if let Some(source) = &self.frame_source {
+                source.request_begin_frame();
+                return Ok(());
+            }
+        }
+        let overlay_content = self
+            .popup
+            .as_ref()
+            .map(|popup| {
+                crate::chrome::content_with_popup(
+                    page.map(|frame| frame.display_items.as_ref()),
+                    popup.page.CurrentFrame().unwrap().display_items.as_ref(),
+                )
+            })
+            .transpose()?
+            .map(Arc::new);
+        let mut drag_regions = vec![crate::chrome::DragRegion {
+            x: 92.0,
+            y: 0.0,
+            width: (self.viewport.logical_width() - 92.0).max(0.0),
+            height: 6.0,
+        }];
+        {
+            let id = self.dragspace_id;
+            fn bounds(
+                fragment: &FragmentNode,
+                id: u64,
+                parent: Offset,
+            ) -> Option<crate::chrome::DragRegion> {
+                let origin = Offset {
+                    x: parent.x + fragment.offset.x,
+                    y: parent.y + fragment.offset.y,
+                };
+                if fragment.node_id == id {
+                    return Some(crate::chrome::DragRegion {
+                        x: origin.x,
+                        y: origin.y,
+                        width: fragment.size.width,
+                        height: fragment.size.height,
+                    });
+                }
+                fragment
+                    .children
+                    .iter()
+                    .find_map(|child| bounds(child, id, origin))
+            }
+            if let Some(region) = bounds(&toolbar.fragments, id, Offset::default()) {
+                drag_regions.push(region);
+            }
+        }
+        // Protocol readback shares the same Page-owned tile path as native presentation.
+        let readback =
+            |page: &Page, artifact: Option<&Arc<paint::paint_engine::PaintArtifact>>, height| {
+                let mut pixels = vec![u32::MAX; self.viewport.width as usize * height as usize];
+                if let Some(artifact) = artifact {
+                    page.PaintArtifactInto(
+                        artifact,
+                        self.viewport.width,
+                        height,
+                        self.viewport.scale,
+                        &mut pixels,
+                        skia::PixelFormat::Rgba8888,
+                        self.viewport.width as usize,
+                    )?;
+                } else {
+                    page.PaintInto(
+                        self.viewport.width,
+                        height,
+                        self.viewport.scale,
+                        &mut pixels,
+                        skia::PixelFormat::Rgba8888,
+                        self.viewport.width as usize,
+                    )?;
+                }
+                RasterSurface::from_pixels(
+                    self.viewport.width,
+                    height,
+                    pixels.into_iter().flat_map(u32::to_ne_bytes).collect(),
+                )
+            };
+        let toolbar_surface = readback(&self.toolbar, None, self.viewport.toolbar_pixels())?;
+        let content_height = self.viewport.height - self.viewport.toolbar_pixels();
+        let content = if let Some(page) = self.tabs.active.page.as_ref() {
+            readback(page, overlay_content.as_ref(), content_height)?
+        } else {
+            RasterSurface::new(self.viewport.width, content_height)?
+        };
+        self.presented_sequence = self.presented_sequence.wrapping_add(1);
+        self.failed_frame = None;
+        self.output.publish(WindowFrame {
+            provenance: None,
+            viewport: self.viewport,
+            toolbar: toolbar_surface,
+            content,
+        });
+        self.last_frame = Some(signature);
+        self.finish_native_input_trace("headless-raster-only", Instant::now());
+        (self.output.notify)(UserEvent::ChromeDragRegions {
+            viewport: self.viewport,
+            frame_sequence: self.presented_sequence,
+            regions: drag_regions,
+        });
+        Ok(())
+    }
+}
+fn location_title(location: &str) -> String {
+    if location == "about:home" {
+        return "New tab".into();
+    }
+    if location == "about:blank" {
+        return "Blank page".into();
+    }
+    url::Url::parse(location)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| {
+            if location.starts_with("data:") {
+                "Document".into()
+            } else {
+                location.chars().take(60).collect()
+            }
+        })
+}
+fn update_tab_metadata(tab: &mut crate::tabs::Tab<Page>) {
+    if tab.location == "about:home" {
+        tab.title = "New tab".into();
+        return;
+    }
+    let Some(page) = &tab.page else {
+        return;
+    };
+    if !tab.location.starts_with("about:")
+        && !page.URL().is_empty()
+        && !page.URL().starts_with("data:")
+        && tab.location != page.URL()
+    {
+        tab.location = page.URL().into();
+        if let Some(entry) = tab.history.get_mut(tab.history_index) {
+            *entry = tab.location.clone();
+        }
+    }
+    let Some(frame) = page.CurrentFrame() else {
+        return;
+    };
+    if tab.metadata_sequence == frame.sequence {
+        return;
+    }
+    tab.metadata_sequence = frame.sequence;
+    let owner = page.Document();
+    let document = owner.GetDocument();
+    fn connected(document: &dom::persistent_document::PersistentDocument, index: usize) -> bool {
+        let mut next = Some(index);
+        while let Some(index) = next {
+            if index == document.Root() {
+                return true;
+            }
+            next = document.Node(index).Parent();
+        }
+        false
+    }
+    if tab
+        .title_node_id
+        .and_then(|id| document.FindNodeById(id))
+        .is_some_and(|index| !connected(document, index))
+    {
+        tab.title_node_id = None;
+    }
+    if tab.title_node_id.is_none() && tab.metadata_nodes != document.NodeCount() {
+        tab.title_node_id = (0..document.NodeCount()).find_map(|i| {
+            (document.Node(i).IsHTMLElement("title") && connected(document, i))
+                .then_some(document.Node(i).Id())
+        });
+    }
+    tab.metadata_nodes = document.NodeCount();
+    if let Some(index) = tab.title_node_id.and_then(|id| document.FindNodeById(id)) {
+        fn collect(
+            document: &dom::persistent_document::PersistentDocument,
+            index: usize,
+            text: &mut String,
+        ) {
+            let node = document.Node(index);
+            if node.Type() == dom::persistent_document::DOMNodeType::kText {
+                text.push_str(node.Data());
+            }
+            for &child in node.Children() {
+                collect(document, child, text);
+            }
+        }
+        let mut title = String::new();
+        collect(document, index, &mut title);
+        let title = title.trim();
+        if !title.is_empty() {
+            tab.title = title.chars().take(100).collect();
+        }
+    }
+}
+fn find_id(page: &Page, name: &str) -> Option<u64> {
+    let owner = page.Document();
+    let document = owner.GetDocument();
+    fn visit(
+        document: &dom::persistent_document::PersistentDocument,
+        index: usize,
+        name: &str,
+    ) -> Option<u64> {
+        let node = document.Node(index);
+        if node
+            .FindAttribute("id")
+            .is_some_and(|attribute| attribute.value == name)
+        {
+            return Some(node.Id());
+        }
+        node.Children()
+            .iter()
+            .find_map(|&child| visit(document, child, name))
+    }
+    // InnerHTML leaves detached arena nodes alive; only the connected tree is
+    // the current chrome. An old tab label may have the same element id.
+    visit(document, document.Root(), name)
+}
+fn chrome_hover_chain(page: &Page, target: Option<u64>) -> Vec<u64> {
+    let owner = page.Document();
+    let doc = owner.GetDocument();
+    let mut index = target.and_then(|id| doc.FindNodeById(id));
+    let mut chain = Vec::new();
+    while let Some(i) = index {
+        let node = doc.Node(i);
+        if let Some(id) = node.FindAttribute("id") {
+            if id.value.starts_with("tab-")
+                || id.value.starts_with("close-")
+                || matches!(
+                    id.value.as_str(),
+                    "omnibox"
+                        | "back"
+                        | "forward"
+                        | "reload"
+                        | "site"
+                        | "menu"
+                        | "tabsearch"
+                        | "newtab"
+                )
+            {
+                chain.push(node.Id());
+            }
+        }
+        index = node.Parent();
+    }
+    chain
+}
+fn set_hover_class(page: &mut Page, id: u64, hovered: bool) -> io::Result<()> {
+    let value = {
+        let owner = page.Document();
+        let doc = owner.GetDocument();
+        let Some(i) = doc.FindNodeById(id) else {
+            return Ok(());
+        };
+        let mut classes = doc.Node(i).FindAttribute("class").map_or(Vec::new(), |a| {
+            a.value
+                .split_whitespace()
+                .filter(|class| *class != "hovered")
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        });
+        if hovered {
+            classes.push("hovered".into());
+        }
+        classes.join(" ")
+    };
+    page.Apply(PageMutation::DOMMutation(DOMMutation {
+        mutation_type: DOMMutationType::kSetAttribute,
+        target_node_id: id,
+        name: "class".into(),
+        value,
+        ..Default::default()
+    }))
+}
+fn element_id(page: &Page, target: u64) -> Option<String> {
+    let owner = page.Document();
+    let document = owner.GetDocument();
+    let mut index = document.FindNodeById(target);
+    while let Some(i) = index {
+        let node = document.Node(i);
+        if let Some(id) = node.FindAttribute("id") {
+            return Some(id.value.clone());
+        }
+        index = node.Parent();
+    }
+    None
+}
+#[cfg(test)]
+fn scroll_candidate(
+    fragment: &FragmentNode,
+    point: Offset,
+    parent: Offset,
+    delta: Offset,
+    viewport_height: f64,
+    root: bool,
+) -> Option<(u64, Offset, Offset)> {
+    scroll_chain(fragment, point, parent, delta, viewport_height, root)?
+        .first()
+        .copied()
+}
+
+#[cfg(test)]
+fn scroll_chain(
+    fragment: &FragmentNode,
+    point: Offset,
+    parent: Offset,
+    delta: Offset,
+    viewport_height: f64,
+    root: bool,
+) -> Option<Vec<(u64, Offset, Offset)>> {
+    use layoutng_assembly::internal::layout_input::Overflow;
+    if fragment.paint.hidden {
+        return None;
+    }
+    let origin = Offset {
+        x: parent.x + fragment.offset.x,
+        y: parent.y + fragment.offset.y,
+    };
+    let inside_x = point.x >= origin.x && point.x < origin.x + fragment.size.width;
+    let inside_y = point.y >= origin.y && point.y < origin.y + fragment.size.height;
+    // A clipped-away descendant must not capture wheel input. Visible
+    // overflow can still contain a hit descendant outside the parent's box.
+    if !root
+        && ((fragment.paint.overflow_x != Overflow::kVisible && !inside_x)
+            || (fragment.paint.overflow_y != Overflow::kVisible && !inside_y))
+    {
+        return None;
+    }
+    let offset = fragment.paint.scroll_offset;
+    let mut child_origin = origin;
+    if fragment.paint.establishes_paint_state {
+        child_origin.x -= offset.x;
+        child_origin.y -= offset.y;
+    }
+    let mut chain = None;
+    for child in fragment.children.iter().rev() {
+        if let Some(value) = scroll_chain(child, point, child_origin, delta, viewport_height, false)
+        {
+            chain = Some(value);
+            break;
+        }
+    }
+    let user_scrollable = |overflow| {
+        matches!(overflow, Overflow::kAuto | Overflow::kScroll)
+            || (root && overflow == Overflow::kVisible)
+    };
+    let maximum = Offset {
+        x: if user_scrollable(fragment.paint.overflow_x) {
+            (fragment.paint.scroll_size.width - fragment.size.width).max(0.0)
+        } else {
+            0.0
+        },
+        y: if user_scrollable(fragment.paint.overflow_y) {
+            if root {
+                (fragment
+                    .content_size
+                    .height
+                    .max(fragment.paint.scroll_size.height)
+                    - viewport_height)
+                    .max(0.0)
+            } else {
+                (fragment.paint.scroll_size.height - fragment.size.height).max(0.0)
+            }
+        } else {
+            0.0
+        },
+    };
+    let can_move = (delta.x != 0.0 && (offset.x + delta.x).clamp(0.0, maximum.x) != offset.x)
+        || (delta.y != 0.0 && (offset.y + delta.y).clamp(0.0, maximum.y) != offset.y);
+    // Only real scroll boxes accept wheel input; at a directional boundary
+    // keep walking out to an ancestor. In particular, horizontal overflow
+    // cannot swallow a vertical gesture (nor can overflow:hidden/clip).
+    if (root || inside_x && inside_y)
+        && fragment.node_id != 0
+        && (root || fragment.paint.establishes_paint_state)
+        && can_move
+    {
+        chain
+            .get_or_insert_with(Vec::new)
+            .push((fragment.node_id, offset, maximum));
+    }
+    chain
+}
+#[cfg(test)]
+fn scroll_updates(
+    fragments: &FragmentNode,
+    wheel: &WheelEvent,
+    viewport_height: f64,
+) -> Vec<(u64, Offset)> {
+    let mut updates: Vec<(u64, Offset)> = Vec::new();
+    // Route axes independently and pass unconsumed displacement out through
+    // the same ancestor chain. A coalesced gesture must not lose its remainder
+    // when an inner scroller reaches its limit partway through the delta.
+    for delta in [
+        Offset {
+            x: wheel.delta.x,
+            y: 0.0,
+        },
+        Offset {
+            x: 0.0,
+            y: wheel.delta.y,
+        },
+    ] {
+        // A stationary axis cannot select a scroll target. Avoid a second
+        // complete fragment-tree walk for ordinary single-axis gestures.
+        if delta.x == 0.0 && delta.y == 0.0 {
+            continue;
+        }
+        let mut remaining = delta;
+        if let Some(chain) = scroll_chain(
+            fragments,
+            wheel.position,
+            Offset::default(),
+            delta,
+            viewport_height,
+            true,
+        ) {
+            let mut visited = Vec::new();
+            for (id, before, maximum) in chain {
+                if visited.contains(&id) {
+                    continue;
+                }
+                visited.push(id);
+                let offset = Offset {
+                    x: (before.x + remaining.x).clamp(0.0, maximum.x),
+                    y: (before.y + remaining.y).clamp(0.0, maximum.y),
+                };
+                remaining.x -= offset.x - before.x;
+                remaining.y -= offset.y - before.y;
+                if let Some((_, merged)) = updates.iter_mut().find(|(node, _)| *node == id) {
+                    if delta.x != 0.0 {
+                        merged.x = offset.x;
+                    }
+                    if delta.y != 0.0 {
+                        merged.y = offset.y;
+                    }
+                } else if offset != before {
+                    updates.push((id, offset));
+                }
+                if std::env::var_os("BROWSER_APP_TRACE_INPUT").is_some() {
+                    eprintln!("scroll-target node={id} before={before:?} after={offset:?} maximum={maximum:?} delta={delta:?}");
+                }
+                if remaining.x == 0.0 && remaining.y == 0.0 {
+                    break;
+                }
+            }
+        }
+    }
+    updates
+}
+fn scroll(page: &mut Page, wheel: &WheelEvent, _viewport_height: f64) -> io::Result<()> {
+    page.ScrollWheelDefault(wheel)
+}
+
+fn data_url(html: &str) -> String {
+    let mut url = String::from("data:text/html;charset=utf-8,");
+    for byte in html.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            url.push(byte as char);
+        } else {
+            use std::fmt::Write;
+            write!(&mut url, "%{byte:02X}").unwrap();
+        }
+    }
+    url
+}
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+const HOME: &str = r#"<!doctype html><html><head><title>New Tab</title><style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%}
+body{display:flex;align-items:center;justify-content:center;background:#fdfefe;color:#062142;font:14px Arial,sans-serif}
+main{width:560px;margin:0}
+.brand{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:42px}
+.brand svg{width:48px;height:42px}
+h1{margin:0;font-size:30px;line-height:1;font-weight:700;letter-spacing:-1.1px}
+form{position:relative;width:100%}
+.search-icon{position:absolute;left:17px;top:15px;width:17px;height:17px;color:#687d99;pointer-events:none}
+input{display:block;width:100%;height:48px;padding:0 18px 0 48px;border:1px solid #cbd7e1;border-radius:8px;background:#fff;color:#062142;font:15px Arial,sans-serif;outline:none}
+input:focus{border-color:#15919d}
+.favorites{margin-top:66px}
+.favorites h2{display:none}
+.sites{display:flex;justify-content:center;gap:18px}
+.site{display:flex;flex-direction:column;align-items:center;gap:10px;width:88px;padding:10px 4px;border-radius:8px;color:#062142;text-decoration:none}
+.site:hover{background:#eef7f8}
+.icon{display:flex;align-items:center;justify-content:center;width:38px;height:38px;border:1px solid #d7e2e8;border-radius:8px;background:#fff;color:#15919d}
+.icon svg{width:24px;height:22px}
+.github svg{width:21px;height:21px;fill:#181717}
+.google svg{width:22px;height:22px}
+.label{font-size:13px}
+</style></head><body><main><header class="brand"><svg viewBox="0 0 220 190" aria-hidden="true"><g transform="translate(-111.5 -66.5) scale(.35)"><path fill='#15919d' d="M519 324V282C519 244 551 211 590 216L849 259C883 265 910 290 910 326V545C910 584 880 609 844 602L790 594V538L830 545C849 549 861 538 861 521V354C861 337 850 327 834 325L597 283C580 280 568 290 568 306V331Z"/><path fill='#062142' d="M355 388C355 347 386 320 427 327L728 376C757 381 775 403 775 432V476C760 454 745 446 717 441L441 392C422 388 409 399 409 419V575C409 591 418 602 434 605L701 648C714 651 722 645 722 631V461C750 467 775 486 775 512V651C775 692 747 716 710 709L410 660C377 654 355 630 355 595Z"/></g></svg><h1>Rechrom</h1></header><form action="https://www.google.com/search" method="get"><svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12.5 12.5L17 17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><input name="q" placeholder="Search the web" autofocus></form><section class="favorites"><h2>Favorites</h2><nav class="sites"><a class="site" href="https://rechrom.dev"><span class="icon"><svg viewBox="0 0 220 190" aria-hidden="true"><g transform="translate(-111.5 -66.5) scale(.35)"><path fill='#15919d' d="M519 324V282C519 244 551 211 590 216L849 259C883 265 910 290 910 326V545C910 584 880 609 844 602L790 594V538L830 545C849 549 861 538 861 521V354C861 337 850 327 834 325L597 283C580 280 568 290 568 306V331Z"/><path fill='#062142' d="M355 388C355 347 386 320 427 327L728 376C757 381 775 403 775 432V476C760 454 745 446 717 441L441 392C422 388 409 399 409 419V575C409 591 418 602 434 605L701 648C714 651 722 645 722 631V461C750 467 775 486 775 512V651C775 692 747 716 710 709L410 660C377 654 355 630 355 595Z"/></g></svg></span><span class="label">Rechrom</span></a><a class="site" href="https://www.google.com"><span class="icon google"><svg viewBox="0 0 48 48" aria-hidden="true"><path fill='#ffc107' d="M43.6 20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.1 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.7-.4-4Z"/><path fill='#ff3d00' d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.1 6.1 29.3 4 24 4c-7.7 0-14.3 4.3-17.7 10.7Z"/><path fill='#4caf50' d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.1 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.6 39.5 16.3 44 24 44Z"/><path fill='#1976d2' d="M43.6 20H24v8h11.3c-.8 2.3-2.3 4.2-4.2 5.6l6.2 5.2C41 35.5 44 30.2 44 24c0-1.3-.1-2.7-.4-4Z"/></svg></span><span class="label">Google</span></a><a class="site" href="https://github.com/rechrom/rechrom"><span class="icon github"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .7C5.6.7.4 5.9.4 12.3c0 5.1 3.3 9.4 7.8 10.9.6.1.8-.3.8-.6v-2.2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.4-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.5-.3-5.2-1.3-5.2-5.7 0-1.3.4-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2.9-.3 1.9-.4 2.9-.4s2 .1 2.9.4c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.9 1.2 1.9 1.2 3.1 0 4.4-2.7 5.4-5.2 5.7.4.3.8 1 .8 2v3c0 .4.2.7.8.6 4.5-1.5 7.8-5.8 7.8-10.9C23.6 5.9 18.4.7 12 .7Z"/></svg></span><span class="label">GitHub</span></a></nav></section></main></body></html>"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requested_native_gc_survives_loading_yields_roots_and_retirement() {
+        std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
+            use std::{cell::{Cell, RefCell}, rc::Rc};
+            use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
+            struct Response { response: Option<URLResponse>, release: Option<Rc<Cell<bool>>> }
+            impl URLLoadOperation for Response {
+                fn Poll(&mut self) -> io::Result<Option<URLResponse>> {
+                    if self.release.as_ref().is_some_and(|release| !release.get()) {
+                        return Ok(None);
+                    }
+                    Ok(self.response.take())
+                }
+            }
+            struct Loader(Rc<Cell<bool>>);
+            impl URLLoader for Loader {
+                fn Load(&mut self, request: &URLRequest) -> io::Result<Box<dyn URLLoadOperation>> {
+                    let script = request.url.ends_with("delayed.js");
+                    let body = if script {
+                        b"window.resourceCompleted=true;document.getElementById('marker').style.background='lime';void document.body.offsetHeight;".to_vec()
+                    } else {
+                        format!("<!doctype html><style>body{{margin:0}}.card{{height:8px;padding-left:1px}}.a .card{{padding-left:2px}}#marker{{position:fixed;top:0;left:0;width:50px;height:50px;background:red}}</style><div id=marker></div>{}<script src=delayed.js></script>",
+                            "<div class=card>row</div>".repeat(240)).into_bytes()
+                    };
+                    Ok(Box::new(Response { response: Some(URLResponse {
+                        final_url: request.url.clone(), status_code: 200,
+                        mime_type: if script { "text/javascript" } else { "text/html" }.into(),
+                        body, ..Default::default()
+                    }), release: script.then(|| self.0.clone()) }))
+                }
+            }
+            struct XHR;
+            impl xhr_transport::XMLHttpRequestTransport for XHR {
+                fn Start(&mut self, _: &xhr_transport::XMLHttpRequestData)
+                    -> io::Result<Box<dyn xhr_transport::XMLHttpRequestOperation>> {
+                    Err(io::Error::other("unexpected loading fixture XHR"))
+                }
+            }
+            fn page(release: Rc<Cell<bool>>) -> Page {
+                let assembly = browser::CreateLayoutAssembly();
+                let constraints = browser::CreateBrowserConstraints(320, 160);
+                let decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+                let mut page = Page::Create(Rc::new(RefCell::new(Loader(release))),
+                    Rc::new(RefCell::new(image_decoder::skia_image_decoder::SkiaImageDecoder)),
+                    Rc::new(RefCell::new(decoder)), constraints,
+                    Some(browser::page::ScriptEnvironment {
+                        runtime: Box::new(javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_native_stack_budget(8 * 1024 * 1024)),
+                        xhr: Box::new(XHR), user_agent: "loading-gc-fixture".into(),
+                    }), None);
+                page.Open("https://loading-gc.test/", 16384, 4096).unwrap();
+                for _ in 0..12 { page.RunTask().unwrap(); }
+                assert!(page.IsLoading());
+                assert!(page.CurrentFrame().is_some());
+                page
+            }
+            fn pixels(page: &Page, artifact: &Arc<paint::paint_engine::PaintArtifact>) -> Vec<u32> {
+                let mut pixels = vec![0; 320 * 160];
+                page.PaintArtifactInto(artifact, 320, 160, 1.0, &mut pixels,
+                    renderer::PixelFormat::Rgba8888, 320).unwrap();
+                pixels
+            }
+            let release = Rc::new(Cell::new(false));
+            let output = Output { mailbox: Arc::new(Mutex::new(None)), notify: Arc::new(|_| {}) };
+            let mut state = BrowserState::new(Viewport { width: 320, height: 248, scale: 1.0 }, output).unwrap();
+            state.tabs.active.page = Some(page(release.clone()));
+            state.tabs.add();
+            state.tabs.active.page = Some(page(release.clone()));
+            let active = state.tabs.active.page.as_mut().unwrap();
+            let held = active.CurrentFrame().unwrap().display_items.clone();
+            let held_fragments = active.CurrentFrame().unwrap().fragments.clone();
+            let held_pixels = pixels(active, &held);
+            let held_style = {
+                let owner = active.Document();
+                let document = owner.GetDocument();
+                let marker = document.FindNodeById(find_id(active, "marker").unwrap()).unwrap();
+                document.ResolvedStyleFor(marker).unwrap().native_style.clone()
+            };
+            let held_display = unsafe { &*held_style.Get() }.Display();
+            // Actual production style/layout work raises the existing allocation
+            // request. Neither RequestLayoutHeapCollection nor a testing collector
+            // is used to manufacture this loading-time regression.
+            for turn in 0..120 {
+                let source = format!("document.body.className='{}';var cards=document.querySelectorAll('.card');for(var i=0;i<20;i++)cards[i].textContent='row '+i+' / '+{};void document.body.offsetHeight;", if turn % 2 == 0 { "a" } else { "" }, turn);
+                assert!(active.Evaluate(&source, "test:loading-pressure").unwrap().Succeeded());
+                if foundation::IsLayoutHeapCollectionRequested() { break; }
+            }
+            let before = foundation::LayoutHeapMemoryDiagnostics();
+            assert!(before.collection_requested);
+            assert_eq!(before.active_scopes, 0);
+            assert!(state.tabs.active.page.as_ref().unwrap().IsLoading());
+            assert!(state.tabs.background[0].page.as_ref().unwrap().IsLoading());
+            let (sender, receiver) = mpsc::channel();
+            sender.send(Command::Input(InputEvent::Mouse(MouseEvent::default()))).unwrap();
+            let mut pending = VecDeque::new();
+            let mut scheduling = BrowserEventLoopScheduling::default();
+            let mut executor = BrowserEventLoopExecutor { state: &mut state,
+                receiver: &receiver, pending: &mut pending, scheduling: &mut scheduling,
+                request_foreground: false, request_background: false };
+            executor.RunTask(ExecutionContextId(1), TaskPriority::Normal,
+                BrowserEventLoopTask::NativeGC { queued_at: Instant::now() }).unwrap();
+            assert_eq!(foundation::LayoutHeapMemoryDiagnostics().collections_completed,
+                before.collections_completed);
+            assert!(foundation::IsLayoutHeapCollectionRequested());
+            drop(executor);
+            assert!(matches!(pending.pop_front(), Some(Command::Input(_))));
+            // A queued priority frame retains the same guard as queued input.
+            state.scroll_active = true;
+            let now = Instant::now();
+            sender.send(Command::BeginFrame(BeginFrameArgs { source_id: 9, sequence_number: 1,
+                frame_time: now, deadline: now + Duration::from_millis(16),
+                interval: Duration::from_millis(16) }.into())).unwrap();
+            let mut executor = BrowserEventLoopExecutor { state: &mut state,
+                receiver: &receiver, pending: &mut pending, scheduling: &mut scheduling,
+                request_foreground: false, request_background: false };
+            executor.RunTask(ExecutionContextId(1), TaskPriority::Normal,
+                BrowserEventLoopTask::NativeGC { queued_at: now }).unwrap();
+            assert!(foundation::IsLayoutHeapCollectionRequested());
+            assert_eq!(foundation::LayoutHeapMemoryDiagnostics().collections_completed,
+                before.collections_completed);
+            drop(executor);
+            assert!(matches!(pending.pop_front(), Some(Command::BeginFrame(_))));
+            state.scroll_active = false;
+            let mut executor = BrowserEventLoopExecutor { state: &mut state,
+                receiver: &receiver, pending: &mut pending, scheduling: &mut scheduling,
+                request_foreground: false, request_background: false };
+            executor.RunTask(ExecutionContextId(1), TaskPriority::Normal,
+                BrowserEventLoopTask::NativeGC { queued_at: Instant::now() }).unwrap();
+            drop(executor);
+            let after = foundation::LayoutHeapMemoryDiagnostics();
+            assert!(after.collections_completed > before.collections_completed);
+            assert!(after.last_after_bytes < after.last_before_bytes);
+            assert!(state.tabs.active.page.as_ref().unwrap().IsLoading());
+            assert_eq!(unsafe { &*held_style.Get() }.Display(), held_display);
+            assert!(!held_fragments.children.is_empty());
+            assert_eq!(pixels(state.tabs.active.page.as_ref().unwrap(), &held), held_pixels);
+            // Repeated pressure cannot wait for Background while ordinary
+            // loading work remains continuously ready. Use the real FIFO engine,
+            // request coalescer, task payload and production executor together.
+            let mut event_loop = EventLoopEngine::New();
+            QueueBackgroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+            for round in 0..3 {
+                let active = state.tabs.active.page.as_mut().unwrap();
+                for turn in 0..120 {
+                    let source = format!("document.body.style.paddingLeft='{}px';void document.body.offsetHeight;", (turn + round) % 2);
+                    assert!(active.Evaluate(&source, "test:repeated-loading-pressure").unwrap().Succeeded());
+                    if foundation::IsLayoutHeapCollectionRequested() { break; }
+                }
+                assert!(foundation::IsLayoutHeapCollectionRequested());
+                let before = foundation::LayoutHeapMemoryDiagnostics().collections_completed;
+                QueueForegroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+                let token_before = scheduling.next_task_id;
+                for _ in 0..8 {
+                    QueueRequestedNativeGC(&mut event_loop, &mut scheduling, Instant::now());
+                }
+                assert_eq!(scheduling.next_task_id, token_before + 1, "coalesce one request task");
+                let mut collected = false;
+                for _ in 0..16 {
+                    // Replenish normal work before every turn, never making the
+                    // Background queue eligible as a way to pass this test.
+                    QueueForegroundTurn(&mut event_loop, &mut scheduling, Instant::now());
+                    let mut executor = BrowserEventLoopExecutor { state: &mut state,
+                        receiver: &receiver, pending: &mut pending, scheduling: &mut scheduling,
+                        request_foreground: false, request_background: false };
+                    event_loop.OnWake(Instant::now(), &mut executor).unwrap();
+                    drop(executor);
+                    QueueRequestedNativeGC(&mut event_loop, &mut scheduling, Instant::now());
+                    if foundation::LayoutHeapMemoryDiagnostics().collections_completed > before {
+                        collected = true;
+                        break;
+                    }
+                }
+                assert!(collected, "normal loading flood starved the requested foreground GC task");
+                assert!(scheduling.background_queued, "GC must not promote general Background work");
+                assert!(state.tabs.active.page.as_ref().unwrap().IsLoading());
+                assert_eq!(pixels(state.tabs.active.page.as_ref().unwrap(), &held), held_pixels);
+            }
+            // Continue another loading document's work after collection, then
+            // cancel/retire it while the surviving document is still loading.
+            assert!(state.tabs.background[0].page.as_mut().unwrap().Evaluate(
+                "document.body.style.height='2400px';void document.body.offsetHeight;",
+                "test:background-after-gc").unwrap().Succeeded());
+            let background = state.tabs.background[0].page.as_ref().unwrap();
+            let retired_artifact = background.CurrentFrame().unwrap().display_items.clone();
+            let retired_pixels = pixels(background, &retired_artifact);
+            let retired_style = {
+                let owner = background.Document();
+                let document = owner.GetDocument();
+                let marker = document.FindNodeById(find_id(background, "marker").unwrap()).unwrap();
+                document.ResolvedStyleFor(marker).unwrap().native_style.clone()
+            };
+            let retired_display = unsafe { &*retired_style.Get() }.Display();
+            state.publish().unwrap();
+            let mut retired = state.tabs.background[0].page.take().unwrap();
+            retired.StopLoading();
+            state.retired_documents.push_back(retired);
+            state.tick_background().unwrap();
+            let mut executor = BrowserEventLoopExecutor { state: &mut state,
+                receiver: &receiver, pending: &mut pending, scheduling: &mut scheduling,
+                request_foreground: false, request_background: false };
+            executor.RunTask(ExecutionContextId(1), TaskPriority::Normal,
+                BrowserEventLoopTask::NativeGC { queued_at: Instant::now() }).unwrap();
+            drop(executor);
+            assert!(state.retired_documents.is_empty());
+            assert_eq!(unsafe { &*retired_style.Get() }.Display(), retired_display);
+            assert_eq!(pixels(state.tabs.active.page.as_ref().unwrap(), &retired_artifact), retired_pixels);
+            release.set(true);
+            for _ in 0..40 { state.tick().unwrap(); }
+            let active = state.tabs.active.page.as_mut().unwrap();
+            assert!(!active.IsLoading());
+            assert!(active.Evaluate("if(!resourceCompleted)throw Error('lost callback');scrollTo(0,120);void document.body.offsetHeight;", "test:after-loading-gc").unwrap().Succeeded());
+            for _ in 0..4 { active.RunTask().unwrap(); }
+            let final_pixels = pixels(active, &active.CurrentFrame().unwrap().display_items);
+            assert_eq!(final_pixels[10 * 320 + 10].to_ne_bytes(), [0, 255, 0, 255]);
+            assert_eq!(pixels(active, &held), held_pixels);
+            assert_eq!(unsafe { &*held_style.Get() }.Display(), held_display);
+            // A requested service is not an unconditional collection policy.
+            state.tick_background().unwrap();
+            state.collect_native_heap_if_requested();
+            assert!(!foundation::IsLayoutHeapCollectionRequested());
+            let collections = foundation::LayoutHeapMemoryDiagnostics().collections_completed;
+            let token_before = scheduling.next_task_id;
+            QueueRequestedNativeGC(&mut event_loop, &mut scheduling, Instant::now());
+            assert_eq!(scheduling.next_task_id, token_before, "quiet heap schedules no task");
+            // A task that was posted for an earlier request but has become
+            // stale must neither force another GC nor leave its queued bit set.
+            scheduling.native_gc_queued = true;
+            let mut executor = BrowserEventLoopExecutor { state: &mut state,
+                receiver: &receiver, pending: &mut pending, scheduling: &mut scheduling,
+                request_foreground: false, request_background: false };
+            executor.RunTask(ExecutionContextId(1), TaskPriority::Normal,
+                BrowserEventLoopTask::NativeGC { queued_at: Instant::now() }).unwrap();
+            drop(executor);
+            assert!(!scheduling.native_gc_queued);
+            assert_eq!(foundation::LayoutHeapMemoryDiagnostics().collections_completed, collections);
+        }).unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn page_frame_demand_does_not_let_an_old_pulse_consume_new_work() {
+        let now = Instant::now();
+        let first = NativeBeginFrame {
+            args: BeginFrameArgs {
+                source_id: 17,
+                sequence_number: 3,
+                frame_time: now,
+                deadline: now + Duration::from_millis(16),
+                interval: Duration::from_millis(16),
+            },
+            display_time: None,
+        };
+        let mut demand = PageFrameDemand::InitiallyRequested();
+        assert!(demand.TakeFor(first));
+
+        // The direct host and compositor routes can both observe this physical
+        // pulse. Work requested between those callbacks belongs to the next
+        // frame; the duplicate must neither deliver nor acknowledge it.
+        demand.Request();
+        assert!(!demand.TakeFor(first));
+        assert_ne!(demand.requested_generation, demand.acknowledged_generation);
+
+        let second = NativeBeginFrame {
+            args: BeginFrameArgs {
+                sequence_number: 4,
+                frame_time: now + Duration::from_millis(16),
+                deadline: now + Duration::from_millis(32),
+                ..first.args
+            },
+            ..first
+        };
+        assert!(demand.TakeFor(second));
+        assert_eq!(demand.requested_generation, demand.acknowledged_generation);
+        assert!(!demand.TakeFor(second));
+    }
+
+    #[test]
+    fn active_scroll_prioritizes_ready_input_without_suspending_page_tasks() {
+        assert!(defer_foreground_for_priority(true));
+        assert!(!defer_foreground_for_priority(false));
+    }
+    #[test]
+    fn late_scroll_wait_is_bounded_and_never_holds_ready_input() {
+        let base = Instant::now();
+        let interval = Duration::from_micros(16666);
+        let frame = NativeBeginFrame {
+            args: BeginFrameArgs {
+                source_id: 1,
+                sequence_number: 1,
+                frame_time: base,
+                deadline: base + interval,
+                interval,
+            },
+            display_time: Some(base + interval * 2),
+        };
+        let deadline = base + interval * 333 / 1000;
+        assert_eq!(
+            late_scroll_deadline(frame, true, false, base),
+            Some(deadline)
+        );
+        assert_eq!(late_scroll_deadline(frame, true, true, base), None);
+        assert_eq!(late_scroll_deadline(frame, false, false, base), None);
+        assert_eq!(late_scroll_deadline(frame, true, false, deadline), None);
+        // WAIT_FOR_SCROLL depends on BeginFrameArgs, not presentation feedback.
+        assert_eq!(
+            late_scroll_deadline(
+                NativeBeginFrame {
+                    display_time: None,
+                    ..frame
+                },
+                true,
+                false,
+                base
+            ),
+            Some(deadline)
+        );
+    }
+
+    #[test]
+    fn late_scroll_updates_current_frame_without_running_raf_twice() {
+        std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
+            struct Source;
+            impl BeginFrameSource for Source { fn request_begin_frame(&self) {} }
+            let output = Output { mailbox: Arc::new(Mutex::new(None)), notify: Arc::new(|_| {}) };
+            let mut state = BrowserState::new(Viewport { width: 320, height: 248, scale: 1.0 }, output).unwrap();
+            assert!(!state.has_pending_frame_input());
+            state.scroll_active = true;
+            let (sender, receiver) = mpsc::channel();
+            let now = Instant::now();
+            sender.send(Command::BeginFrame(BeginFrameArgs { source_id: 1, sequence_number: 1,
+                frame_time: now, deadline: now + Duration::from_millis(16),
+                interval: Duration::from_millis(16) }.into())).unwrap();
+            let mut pending = VecDeque::new();
+            assert!(native_command_waiting(&receiver, &mut pending, state.has_priority_frame()),
+                "a ready gesture pulse precedes scripts even between wheel samples");
+            state.scroll_active = false;
+            assert!(!native_command_waiting(&receiver, &mut pending, state.has_priority_frame()),
+                "ending the gesture returns animation-only pulses to ordinary priority");
+            let mut page = create_page(320.0, 160.0, 1.0, true, state.pointer.clone(), false, 1, 0).unwrap();
+            page.Open(&data_url("<!doctype html><style>body{margin:0;height:4000px}</style>scroll"), 16384, 4096).unwrap();
+            while page.IsLoading() { page.RunTask().unwrap(); }
+            page.SetBeginFrameSource(Some(Arc::new(Source)));
+            assert!(page.Evaluate("var rafCount=0;requestAnimationFrame(()=>{rafCount++;requestAnimationFrame(()=>rafCount++);});", "test:late-scroll").unwrap().Succeeded());
+            let base = Instant::now();
+            let args = BeginFrameArgs { source_id: 7, sequence_number: 1, frame_time: base,
+                interval: Duration::from_secs(1), deadline: base + Duration::from_secs(1) };
+            page.UpdateRendering(args).unwrap();
+            page.QueueFrameInput(InputEvent::Wheel(WheelEvent { phase: WheelPhase::kChanged,
+                delta_units: ScrollGranularity::kScrollByPrecisePixel, position: Offset { x: 10.0, y: 10.0 },
+                delta: Offset { x: 0.0, y: 20.0 }, ..Default::default() }), Instant::now(), 1).unwrap();
+            assert!(!page.OnLateScrollInput(BeginFrameArgs { sequence_number: 2, ..args }).unwrap());
+            assert!(page.HasPendingWheelFrameInput());
+            assert!(page.OnLateScrollInput(args).unwrap());
+            assert!(!page.HasPendingWheelFrameInput());
+            let root = page.CurrentFrame().unwrap().fragments.node_id;
+            {
+                let owner = page.Document();
+                let document = owner.GetDocument();
+                assert_eq!(document.ScrollOffsetFor(document.FindNodeById(root).unwrap()).y, 20.0);
+            }
+            assert!(page.Evaluate("if(rafCount!==1)throw Error('late scroll reran RAF');", "test:late-scroll").unwrap().Succeeded());
+            // Dispatch at the queue boundary; later host bookkeeping crossing
+            // the held draw deadline must neither defer nor replay this input.
+            state.tabs.active.page = Some(page);
+            state.frame_source = Some(Arc::new(Source));
+            let next_args = BeginFrameArgs { sequence_number: 2, ..args };
+            state.late_scroll = Some(LateScrollFrame { frame: next_args.into(), started: base,
+                opened_at: base, input_deadline: Some(base + Duration::from_secs(1)),
+                deadline: base + Duration::from_secs(1),
+                submitted_before: 0, input_attempted_at: None, input_dispatched: false,
+                production_started: false, compositor_input_ready_at: None });
+            state.input(InputEvent::Wheel(WheelEvent { phase: WheelPhase::kChanged,
+                delta_units: ScrollGranularity::kScrollByPrecisePixel,
+                position: Offset { x: 10.0, y: TOOLBAR_HEIGHT + 10.0 },
+                delta: Offset { x: 0.0, y: 20.0 }, ..Default::default() })).unwrap();
+            assert!(state.late_scroll.as_ref().unwrap().input_dispatched);
+            assert!(!state.tabs.active.page.as_ref().unwrap().HasPendingWheelFrameInput());
+            state.late_scroll.as_mut().unwrap().deadline = Instant::now() - Duration::from_millis(1);
+            state.finish_late_scroll(true).unwrap();
+            let page = state.tabs.active.page.as_mut().unwrap();
+            {
+                let owner = page.Document();
+                let document = owner.GetDocument();
+                assert_eq!(document.ScrollOffsetFor(document.FindNodeById(root).unwrap()).y, 40.0);
+            }
+            // An input reaching the actual admission point too late stays
+            // queued; removing the host's second gate must not relax this one.
+            // Keep the source timeline ordered while delivering this pulse late.
+            let expired_base = base + Duration::from_nanos(1);
+            let expired_deadline = expired_base + Duration::from_millis(1);
+            if let Some(wait)=expired_deadline.checked_duration_since(Instant::now()) {
+                std::thread::sleep(wait);
+            }
+            let expired = BeginFrameArgs { source_id: 7, sequence_number: 3,
+                frame_time: expired_base, interval: Duration::from_millis(16),
+                deadline: expired_deadline };
+            page.UpdateRendering(expired).unwrap();
+            page.QueueFrameInput(InputEvent::Wheel(WheelEvent { phase: WheelPhase::kChanged,
+                delta_units: ScrollGranularity::kScrollByPrecisePixel,
+                position: Offset { x: 10.0, y: 10.0 },
+                delta: Offset { x: 0.0, y: 20.0 }, ..Default::default() }), Instant::now(), 1).unwrap();
+            assert!(!page.OnLateScrollInput(expired).unwrap());
+            assert!(page.HasPendingWheelFrameInput());
+        }).unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn native_momentum_continues_frame_aligned_scroll() {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                struct Source;
+                impl BeginFrameSource for Source {
+                    fn request_begin_frame(&self) {}
+                }
+                let output = Output {
+                    mailbox: Arc::new(Mutex::new(None)),
+                    notify: Arc::new(|_| {}),
+                };
+                let mut state = BrowserState::new(
+                    Viewport {
+                        width: 320,
+                        height: 248,
+                        scale: 1.0,
+                    },
+                    output,
+                )
+                .unwrap();
+                let mut page =
+                    create_page(320.0, 160.0, 1.0, true, state.pointer.clone(), false, 1, 0)
+                        .unwrap();
+                page.Open(
+                    &data_url("<!doctype html><style>body{margin:0;height:4000px}</style>scroll"),
+                    16384,
+                    4096,
+                )
+                .unwrap();
+                while page.IsLoading() {
+                    page.RunTask().unwrap();
+                }
+                let source: Arc<dyn BeginFrameSource> = Arc::new(Source);
+                page.SetBeginFrameSource(Some(source.clone()));
+                state.tabs.active.page = Some(page);
+                state.frame_source = Some(source);
+                let mut native = crate::input::InputState::default();
+                native.event(
+                    &winit::event::WindowEvent::CursorMoved {
+                        device_id: winit::event::DeviceId::dummy(),
+                        position: winit::dpi::PhysicalPosition::new(10.0, TOOLBAR_HEIGHT + 10.0),
+                    },
+                    1.0,
+                );
+                let event =
+                    |phase, momentum_phase, dy: f64| winit::event::WindowEvent::MouseWheel {
+                        device_id: winit::event::DeviceId::dummy(),
+                        delta: winit::event::MouseScrollDelta::PixelDelta(
+                            winit::dpi::PhysicalPosition::new(0.0, -dy),
+                        ),
+                        phase: if phase == 8 || momentum_phase == 8 {
+                            winit::event::TouchPhase::Ended
+                        } else if phase == 1 || momentum_phase == 1 {
+                            winit::event::TouchPhase::Started
+                        } else {
+                            winit::event::TouchPhase::Moved
+                        },
+                        native: Some(winit::event::MacOSMouseWheelMetadata {
+                            timestamp_seconds: 1.0,
+                            phase,
+                            momentum_phase,
+                        }),
+                    };
+                let send =
+                    |state: &mut BrowserState, native: &mut crate::input::InputState, event| {
+                        for command in native.event(&event, 1.0) {
+                            state.command(command).unwrap();
+                        }
+                    };
+                let offset = |state: &BrowserState| {
+                    let page = state.tabs.active.page.as_ref().unwrap();
+                    let root = page.CurrentFrame().unwrap().fragments.node_id;
+                    let owner = page.Document();
+                    let document = owner.GetDocument();
+                    document
+                        .ScrollOffsetFor(document.FindNodeById(root).unwrap())
+                        .y
+                };
+                let frame = |state: &mut BrowserState, sequence_number| {
+                    let now = Instant::now();
+                    state
+                        .begin_frame(BeginFrameArgs {
+                            source_id: 41,
+                            sequence_number,
+                            frame_time: now,
+                            deadline: now + Duration::from_millis(16),
+                            interval: Duration::from_millis(16),
+                        })
+                        .unwrap();
+                };
+                send(&mut state, &mut native, event(1, 0, 20.0));
+                frame(&mut state, 1);
+                assert_eq!(offset(&state), 20.0);
+                // Both the last finger update and the first momentum update belong
+                // to the existing gesture. Neither may flush the frame queue.
+                send(&mut state, &mut native, event(4, 0, 7.0));
+                send(&mut state, &mut native, event(8, 0, 5.0));
+                send(&mut state, &mut native, event(0, 1, 5.0));
+                assert_eq!(
+                    offset(&state),
+                    20.0,
+                    "momentum begin must not flush queued scroll outside BeginFrame"
+                );
+                assert!(state
+                    .tabs
+                    .active
+                    .page
+                    .as_ref()
+                    .unwrap()
+                    .HasPendingWheelFrameInput());
+                assert!(state.scroll_active);
+                frame(&mut state, 2);
+                assert_eq!(offset(&state), 32.0);
+                assert!(!state
+                    .tabs
+                    .active
+                    .page
+                    .as_ref()
+                    .unwrap()
+                    .HasPendingWheelFrameInput());
+                send(&mut state, &mut native, event(0, 4, 6.0));
+                assert_eq!(offset(&state), 32.0);
+                frame(&mut state, 3);
+                assert_eq!(offset(&state), 38.0);
+                send(&mut state, &mut native, event(0, 8, 0.0));
+                assert!(!state.scroll_active);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn ready_wheel_enters_current_frame_without_crossing_gesture_boundary() {
+        let (sender, receiver) = mpsc::channel();
+        let now = Instant::now();
+        let args = BeginFrameArgs {
+            source_id: 1,
+            sequence_number: 1,
+            frame_time: now,
+            deadline: now + Duration::from_millis(16),
+            interval: Duration::from_millis(16),
+        };
+        let wheel = |phase| Command::QueuedInput {
+            input: InputEvent::Wheel(WheelEvent {
+                phase,
+                delta: Offset { x: 0.0, y: 2.0 },
+                ..Default::default()
+            }),
+            queued_at: now,
+            samples: 1,
+        };
+        sender.send(wheel(WheelPhase::kChanged)).unwrap();
+        sender
+            .send(Command::BeginFrame(
+                BeginFrameArgs {
+                    sequence_number: 2,
+                    ..args
+                }
+                .into(),
+            ))
+            .unwrap();
+        sender.send(Command::BeginFrame(args.into())).unwrap();
+        sender.send(wheel(WheelPhase::kChanged)).unwrap();
+        sender.send(wheel(WheelPhase::kEnded)).unwrap();
+        sender.send(wheel(WheelPhase::kChanged)).unwrap();
+        let mut pending = VecDeque::new();
+        let mut inputs = interaction::frame_aligned_input_queue::FrameAlignedInputQueue::default();
+        let selected = prepare_begin_frame(args.into(), &receiver, &mut pending, |command| {
+            let Command::QueuedInput {
+                input,
+                queued_at,
+                samples,
+            } = command
+            else {
+                panic!()
+            };
+            inputs.Push(input, queued_at, samples);
+        });
+        assert_eq!(selected.sequence_number, 2);
+        let input = inputs.PopFront().unwrap();
+        assert_eq!(input.samples, 2);
+        assert!(matches!(input.input, InputEvent::Wheel(wheel) if wheel.delta.y == 4.0));
+        assert!(inputs.IsEmpty());
+        assert!(
+            matches!(pending.pop_front().unwrap().input(), Some(InputEvent::Wheel(wheel))
+            if wheel.phase == WheelPhase::kEnded)
+        );
+        assert!(
+            matches!(receiver.try_recv().unwrap().input(), Some(InputEvent::Wheel(wheel))
+            if wheel.phase == WheelPhase::kChanged)
+        );
+        // A continuous producer cannot hold the owner inside preparation.
+        for _ in 0..65 {
+            sender.send(wheel(WheelPhase::kChanged)).unwrap();
+        }
+        let mut count = 0;
+        prepare_begin_frame(args.into(), &receiver, &mut pending, |_| count += 1);
+        assert_eq!(count, 64);
+        assert!(receiver.try_recv().is_ok());
+    }
+    #[test]
+    fn begin_frame_presentation_waits_and_reuses_unchanged_frame() {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                struct Source(std::sync::atomic::AtomicUsize);
+                impl BeginFrameSource for Source {
+                    fn request_begin_frame(&self) {
+                        self.0.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                let source = Arc::new(Source(std::sync::atomic::AtomicUsize::new(0)));
+                let output = Output {
+                    mailbox: Arc::new(Mutex::new(None)),
+                    notify: Arc::new(|_| {}),
+                };
+                let mut state = BrowserState::new(
+                    Viewport {
+                        width: 320,
+                        height: 240,
+                        scale: 1.0,
+                    },
+                    output,
+                )
+                .unwrap();
+                state.frame_source = Some(source.clone());
+                state.toolbar.SetBeginFrameSource(Some(source.clone()));
+                state.publish().unwrap();
+                assert_eq!(state.presented_sequence, 0);
+                assert!(source.0.load(Ordering::Relaxed) > 0);
+                let frame_time = Instant::now();
+                let args = BeginFrameArgs {
+                    source_id: 1,
+                    sequence_number: 1,
+                    frame_time,
+                    interval: Duration::from_millis(16),
+                    deadline: frame_time + Duration::from_millis(16),
+                };
+                state.begin_frame(args).unwrap();
+                assert_eq!(state.presented_sequence, 1);
+                state.publish().unwrap();
+                state
+                    .begin_frame(BeginFrameArgs {
+                        sequence_number: 2,
+                        ..args
+                    })
+                    .unwrap();
+                assert_eq!(
+                    state.presented_sequence, 1,
+                    "unchanged frame must not raster/compose again"
+                );
+                state.failed_frame = state.last_frame;
+                state.last_frame = None;
+                let requests = source.0.load(Ordering::Relaxed);
+                state.publish().unwrap();
+                assert_eq!(
+                    source.0.load(Ordering::Relaxed),
+                    requests,
+                    "same failed artifact must not request another tick"
+                );
+                state.command(Command::Redraw).unwrap();
+                state.publish().unwrap();
+                assert!(
+                    source.0.load(Ordering::Relaxed) > requests,
+                    "explicit redraw can retry"
+                );
+                let (sender, receiver) = mpsc::channel();
+                sender.send(Command::BeginFrame(args.into())).unwrap();
+                let mut pending = VecDeque::new();
+                assert!(
+                    !native_command_waiting(&receiver, &mut pending, false),
+                    "frames must not starve ordinary loading tasks"
+                );
+                sender.send(Command::FocusAddress).unwrap();
+                assert!(
+                    native_command_waiting(&receiver, &mut pending, false),
+                    "native input still retains priority"
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn pending_input_frame_precedes_script_work_without_starving_animations() {
+        let (sender, receiver) = mpsc::channel();
+        let now = Instant::now();
+        let args = BeginFrameArgs {
+            source_id: 1,
+            sequence_number: 1,
+            frame_time: now,
+            deadline: now + Duration::from_millis(16),
+            interval: Duration::from_millis(16),
+        };
+        sender.send(Command::Wake(OPEN_ENGINE_WAKE)).unwrap();
+        sender.send(Command::BeginFrame(args.into())).unwrap();
+        let mut pending = VecDeque::new();
+        assert!(!native_command_waiting(&receiver, &mut pending, false));
+        assert!(native_command_waiting(&receiver, &mut pending, true));
+        assert!(matches!(
+            pending.pop_front(),
+            Some(Command::Wake(OPEN_ENGINE_WAKE))
+        ));
+        assert!(matches!(pending.pop_front(), Some(Command::BeginFrame(_))));
+        assert!(!native_command_waiting(&receiver, &mut pending, true));
+    }
+
+    fn host_task_pump_does_not_sleep_until_a_future_timer(state: &mut BrowserState) {
+        let result = state.tabs.active.page.as_mut().unwrap().Evaluate(
+            "var pumpLog=[]; var future=setTimeout(()=>pumpLog.push('future'),1000); setTimeout(()=>pumpLog.push('ready'),0);",
+            "test:task-pump",
+        ).unwrap();
+        assert!(result.Succeeded(), "{:?}", result.exception);
+        let started = Instant::now();
+        for _ in 0..10 {
+            state.tick().unwrap();
+        }
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "host pump waited for a future timer"
+        );
+        let result = state.tabs.active.page.as_mut().unwrap().Evaluate(
+            "clearTimeout(future); if(pumpLog.join(',')!=='ready')throw Error('timer readiness');",
+            "test:task-pump-check",
+        ).unwrap();
+        assert!(result.Succeeded(), "{:?}", result.exception);
+    }
+
+    #[test]
+    fn background_page_feedback_cannot_change_the_visible_cursor() {
+        use browser::page::Cursor;
+        let cursors = Arc::new(Mutex::new(Vec::new()));
+        let output = Output {
+            mailbox: Arc::new(Mutex::new(None)),
+            notify: {
+                let cursors = cursors.clone();
+                Arc::new(move |event| {
+                    if let UserEvent::CursorChanged(cursor) = event {
+                        cursors.lock().unwrap().push(cursor);
+                    }
+                })
+            },
+        };
+        let pointer = Rc::new(HostFeedback {
+            in_toolbar: Cell::new(false),
+            active_tab: Cell::new(2),
+            navigations: RefCell::new(VecDeque::new()),
+            cursor: Cell::new(Cursor::kDefault),
+            output,
+        });
+        let mut client = Client {
+            pointer: pointer.clone(),
+            toolbar: false,
+            tab_id: 1,
+            document_generation: 1,
+            trace: false,
+            started: Instant::now(),
+        };
+        client.DidChangeCursor(Cursor::kWait);
+        assert!(cursors.lock().unwrap().is_empty());
+        client.tab_id = 2;
+        client.DidChangeCursor(Cursor::kText);
+        assert_eq!(*cursors.lock().unwrap(), [Cursor::kText]);
+        pointer.in_toolbar.set(true);
+        client.DidChangeCursor(Cursor::kCrosshair);
+        assert_eq!(*cursors.lock().unwrap(), [Cursor::kText]);
+    }
+
+    #[test]
+    fn wheel_target_ignores_visible_overflow_and_non_scrollable_axis() {
+        let mut root = FragmentNode {
+            node_id: 1,
+            size: Size {
+                width: 300.0,
+                height: 100.0,
+            },
+            content_size: Size {
+                width: 300.0,
+                height: 600.0,
+            },
+            ..Default::default()
+        };
+        let mut child = FragmentNode {
+            node_id: 2,
+            size: Size {
+                width: 100.0,
+                height: 40.0,
+            },
+            ..Default::default()
+        };
+        child.paint.has_source = true;
+        child.paint.establishes_paint_state = true;
+        child.paint.scroll_size = Size {
+            width: 200.0,
+            height: 200.0,
+        };
+        root.children.push(child);
+        let target = scroll_candidate(
+            &root,
+            Offset { x: 20.0, y: 20.0 },
+            Offset::default(),
+            Offset { x: 0.0, y: 10.0 },
+            100.0,
+            true,
+        )
+        .unwrap();
+        assert_eq!(target.0, 1, "visible overflow is not user-scrollable");
+        use layoutng_assembly::internal::layout_input::Overflow;
+        for overflow in [Overflow::kHidden, Overflow::kClip] {
+            root.children[0].paint.SetOverflow(overflow);
+            assert_eq!(
+                scroll_candidate(
+                    &root,
+                    Offset { x: 20.0, y: 20.0 },
+                    Offset::default(),
+                    Offset { x: 0.0, y: 10.0 },
+                    100.0,
+                    true
+                )
+                .unwrap()
+                .0,
+                1
+            );
+        }
+        root.children[0].paint.overflow_x = Overflow::kAuto;
+        root.children[0].paint.overflow_y = Overflow::kHidden;
+        root.children[0].paint.scroll_size.height = 40.0;
+        assert_eq!(
+            scroll_candidate(
+                &root,
+                Offset { x: 20.0, y: 20.0 },
+                Offset::default(),
+                Offset { x: 0.0, y: 10.0 },
+                100.0,
+                true
+            )
+            .unwrap()
+            .0,
+            1
+        );
+        assert_eq!(
+            scroll_candidate(
+                &root,
+                Offset { x: 20.0, y: 20.0 },
+                Offset::default(),
+                Offset { x: 10.0, y: 0.0 },
+                100.0,
+                true
+            )
+            .unwrap()
+            .0,
+            2
+        );
+        root.children[0].paint.overflow_y = Overflow::kAuto;
+        root.children[0].paint.scroll_size.height = 200.0;
+        root.children[0].paint.scroll_offset.y = 160.0;
+        assert_eq!(
+            scroll_candidate(
+                &root,
+                Offset { x: 20.0, y: 20.0 },
+                Offset::default(),
+                Offset { x: 0.0, y: 10.0 },
+                100.0,
+                true
+            )
+            .unwrap()
+            .0,
+            1,
+            "at bottom, scroll the ancestor"
+        );
+        assert_eq!(
+            scroll_candidate(
+                &root,
+                Offset { x: 20.0, y: 20.0 },
+                Offset::default(),
+                Offset { x: 0.0, y: -10.0 },
+                100.0,
+                true
+            )
+            .unwrap()
+            .0,
+            2,
+            "reverse direction returns to inner"
+        );
+        root.paint.establishes_paint_state = true;
+        root.paint.scroll_offset.y = 100.0;
+        root.children[0].offset.y = 120.0;
+        assert_eq!(
+            scroll_candidate(
+                &root,
+                Offset { x: 20.0, y: 30.0 },
+                Offset::default(),
+                Offset { x: 0.0, y: -10.0 },
+                100.0,
+                true
+            )
+            .unwrap()
+            .0,
+            2,
+            "hit test uses scrolled coordinates"
+        );
+    }
+
+    #[test]
+    fn coalesced_scroll_keeps_remainder_on_the_ancestor_chain() {
+        use layoutng_assembly::internal::layout_input::Overflow;
+        let mut root = FragmentNode {
+            node_id: 1,
+            size: Size {
+                width: 300.0,
+                height: 100.0,
+            },
+            content_size: Size {
+                width: 300.0,
+                height: 600.0,
+            },
+            ..Default::default()
+        };
+        let mut child = FragmentNode {
+            node_id: 2,
+            size: Size {
+                width: 100.0,
+                height: 40.0,
+            },
+            ..Default::default()
+        };
+        child.paint.establishes_paint_state = true;
+        child.paint.SetOverflow(Overflow::kAuto);
+        child.paint.scroll_size = Size {
+            width: 100.0,
+            height: 200.0,
+        };
+        child.paint.scroll_offset.y = 150.0;
+        root.children.push(child);
+        let wheel = WheelEvent {
+            position: Offset { x: 20.0, y: 20.0 },
+            delta: Offset { x: 0.0, y: 50.0 },
+            ..Default::default()
+        };
+        assert_eq!(
+            scroll_updates(&root, &wheel, 100.0),
+            [
+                (2, Offset { x: 0.0, y: 160.0 }),
+                (1, Offset { x: 0.0, y: 40.0 })
+            ]
+        );
+        root.paint.establishes_paint_state = true;
+        root.paint.scroll_offset.y = 50.0;
+        root.children[0].offset.y = 50.0;
+        root.children[0].paint.scroll_offset.y = 10.0;
+        assert_eq!(
+            scroll_updates(
+                &root,
+                &WheelEvent {
+                    delta: Offset { x: 0.0, y: -30.0 },
+                    ..wheel
+                },
+                100.0
+            ),
+            [(2, Offset::default()), (1, Offset { x: 0.0, y: 30.0 })]
+        );
+    }
+
+    #[test]
+    fn native_priority_looks_through_wakes_and_retains_order() {
+        let (sender, receiver) = mpsc::channel();
+        let mut pending = VecDeque::new();
+        sender.send(Command::Wake(OPEN_ENGINE_WAKE)).unwrap();
+        sender.send(Command::Reload).unwrap();
+        assert!(native_command_waiting(&receiver, &mut pending, false));
+        assert!(matches!(
+            pending.pop_front(),
+            Some(Command::Wake(OPEN_ENGINE_WAKE))
+        ));
+        assert!(matches!(pending.pop_front(), Some(Command::Reload)));
+        sender.send(Command::Wake(OPEN_ENGINE_WAKE)).unwrap();
+        assert!(!native_command_waiting(&receiver, &mut pending, false));
+        assert!(matches!(
+            pending.pop_front(),
+            Some(Command::Wake(OPEN_ENGINE_WAKE))
+        ));
+    }
+
+    #[test]
+    fn compositor_delta_is_consumed_before_rendering_opportunity() {
+        let command = Command::CompositorScroll {
+            document: (1, 1),
+            update: ::compositor::MainThreadScrollDelta {
+                sequence: 1,
+                owner_client_id: 10,
+                delta: Offset { x: 0., y: 10. },
+            },
+        };
+        assert_eq!(BrowserTaskPriority(&command), TaskPriority::UserBlocking);
+    }
+
+    #[test]
+    fn coalesced_native_input_keeps_oldest_enqueue_time() {
+        let (sender, receiver) = mpsc::channel();
+        let first = Instant::now();
+        for i in 0..3 {
+            sender
+                .send(Command::QueuedInput {
+                    input: InputEvent::Wheel(WheelEvent {
+                        delta: Offset { x: 0.0, y: 2.0 },
+                        ..Default::default()
+                    }),
+                    queued_at: first + Duration::from_millis(i),
+                    samples: 1,
+                })
+                .unwrap();
+        }
+        sender
+            .send(Command::Input(InputEvent::Key(KeyEvent {
+                key: "Enter".into(),
+                ..Default::default()
+            })))
+            .unwrap();
+        let mut pending = VecDeque::new();
+        match receive_command(&receiver, &mut pending, Duration::ZERO).unwrap() {
+            Command::QueuedInput {
+                input: InputEvent::Wheel(wheel),
+                queued_at,
+                samples,
+            } => {
+                assert_eq!(wheel.delta.y, 6.0);
+                assert_eq!(queued_at, first);
+                assert_eq!(samples, 3);
+            }
+            _ => panic!("lost queued event timing"),
+        }
+        assert!(matches!(
+            pending.pop_front(),
+            Some(Command::Input(InputEvent::Key(_)))
+        ));
+    }
+
+    fn foreground_frame_and_new_input_precede_background_task() {
+        let mailbox: FrameMailbox = Arc::new(Mutex::new(None));
+        let (sender, receiver) = mpsc::channel();
+        let armed = Arc::new(AtomicBool::new(false));
+        let output = Output {
+            mailbox: mailbox.clone(),
+            notify: {
+                let armed = armed.clone();
+                Arc::new(move |event| {
+                    if matches!(event, UserEvent::FrameReady) {
+                        mailbox.lock().unwrap().take();
+                        if armed.swap(false, Ordering::AcqRel) {
+                            sender.send(Command::Wake(OPEN_ENGINE_WAKE)).unwrap();
+                            sender
+                                .send(Command::Input(InputEvent::Mouse(MouseEvent::default())))
+                                .unwrap();
+                        }
+                    }
+                })
+            },
+        };
+        let mut state = BrowserState::new(
+            Viewport {
+                width: 320,
+                height: 248,
+                scale: 1.0,
+            },
+            output,
+        )
+        .unwrap();
+        let background = data_url("<!doctype html><p>Background</p>");
+        state.navigate(&background, true).unwrap();
+        while state.tabs.active.page.as_ref().unwrap().IsLoading() {
+            state.tick().unwrap();
+        }
+        state
+            .new_tab(
+                &data_url("<!doctype html><style>body{background:red}</style><p>Foreground</p>"),
+                false,
+            )
+            .unwrap();
+        while state.tabs.active.page.as_ref().unwrap().IsLoading() {
+            state.tick().unwrap();
+        }
+        state.publish().unwrap();
+        // No-op input must terminate before unrelated timer rendering.
+        let queued_at = Instant::now();
+        state.pending_native_input = Some(NativeInputTrace {
+            queued_at,
+            samples: 3,
+            commands: 2,
+        });
+        state.publish().unwrap();
+        assert!(state.pending_native_input.is_none());
+        // A nested unchanged publish cannot end an in-progress input.
+        state.pending_native_input = Some(NativeInputTrace {
+            queued_at,
+            samples: 1,
+            commands: 1,
+        });
+        state.dispatching_native_input = true;
+        state.publish().unwrap();
+        assert!(state.pending_native_input.is_some());
+        state.dispatching_native_input = false;
+        state.publish().unwrap();
+        assert!(state.pending_native_input.is_none());
+        assert!(state.tabs.background[0]
+            .page
+            .as_mut()
+            .unwrap()
+            .Evaluate(
+                "window.backgroundRan=0;setTimeout(()=>backgroundRan++,0)",
+                "test:background-ready"
+            )
+            .unwrap()
+            .Succeeded());
+        assert!(state
+            .tabs
+            .active
+            .page
+            .as_mut()
+            .unwrap()
+            .Evaluate(
+                "setTimeout(()=>document.body.style.background='blue',0)",
+                "test:foreground-ready"
+            )
+            .unwrap()
+            .Succeeded());
+        state.pending_native_input = Some(NativeInputTrace {
+            queued_at: Instant::now(),
+            samples: 1,
+            commands: 1,
+        });
+        state.last_frame = None;
+        state.publish().unwrap();
+        assert!(
+            state.pending_native_input.is_none(),
+            "headless raster must consume the trace without claiming a native presentation"
+        );
+        armed.store(true, Ordering::Release);
+        let mut pending = VecDeque::new();
+        finish_host_turn(&mut state, &receiver, &mut pending).unwrap();
+        assert!(
+            !armed.load(Ordering::Acquire),
+            "foreground frame must be presented this turn"
+        );
+        assert!(state.tabs.background[0]
+            .page
+            .as_mut()
+            .unwrap()
+            .Evaluate(
+                "if(backgroundRan!==0)throw Error('background ran before pending input')",
+                "test:background-yield"
+            )
+            .unwrap()
+            .Succeeded());
+        while let Some(command) = pending.pop_front() {
+            state.command(command).unwrap();
+        }
+        finish_host_turn(&mut state, &receiver, &mut pending).unwrap();
+        assert!(state.tabs.background[0]
+            .page
+            .as_mut()
+            .unwrap()
+            .Evaluate(
+                "if(backgroundRan!==1)throw Error('background timer was dropped')",
+                "test:background-resume"
+            )
+            .unwrap()
+            .Succeeded());
+        // History replacement must preserve the current slot immediately,
+        // without waiting for the next active-page task.
+        let old_len = state.tabs.active.history.len();
+        assert!(state
+            .tabs
+            .active
+            .page
+            .as_mut()
+            .unwrap()
+            .Evaluate(
+                "location.replace('about:blank')",
+                "test:location-replace-history"
+            )
+            .unwrap()
+            .Succeeded());
+        state.drain_navigation_requests().unwrap();
+        assert_eq!(state.tabs.active.history.len(), old_len);
+        assert_eq!(
+            state.tabs.active.history[state.tabs.active.history_index],
+            "about:blank"
+        );
+    }
+
+    #[test]
+    fn loading_wakes_coalesce_without_delaying_input_or_losing_rearm() {
+        let (sender, receiver) = mpsc::channel();
+        let pending = Arc::new(AtomicBool::new(false));
+        let wake = engine_wake_callback(sender.clone(), pending.clone(), OPEN_ENGINE_WAKE);
+        // A burst arriving while JS/render work occupies the owner must not
+        // create thousands of empty host turns ahead of a later mouse event.
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                let wake = wake.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..12500 {
+                        wake();
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        sender
+            .send(Command::Input(InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kMove,
+                position: Offset { x: 40.0, y: 120.0 },
+                ..Default::default()
+            })))
+            .unwrap();
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Command::Wake(OPEN_ENGINE_WAKE))
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Command::Input(InputEvent::Mouse(_)))
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(pending.load(Ordering::Acquire));
+        pending.store(false, Ordering::Release); // host accepts the wake
+        wake();
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Command::Wake(OPEN_ENGINE_WAKE))
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        drop(receiver);
+        pending.store(false, Ordering::Release);
+        wake();
+        assert!(
+            !pending.load(Ordering::Acquire),
+            "failed delivery must allow rearm"
+        );
+    }
+
+    #[test]
+    fn navigation_rearms_resource_wakes_after_retiring_a_document() {
+        let output = Output {
+            mailbox: Arc::new(Mutex::new(None)),
+            notify: Arc::new(|_| {}),
+        };
+        let mut state = BrowserState::new(
+            Viewport {
+                width: 320,
+                height: 248,
+                scale: 1.0,
+            },
+            output,
+        )
+        .unwrap();
+        state.loading_wake_pending.store(true, Ordering::Release);
+        state
+            .navigate_request(
+                url_loader::URLRequest {
+                    url: "about:blank".into(),
+                    ..Default::default()
+                },
+                true,
+                false,
+            )
+            .unwrap();
+        assert!(
+            !state.loading_wake_pending.load(Ordering::Acquire),
+            "a retired loader's coalescing bit must not suppress replacement-document work"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual complete scroll latency profile; run with --ignored --nocapture"]
+    fn local_scroll_latency_profile() {
+        std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
+            let output = Output { mailbox: Arc::new(Mutex::new(None)), notify: Arc::new(|_| {}) };
+            let viewport = Viewport { width: 2560, height: 1542, scale: 2.0 };
+            let mut state = BrowserState::new(viewport, output.clone()).unwrap();
+                let direct = std::env::var_os("BROWSER_APP_SCROLL_DIRECT").is_some();
+            let format = if std::env::var("BROWSER_APP_SCROLL_FORMAT").as_deref() == Ok("bgra") {
+                skia::PixelFormat::Bgra8888
+            } else {
+                skia::PixelFormat::Bgrx8888
+            };
+            state.navigate(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/interaction.html"), true).unwrap();
+                while state.tabs.active.page.as_ref().is_some_and(Page::IsLoading) { state.tick().unwrap(); }
+                state.publish().unwrap();
+            let mut buffer = vec![0u32; viewport.width as usize * viewport.height as usize];
+            let path = std::env::var("BROWSER_APP_SCROLL_CAPTURE").ok();
+            println!("scroll-target direct={direct} capture_outside_timer=true");
+                for iteration in 0..12 {
+                output.mailbox.lock().unwrap().take();
+                let sequence = state.tabs.active.page.as_ref().unwrap().CurrentFrame().unwrap().sequence;
+                let start = Instant::now();
+                state.input(InputEvent::Wheel(WheelEvent {
+                    position: Offset { x: 800.0, y: TOOLBAR_HEIGHT + 200.0 },
+                    delta: Offset { x: 0.0, y: if iteration < 6 { 32.0 } else { -32.0 } },
+                    ..Default::default()
+                })).unwrap();
+                let input = start.elapsed();
+                #[cfg(feature = "profile_paint")]
+                if std::env::var("BROWSER_APP_SCROLL_PROFILE").ok().and_then(|v|v.parse::<usize>().ok())==Some(iteration) { profile_paint(&state); }
+                assert!(state.tabs.active.page.as_ref().unwrap().CurrentFrame().unwrap().sequence > sequence);
+                let start = Instant::now();
+                let frame = if direct {
+                    let (top,bottom)=buffer.split_at_mut(viewport.width as usize * viewport.toolbar_pixels() as usize);
+                    raster::surface::RenderDisplayItemListIntoWindowBufferWithFormat(
+                        &state.toolbar.CurrentFrame().unwrap().display_items,viewport.width,viewport.toolbar_pixels(),viewport.scale,top,format,
+                    ).unwrap();
+                    raster::surface::RenderDisplayItemListIntoWindowBufferWithFormat(
+                        &state.tabs.active.page.as_ref().unwrap().CurrentFrame().unwrap().display_items,viewport.width,viewport.height-viewport.toolbar_pixels(),viewport.scale,bottom,format,
+                    ).unwrap();
+                    None
+                } else {
+                    state.publish().unwrap();
+                    Some(output.mailbox.lock().unwrap().take().unwrap())
+                };
+                let render = start.elapsed();
+                let start = Instant::now();
+                if let Some(frame)=&frame {
+                    crate::window_surface::compose_layers(&mut buffer, viewport.width, viewport.height, &[
+                        crate::window_surface::SurfaceLayer { surface: &frame.toolbar, x: 0, y: 0 },
+                        crate::window_surface::SurfaceLayer { surface: &frame.content, x: 0, y: viewport.toolbar_pixels() },
+                    ]);
+                }
+                let copy = if direct { Duration::ZERO } else { start.elapsed() };
+                println!("scroll-profile iteration={iteration} input_ms={:.3} render_ms={:.3} window_copy_ms={:.3} total_ms={:.3}", input.as_secs_f64()*1000.0, render.as_secs_f64()*1000.0, copy.as_secs_f64()*1000.0, (input+render+copy).as_secs_f64()*1000.0);
+                if let Some(path) = &path {
+                    let bytes: Vec<u8> = buffer.iter().flat_map(|v| v.to_le_bytes()).collect();
+                    std::fs::write(format!("{path}-{iteration}.rgbx"), bytes).unwrap();
+                }
+            }
+        }).unwrap().join().unwrap();
+    }
+    #[test]
+    #[ignore = "manual button latency profile; run with --ignored --nocapture"]
+    fn local_button_latency_profile() {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let output = Output {
+                    mailbox: Arc::new(Mutex::new(None)),
+                    notify: Arc::new(|_| {}),
+                };
+                let viewport = Viewport {
+                    width: 2560,
+                    height: 1542,
+                    scale: 2.0,
+                };
+                let mut state = BrowserState::new(viewport, output.clone()).unwrap();
+                let html = include_str!("../fixtures/interaction.html").replace(
+                    "'Clicked — JavaScript event works'",
+                    "'Clicked '+String(++window.clickCount)",
+                );
+                state.navigate(&data_url(&html), true).unwrap();
+                while state.tabs.active.page.as_ref().is_some_and(Page::IsLoading) {
+                    state.tick().unwrap();
+                }
+                state.publish().unwrap();
+                state
+                    .tabs
+                    .active
+                    .page
+                    .as_mut()
+                    .unwrap()
+                    .Evaluate("window.clickCount=0", "test:setup")
+                    .unwrap();
+                let button = find_id(state.tabs.active.page.as_ref().unwrap(), "click").unwrap();
+                let mut pixels = Vec::new();
+                let toolbar_path = std::env::var("BROWSER_APP_PROFILE_TOOLBAR_PIXELS").ok();
+                let mut toolbar = None;
+                let repeats = std::env::var("BROWSER_APP_PROFILE_REPEATS")
+                    .ok()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(3);
+                for iteration in 0..repeats {
+                    output.mailbox.lock().unwrap().take();
+                    let total = Instant::now();
+                    for kind in [
+                        MouseEventType::kMove,
+                        MouseEventType::kDown,
+                        MouseEventType::kUp,
+                        MouseEventType::kClick,
+                    ] {
+                        let start = Instant::now();
+                        state
+                            .input(InputEvent::Mouse(MouseEvent {
+                                r#type: kind,
+                                target_node_id: Some(button),
+                                position: Offset {
+                                    x: 425.0,
+                                    y: TOOLBAR_HEIGHT + 215.0,
+                                },
+                                button: if kind == MouseEventType::kMove {
+                                    MouseButton::kNone
+                                } else {
+                                    MouseButton::kPrimary
+                                },
+                                ..Default::default()
+                            }))
+                            .unwrap();
+                        println!(
+                            "button-profile iteration={iteration} event={kind:?} dispatch_ms={:.3}",
+                            start.elapsed().as_secs_f64() * 1000.0
+                        );
+                        let start = Instant::now();
+                        state.publish().unwrap();
+                        println!(
+                            "button-profile iteration={iteration} event={kind:?} render_ms={:.3}",
+                            start.elapsed().as_secs_f64() * 1000.0
+                        );
+                        if let Some(frame) = output.mailbox.lock().unwrap().take() {
+                            pixels.clear();
+                            pixels.extend_from_slice(frame.content.pixels());
+                            if toolbar_path.is_some() {
+                                toolbar = Some(frame.toolbar);
+                            }
+                        }
+                    }
+                    println!(
+                        "button-profile iteration={iteration} total_ms={:.3}",
+                        total.elapsed().as_secs_f64() * 1000.0
+                    );
+                }
+                let path = std::env::var("BROWSER_APP_PROFILE_PIXELS")
+                    .unwrap_or_else(|_| "/tmp/browser-app-button-profile.rgba".into());
+                std::fs::write(path, pixels).unwrap();
+                if let Some(path) = toolbar_path {
+                    std::fs::write(path, toolbar.unwrap().pixels()).unwrap();
+                }
+                #[cfg(feature = "profile_paint")]
+                profile_paint(&state);
+                let result = state
+                    .tabs
+                    .active
+                    .page
+                    .as_mut()
+                    .unwrap()
+                    .Evaluate(
+                        &format!("if(clickCount!=={repeats})throw Error('lost clicks')"),
+                        "test:clicks",
+                    )
+                    .unwrap();
+                assert!(result.Succeeded());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+    #[cfg(feature = "profile_paint")]
+    fn profile_paint(state: &BrowserState) {
+        use raster::pure_replay::{
+            ProfileSourceDisplayItemListWithScale, RasterizeSourceDisplayItemListWithScale,
+        };
+        for (name, page, height) in [
+            ("toolbar", &state.toolbar, state.viewport.toolbar_pixels()),
+            (
+                "content",
+                state.tabs.active.page.as_ref().unwrap(),
+                state.viewport.height - state.viewport.toolbar_pixels(),
+            ),
+        ] {
+            let list = &page.CurrentFrame().unwrap().display_items;
+            let (baseline, profile) = ProfileSourceDisplayItemListWithScale(
+                list,
+                state.viewport.width,
+                height,
+                state.viewport.scale,
+            );
+            #[cfg(target_os = "macos")]
+            println!(
+                "paint-glyph-cache surface={name} stats={:?}",
+                skia::src::ports::SkScalerContext_mac_ct::glyph_cache_stats()
+            );
+            let mut groups = std::collections::BTreeMap::<String, (usize, f64)>::new();
+            for entry in &profile.items {
+                let item = &list.items[entry.index];
+                let ms = entry.elapsed.as_secs_f64() * 1000.0;
+                let group = groups.entry(format!("{:?}", item.r#type)).or_default();
+                group.0 += 1;
+                group.1 += ms;
+                println!("paint-item surface={name} index={} type={:?} ms={ms:.3} aa_clip={} partial_clip_pixels={} rect={:?}", entry.index,item.r#type,entry.antialiased_clip,entry.partial_clip_pixels,item.rect);
+                if format!("{:?}", item.r#type) == "kDrawGlyphRun" {
+                    println!("paint-glyph-input surface={name} index={} count={} synthetic_bold={} synthetic_italic={} stroke={}", entry.index, item.glyphs.len(), item.synthetic_bold, item.synthetic_italic, item.stroke_glyphs);
+                }
+            }
+            let replay: f64 = profile
+                .items
+                .iter()
+                .map(|entry| entry.elapsed.as_secs_f64() * 1000.0)
+                .sum();
+            println!("paint-stages surface={name} setup_ms={:.3} replay_ms={replay:.3} readback_ms={:.3}",profile.setup.as_secs_f64()*1000.0,profile.readback.as_secs_f64()*1000.0);
+            for (kind, (count, ms)) in groups {
+                println!("paint-group surface={name} type={kind} count={count} ms={ms:.3}");
+            }
+            #[cfg(feature = "profile_native")]
+            {
+                // Warm up native font and CPU dispatch initialization before
+                // three measured repetitions of this exact command list.
+                for iteration in 0..4 {
+                    let (pixels, stages) =
+                        raster::source_replay::ProfileSourceDisplayItemListWithScale(
+                            list,
+                            state.viewport.width,
+                            height,
+                            state.viewport.scale,
+                        );
+                    let total: f64 = stages.iter().map(|t| t.as_secs_f64() * 1000.0).sum();
+                    let different = pixels
+                        .chunks_exact(4)
+                        .zip(baseline.chunks_exact(4))
+                        .filter(|(a, b)| a != b)
+                        .count();
+                    println!("paint-native surface={name} iteration={iteration} total_ms={total:.3} setup_ms={:.3} replay_ms={:.3} readback_ms={:.3} different_pixels={different}", stages[0].as_secs_f64()*1000.0, stages[1].as_secs_f64()*1000.0, stages[2].as_secs_f64()*1000.0);
+                    if name == "content" && iteration == 3 {
+                        if let Ok(path) = std::env::var("BROWSER_APP_PROFILE_NATIVE_PIXELS") {
+                            std::fs::write(path, pixels).unwrap();
+                        }
+                    }
+                }
+            }
+            // Counterfactuals only: retain the fixture's commands, changing
+            // one suspected cost at a time. Pixel differences are reported.
+            for experiment in ["binary_viewport_clip", "no_gradient", "no_rounded"] {
+                let mut changed = list.clone();
+                let mut count = 0;
+                for item in
+                    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut changed).items)
+                        .iter_mut()
+                {
+                    let kind = format!("{:?}", item.r#type);
+                    if experiment == "binary_viewport_clip"
+                        && kind == "kClipRect"
+                        && item.rect.x == 0.0
+                        && item.rect.y == 0.0
+                        && item.rect.width == state.viewport.logical_width()
+                        && item.rect.height == f64::from(height) / state.viewport.scale
+                    {
+                        item.antialias = false;
+                        count += 1;
+                    } else if experiment == "no_gradient"
+                        && (kind == "kDrawGradientRect" || kind == "kDrawTiledGradient")
+                    {
+                        // Keep the same clipped area, replace shading with a solid fill.
+                        item.r#type = paint_type_rect();
+                        item.color = item.paint_shader.as_ref().unwrap().stops[0].color;
+                        item.paint_shader = None;
+                        count += 1;
+                    } else if experiment == "no_rounded"
+                        && (kind == "kDrawRoundedRect" || kind == "kClipRoundedRect")
+                    {
+                        item.corner_radii = Default::default();
+                        count += 1;
+                    }
+                }
+                if count == 0 {
+                    continue;
+                }
+                let start = Instant::now();
+                let pixels = RasterizeSourceDisplayItemListWithScale(
+                    &changed,
+                    state.viewport.width,
+                    height,
+                    state.viewport.scale,
+                );
+                let ms = start.elapsed().as_secs_f64() * 1000.0;
+                let differences = pixels
+                    .chunks_exact(4)
+                    .zip(baseline.chunks_exact(4))
+                    .filter(|(a, b)| a != b)
+                    .count();
+                println!("paint-experiment surface={name} name={experiment} changed_items={count} render_ms={ms:.3} different_pixels={differences}");
+            }
+            if name == "content" {
+                let body = &list.items[2];
+                for (variant, duration, equal) in raster::pure_replay::ProfileConstantMaskBlit(
+                    body.color,
+                    state.viewport.width,
+                    height - (body.rect.y * state.viewport.scale) as u32,
+                ) {
+                    println!(
+                        "paint-solid-micro variant={variant} ms={:.3} pixel_equal={equal}",
+                        duration.as_secs_f64() * 1000.0
+                    );
+                }
+                let card = list
+                    .items
+                    .iter()
+                    .find(|item| {
+                        item.r#type == paint::paint_engine::DisplayItemType::kDrawRoundedRect
+                    })
+                    .unwrap();
+                let (duration, rejected) = raster::pure_replay::ProfileRoundedRectAttempt(
+                    card.rect,
+                    card.corner_radii,
+                    state.viewport.width,
+                    height,
+                    state.viewport.scale,
+                );
+                println!(
+                    "paint-rounded-micro rejected={rejected} attempt_ms={:.3}",
+                    duration.as_secs_f64() * 1000.0
+                );
+            }
+        }
+    }
+    #[cfg(feature = "profile_paint")]
+    fn paint_type_rect() -> paint::paint_engine::DisplayItemType {
+        paint::paint_engine::DisplayItemType::kDrawRect
+    }
+    #[test]
+    #[ignore = "manual queued window resize profile; no speed assertion"]
+    fn queued_resize_latency_profile() {
+        std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
+            let output = Output { mailbox: Arc::new(Mutex::new(None)), notify: Arc::new(|_| {}) };
+            let viewport = Viewport { width: 1280, height: 900, scale: 1.0 };
+            let mut state = BrowserState::new(viewport, output).unwrap();
+            let cards = (0..240).map(|i| format!("<article><h3>Article {i}</h3><p>Text.</p></article>")).collect::<String>();
+            let html = format!("<!doctype html><style>body{{margin:0}}article{{display:block;width:30%;margin:1%;padding:8px;background:#eeeeee}}h3,p{{margin:0}}@media(max-width:1000px){{article{{width:45%}}}}</style>{cards}<script>window.resizeCount=0;window.addEventListener('resize',()=>resizeCount++);</script>");
+            state.navigate(&data_url(&html), true).unwrap();
+            while state.tabs.active.page.as_ref().is_some_and(Page::IsLoading) { state.tick().unwrap(); }
+            state.publish().unwrap();
+            let (tx, rx) = mpsc::channel();
+            for i in 0..12 { tx.send(Command::Resize(Viewport { width: 1120 - i * 20, height: 800 + i * 4, scale: 1.0 })).unwrap(); tx.send(Command::Redraw).unwrap(); }
+            tx.send(Command::Stop).unwrap();
+            let mut pending = VecDeque::new();
+            let sample_gate = std::env::var_os("BROWSER_APP_RESIZE_SAMPLE_GATE").is_some();
+            if sample_gate {
+                eprintln!("resize-profile ready-for-sample");
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            let total = Instant::now();
+            let mut commands = 0;
+            loop {
+                let command = receive_command(&rx, &mut pending, Duration::ZERO).unwrap();
+                if matches!(command, Command::Stop) { break; }
+                let start = Instant::now();
+                state.command(command).unwrap();
+                let layout_ms = start.elapsed().as_secs_f64() * 1000.0;
+                let start = Instant::now();
+                let width = state.viewport.width;
+                let height = state.viewport.height;
+                let toolbar_pixels = state.viewport.toolbar_pixels();
+                let mut buffer = vec![0u32; width as usize * height as usize];
+                let (top, bottom) = buffer.split_at_mut(width as usize * toolbar_pixels as usize);
+                raster::surface::RenderDisplayItemListIntoWindowBufferWithFormat(&state.toolbar.CurrentFrame().unwrap().display_items, width, toolbar_pixels, state.viewport.scale, top, skia::PixelFormat::Bgra8888).unwrap();
+                raster::surface::RenderDisplayItemListIntoWindowBufferWithFormat(&state.tabs.active.page.as_ref().unwrap().CurrentFrame().unwrap().display_items, width, height-toolbar_pixels, state.viewport.scale, bottom, skia::PixelFormat::Bgra8888).unwrap();
+                let raster_ms = start.elapsed().as_secs_f64() * 1000.0;
+                commands += 1;
+                println!("resize-profile command={commands} width={width} layout_js_ms={layout_ms:.3} allocate_full_raster_ms={raster_ms:.3}");
+            }
+            println!("resize-profile commands={commands} final_viewport={:?} total_ms={:.3}", state.viewport, total.elapsed().as_secs_f64()*1000.0);
+            assert!(state.tabs.active.page.as_mut().unwrap().Evaluate(&format!("if(innerWidth!==900||innerHeight!=={}||devicePixelRatio!==1)throw Error('final viewport');", state.viewport.content_height()), "test:resize-profile").unwrap().Succeeded());
+            if sample_gate { std::thread::sleep(Duration::from_secs(1)); }
+        }).unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn input_history_and_resize_use_persistent_pages() {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let output = Output {
+                    mailbox: Arc::new(Mutex::new(None)),
+                    notify: Arc::new(|_| {}),
+                };
+                let viewport = Viewport {
+                    width: 640,
+                    height: 480,
+                    scale: 1.0,
+                };
+                let mut state = BrowserState::new(viewport, output.clone()).unwrap();
+                state.navigate("about:home", true).unwrap();
+                while state.tabs.active.page.as_ref().is_some_and(Page::IsLoading) { state.tick().unwrap(); }
+                state.input(InputEvent::Mouse(MouseEvent {
+                    r#type: MouseEventType::kDown,
+                    position: Offset { x: 280.0, y: 60.0 },
+                    button: MouseButton::kPrimary,
+                    target_node_id: Some(state.address_id),
+                    ..Default::default()
+                })).unwrap();
+                state.input(InputEvent::TextInput(TextInputEvent {
+                    text: "selected".into(),
+                    ..Default::default()
+                })).unwrap();
+                assert_eq!(state.address(), "selected", "first omnibox click selects all");
+                state.set_address("about:home").unwrap();
+                host_task_pump_does_not_sleep_until_a_future_timer(&mut state);
+                // A webpack/AMD-style dependency chain must reach DOM bindings
+                // on the embedding's unoptimized translated VM stack.
+                let result = state.tabs.active.page.as_mut().unwrap().Evaluate(
+                    "function dependency(n){if(n) return dependency(n-1); return document.createElement('a').tagName;} if(dependency(52)!=='A') throw Error('dependency initialization');",
+                    "test:module-native-stack",
+                ).unwrap();
+                assert!(result.Succeeded(), "{:?}", result.exception);
+                let overflow = state.tabs.active.page.as_mut().unwrap().Evaluate(
+                    "function unbounded(){return unbounded();} unbounded();",
+                    "test:module-stack-protection",
+                ).unwrap();
+                assert!(overflow.exception.is_some_and(|error| error.message.contains("stack overflow")));
+
+                state.publish().unwrap();
+                assert_eq!(state.tabs.active.history, vec!["about:home"]);
+                assert!(output.mailbox.lock().unwrap().take().is_some());
+                state.publish().unwrap();
+                assert!(
+                    output.mailbox.lock().unwrap().is_none(),
+                    "unchanged pages must not reraster"
+                );
+                state.command(Command::FocusAddress).unwrap();
+                state
+                    .input(InputEvent::TextInput(TextInputEvent {
+                        text: "about:blank".into(),
+                        ..Default::default()
+                    }))
+                    .unwrap();
+                state
+                    .input(InputEvent::Key(KeyEvent {
+                        key: "Enter".into(),
+                        ..Default::default()
+                    }))
+                    .unwrap();
+                assert_eq!(state.tabs.active.location, "about:blank");
+                state.history(-1).unwrap();
+                assert_eq!(state.tabs.active.location, "about:home");
+                state
+                    .command(Command::Resize(Viewport {
+                        width: 900,
+                        height: 700,
+                        scale: 2.0,
+                    }))
+                    .unwrap();
+                let result = state
+                    .tabs.active.page
+                    .as_mut()
+                    .unwrap()
+                    .Evaluate(
+                        "if(innerWidth!==450||devicePixelRatio!==2)throw Error('viewport');",
+                        "test:viewport",
+                    )
+                    .unwrap();
+                assert!(result.Succeeded(), "{:?}", result.exception);
+                while state.tabs.active.page.as_ref().is_some_and(|p|p.IsLoading()||p.CurrentFrame().is_none()) { state.tick().unwrap(); }
+                state.publish().unwrap();
+                let frame = output.mailbox.lock().unwrap().take().unwrap();
+                assert_eq!(frame.toolbar.size(), (900, state.viewport.toolbar_pixels()));
+                assert_eq!(frame.content.size(), (900, state.viewport.height - state.viewport.toolbar_pixels()));
+                state.navigate(&data_url(r#"<!doctype html><style>body{margin:0}input{width:200px;height:30px}#long{height:1800px}</style><input id="edit"><button id="button">Click</button><div id="long">Scrollable</div><script>document.getElementById('button').addEventListener('click',()=>document.getElementById('button').textContent='Clicked');</script>"#), true).unwrap();
+                while state.tabs.active.page.as_ref().is_some_and(Page::IsLoading) { state.tick().unwrap(); }
+                let edit = find_id(state.tabs.active.page.as_ref().unwrap(), "edit").unwrap();
+                state.input(InputEvent::Mouse(MouseEvent {
+                    r#type: MouseEventType::kDown,
+                    target_node_id: Some(edit),
+                    position: Offset { x: 10.0, y: TOOLBAR_HEIGHT + 10.0 },
+                    button: MouseButton::kPrimary,
+                    ..Default::default()
+                })).unwrap();
+                state.input(InputEvent::TextInput(TextInputEvent { text: "Rust input".into(), ..Default::default() })).unwrap();
+                let button = find_id(state.tabs.active.page.as_ref().unwrap(), "button").unwrap();
+                state.input(InputEvent::Mouse(MouseEvent {
+                    r#type: MouseEventType::kClick,
+                    target_node_id: Some(button),
+                    position: Offset { x: 220.0, y: TOOLBAR_HEIGHT + 10.0 },
+                    button: MouseButton::kPrimary,
+                    ..Default::default()
+                })).unwrap();
+                let result = state.tabs.active.page.as_mut().unwrap().Evaluate("if(document.getElementById('edit').value!=='Rust input'||document.getElementById('button').textContent!=='Clicked')throw Error('input routing');", "test:input").unwrap();
+                assert!(result.Succeeded(), "{:?}", result.exception);
+                let before = state.tabs.active.page.as_ref().unwrap().CurrentFrame().unwrap().sequence;
+                state.input(InputEvent::Wheel(WheelEvent {
+                    position: Offset { x: 20.0, y: TOOLBAR_HEIGHT + 100.0 },
+                    delta: Offset { x: 0.0, y: 200.0 },
+                    ..Default::default()
+                })).unwrap();
+                assert!(state.tabs.active.page.as_ref().unwrap().CurrentFrame().unwrap().sequence > before, "wheel must update the frame");
+                coordinate_input_and_cursor_use_resolved_styles();
+                native_hover_repaints_without_reflow();
+                article_cursor_follows_the_hit_text_and_link_style();
+                repeated_cursor_moves_survive_self_posting_script_tasks();
+                wheel_routes_axes_and_paints_document_scroll();
+                ready_input_frame_is_presented_before_the_next_task();
+                foreground_frame_and_new_input_precede_background_task();
+                merged_resize_exposes_final_viewport_before_the_next_input();
+                tabs_preserve_documents_and_route_link_navigation();
+                host_form_requests_keep_post_bytes_source_tab_and_generation();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+    fn tabs_preserve_documents_and_route_link_navigation() {
+        let close_window = Arc::new(AtomicBool::new(false));
+        let output = Output {
+            mailbox: Arc::new(Mutex::new(None)),
+            notify: {
+                let close_window = close_window.clone();
+                Arc::new(move |event| {
+                    if matches!(event, UserEvent::CloseWindow) {
+                        close_window.store(true, Ordering::Release);
+                    }
+                })
+            },
+        };
+        let mut state = BrowserState::new(
+            Viewport {
+                width: 640,
+                height: 480,
+                scale: 1.0,
+            },
+            output,
+        )
+        .unwrap();
+        let primary = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/tabs-primary.html");
+        state.navigate(primary, true).unwrap();
+        fn loaded(state: &mut BrowserState) {
+            for _ in 0..2000 {
+                if !state.tabs.active.page.as_ref().unwrap().IsLoading() {
+                    return;
+                }
+                state.tick().unwrap();
+            }
+            panic!("local tab fixture did not finish loading");
+        }
+        fn click(state: &mut BrowserState, id: &str) {
+            let target = find_id(state.tabs.active.page.as_ref().unwrap(), id).unwrap();
+            state
+                .input(InputEvent::Mouse(MouseEvent {
+                    r#type: MouseEventType::kClick,
+                    button: MouseButton::kPrimary,
+                    target_node_id: Some(target),
+                    position: Offset {
+                        x: 20.0,
+                        y: TOOLBAR_HEIGHT + 20.0,
+                    },
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+        loaded(&mut state);
+        let first_id = state.tabs.active.id;
+        let first_document = {
+            let owner = state.tabs.active.page.as_ref().unwrap().Document();
+            owner.GetDocument() as *const dom::persistent_document::PersistentDocument
+        };
+        let edit = find_id(state.tabs.active.page.as_ref().unwrap(), "edit").unwrap();
+        state
+            .input(InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kDown,
+                button: MouseButton::kPrimary,
+                target_node_id: Some(edit),
+                position: Offset {
+                    x: 20.0,
+                    y: TOOLBAR_HEIGHT + 20.0,
+                },
+                ..Default::default()
+            }))
+            .unwrap();
+        state
+            .input(InputEvent::TextInput(TextInputEvent {
+                text: "Saved input".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        state
+            .input(InputEvent::Key(KeyEvent {
+                key: "ArrowLeft".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        let page = state.tabs.active.page.as_mut().unwrap();
+        assert!(page.Evaluate("window.tabMarker=17;document.getElementById('cancel').addEventListener('click',e=>e.preventDefault());window.addEventListener('resize',()=>{if(document.activeElement.id!=='edit')throw Error('window event lost focus');document.getElementById('edit').focus()});", "test:tab-state").unwrap().Succeeded());
+        state
+            .input(InputEvent::Wheel(WheelEvent {
+                position: Offset {
+                    x: 20.0,
+                    y: TOOLBAR_HEIGHT + 200.0,
+                },
+                delta: Offset { x: 0.0, y: 150.0 },
+                ..Default::default()
+            }))
+            .unwrap();
+        let root = state
+            .tabs
+            .active
+            .page
+            .as_ref()
+            .unwrap()
+            .CurrentFrame()
+            .unwrap()
+            .fragments
+            .node_id;
+        let mut scroll_before = {
+            let owner = state.tabs.active.page.as_ref().unwrap().Document();
+            owner
+                .GetDocument()
+                .ScrollOffsetFor(owner.GetDocument().FindNodeById(root).unwrap())
+        };
+        assert!(scroll_before.y > 0.0);
+        let scroll_document = (first_id, state.tabs.active.document_generation);
+        let scroll_owner = state
+            .tabs
+            .active
+            .page
+            .as_ref()
+            .unwrap()
+            .CurrentFrame()
+            .unwrap()
+            .fragments
+            .paint
+            .display_item_client_id;
+        assert!(state.tabs.active.page.as_mut().unwrap().Evaluate("if(document.activeElement.id!=='edit')throw Error('before new-tab focus '+document.activeElement.id);", "test:focus-before-tab").unwrap().Succeeded());
+        state.command(Command::NewTab).unwrap();
+        // An impl batch can arrive after the owner Page became hidden. Route
+        // by document lifetime, apply it once, and reject obsolete generations.
+        let delayed_scroll = ::compositor::MainThreadScrollDelta {
+            sequence: 17,
+            owner_client_id: scroll_owner,
+            delta: Offset { x: 0., y: 10. },
+        };
+        state
+            .command(Command::CompositorScroll {
+                document: (first_id, scroll_document.1 + 1),
+                update: delayed_scroll,
+            })
+            .unwrap();
+        state
+            .command(Command::CompositorScroll {
+                document: scroll_document,
+                update: delayed_scroll,
+            })
+            .unwrap();
+        state
+            .command(Command::CompositorScroll {
+                document: scroll_document,
+                update: delayed_scroll,
+            })
+            .unwrap();
+        scroll_before.y += 10.;
+        {
+            let owner = state.tabs.background[0].page.as_ref().unwrap().Document();
+            assert_eq!(
+                owner
+                    .GetDocument()
+                    .ScrollOffsetFor(owner.GetDocument().FindNodeById(root).unwrap()),
+                scroll_before,
+                "hidden owner receives its delta once; replacement generations receive none"
+            );
+        }
+        assert!(state.tabs.background[0]
+            .page
+            .as_mut()
+            .unwrap()
+            .Evaluate(
+                "if(document.activeElement.id!=='edit')throw Error('focus after create');",
+                "test:focus-created"
+            )
+            .unwrap()
+            .Succeeded());
+        loaded(&mut state);
+        assert!(state.tabs.background[0]
+            .page
+            .as_mut()
+            .unwrap()
+            .Evaluate(
+                "if(document.activeElement.id!=='edit')throw Error('focus after background pump');",
+                "test:focus-background-pump"
+            )
+            .unwrap()
+            .Succeeded());
+        let temporary = state.tabs.active.id;
+        assert!(state
+            .tabs
+            .active
+            .page
+            .as_mut()
+            .unwrap()
+            .Evaluate(
+                "if(typeof tabMarker!=='undefined')throw Error('new tab shares realm');",
+                "test:new-tab"
+            )
+            .unwrap()
+            .Succeeded());
+        state
+            .command(Command::Resize(Viewport {
+                width: 1000,
+                height: 800,
+                scale: 2.0,
+            }))
+            .unwrap();
+        state.activate_tab(first_id).unwrap();
+        assert!(state.tabs.active.page.as_mut().unwrap().Evaluate("if(tabMarker!==17||document.getElementById('edit').value!=='Saved input'||document.activeElement.id!=='edit'||innerWidth!==500||devicePixelRatio!==2)throw Error('focused tab restoration');", "test:focus-restored").unwrap().Succeeded());
+        state
+            .input(InputEvent::TextInput(TextInputEvent {
+                text: "!".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        assert!(state.tabs.active.page.as_mut().unwrap().Evaluate("if(document.getElementById('edit').value!=='Saved inpu!t')throw Error('selection did not survive');", "test:selection-restored").unwrap().Succeeded());
+        state.close_tab(temporary).unwrap();
+        click(&mut state, "cancel");
+        assert_eq!(
+            state.tabs.background.len(),
+            0,
+            "preventDefault cancels _blank as well"
+        );
+        click(&mut state, "nested");
+        loaded(&mut state);
+        let second_id = state.tabs.active.id;
+        assert_ne!(first_id, second_id, "_blank creates another tab");
+        assert!(state.tabs.active.location.ends_with("tabs-secondary.html"));
+        assert_eq!(state.tabs.background.len(), 1);
+        assert!(state.tabs.active.page.as_mut().unwrap().Evaluate("if(typeof tabMarker!=='undefined')throw Error('shared realm');window.tabMarker=29;", "test:second-tab").unwrap().Succeeded());
+        state.activate_tab(first_id).unwrap();
+        {
+            let owner = state.tabs.active.page.as_ref().unwrap().Document();
+            assert_eq!(
+                owner.GetDocument() as *const dom::persistent_document::PersistentDocument,
+                first_document,
+                "switching returns the same document allocation"
+            );
+            assert_eq!(
+                owner
+                    .GetDocument()
+                    .ScrollOffsetFor(owner.GetDocument().FindNodeById(root).unwrap()),
+                scroll_before
+            );
+        }
+        assert!(state.tabs.active.page.as_mut().unwrap().Evaluate("if(tabMarker!==17||document.getElementById('edit').value!=='Saved inpu!t'||innerWidth!==500||devicePixelRatio!==2)throw Error('tab restoration');", "test:first-restored").unwrap().Succeeded());
+        assert_eq!(state.tabs.active.history.len(), 1);
+        click(&mut state, "same");
+        loaded(&mut state);
+        assert_eq!(
+            state.tabs.active.id, first_id,
+            "ordinary links use the current tab"
+        );
+        assert_eq!(state.tabs.active.history.len(), 2);
+        assert_eq!(state.tabs.background.len(), 1);
+        state.history(-1).unwrap();
+        loaded(&mut state);
+        assert!(state.tabs.active.location.ends_with("tabs-primary.html"));
+        state.activate_tab(second_id).unwrap();
+        assert_eq!(
+            state.tabs.active.history.len(),
+            1,
+            "history belongs to each tab"
+        );
+        assert!(state
+            .tabs
+            .active
+            .page
+            .as_mut()
+            .unwrap()
+            .Evaluate(
+                "if(tabMarker!==29)throw Error('second realm discarded');",
+                "test:second-restored"
+            )
+            .unwrap()
+            .Succeeded());
+        state.close_tab(second_id).unwrap();
+        assert_eq!(state.tabs.active.id, first_id);
+        state.close_tab(first_id).unwrap();
+        assert!(close_window.load(Ordering::Acquire));
+        assert_eq!(state.tabs.active.id, first_id);
+        assert!(state.tabs.background.is_empty());
+        fn chrome_click(state: &mut BrowserState, name: &str) {
+            let id = find_id(&state.toolbar, name).unwrap();
+            fn center(fragment: &FragmentNode, id: u64, parent: Offset) -> Option<Offset> {
+                let origin = Offset {
+                    x: parent.x + fragment.offset.x,
+                    y: parent.y + fragment.offset.y,
+                };
+                if fragment.node_id == id && fragment.size.width > 0.0 && fragment.size.height > 0.0
+                {
+                    return Some(Offset {
+                        x: origin.x + fragment.size.width * 0.5,
+                        y: origin.y + fragment.size.height * 0.5,
+                    });
+                }
+                fragment
+                    .children
+                    .iter()
+                    .find_map(|child| center(child, id, origin))
+            }
+            let position = center(
+                &state.toolbar.CurrentFrame().unwrap().fragments,
+                id,
+                Offset::default(),
+            )
+            .unwrap_or_else(|| panic!("no chrome fragment for {name}, node {id}"));
+            for r#type in [
+                MouseEventType::kDown,
+                MouseEventType::kUp,
+                MouseEventType::kClick,
+            ] {
+                state
+                    .input(InputEvent::Mouse(MouseEvent {
+                        r#type,
+                        button: MouseButton::kPrimary,
+                        position,
+                        ..Default::default()
+                    }))
+                    .unwrap();
+            }
+        }
+        let home_id = state.tabs.active.id;
+        chrome_click(&mut state, "newtab");
+        loaded(&mut state);
+        let created = state.tabs.active.id;
+        assert_ne!(
+            created, home_id,
+            "actual chrome hit testing reaches the new-tab button"
+        );
+        if let Ok(path) = std::env::var("BROWSER_APP_TABS_CAPTURE") {
+            let surface = raster::surface::RenderDisplayItemListToSurface(
+                &state.toolbar.CurrentFrame().unwrap().display_items,
+                state.viewport.width,
+                state.viewport.toolbar_pixels(),
+                state.viewport.scale,
+            )
+            .unwrap();
+            std::fs::write(path, surface.pixels()).unwrap();
+        }
+        chrome_click(&mut state, &format!("title-{home_id}"));
+        assert_eq!(
+            state.tabs.active.id, home_id,
+            "title click activates its tab"
+        );
+        chrome_click(&mut state, &format!("title-{home_id}"));
+        assert!(
+            !state.toolbar_focused,
+            "clicking the current tab restores content input routing"
+        );
+        chrome_click(&mut state, &format!("close-{created}"));
+        assert!(
+            state.tabs.background.is_empty(),
+            "close button routes to its own tab"
+        );
+        assert!(
+            !state.toolbar_focused,
+            "closing a background tab preserves the content input route"
+        );
+        state.publish().unwrap();
+        let base_items = state
+            .tabs
+            .active
+            .page
+            .as_ref()
+            .unwrap()
+            .CurrentFrame()
+            .unwrap()
+            .display_items
+            .clone();
+        let viewport = state.viewport;
+        let base = raster::surface::RenderDisplayItemListToSurface(
+            &base_items,
+            viewport.width,
+            viewport.height - viewport.toolbar_pixels(),
+            viewport.scale,
+        )
+        .unwrap();
+        chrome_click(&mut state, "menu");
+        assert!(state.popup.is_some(), "menu icon opens a host popup Page");
+        let popup = state.popup.as_ref().unwrap();
+        let combined = crate::chrome::content_with_popup(
+            Some(&base_items),
+            &popup.page.CurrentFrame().unwrap().display_items,
+        )
+        .unwrap();
+        let over = raster::surface::RenderDisplayItemListToSurface(
+            &combined,
+            viewport.width,
+            viewport.height - viewport.toolbar_pixels(),
+            viewport.scale,
+        )
+        .unwrap();
+        assert_eq!(
+            &base.pixels()[..4],
+            &over.pixels()[..4],
+            "popup replay preserves uncovered site pixels"
+        );
+        assert_ne!(
+            base.pixels(),
+            over.pixels(),
+            "popup paints over the content without clearing it"
+        );
+        if let Ok(path) = std::env::var("BROWSER_APP_TABS_CAPTURE") {
+            let top = raster::surface::RenderDisplayItemListToSurface(
+                &state.toolbar.CurrentFrame().unwrap().display_items,
+                viewport.width,
+                viewport.toolbar_pixels(),
+                viewport.scale,
+            )
+            .unwrap();
+            let mut rgba = top.pixels().to_vec();
+            rgba.extend_from_slice(over.pixels());
+            std::fs::write(format!("{path}.menu"), rgba).unwrap();
+        }
+        let original = state.tabs.active.id;
+        let position = Offset {
+            x: popup.x + 60.0,
+            y: TOOLBAR_HEIGHT + 4.0 + 8.0 + 16.0,
+        };
+        for r#type in [
+            MouseEventType::kDown,
+            MouseEventType::kUp,
+            MouseEventType::kClick,
+        ] {
+            state
+                .input(InputEvent::Mouse(MouseEvent {
+                    r#type,
+                    position,
+                    button: MouseButton::kPrimary,
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+        assert_ne!(
+            state.tabs.active.id, original,
+            "actual popup hit creates a new independent tab"
+        );
+        chrome_click(&mut state, "tabsearch");
+        assert!(state.popup.is_some());
+        state
+            .input(InputEvent::Key(KeyEvent {
+                r#type: KeyEventType::kDown,
+                key: "Escape".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        assert!(state.popup.is_none(), "Escape dismisses the host popup");
+        state.command(Command::FocusAddress).unwrap();
+        state.publish().unwrap();
+        assert_eq!(state.toolbar.FocusedNodeId(), Some(state.address_id));
+        chrome_click(&mut state, "menu");
+        let before_menu_key = state.tabs.active.id;
+        state
+            .input(InputEvent::Key(KeyEvent {
+                r#type: KeyEventType::kDown,
+                key: "ArrowDown".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        state
+            .input(InputEvent::Key(KeyEvent {
+                r#type: KeyEventType::kDown,
+                key: "Enter".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        assert_ne!(
+            state.tabs.active.id, before_menu_key,
+            "menu arrows/Enter activate the same new-tab action"
+        );
+        state
+            .input(InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kMove,
+                position: Offset {
+                    x: 12.0,
+                    y: TOOLBAR_HEIGHT + 12.0,
+                },
+                ..Default::default()
+            }))
+            .unwrap();
+        state
+            .input(InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kDown,
+                button: MouseButton::kPrimary,
+                position: Offset {
+                    x: 12.0,
+                    y: TOOLBAR_HEIGHT + 12.0,
+                },
+                ..Default::default()
+            }))
+            .unwrap();
+        loaded(&mut state);
+        let fresh_location = state.tabs.active.location.clone();
+        let fresh_focus = state.tabs.active.page.as_ref().unwrap().FocusedNodeId();
+        for r#type in [MouseEventType::kUp, MouseEventType::kClick] {
+            state
+                .input(InputEvent::Mouse(MouseEvent {
+                    r#type,
+                    button: MouseButton::kPrimary,
+                    position: Offset {
+                        x: 12.0,
+                        y: TOOLBAR_HEIGHT + 12.0,
+                    },
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+        assert_eq!(
+            state.tabs.active.location, fresh_location,
+            "pre-paint press cannot activate a link appearing before release"
+        );
+        assert_eq!(
+            state.tabs.active.page.as_ref().unwrap().FocusedNodeId(),
+            fresh_focus
+        );
+        // A genuine move updates chrome appearance without changing the site.
+        state.publish().unwrap();
+        let before_hover = state.toolbar.CurrentFrame().unwrap().display_items.clone();
+        let location = state.tabs.active.location.clone();
+        state
+            .input(InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kMove,
+                position: Offset {
+                    x: state.viewport.logical_width() - 23.0,
+                    y: TOOLBAR_HEIGHT - 23.0,
+                },
+                ..Default::default()
+            }))
+            .unwrap();
+        assert!(
+            state.toolbar.CurrentFrame().unwrap().display_items.items != before_hover.items,
+            "hover paints a visible background"
+        );
+        assert_eq!(state.tabs.active.location, location);
+        state
+            .input(InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kMove,
+                position: Offset {
+                    x: 12.0,
+                    y: TOOLBAR_HEIGHT + 12.0,
+                },
+                ..Default::default()
+            }))
+            .unwrap();
+        assert!(
+            state.chrome_hovered.is_empty(),
+            "leaving chrome clears its hover ink"
+        );
+        let regions = Arc::new(Mutex::new(Vec::<crate::chrome::DragRegion>::new()));
+        let observed = regions.clone();
+        let saved = state.output.notify.clone();
+        state.output.notify = Arc::new(move |event| {
+            if let UserEvent::ChromeDragRegions { regions, .. } = event {
+                *observed.lock().unwrap() = regions;
+            }
+        });
+        state.last_frame = None;
+        state.publish().unwrap();
+        assert!(
+            regions
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|region| region.contains(state.viewport.logical_width() - 24.0, 20.0)),
+            "the actual tabstrip drag-space layout reaches the native host"
+        );
+        assert!(
+            !regions
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|region| region.contains(110.0, 23.0)),
+            "the tab search button is excluded from native dragging"
+        );
+        state.output.notify = saved;
+    }
+    fn host_form_requests_keep_post_bytes_source_tab_and_generation() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while requests.len() < 3 && Instant::now() < deadline {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(value) => value,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+                    Err(error) => panic!("local HTTP accept: {error}"),
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                let (header_end, length) = loop {
+                    let mut buffer = [0; 4096];
+                    let count = stream.read(&mut buffer).unwrap();
+                    assert!(count > 0, "truncated HTTP request");
+                    bytes.extend_from_slice(&buffer[..count]);
+                    if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                        let header = String::from_utf8_lossy(&bytes[..index]);
+                        let length = header
+                            .lines()
+                            .find_map(|line| {
+                                line.split_once(':')
+                                    .filter(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                                    .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        break (index + 4, length);
+                    }
+                };
+                while bytes.len() < header_end + length {
+                    let mut buffer = [0; 4096];
+                    let count = stream.read(&mut buffer).unwrap();
+                    assert!(count > 0, "truncated HTTP body");
+                    bytes.extend_from_slice(&buffer[..count]);
+                }
+                let head = String::from_utf8_lossy(&bytes[..header_end]);
+                let request = (
+                    head.lines().next().unwrap().to_owned(),
+                    bytes[header_end..header_end + length].to_vec(),
+                    head.to_lowercase(),
+                );
+                let html = if requests.is_empty() {
+                    "<!doctype html><title>Form source</title><form id='form' method='post' action='/submit' target='_blank'><input name='q' value='space name'><button id='send' name='submitter' value='Send'>Send</button></form>"
+                } else {
+                    "<!doctype html><title>Submitted</title><h1>Submitted document</h1>"
+                };
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", html.len(), html).unwrap();
+                requests.push(request);
+            }
+            requests
+        });
+        let output = Output {
+            mailbox: Arc::new(Mutex::new(None)),
+            notify: Arc::new(|_| {}),
+        };
+        let mut state = BrowserState::new(
+            Viewport {
+                width: 640,
+                height: 480,
+                scale: 1.0,
+            },
+            output,
+        )
+        .unwrap();
+        fn loaded(state: &mut BrowserState) {
+            let deadline = Instant::now() + Duration::from_secs(4);
+            while state.tabs.active.page.as_ref().unwrap().IsLoading() && Instant::now() < deadline
+            {
+                state.tick().unwrap();
+                std::thread::yield_now();
+            }
+            assert!(
+                !state.tabs.active.page.as_ref().unwrap().IsLoading(),
+                "HTTP fixture did not load"
+            );
+        }
+        state
+            .navigate(&format!("http://{address}/form"), true)
+            .unwrap();
+        loaded(&mut state);
+        let source_id = state.tabs.active.id;
+        let source_generation = state.tabs.active.document_generation;
+        let send = find_id(state.tabs.active.page.as_ref().unwrap(), "send").unwrap();
+        state
+            .input(InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kClick,
+                target_node_id: Some(send),
+                button: MouseButton::kPrimary,
+                position: Offset {
+                    x: 20.0,
+                    y: TOOLBAR_HEIGHT + 20.0,
+                },
+                ..Default::default()
+            }))
+            .unwrap();
+        loaded(&mut state);
+        let foreground = state.tabs.active.id;
+        assert_ne!(
+            foreground, source_id,
+            "form _blank reaches the host's new-tab path"
+        );
+        assert!(state.tabs.active.location.ends_with("/submit"));
+        let background = state
+            .tabs
+            .background
+            .iter_mut()
+            .find(|tab| tab.id == source_id)
+            .unwrap();
+        assert!(background.page.as_mut().unwrap().Evaluate("var form=document.getElementById('form');form.target='_self';form.action='/background';form.submit();", "test:background-submit").unwrap().Succeeded());
+        state.drain_navigation_requests().unwrap();
+        assert_eq!(
+            state.tabs.active.id, foreground,
+            "background navigation cannot activate its source tab"
+        );
+        assert!(state
+            .tabs
+            .background
+            .iter()
+            .find(|tab| tab.id == source_id)
+            .unwrap()
+            .location
+            .ends_with("/background"));
+        let stale = browser::page::NavigationRequest {
+            request: url_loader::URLRequest {
+                url: format!("http://{address}/stale"),
+                ..Default::default()
+            },
+            target: "_blank".into(),
+            replace_history: false,
+        };
+        state.pointer.navigations.borrow_mut().push_back((
+            source_id,
+            source_generation,
+            stale.clone(),
+        ));
+        state
+            .pointer
+            .navigations
+            .borrow_mut()
+            .push_back((999, 1, stale));
+        state.drain_navigation_requests().unwrap();
+        assert_eq!(state.tabs.active.id, foreground);
+        assert_eq!(
+            state.tabs.background.len(),
+            1,
+            "old/closed documents cannot open another tab"
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].0, "GET /form HTTP/1.1");
+        assert_eq!(requests[1].0, "POST /submit HTTP/1.1");
+        assert_eq!(requests[1].1, b"q=space+name&submitter=Send");
+        assert!(requests[1]
+            .2
+            .contains("content-type: application/x-www-form-urlencoded"));
+        assert_eq!(requests[2].0, "POST /background HTTP/1.1");
+        assert_eq!(requests[2].1, b"q=space+name");
+    }
+    fn ready_input_frame_is_presented_before_the_next_task() {
+        let mailbox: FrameMailbox = Arc::new(Mutex::new(None));
+        let colors = Arc::new(Mutex::new(Vec::new()));
+        let output = Output {
+            mailbox: mailbox.clone(),
+            notify: {
+                let colors = colors.clone();
+                Arc::new(move |event| {
+                    if matches!(event, UserEvent::FrameReady) {
+                        let frame = mailbox.lock().unwrap().take().unwrap();
+                        colors
+                            .lock()
+                            .unwrap()
+                            .push(frame.content.pixels()[..4].to_vec());
+                    }
+                })
+            },
+        };
+        let mut state = BrowserState::new(
+            Viewport {
+                width: 320,
+                height: 248,
+                scale: 1.0,
+            },
+            output,
+        )
+        .unwrap();
+        state.navigate(&data_url("<!doctype html><style>html,body{margin:0}#tail{height:900px;background:red}</style><div id=tail></div>"), true).unwrap();
+        while state.tabs.active.page.as_ref().is_some_and(Page::IsLoading) {
+            state.tick().unwrap();
+        }
+        state.publish().unwrap();
+        colors.lock().unwrap().clear();
+        assert!(state
+            .tabs
+            .active
+            .page
+            .as_mut()
+            .unwrap()
+            .Evaluate(
+                "setTimeout(()=>document.getElementById('tail').style.background='blue',0);",
+                "test:ready-input-frame"
+            )
+            .unwrap()
+            .Succeeded());
+        state
+            .input(InputEvent::Wheel(WheelEvent {
+                position: Offset {
+                    x: 20.0,
+                    y: TOOLBAR_HEIGHT + 20.0,
+                },
+                delta: Offset { x: 0.0, y: 12.0 },
+                ..Default::default()
+            }))
+            .unwrap();
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(Command::Input(InputEvent::Wheel(WheelEvent {
+                position: Offset {
+                    x: 20.0,
+                    y: TOOLBAR_HEIGHT + 20.0,
+                },
+                delta: Offset { x: 0.0, y: 12.0 },
+                ..Default::default()
+            })))
+            .unwrap();
+        let mut pending = VecDeque::new();
+        finish_host_turn(&mut state, &receiver, &mut pending).unwrap();
+        assert_eq!(
+            *colors.lock().unwrap(),
+            vec![vec![255, 0, 0, 255]],
+            "queued input has priority over the unrelated timer"
+        );
+        state.command(pending.pop_front().unwrap()).unwrap();
+        finish_host_turn(&mut state, &receiver, &mut pending).unwrap();
+        assert_eq!(
+            *colors.lock().unwrap(),
+            vec![
+                vec![255, 0, 0, 255],
+                vec![255, 0, 0, 255],
+                vec![0, 0, 255, 255]
+            ],
+            "present the completed red scroll frame before the timer paints blue"
+        );
+    }
+    fn wheel_routes_axes_and_paints_document_scroll() {
+        let output = Output {
+            mailbox: Arc::new(Mutex::new(None)),
+            notify: Arc::new(|_| {}),
+        };
+        let mut state = BrowserState::new(
+            Viewport {
+                width: 320,
+                height: 248,
+                scale: 1.0,
+            },
+            output,
+        )
+        .unwrap();
+        state.navigate(&data_url("<!doctype html><style>html,body{margin:0}#strip{width:100px;height:40px;overflow-x:auto;overflow-y:hidden}#wide{width:300px;height:40px;background:red}#tail{height:900px;background:blue}</style><div id=strip><div id=wide></div></div><div id=tail></div>"), true).unwrap();
+        while state.tabs.active.page.as_ref().is_some_and(Page::IsLoading) {
+            state.tick().unwrap();
+        }
+        let strip = find_id(state.tabs.active.page.as_ref().unwrap(), "strip").unwrap();
+        let tail = find_id(state.tabs.active.page.as_ref().unwrap(), "tail").unwrap();
+        let frame = state
+            .tabs
+            .active
+            .page
+            .as_ref()
+            .unwrap()
+            .CurrentFrame()
+            .unwrap();
+        let root = frame.fragments.node_id;
+        let before_y = frame
+            .display_items
+            .items
+            .iter()
+            .find(|i| i.node_id == tail)
+            .unwrap()
+            .rect
+            .y;
+        let sequence = frame.sequence;
+        state
+            .input(InputEvent::Wheel(WheelEvent {
+                position: Offset {
+                    x: 20.0,
+                    y: TOOLBAR_HEIGHT + 20.0,
+                },
+                delta: Offset { x: 1.5, y: 12.25 },
+                ..Default::default()
+            }))
+            .unwrap();
+        let page = state.tabs.active.page.as_ref().unwrap();
+        let owner = page.Document();
+        let document = owner.GetDocument();
+        let root_offset = document.ScrollOffsetFor(document.FindNodeById(root).unwrap());
+        let strip_offset = document.ScrollOffsetFor(document.FindNodeById(strip).unwrap());
+        assert_eq!(
+            root_offset.y, 12.25,
+            "vertical wheel must reach the document"
+        );
+        assert_eq!(
+            strip_offset.x, 1.5,
+            "horizontal component scrolls the strip"
+        );
+        assert_eq!(strip_offset.y, 0.0);
+        let frame = page.CurrentFrame().unwrap();
+        assert!(frame.sequence > sequence);
+        let after_y = frame
+            .display_items
+            .items
+            .iter()
+            .find(|i| i.node_id == tail)
+            .unwrap()
+            .rect
+            .y;
+        assert!(
+            after_y < before_y && (after_y - (before_y - 12.25)).abs() <= 0.5,
+            "paint must translate the visible content within raster pixel snapping"
+        );
+        drop(owner);
+        let result = state
+            .tabs
+            .active
+            .page
+            .as_mut()
+            .unwrap()
+            .Evaluate(
+                "document.addEventListener('wheel',e=>e.preventDefault());",
+                "test:cancel-wheel",
+            )
+            .unwrap();
+        assert!(result.Succeeded());
+        state
+            .input(InputEvent::Wheel(WheelEvent {
+                position: Offset {
+                    x: 20.0,
+                    y: TOOLBAR_HEIGHT + 80.0,
+                },
+                delta: Offset { x: 0.0, y: 20.0 },
+                ..Default::default()
+            }))
+            .unwrap();
+        let owner = state.tabs.active.page.as_ref().unwrap().Document();
+        let document = owner.GetDocument();
+        assert_eq!(
+            document
+                .ScrollOffsetFor(document.FindNodeById(root).unwrap())
+                .y,
+            12.25,
+            "preventDefault must keep the scroll position"
+        );
+    }
+
+    // Run on the existing browser test's GC owner thread. Separate browser
+    // threads in one process cannot share the assembly's Persistent objects.
+    fn layout_result_for(
+        tree: &layoutng_assembly::internal::layout_object_builder::LayoutObjectTree,
+        id: u64,
+    ) -> *const layoutng_assembly::layout_result::LayoutResult {
+        use layoutng_assembly::internal::{layout_box::LayoutBox, layout_object::LayoutObject};
+        let root = tree.Root() as *const LayoutObject;
+        let mut object = root as *mut LayoutObject;
+        while !object.is_null() {
+            let node = unsafe { &*object }.GetNode();
+            if !node.is_null() && unsafe { &*node }.InputId() == id {
+                let box_ptr = foundation::DynamicTo::<LayoutBox>(object);
+                assert!(!box_ptr.is_null());
+                return unsafe { &*box_ptr }.GetLayoutResult(0);
+            }
+            object = unsafe { &*object }.NextInPreOrder(root);
+        }
+        panic!("no layout object for {id}");
+    }
+    #[test]
+    fn resize_queue_keeps_latest_visual_properties_and_all_task_boundaries() {
+        let (tx, rx) = mpsc::channel();
+        let viewport = |width, scale| Viewport {
+            width,
+            height: 800,
+            scale,
+        };
+        let (a, b, c, d) = (
+            viewport(1000, 1.0),
+            viewport(1800, 2.0),
+            viewport(1300, 1.0),
+            viewport(2200, 2.0),
+        );
+        tx.send(Command::Redraw).unwrap();
+        for _ in 0..600 {
+            tx.send(Command::Resize(a)).unwrap();
+            tx.send(Command::Redraw).unwrap();
+        }
+        tx.send(Command::Resize(b)).unwrap();
+        tx.send(Command::Input(InputEvent::Key(KeyEvent {
+            key: "Enter".into(),
+            ..Default::default()
+        })))
+        .unwrap();
+        tx.send(Command::Resize(c)).unwrap();
+        tx.send(Command::Wake(OPEN_ENGINE_WAKE)).unwrap();
+        tx.send(Command::Redraw).unwrap();
+        tx.send(Command::Redraw).unwrap();
+        tx.send(Command::Reload).unwrap();
+        tx.send(Command::Resize(d)).unwrap();
+        tx.send(Command::SetActive(false)).unwrap();
+        tx.send(Command::Stop).unwrap();
+        let mut pending = VecDeque::new();
+        assert!(
+            matches!(receive_command(&rx, &mut pending, Duration::ZERO).unwrap(), Command::Resize(v) if v==b)
+        );
+        assert!(
+            matches!(receive_command(&rx, &mut pending, Duration::ZERO).unwrap(), Command::Input(InputEvent::Key(k)) if k.key=="Enter")
+        );
+        assert!(
+            matches!(receive_command(&rx, &mut pending, Duration::ZERO).unwrap(), Command::Resize(v) if v==c)
+        );
+        assert!(matches!(
+            receive_command(&rx, &mut pending, Duration::ZERO).unwrap(),
+            Command::Wake(OPEN_ENGINE_WAKE)
+        ));
+        assert!(matches!(
+            receive_command(&rx, &mut pending, Duration::ZERO).unwrap(),
+            Command::Redraw
+        ));
+        assert!(matches!(
+            receive_command(&rx, &mut pending, Duration::ZERO).unwrap(),
+            Command::Reload
+        ));
+        assert!(
+            matches!(receive_command(&rx, &mut pending, Duration::ZERO).unwrap(), Command::Resize(v) if v==d)
+        );
+        assert!(matches!(
+            receive_command(&rx, &mut pending, Duration::ZERO).unwrap(),
+            Command::SetActive(false)
+        ));
+        assert!(matches!(
+            receive_command(&rx, &mut pending, Duration::ZERO).unwrap(),
+            Command::Stop
+        ));
+    }
+
+    fn merged_resize_exposes_final_viewport_before_the_next_input() {
+        let output = Output {
+            mailbox: Arc::new(Mutex::new(None)),
+            notify: Arc::new(|_| {}),
+        };
+        let mut state = BrowserState::new(
+            Viewport {
+                width: 640,
+                height: 480,
+                scale: 1.0,
+            },
+            output.clone(),
+        )
+        .unwrap();
+        state.navigate(&data_url("<!doctype html><style>body{margin:0}#probe{height:50px;width:100%;background:red}@media(max-width:500px){#probe{background:blue}}</style><div id='probe'></div><script>window.resizeCount=0;window.addEventListener('resize',()=>resizeCount++);</script>"), true).unwrap();
+        while state.tabs.active.page.as_ref().is_some_and(Page::IsLoading) {
+            state.tick().unwrap();
+        }
+        state.publish().unwrap();
+        output.mailbox.lock().unwrap().take();
+        let final_viewport = Viewport {
+            width: 900,
+            height: 700,
+            scale: 2.0,
+        };
+        let (tx, rx) = mpsc::channel();
+        tx.send(Command::Resize(Viewport {
+            width: 1400,
+            height: 700,
+            scale: 1.0,
+        }))
+        .unwrap();
+        tx.send(Command::Redraw).unwrap();
+        tx.send(Command::Resize(final_viewport)).unwrap();
+        tx.send(Command::Input(InputEvent::Mouse(MouseEvent::default())))
+            .unwrap();
+        let mut pending = VecDeque::new();
+        state
+            .command(receive_command(&rx, &mut pending, Duration::ZERO).unwrap())
+            .unwrap();
+        assert!(state.tabs.active.page.as_mut().unwrap().Evaluate(&format!("if(innerWidth!==450||innerHeight!=={}||devicePixelRatio!==2||resizeCount!==1)throw Error('merged viewport');", state.viewport.content_height()), "test:merged-resize").unwrap().Succeeded());
+        let probe = find_id(state.tabs.active.page.as_ref().unwrap(), "probe").unwrap();
+        let items = &state
+            .tabs
+            .active
+            .page
+            .as_ref()
+            .unwrap()
+            .CurrentFrame()
+            .unwrap()
+            .display_items
+            .items;
+        assert!(
+            items
+                .iter()
+                .any(|i| i.node_id == probe && i.color.blue == 1.0 && i.color.red == 0.0),
+            "final media query must be applied"
+        );
+        finish_host_turn(&mut state, &rx, &mut pending).unwrap();
+        let frame = output.mailbox.lock().unwrap().take().unwrap();
+        assert_eq!(frame.viewport, final_viewport);
+        assert_eq!(
+            frame.content.size(),
+            (900, state.viewport.height - state.viewport.toolbar_pixels())
+        );
+        // A repeated-size update may include an exposure request. It must
+        // repaint without dispatching a spurious JS resize event.
+        tx.send(Command::Resize(final_viewport)).unwrap();
+        tx.send(Command::Redraw).unwrap();
+        assert!(matches!(
+            receive_command(&rx, &mut pending, Duration::ZERO).unwrap(),
+            Command::Input(_)
+        ));
+        state
+            .command(receive_command(&rx, &mut pending, Duration::ZERO).unwrap())
+            .unwrap();
+        state.publish().unwrap();
+        assert!(output.mailbox.lock().unwrap().take().is_some());
+        assert!(state
+            .tabs
+            .active
+            .page
+            .as_mut()
+            .unwrap()
+            .Evaluate(
+                "if(resizeCount!==1)throw Error('duplicate resize event');",
+                "test:resize-exposure"
+            )
+            .unwrap()
+            .Succeeded());
+    }
+
+    #[test]
+    fn mouse_queue_coalesces_only_adjacent_compatible_moves() {
+        let (tx, rx) = mpsc::channel();
+        let moved = |x, shift| {
+            Command::Input(InputEvent::Mouse(MouseEvent {
+                position: Offset { x, y: 20.0 },
+                modifiers: EventModifiers {
+                    shift,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }))
+        };
+        for x in 0..200 {
+            tx.send(moved(x as f64, false)).unwrap();
+        }
+        tx.send(Command::Input(InputEvent::Mouse(MouseEvent {
+            r#type: MouseEventType::kDown,
+            position: Offset { x: 199.0, y: 20.0 },
+            button: MouseButton::kPrimary,
+            ..Default::default()
+        })))
+        .unwrap();
+        tx.send(moved(201.0, false)).unwrap();
+        tx.send(moved(202.0, true)).unwrap();
+        tx.send(Command::Input(InputEvent::Mouse(MouseEvent {
+            r#type: MouseEventType::kLeave,
+            ..Default::default()
+        })))
+        .unwrap();
+        tx.send(Command::Stop).unwrap();
+        let mut pending = VecDeque::new();
+        let mut events = Vec::new();
+        loop {
+            match receive_command(&rx, &mut pending, Duration::ZERO).unwrap() {
+                Command::Input(InputEvent::Mouse(mouse)) => events.push(mouse),
+                Command::Stop => break,
+                _ => panic!("input ordering changed"),
+            }
+        }
+        assert_eq!(events.len(), 5);
+        assert_eq!(events[0].position.x, 199.0);
+        assert_eq!(events[1].r#type, MouseEventType::kDown);
+        assert_eq!(events[2].position.x, 201.0);
+        assert!(events[3].modifiers.shift);
+        assert_eq!(events[4].r#type, MouseEventType::kLeave);
+    }
+
+    #[test]
+    fn wheel_queue_preserves_displacement_phases_and_input_boundaries() {
+        let (tx, rx) = mpsc::channel();
+        let wheel = |y, phase, shift| {
+            Command::Input(InputEvent::Wheel(WheelEvent {
+                position: Offset { x: 40.0, y: 80.0 },
+                delta: Offset { x: 0.0, y },
+                phase,
+                modifiers: EventModifiers {
+                    shift,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }))
+        };
+        let moved = |x| {
+            Command::Input(InputEvent::Mouse(MouseEvent {
+                position: Offset { x, y: 80.0 },
+                ..Default::default()
+            }))
+        };
+        tx.send(wheel(0.0, WheelPhase::kBegan, false)).unwrap();
+        for _ in 0..200 {
+            tx.send(wheel(1.0, WheelPhase::kChanged, false)).unwrap();
+            tx.send(moved(40.0)).unwrap();
+        }
+        tx.send(wheel(0.0, WheelPhase::kEnded, false)).unwrap();
+        tx.send(wheel(-5.0, WheelPhase::kChanged, false)).unwrap();
+        tx.send(wheel(3.0, WheelPhase::kChanged, false)).unwrap();
+        tx.send(wheel(7.0, WheelPhase::kChanged, true)).unwrap();
+        tx.send(moved(45.0)).unwrap();
+        tx.send(wheel(9.0, WheelPhase::kChanged, true)).unwrap();
+        tx.send(Command::Input(InputEvent::Mouse(MouseEvent {
+            r#type: MouseEventType::kDown,
+            button: MouseButton::kPrimary,
+            ..Default::default()
+        })))
+        .unwrap();
+        tx.send(wheel(10.0, WheelPhase::kChanged, true)).unwrap();
+        tx.send(Command::Stop).unwrap();
+        let mut pending = VecDeque::new();
+        let mut sequence = Vec::new();
+        loop {
+            match receive_command(&rx, &mut pending, Duration::ZERO).unwrap() {
+                Command::Input(InputEvent::Wheel(w)) => sequence.push(format!(
+                    "wheel:{:?}:{}:{}",
+                    w.phase, w.delta.y, w.modifiers.shift
+                )),
+                Command::Input(InputEvent::Mouse(m)) => {
+                    sequence.push(format!("mouse:{:?}:{}", m.r#type, m.position.x))
+                }
+                Command::Stop => break,
+                _ => panic!("input ordering changed"),
+            }
+        }
+        assert_eq!(
+            sequence,
+            [
+                "wheel:kBegan:0:false",
+                "wheel:kChanged:200:false",
+                "mouse:kMove:40",
+                "wheel:kEnded:0:false",
+                "wheel:kChanged:-2:false",
+                "wheel:kChanged:7:true",
+                "mouse:kMove:45",
+                "wheel:kChanged:9:true",
+                "mouse:kDown:0",
+                "wheel:kChanged:10:true"
+            ]
+        );
+        assert!(!compatible_wheel_delta(
+            Offset {
+                x: f64::MAX,
+                y: 0.0
+            },
+            Offset {
+                x: f64::MAX,
+                y: 0.0
+            }
+        ));
+        assert!(!compatible_wheel_delta(
+            Offset {
+                x: 0.0,
+                y: f64::NAN
+            },
+            Offset::default()
+        ));
+    }
+
+    fn repeated_cursor_moves_survive_self_posting_script_tasks() {
+        use browser::page::Cursor;
+        let cursors = Arc::new(Mutex::new(Vec::new()));
+        let captured = cursors.clone();
+        let output = Output {
+            mailbox: Arc::new(Mutex::new(None)),
+            notify: Arc::new(move |event| {
+                if let UserEvent::CursorChanged(cursor) = event {
+                    captured.lock().unwrap().push(cursor);
+                }
+            }),
+        };
+        let mut state = BrowserState::new(
+            Viewport {
+                width: 640,
+                height: 480,
+                scale: 1.0,
+            },
+            output,
+        )
+        .unwrap();
+        state.navigate(&data_url(
+            "<!doctype html><style>body{margin:0}a,p{display:block;margin:0;width:300px;height:40px;font:20px sans-serif}</style><a href='https://example.com/'>Article title</a><p>Ordinary prose</p>"
+        ), true).unwrap();
+        while state.tabs.active.page.as_ref().is_some_and(Page::IsLoading) {
+            state.tick().unwrap();
+        }
+        assert!(state
+            .tabs
+            .active
+            .page
+            .as_mut()
+            .unwrap()
+            .Evaluate(
+                r#"
+            window.turns=0;window.jobs=0;
+            window.post=function(){
+                var script=document.createElement('script');
+                script.textContent='turns++;queueMicrotask(()=>jobs++);if(turns<32)post()';
+                document.body.appendChild(script);
+            };post();
+        "#,
+                "test:self-posting-scripts"
+            )
+            .unwrap()
+            .Succeeded());
+        for turn in 1..=32 {
+            state.tick().unwrap();
+            assert!(state.tabs.active.page.as_mut().unwrap().Evaluate(
+                &format!("if(turns!=={turn}||jobs!=={turn})throw Error('host task starvation '+turns+'/'+jobs)"),
+                "test:script-turn",
+            ).unwrap().Succeeded(), "each task must yield after its microtasks");
+            let (x, y, expected) = match turn % 3 {
+                0 => (20.0, 12.0, Cursor::kPointer),
+                1 => (20.0, 52.0, Cursor::kText),
+                _ => (500.0, 52.0, Cursor::kDefault),
+            };
+            state
+                .input(InputEvent::Mouse(MouseEvent {
+                    position: Offset {
+                        x,
+                        y: y + TOOLBAR_HEIGHT,
+                    },
+                    ..Default::default()
+                }))
+                .unwrap();
+            assert_eq!(
+                cursors.lock().unwrap().last(),
+                Some(&expected),
+                "cursor feedback must keep updating between posted scripts (turn {turn})"
+            );
+        }
+    }
+
+    fn article_cursor_follows_the_hit_text_and_link_style() {
+        use browser::page::Cursor;
+        let output = Output {
+            mailbox: Arc::new(Mutex::new(None)),
+            notify: Arc::new(|_| {}),
+        };
+        let mut state = BrowserState::new(
+            Viewport {
+                width: 640,
+                height: 480,
+                scale: 1.0,
+            },
+            output,
+        )
+        .unwrap();
+        state.navigate(&data_url(
+            "<!doctype html><style>body{margin:0}a,p{display:block;margin:0;width:300px;height:40px;font:20px sans-serif}</style><a id='article' href='https://example.com/'><span>Article title</span></a><p>Ordinary prose</p>"
+        ), true).unwrap();
+        while state.tabs.active.page.as_ref().is_some_and(Page::IsLoading) {
+            state.tick().unwrap();
+        }
+        let page = state.tabs.active.page.as_mut().unwrap();
+        let move_to = |page: &mut Page, x, y| {
+            page.Dispatch(&InputEvent::Mouse(MouseEvent {
+                position: Offset { x, y },
+                ..Default::default()
+            }))
+            .unwrap();
+        };
+        move_to(page, 20.0, 12.0);
+        assert_eq!(
+            page.Cursor(),
+            Cursor::kPointer,
+            "article link uses the UA hand cursor"
+        );
+        move_to(page, 260.0, 12.0);
+        assert_eq!(
+            page.Cursor(),
+            Cursor::kPointer,
+            "the link box also uses the hand cursor"
+        );
+        move_to(page, 20.0, 52.0);
+        assert_eq!(page.Cursor(), Cursor::kText, "ordinary text uses an I-beam");
+        move_to(page, 500.0, 52.0);
+        assert_eq!(
+            page.Cursor(),
+            Cursor::kDefault,
+            "whitespace outside text keeps an arrow"
+        );
+        assert!(page
+            .Evaluate(
+                "document.getElementById('article').removeAttribute('href')",
+                "test:article-no-href"
+            )
+            .unwrap()
+            .Succeeded());
+        move_to(page, 20.0, 12.0);
+        assert_eq!(
+            page.Cursor(),
+            Cursor::kText,
+            "an anchor without href is ordinary text"
+        );
+        assert!(page
+            .Evaluate(
+                "document.getElementById('article').setAttribute('href','')",
+                "test:article-empty-href"
+            )
+            .unwrap()
+            .Succeeded());
+        assert_eq!(
+            page.Cursor(),
+            Cursor::kPointer,
+            "an empty href still creates a link"
+        );
+        assert!(page
+            .Evaluate(
+                "document.getElementById('article').style.cursor='auto'",
+                "test:article-auto"
+            )
+            .unwrap()
+            .Succeeded());
+        assert_eq!(
+            page.Cursor(),
+            Cursor::kText,
+            "author auto overrides UA pointer on link text"
+        );
+        assert!(page
+            .Evaluate(
+                "document.getElementById('article').style.cursor='crosshair'",
+                "test:article-explicit"
+            )
+            .unwrap()
+            .Succeeded());
+        assert_eq!(
+            page.Cursor(),
+            Cursor::kCrosshair,
+            "explicit cursor wins over link/text defaults"
+        );
+    }
+
+    fn native_hover_repaints_without_reflow() {
+        let output = Output {
+            mailbox: Arc::new(Mutex::new(None)),
+            notify: Arc::new(|_| {}),
+        };
+        let mut state = BrowserState::new(
+            Viewport {
+                width: 320,
+                height: 240,
+                scale: 1.0,
+            },
+            output,
+        )
+        .unwrap();
+        state.navigate(&data_url("<!doctype html><style>body{margin:0}button{width:120px;height:40px}</style><button id='theme'>Button</button>"),true).unwrap();
+        while state.tabs.active.page.as_ref().is_some_and(Page::IsLoading) {
+            state.tick().unwrap();
+        }
+        let page = state.tabs.active.page.as_mut().unwrap();
+        let button = find_id(page, "theme").unwrap();
+        let geometry = {
+            let engine = page.GetLayoutEngine();
+            layout_result_for(engine.GetLayoutTree().unwrap(), button)
+        };
+        let render = |page: &Page| {
+            let mut pixels = vec![0; 320 * 192];
+            raster::surface::RenderDisplayItemListIntoWindowBuffer(
+                &page.CurrentFrame().unwrap().display_items,
+                320,
+                192,
+                1.0,
+                &mut pixels,
+            )
+            .unwrap();
+            pixels
+        };
+        let before = render(page);
+        page.Dispatch(&InputEvent::Mouse(MouseEvent {
+            position: Offset { x: 20.0, y: 20.0 },
+            ..Default::default()
+        }))
+        .unwrap();
+        assert_eq!(
+            {
+                let engine = page.GetLayoutEngine();
+                layout_result_for(engine.GetLayoutTree().unwrap(), button)
+            },
+            geometry
+        );
+        let hovered = render(page);
+        assert_ne!(
+            hovered, before,
+            "native hover must update paint even while geometry is cached"
+        );
+        page.Dispatch(&InputEvent::Mouse(MouseEvent {
+            r#type: MouseEventType::kLeave,
+            position: Offset { x: -10.0, y: -10.0 },
+            ..Default::default()
+        }))
+        .unwrap();
+        assert_eq!(
+            render(page),
+            before,
+            "leaving must clear native hover appearance"
+        );
+    }
+
+    fn coordinate_input_and_cursor_use_resolved_styles() {
+        use browser::page::Cursor;
+        let cursors = Arc::new(Mutex::new(Vec::new()));
+        let observed = cursors.clone();
+        let output = Output {
+            mailbox: Arc::new(Mutex::new(None)),
+            notify: Arc::new(move |event| {
+                if let UserEvent::CursorChanged(cursor) = event {
+                    observed.lock().unwrap().push(cursor);
+                }
+            }),
+        };
+        let mut state = BrowserState::new(
+            Viewport {
+                width: 640,
+                height: 480,
+                scale: 1.0,
+            },
+            output,
+        )
+        .unwrap();
+        state.navigate(&data_url(r#"<!doctype html><style>
+              body{margin:0} #wrap{position:relative;width:250px;height:60px}
+              textarea{position:absolute;left:10px;top:10px;width:200px;height:30px;cursor:text}
+              #decoration{position:absolute;inset:0;pointer-events:none}
+              #off{pointer-events:none} #on{pointer-events:auto;cursor:crosshair;width:80px;height:30px}
+              #plain{width:80px;height:30px;cursor:auto}
+              </style><div id="wrap"><textarea id="edit"></textarea><div id="decoration"></div></div>
+              <div id="off"><div id="on"></div></div><div id="plain"></div>
+              <div style="display:none"><input id="ghost"></div>"#), true).unwrap();
+        while state.tabs.active.page.as_ref().is_some_and(Page::IsLoading) {
+            state.tick().unwrap();
+        }
+        let edit = find_id(state.tabs.active.page.as_ref().unwrap(), "edit").unwrap();
+        let page = state.tabs.active.page.as_mut().unwrap();
+        let point = Offset { x: 30.0, y: 20.0 };
+        let moved = page
+            .Dispatch(&InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kMove,
+                position: point,
+                ..Default::default()
+            }))
+            .unwrap();
+        assert_eq!(
+            moved.target_node_id,
+            Some(edit),
+            "decoration must not capture input"
+        );
+        assert_eq!(page.Cursor(), Cursor::kText);
+        let result = {
+            let engine = page.GetLayoutEngine();
+            layout_result_for(engine.GetLayoutTree().unwrap(), edit)
+        };
+        page.Dispatch(&InputEvent::Mouse(MouseEvent {
+            position: Offset { x: 30.0, y: 70.0 },
+            ..Default::default()
+        }))
+        .unwrap();
+        assert_eq!(
+            {
+                let engine = page.GetLayoutEngine();
+                layout_result_for(engine.GetLayoutTree().unwrap(), edit)
+            },
+            result,
+            "native hover flags must preserve control geometry"
+        );
+        page.Dispatch(&InputEvent::Mouse(MouseEvent {
+            r#type: MouseEventType::kDown,
+            position: point,
+            button: MouseButton::kPrimary,
+            ..Default::default()
+        }))
+        .unwrap();
+        let empty_caret = page
+            .Caret()
+            .expect("focused empty control needs layout caret geometry");
+        assert!(empty_caret.visible && empty_caret.rect.height > 0.0);
+        assert_eq!(empty_caret.rect.width, 1.0);
+        let (root, layout_editing) = {
+            let engine = page.GetLayoutEngine();
+            let tree = engine.GetLayoutTree().unwrap();
+            (tree.Root() as *const _, tree.EditingState())
+        };
+        assert!(layout_editing.selections.Get(edit).unwrap().Collapsed());
+        let sibling_id = find_id(page, "on").unwrap();
+        let sibling_result = {
+            let engine = page.GetLayoutEngine();
+            layout_result_for(engine.GetLayoutTree().unwrap(), sibling_id)
+        };
+        let mut on_pixels = vec![0_u32; 640 * 432];
+        raster::surface::RenderDisplayItemListIntoWindowBuffer(
+            &page.CurrentFrame().unwrap().display_items,
+            640,
+            432,
+            1.0,
+            &mut on_pixels,
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(550));
+        page.RunTask().unwrap();
+        let off_caret = page.Caret().unwrap();
+        assert!(!off_caret.visible);
+        assert_eq!(
+            off_caret.rect, empty_caret.rect,
+            "blink retains layout geometry"
+        );
+        assert_eq!(
+            {
+                let engine = page.GetLayoutEngine();
+                engine.GetLayoutTree().unwrap().Root() as *const _
+            },
+            root,
+            "blink retains the resident layout root"
+        );
+        assert_eq!(
+            {
+                let engine = page.GetLayoutEngine();
+                layout_result_for(engine.GetLayoutTree().unwrap(), sibling_id)
+            },
+            sibling_result,
+            "local caret invalidation must retain an unaffected sibling result"
+        );
+        let mut off_pixels = vec![0_u32; 640 * 432];
+        raster::surface::RenderDisplayItemListIntoWindowBuffer(
+            &page.CurrentFrame().unwrap().display_items,
+            640,
+            432,
+            1.0,
+            &mut off_pixels,
+        )
+        .unwrap();
+        let sample = empty_caret.rect.y as usize * 640 + empty_caret.rect.x as usize;
+        assert_ne!(
+            on_pixels[sample] & 0x00ff_ffff,
+            off_pixels[sample] & 0x00ff_ffff,
+            "the caret must actually reach the raster target"
+        );
+        page.Dispatch(&InputEvent::TextInput(TextInputEvent {
+            text: "Rust".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let end_caret = page.Caret().unwrap();
+        assert!(
+            end_caret.visible && end_caret.rect.x > empty_caret.rect.x,
+            "typing restarts blink and follows shaped text"
+        );
+        page.Dispatch(&InputEvent::Key(KeyEvent {
+            key: "Home".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+        assert!(page.Caret().unwrap().rect.x < end_caret.rect.x);
+        page.Dispatch(&InputEvent::Key(KeyEvent {
+            key: "a".into(),
+            modifiers: EventModifiers {
+                control: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }))
+        .unwrap();
+        assert!(
+            page.Caret().is_none(),
+            "range selections have no insertion caret"
+        );
+        page.Dispatch(&InputEvent::Key(KeyEvent {
+            key: "End".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+        page.SetActive(false).unwrap();
+        assert!(
+            page.Caret().is_none(),
+            "inactive host hides caret without changing DOM focus"
+        );
+        page.SetActive(true).unwrap();
+        assert!(page.Caret().unwrap().visible);
+
+        let result = page.Evaluate("if(document.getElementById('edit').value!=='Rust'||document.activeElement.id!=='edit')throw Error('coordinate focus/input');", "test:cursor").unwrap();
+        assert!(result.Succeeded(), "{:?}", result.exception);
+        let result = page.Evaluate("document.getElementById('ghost').focus();if(document.activeElement.id!=='edit')throw Error('hidden focus stole caret')", "test:hidden-focus").unwrap();
+        assert!(result.Succeeded(), "{:?}", result.exception);
+        assert!(page.Caret().is_some());
+        // A style change under a stationary pointer must refresh feedback.
+        let result = page
+            .Evaluate(
+                "document.getElementById('edit').style.cursor='none'",
+                "test:cursor",
+            )
+            .unwrap();
+        assert!(result.Succeeded());
+        assert_eq!(page.Cursor(), Cursor::kNone);
+        let result = page.Evaluate("document.getElementById('wrap').style.cursor='wait';document.getElementById('edit').style.cursor='inherit'", "test:cursor").unwrap();
+        assert!(result.Succeeded());
+        assert_eq!(page.Cursor(), Cursor::kWait);
+        let result = page
+            .Evaluate(
+                "document.getElementById('edit').style.cursor='initial'",
+                "test:cursor",
+            )
+            .unwrap();
+        assert!(result.Succeeded());
+        assert_eq!(page.Cursor(), Cursor::kText);
+        let result = page.Evaluate("document.getElementById('edit').style.cursor='url(unavailable-cursor.png), vertical-text'", "test:cursor").unwrap();
+        assert!(result.Succeeded());
+        assert_eq!(page.Cursor(), Cursor::kVerticalText);
+        let on = find_id(page, "on").unwrap();
+        let moved = page
+            .Dispatch(&InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kMove,
+                position: Offset { x: 20.0, y: 70.0 },
+                ..Default::default()
+            }))
+            .unwrap();
+        assert_eq!(
+            moved.target_node_id,
+            Some(on),
+            "auto descendant re-enables hit testing"
+        );
+        assert_eq!(page.Cursor(), Cursor::kCrosshair);
+        page.Dispatch(&InputEvent::Mouse(MouseEvent {
+            r#type: MouseEventType::kLeave,
+            ..Default::default()
+        }))
+        .unwrap();
+        assert_eq!(page.Cursor(), Cursor::kDefault);
+        // The window adapter receives cursor feedback independently of a raster frame.
+        state
+            .input(InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kMove,
+                position: Offset {
+                    x: 20.0,
+                    y: TOOLBAR_HEIGHT + 70.0,
+                },
+                ..Default::default()
+            }))
+            .unwrap();
+        assert_eq!(cursors.lock().unwrap().last(), Some(&Cursor::kCrosshair));
+        state
+            .input(InputEvent::Mouse(MouseEvent {
+                position: Offset {
+                    x: 470.0,
+                    y: TOOLBAR_HEIGHT - 24.0,
+                },
+                ..Default::default()
+            }))
+            .unwrap();
+        assert_eq!(cursors.lock().unwrap().last(), Some(&Cursor::kText));
+        state
+            .input(InputEvent::Mouse(MouseEvent {
+                position: Offset {
+                    x: 20.0,
+                    y: TOOLBAR_HEIGHT + 70.0,
+                },
+                ..Default::default()
+            }))
+            .unwrap();
+        assert_eq!(
+            cursors.lock().unwrap().last(),
+            Some(&Cursor::kCrosshair),
+            "cached page cursor must be restored across surfaces"
+        );
+        state
+            .input(InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kLeave,
+                position: Offset { x: -10.0, y: -10.0 },
+                ..Default::default()
+            }))
+            .unwrap();
+        assert_eq!(
+            state.tabs.active.page.as_ref().unwrap().Cursor(),
+            Cursor::kDefault
+        );
+        assert_eq!(cursors.lock().unwrap().last(), Some(&Cursor::kDefault));
+        let page = state.tabs.active.page.as_mut().unwrap();
+        let result = page.Evaluate("var edit=document.getElementById('edit');edit.style.cursor='initial';edit.addEventListener('mousemove',function(){edit.style.cursor='wait'});", "test:early-cursor").unwrap();
+        assert!(result.Succeeded());
+        let before = cursors.lock().unwrap().len();
+        state
+            .input(InputEvent::Mouse(MouseEvent {
+                position: Offset {
+                    x: 30.0,
+                    y: TOOLBAR_HEIGHT + 20.0,
+                },
+                ..Default::default()
+            }))
+            .unwrap();
+        assert_eq!(
+            &cursors.lock().unwrap()[before..],
+            &[Cursor::kText, Cursor::kWait],
+            "native cursor feedback must precede JS, then reflect its style mutation"
+        );
+        let before = cursors.lock().unwrap().len();
+        state
+            .input(InputEvent::Mouse(MouseEvent {
+                position: Offset {
+                    x: 31.0,
+                    y: TOOLBAR_HEIGHT + 20.0,
+                },
+                ..Default::default()
+            }))
+            .unwrap();
+        assert_eq!(
+            cursors.lock().unwrap().get(before),
+            Some(&Cursor::kWait),
+            "fresh input must reassert cached feedback after a native cursor reset"
+        );
+    }
+}
+
+#[cfg(test)]
+mod scrollbar_theme_tests {
+    #[test]
+    fn host_mode_preserves_injected_dimensions_and_default() {
+        let mut theme = layoutng_assembly::internal::layout_input_types::ScrollbarThemeMetrics {
+            auto_thickness: 23,
+            thin_thickness: 11,
+            uses_overlay_scrollbars: true,
+            ..Default::default()
+        };
+        super::configure_scrollbar_mode(&mut theme, None).unwrap();
+        assert!(theme.uses_overlay_scrollbars);
+        super::configure_scrollbar_mode(&mut theme, Some("classic")).unwrap();
+        assert!(!theme.uses_overlay_scrollbars);
+        assert_eq!((theme.auto_thickness, theme.thin_thickness), (23, 11));
+        super::configure_scrollbar_mode(&mut theme, Some("overlay")).unwrap();
+        assert!(theme.uses_overlay_scrollbars);
+        assert!(super::configure_scrollbar_mode(&mut theme, Some("invalid")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod unsupported_layout_diagnostic_tests {
+    #[test]
+    fn typed_unsupported_layout_reason_survives_page_thread_boundary() {
+        let message = super::panic_message(Box::new(foundation::UnsupportedLayout::new(
+            "SVG use svg/symbol viewport instances are not translated",
+        )));
+        assert_eq!(
+            message,
+            "unsupported layout: SVG use svg/symbol viewport instances are not translated"
+        );
+    }
+}

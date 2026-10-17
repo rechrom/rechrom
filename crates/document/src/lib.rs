@@ -200,14 +200,79 @@ impl DocumentEngine {
                 message: "parse document requires the document parser",
             });
         }
+        // cpp: Node::setTextContent -> ContainerNode::RemoveChildren and
+        // CharacterData::setData. An empty replacement of an empty container,
+        // or identical character data, leaves the render tree untouched. Node
+        // allocation likewise attaches nothing. Still execute normal DOM
+        // validation/application before suppressing cross-engine work.
+        let no_lifecycle_change = match mutation.mutation_type {
+            DOMMutationType::kCreateDocument
+            | DOMMutationType::kCreateElement
+            | DOMMutationType::kCreateText
+            | DOMMutationType::kCreateComment
+            | DOMMutationType::kCreateFragment
+            | DOMMutationType::kCloneNode
+            | DOMMutationType::kImportNode
+            | DOMMutationType::kNotifyInlineStyleUnchanged => true,
+            DOMMutationType::kSetTextContent => {
+                let owner = self.dom.borrow();
+                let tree = owner.GetDocument();
+                tree.FindNodeById(mutation.target_node_id)
+                    .is_some_and(|index| {
+                        let node = tree.Node(index);
+                        match node.Type() {
+                            DOMNodeType::kElement | DOMNodeType::kDocumentFragment => {
+                                mutation.value.is_empty() && node.Children().is_empty()
+                            }
+                            DOMNodeType::kText
+                            | DOMNodeType::kComment
+                            | DOMNodeType::kProcessingInstruction => node.Data() == mutation.value,
+                            _ => false,
+                        }
+                    })
+            }
+            _ => false,
+        };
+        // cpp: ContainerNode::ChildrenChanged / Node::SetNeedsStyleRecalc:
+        // detached DOM mutations still run all DOM semantics, but cannot dirty
+        // the active render tree. A move into a detached parent can remove a
+        // currently attached child, so sample both ends before application.
+        let affects_active_tree = {
+            let owner = self.dom.borrow();
+            let tree = owner.GetDocument();
+            let connected = |id| {
+                tree.FindNodeById(id)
+                    .is_some_and(|index| tree.IsConnectedToDocument(index))
+            };
+            connected(mutation.target_node_id)
+                || (matches!(
+                    mutation.mutation_type,
+                    DOMMutationType::kAppendChild | DOMMutationType::kInsertBefore
+                ) && connected(mutation.child_node_id))
+        };
         let attribute_mutation = matches!(
             mutation.mutation_type,
             DOMMutationType::kSetAttribute | DOMMutationType::kRemoveAttribute
+        );
+        let geometry_before = self.dom.borrow().GetMeasurementGeometryRevision();
+        let geometry_recorded_by_dom = matches!(
+            mutation.mutation_type,
+            DOMMutationType::kAppendChild
+                | DOMMutationType::kInsertBefore
+                | DOMMutationType::kRemoveChild
+                | DOMMutationType::kSetTextContent
+                | DOMMutationType::kSetInnerHTML
+                | DOMMutationType::kSetControlValue
         );
         let changed_image_request = self.ChangedImageRequest(mutation);
         self.dom
             .borrow_mut()
             .ApplyMutationWithFragmentParser(mutation, ParseInnerHTMLMutation)?;
+        if no_lifecycle_change {
+            return Ok(DocumentEffects::default());
+        }
+        let geometry_changed =
+            self.dom.borrow().GetMeasurementGeometryRevision() != geometry_before;
         let connected_subtree = match mutation.mutation_type {
             DOMMutationType::kAppendChild | DOMMutationType::kInsertBefore => {
                 Some(ConnectedSubtreeRequest {
@@ -238,10 +303,17 @@ impl DocumentEngine {
         Ok(DocumentEffects {
             // The Document has already recorded the precise dirty nodes. This
             // is a lifecycle admission signal, not a duplicate invalidation.
-            style: Some(StyleMutation::Recalculate),
+            style: affects_active_tree.then_some(StyleMutation::Recalculate),
             // Attribute mutations retain geometry until computed-style diffing
-            // proves layout changed. Tree/text mutations cannot retain it.
-            layout: (!attribute_mutation).then_some(LayoutMutation::InvalidateGeometry),
+            // proves layout changed. Tree/text geometry facts belong to DOM:
+            // head/hidden edits retain geometry until the actual CSS diff,
+            // while moves and rendered semantic owners already revoke it.
+            // Control-value setters also own their native early-return-on-equal
+            // check; do not turn that no-op into an unconditional layout flush.
+            layout: (affects_active_tree
+                && !attribute_mutation
+                && (!geometry_recorded_by_dom || geometry_changed))
+                .then_some(LayoutMutation::InvalidateGeometry),
             resource,
         })
     }
@@ -300,7 +372,11 @@ fn ParseInnerHTMLMutation(
             message: "invalid innerHTML target",
         });
     }
-    let context = document.Node(target).clone();
+    // cpp: ShadowRoot::SetInnerHTMLInternal supplies host() as the HTML
+    // fragment context. A ShadowRoot itself has no element namespace.
+    let context = document
+        .Node(document.ShadowHost(target).unwrap_or(target))
+        .clone();
     let fragment = ParseHTMLFragment(document, &context, &mutation.value);
     if let Some(contents) = document.TemplateContents(target) {
         target = contents;
@@ -392,6 +468,117 @@ mod tests {
                 }
             )]
         );
+        let detached_id = {
+            let mut owner = engine.borrow_mut();
+            let tree = owner.GetDocumentMut();
+            let detached = tree.CreateElementDefault(DOMNamespace::kHTML, "section".into());
+            tree.Node(detached).Id()
+        };
+        let moved = engine
+            .ApplyDOMMutation(&DOMMutation {
+                mutation_type: DOMMutationType::kAppendChild,
+                target_node_id: detached_id,
+                child_node_id: child_id,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(moved.layout, Some(LayoutMutation::InvalidateGeometry));
+        let geometry = engine.borrow().GetMeasurementGeometryRevision();
+        let detached = engine
+            .ApplyDOMMutation(&DOMMutation {
+                mutation_type: DOMMutationType::kSetTextContent,
+                target_node_id: child_id,
+                value: "detached text".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(detached.style, None);
+        assert_eq!(detached.layout, None);
+        assert_eq!(engine.borrow().GetMeasurementGeometryRevision(), geometry);
+        let attached = engine
+            .ApplyDOMMutation(&DOMMutation {
+                mutation_type: DOMMutationType::kAppendChild,
+                target_node_id: root_id,
+                child_node_id: detached_id,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(attached.style, Some(StyleMutation::Recalculate));
+        assert_eq!(attached.layout, Some(LayoutMutation::InvalidateGeometry));
+        assert!(engine.borrow().GetMeasurementGeometryRevision() > geometry);
+        // A style element has no layout subtree. Its CSS invalidation still
+        // reaches StyleEngine; Document must preserve query geometry meanwhile.
+        let (sheet_id, option_id) = {
+            let mut owner = engine.borrow_mut();
+            let tree = owner.GetDocumentMut();
+            let sheet = tree.CreateElementDefault(DOMNamespace::kHTML, "style".into());
+            let select = tree.CreateElementDefault(DOMNamespace::kHTML, "select".into());
+            let option = tree.CreateElementDefault(DOMNamespace::kHTML, "option".into());
+            let root = tree.Root();
+            tree.AppendChild(root, sheet);
+            tree.AppendChild(root, select);
+            tree.AppendChild(select, option);
+            tree.SetResolvedStyle(
+                select,
+                dom::persistent_document::ResolvedNodeStyle::default(),
+            );
+            tree.StyleStateMut().all_dirty = false;
+            (tree.Node(sheet).Id(), tree.Node(option).Id())
+        };
+        let geometry = engine.borrow().GetMeasurementGeometryRevision();
+        let stylesheet = engine
+            .ApplyDOMMutation(&DOMMutation {
+                mutation_type: DOMMutationType::kSetTextContent,
+                target_node_id: sheet_id,
+                value: "div{color:red}".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(stylesheet.style, Some(StyleMutation::Recalculate));
+        assert_eq!(stylesheet.layout, None);
+        assert_eq!(engine.borrow().GetMeasurementGeometryRevision(), geometry);
+        // Option text also feeds a rendered select even without option style.
+        let option = engine
+            .ApplyDOMMutation(&DOMMutation {
+                mutation_type: DOMMutationType::kSetTextContent,
+                target_node_id: option_id,
+                value: "new menu label".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(option.layout, Some(LayoutMutation::InvalidateGeometry));
+        assert!(engine.borrow().GetMeasurementGeometryRevision() > geometry);
+        let textarea_id = {
+            let mut owner = engine.borrow_mut();
+            let tree = owner.GetDocumentMut();
+            let textarea = tree.CreateElementDefault(DOMNamespace::kHTML, "textarea".into());
+            let root = tree.Root();
+            tree.AppendChild(root, textarea);
+            tree.StyleStateMut().all_dirty = true;
+            tree.Node(textarea).Id()
+        };
+        let value = DOMMutation {
+            mutation_type: DOMMutationType::kSetControlValue,
+            target_node_id: textarea_id,
+            value: "same value".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            engine.ApplyDOMMutation(&value).unwrap().layout,
+            Some(LayoutMutation::InvalidateGeometry)
+        );
+        let geometry = engine.borrow().GetMeasurementGeometryRevision();
+        assert_eq!(engine.ApplyDOMMutation(&value).unwrap().layout, None);
+        assert_eq!(engine.borrow().GetMeasurementGeometryRevision(), geometry);
+        let changed = DOMMutation {
+            value: "different value".into(),
+            ..value
+        };
+        assert_eq!(
+            engine.ApplyDOMMutation(&changed).unwrap().layout,
+            Some(LayoutMutation::InvalidateGeometry)
+        );
+        assert!(engine.borrow().GetMeasurementGeometryRevision() > geometry);
     }
 
     #[test]

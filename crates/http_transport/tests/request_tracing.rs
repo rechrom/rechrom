@@ -79,6 +79,7 @@ fn trace_separates_network_decode_admission_and_delivery() {
     let recording = browser_tracing::start(StartOptions {
         max_events: 1024,
         target_id: 731,
+        ..Default::default()
     })
     .unwrap();
     let _scope = browser_tracing::scope(Context {

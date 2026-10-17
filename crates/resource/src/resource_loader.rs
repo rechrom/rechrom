@@ -3,6 +3,7 @@
 //! One resource request and its terminal result. The URL backend supplies bytes;
 //! the resource owner decides how to decode, apply and schedule those bytes.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 use std::{cell::RefCell, io, rc::Rc};
@@ -23,9 +24,18 @@ pub struct ResourceLoadResult {
 }
 
 pub(crate) struct SharedResourceLoad {
+    identity: u64,
     operation: Option<Box<dyn URLLoadOperation>>,
     result: ResourceLoadResult,
     status: ResourceLoadStatus,
+}
+
+static NEXT_RESOURCE_LOAD_IDENTITY: AtomicU64 = AtomicU64::new(1);
+
+fn NextResourceLoadIdentity() -> u64 {
+    let identity = NEXT_RESOURCE_LOAD_IDENTITY.fetch_add(1, Ordering::Relaxed);
+    assert_ne!(identity, 0, "resource load identity exhausted");
+    identity
 }
 
 pub struct ResourceLoader {
@@ -36,19 +46,26 @@ pub struct ResourceLoader {
 
 impl SharedResourceLoad {
     pub(crate) fn MemoryUsage(&self) -> (bool, usize) {
-        (self.status == ResourceLoadStatus::kLoading,
-         self.result.response.as_ref().map_or(0, |response| response.body.capacity()))
+        (
+            self.status == ResourceLoadStatus::kLoading,
+            self.result
+                .response
+                .as_ref()
+                .map_or(0, |response| response.body.capacity()),
+        )
     }
 }
 impl ResourceLoader {
     pub fn Start(loader: &mut dyn URLLoader, request: &URLRequest) -> Self {
         let shared = match loader.Load(request) {
             Ok(operation) => SharedResourceLoad {
+                identity: NextResourceLoadIdentity(),
                 operation: Some(operation),
                 result: ResourceLoadResult::default(),
                 status: ResourceLoadStatus::kLoading,
             },
             Err(error) => SharedResourceLoad {
+                identity: NextResourceLoadIdentity(),
                 operation: None,
                 result: ResourceLoadResult {
                     response: None,
@@ -62,6 +79,7 @@ impl ResourceLoader {
 
     pub fn Failed(error: impl ToString) -> Self {
         Self::FromShared(Rc::new(RefCell::new(SharedResourceLoad {
+            identity: NextResourceLoadIdentity(),
             operation: None,
             result: ResourceLoadResult {
                 response: None,
@@ -81,6 +99,13 @@ impl ResourceLoader {
 
     pub(crate) fn Shared(&self) -> Rc<RefCell<SharedResourceLoad>> {
         self.shared.clone()
+    }
+
+    /// Stable identity of the underlying byte transfer. Independent handles
+    /// returned for a coalesced request retain the same identity, allowing a
+    /// format owner to share derived immutable data without keying it by URL.
+    pub fn Identity(&self) -> u64 {
+        self.shared.borrow().identity
     }
 
     pub(crate) fn CancelShared(shared: &Rc<RefCell<SharedResourceLoad>>) {

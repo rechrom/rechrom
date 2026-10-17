@@ -320,8 +320,8 @@ impl SelectorCheckerBackend for Backend {
     fn IsInHTMLDocument(&self, e: &Self::Element) -> bool {
         true
     }
-    fn AttributesWithoutUpdate(&self, e: &Self::Element) -> Vec<Rc<Self::Attribute>> {
-        self.attrs[*e].iter().cloned().map(Rc::new).collect()
+    fn AttributesWithoutUpdate(&self, e: &Self::Element) -> &[Self::Attribute] {
+        &self.attrs[*e]
     }
     fn AttributeMatchesName(&self, a: &Self::Attribute, name: &QualifiedName) -> bool {
         &a.0 == name

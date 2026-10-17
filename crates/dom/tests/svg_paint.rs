@@ -172,6 +172,7 @@ fn generated_properties_report_unsupported_without_losing_valid_declarations() {
         .map(GetPropertyName);
     for property in names {
         for value in ["unimplemented-web-value", "initial", "none", "0"] {
+            let _heap = foundation::LayoutHeapScope::new();
             let markup = format!("<html><body><div style='{property}:{value};width:30px;color:red'></div></body></html>");
             let mut owner = html::html_parser::ParseHTML(&markup);
             let mut engine = style::StyleEngine::new(&owner);
@@ -179,11 +180,14 @@ fn generated_properties_report_unsupported_without_losing_valid_declarations() {
             let div = (0..owner.GetDocument().NodeCount())
                 .find(|&index| owner.GetDocument().Node(index).IsHTMLElement("div"))
                 .unwrap();
+            engine
+                .EnsureComputedStyle(&mut owner, &media(), &[], div)
+                .unwrap();
             assert!(
                 !owner
                     .GetDocument()
                     .ResolvedStyleFor(div)
-                    .unwrap()
+                    .unwrap_or_else(|| panic!("missing queried style for {property}:{value}"))
                     .style
                     .native_style
                     .is_null(),

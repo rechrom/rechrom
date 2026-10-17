@@ -1786,14 +1786,44 @@ impl CSSValueDispatch for ProductionCSSValueDispatch {
         };
         identifier(id)
     }
-    // cpp: css_primitive_value.cc:CreateFromLength fixed/percent branches.
+    // cpp: CSSPrimitiveValue::CreateFromLength / CSSMathFunctionValue::Create.
     fn CreatePrimitiveFromLength(length: &Length, zoom: f32) -> Rc<Value> {
         if length.IsFixed() {
             numeric((length.Pixels() / zoom) as f64, UnitType::kPixels)
         } else if length.IsPercent() {
             numeric(length.PercentValue() as f64, UnitType::kPercentage)
+        } else if length.IsCalculated() {
+            let value = length.GetCalculationValue();
+            // CSSPrimitiveValue::CreateFromLength collapses a non-expression
+            // calculation with zero pixels to its (range-clamped) percentage.
+            if !value.IsExpression() && value.Pixels() == 0.0 {
+                let percent = value.Percent();
+                return numeric(
+                    if value.IsNonNegative() {
+                        percent.max(0.0)
+                    } else {
+                        percent
+                    } as f64,
+                    UnitType::kPercentage,
+                );
+            }
+            let expression =
+                crate::css_math_expression_node::CSSMathExpressionNode::FromCalculationValue(
+                    &value, zoom,
+                )
+                .expect("computed length must have a serializable calculation");
+            math(
+                expression,
+                if value.IsNonNegative() {
+                    crate::css_math_function_value::ValueRange::NonNegative
+                } else {
+                    crate::css_math_function_value::ValueRange::All
+                },
+            )
+        } else if length.IsFlex() {
+            numeric(length.FlexValue() as f64, UnitType::kFlex)
         } else {
-            unreachable!("calculated Length is unavailable to production literal parser")
+            unreachable!("CSSPrimitiveValue::CreateFromLength precondition")
         }
     }
 }

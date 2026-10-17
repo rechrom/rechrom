@@ -1,7 +1,7 @@
 //! Engine-independent, opt-in wall-clock tracing. Collection never calls Page.
-pub mod diagnostics;
 #[cfg(feature = "allocation_diagnostics")]
 pub mod allocation;
+pub mod diagnostics;
 use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
@@ -109,12 +109,16 @@ impl Drop for ScopeGuard {
 pub struct StartOptions {
     pub max_events: usize,
     pub target_id: u64,
+    /// Record only these exact category names. Empty preserves full recording.
+    /// Filtering happens on the producer, before allocating or copying events.
+    pub included_categories: Vec<String>,
 }
 impl Default for StartOptions {
     fn default() -> Self {
         Self {
             max_events: 100_000,
             target_id: 0,
+            included_categories: Vec::new(),
         }
     }
 }
@@ -219,6 +223,8 @@ struct Event {
     context: Context,
     fields: [Field; 8],
     len: usize,
+    // Clock metadata cannot compete with the bounded caller field slots.
+    thread_cpu_ns: Option<u64>,
     text: Option<Arc<str>>,
     kind: Kind,
 }
@@ -227,7 +233,7 @@ fn timestamp(r: &Recording, t: Instant) -> u64 {
         .map(|d| d.as_nanos().min(u64::MAX as u128) as u64)
         .unwrap_or(0)
 }
-fn attach() -> Option<(Arc<Recording>, Arc<ThreadBuffer>, Context, u64, u64)> {
+fn attach(category: &str) -> Option<(Arc<Recording>, Arc<ThreadBuffer>, Context, u64, u64)> {
     let id = ACTIVE.load(Ordering::Acquire);
     if id == 0 {
         return None;
@@ -258,12 +264,21 @@ fn attach() -> Option<(Arc<Recording>, Arc<ThreadBuffer>, Context, u64, u64)> {
             l.session = Some(r);
             l.buffer = Some(b);
         }
-        let r = l.session.as_ref()?.clone();
+        let r = l.session.as_ref()?;
+        if !r.options.included_categories.is_empty()
+            && !r
+                .options
+                .included_categories
+                .iter()
+                .any(|included| included == category)
+        {
+            return None;
+        }
         if r.options.target_id != 0 && r.options.target_id != l.context.target_id {
             return None;
         }
         Some((
-            r,
+            r.clone(),
             l.buffer.as_ref()?.clone(),
             l.context,
             l.parent,
@@ -295,6 +310,7 @@ pub struct Span {
     diagnostic: Option<diagnostics::PhaseGuard>,
     record: Option<(Arc<Recording>, Arc<ThreadBuffer>, Event)>,
     previous: u64,
+    thread_cpu_start: Option<u64>,
     _same_thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 pub fn span(category: &'static str, name: &'static str) -> Span {
@@ -304,12 +320,13 @@ pub fn span(category: &'static str, name: &'static str) -> Span {
         diagnostic,
         record: None,
         previous: 0,
+        thread_cpu_start: None,
         _same_thread: std::marker::PhantomData,
     };
     if !enabled() {
         return span;
     }
-    if let Some((r, b, c, parent, thread)) = attach() {
+    if let Some((r, b, c, parent, thread)) = attach(category) {
         let id = IDS.fetch_add(1, Ordering::Relaxed);
         let e = Event {
             id,
@@ -321,6 +338,7 @@ pub fn span(category: &'static str, name: &'static str) -> Span {
             context: c,
             fields: [Field::default(); 8],
             len: 0,
+            thread_cpu_ns: None,
             text: None,
             kind: Kind::Begin,
         };
@@ -328,6 +346,7 @@ pub fn span(category: &'static str, name: &'static str) -> Span {
         span.previous = parent;
         LOCAL.with(|l| l.borrow_mut().parent = id);
         span.record = Some((r, b, e));
+        span.thread_cpu_start = thread_cpu_time();
     }
     span
 }
@@ -348,6 +367,13 @@ impl Span {
 }
 impl Drop for Span {
     fn drop(&mut self) {
+        if let Some(start) = self.thread_cpu_start {
+            if let Some(end) = thread_cpu_time() {
+                if let Some((_, _, event)) = &mut self.record {
+                    event.thread_cpu_ns = Some(end.saturating_sub(start));
+                }
+            }
+        }
         let _allocation = diagnostics::AllocationScope::trace();
         if let Some((r, b, mut e)) = self.record.take() {
             LOCAL.with(|l| l.borrow_mut().parent = self.previous);
@@ -358,6 +384,32 @@ impl Drop for Span {
         drop(_allocation);
         drop(self.diagnostic.take());
     }
+}
+
+// Opt-in diagnostic: wall-clock spans include descheduling and blocking. The
+// current thread's CPU clock lets an investigator distinguish those pauses
+// from work without attaching a sampling profiler. Unsupported clocks simply
+// omit the field; this never substitutes CPU time for the normal duration.
+fn thread_cpu_time() -> Option<u64> {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    if !*ENABLED.get_or_init(|| std::env::var_os("RECHROM_TRACE_THREAD_CPU").is_some()) {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        let mut time = std::mem::MaybeUninit::<libc::timespec>::uninit();
+        if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, time.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        let time = unsafe { time.assume_init() };
+        Some(
+            (time.tv_sec as u64)
+                .saturating_mul(1_000_000_000)
+                .saturating_add(time.tv_nsec as u64),
+        )
+    }
+    #[cfg(not(unix))]
+    None
 }
 pub fn instant(category: &'static str, name: &'static str, fields: &[(&'static str, f64)]) {
     emit(category, name, Instant::now(), None, fields, None);
@@ -401,7 +453,7 @@ fn emit(
         return;
     }
     let _allocation = diagnostics::AllocationScope::trace();
-    if let Some((r, b, c, parent, thread)) = attach() {
+    if let Some((r, b, c, parent, thread)) = attach(category) {
         let mut e = Event {
             id: IDS.fetch_add(1, Ordering::Relaxed),
             parent,
@@ -412,6 +464,7 @@ fn emit(
             context: c,
             fields: [Field::default(); 8],
             len: 0,
+            thread_cpu_ns: None,
             text: text.map(Arc::from),
             kind: end
                 .map(|t| Kind::Interval(timestamp(&r, t)))
@@ -452,21 +505,25 @@ pub struct Snapshot {
     pub spans: Vec<RecordedSpan>,
     pub instants: Vec<RecordedSpan>,
 }
-fn recorded(e: &Event, end: u64, incomplete: bool) -> RecordedSpan {
+fn recorded(e: &Event, start: u64, end: u64, incomplete: bool) -> RecordedSpan {
     RecordedSpan {
         id: e.id,
         parent_id: e.parent,
         thread_id: e.thread,
         category: e.category.into(),
         name: e.name.into(),
-        start_ns: e.at,
-        duration_ns: end.saturating_sub(e.at),
+        start_ns: start,
+        duration_ns: end.saturating_sub(start),
         incomplete,
         context: e.context,
         text: e.text.as_deref().map(str::to_owned),
         fields: e.fields[..e.len]
             .iter()
             .map(|f| (f.key.into(), f.value))
+            .chain(
+                e.thread_cpu_ns
+                    .map(|cpu| ("thread_cpu_ns".into(), cpu as f64)),
+            )
             .collect(),
     }
 }
@@ -484,43 +541,40 @@ pub fn snapshot(id: Option<u64>) -> Result<Snapshot, String> {
     let stop = *r.end.lock().unwrap();
     let end = timestamp(&r, stop.unwrap_or_else(Instant::now));
     let buffers = r.buffers.lock().unwrap().clone();
-    let events = {
+    let (mut spans, mut instants) = {
         // Only collectors serialize here. Producers use independent channels.
+        // Borrow archived records while pairing begins/ends: cloning every
+        // full Event and moving those copies through two maps multiplies the
+        // inspection peak without protecting any additional producer state.
         let mut archive = r.archive.lock().unwrap();
         for b in buffers {
             archive.extend(b.receiver.lock().unwrap().try_iter());
         }
-        archive
-            .iter()
-            .filter(|e| e.at <= end)
-            .cloned()
-            .collect::<Vec<_>>()
+        let mut starts = HashMap::new();
+        let mut ends = HashMap::new();
+        let mut spans = Vec::new();
+        let mut instants = Vec::new();
+        for e in archive.iter().filter(|e| e.at <= end) {
+            match e.kind {
+                Kind::Begin => {
+                    starts.insert(e.id, e);
+                }
+                Kind::End => {
+                    ends.insert(e.id, e);
+                }
+                Kind::Instant => instants.push(recorded(e, e.at, e.at, false)),
+                Kind::Interval(t) => spans.push(recorded(e, e.at, t.min(end), false)),
+            }
+        }
+        for (id, begin) in starts {
+            if let Some(finish) = ends.remove(&id) {
+                spans.push(recorded(finish, begin.at, finish.at.min(end), false));
+            } else {
+                spans.push(recorded(begin, begin.at, end, true));
+            }
+        }
+        (spans, instants)
     };
-    let mut starts = HashMap::new();
-    let mut ends = HashMap::new();
-    let mut spans = Vec::new();
-    let mut instants = Vec::new();
-    for e in events {
-        match e.kind {
-            Kind::Begin => {
-                starts.insert(e.id, e);
-            }
-            Kind::End => {
-                ends.insert(e.id, e);
-            }
-            Kind::Instant => instants.push(recorded(&e, e.at, false)),
-            Kind::Interval(t) => spans.push(recorded(&e, t.min(end), false)),
-        }
-    }
-    for (id, e) in starts {
-        if let Some(mut finish) = ends.remove(&id) {
-            let finished_at = finish.at;
-            finish.at = e.at;
-            spans.push(recorded(&finish, finished_at.min(end), false));
-        } else {
-            spans.push(recorded(&e, end, true));
-        }
-    }
     // End events whose Begin was dropped remain explicitly represented as loss.
     spans.sort_by_key(|e| (e.start_ns, e.id));
     instants.sort_by_key(|e| (e.start_ns, e.id));
@@ -563,7 +617,23 @@ mod tests {
         });
         let mut outer = span("test", "outer");
         outer.set("tiles", 10.);
-        instant_with_text("test", "request", "https://example.test/style.css", &[("request_id", 7.)]);
+        for key in ["a", "b", "c", "d", "e", "f", "g"] {
+            outer.set(key, 1.);
+        }
+        // A full payload must preserve the independently recorded CPU clock.
+        let mut full = outer.record.as_ref().unwrap().2.clone();
+        assert_eq!(full.len, 8);
+        full.thread_cpu_ns = Some(1234);
+        let full = recorded(&full, full.at, full.at, false);
+        assert_eq!(full.fields.len(), 9);
+        assert_eq!(full.fields["tiles"], 10.);
+        assert_eq!(full.fields["thread_cpu_ns"], 1234.);
+        instant_with_text(
+            "test",
+            "request",
+            "https://example.test/style.css",
+            &[("request_id", 7.)],
+        );
         let nested = span("test", "nested");
         drop(nested);
         let live = snapshot(Some(id)).unwrap();
@@ -582,9 +652,16 @@ mod tests {
         assert!(!done.active);
         assert_eq!(done.dropped_events, 0);
         let request = done.instants.iter().find(|e| e.name == "request").unwrap();
-        assert_eq!(request.text.as_deref(), Some("https://example.test/style.css"));
+        assert_eq!(
+            request.text.as_deref(),
+            Some("https://example.test/style.css")
+        );
         assert_eq!(request.fields["request_id"], 7.);
-        assert!(chrome_trace(&done)["traceEvents"].as_array().unwrap().iter().any(|e| e["args"]["text"] == "https://example.test/style.css"));
+        assert!(chrome_trace(&done)["traceEvents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["args"]["text"] == "https://example.test/style.css"));
         assert_eq!(
             done.spans
                 .iter()
@@ -605,6 +682,7 @@ mod tests {
         let _ = start(StartOptions {
             max_events: 1024,
             target_id: 8,
+            ..Default::default()
         })
         .unwrap();
         {
@@ -631,6 +709,7 @@ mod tests {
         start(StartOptions {
             max_events: 20_000,
             target_id: 0,
+            ..Default::default()
         })
         .unwrap();
         let ready = Arc::new(std::sync::Barrier::new(2));
@@ -653,5 +732,49 @@ mod tests {
         assert_eq!(complete.dropped_events, 0);
         assert_eq!(complete.spans.len(), 1000);
         assert!(complete.spans.iter().all(|s| !s.incomplete));
+        // Selection must suppress producer work, not discard events at export.
+        // Excluded nesting keeps the nearest included parent and consumes no
+        // event allowance, so a noisy category cannot truncate input records.
+        start(StartOptions {
+            max_events: 1024,
+            included_categories: vec!["input".into()],
+            ..Default::default()
+        })
+        .unwrap();
+        {
+            let _outer = span("input", "selected-outer");
+            let excluded = span("style", "excluded-parent");
+            assert!(excluded.record.is_none());
+            let _inner = span("input", "selected-inner");
+            instant_with_text("style", "excluded-text", "payload", &[]);
+            for _ in 0..2000 {
+                let _ = span("style", "excluded-noise");
+                instant("style", "excluded-instant", &[]);
+            }
+        }
+        instant("input", "selected-instant", &[]);
+        let at = Instant::now();
+        interval("input", "selected-interval", at, Instant::now(), &[]);
+        stop().unwrap();
+        let selected = snapshot(None).unwrap();
+        assert_eq!(selected.dropped_events, 0);
+        assert_eq!(selected.spans.len(), 3);
+        assert_eq!(selected.instants.len(), 1);
+        let outer = selected
+            .spans
+            .iter()
+            .find(|s| s.name == "selected-outer")
+            .unwrap();
+        let inner = selected
+            .spans
+            .iter()
+            .find(|s| s.name == "selected-inner")
+            .unwrap();
+        assert_eq!(inner.parent_id, outer.id);
+        assert!(selected
+            .spans
+            .iter()
+            .chain(&selected.instants)
+            .all(|s| s.category == "input"));
     }
 }

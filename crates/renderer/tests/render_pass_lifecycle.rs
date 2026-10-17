@@ -11,7 +11,7 @@ use viz::{AggregatedFrame, RenderPassId, SurfaceId};
 
 #[derive(Default)]
 struct Resources {
-    tiles: HashMap<layer_tile::TileId, raster::RasterResource>,
+    tiles: HashMap<layer_tile::TileId, Arc<raster::RasterResource>>,
 }
 impl RasterResourceProvider for Resources {
     fn stats(&self) -> raster::RasterStats {
@@ -24,9 +24,9 @@ impl RasterResourceProvider for Resources {
         0
     }
     fn resource(&self, id: layer_tile::TileId) -> Option<&raster::RasterResource> {
-        self.tiles.get(&id)
+        self.tiles.get(&id).map(Arc::as_ref)
     }
-    fn resources(&self) -> &HashMap<layer_tile::TileId, raster::RasterResource> {
+    fn resources(&self) -> &HashMap<layer_tile::TileId, Arc<raster::RasterResource>> {
         &self.tiles
     }
     fn resident_bytes(&self) -> usize {
@@ -89,6 +89,7 @@ fn frame(ids: &[u64], color: [u8; 4], damaged: bool) -> CompositorFrame {
         let mut pass = CompositorRenderPass {
             id: RenderPassId(id),
             owner_effect: (!root).then(|| PropertyTreeState::default().effect),
+            has_transparent_background: !root,
             output_rect: rect(),
             damage_rect: damage,
             shared_quad_state_list: Vec::new(),
@@ -303,6 +304,64 @@ fn nested_graph_surface_namespaces_and_explicit_invalidation_are_independent() {
     );
     check(&pixels, [255, 0, 0, 255]);
     assert_eq!(update.damage_pixels, 3 * W as usize * H as usize);
+
+    // Independent transparent Page roots blend over the selected content
+    // Surface. Retaining or removing the overlay must never reblend old pixels.
+    let mut viz = viz::VizEngine::New();
+    let mut renderer = Renderer::default();
+    submit(&mut viz, SurfaceId(1), frame(&[1], [255, 0, 0, 255], true)).unwrap();
+    let mut overlay = frame(&[1], [0, 0, 128, 128], true);
+    overlay
+        .render_pass_list
+        .last_mut()
+        .unwrap()
+        .has_transparent_background = true;
+    let placements = [1, 2].map(|id| viz::SurfacePlacement {
+        surface_id: SurfaceId(id),
+        destination: rect(),
+    });
+    for damaged in [true, false] {
+        overlay.metadata.root_damage_rect = if damaged {
+            rect()
+        } else {
+            DeviceRect::new(0, 0, 0, 0)
+        };
+        overlay.render_pass_list[0].damage_rect = overlay.metadata.root_damage_rect;
+        submit(&mut viz, SurfaceId(2), overlay.clone()).unwrap();
+        let combined = viz.Aggregate(rect(), &placements).unwrap();
+        for format in [
+            skia::PixelFormat::Rgba8888,
+            skia::PixelFormat::Bgra8888,
+            skia::PixelFormat::Bgrx8888,
+        ] {
+            let pixels = render(&mut renderer, &combined, format).0;
+            let expected = match format {
+                skia::PixelFormat::Rgba8888 => [127, 0, 128, 255],
+                skia::PixelFormat::Bgra8888 => [128, 0, 127, 255],
+                skia::PixelFormat::Bgrx8888 => [128, 0, 127, 0],
+            };
+            check(&pixels, expected);
+        }
+    }
+    check(
+        &render(
+            &mut renderer,
+            &viz.Aggregate(rect(), &placements[..1]).unwrap(),
+            skia::PixelFormat::Rgba8888,
+        )
+        .0,
+        [255, 0, 0, 255],
+    );
+    // A transparent root alone does not certify opaque output coverage.
+    check(
+        &render(
+            &mut renderer,
+            &viz.Aggregate(rect(), &placements[1..]).unwrap(),
+            skia::PixelFormat::Rgba8888,
+        )
+        .0,
+        [127, 127, 255, 255],
+    );
 }
 
 #[test]
@@ -454,7 +513,8 @@ fn translucent_child_does_not_reblend_outside_parent_damage() {
                 if damaged {
                     current.render_pass_list[0].damage_rect = DeviceRect::new(2, 2, 4, 4);
                 }
-                let composition = &mut current.render_pass_list[1].shared_quad_state_list[0].composition;
+                let composition =
+                    &mut current.render_pass_list[1].shared_quad_state_list[0].composition;
                 composition.content_bounds = Some(DeviceRect::new(2, 2, 4, 4));
                 composition.clip = Some(DeviceRect::new(3, 1, 2, 5));
             }
@@ -473,8 +533,16 @@ fn translucent_child_does_not_reblend_outside_parent_damage() {
         }
         let mut partial = fixture(false);
         if !blur {
-            assert_eq!(before[0], u32::MAX, "backing extent is not visible quad coverage");
-            assert_eq!(before[3 * W as usize + 2], u32::MAX, "quad clip restricts content bounds");
+            assert_eq!(
+                before[0],
+                u32::MAX,
+                "backing extent is not visible quad coverage"
+            );
+            assert_eq!(
+                before[3 * W as usize + 2],
+                u32::MAX,
+                "quad clip restricts content bounds"
+            );
             assert_ne!(before[3 * W as usize + 3], u32::MAX);
         }
         let damage = if blur {
@@ -515,7 +583,11 @@ fn translucent_child_does_not_reblend_outside_parent_damage() {
                 moved.metadata.root_damage_rect = rect();
                 moved.render_pass_list[1].damage_rect = rect();
                 submit(&mut viz, SurfaceId(1), moved).unwrap();
-                let (pixels, _) = render(&mut renderer, &aggregate(&viz, &[1]), skia::PixelFormat::Rgba8888);
+                let (pixels, _) = render(
+                    &mut renderer,
+                    &aggregate(&viz, &[1]),
+                    skia::PixelFormat::Rgba8888,
+                );
                 if output.width == 1 {
                     assert_eq!(pixels[3 * W as usize + 3], u32::MAX);
                     assert_ne!(pixels[3 * W as usize + 4], u32::MAX);

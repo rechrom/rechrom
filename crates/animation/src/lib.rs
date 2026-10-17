@@ -428,9 +428,7 @@ fn ApplyEasing(function: &CSSTimingFunction, value: f64) -> f64 {
         }
         CSSTimingFunction::CubicBezier([x1, y1, x2, y2]) => {
             let curve = |t: f64, a: f64, b: f64| {
-                3.0 * (1.0 - t) * (1.0 - t) * t * a
-                    + 3.0 * (1.0 - t) * t * t * b
-                    + t * t * t
+                3.0 * (1.0 - t) * (1.0 - t) * t * a + 3.0 * (1.0 - t) * t * t * b + t * t * t
             };
             let (mut low, mut high) = (0.0, 1.0);
             for _ in 0..24 {
@@ -453,7 +451,11 @@ fn DirectedProgress(progress: f64, iteration: u64, direction: CSSPlaybackDirecti
         CSSPlaybackDirection::Alternate => iteration % 2 == 1,
         CSSPlaybackDirection::AlternateReverse => iteration % 2 == 0,
     };
-    if reverse { 1.0 - progress } else { progress }
+    if reverse {
+        1.0 - progress
+    } else {
+        progress
+    }
 }
 
 fn SampleCSSAnimation(
@@ -481,11 +483,21 @@ fn SampleCSSAnimation(
         } else {
             let overall = active_time / duration;
             let iteration = overall.floor().max(0.0) as u64;
-            (Some(DirectedProgress(overall.fract(), iteration, timing.direction)), true)
+            (
+                Some(DirectedProgress(
+                    overall.fract(),
+                    iteration,
+                    timing.direction,
+                )),
+                true,
+            )
         }
     } else if matches!(timing.fill, CSSFillMode::Forwards | CSSFillMode::Both) {
         let final_iteration = timing.iterations.ceil().max(1.0) as u64 - 1;
-        (Some(DirectedProgress(1.0, final_iteration, timing.direction)), false)
+        (
+            Some(DirectedProgress(1.0, final_iteration, timing.direction)),
+            false,
+        )
     } else {
         (None, false)
     };
@@ -509,7 +521,12 @@ fn SampleKeyframes(
 ) -> Vec<CSSDeclaration> {
     let mut properties = BTreeSet::new();
     for frame in &effect.definition.keyframes {
-        properties.extend(frame.declarations.iter().map(|value| value.property.clone()));
+        properties.extend(
+            frame
+                .declarations
+                .iter()
+                .map(|value| value.property.clone()),
+        );
     }
     let mut result = Vec::new();
     for property in properties {
@@ -590,9 +607,7 @@ fn InterpolateCSSValue(start: &str, end: &str, progress: f64) -> Option<String> 
                     index += 1;
                 }
             }
-            if index == number_start
-                || (index == number_start + 1 && bytes[number_start] == b'.')
-            {
+            if index == number_start || (index == number_start + 1 && bytes[number_start] == b'.') {
                 index = start + 1;
                 continue;
             }

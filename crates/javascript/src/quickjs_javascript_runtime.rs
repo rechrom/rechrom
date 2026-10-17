@@ -21,9 +21,32 @@ mod intl;
 #[path = "quickjs_regexp.rs"]
 mod regexp;
 
+#[path = "quickjs_bridge_profile.rs"]
+mod bridge_profile;
+#[path = "quickjs_host_graph.rs"]
+mod host_graph;
+use host_graph::{HostGraph, SynchronizeHostGraph};
+enum WrapperSlot {
+    Strong(JsObject),
+    Weak(WeakObject),
+}
+impl WrapperSlot {
+    fn get(&self) -> Option<JsObject> {
+        match self {
+            Self::Strong(object) => Some(object.clone()),
+            Self::Weak(object) => object.upgrade(),
+        }
+    }
+    fn identity(&self) -> (usize, usize) {
+        match self {
+            Self::Strong(object) => object.identity(),
+            Self::Weak(object) => object.identity(),
+        }
+    }
+}
 struct Wrapper {
-    target: Gc<JsObject>,
-    proxy: Gc<JsObject>,
+    target: WrapperSlot,
+    object: WrapperSlot,
     prototype_installed: bool,
 }
 
@@ -31,8 +54,9 @@ struct State {
     host: Rc<RefCell<dyn JavaScriptHostBindings>>,
     global: Value,
     wrappers: HashMap<HostObjectId, Wrapper>,
-    // QuickJS object identity, scoped to its runtime. Forward entries strongly
-    // retain proxies, so GC cannot recycle an address while indexed here.
+    host_graph: HostGraph,
+    // Realm-local identity. Weak slots retain tombstones until removal, so
+    // a collected wrapper's address cannot alias a new object in this index.
     wrapper_ids: HashMap<(usize, usize), HostObjectId>,
     fallbacks: HashMap<String, Value>,
     reflect_get: Value,
@@ -45,19 +69,13 @@ struct State {
 #[derive(Default)]
 struct Hooks {
     checkpoint_running: Cell<bool>,
-    rejections: RefCell<Vec<(Gc<JsObject>, Value)>>,
+    rejections: RefCell<Vec<(JsObject, Value)>>,
     exceptions: RefCell<Vec<JavaScriptException>>,
 }
 
 struct Tracker(Rc<Hooks>);
 impl RejectionTracker for Tracker {
-    fn on_rejection(
-        &mut self,
-        _: &mut Context,
-        promise: &Gc<JsObject>,
-        reason: &Value,
-        handled: bool,
-    ) {
+    fn on_rejection(&mut self, _: &mut Context, promise: &JsObject, reason: &Value, handled: bool) {
         let mut pending = self.0.rejections.borrow_mut();
         pending.retain(|(p, _)| p != promise);
         if !handled {
@@ -78,6 +96,7 @@ impl Drop for QuickJsRealm {
         let mut state = self.state.borrow_mut();
         state.wrapper_ids.clear();
         state.wrappers.clear();
+        state.host_graph.Clear();
         state.fallbacks.clear();
         state.global = Value::Undefined;
         state.reflect_get = Value::Undefined;
@@ -87,11 +106,18 @@ impl Drop for QuickJsRealm {
     }
 }
 
+struct PreparedClassicScript {
+    realm: JavaScriptRealm,
+    worker: module_worker::Job,
+    outcome: Option<module_worker::Outcome>,
+}
 pub struct QuickJsJavaScriptRuntime {
     realms: Vec<JavaScriptRealm>,
     native_stack_budget: usize,
+    compilation_executor: Option<std::sync::Arc<dyn executor::Executor>>,
     module_worker: Option<module_worker::Worker>,
     module_worker_unavailable: bool,
+    prepared_classic_scripts: Vec<PreparedClassicScript>,
     module_compilation_wake: Option<JavaScriptModuleCompilationWake>,
 }
 
@@ -105,8 +131,10 @@ impl Default for QuickJsJavaScriptRuntime {
         Self {
             realms: Vec::new(),
             native_stack_budget: 1024 * 1024,
+            compilation_executor: Some(executor::inline()),
             module_worker: None,
             module_worker_unavailable: false,
+            prepared_classic_scripts: Vec::new(),
             module_compilation_wake: None,
         }
     }
@@ -127,14 +155,19 @@ impl QuickJsJavaScriptRuntime {
         Self {
             realms: Vec::new(),
             native_stack_budget: bytes,
+            compilation_executor: Some(executor::inline()),
             module_worker: None,
             module_worker_unavailable: false,
+            prepared_classic_scripts: Vec::new(),
             module_compilation_wake: None,
         }
     }
 }
 
-impl JavaScriptFunctionStorage for Gc<JsObject> {
+impl JavaScriptFunctionStorage for JsObject {
+    fn Downgrade(&self) -> WeakJavaScriptFunction {
+        WeakJavaScriptFunction::new(WeakObject::new(self))
+    }
     fn AsAny(&self) -> &dyn Any {
         self
     }
@@ -143,6 +176,12 @@ impl JavaScriptFunctionStorage for Gc<JsObject> {
             .AsAny()
             .downcast_ref::<Self>()
             .is_some_and(|v| self == v)
+    }
+}
+
+impl WeakJavaScriptFunctionStorage for WeakObject {
+    fn Upgrade(&self) -> Option<JavaScriptFunction> {
+        self.upgrade().map(JavaScriptFunction::new)
     }
 }
 
@@ -270,6 +309,7 @@ enum Action {
     GlobalGet(String),
     GlobalSet(String),
     Method(HostMethodRef),
+    Callback(HostMethodRef, bool),
 }
 struct HostFunction {
     state: Rc<RefCell<State>>,
@@ -295,10 +335,11 @@ fn host_result(
     state: &Rc<RefCell<State>>,
     result: HostResult,
 ) -> JsResult<Value> {
+    let _native_roots = SynchronizeHostGraph(ctx, state)?;
     if let Some(e) = result.exception {
         Err(error(ctx, e))
     } else {
-        to_js(ctx, state, &result.value)
+        to_js_value(ctx, state, &result.value)
     }
 }
 
@@ -306,15 +347,45 @@ impl HostCallable for HostFunction {
     fn call(
         &self,
         ctx: &mut Context,
-        _: &Value,
+        this: &Value,
         args: &[Value],
-        _: &[Value],
+        data: &[Value],
         _: &Value,
     ) -> JsResult<Value> {
+        let _boundary = bridge_profile::enter(bridge_profile::Phase::Call);
         let state = &self.state;
         match &self.action {
+            Action::Callback(method, capture_receiver) => {
+                let data = if *capture_receiver { &data[1..] } else { data };
+                let values = {
+                    let _conversion = bridge_profile::enter(bridge_profile::Phase::Arguments);
+                    let mut values = Vec::with_capacity(1 + data.len() + args.len());
+                    values.push(from_js(this, ctx, state));
+                    values.extend(
+                        data.iter()
+                            .chain(args)
+                            .map(|value| from_js(value, ctx, state)),
+                    );
+                    values
+                };
+                let answer = invoke(
+                    ctx,
+                    state,
+                    &HostCall {
+                        receiver: method.receiver,
+                        operation: HostOperation::kCall,
+                        member: &method.name,
+                        symbol: HostSymbol::kNone,
+                        arguments: &values,
+                    },
+                );
+                host_result(ctx, state, answer)
+            }
             Action::Method(method) => {
-                let values: Vec<_> = args.iter().map(|v| from_js(v, ctx, state)).collect();
+                let values: Vec<_> = {
+                    let _conversion = bridge_profile::enter(bridge_profile::Phase::Arguments);
+                    args.iter().map(|v| from_js(v, ctx, state)).collect()
+                };
                 let answer = invoke(
                     ctx,
                     state,
@@ -340,6 +411,7 @@ impl HostCallable for HostFunction {
                 if answer.handled || answer.exception.is_some() {
                     host_result(ctx, state, answer)
                 } else {
+                    let _native_roots = SynchronizeHostGraph(ctx, state)?;
                     Ok(state
                         .borrow()
                         .fallbacks
@@ -350,7 +422,10 @@ impl HostCallable for HostFunction {
             }
             Action::GlobalSet(name) => {
                 let value = args.first().cloned().unwrap_or(Value::Undefined);
-                let host_value = from_js(&value, ctx, state);
+                let host_value = {
+                    let _conversion = bridge_profile::enter(bridge_profile::Phase::Arguments);
+                    from_js(&value, ctx, state)
+                };
                 let answer = invoke(
                     ctx,
                     state,
@@ -362,6 +437,7 @@ impl HostCallable for HostFunction {
                         arguments: &[host_value],
                     },
                 );
+                let _native_roots = SynchronizeHostGraph(ctx, state)?;
                 if let Some(e) = answer.exception {
                     return Err(error(ctx, e));
                 }
@@ -371,6 +447,7 @@ impl HostCallable for HostFunction {
                 Ok(Value::Undefined)
             }
             Action::Get(id) | Action::Set(id) | Action::Has(id) => {
+                let mut _native_roots = Vec::new();
                 let target = args.first().cloned().unwrap_or(Value::Undefined);
                 let key = args.get(1).cloned().unwrap_or(Value::Undefined);
                 let set = matches!(self.action, Action::Set(_));
@@ -381,7 +458,10 @@ impl HostCallable for HostFunction {
                     .cloned()
                     .unwrap_or(Value::Undefined);
                 if let Some((name, symbol)) = key_name(ctx, &key)? {
-                    let set_value = set.then(|| from_js(&value, ctx, state));
+                    let set_value = set.then(|| {
+                        let _conversion = bridge_profile::enter(bridge_profile::Phase::Arguments);
+                        from_js(&value, ctx, state)
+                    });
                     let values = set_value.as_ref().map(std::slice::from_ref).unwrap_or(&[]);
                     let answer = invoke(
                         ctx,
@@ -398,6 +478,7 @@ impl HostCallable for HostFunction {
                             arguments: values,
                         },
                     );
+                    _native_roots.extend(SynchronizeHostGraph(ctx, state)?);
                     if let Some(e) = answer.exception {
                         return Err(error(ctx, e));
                     }
@@ -405,7 +486,7 @@ impl HostCallable for HostFunction {
                         return if has || set {
                             Ok(Value::Bool(true))
                         } else {
-                            to_js(ctx, state, &answer.value)
+                            to_js_value(ctx, state, &answer.value)
                         };
                     }
                 }
@@ -461,7 +542,7 @@ fn install_prototype(
         .borrow()
         .wrappers
         .get(&id)
-        .map(|w| (w.target.clone(), w.prototype_installed));
+        .and_then(|w| w.target.get().map(|target| (target, w.prototype_installed)));
     let Some((target, false)) = entry else {
         return Ok(());
     };
@@ -481,6 +562,18 @@ fn install_prototype(
 }
 
 fn to_js(ctx: &mut Context, state: &Rc<RefCell<State>>, value: &HostValue) -> JsResult<Value> {
+    let _native_roots = SynchronizeHostGraph(ctx, state)?;
+    to_js_value(ctx, state, value)
+}
+
+// The caller holds the synchronized native roots across the whole conversion.
+// Recursive records and callback arguments must not poll the host per object.
+fn to_js_value(
+    ctx: &mut Context,
+    state: &Rc<RefCell<State>>,
+    value: &HostValue,
+) -> JsResult<Value> {
+    let _conversion = bridge_profile::enter(bridge_profile::Phase::Return);
     let value = match value {
         HostValue::Undefined(_) => Value::Undefined,
         HostValue::Null(_) => Value::Null,
@@ -491,7 +584,7 @@ fn to_js(ctx: &mut Context, state: &Rc<RefCell<State>>, value: &HostValue) -> Js
         HostValue::Record(fields) => {
             let object = ctx.try_new_object()?;
             for (name, value) in fields {
-                let value = to_js(ctx, state, value)?;
+                let value = to_js_value(ctx, state, value)?;
                 ctx.define_data_value(&object, name, value, PropFlags::C_W_E)?;
             }
             Value::Object(object)
@@ -501,43 +594,111 @@ fn to_js(ctx: &mut Context, state: &Rc<RefCell<State>>, value: &HostValue) -> Js
             .cloned()
             .ok_or_else(|| ctx.type_error("Value belongs to another engine"))?,
         HostValue::JavaScriptFunction(v) => Value::Object(
-            v.Implementation::<Gc<JsObject>>()
+            v.Implementation::<JsObject>()
                 .cloned()
                 .ok_or_else(|| ctx.type_error("Function belongs to another engine"))?,
         ),
-        HostValue::Method(m) => function(ctx, state, Action::Method(m.clone()), &m.name, 0),
+        HostValue::Method(m) => {
+            // A bound native method retains its receiver through engine-marked
+            // captures, even if the caller stores the method separately.
+            let capture = state
+                .borrow()
+                .wrappers
+                .get(&m.receiver)
+                .and_then(|wrapper| wrapper.object.get());
+            Value::Object(
+                ctx.new_host_function(
+                    Rc::new(HostFunction {
+                        state: state.clone(),
+                        action: Action::Method(m.clone()),
+                    }),
+                    capture
+                        .map(|object| vec![Value::Object(object)])
+                        .unwrap_or_default(),
+                    &m.name,
+                    0,
+                ),
+            )
+        }
         HostValue::Object(o) if o.id == 0 => state.borrow().global.clone(),
         HostValue::Object(o) => {
-            let existing = state.borrow().wrappers.get(&o.id).map(|w| w.proxy.clone());
-            if let Some(proxy) = existing {
+            let existing = state
+                .borrow()
+                .wrappers
+                .get(&o.id)
+                .and_then(|w| w.object.get());
+            if let Some(object) = existing {
                 install_prototype(ctx, state, o.id)?;
-                return Ok(Value::Object(proxy));
+                return Ok(Value::Object(object));
             }
-            let target = ctx.new_object();
-            let handler = ctx.new_object();
-            for (name, action, length) in [
-                ("get", Action::Get(o.id), 3),
-                ("set", Action::Set(o.id), 4),
-                ("has", Action::Has(o.id), 2),
-            ] {
-                let callback = function(ctx, state, action, name, length);
-                ctx.define_value(&handler, name, callback, PropFlags::C_W_E);
-            }
-            let proxy = ctx.new_proxy(target.clone(), handler)?;
+            let managed = state.borrow().host_graph.Manages(o.id);
+            // A native cell is already an ordinary traced object. Surface it
+            // directly as the wrapper target instead of creating a second
+            // object and a cycle for every Node (DOMDataStore inline storage).
+            let mut native_cells = Vec::new();
+            let target = if managed {
+                state
+                    .borrow_mut()
+                    .host_graph
+                    .Cell(ctx, o.id, &mut native_cells)?
+            } else {
+                ctx.new_object()
+            };
+            let host = state.borrow().host.clone();
+            let ordinary = host.borrow().UsesOrdinaryProperties(o.id);
+            let object = if ordinary {
+                // Ordinary host wrappers resolve installed/author descriptors
+                // directly in the engine, as Blink's V8 instance templates do.
+                // Identity and the native interface brand remain in the same
+                // realm-local registry; neither depends on the prototype.
+                target.clone()
+            } else {
+                let handler = ctx.new_object();
+                for (name, action, length) in [
+                    ("get", Action::Get(o.id), 3),
+                    ("set", Action::Set(o.id), 4),
+                    ("has", Action::Has(o.id), 2),
+                ] {
+                    let callback = function(ctx, state, action, name, length);
+                    ctx.define_value(&handler, name, callback, PropFlags::C_W_E);
+                }
+                ctx.new_proxy(target.clone(), handler)?
+            };
             {
                 let mut state = state.borrow_mut();
-                state.wrapper_ids.insert(proxy.identity(), o.id);
+                if let Some(old) = state.wrappers.remove(&o.id) {
+                    state.wrapper_ids.remove(&old.object.identity());
+                }
+                state.wrapper_ids.insert(object.identity(), o.id);
                 state.wrappers.insert(
                     o.id,
                     Wrapper {
-                        target,
-                        proxy: proxy.clone(),
+                        target: if managed {
+                            WrapperSlot::Weak(WeakObject::new(&target))
+                        } else {
+                            WrapperSlot::Strong(target.clone())
+                        },
+                        object: if managed {
+                            WrapperSlot::Weak(WeakObject::new(&object))
+                        } else {
+                            WrapperSlot::Strong(object.clone())
+                        },
                         prototype_installed: false,
                     },
                 );
             }
+            if managed {
+                let attached = host_graph::AttachWrapper(ctx, &object, &target);
+                if let Err(error) = attached {
+                    let mut state = state.borrow_mut();
+                    if let Some(old) = state.wrappers.remove(&o.id) {
+                        state.wrapper_ids.remove(&old.object.identity());
+                    }
+                    return Err(error);
+                }
+            }
             install_prototype(ctx, state, o.id)?;
-            Value::Object(proxy)
+            Value::Object(object)
         }
     };
     ctx.validate_value(&value)?;
@@ -613,18 +774,45 @@ impl ModuleLoader for Loader {
 }
 
 impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
+    fn GarbageCollectionRequested(&self) -> bool {
+        self.realms.iter().any(|realm| {
+            realm
+                .WithImplementation::<QuickJsRealm, _>(|realm| {
+                    realm.context.cycle_collection_requested()
+                })
+                .unwrap_or(false)
+        })
+    }
+
+    fn CollectGarbage(&mut self) {
+        for realm in &self.realms {
+            realm.WithImplementation::<QuickJsRealm, _>(|realm| {
+                realm.context.collect_cycles();
+            });
+        }
+    }
+
     fn MemoryDiagnostics(&self, realm: &JavaScriptRealm) -> Option<JavaScriptMemoryDiagnostics> {
         realm.WithImplementation::<QuickJsRealm, _>(|realm| {
             let usage = realm.context.memory_usage();
             let state = realm.state.borrow();
             JavaScriptMemoryDiagnostics {
-                malloc_bytes: usage.malloc_size, used_bytes: usage.memory_used_size,
-                objects: usage.obj_count, strings: usage.str_count, string_bytes: usage.str_size,
-                atoms: usage.atom_count, properties: usage.prop_count, property_bytes: usage.prop_size,
-                shapes: usage.shape_count, function_bytes: usage.js_func_size,
-                code_bytes: usage.js_func_code_size, array_elements: usage.fast_array_elements,
-                binary_bytes: usage.binary_object_size, host_wrappers: state.wrappers.len(),
-                host_identities: state.wrapper_ids.len(), host_fallbacks: state.fallbacks.len(),
+                malloc_bytes: usage.malloc_size,
+                used_bytes: usage.memory_used_size,
+                objects: usage.obj_count,
+                strings: usage.str_count,
+                string_bytes: usage.str_size,
+                atoms: usage.atom_count,
+                properties: usage.prop_count,
+                property_bytes: usage.prop_size,
+                shapes: usage.shape_count,
+                function_bytes: usage.js_func_size,
+                code_bytes: usage.js_func_code_size,
+                array_elements: usage.fast_array_elements,
+                binary_bytes: usage.binary_object_size,
+                host_wrappers: state.wrappers.len(),
+                host_identities: state.wrapper_ids.len(),
+                host_fallbacks: state.fallbacks.len(),
             }
         })
     }
@@ -665,6 +853,7 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
             host: host.clone(),
             global: Value::Object(global.clone()),
             wrappers: HashMap::new(),
+            host_graph: HostGraph::new(host.borrow().ObjectTraceSource()),
             wrapper_ids: HashMap::new(),
             fallbacks: HashMap::new(),
             reflect_get,
@@ -717,11 +906,46 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
                 start.elapsed().as_secs_f64() * 1000.
             );
         }
+        context.defer_cycle_collection();
         let realm = JavaScriptRealm::new(QuickJsRealm { context, state });
         self.realms.push(realm.clone());
         realm
     }
 
+    fn PrepareClassicScript(&mut self, realm: &JavaScriptRealm, source: &str, name: &str) -> bool {
+        if !self.realms.contains(realm)
+            || self.module_worker_unavailable
+            || self.compilation_executor.is_none()
+        {
+            return true;
+        }
+        if let Some(job) = self.prepared_classic_scripts.iter_mut().find(|job| {
+            &job.realm == realm && job.worker.name == name && job.worker.source.as_str() == source
+        }) {
+            if job.outcome.is_none() {
+                job.outcome = job.worker.poll();
+            }
+            return job.outcome.is_some();
+        }
+        if self.module_worker.is_none() {
+            let mut worker = module_worker::Worker::with_executor(
+                self.compilation_executor.as_ref().unwrap().clone(),
+            );
+            worker.set_wake(self.module_compilation_wake.clone());
+            self.module_worker = Some(worker);
+        }
+        let worker = self.module_worker.as_ref().unwrap().begin_classic(
+            source,
+            name,
+            self.native_stack_budget,
+        );
+        self.prepared_classic_scripts.push(PreparedClassicScript {
+            realm: realm.clone(),
+            worker,
+            outcome: None,
+        });
+        false
+    }
     fn Evaluate(&mut self, realm: &JavaScriptRealm, source: &str, name: &str) -> JavaScriptResult {
         let mut trace = browser_tracing::span("javascript", "ScriptEvaluate");
         trace.set("source_bytes", source.len() as f64);
@@ -734,12 +958,48 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
                 0,
             );
         }
-        realm
+        let prepared = self
+            .prepared_classic_scripts
+            .iter()
+            .position(|job| {
+                &job.realm == realm
+                    && job.worker.name == name
+                    && job.worker.source.as_str() == source
+            })
+            .map(|index| self.prepared_classic_scripts.swap_remove(index));
+        let compiled = prepared.and_then(|job| job.outcome);
+        trace.set(
+            "background_compiled",
+            matches!(&compiled, Some(module_worker::Outcome::Compiled { .. })) as u8 as f64,
+        );
+        let boundary = bridge_profile::Measurement::start();
+        let answer = realm
             .WithImplementation::<QuickJsRealm, _>(|r| {
-                let value = r.context.eval_named(source, SourceType::Script, name);
+                let _native_roots = match SynchronizeHostGraph(&mut r.context, &r.state) {
+                    Ok(roots) => roots,
+                    Err(error) => return result(&mut r.context, Err(error), name),
+                };
+                let value = if let Some(module_worker::Outcome::Compiled { bytes, metadata }) =
+                    compiled
+                {
+                    let mut hydrate = browser_tracing::span("javascript", "ClassicScriptHydrate");
+                    hydrate.set("bytecode_bytes", bytes.len() as f64);
+                    let script = r.context.hydrate_classic_script(&bytes, &metadata);
+                    drop(hydrate);
+                    match script {
+                        Ok(script) => r.context.evaluate_classic_script(&script),
+                        // Hydration executes no page code. Preserve the owner
+                        // compiler's error semantics when importing fails.
+                        Err(_) => r.context.eval_named(source, SourceType::Script, name),
+                    }
+                } else {
+                    r.context.eval_named(source, SourceType::Script, name)
+                };
                 result(&mut r.context, value, name)
             })
-            .expect("invalid QuickJS realm")
+            .expect("invalid QuickJS realm");
+        bridge_profile::Measurement::finish(boundary, &mut trace);
+        answer
     }
 
     fn EvaluateBootstrap(
@@ -761,6 +1021,10 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
         }
         realm
             .WithImplementation::<QuickJsRealm, _>(|r| {
+                let _native_roots = match SynchronizeHostGraph(&mut r.context, &r.state) {
+                    Ok(roots) => roots,
+                    Err(error) => return result(&mut r.context, Err(error), name),
+                };
                 let value = r.context.eval_bootstrap_named(source, name);
                 result(&mut r.context, value, name)
             })
@@ -809,14 +1073,16 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
         source: &str,
         name: &str,
     ) -> Option<JavaScriptModuleCompilationJob> {
-        if !self.realms.contains(realm) || self.module_worker_unavailable {
+        if !self.realms.contains(realm)
+            || self.module_worker_unavailable
+            || self.compilation_executor.is_none()
+        {
             return None;
         }
         if self.module_worker.is_none() {
-            let Some(mut worker) = module_worker::Worker::new(self.native_stack_budget) else {
-                self.module_worker_unavailable = true;
-                return None;
-            };
+            let mut worker = module_worker::Worker::with_executor(
+                self.compilation_executor.as_ref().unwrap().clone(),
+            );
             worker.set_wake(self.module_compilation_wake.clone());
             self.module_worker = Some(worker);
         }
@@ -892,6 +1158,13 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
         };
         JavaScriptModuleCompilationPoll::Ready(compiled)
     }
+    fn SetCompilationExecutor(&mut self, executor: Option<std::sync::Arc<dyn executor::Executor>>) {
+        assert!(
+            self.module_worker.is_none(),
+            "configure compilation before submitting work"
+        );
+        self.compilation_executor = executor;
+    }
     fn SetModuleCompilationWake(&mut self, wake: Option<JavaScriptModuleCompilationWake>) {
         self.module_compilation_wake = wake.clone();
         if let Some(worker) = &mut self.module_worker {
@@ -926,6 +1199,10 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
         };
         realm
             .WithImplementation::<QuickJsRealm, _>(|r| {
+                let _native_roots = match SynchronizeHostGraph(&mut r.context, &r.state) {
+                    Ok(roots) => roots,
+                    Err(error) => return result(&mut r.context, Err(error), name),
+                };
                 let ctx = &mut r.context;
                 let value = ctx.with_module_loader(
                     Box::new(Loader {
@@ -966,6 +1243,10 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
         }
         realm
             .WithImplementation::<QuickJsRealm, _>(|r| {
+                let _native_roots = match SynchronizeHostGraph(&mut r.context, &r.state) {
+                    Ok(roots) => roots,
+                    Err(error) => return result(&mut r.context, Err(error), name),
+                };
                 let ctx = &mut r.context;
                 let loader = Loader {
                     host: loader,
@@ -1062,22 +1343,36 @@ fn call(
     // their own task span. Reentrant event/observer calls remain nested here.
     let mut trace = browser_tracing::span("javascript", "Callback");
     trace.set("argc", arguments.len() as f64);
+    let boundary = bridge_profile::Measurement::start();
     let value = (|| {
+        let _native_roots = SynchronizeHostGraph(ctx, state)?;
         let function = callback
-            .Implementation::<Gc<JsObject>>()
+            .Implementation::<JsObject>()
             .ok_or_else(|| ctx.type_error("Invalid callback"))?;
+        // Pin the native receiver before argument allocation can collect a
+        // just-popped native reaction/event task's former root.
+        let receiver = to_js_value(ctx, state, receiver)?;
         let args = arguments
             .iter()
-            .map(|v| to_js(ctx, state, v))
+            .map(|v| to_js_value(ctx, state, v))
             .collect::<JsResult<Vec<_>>>()?;
-        let receiver = to_js(ctx, state, receiver)?;
         ctx.call(Value::Object(function.clone()), receiver, &args)
     })();
     trace.set("failed", u8::from(value.is_err()) as f64);
+    bridge_profile::Measurement::finish(boundary, &mut trace);
     result(ctx, value, "")
 }
 
 fn clone_value(ctx: &mut Context, state: &Rc<RefCell<State>>, value: &HostValue) -> HostResult {
+    let _native_roots = match SynchronizeHostGraph(ctx, state) {
+        Ok(roots) => roots,
+        Err(error) => {
+            return HostResult {
+                exception: Some(exception(ctx, &error, "")),
+                ..Default::default()
+            }
+        }
+    };
     // Structured serialization is a browser service, independent of which
     // ECMAScript backend executes the graph-copy algorithm.
     fn is_proxy(ctx: &mut Context, _: &Value, args: &[Value], _: i32) -> JsResult<Value> {
@@ -1086,7 +1381,7 @@ fn clone_value(ctx: &mut Context, state: &Rc<RefCell<State>>, value: &HostValue)
         ))
     }
     let answer = (|| {
-        let input = to_js(ctx, state, value)?;
+        let input = to_js_value(ctx, state, value)?;
         let proxy_check = Value::Object(ctx.new_native_function(is_proxy, "", 1, 0));
         // Copy the handle out before executing JS: getters may reenter Clone.
         let cached = state.borrow().clone_copier.clone();
@@ -1115,7 +1410,7 @@ fn clone_value(ctx: &mut Context, state: &Rc<RefCell<State>>, value: &HostValue)
 
 fn enqueue(ctx: &mut Context, callback: &JavaScriptFunction) -> HostResult {
     let _trace = browser_tracing::span("javascript", "MicrotaskEnqueue");
-    let Some(function) = callback.Implementation::<Gc<JsObject>>() else {
+    let Some(function) = callback.Implementation::<JsObject>() else {
         return HostResult::Failure(
             JavaScriptExceptionKind::kTypeError,
             "Invalid microtask callback",
@@ -1131,10 +1426,19 @@ fn enqueue(ctx: &mut Context, callback: &JavaScriptFunction) -> HostResult {
 }
 fn checkpoint(ctx: &mut Context, state: &Rc<RefCell<State>>) {
     let hooks = state.borrow().hooks.clone();
+    let _native_roots = match SynchronizeHostGraph(ctx, state) {
+        Ok(roots) => roots,
+        Err(error) => {
+            let reported = exception(ctx, &error, "");
+            hooks.exceptions.borrow_mut().push(reported);
+            return;
+        }
+    };
     if hooks.checkpoint_running.replace(true) {
         return;
     }
-    let _trace = browser_tracing::span("javascript", "MicrotaskCheckpoint");
+    let mut trace = browser_tracing::span("javascript", "MicrotaskCheckpoint");
+    let boundary = bridge_profile::Measurement::start();
     let started = std::env::var_os("BROWSER_PROFILE_INPUT")
         .is_some()
         .then(std::time::Instant::now);
@@ -1146,6 +1450,7 @@ fn checkpoint(ctx: &mut Context, state: &Rc<RefCell<State>>) {
         hooks.exceptions.borrow_mut().push(e);
     }
     hooks.checkpoint_running.set(false);
+    bridge_profile::Measurement::finish(boundary, &mut trace);
     if let Some(started) = started {
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         if elapsed >= 1.0 {
@@ -1174,9 +1479,54 @@ struct HostRuntime<'a> {
     state: &'a Rc<RefCell<State>>,
 }
 impl JavaScriptHostRuntime for HostRuntime<'_> {
+    fn CreateHostFunction(&mut self, binding: &HostFunctionBinding) -> HostResult {
+        let created = (|| -> JsResult<JsObject> {
+            let _roots = SynchronizeHostGraph(self.context, self.state)?;
+            let mut data = binding
+                .data
+                .iter()
+                .map(|value| {
+                    let value = to_js_value(self.context, self.state, value)?;
+                    self.context.validate_value(&value)?;
+                    Ok(value)
+                })
+                .collect::<JsResult<Vec<_>>>()?;
+            let capture_receiver = binding.callback.receiver != 0;
+            if capture_receiver {
+                data.insert(
+                    0,
+                    to_js_value(
+                        self.context,
+                        self.state,
+                        &HostValue::Object(HostObjectRef {
+                            id: binding.callback.receiver,
+                        }),
+                    )?,
+                );
+            }
+            Ok(self.context.new_host_function(
+                Rc::new(HostFunction {
+                    state: self.state.clone(),
+                    action: Action::Callback(binding.callback.clone(), capture_receiver),
+                }),
+                data,
+                &binding.name,
+                binding.length,
+            ))
+        })();
+        match created {
+            Ok(function) => HostResult {
+                value: HostValue::JavaScriptFunction(JavaScriptFunction::new(function)),
+                ..Default::default()
+            },
+            Err(thrown) => HostResult {
+                exception: Some(exception(self.context, &thrown, "")),
+                ..Default::default()
+            },
+        }
+    }
     fn IsProxy(&mut self, value: &HostValue) -> bool {
-        to_js(self.context, self.state, value)
-            .is_ok_and(|value| self.context.is_proxy(&value))
+        to_js(self.context, self.state, value).is_ok_and(|value| self.context.is_proxy(&value))
     }
     fn ReportException(&mut self, value: &HostValue) -> HostResult {
         let value = match to_js(self.context, self.state, value) {
@@ -1185,7 +1535,12 @@ impl JavaScriptHostRuntime for HostRuntime<'_> {
         };
         let location = self.context.error_creation_location(&value);
         let reported = exception_at(self.context, &value, "", location);
-        self.state.borrow().hooks.exceptions.borrow_mut().push(reported);
+        self.state
+            .borrow()
+            .hooks
+            .exceptions
+            .borrow_mut()
+            .push(reported);
         HostResult::default()
     }
     fn Call(
@@ -1197,7 +1552,16 @@ impl JavaScriptHostRuntime for HostRuntime<'_> {
         call(self.context, self.state, callback, receiver, args)
     }
     fn ToString(&mut self, value: &HostValue) -> HostResult {
-        let converted = to_js(self.context, self.state, value)
+        let _native_roots = match SynchronizeHostGraph(self.context, self.state) {
+            Ok(roots) => roots,
+            Err(error) => {
+                return HostResult {
+                    exception: Some(exception(self.context, &error, "")),
+                    ..Default::default()
+                }
+            }
+        };
+        let converted = to_js_value(self.context, self.state, value)
             .and_then(|value| self.context.to_rust_string(&value));
         match converted {
             Ok(text) => HostResult {
@@ -1226,6 +1590,91 @@ impl JavaScriptHostRuntime for HostRuntime<'_> {
 mod tests {
     use super::*;
     use crate::javascript_runtime::{HostMethodRef, HostObjectRef};
+
+    #[test]
+    fn host_function_bindings_preserve_receiver_captures_and_realm_ownership() {
+        struct Source(RefCell<Vec<HostObjectTraceChange>>);
+        impl HostObjectTraceSource for Source {
+            fn TakeChanges(&self) -> Vec<HostObjectTraceChange> {
+                std::mem::take(&mut *self.0.borrow_mut())
+            }
+        }
+        struct CallbackHost(Rc<Source>);
+        impl JavaScriptHostBindings for CallbackHost {
+            fn ObjectTraceSource(&self) -> Option<Rc<dyn HostObjectTraceSource>> {
+                Some(self.0.clone())
+            }
+            fn GlobalNames(&self) -> Vec<String> {
+                Vec::new()
+            }
+            fn Invoke(&mut self, call: &HostCall<'_>) -> HostResult {
+                assert_eq!(call.member, "callback");
+                assert_eq!(call.arguments.len(), 3);
+                HostResult {
+                    value: HostValue::Record(vec![
+                        ("receiver".into(), call.arguments[0].clone()),
+                        ("captured".into(), call.arguments[1].clone()),
+                        ("argument".into(), call.arguments[2].clone()),
+                        ("boundID".into(), HostValue::Number(call.receiver as f64)),
+                    ]),
+                    ..Default::default()
+                }
+            }
+        }
+        let mut runtime = QuickJsJavaScriptRuntime::new();
+        let realm = runtime.CreateRealm(Rc::new(RefCell::new(CallbackHost(Rc::new(Source(
+            RefCell::new(vec![HostObjectTraceChange::Object { id: 77 }]),
+        ))))));
+        realm.WithImplementation::<QuickJsRealm, _>(|r| {
+            let capture = r.context.eval("({held:7})").unwrap();
+            let weak = WeakObject::new(capture.as_object().unwrap());
+            let binding = HostFunctionBinding {
+                name: "bound".into(), length: 1,
+                callback: HostMethodRef { receiver: 0, name: "callback".into() },
+                data: vec![HostValue::JavaScriptValue(JavaScriptValue::new(capture))],
+            };
+            let created = HostRuntime { context: &mut r.context, state: &r.state }.CreateHostFunction(&binding);
+            assert!(created.exception.is_none());
+            let function = to_js(&mut r.context, &r.state, &created.value).unwrap();
+            let global = r.context.global();
+            r.context.define_value(&global, "bound", function, PropFlags::C_W_E);
+            drop(created);
+            drop(binding);
+            assert!(weak.upgrade().is_some(), "engine capture must retain data");
+            assert_eq!(r.context.eval("(()=>{const receiver={},argument={};const out=bound.call(receiver,argument);return bound.name==='bound'&&bound.length===1&&out.receiver===receiver&&out.argument===argument&&out.captured.held===7})()").unwrap().as_boolean(), Some(true));
+            r.context.eval("delete globalThis.bound").unwrap();
+            assert!(weak.upgrade().is_none(), "released function must release captures");
+
+            let receiver = to_js(&mut r.context, &r.state, &HostValue::Object(HostObjectRef { id: 77 })).unwrap();
+            let weak_receiver = WeakObject::new(receiver.as_object().unwrap());
+            let binding = HostFunctionBinding {
+                name: "boundReceiver".into(), length: 1,
+                callback: HostMethodRef { receiver: 77, name: "callback".into() },
+                data: vec![HostValue::Number(2.0)],
+            };
+            let created = HostRuntime { context: &mut r.context, state: &r.state }.CreateHostFunction(&binding);
+            assert!(created.exception.is_none());
+            let function = to_js(&mut r.context, &r.state, &created.value).unwrap();
+            r.context.define_value(&global, "boundReceiver", function, PropFlags::C_W_E);
+            drop(created);
+            drop(receiver);
+            r.context.collect_garbage();
+            assert!(weak_receiver.upgrade().is_some(), "bound host receiver must remain reachable");
+            assert_eq!(r.context.eval("boundReceiver.call({},4).boundID===77").unwrap().as_boolean(), Some(true));
+            r.context.eval("delete globalThis.boundReceiver").unwrap();
+            r.context.collect_garbage();
+            assert!(weak_receiver.upgrade().is_none(), "bound receiver must be released with the function");
+
+            let mut foreign = Context::new();
+            let binding = HostFunctionBinding {
+                name: "foreign".into(), length: 0,
+                callback: HostMethodRef { receiver: 0, name: "callback".into() },
+                data: vec![HostValue::JavaScriptValue(JavaScriptValue::new(foreign.eval("({})").unwrap()))],
+            };
+            let created = HostRuntime { context: &mut r.context, state: &r.state }.CreateHostFunction(&binding);
+            assert!(created.exception.is_some(), "foreign captures must be rejected");
+        });
+    }
 
     #[test]
     fn trusted_bootstrap_bytecode_preserves_realm_execution_and_source_identity() {
@@ -1438,6 +1887,28 @@ mod tests {
                 .unwrap()
                 .to_string_lossy(),
             "zh:Hans:CN"
+        );
+        let result = runtime.Evaluate(&realm, r#"
+            JSON.stringify([
+                Intl.NumberFormat.supportedLocalesOf(['en', 'de-DE', 'zh-CN', 'zz-ZZ']),
+                new Intl.NumberFormat('de-DE', {minimumFractionDigits:2, maximumFractionDigits:2}).format(1234.5),
+                new Intl.NumberFormat('en', {maximumFractionDigits:0}).format(-1.5),
+                new Intl.DateTimeFormat('en-US', {timeZone:'UTC'}).format(Date.UTC(2026,9,15)),
+                new Intl.PluralRules('ar').select(2),
+                new Intl.PluralRules('en', {type:'ordinal'}).select(2),
+                new Intl.PluralRules('en', {minimumFractionDigits:2}).select(1)
+            ])
+        "#, "intl-format.js");
+        assert!(result.Succeeded(), "{:?}", result.exception);
+        assert_eq!(
+            result
+                .value
+                .Implementation::<JsValue>()
+                .unwrap()
+                .as_string()
+                .unwrap()
+                .to_string_lossy(),
+            r#"[["en","de-DE","zh-CN"],"1.234,50","-2","10/15/2026","two","two","other"]"#
         );
     }
 
@@ -2164,8 +2635,12 @@ mod wrapper_identity_tests {
     use super::*;
     struct Host {
         prototypes: Rc<Cell<usize>>,
+        source: Option<Rc<dyn HostObjectTraceSource>>,
     }
     impl JavaScriptHostBindings for Host {
+        fn ObjectTraceSource(&self) -> Option<Rc<dyn HostObjectTraceSource>> {
+            self.source.clone()
+        }
         fn GlobalNames(&self) -> Vec<String> {
             vec![]
         }
@@ -2174,6 +2649,9 @@ mod wrapper_identity_tests {
                 handled: false,
                 ..Default::default()
             }
+        }
+        fn UsesOrdinaryProperties(&self, id: HostObjectId) -> bool {
+            id == 17
         }
         fn PrototypeFor(&mut self, _: HostObjectId) -> HostResult {
             self.prototypes.set(self.prototypes.get() + 1);
@@ -2190,6 +2668,7 @@ mod wrapper_identity_tests {
         let mut runtime = QuickJsJavaScriptRuntime::new();
         let realm = runtime.CreateRealm(Rc::new(RefCell::new(Host {
             prototypes: calls.clone(),
+            source: None,
         })));
         let js = realm
             .WithImplementation::<QuickJsRealm, _>(|r| {
@@ -2199,13 +2678,21 @@ mod wrapper_identity_tests {
                     &HostValue::Object(HostObjectRef { id: 17 }),
                 )
                 .unwrap();
+                assert!(
+                    !r.context.is_proxy(&expected),
+                    "ordinary wrapper needs no host traps"
+                );
                 for id in 100..1100 {
-                    to_js(
+                    let intercepted = to_js(
                         &mut r.context,
                         &r.state,
                         &HostValue::Object(HostObjectRef { id }),
                     )
                     .unwrap();
+                    assert!(
+                        r.context.is_proxy(&intercepted),
+                        "exotic host semantics stay intercepted"
+                    );
                 }
                 let global = r.context.global();
                 r.context
@@ -2235,6 +2722,7 @@ mod wrapper_identity_tests {
             .unwrap();
         let second = runtime.CreateRealm(Rc::new(RefCell::new(Host {
             prototypes: calls.clone(),
+            source: None,
         })));
         second
             .WithImplementation::<QuickJsRealm, _>(|r| {
@@ -2256,6 +2744,88 @@ mod wrapper_identity_tests {
                     from_js(&local, &r.context, &r.state),
                     HostValue::Object(HostObjectRef { id: 17 })
                 ));
+            })
+            .unwrap();
+
+        struct TraceSource(RefCell<Vec<HostObjectTraceChange>>);
+        impl HostObjectTraceSource for TraceSource {
+            fn TakeChanges(&self) -> Vec<HostObjectTraceChange> {
+                std::mem::take(&mut *self.0.borrow_mut())
+            }
+        }
+        use HostObjectTraceChange as C;
+        let source = Rc::new(TraceSource(RefCell::new(vec![
+            C::Object { id: 17 },
+            C::Root {
+                id: 17,
+                reason: 0,
+                rooted: true,
+            },
+        ])));
+        let managed = runtime.CreateRealm(Rc::new(RefCell::new(Host {
+            prototypes: calls,
+            source: Some(source.clone()),
+        })));
+        managed
+            .WithImplementation::<QuickJsRealm, _>(|r| {
+                let value = to_js(
+                    &mut r.context,
+                    &r.state,
+                    &HostValue::Object(HostObjectRef { id: 17 }),
+                )
+                .unwrap();
+                let weak = WeakObject::new(value.as_object().unwrap());
+                drop(value);
+                source.0.borrow_mut().push(C::Root {
+                    id: 17,
+                    reason: 0,
+                    rooted: false,
+                });
+                let scope = SynchronizeHostGraph(&mut r.context, &r.state).unwrap();
+                assert!(
+                    weak.upgrade().is_some(),
+                    "former native root died before callback/return conversion"
+                );
+                drop(scope);
+                assert!(
+                    weak.upgrade().is_none(),
+                    "former native root survived its conversion scope"
+                );
+                source.0.borrow_mut().extend([
+                    C::Root {
+                        id: 19,
+                        reason: 0,
+                        rooted: true,
+                    },
+                    C::Reference {
+                        owner: 19,
+                        slot: 1,
+                        target: Some(17),
+                    },
+                ]);
+                let value = to_js(
+                    &mut r.context,
+                    &r.state,
+                    &HostValue::Object(HostObjectRef { id: 17 }),
+                )
+                .unwrap();
+                let weak = WeakObject::new(value.as_object().unwrap());
+                drop(value);
+                source.0.borrow_mut().push(C::Reference {
+                    owner: 19,
+                    slot: 1,
+                    target: None,
+                });
+                let scope = SynchronizeHostGraph(&mut r.context, &r.state).unwrap();
+                assert!(
+                    weak.upgrade().is_some(),
+                    "removed native edge died before return conversion"
+                );
+                drop(scope);
+                assert!(
+                    weak.upgrade().is_none(),
+                    "removed native edge survived its conversion scope"
+                );
             })
             .unwrap();
     }
@@ -2327,6 +2897,61 @@ mod background_module_tests {
         fn Invoke(&mut self, _: &HostCall<'_>) -> HostResult {
             HostResult::default()
         }
+    }
+    #[test]
+    fn external_classic_preparation_preserves_owner_bindings_and_exceptions() {
+        let mut runtime = QuickJsJavaScriptRuntime::new();
+        let realm = runtime.CreateRealm(Rc::new(RefCell::new(EmptyHost)));
+        assert!(runtime
+            .Evaluate(&realm, "globalThis.counter=0;let existing=41;", "owner.js")
+            .Succeeded());
+        let prepare = |runtime: &mut QuickJsJavaScriptRuntime, source: &str, name: &str| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !runtime.PrepareClassicScript(&realm, source, name) {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        };
+        let source = "counter++;globalThis.answer=existing+1;";
+        prepare(&mut runtime, source, "external.js");
+        assert!(runtime
+            .Evaluate(
+                &realm,
+                "if(counter!==0)throw Error('prepare executed code')",
+                "check.js"
+            )
+            .Succeeded());
+        assert!(runtime.Evaluate(&realm, source, "external.js").Succeeded());
+        assert!(runtime
+            .Evaluate(
+                &realm,
+                "if(counter!==1||answer!==42)throw Error('owner bindings lost')",
+                "check.js"
+            )
+            .Succeeded());
+        let throwing = "counter++;throw new Error('compiled classic failure')";
+        prepare(&mut runtime, throwing, "throwing.js");
+        let error = runtime
+            .Evaluate(&realm, throwing, "throwing.js")
+            .exception
+            .unwrap();
+        assert!(error.message.contains("compiled classic failure"));
+        assert_eq!(error.source_name, "throwing.js");
+        assert!(runtime
+            .Evaluate(
+                &realm,
+                "if(counter!==2)throw Error('script reran')",
+                "check.js"
+            )
+            .Succeeded());
+        let duplicate = "let existing=2;";
+        prepare(&mut runtime, duplicate, "duplicate.js");
+        assert!(!runtime
+            .Evaluate(&realm, duplicate, "duplicate.js")
+            .Succeeded());
+        let malformed = "const = ;";
+        prepare(&mut runtime, malformed, "syntax.js");
+        assert!(!runtime.Evaluate(&realm, malformed, "syntax.js").Succeeded());
     }
     fn finish_background_compilation(
         runtime: &mut QuickJsJavaScriptRuntime,

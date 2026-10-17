@@ -20,6 +20,9 @@ impl DOM {
     pub fn InvalidateLayout(&mut self) {
         self.GetDocumentMut()
             .StyleStateMut()
+            .layout_inputs_require_tree = true;
+        self.GetDocumentMut()
+            .StyleStateMut()
             .impact
             .Merge(StyleUpdateImpact::LAYOUT);
     }
@@ -37,6 +40,10 @@ impl DOM {
     pub fn DidCommitPaint(&mut self) {
         let state = self.GetDocumentMut().StyleStateMut();
         state.impact = Default::default();
+        state.layout_inputs_require_tree = false;
+        state.layout_tree_roots.clear();
+        state.layout_reattach_nodes.clear();
+        state.layout_style_nodes.clear();
         state.paint_style_nodes.clear();
         state.paint_style_requires_export = false;
     }

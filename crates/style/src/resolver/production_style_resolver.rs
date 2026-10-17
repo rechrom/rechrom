@@ -873,7 +873,8 @@ impl ProductionResolverElement {
                 .map(|slot| Box::new(ProductionResolverSlot::ForNode(document, slot))),
             part,
             part_names_map: document.PartNamesMap(index).cloned(),
-            corresponding_element: document.CorrespondingSVGElement(index)
+            corresponding_element: document
+                .CorrespondingSVGElement(index)
                 .map(|source| Box::new(Self::ForNode(document, source, media_type, false))),
         }
     }
@@ -902,6 +903,10 @@ struct ProductionResolverState {
     has_tree_scoped_reference: bool,
     rejected_legacy_overlapping: bool,
     length_conversion_flags: u32,
+    incremental_properties: Vec<(
+        crate::css_property_name::CSSPropertyName,
+        Rc<production_css_value::Value>,
+    )>,
 }
 
 /// Source `StyleRequest` owner. Selector matching keeps using the compact
@@ -927,9 +932,19 @@ impl ProductionStyleRequest {
 /// Chromium keeps this cache on the document's long-lived StyleResolver.  The
 /// production adapter creates a short-lived resolver host per element, so the
 /// StyleEngine retains this shared owner and each host borrows the same cache.
+#[derive(Clone, Default)]
+pub(crate) struct ProductionCachedVariables {
+    parent: CustomProperties,
+    output: Rc<CustomProperties>,
+}
+
 #[derive(Clone)]
 pub(crate) struct ProductionMatchedPropertiesCache(
-    Rc<RefCell<MatchedPropertiesCache<StyleAdjusterElementTypeForCache>>>,
+    Rc<
+        RefCell<
+            MatchedPropertiesCache<StyleAdjusterElementTypeForCache, ProductionCachedVariables>,
+        >,
+    >,
 );
 
 impl Default for ProductionMatchedPropertiesCache {
@@ -944,6 +959,11 @@ impl ProductionMatchedPropertiesCache {
     }
 
     pub(crate) fn Clean(&self) {
+        static PROFILE_RULES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let _trace = (*PROFILE_RULES.get_or_init(|| {
+            std::env::var_os("BROWSER_PROFILE_STYLE_RULES").is_some_and(|value| value == "1")
+        }))
+        .then(|| browser_tracing::span("style", "StyleResolver.CleanMatchedPropertiesCache"));
         self.0.borrow_mut().CleanMatchedPropertiesCache();
     }
 }
@@ -1017,12 +1037,131 @@ impl ProductionResolverRuleSetInput {
     }
 }
 
+// cpp: ScopedStyleResolver::RebuildCascadeLayerMap / rule_set_groups_.
+// A recalc batch shares only immutable rule preparation. Live selector,
+// container, scope activation and match-result state stay in each collector.
+#[derive(Default)]
+pub(crate) struct ProductionRuleCollectionCache {
+    entries: RefCell<Vec<Rc<ProductionRuleCollection>>>,
+}
+struct ProductionRuleCollection {
+    origin: CascadeOrigin,
+    inputs: Vec<ProductionResolverRuleSetInput>,
+    groups: Vec<RuleSetGroup<Backend>>,
+    layers: Option<Rc<CascadeLayerMap>>,
+    implicit_roots: Rc<HashMap<usize, Vec<usize>>>,
+}
+impl ProductionRuleCollection {
+    fn new(inputs: &[ProductionResolverRuleSetInput], origin: CascadeOrigin) -> Self {
+        let layers = (origin == CascadeOrigin::kAuthor).then(|| {
+            let active = inputs
+                .iter()
+                .map(|input| ActiveStyleSheet::new(Rc::new(()), Some(input.rule_set.clone())))
+                .collect::<Vec<_>>();
+            Rc::new(CascadeLayerMap::new(&active))
+        });
+        let groups = inputs
+            .chunks(RuleSetGroup::<Backend>::kRulesetsRoom)
+            .enumerate()
+            .map(|(index, chunk)| {
+                let mut group = RuleSetGroup::new(index as u32);
+                for input in chunk {
+                    group.AddRuleSet(input.rule_set.clone());
+                }
+                group
+            })
+            .collect();
+        let implicit_roots = Rc::new(
+            crate::production_rule_matching::ProductionImplicitScopeRoots(
+                inputs
+                    .iter()
+                    .map(|input| (input.rule_set.as_ref(), input.implicit_scope_trigger)),
+            ),
+        );
+        Self {
+            origin,
+            inputs: inputs.to_vec(),
+            groups,
+            layers,
+            implicit_roots,
+        }
+    }
+    fn Matches(&self, inputs: &[ProductionResolverRuleSetInput], origin: CascadeOrigin) -> bool {
+        self.origin == origin
+            && self.inputs.len() == inputs.len()
+            && self.inputs.iter().zip(inputs).all(|(old, new)| {
+                Rc::ptr_eq(&old.rule_set, &new.rule_set)
+                    && old.implicit_scope_trigger == new.implicit_scope_trigger
+                    && old.tree_scope_root == new.tree_scope_root
+                    && old.sheet_base == new.sheet_base
+            })
+    }
+}
+impl ProductionRuleCollectionCache {
+    fn Prepare(
+        &self,
+        inputs: &[ProductionResolverRuleSetInput],
+        origin: CascadeOrigin,
+    ) -> (Rc<ProductionRuleCollection>, bool) {
+        if let Some(prepared) = self
+            .entries
+            .borrow()
+            .iter()
+            .find(|entry| entry.Matches(inputs, origin))
+        {
+            return (prepared.clone(), true);
+        }
+        let prepared = Rc::new(ProductionRuleCollection::new(inputs, origin));
+        self.entries.borrow_mut().push(prepared.clone());
+        (prepared, false)
+    }
+}
+
+type InlineDeclarations = Rc<Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>>;
+
+/// Route element-owned inline declarations and retain immutable resolver
+/// defaults. Neither owner belongs to a temporary per-element matching host;
+/// inline values live with DOM ElementData, not a resolver source-text cache.
+pub(crate) struct ProductionDeclarationCache {
+    defaults: StyleResolverDeclarationCache<
+        Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>,
+    >,
+}
+
+impl Default for ProductionDeclarationCache {
+    fn default() -> Self {
+        Self {
+            defaults: StyleResolverDeclarationCache::new(),
+        }
+    }
+}
+
+impl ProductionDeclarationCache {
+    fn Resolve(
+        &self,
+        document: &Document,
+        index: usize,
+        mode: crate::parser::css_parser_mode::CSSParserMode,
+    ) -> InlineDeclarations {
+        crate::production_style_sheet_projection::ResolveInlineStyle(
+            &document.Node(index).InlineStyle(),
+            mode,
+        )
+        .Declarations()
+    }
+}
+
 /// The document-owned collaborators consumed when the translated resolver
-/// reaches `StyleCascade::Apply`.  This is deliberately the same ownership
+/// reaches `StyleCascade::Apply`. This is deliberately the same ownership
 /// boundary as [`ProductionCascadeInputs`]: the resolver gathers rules and
 /// initializes state, while the existing cascade adapter remains the sole
 /// owner of substitution, registered-property, image and interpolation
 /// semantics.
+pub(crate) struct ProductionIncrementalStyle<'a> {
+    pub custom_properties: Rc<CustomProperties>,
+    pub matched_signatures: &'a [(usize, u32, u32)],
+}
+
 pub(crate) struct ProductionBaseStyleCollaborators<'a> {
     /// Supplemental quirks-mode HTML UA owner. It remains parser-owned and is
     /// selected by StyleResolver::ForEachUARulesForElement through the same
@@ -1040,6 +1179,8 @@ pub(crate) struct ProductionBaseStyleCollaborators<'a> {
     /// the body's resolved current color here; UA quirks colors consume it.
     pub text_link_text_color: Option<foundation::Color>,
     pub is_document_element: bool,
+    pub is_ensuring_style: bool,
+    pub incremental_style: Option<ProductionIncrementalStyle<'a>>,
     pub pseudo_id: PseudoId,
     pub pseudo_argument: Option<AtomicString>,
     pub search_text: SearchTextRequest,
@@ -1055,6 +1196,15 @@ pub(crate) struct ProductionBaseStyleCollaborators<'a> {
     pub animations: Option<&'a ProductionActiveInterpolationsMap>,
     pub transitions: Option<&'a ProductionActiveInterpolationsMap>,
     pub matched_properties_cache: Option<ProductionMatchedPropertiesCache>,
+    pub rule_collections: Option<Rc<ProductionRuleCollectionCache>>,
+    /// Resolver-owned immutable RuleSet sentinels and the UA RuleSetGroup
+    /// cache shared by every element in one style-update traversal.
+    ///
+    /// cpp: StyleResolver owns these for its document lifetime. Keeping this
+    /// owner outside the per-element host preserves that reuse without
+    /// exposing resolver internals across the Style package boundary.
+    pub resolver_batch: Option<Rc<ProductionResolverBatch>>,
+    pub declarations: Option<Rc<ProductionDeclarationCache>>,
     /// Document-owned selector handles and compiled-query cache. Each match
     /// still creates a fresh session/backend with live DOM and scope state.
     /// cpp: StyleEngine retains its StyleResolver; per-element collectors
@@ -1081,6 +1231,8 @@ impl ProductionBaseStyleCollaborators<'_> {
             system_colors: ProductionSystemColorContext::default(),
             text_link_text_color: None,
             is_document_element: false,
+            is_ensuring_style: false,
+            incremental_style: None,
             pseudo_id: PseudoId::kPseudoIdNone,
             pseudo_argument: None,
             search_text: SearchTextRequest::kNone,
@@ -1096,8 +1248,35 @@ impl ProductionBaseStyleCollaborators<'_> {
             animations: None,
             transitions: None,
             matched_properties_cache: None,
+            rule_collections: None,
+            resolver_batch: None,
+            declarations: None,
             selectors: None,
             interaction: UserInteractionState::default(),
+        }
+    }
+}
+
+/// The part of Chromium's document-owned StyleResolver that is invariant
+/// while walking a style-update batch. Per-element state remains in
+/// `ProductionRuleMatchingHost`; UA RuleSetGroup construction and empty
+/// fallback owners are retained once for the whole traversal.
+pub(crate) struct ProductionResolverBatch {
+    empty_rules: Rc<RuleSet<Backend>>,
+    media_controls_rules: Rc<RuleSet<Backend>>,
+    forced_colors_media_controls_rules: Rc<RuleSet<Backend>>,
+    ua_group_cache: Rc<RefCell<Vec<(u32, RuleSetGroup<Backend>)>>>,
+    mathml_namespace: AtomicString,
+}
+
+impl Default for ProductionResolverBatch {
+    fn default() -> Self {
+        Self {
+            empty_rules: Rc::new(RuleSet::new()),
+            media_controls_rules: Rc::new(RuleSet::new()),
+            forced_colors_media_controls_rules: Rc::new(RuleSet::new()),
+            ua_group_cache: Rc::new(RefCell::new(Vec::new())),
+            mathml_namespace: AtomicString::from_str("http://www.w3.org/1998/Math/MathML"),
         }
     }
 }
@@ -1108,7 +1287,7 @@ impl ProductionBaseStyleCollaborators<'_> {
 struct ProductionRuleMatchingHost<'d> {
     initial: ProductionInitialStyleHost<'d>,
     document: &'d Document,
-    author_rule_sets: Vec<ProductionResolverRuleSetInput>,
+    author_rule_sets: Rc<Vec<ProductionResolverRuleSetInput>>,
     selectors: Rc<RefCell<PersistentSelectorService>>,
     html_user_agent_rules: ProductionResolverRuleSetInput,
     svg_user_agent_rules: Option<ProductionResolverRuleSetInput>,
@@ -1130,16 +1309,8 @@ struct ProductionRuleMatchingHost<'d> {
     /// Supplemental forced-colors UA rules, built with Chromium's dedicated
     /// `ua-forced-colors` media-type evaluator.
     forced_color_rules: Option<ProductionResolverRuleSetInput>,
-    declaration_cache: StyleResolverDeclarationCache<
-        Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>,
-    >,
-    /// Parser-owned inline declarations retained for one translated resolver
-    /// operation. `MatchStyleAttribute` reads Element::InlineStyle twice; both
-    /// reads must observe the same property-set identity.
-    inline_styles:
-        RefCell<HashMap<usize, Rc<Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>>>>,
-    ua_group_cache: RefCell<Vec<(u32, RuleSetGroup<Backend>)>>,
-    language: &'static AtomicString,
+    declarations: Rc<ProductionDeclarationCache>,
+    ua_group_cache: Rc<RefCell<Vec<(u32, RuleSetGroup<Backend>)>>>,
     mathml_namespace: AtomicString,
     cascade: ProductionBaseStyleCollaborators<'d>,
     cascade_custom_output: RefCell<Option<Rc<CustomProperties>>>,
@@ -1183,7 +1354,7 @@ impl<'d> ProductionRuleMatchingHost<'d> {
             html_user_agent_rules,
             None,
             None,
-            author_rule_sets,
+            Rc::new(author_rule_sets),
             cascade,
         )
     }
@@ -1194,12 +1365,13 @@ impl<'d> ProductionRuleMatchingHost<'d> {
         html_user_agent_rules: ProductionResolverRuleSetInput,
         svg_user_agent_rules: Option<ProductionResolverRuleSetInput>,
         mathml_user_agent_rules: Option<ProductionResolverRuleSetInput>,
-        author_rule_sets: Vec<ProductionResolverRuleSetInput>,
+        author_rule_sets: Rc<Vec<ProductionResolverRuleSetInput>>,
         cascade: ProductionBaseStyleCollaborators<'d>,
     ) -> Self {
         let matched_properties_cache = cascade.matched_properties_cache.clone().unwrap_or_default();
         let selectors = cascade.selectors.clone().unwrap_or_default();
         selectors.borrow_mut().interaction = cascade.interaction;
+        let resolver_batch = cascade.resolver_batch.clone().unwrap_or_default();
         Self {
             initial: ProductionInitialStyleHost::new(media, cascade.color_scheme_settings),
             document,
@@ -1210,15 +1382,15 @@ impl<'d> ProductionRuleMatchingHost<'d> {
             mathml_user_agent_rules,
             html_quirks_user_agent_rules: cascade.html_quirks_user_agent_rules.clone(),
             fullscreen_user_agent_rules: cascade.fullscreen_user_agent_rules.clone(),
-            empty_rules: Rc::new(RuleSet::new()),
-            media_controls_rules: Rc::new(RuleSet::new()),
-            forced_colors_media_controls_rules: Rc::new(RuleSet::new()),
+            empty_rules: resolver_batch.empty_rules.clone(),
+            media_controls_rules: resolver_batch.media_controls_rules.clone(),
+            forced_colors_media_controls_rules: resolver_batch
+                .forced_colors_media_controls_rules
+                .clone(),
             forced_color_rules: cascade.forced_colors_user_agent_rules.clone(),
-            declaration_cache: StyleResolverDeclarationCache::new(),
-            inline_styles: RefCell::new(HashMap::new()),
-            ua_group_cache: RefCell::new(Vec::new()),
-            language: Box::leak(Box::new(AtomicString::default())),
-            mathml_namespace: AtomicString::from_str("http://www.w3.org/1998/Math/MathML"),
+            declarations: cascade.declarations.clone().unwrap_or_default(),
+            ua_group_cache: resolver_batch.ua_group_cache.clone(),
+            mathml_namespace: resolver_batch.mathml_namespace.clone(),
             cascade,
             cascade_custom_output: RefCell::new(None),
             base_style_metrics: RefCell::new(ProductionBaseStyleMetrics::default()),
@@ -1491,7 +1663,7 @@ impl StyleResolverBackend for ProductionRuleMatchingHost<'_> {
         false
     }
     fn ContentLanguage<'d>(&self, _: &'d Self::Document) -> &'d AtomicString {
-        self.language
+        &foundation::atomic_string::g_null_atom
     }
     fn LayoutZoomFactor(&self, _: &Self::LocalFrame) -> f32 {
         self.initial.media.layout_zoom_factor
@@ -1835,10 +2007,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         names.PushMap(map)
     }
     fn InlineStyle(&self, e: &Self::Element) -> Option<Rc<Self::CSSPropertyValueSet>> {
-        if let Some(cached) = self.inline_styles.borrow().get(&e.index) {
-            return Some(cached.clone());
-        }
-        let value = &self.document.Node(e.index).FindAttribute("style")?.value;
+        self.document.Node(e.index).FindAttribute("style")?;
         // cpp: CSSParserImpl::ParseInlineStyleDeclarationForElement
         // (css_parser_impl.cc:370-387). The source uses standard mode only for
         // HTML elements outside quirks mode; every other element uses quirks.
@@ -1849,28 +2018,27 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         } else {
             crate::parser::css_parser_mode::CSSParserMode::kHTMLQuirksMode
         };
-        let text = foundation::String::FromUtf8(value.as_bytes());
-        let properties =
-            crate::parser::css_parser_impl::CSSParserImpl::<Backend>::ParseInlineStyleDeclaration(
-                &text,
-                mode,
-                crate::parser::css_parser_context::SecureContextMode::kInsecureContext,
-                None,
-            );
-        let owner = Rc::new(CSSPropertyValueSetRuleHandle::FromImmutable(properties));
-        self.inline_styles
-            .borrow_mut()
-            .insert(e.index, owner.clone());
-        Some(owner)
+        Some(self.declarations.Resolve(self.document, e.index, mode))
     }
     fn PresentationAttributeStyle(
         &self,
         element: &Self::Element,
     ) -> Option<Rc<Self::CSSPropertyValueSet>> {
+        let node = self.document.Node(element.index);
+        if node.Namespace() == DOMNamespace::kHTML
+            && !node.Attributes().iter().any(|attribute| {
+                attribute.namespace_uri.is_empty() && attribute.local_name == "hidden"
+            })
+            && self
+                .document
+                .DirectionalityPresentationalHint(element.index)
+                .is_none()
+        {
+            return None;
+        }
         let properties = self.NewMutableCSSPropertyValueSet(
             crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
         );
-        let node = self.document.Node(element.index);
         // Chromium HTMLElement::CollectStyleForPresentationAttribute,
         // html_element.cc:412-420 (6c1d401fcca5e1b0030563a90c2f2bba168e0c15).
         // hidden is an HTML presentation hint, not an unoverrideable UA rule
@@ -2097,7 +2265,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
     }
 
     fn DeclarationCache(&self) -> &StyleResolverDeclarationCache<Self::CSSPropertyValueSet> {
-        &self.declaration_cache
+        &self.declarations.defaults
     }
     fn NewMutableCSSPropertyValueSet(
         &self,
@@ -2247,39 +2415,36 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         if collector.pending_inputs.is_empty() {
             return;
         }
-        let active = collector
-            .pending_inputs
-            .iter()
-            .map(|input| ActiveStyleSheet::new(Rc::new(()), Some(input.rule_set.clone())))
-            .collect::<Vec<_>>();
-        let layers =
-            (origin == CascadeOrigin::kAuthor).then(|| Rc::new(CascadeLayerMap::new(&active)));
+        static PROFILE_RULES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let profile = *PROFILE_RULES.get_or_init(|| {
+            std::env::var_os("BROWSER_PROFILE_STYLE_RULES").is_some_and(|value| value == "1")
+        });
+        let setup_trace =
+            profile.then(|| browser_tracing::span("style", "StyleResolver.SetupCollector"));
+        let mut preparation_trace =
+            browser_tracing::span("style", "StyleResolver.PrepareRuleCollection");
+        let (prepared, cache_hit) = if let Some(cache) = self.cascade.rule_collections.as_ref() {
+            cache.Prepare(&collector.pending_inputs, origin)
+        } else {
+            (
+                Rc::new(ProductionRuleCollection::new(
+                    &collector.pending_inputs,
+                    origin,
+                )),
+                false,
+            )
+        };
+        preparation_trace.set("cache_hit", cache_hit as u8 as f64);
+        preparation_trace.set("rule_sets", collector.pending_inputs.len() as f64);
+        drop(preparation_trace);
         let session = collector
             .selectors
             .borrow_mut()
             .StyleMatchSession(collector.document);
-        let implicit_scope_inputs = if origin == CascadeOrigin::kAuthor {
-            collector
-                .pending_inputs
-                .iter()
-                .map(|input| (input.rule_set.as_ref(), input.implicit_scope_trigger))
-                .collect::<Vec<_>>()
-        } else if !collector.pending_inputs.is_empty() {
-            collector
-                .pending_inputs
-                .iter()
-                .map(|input| (input.rule_set.as_ref(), input.implicit_scope_trigger))
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-        let implicit_scope_roots = crate::production_rule_matching::ProductionImplicitScopeRoots(
-            implicit_scope_inputs.into_iter(),
-        );
         let runtime = ProductionElementRuleCollectorRuntime::with_production_inputs(
             &session,
-            layers,
-            implicit_scope_roots,
+            prepared.layers.clone(),
+            prepared.implicit_roots.clone(),
             self.cascade.container_runtime,
         );
         let mut matching_element = collector.element.index;
@@ -2307,28 +2472,24 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         let recalc = collector.recalc.clone();
         let mut result = collector.result.borrow_mut();
         let first_result = result.GetMatchedProperties().len();
+        let selector_filter = runtime.SelectorFilterForElement(context.element);
         let mut actual = ElementRuleCollector::<Backend, _>::new(
             &runtime,
             &context,
             &recalc,
-            &(),
+            &selector_filter,
             &mut result,
             collector.inside_link,
         );
         actual.SetPseudoElementStyleRequest(&matching_pseudo);
         actual.SetMatchingUARules(collector.matching_ua);
+        drop(setup_trace);
+        let mut matching_trace =
+            profile.then(|| browser_tracing::span("style", "StyleResolver.MatchRuleBuckets"));
         let mut collector_calls = 0usize;
-        for (index, chunk) in collector
-            .pending_inputs
-            .chunks(RuleSetGroup::<Backend>::kRulesetsRoom)
-            .enumerate()
-        {
-            let mut group = RuleSetGroup::new(index as u32);
-            for input in chunk {
-                group.AddRuleSet(input.rule_set.clone());
-            }
+        for group in &prepared.groups {
             let scope = collector.scope.as_ref().map(|scope| Rc::new(scope.0));
-            let request = MatchRequest::new(&group, scope, None);
+            let request = MatchRequest::new(group, scope, None);
             for pass in &collector.pending_passes {
                 match pass {
                     ProductionResolverRulePass::Normal => {
@@ -2355,6 +2516,15 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         }
         let candidates_considered = actual.CandidatesConsidered();
         let selector_matches = actual.MatchedRulesForTest().len();
+        if let Some(trace) = matching_trace.as_mut() {
+            trace.set("node_index", context.element as f64);
+            trace.set("candidates", candidates_considered as f64);
+            trace.set("matches", selector_matches as f64);
+            trace.set("collector_calls", collector_calls as f64);
+        }
+        drop(matching_trace);
+        let _transfer_trace =
+            profile.then(|| browser_tracing::span("style", "StyleResolver.TransferMatchedRules"));
         let inputs = &collector.pending_inputs[..];
         let incomplete_match = actual.MatchedRulesForTest().iter().any(|matched| {
             let Some(input) = inputs.get(matched.StyleSheetIndex()) else {
@@ -2609,7 +2779,8 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     type StyleCascade = ProductionBaseStyleCascade;
     type MatchResult = MatchResult;
     type CacheKey = MatchedPropertiesCacheKey;
-    type CacheEntry = MatchedPropertiesCacheEntry<StyleAdjusterElementTypeForCache>;
+    type CacheEntry =
+        MatchedPropertiesCacheEntry<StyleAdjusterElementTypeForCache, ProductionCachedVariables>;
     type ElementTypeForCache = StyleAdjusterElementTypeForCache;
     type CSSPropertyValue = crate::css_property_value::CSSPropertyValue<ProductionCSSValueDispatch>;
     type CSSValue = Rc<production_css_value::Value>;
@@ -2701,10 +2872,39 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
             .is_some_and(|root| self.document.Node(element.index).Parent() == Some(root.root))
     }
     fn IsInlineIndependentStyleChange(&self, element: &Self::Element) -> bool {
-        false
+        self.cascade.incremental_style.is_some() && self.cascade.subject_node == Some(element.index)
     }
     fn HasCustomStyleCallbacks(&self, element: &Self::Element) -> bool {
-        false
+        // cpp: SVGElement, HTMLFormControlElement, HTMLFrameOwnerElement,
+        // HTMLPlugInElement and the specialized HTML constructors set this bit.
+        // UA implementation elements and image fallback also have callbacks.
+        let node = self.document.Node(element.index);
+        node.Namespace() == DOMNamespace::kSVG
+            || self.document.ShadowPseudoId(element.index).is_some()
+            || node.Namespace() == DOMNamespace::kHTML
+                && matches!(
+                    node.Name(),
+                    "button"
+                        | "fieldset"
+                        | "input"
+                        | "output"
+                        | "select"
+                        | "textarea"
+                        | "meter"
+                        | "progress"
+                        | "canvas"
+                        | "frameset"
+                        | "frame"
+                        | "iframe"
+                        | "object"
+                        | "embed"
+                        | "audio"
+                        | "video"
+                        | "img"
+                        | "permission"
+                        | "geolocation"
+                        | "usermedia"
+                )
     }
     fn HasContenteditableAttribute(&self, element: &Self::Element) -> bool {
         self.document
@@ -2816,22 +3016,29 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         true
     }
     fn NewStyleRecalcContext(&self) -> Self::StyleRecalcContext {
-        self.cascade
-            .subject_node
-            .map_or_else(ProductionStyleRecalcContext::default, |node| {
-                let size_container = self.cascade.container_runtime.and_then(|runtime| {
-                    runtime.NearestSizeContainerForStyleRequest(node, self.cascade.pseudo_id)
+        let mut context =
+            self.cascade
+                .subject_node
+                .map_or_else(ProductionStyleRecalcContext::default, |node| {
+                    let size_container = self.cascade.container_runtime.and_then(|runtime| {
+                        runtime.NearestSizeContainerForStyleRequest(node, self.cascade.pseudo_id)
+                    });
+                    ProductionStyleRecalcContext::ForStyleRequest(
+                        self.document,
+                        node,
+                        self.cascade.pseudo_id,
+                        size_container,
+                    )
                 });
-                ProductionStyleRecalcContext::ForStyleRequest(
-                    self.document,
-                    node,
-                    self.cascade.pseudo_id,
-                    size_container,
-                )
-            })
+        context.can_use_incremental_style = self.cascade.incremental_style.is_some();
+        context
     }
     fn RecalcFlag(&self, context: &Self::StyleRecalcContext, flag: ResolverRecalcFlag) -> bool {
-        false
+        match flag {
+            ResolverRecalcFlag::EnsuringStyle => self.cascade.is_ensuring_style,
+            ResolverRecalcFlag::CanUseIncrementalStyle => context.can_use_incremental_style,
+            _ => false,
+        }
     }
     fn NewStyleResolverState(
         &self,
@@ -2858,6 +3065,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
             has_tree_scoped_reference: false,
             rejected_legacy_overlapping: false,
             length_conversion_flags: 0,
+            incremental_properties: Vec::new(),
         }
     }
     fn NewStyleCascade(&self, state: &mut Self::StyleResolverState) -> Self::StyleCascade {
@@ -3017,6 +3225,61 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         state: &mut Self::StyleResolverState,
         flags: u64,
     ) {
+        if !state.incremental_properties.is_empty() {
+            let _trace =
+                browser_tracing::span("style", "StyleResolver.ApplyInlineStyleIncrementally");
+            let properties = std::mem::take(&mut state.incremental_properties);
+            let result = crate::resolver::production_style_cascade::ApplyInlineProperties(
+                ProductionCascadeInputs {
+                    document: Some(self.document),
+                    media: self.initial.media.clone(),
+                    base: self.initial.initial.clone(),
+                    parent: state.parent.as_deref().cloned(),
+                    root_style: self.cascade.root_style.clone(),
+                    match_result: MatchResult::default(),
+                    root_font_size: self.cascade.root_font_size,
+                    color_scheme_settings: self.cascade.color_scheme_settings,
+                    text_link_text_color: self.cascade.text_link_text_color,
+                    is_document_element: false,
+                    pseudo_id: self.cascade.pseudo_id,
+                    originating_style: self.cascade.originating_style.clone(),
+                    subject_node: self.cascade.subject_node,
+                    container_runtime: self.cascade.container_runtime,
+                    custom_properties: None,
+                    parent_custom_properties: self.cascade.parent_custom_properties,
+                    substitution_context: self.cascade.substitution_context,
+                    image_resolver: self.cascade.image_resolver,
+                    property_registry: self.cascade.property_registry,
+                    function_registry: self.cascade.function_registry,
+                    animations: None,
+                    transitions: None,
+                },
+                &mut state.builder,
+                &properties,
+            );
+            match result {
+                Ok(length_flags) => {
+                    state.length_conversion_flags |= length_flags;
+                    let old = self
+                        .cascade
+                        .incremental_style
+                        .as_ref()
+                        .expect("MISU owns previous outputs");
+                    *self.cascade_custom_output.borrow_mut() = Some(old.custom_properties.clone());
+                    self.matched_signatures
+                        .borrow_mut()
+                        .extend_from_slice(old.matched_signatures);
+                    self.base_style_metrics
+                        .borrow_mut()
+                        .incremental_style_updates += 1;
+                }
+                Err(errors) => self.fallbacks.borrow_mut().extend(
+                    errors
+                        .into_iter()
+                        .map(ProductionRuleMatchingFallback::Cascade),
+                ),
+            }
+        }
         // cpp: style_resolver_state.cc:546-567.
         if flags & CSSProperty::kBackground != 0 {
             state.builder.SetHasAuthorBackground();
@@ -3416,9 +3679,11 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         Self::style(style).EffectiveZoom()
     }
     fn StyleInheritedVariablesHash(&self, style: &Self::ComputedStyle) -> u32 {
-        // The production side-table is admitted only when its inherited
-        // custom-property owner is empty, whose source hash is zero.
-        0
+        // The native style retains other inherited fields. Variables belong
+        // to the typed style-side owner and join the same source MPC key.
+        self.cascade
+            .parent_custom_properties
+            .map_or(0, CustomProperties::CacheHash)
     }
     fn StyleInheritedBitFieldsHash(&self, style: &Self::ComputedStyle) -> u32 {
         Self::style(style).HashInheritedBitFields()
@@ -3563,6 +3828,11 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         selector_filter: &mut Self::SelectorFilter,
         cascade: &mut Self::StyleCascade,
     ) -> Self::ElementRuleCollector {
+        if self.cascade.incremental_style.is_some() && !state.pseudo {
+            self.selectors
+                .borrow()
+                .ResetSubjectMatchFlags(state.element.index);
+        }
         ProductionResolverCollector {
             document: self.document,
             element: state.element.clone(),
@@ -3719,6 +3989,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         builder.SetPseudoElementStyles(bits)
     }
     fn CascadeApply(&self, cascade: &mut Self::StyleCascade, filter: CascadeFilter) {
+        let _trace = browser_tracing::span("style", "StyleResolver.ApplyCascade");
         let Some(mut state_ptr) = cascade.state else {
             self.unsupported("base:missing-cascade-state");
             return;
@@ -3944,17 +4215,14 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         {
             return None;
         }
-        let parent_custom = self.cascade.parent_custom_properties;
-        if parent_custom.is_some_and(|custom| {
-            !custom.values.is_empty()
-                || !custom.registered_values.is_empty()
-                || !custom.diagnostics.is_empty()
-        }) {
+        let empty = CustomProperties::default();
+        let parent_custom = self.cascade.parent_custom_properties.unwrap_or(&empty);
+        if !parent_custom.diagnostics.is_empty() {
             return None;
         }
         let parent = state.parent.as_deref()?;
         let layout_parent = state.layout_parent.as_deref()?;
-        let entry = cache.0.borrow_mut().FindForNonHighlightWithStyles(
+        let entry = cache.0.borrow_mut().FindForNonHighlightWithStylesAndData(
             key,
             element_type,
             style_type,
@@ -3962,17 +4230,16 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
             layout_parent,
             self.IsAtShadowBoundary(&state.element),
             StyleAdjusterElementTypeForCache::CacheEntryIsStyleAdjusted,
+            |data| data.parent.CacheEquivalent(parent_custom),
             // kIsNotElement entries are stored before style adjustment, so
             // source never consults StyleAdjuster::IsCacheCompatible here.
             |_, _, _, _| true,
         );
-        if entry.is_some() {
+        if let Some(entry) = &entry {
             self.base_style_metrics
                 .borrow_mut()
                 .matched_property_cache_hits += 1;
-            // Cache eligibility below excludes any custom-property output, so
-            // the side-table result on a hit is the canonical empty owner.
-            *self.cascade_custom_output.borrow_mut() = Some(Rc::new(CustomProperties::default()));
+            *self.cascade_custom_output.borrow_mut() = Some(entry.additional_data.output.clone());
         }
         entry.map(Rc::new)
     }
@@ -4008,16 +4275,12 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         if !self.GetCascadeFilter(&state.element).IsEmpty() {
             return false;
         }
-        let custom_is_empty = self
+        let custom_is_cacheable = self
             .cascade_custom_output
             .borrow()
             .as_ref()
-            .is_some_and(|custom| {
-                custom.values.is_empty()
-                    && custom.registered_values.is_empty()
-                    && custom.diagnostics.is_empty()
-            });
-        custom_is_empty
+            .is_some_and(|custom| custom.diagnostics.is_empty());
+        custom_is_cacheable
             && self
                 .cascade
                 .substitution_context
@@ -4042,13 +4305,26 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         let (Some(parent), Some(layout_parent)) = (parent, layout_parent) else {
             return;
         };
-        cache.0.borrow_mut().AddOwned(
+        cache.0.borrow_mut().AddOwnedWithData(
             key,
             *element_type,
             style.as_ref().clone(),
             parent.as_ref().clone(),
             layout_parent.as_ref().clone(),
             originating.map(|style| style.as_ref().clone()),
+            ProductionCachedVariables {
+                parent: self
+                    .cascade
+                    .parent_custom_properties
+                    .cloned()
+                    .unwrap_or_default(),
+                output: self
+                    .cascade_custom_output
+                    .borrow()
+                    .as_ref()
+                    .expect("cacheable cascade has custom output")
+                    .clone(),
+            },
         );
         self.base_style_metrics
             .borrow_mut()
@@ -4283,12 +4559,12 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
 
     fn ApplyScopedProperty(
         &self,
-        _name: crate::css_property_name::CSSPropertyName,
-        _state: &mut Self::StyleResolverState,
-        _value: &Self::CSSValue,
+        name: crate::css_property_name::CSSPropertyName,
+        state: &mut Self::StyleResolverState,
+        value: &Self::CSSValue,
         _scope: &Self::TreeScope,
     ) {
-        self.unsupported("base:ApplyScopedProperty");
+        state.incremental_properties.push((name, value.clone()));
     }
     fn AddMathPropertyIfNeeded(
         &self,
@@ -4343,7 +4619,7 @@ pub(crate) struct ProductionRuleMatchingInputs<'a> {
     pub html_user_agent_rules: ProductionResolverRuleSetInput,
     pub svg_user_agent_rules: Option<ProductionResolverRuleSetInput>,
     pub mathml_user_agent_rules: Option<ProductionResolverRuleSetInput>,
-    pub author_rule_sets: Vec<ProductionResolverRuleSetInput>,
+    pub author_rule_sets: Rc<Vec<ProductionResolverRuleSetInput>>,
 }
 
 pub(crate) struct ProductionBaseStyleInputs<'a> {
@@ -4372,6 +4648,7 @@ pub(crate) struct ProductionBaseStyleOutput {
 
 #[derive(Clone, Default)]
 pub(crate) struct ProductionBaseStyleMetrics {
+    pub incremental_style_updates: usize,
     pub collector_calls: usize,
     pub candidates_considered: usize,
     pub selector_matches: usize,
@@ -4458,6 +4735,7 @@ pub(crate) fn MatchAllRulesForElement(
         has_tree_scoped_reference: false,
         rejected_legacy_overlapping: false,
         length_conversion_flags: 0,
+        incremental_properties: Vec::new(),
     };
     let mut collector = ProductionResolverCollector {
         document: inputs.document,
@@ -4506,6 +4784,18 @@ pub(crate) fn ApplyBaseStyleForElement(
             "non-element-style-target",
         )]);
     }
+    let mut trace = browser_tracing::span("style", "StyleResolver.ResolveElement");
+    trace.set(
+        "node_id",
+        inputs.document.Node(inputs.element_index).Id() as f64,
+    );
+    trace.set("pseudo", collaborators.pseudo_id.value() as f64);
+    trace.set(
+        "parent_custom_properties",
+        collaborators
+            .parent_custom_properties
+            .map_or(0, |p| p.values.len()) as f64,
+    );
     let node = inputs.document.Node(inputs.element_index);
     if node.Namespace() == DOMNamespace::kNone {
         return Err(vec![ProductionRuleMatchingFallback::Unsupported(
@@ -4600,7 +4890,22 @@ pub(crate) fn ApplyBaseStyleForElement(
     let style = StyleResolver::new(&element, &host)
         .ResolveStyleForProduction(&element, &context, &request, &mut state, &mut cascade)
         .expect("production element resolution retains a style");
+    {
+        let metrics = host.base_style_metrics.borrow();
+        trace.set(
+            "incremental_style_updates",
+            metrics.incremental_style_updates as f64,
+        );
+        trace.set("cache_hits", metrics.matched_property_cache_hits as f64);
+        trace.set("cache_adds", metrics.matched_property_cache_adds as f64);
+        trace.set("collector_calls", metrics.collector_calls as f64);
+        trace.set(
+            "candidates_considered",
+            metrics.candidates_considered as f64,
+        );
+    }
     let fallbacks = host.take_fallbacks();
+    trace.set("fallbacks", fallbacks.len() as f64);
     if !fallbacks.is_empty() {
         return Err(fallbacks);
     }
@@ -4861,7 +5166,7 @@ mod tests {
                 html_user_agent_rules: ua_rule_set("", &media),
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: Vec::new(),
+                author_rule_sets: Rc::new(Vec::new()),
             },
             parent: Some(parent),
             collaborators,
@@ -4909,7 +5214,7 @@ mod tests {
                     html_user_agent_rules: ua.clone(),
                     svg_user_agent_rules: None,
                     mathml_user_agent_rules: None,
-                    author_rule_sets: Vec::new(),
+                    author_rule_sets: Rc::new(Vec::new()),
                 },
                 parent: Some(initial.clone()),
                 collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
@@ -4953,7 +5258,7 @@ mod tests {
                 html_user_agent_rules: ua,
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: Vec::new(),
+                author_rule_sets: Rc::new(Vec::new()),
             },
             parent: Some(initial),
             collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
@@ -4988,7 +5293,7 @@ mod tests {
                 html_user_agent_rules: ua_rule_set("", &media),
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: vec![author.clone()],
+                author_rule_sets: Rc::new(vec![author.clone()]),
             },
             parent: Some(initial),
             collaborators: root_collaborators,
@@ -5006,7 +5311,7 @@ mod tests {
                 html_user_agent_rules: ua_rule_set("", &media),
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: vec![author],
+                author_rule_sets: Rc::new(vec![author]),
             },
             parent: Some((*root).clone()),
             collaborators,
@@ -5057,7 +5362,7 @@ mod tests {
                     html_user_agent_rules: ua,
                     svg_user_agent_rules: None,
                     mathml_user_agent_rules: None,
-                    author_rule_sets: Vec::new(),
+                    author_rule_sets: Rc::new(Vec::new()),
                 },
                 parent: Some(initial),
                 collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
@@ -5101,7 +5406,7 @@ mod tests {
                 html_user_agent_rules: ua,
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: Vec::new(),
+                author_rule_sets: Rc::new(Vec::new()),
             },
             parent: Some(initial),
             collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
@@ -5146,7 +5451,7 @@ mod tests {
                     html_user_agent_rules: ua.clone(),
                     svg_user_agent_rules: None,
                     mathml_user_agent_rules: None,
-                    author_rule_sets: vec![author.clone()],
+                    author_rule_sets: Rc::new(vec![author.clone()]),
                 },
                 parent: Some(initial.clone()),
                 collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
@@ -5223,7 +5528,7 @@ mod tests {
                 html_user_agent_rules: ua,
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: Vec::new(),
+                author_rule_sets: Rc::new(Vec::new()),
             },
             parent: Some(initial),
             collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
@@ -5270,7 +5575,7 @@ mod tests {
                     html_user_agent_rules: empty.clone(),
                     svg_user_agent_rules: None,
                     mathml_user_agent_rules: Some(empty.clone()),
-                    author_rule_sets: Vec::new(),
+                    author_rule_sets: Rc::new(Vec::new()),
                 },
                 parent: Some(initial.clone()),
                 collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
@@ -5329,7 +5634,7 @@ mod tests {
                     html_user_agent_rules: ua_rule_set(css, &media),
                     svg_user_agent_rules: None,
                     mathml_user_agent_rules: None,
-                    author_rule_sets: Vec::new(),
+                    author_rule_sets: Rc::new(Vec::new()),
                 },
                 parent: Some(initial.clone()),
                 collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
@@ -5362,7 +5667,7 @@ mod tests {
                 html_user_agent_rules: empty.clone(),
                 svg_user_agent_rules: Some(empty),
                 mathml_user_agent_rules: None,
-                author_rule_sets: Vec::new(),
+                author_rule_sets: Rc::new(Vec::new()),
             },
             parent: Some(initial),
             collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
@@ -5412,7 +5717,7 @@ mod tests {
                     html_user_agent_rules: html_ua.clone(),
                     svg_user_agent_rules: None,
                     mathml_user_agent_rules: Some(mathml_ua.clone()),
-                    author_rule_sets: Vec::new(),
+                    author_rule_sets: Rc::new(Vec::new()),
                 },
                 parent: Some(initial.clone()),
                 collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
@@ -5572,7 +5877,7 @@ mod tests {
                     html_user_agent_rules: rule_set("", &media),
                     svg_user_agent_rules: None,
                     mathml_user_agent_rules: None,
-                    author_rule_sets: vec![author.clone()],
+                    author_rule_sets: Rc::new(vec![author.clone()]),
                 },
                 parent: Some(parent.clone()),
                 collaborators,
@@ -5588,6 +5893,70 @@ mod tests {
         assert_eq!(
             ProductionRuleMatchingHost::style(second_output.as_ref()).Width(),
             ProductionRuleMatchingHost::style(first_output.as_ref()).Width()
+        );
+
+        // The same native parent can carry a different typed variable owner.
+        // Cache hits must restore computed output, and a variable mutation
+        // must miss without relying on native pointer identity or hash alone.
+        let variable_author = rule_set(
+            ".hit { width:var(--width); --derived:var(--width) }",
+            &media,
+        );
+        let mut variables = CustomProperties::default();
+        variables.SetData("--width".into(), crate::resolver::production_style_builder::custom_properties::ComputedVariableValue::Data(variable_data("37px")));
+        let resolve_variables = |target, variables: &CustomProperties| {
+            let mut collaborators = ProductionBaseStyleCollaborators::ordinary(media.em_size);
+            collaborators.matched_properties_cache = Some(cache.clone());
+            collaborators.parent_custom_properties = Some(variables);
+            ApplyBaseStyleForElement(ProductionBaseStyleInputs {
+                matching: ProductionRuleMatchingInputs {
+                    document: owner.GetDocument(),
+                    element_index: target,
+                    media: &media,
+                    html_user_agent_rules: rule_set("", &media),
+                    svg_user_agent_rules: None,
+                    mathml_user_agent_rules: None,
+                    author_rule_sets: Rc::new(vec![variable_author.clone()]),
+                },
+                parent: Some(parent.clone()),
+                collaborators,
+            })
+            .expect("variables retain the typed resolver and MPC")
+        };
+        let first_variable = resolve_variables(first, &variables);
+        assert_eq!(first_variable.metrics.matched_property_cache_adds, 1);
+        let second_variable = resolve_variables(second, &variables);
+        assert_eq!(second_variable.metrics.matched_property_cache_hits, 1);
+        assert_eq!(
+            unsafe { &*second_variable.style.Get() }.Width().Pixels(),
+            37.0
+        );
+        assert_eq!(
+            second_variable
+                .custom_properties
+                .Get("--derived")
+                .unwrap()
+                .Serialize()
+                .Utf8(),
+            "37px"
+        );
+        let old_hash = variables.CacheHash();
+        variables.SetData("--width".into(), crate::resolver::production_style_builder::custom_properties::ComputedVariableValue::Data(variable_data("41px")));
+        assert_ne!(variables.CacheHash(), old_hash);
+        let changed_variable = resolve_variables(second, &variables);
+        assert_eq!(changed_variable.metrics.matched_property_cache_hits, 0);
+        assert_eq!(
+            unsafe { &*changed_variable.style.Get() }.Width().Pixels(),
+            41.0
+        );
+        assert_eq!(
+            changed_variable
+                .custom_properties
+                .Get("--derived")
+                .unwrap()
+                .Serialize()
+                .Utf8(),
+            "41px"
         );
 
         let animations = ProductionActiveInterpolationsMap::default();
@@ -5656,7 +6025,7 @@ mod tests {
             html_user_agent_rules: rule_set("", &media),
             svg_user_agent_rules: None,
             mathml_user_agent_rules: None,
-            author_rule_sets: vec![rule_set(css, &media)],
+            author_rule_sets: Rc::new(vec![rule_set(css, &media)]),
         })
         .expect("ordinary document matching must not use a compatibility fallback");
         assert_eq!(matched.GetMatchedProperties().len(), 1);
@@ -5698,7 +6067,7 @@ mod tests {
     fn translated_match_all_rules_retains_parser_owned_inline_style() {
         let _heap = foundation::LayoutHeapScope::new();
         let media = MediaValuesCachedData::default();
-        let owner =
+        let mut owner =
             html::html_parser::ParseHTML("<!doctype html><div id=target style='width:17px'></div>");
         let target = element_with_id(owner.GetDocument(), "target");
         let result = MatchAllRulesForElement(ProductionRuleMatchingInputs {
@@ -5708,7 +6077,7 @@ mod tests {
             html_user_agent_rules: rule_set("", &media),
             svg_user_agent_rules: None,
             mathml_user_agent_rules: None,
-            author_rule_sets: Vec::new(),
+            author_rule_sets: Rc::new(Vec::new()),
         })
         .expect("translated MatchAllRules must own inline declarations");
         assert_eq!(result.GetMatchedProperties().len(), 1);
@@ -5726,6 +6095,94 @@ mod tests {
         };
         assert_eq!(properties.len(), 1);
         assert_eq!(properties[0].PropertyID(), CSSPropertyID::kWidth);
+
+        // Each production request constructs a fresh host. The document
+        // collaborator must retain declaration identity across those requests,
+        // without reusing it after an attribute, parser-mode or document change.
+        let declarations = Rc::new(ProductionDeclarationCache::default());
+        let inline = |document: &Document| {
+            let mut collaborators = ProductionBaseStyleCollaborators::ordinary(media.em_size);
+            collaborators.declarations = Some(declarations.clone());
+            let host = ProductionRuleMatchingHost::new_with_collaborators(
+                document,
+                &media,
+                rule_set("", &media),
+                Vec::new(),
+                collaborators,
+            );
+            let element =
+                ProductionResolverElement::ForNode(document, target, &media.media_type, true);
+            host.InlineStyle(&element)
+                .expect("inline declaration must exist")
+        };
+        let first = inline(owner.GetDocument());
+        assert!(Rc::ptr_eq(&first, &inline(owner.GetDocument())));
+        let mut attribute = owner
+            .GetDocument()
+            .Node(target)
+            .FindAttribute("style")
+            .unwrap()
+            .clone();
+        attribute.value = "width:23px".into();
+        owner.GetDocumentMut().SetAttribute(target, attribute);
+        let changed = inline(owner.GetDocument());
+        assert!(!Rc::ptr_eq(&first, &changed));
+        assert!(Rc::ptr_eq(&changed, &inline(owner.GetDocument())));
+        // A CSSOM write transfers its parsed property-set owner in the same
+        // mutation as the attribute, before any reentrant style request.
+        let current = owner.GetDocument().Node(target).InlineStyle();
+        let edited = match crate::production_style_sheet_projection::SetInlineCSSDeclaration(
+            &current, "width", "24px", "", true,
+        ).unwrap() {
+            crate::production_style_sheet_projection::CSSInlineDeclarationMutation::Changed(value)
+            | crate::production_style_sheet_projection::CSSInlineDeclarationMutation::ChangedIndependent(value) => value,
+            _ => panic!("the inline width must change"),
+        };
+        let parsed = edited
+            .ParsedBacking::<crate::production_style_sheet_projection::ParsedInlineStyle>()
+            .unwrap();
+        let mut mutation = dom::dom_mutation::DOMMutation {
+            mutation_type: dom::dom_mutation::DOMMutationType::kSetAttribute,
+            target_node_id: owner.GetDocument().Node(target).Id(),
+            name: "style".into(),
+            value: edited.SourceText().into(),
+            inline_style: Some(edited),
+            ..Default::default()
+        };
+        owner.ApplyMutation(&mutation).unwrap();
+        assert!(
+            Rc::ptr_eq(&parsed.Declarations(), &inline(owner.GetDocument())),
+            "the resolver must use the exact CSSOM property-set owner"
+        );
+        mutation.value = "width:23px".into();
+        mutation.inline_style = None;
+        owner.ApplyMutation(&mutation).unwrap();
+        let changed = inline(owner.GetDocument());
+        let quirks =
+            declarations.Resolve(owner.GetDocument(), target, CSSParserMode::kHTMLQuirksMode);
+        assert!(!Rc::ptr_eq(&changed, &quirks));
+        owner
+            .GetDocumentMut()
+            .RemoveAttributeDefault(target, "style");
+        assert_eq!(
+            owner.GetDocument().Node(target).InlineStyle().SourceText(),
+            ""
+        );
+        assert!(!Rc::ptr_eq(
+            &changed,
+            &declarations.Resolve(
+                owner.GetDocument(),
+                target,
+                CSSParserMode::kHTMLStandardMode,
+            )
+        ));
+        let other = html::html_parser::ParseHTML("<!doctype html><div style='width:23px'></div>");
+        let replacement = declarations.Resolve(
+            other.GetDocument(),
+            target,
+            CSSParserMode::kHTMLStandardMode,
+        );
+        assert!(!Rc::ptr_eq(&changed, &replacement));
     }
 
     #[test]
@@ -5744,7 +6201,7 @@ mod tests {
             html_user_agent_rules: rule_set("", &media),
             svg_user_agent_rules: None,
             mathml_user_agent_rules: None,
-            author_rule_sets: vec![rule_set(css, &media)],
+            author_rule_sets: Rc::new(vec![rule_set(css, &media)]),
         })
         .expect("initial resolver pass must own @starting-style");
         assert_eq!(initial.GetMatchedProperties().len(), 2);
@@ -5760,7 +6217,7 @@ mod tests {
             html_user_agent_rules: rule_set("", &media),
             svg_user_agent_rules: None,
             mathml_user_agent_rules: None,
-            author_rule_sets: vec![rule_set(css, &media)],
+            author_rule_sets: Rc::new(vec![rule_set(css, &media)]),
         })
         .expect("subsequent resolver pass must reject @starting-style");
         assert_eq!(subsequent.GetMatchedProperties().len(), 1);
@@ -5819,7 +6276,7 @@ mod tests {
                 html_user_agent_rules: rule_set("", &media),
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: vec![rule_set(css, &media)],
+                author_rule_sets: Rc::new(vec![rule_set(css, &media)]),
             },
             parent,
             collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
@@ -5868,7 +6325,7 @@ mod tests {
                     html_user_agent_rules: rule_set("", &media),
                     svg_user_agent_rules: None,
                     mathml_user_agent_rules: None,
-                    author_rule_sets: vec![rule_set(css, &media)],
+                    author_rule_sets: Rc::new(vec![rule_set(css, &media)]),
                 },
                 parent: Some(originating.clone()),
                 collaborators,
@@ -5913,7 +6370,7 @@ mod tests {
                     html_user_agent_rules: rule_set("", &media),
                     svg_user_agent_rules: None,
                     mathml_user_agent_rules: None,
-                    author_rule_sets: vec![rule_set(css, &media)],
+                    author_rule_sets: Rc::new(vec![rule_set(css, &media)]),
                 },
                 parent: Some(originating.clone()),
                 collaborators,
@@ -5954,12 +6411,12 @@ mod tests {
                 html_user_agent_rules: rule_set("", &media),
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: vec![rule_set(
+                author_rule_sets: Rc::new(vec![rule_set(
                     ".other::placeholder{font-size:44px}\
                      .host::first-letter{font-size:43px}\
                      .host::placeholder{font-size:30px;font-style:italic}",
                     &media,
-                )],
+                )]),
             },
             parent: Some(originating.clone()),
             collaborators,
@@ -6046,7 +6503,7 @@ mod tests {
                 html_user_agent_rules: rule_set("", &media),
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: Vec::new(),
+                author_rule_sets: Rc::new(Vec::new()),
             })
             .unwrap_or_else(|fallbacks| {
                 panic!("media UA-shadow rule-set selection fell back: {fallbacks:?}")
@@ -6075,7 +6532,7 @@ mod tests {
                     html_user_agent_rules: rule_set("", &media),
                     svg_user_agent_rules: None,
                     mathml_user_agent_rules: None,
-                    author_rule_sets: Vec::new(),
+                    author_rule_sets: Rc::new(Vec::new()),
                 },
                 parent: Some(parent.clone()),
                 collaborators: ProductionBaseStyleCollaborators::ordinary(media.em_size),
@@ -6128,7 +6585,7 @@ mod tests {
                 html_user_agent_rules: rule_set("", &media),
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: vec![rule_set(css, &media)],
+                author_rule_sets: Rc::new(vec![rule_set(css, &media)]),
             },
             parent: Some(parent),
             collaborators,
@@ -6193,7 +6650,7 @@ mod tests {
                 html_user_agent_rules: rule_set("", &media),
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: vec![rule_set(css, &media)],
+                author_rule_sets: Rc::new(vec![rule_set(css, &media)]),
             },
             parent: Some(parent),
             collaborators,
@@ -6254,7 +6711,7 @@ mod tests {
                 html_user_agent_rules: rule_set("", &media),
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: vec![rule_set(css, &media)],
+                author_rule_sets: Rc::new(vec![rule_set(css, &media)]),
             },
             parent: Some(parent),
             collaborators,
@@ -6298,7 +6755,7 @@ mod tests {
                 html_user_agent_rules: rule_set("", &media),
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: vec![rule_set("#target { display:inline }", &media)],
+                author_rule_sets: Rc::new(vec![rule_set("#target { display:inline }", &media)]),
             },
             parent,
             layout_parent,
@@ -6339,12 +6796,12 @@ mod tests {
                 html_user_agent_rules: rule_set("", &media),
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: vec![rule_set(
+                author_rule_sets: Rc::new(vec![rule_set(
                     "#target { box-shadow:1px 2px 3px red; \
                      text-shadow:1px 2px blue; accent-color:red; \
                      color-scheme:dark; background-image:linear-gradient(red, blue) }",
                     &media,
-                )],
+                )]),
             },
             parent: parent.clone(),
             layout_parent: parent,
@@ -6412,7 +6869,7 @@ mod tests {
                 html_user_agent_rules: rule_set("", &media),
                 svg_user_agent_rules: None,
                 mathml_user_agent_rules: None,
-                author_rule_sets: vec![rule_set(css, &media)],
+                author_rule_sets: Rc::new(vec![rule_set(css, &media)]),
             },
             parent: None,
             collaborators,

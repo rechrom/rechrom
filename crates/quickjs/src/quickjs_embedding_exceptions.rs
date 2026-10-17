@@ -125,51 +125,150 @@ impl core::ops::Deref for DiagnosticSource {
         &self.text
     }
 }
+// V8 MessageLocation keeps the script and position, not a copied source line.
+// QuickJS bytecode may be freed before the host reads its Error message, so
+// capture the raw line/column while it is alive and own only immutable Rust
+// source data. Caught exceptions never materialize diagnostic text.
+#[derive(Clone)]
+struct DiagnosticLocation(DiagnosticArc<DiagnosticLocationData>);
+struct DiagnosticLocationData {
+    filename: String,
+    raw_line: i32,
+    raw_column: i32,
+    source: Option<DiagnosticArc<DiagnosticSource>>,
+    creation: bool,
+}
+impl DiagnosticLocation {
+    fn new(filename: String, raw_line: i32, raw_column: i32,
+        source: Option<DiagnosticArc<DiagnosticSource>>, creation: bool) -> Self
+    {
+        Self(DiagnosticArc::new(DiagnosticLocationData {
+            filename, raw_line, raw_column, source, creation,
+        }))
+    }
+    fn resolve(&self) -> JSExceptionLocation {
+        let data = &self.0;
+        let Some(source) = &data.source else {
+            return JSExceptionLocation {
+                filename: data.filename.clone(), line: data.raw_line.max(0) as usize,
+                column: data.raw_column.max(1) as usize - 1, source_line: String::new(),
+            };
+        };
+        let mut index = source.raw_source_offset(data.raw_line, data.raw_column);
+        if data.creation {
+            if let Some(&expression_start) = source.call_sites.lock()
+                .unwrap_or_else(|e| e.into_inner()).get(&index)
+            {
+                index = expression_start;
+            }
+        }
+        source.position_at_offset(data.filename.clone(), index)
+    }
+}
+
 #[derive(Default)]
 struct ExceptionDiagnostics {
     captured: bool,
     consume_creation_on_stack_read: bool,
-    pending: Option<JSExceptionLocation>,
+    pending: Option<DiagnosticLocation>,
     sources: DiagnosticMap<usize, DiagnosticArc<DiagnosticSource>>,
     compiling: Vec<DiagnosticArc<DiagnosticSource>>,
-    creations: DiagnosticMap<usize, JSExceptionLocation>,
-    suspended: DiagnosticMap<(usize, usize), Option<JSExceptionLocation>>,
+    creations: DiagnosticMap<usize, DiagnosticLocation>,
+    suspended: DiagnosticMap<(usize, usize), Option<DiagnosticLocation>>,
 }
-static EXCEPTION_DIAGNOSTICS: Mutex<DiagnosticMap<usize, ExceptionDiagnostics>> =
+// The registry owns lifetime only. Runtime operations never hold its lock:
+// source lookup/indexing, compilation and GC belong to each independent VM.
+// Weak thread-local lookup entries do not extend metadata lifetime. A registry
+// revision also invalidates cached absence and disable/re-enable/address reuse.
+// State remains runtime-owned when an idle runtime moves between owner threads.
+type RuntimeExceptionDiagnostics = DiagnosticArc<Mutex<ExceptionDiagnostics>>;
+static EXCEPTION_DIAGNOSTICS: Mutex<DiagnosticMap<usize, RuntimeExceptionDiagnostics>> =
     Mutex::new(DiagnosticMap::new());
+static EXCEPTION_DIAGNOSTICS_REVISION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+struct ExceptionDiagnosticsLookup {
+    runtime: usize,
+    revision: u64,
+    state: Option<std::sync::Weak<Mutex<ExceptionDiagnostics>>>,
+}
+std::thread_local! {
+    static EXCEPTION_DIAGNOSTICS_LOOKUP: std::cell::RefCell<ExceptionDiagnosticsLookup> =
+        const { std::cell::RefCell::new(ExceptionDiagnosticsLookup {
+            runtime: 0, revision: 0, state: None,
+        }) };
+}
+fn js_host_exception_diagnostics(rt: *mut JSRuntime) -> Option<RuntimeExceptionDiagnostics> {
+    let revision = EXCEPTION_DIAGNOSTICS_REVISION.load(std::sync::atomic::Ordering::Acquire);
+    if revision != u64::MAX {
+        let cached = EXCEPTION_DIAGNOSTICS_LOOKUP.with(|slot| {
+            let slot = slot.borrow();
+            if slot.runtime != rt as usize || slot.revision != revision { return None; }
+            match &slot.state {
+                None => Some(None),
+                Some(state) => state.upgrade().map(Some),
+            }
+        });
+        if let Some(state) = cached { return state; }
+    }
+    let state = EXCEPTION_DIAGNOSTICS.lock().unwrap_or_else(|e| e.into_inner())
+        .get(&(rt as usize)).cloned();
+    EXCEPTION_DIAGNOSTICS_LOOKUP.with(|slot| {
+        *slot.borrow_mut() = ExceptionDiagnosticsLookup {
+            runtime: rt as usize, revision,
+            state: state.as_ref().map(DiagnosticArc::downgrade),
+        };
+    });
+    state
+}
+// Only owned results escape this closure. Location decoding does not execute
+// JS or reenter a VM; large immutable source work is performed after cloning
+// its source handle and releasing this runtime's short state access below.
+fn with_exception_diagnostics<R>(
+    rt: *mut JSRuntime,
+    read: impl FnOnce(&mut ExceptionDiagnostics) -> R,
+) -> Option<R> {
+    let state = js_host_exception_diagnostics(rt)?;
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    Some(read(&mut state))
+}
 
 /// Opt into independent diagnostics; false discards all sidecar state. This
 /// neither edits Error properties nor changes the official exception value.
 pub unsafe fn JS_EnableExceptionMetadata(rt: *mut JSRuntime, enabled: bool) {
-    let mut states = EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if enabled {
-        states.entry(rt as usize).or_default();
+    let mut states = EXCEPTION_DIAGNOSTICS.lock().unwrap_or_else(|e| e.into_inner());
+    let (changed, retired) = if enabled {
+        if let std::collections::btree_map::Entry::Vacant(entry) = states.entry(rt as usize) {
+            entry.insert(DiagnosticArc::new(Mutex::new(ExceptionDiagnostics::default())));
+            (true, None)
+        } else { (false, None) }
     } else {
-        states.remove(&(rt as usize));
+        let retired = states.remove(&(rt as usize));
+        (retired.is_some(), retired)
+    };
+    if changed {
+        // Saturation disables lookup reuse permanently instead of allowing ABA.
+        let _ = EXCEPTION_DIAGNOSTICS_REVISION.fetch_update(
+            std::sync::atomic::Ordering::Release, std::sync::atomic::Ordering::Relaxed,
+            |revision| Some(revision.saturating_add(1)),
+        );
     }
+    drop(states);
+    // Destroy potentially large source tables outside the lifetime registry.
+    drop(retired);
 }
 /// Choose whether reading stack consumes the separate creation-message
 /// diagnostic. Default false keeps creation metadata; browser hosts may opt in
 /// to the message policy of an engine that formats structured stacks lazily.
 /// This never changes the returned JS stack property or its descriptor.
 pub unsafe fn JS_SetExceptionMetadataStackReadPolicy(rt: *mut JSRuntime, consume: bool) {
-    if let Some(state) = EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get_mut(&(rt as usize))
-    {
-        state.consume_creation_on_stack_read = consume;
-    }
+    with_exception_diagnostics(rt, |state| state.consume_creation_on_stack_read = consume);
 }
 /// Read before JS_GetException, which transfers/clears the current exception.
 pub unsafe fn JS_GetExceptionMetadata(ctx: *mut JSContext) -> Option<JSExceptionLocation> {
-    EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&((*ctx).rt as usize))
-        .and_then(|s| s.pending.clone())
+    js_host_pending_location((*ctx).rt).map(|location| location.resolve())
+}
+fn js_host_pending_location(rt: *mut JSRuntime) -> Option<DiagnosticLocation> {
+    with_exception_diagnostics(rt, |state| state.pending.clone()).flatten()
 }
 /// Creation metadata is separate from an actual throw, for host contracts that
 /// create a diagnostic message from a Promise's rejection reason.
@@ -177,34 +276,19 @@ pub unsafe fn JS_GetErrorCreationMetadata(
     ctx: *mut JSContext,
     value: JSValueConst,
 ) -> Option<JSExceptionLocation> {
-    if JS_VALUE_GET_TAG(value) != JS_TAG_OBJECT {
-        return None;
-    }
-    EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&((*ctx).rt as usize))
-        .and_then(|s| {
-            s.creations
-                .get(&(JS_VALUE_GET_PTR(value) as usize))
-                .cloned()
-        })
+    if JS_VALUE_GET_TAG(value) != JS_TAG_OBJECT { return None; }
+    with_exception_diagnostics((*ctx).rt, |state| {
+        state.creations.get(&(JS_VALUE_GET_PTR(value) as usize)).cloned()
+    }).flatten().map(|location| location.resolve())
 }
 fn js_host_diagnostics_enabled(rt: *mut JSRuntime) -> bool {
-    EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .contains_key(&(rt as usize))
+    js_host_exception_diagnostics(rt).is_some()
 }
 unsafe fn js_host_exception_begin(rt: *mut JSRuntime) {
-    if let Some(state) = EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get_mut(&(rt as usize))
-    {
+    with_exception_diagnostics(rt, |state| {
         state.pending = None;
         state.captured = false;
-    }
+    });
 }
 unsafe fn js_host_exception_taken(rt: *mut JSRuntime) {
     js_host_exception_begin(rt);
@@ -213,33 +297,15 @@ unsafe fn js_host_clear_exception_diagnostics(rt: *mut JSRuntime) {
     JS_EnableExceptionMetadata(rt, false);
 }
 unsafe fn js_host_free_bytecode_diagnostics(rt: *mut JSRuntime, bytecode: *mut JSFunctionBytecode) {
-    if let Some(state) = EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get_mut(&(rt as usize))
-    {
-        state.sources.remove(&(bytecode as usize));
-    }
+    with_exception_diagnostics(rt, |state| { state.sources.remove(&(bytecode as usize)); });
 }
 unsafe fn js_host_free_object_diagnostics(rt: *mut JSRuntime, object: *mut JSObject) {
-    if let Some(state) = EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get_mut(&(rt as usize))
-    {
-        state.creations.remove(&(object as usize));
-    }
+    with_exception_diagnostics(rt, |state| { state.creations.remove(&(object as usize)); });
 }
 unsafe fn js_host_free_frame_diagnostics(rt: *mut JSRuntime, frame: *mut JSStackFrame) {
-    if let Some(state) = EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get_mut(&(rt as usize))
-    {
-        state
-            .suspended
-            .retain(|(owner, _), _| *owner != frame as usize);
-    }
+    with_exception_diagnostics(rt, |state| {
+        state.suspended.retain(|(owner, _), _| *owner != frame as usize);
+    });
 }
 struct JSHostSourceScope {
     runtime: *mut JSRuntime,
@@ -250,68 +316,52 @@ impl JSHostSourceScope {
     unsafe fn new(ctx: *mut JSContext, input: *const c_char, len: usize) -> Self {
         let source_positions = CompilerSourcePositionScope::new(input, len);
         let runtime = (*ctx).rt;
-        let mut states = EXCEPTION_DIAGNOSTICS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let enabled = if let Some(state) = states.get_mut(&(runtime as usize)) {
+        let enabled = with_exception_diagnostics(runtime, |state| {
             state.compiling.push(DiagnosticArc::new(DiagnosticSource {
                 text: String::from_utf8_lossy(core::slice::from_raw_parts(input.cast::<u8>(), len))
                     .into_owned(),
                 call_sites: Mutex::new(DiagnosticMap::new()),
                 positions: std::sync::OnceLock::new(),
             }));
-            true
-        } else {
-            false
-        };
+        }).is_some();
         Self { runtime, enabled, _source_positions: source_positions }
     }
 }
 impl Drop for JSHostSourceScope {
     fn drop(&mut self) {
         if self.enabled {
-            if let Some(state) = EXCEPTION_DIAGNOSTICS
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get_mut(&(self.runtime as usize))
-            {
-                state.compiling.pop();
-            }
+            with_exception_diagnostics(self.runtime, |state| { state.compiling.pop(); });
         }
     }
 }
 unsafe fn js_host_register_evaluated_source(ctx: *mut JSContext, value: JSValueConst) {
     let runtime = (*ctx).rt;
-    let mut states = EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let Some(state) = states.get_mut(&(runtime as usize)) else {
-        return;
-    };
-    let Some(source) = state.compiling.last().cloned() else {
-        return;
-    };
-    let root = match JS_VALUE_GET_TAG(value) {
-        JS_TAG_FUNCTION_BYTECODE => JS_VALUE_GET_PTR(value).cast::<JSFunctionBytecode>(),
-        JS_TAG_MODULE => {
-            JS_VALUE_GET_PTR((*JS_VALUE_GET_PTR(value).cast::<JSModuleDef>()).func_obj)
-                .cast::<JSFunctionBytecode>()
-        }
-        _ => return,
-    };
-    let mut pending = vec![root];
-    while let Some(bytecode) = pending.pop() {
-        if bytecode.is_null() {
-            continue;
-        }
-        state.sources.insert(bytecode as usize, source.clone());
-        for index in 0..(*bytecode).cpool_count as usize {
-            let child = *(*bytecode).cpool.add(index);
-            if JS_VALUE_GET_TAG(child) == JS_TAG_FUNCTION_BYTECODE {
-                pending.push(JS_VALUE_GET_PTR(child).cast());
+    with_exception_diagnostics(runtime, |state| {
+        let Some(source) = state.compiling.last().cloned() else {
+            return;
+        };
+        let root = match JS_VALUE_GET_TAG(value) {
+            JS_TAG_FUNCTION_BYTECODE => JS_VALUE_GET_PTR(value).cast::<JSFunctionBytecode>(),
+            JS_TAG_MODULE => {
+                JS_VALUE_GET_PTR((*JS_VALUE_GET_PTR(value).cast::<JSModuleDef>()).func_obj)
+                    .cast::<JSFunctionBytecode>()
+            }
+            _ => return,
+        };
+        let mut pending = vec![root];
+        while let Some(bytecode) = pending.pop() {
+            if bytecode.is_null() {
+                continue;
+            }
+            state.sources.insert(bytecode as usize, source.clone());
+            for index in 0..(*bytecode).cpool_count as usize {
+                let child = *(*bytecode).cpool.add(index);
+                if JS_VALUE_GET_TAG(child) == JS_TAG_FUNCTION_BYTECODE {
+                    pending.push(JS_VALUE_GET_PTR(child).cast());
+                }
             }
         }
-    }
+    });
 }
 /// Owned optional diagnostic data for trusted compile-only bytecode transfer.
 /// This contains source text, source offsets and Rust position indexes only;
@@ -334,16 +384,15 @@ unsafe fn js_host_compiled_source_root(value: JSValueConst) -> Option<*mut JSFun
     }
 }
 /// Export while the compiled value is alive on its owning engine thread.
-/// Prewarming the pure Rust source index here avoids a first-throw full source
+/// Prewarming the pure Rust source index here avoids a first-read full source
 /// scan after destination hydration. No JS getter, job or script is executed.
 pub unsafe fn JS_ExportCompiledSourceMetadata(
     ctx: *mut JSContext, value: JSValueConst,
 ) -> Option<JSCompiledSourceMetadata> {
     let root = js_host_compiled_source_root(value)?;
-    let source = EXCEPTION_DIAGNOSTICS.lock().unwrap_or_else(|e| e.into_inner())
-        .get(&((*ctx).rt as usize))?.sources.get(&(root as usize))?.clone();
-    // The global map guard has been released before the potentially large
-    // index construction; independent realms retain diagnostic access.
+    let source = with_exception_diagnostics((*ctx).rt, |state| {
+        state.sources.get(&(root as usize)).cloned()
+    }).flatten()?;
     source.positions.get_or_init(|| DiagnosticSourceIndex::new(&source.text));
     Some(JSCompiledSourceMetadata { source })
 }
@@ -355,22 +404,22 @@ pub unsafe fn JS_ImportCompiledSourceMetadata(
     ctx: *mut JSContext, value: JSValueConst, metadata: &JSCompiledSourceMetadata,
 ) -> bool {
     let Some(root) = js_host_compiled_source_root(value) else { return false; };
-    let mut states = EXCEPTION_DIAGNOSTICS.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(state) = states.get_mut(&((*ctx).rt as usize)) else { return false; };
-    let mut pending = vec![root];
-    while let Some(bytecode) = pending.pop() {
-        if bytecode.is_null() { continue; }
-        state.sources.insert(bytecode as usize, metadata.source.clone());
-        let mut index = 0;
-        while index < (*bytecode).cpool_count {
-            let child = *(*bytecode).cpool.offset(index as isize);
-            if JS_VALUE_GET_TAG(child) == JS_TAG_FUNCTION_BYTECODE {
-                pending.push(JS_VALUE_GET_PTR(child).cast());
+    with_exception_diagnostics((*ctx).rt, |state| {
+        let mut pending = vec![root];
+        while let Some(bytecode) = pending.pop() {
+            if bytecode.is_null() { continue; }
+            state.sources.insert(bytecode as usize, metadata.source.clone());
+            let mut index = 0;
+            while index < (*bytecode).cpool_count {
+                let child = *(*bytecode).cpool.offset(index as isize);
+                if JS_VALUE_GET_TAG(child) == JS_TAG_FUNCTION_BYTECODE {
+                    pending.push(JS_VALUE_GET_PTR(child).cast());
+                }
+                index += 1;
             }
-            index += 1;
         }
-    }
-    true
+        true
+    }).unwrap_or(false)
 }
 #[cfg(test)]
 #[test]
@@ -484,52 +533,22 @@ unsafe fn js_host_bytecode_location(
     b: *mut JSFunctionBytecode,
     pc: *const u8,
     creation: bool,
-) -> Option<JSExceptionLocation> {
+) -> Option<DiagnosticLocation> {
     if b.is_null() || (*b).has_debug() == 0 || pc.is_null() || (*b).byte_code_buf.is_null() {
         return None;
     }
     let offset = pc.offset_from((*b).byte_code_buf) - 1;
-    if offset < 0 || offset >= (*b).byte_code_len as isize {
-        return None;
-    }
+    if offset < 0 || offset >= (*b).byte_code_len as isize { return None; }
     let mut column = 0;
     let line = find_line_num(ctx, b, offset as u32, &mut column);
-    if line <= 0 {
-        return None;
-    }
-    let states = EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let source = states
-        .get(&((*ctx).rt as usize))?
-        .sources
-        .get(&(b as usize))
-        .cloned();
+    if line <= 0 { return None; }
+    let source = with_exception_diagnostics((*ctx).rt, |state| {
+        state.sources.get(&(b as usize)).cloned()
+    })?;
     let filename = js_host_atom_text((*ctx).rt, (*b).debug.filename);
-    Some(match source {
-        Some(source) => {
-            let mut index = source.raw_source_offset(line, column);
-            if creation {
-                if let Some(&expression_start) = source
-                    .call_sites
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .get(&index)
-                {
-                    index = expression_start;
-                }
-            }
-            source.position_at_offset(filename, index)
-        }
-        None => JSExceptionLocation {
-            filename,
-            line: line as usize,
-            column: column.max(1) as usize - 1,
-            source_line: String::new(),
-        },
-    })
+    Some(DiagnosticLocation::new(filename, line, column, source, creation))
 }
-unsafe fn js_host_current_location(ctx: *mut JSContext) -> Option<JSExceptionLocation> {
+unsafe fn js_host_current_location(ctx: *mut JSContext) -> Option<DiagnosticLocation> {
     let mut frame = (*(*ctx).rt).current_stack_frame;
     while !frame.is_null() {
         let b = JS_GetFunctionBytecode((*frame).cur_func);
@@ -542,43 +561,21 @@ unsafe fn js_host_current_location(ctx: *mut JSContext) -> Option<JSExceptionLoc
 }
 unsafe fn js_host_vm_exception(ctx: *mut JSContext, b: *mut JSFunctionBytecode, pc: *const u8) {
     let rt = (*ctx).rt;
-    if !js_host_diagnostics_enabled(rt) {
-        return;
-    }
-    if EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&(rt as usize))
-        .is_some_and(|state| state.captured)
-    {
-        return;
-    }
+    if with_exception_diagnostics(rt, |state| state.captured) != Some(false) { return; }
     let location = js_host_bytecode_location(ctx, b, pc, false);
-    if let Some(state) = EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get_mut(&(rt as usize))
-    {
+    with_exception_diagnostics(rt, |state| {
         state.pending = location;
         state.captured = true;
-    }
+    });
 }
 unsafe fn js_host_catch_exception(
-    rt: *mut JSRuntime,
-    frame: *mut JSStackFrame,
-    slot: *mut JSValue,
+    rt: *mut JSRuntime, frame: *mut JSStackFrame, slot: *mut JSValue,
 ) {
-    if let Some(state) = EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get_mut(&(rt as usize))
-    {
+    with_exception_diagnostics(rt, |state| {
         let location = state.pending.take();
         state.captured = false;
-        state
-            .suspended
-            .insert((frame as usize, slot as usize), location);
-    }
+        state.suspended.insert((frame as usize, slot as usize), location);
+    });
 }
 unsafe fn js_host_is_finally_rethrow(b: *mut JSFunctionBytecode, pc: *const u8) -> bool {
     let target = (pc.offset_from((*b).byte_code_buf) - 1) as usize;
@@ -595,58 +592,42 @@ unsafe fn js_host_is_finally_rethrow(b: *mut JSFunctionBytecode, pc: *const u8) 
     offset == target && previous == OP_gosub
 }
 unsafe fn js_host_vm_throw(
-    ctx: *mut JSContext,
-    b: *mut JSFunctionBytecode,
-    frame: *mut JSStackFrame,
-    pc: *const u8,
-    slot: *mut JSValue,
-    value: JSValue,
+    ctx: *mut JSContext, b: *mut JSFunctionBytecode, frame: *mut JSStackFrame,
+    pc: *const u8, slot: *mut JSValue, value: JSValue,
 ) -> JSValue {
     let rt = (*ctx).rt;
     let saved = if js_host_diagnostics_enabled(rt) && js_host_is_finally_rethrow(b, pc) {
-        EXCEPTION_DIAGNOSTICS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get_mut(&(rt as usize))
-            .and_then(|s| s.suspended.remove(&(frame as usize, slot as usize)))
-    } else {
-        None
-    };
+        with_exception_diagnostics(rt, |state| {
+            state.suspended.remove(&(frame as usize, slot as usize))
+        }).flatten()
+    } else { None };
     let result = JS_Throw(ctx, value);
     if let Some(location) = saved {
-        if let Some(state) = EXCEPTION_DIAGNOSTICS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get_mut(&(rt as usize))
-        {
+        with_exception_diagnostics(rt, |state| {
             state.pending = location;
             state.captured = true;
-        }
+        });
     }
     result
 }
 struct JSHostPreserveException {
     captured: bool,
     runtime: *mut JSRuntime,
-    saved: Option<JSExceptionLocation>,
+    saved: Option<DiagnosticLocation>,
     enabled: bool,
 }
 impl JSHostPreserveException {
     unsafe fn new(ctx: *mut JSContext, preserve: bool) -> Self {
         let runtime = (*ctx).rt;
         let enabled = preserve && js_host_diagnostics_enabled(runtime);
-        // Drop the state guard before fetching the saved location below.
-        let captured = EXCEPTION_DIAGNOSTICS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&(runtime as usize))
-            .is_some_and(|state| state.captured);
+        let captured = enabled
+            && with_exception_diagnostics(runtime, |state| state.captured).unwrap_or(false);
         Self {
             runtime,
             enabled,
             captured,
             saved: if enabled {
-                JS_GetExceptionMetadata(ctx)
+                js_host_pending_location(runtime)
             } else {
                 None
             },
@@ -656,102 +637,53 @@ impl JSHostPreserveException {
 impl Drop for JSHostPreserveException {
     fn drop(&mut self) {
         if self.enabled {
-            if let Some(state) = EXCEPTION_DIAGNOSTICS
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get_mut(&(self.runtime as usize))
-            {
+            with_exception_diagnostics(self.runtime, |state| {
                 state.pending = self.saved.take();
                 state.captured = self.captured;
-            }
+            });
         }
     }
 }
 unsafe fn js_host_error_creation(
-    ctx: *mut JSContext,
-    value: JSValueConst,
-    filename: *const c_char,
-    line: i32,
-    column: i32,
+    ctx: *mut JSContext, value: JSValueConst, filename: *const c_char,
+    line: i32, column: i32,
 ) {
     let rt = (*ctx).rt;
-    if !js_host_diagnostics_enabled(rt) || JS_VALUE_GET_TAG(value) != JS_TAG_OBJECT {
-        return;
-    }
+    if JS_VALUE_GET_TAG(value) != JS_TAG_OBJECT { return; }
     let key = JS_VALUE_GET_PTR(value) as usize;
-    if EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&(rt as usize))
-        .is_some_and(|s| s.creations.contains_key(&key))
-    {
+    if with_exception_diagnostics(rt, |state| state.creations.contains_key(&key)) != Some(false) {
         return;
     }
     let location = if !filename.is_null() {
-        let states = EXCEPTION_DIAGNOSTICS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let source = states.get(&(rt as usize)).and_then(|s| s.compiling.last());
-        let name = core::ffi::CStr::from_ptr(filename)
-            .to_string_lossy()
-            .into_owned();
-        source
-            .map(|source| js_host_source_position(name.clone(), source, line, column))
-            .or_else(|| {
-                Some(JSExceptionLocation {
-                    filename: name,
-                    line: line.max(0) as usize,
-                    column: column.max(1) as usize - 1,
-                    source_line: String::new(),
-                })
-            })
+        let source = with_exception_diagnostics(rt, |state| state.compiling.last().cloned()).flatten();
+        let name = core::ffi::CStr::from_ptr(filename).to_string_lossy().into_owned();
+        Some(DiagnosticLocation::new(name, line, column, source, false))
     } else if JS_VALUE_GET_TAG((*rt).current_exception) == JS_TAG_OBJECT
         && JS_VALUE_GET_PTR((*rt).current_exception) == JS_VALUE_GET_PTR(value)
     {
-        JS_GetExceptionMetadata(ctx).or_else(|| js_host_current_location(ctx))
-    } else {
-        js_host_current_location(ctx)
-    };
+        js_host_pending_location(rt).or_else(|| js_host_current_location(ctx))
+    } else { js_host_current_location(ctx) };
     if let Some(location) = location {
-        if let Some(state) = EXCEPTION_DIAGNOSTICS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get_mut(&(rt as usize))
-        {
+        with_exception_diagnostics(rt, |state| {
             state.creations.insert(key, location.clone());
             if !filename.is_null() {
                 state.pending = Some(location);
                 state.captured = true;
             }
-        }
+        });
     }
 }
 
 unsafe fn js_host_parser_callsite(
-    s: *mut JSParseState,
-    call_token: *const u8,
-    expression: *const u8,
+    s: *mut JSParseState, call_token: *const u8, expression: *const u8,
 ) {
-    let state = EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let Some(source) = state
-        .get(&((*(*s).ctx).rt as usize))
-        .and_then(|state| state.compiling.last())
-    else {
-        return;
-    };
+    let Some(source) = with_exception_diagnostics((*(*s).ctx).rt,
+        |state| state.compiling.last().cloned()).flatten()
+    else { return; };
     let call = call_token.offset_from((*s).buf_start);
     let start = expression.offset_from((*s).buf_start);
-    if call >= 0
-        && start >= 0
-        && (call as usize) <= source.len()
-        && (start as usize) <= source.len()
-    {
-        source
-            .call_sites
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+    if call >= 0 && start >= 0 && (call as usize) <= source.len() && (start as usize) <= source.len() {
+        source.call_sites.lock().unwrap_or_else(|e| e.into_inner())
             .insert(call as usize, start as usize);
     }
 }
@@ -760,23 +692,71 @@ unsafe fn js_host_parser_callsite(
 unsafe fn js_host_error_stack_read(ctx: *mut JSContext, value: JSValueConst, prop: JSAtom) {
     if prop != crate::quickjs_atom::JS_ATOM_stack as JSAtom
         || JS_VALUE_GET_TAG(value) != JS_TAG_OBJECT
-    {
-        return;
-    }
-    if let Some(state) = EXCEPTION_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get_mut(&((*ctx).rt as usize))
-    {
+    { return; }
+    with_exception_diagnostics((*ctx).rt, |state| {
         if state.consume_creation_on_stack_read {
             state.creations.remove(&(JS_VALUE_GET_PTR(value) as usize));
         }
-    }
+    });
 }
 
 #[cfg(test)]
 mod diagnostic_source_index_tests {
     use super::*;
+    #[test]
+    fn runtime_metadata_is_independent_and_survives_owner_transfer_without_stale_cache() {
+        unsafe {
+            let a = JS_NewRuntime();
+            let b = JS_NewRuntime();
+            let ctx = JS_NewContext(b);
+            assert!(!js_host_diagnostics_enabled(a));
+            assert!(!js_host_diagnostics_enabled(b));
+            JS_EnableExceptionMetadata(a, true);
+            JS_EnableExceptionMetadata(b, true);
+            let state_a = js_host_exception_diagnostics(a).unwrap();
+            let state_b = js_host_exception_diagnostics(b).unwrap();
+            assert!(!DiagnosticArc::ptr_eq(&state_a, &state_b));
+            {
+                let _held_a = state_a.lock().unwrap();
+                let source = DiagnosticArc::new(DiagnosticSource {
+                    text: "\n\nthrow 1".into(), call_sites: Mutex::new(DiagnosticMap::new()),
+                    positions: std::sync::OnceLock::new(),
+                });
+                with_exception_diagnostics(b, |state| state.pending = Some(DiagnosticLocation::new(
+                    "moved.js".into(), 3, 2, Some(source.clone()), false,
+                ))).unwrap();
+                assert!(source.positions.get().is_none(), "capturing a location must not decode source");
+            }
+            let pointers = (b as usize, ctx as usize);
+            std::thread::spawn(move || {
+                let b = pointers.0 as *mut JSRuntime;
+                let ctx = pointers.1 as *mut JSContext;
+                JS_UpdateStackTop(b);
+                let location = JS_GetExceptionMetadata(ctx).unwrap();
+                assert_eq!((location.filename.as_str(), location.line, location.column,
+                    location.source_line.as_str()), ("moved.js", 3, 1, "throw 1"));
+                JS_EnableExceptionMetadata(b, false);
+                assert!(JS_GetExceptionMetadata(ctx).is_none());
+                JS_EnableExceptionMetadata(b, true);
+                assert!(JS_GetExceptionMetadata(ctx).is_none());
+                with_exception_diagnostics(b, |state| state.pending = Some(DiagnosticLocation::new(
+                    "new-owner.js".into(), 0, 1, None, false,
+                ))).unwrap();
+            }).join().unwrap();
+            JS_UpdateStackTop(b);
+            assert_eq!(JS_GetExceptionMetadata(ctx).unwrap().filename, "new-owner.js");
+            assert!(!DiagnosticArc::ptr_eq(&state_b, &js_host_exception_diagnostics(b).unwrap()));
+            JS_EnableExceptionMetadata(a, false);
+            assert!(!js_host_diagnostics_enabled(a));
+            JS_EnableExceptionMetadata(a, true);
+            assert!(!DiagnosticArc::ptr_eq(&state_a, &js_host_exception_diagnostics(a).unwrap()));
+            JS_FreeContext(ctx);
+            JS_FreeRuntime(b);
+            JS_FreeRuntime(a);
+            assert!(!js_host_diagnostics_enabled(a));
+            assert!(!js_host_diagnostics_enabled(b));
+        }
+    }
     #[test]
     fn sparse_source_positions_match_original_unicode_and_line_break_rules() {
         let sources = [String::new(), "A😀B\r\n漢\u{2028}字\u{2029}x\ry\nz".into(),

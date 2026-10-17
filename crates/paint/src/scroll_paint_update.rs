@@ -485,30 +485,49 @@ fn collect_current_fragments<'a>(
         f.paint.display_item_fragment,
     );
     let Some(&index) = retained.fragment_indices.get(&key) else {
-        browser_tracing::instant("paint", "ScrollPaintReuseRejected", &[
-            ("stage", 1.0), ("node_id", f.node_id as f64),
-            ("fragment_instance_id", f.fragment_instance_id as f64),
-            ("display_item_client_id", f.paint.display_item_client_id as f64),
-        ]);
+        browser_tracing::instant(
+            "paint",
+            "ScrollPaintReuseRejected",
+            &[
+                ("stage", 1.0),
+                ("node_id", f.node_id as f64),
+                ("fragment_instance_id", f.fragment_instance_id as f64),
+                (
+                    "display_item_client_id",
+                    f.paint.display_item_client_id as f64,
+                ),
+            ],
+        );
         return false;
     };
     if nodes[index].is_some() {
-        browser_tracing::instant("paint", "ScrollPaintReuseRejected", &[
-            ("stage", 2.0), ("node_id", f.node_id as f64),
-        ]);
+        browser_tracing::instant(
+            "paint",
+            "ScrollPaintReuseRejected",
+            &[("stage", 2.0), ("node_id", f.node_id as f64)],
+        );
         return false;
     }
     let old = &retained.fragments[index];
     let unowned_sticky_change = f.paint.sticky_offset != old.sticky_offset
         && (f.paint.sticky_constraint.is_none() || f.paint.display_item_client_id == 0);
     if f.offset != old.offset || f.size != old.size || unowned_sticky_change {
-        browser_tracing::instant("paint", "ScrollPaintReuseRejected", &[
-            ("stage", 3.0), ("node_id", f.node_id as f64),
-            ("offset_changed", (f.offset != old.offset) as u8 as f64),
-            ("size_changed", (f.size != old.size) as u8 as f64),
-            ("sticky_changed", (f.paint.sticky_offset != old.sticky_offset) as u8 as f64),
-            ("old_sticky_y", old.sticky_offset.y), ("new_sticky_y", f.paint.sticky_offset.y),
-        ]);
+        browser_tracing::instant(
+            "paint",
+            "ScrollPaintReuseRejected",
+            &[
+                ("stage", 3.0),
+                ("node_id", f.node_id as f64),
+                ("offset_changed", (f.offset != old.offset) as u8 as f64),
+                ("size_changed", (f.size != old.size) as u8 as f64),
+                (
+                    "sticky_changed",
+                    (f.paint.sticky_offset != old.sticky_offset) as u8 as f64,
+                ),
+                ("old_sticky_y", old.sticky_offset.y),
+                ("new_sticky_y", f.paint.sticky_offset.y),
+            ],
+        );
         return false;
     }
     nodes[index] = Some(f);
@@ -520,7 +539,10 @@ fn collect_current_fragments<'a>(
         };
         if let Some(constraint) = f.paint.sticky_constraint {
             let current = (f.paint.sticky_offset, constraint);
-            if sticky.insert(owner, current).is_some_and(|old| old != current) {
+            if sticky
+                .insert(owner, current)
+                .is_some_and(|old| old != current)
+            {
                 return false;
             }
         }
@@ -961,8 +983,14 @@ mod coverage_tests {
             let mut nodes = vec![None; retained.fragments.len()];
             let mut offsets = BTreeMap::new();
             let mut collected = 0;
-            collect_current_fragments(f, retained, &mut nodes, &mut offsets, &mut BTreeMap::new(), &mut collected)
-                && collected == retained.fragments.len()
+            collect_current_fragments(
+                f,
+                retained,
+                &mut nodes,
+                &mut offsets,
+                &mut BTreeMap::new(),
+                &mut collected,
+            ) && collected == retained.fragments.len()
         }
         let mut root = fragment(1);
         root.children = vec![fragment(2), fragment(3)];
@@ -1008,7 +1036,12 @@ mod coverage_tests {
         hidden.children.push(fragment(5));
         with_resource.children.push(hidden);
         assert!(accepts(&retained, &with_resource));
-        with_resource.children.last_mut().unwrap().paint.svg_hidden_container = false;
+        with_resource
+            .children
+            .last_mut()
+            .unwrap()
+            .paint
+            .svg_hidden_container = false;
         assert!(!accepts(&retained, &with_resource));
         let mut current = root.clone();
         current.children.reverse();
@@ -1030,7 +1063,6 @@ mod coverage_tests {
         assert!(!accepts(&retained, &current));
         current.children[0].paint.sticky_constraint = Some(Default::default());
         assert!(accepts(&retained, &current)); // Store subsequently validates the real slot/geometry.
-
     }
 
     #[test]

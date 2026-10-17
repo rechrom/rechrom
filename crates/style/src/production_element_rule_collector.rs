@@ -31,7 +31,7 @@ use crate::{
     style_rule::StyleRule,
     style_scope::StyleScope,
 };
-use dom::{persistent_document::DOMAttribute, Document};
+use dom::Document;
 use foundation::{AtomicString, CSSPropertyID};
 use layoutng_style::style::computed_style_constants::PseudoId;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
@@ -49,6 +49,7 @@ pub(crate) struct ProductionElementResolveContext {
 pub(crate) struct ProductionStyleRecalcContext {
     pub starting_style: ProductionStartingStyleContext,
     pub size_container: Option<usize>,
+    pub can_use_incremental_style: bool,
 }
 
 impl ProductionStyleRecalcContext {
@@ -80,6 +81,7 @@ impl ProductionStyleRecalcContext {
         Self {
             starting_style,
             size_container,
+            can_use_incremental_style: false,
         }
     }
 
@@ -113,19 +115,28 @@ pub(crate) struct ProductionCheckingContext {
 
 pub(crate) struct ProductionElementRuleCollectorRuntime<'d> {
     selector: Rc<PersistentSelectorBackend<'d>>,
-    author_layer_map: Option<Rc<CascadeLayerMap>>,
-    implicit_scope_roots: HashMap<usize, Vec<usize>>,
+    // The runtime's scoped-resolver handle owns the same immutable layer map
+    // for every RuleSetGroup. Do not allocate that handle at each lookup.
+    author_layer_map: Option<Rc<Rc<CascadeLayerMap>>>,
+    implicit_scope_roots: Rc<HashMap<usize, Vec<usize>>>,
     container_runtime: Option<&'d ProductionContainerRuntime<'d>>,
     style_scopes: RefCell<HashMap<usize, Rc<PersistentStyleScope>>>,
     tree_scopes: RefCell<HashMap<usize, Rc<ProductionTreeScope>>>,
 }
 
 impl<'d> ProductionElementRuleCollectorRuntime<'d> {
+    pub(crate) fn SelectorFilterForElement(
+        &self,
+        element: usize,
+    ) -> std::cell::Ref<'_, crate::selector_filter::SelectorFilter> {
+        self.selector.SelectorFilterForElement(element)
+    }
+
     pub fn new(session: &PersistentSelectorMatchSession<'d>) -> Self {
         Self {
             selector: session.Backend(),
             author_layer_map: None,
-            implicit_scope_roots: HashMap::new(),
+            implicit_scope_roots: Default::default(),
             container_runtime: None,
             style_scopes: RefCell::new(HashMap::new()),
             tree_scopes: RefCell::new(HashMap::new()),
@@ -138,8 +149,8 @@ impl<'d> ProductionElementRuleCollectorRuntime<'d> {
     ) -> Self {
         Self {
             selector: session.Backend(),
-            author_layer_map,
-            implicit_scope_roots: HashMap::new(),
+            author_layer_map: author_layer_map.map(Rc::new),
+            implicit_scope_roots: Default::default(),
             container_runtime: None,
             style_scopes: RefCell::new(HashMap::new()),
             tree_scopes: RefCell::new(HashMap::new()),
@@ -149,13 +160,13 @@ impl<'d> ProductionElementRuleCollectorRuntime<'d> {
     pub fn with_production_inputs(
         session: &PersistentSelectorMatchSession<'d>,
         author_layer_map: Option<Rc<CascadeLayerMap>>,
-        implicit_scope_roots: HashMap<usize, Vec<usize>>,
+        implicit_scope_roots: impl Into<Rc<HashMap<usize, Vec<usize>>>>,
         container_runtime: Option<&'d ProductionContainerRuntime<'d>>,
     ) -> Self {
         Self {
             selector: session.Backend(),
-            author_layer_map,
-            implicit_scope_roots,
+            author_layer_map: author_layer_map.map(Rc::new),
+            implicit_scope_roots: implicit_scope_roots.into(),
             container_runtime,
             style_scopes: RefCell::new(HashMap::new()),
             tree_scopes: RefCell::new(HashMap::new()),
@@ -219,7 +230,7 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
     type TreeScope = ProductionTreeScope;
     type ElementResolveContext = ProductionElementResolveContext;
     type StyleRecalcContext = ProductionStyleRecalcContext;
-    type SelectorFilter = ();
+    type SelectorFilter = crate::selector_filter::SelectorFilter;
     type StyleRequest = ProductionPseudoRequest;
     type PartNames = PersistentPartNames;
     type SelectorChecker = SelectorChecker<PersistentSelectorBackend<'static>>;
@@ -227,7 +238,7 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
     type CheckerMatchResult = CheckerMatchResult<PersistentSelectorBackend<'static>>;
     type StyleScopeFrame = PersistentStyleScopeFrame;
     type ContainerSelectorCache = ProductionContainerSelectorCache;
-    type Attribute = DOMAttribute;
+    type Attribute = dom::persistent_document::DOMAttribute;
     type CSSRule = ();
     type CSSRuleCollection = Vec<()>;
     type CSSStyleSheet = ();
@@ -244,8 +255,9 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
         self.ContextElement(c)
     }
     fn ContextParentElement(&self, c: &Self::ElementResolveContext) -> Option<Rc<Self::Element>> {
-        self.node(&c.element)
-            .Parent()
+        self.selector
+            .document()
+            .FlatTreeParentElement(c.element)
             .map(|index| self.selector.handle(index))
     }
     fn ElementIsPseudoElement(&self, _: &Self::Element) -> bool {
@@ -259,11 +271,19 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
             .Parent()
             .map(|index| self.selector.handle(index))
     }
-    fn ParentStackIsConsistent(&self, _: &Self::SelectorFilter, _: Option<&Self::Element>) -> bool {
-        false
+    fn ParentStackIsConsistent(
+        &self,
+        filter: &Self::SelectorFilter,
+        parent: Option<&Self::Element>,
+    ) -> bool {
+        // Quirks author rules use the existing compatibility branch until
+        // their parser context and folded identifiers are retained together.
+        self.selector.document().GetCompatibilityMode()
+            != dom::persistent_document::CompatibilityMode::kQuirks
+            && filter.ParentStackIsConsistent(parent.copied())
     }
-    fn FastRejectSelector(&self, _: &Self::SelectorFilter, _: &[u16]) -> bool {
-        false
+    fn FastRejectSelector(&self, filter: &Self::SelectorFilter, hashes: &[u16]) -> bool {
+        filter.FastRejectSelector(hashes)
     }
     fn DefaultStyleRequest(&self) -> Self::StyleRequest {
         ProductionPseudoRequest::Element()
@@ -469,17 +489,26 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
         // pseudo declarations into the originating element.  Enabling logical
         // pseudo mode here made successful production resolution silently lose
         // ::before/::after markers; compatibility fallback happened to mask it.
-        backend.WithLogicalPseudoMode(false, || checker.Match(&actual, result))
+        let matched = backend.WithLogicalPseudoMode(false, || checker.Match(&actual, result));
+        backend.RememberSubjectFlags(*c.element, result.flags);
+        matched
     }
     fn EasySelectorMatch(
         &self,
-        _: CSSSelectorComplex<'_>,
-        _: &Self::Element,
-        _: Option<&Self::Element>,
-        _: PseudoId,
-        _: &mut Self::CheckerMatchResult,
+        selector: CSSSelectorComplex<'_>,
+        element: &Self::Element,
+        pseudo_element: Option<&Self::Element>,
+        pseudo_id: PseudoId,
+        result: &mut Self::CheckerMatchResult,
     ) -> bool {
-        unreachable!("production RuleSet disables easy-selector classification")
+        crate::selector_checker::EasySelectorChecker::Match(
+            self.selector.as_ref(),
+            selector,
+            self.selector.handle(*element),
+            pseudo_element,
+            pseudo_id,
+            &mut result.dynamic_pseudo,
+        )
     }
     fn MatchDynamicPseudo(&self, result: &Self::CheckerMatchResult) -> PseudoId {
         result.dynamic_pseudo
@@ -528,7 +557,7 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
         &self,
         _: &Self::ContainerNode,
     ) -> Option<Rc<Self::ScopedStyleResolver>> {
-        self.author_layer_map.clone().map(Rc::new)
+        self.author_layer_map.clone()
     }
     fn ResolverCascadeLayerMap(
         &self,
@@ -537,13 +566,21 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
         Some(resolver.clone())
     }
     fn UserCascadeLayerMap(&self, _: &Self::RuntimeDocument) -> Option<Rc<CascadeLayerMap>> {
-        self.author_layer_map.clone()
+        self.author_layer_map
+            .as_ref()
+            .map(|resolver| resolver.as_ref().clone())
     }
     fn ElementDocument(&self, element: &Self::Element) -> Rc<Self::RuntimeDocument> {
         Rc::new(self.selector.document().IsInHTMLDocument(*element))
     }
-    fn AttributeOrClassBloomFilter(&self, _: &Self::Element) -> u32 {
-        u32::MAX
+    fn AttributeOrClassBloomFilter(&self, element: &Self::Element) -> u32 {
+        if self.selector.document().GetCompatibilityMode()
+            == dom::persistent_document::CompatibilityMode::kQuirks
+        {
+            u32::MAX
+        } else {
+            self.selector.ElementSubjectFilter(*element)
+        }
     }
     fn ShadowPseudoId(&self, element: &Self::Element) -> AtomicString {
         SelectorCheckerBackend::ShadowPseudoId(self.selector.as_ref(), element)
@@ -564,17 +601,8 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
     fn HasClass(&self, e: &Self::Element) -> bool {
         SelectorCheckerBackend::HasClass(self.selector.as_ref(), e)
     }
-    fn ClassNames(&self, e: &Self::Element) -> Vec<AtomicString> {
-        self.node(e)
-            .FindAttribute("class")
-            .map(|attribute| {
-                attribute
-                    .value
-                    .split_ascii_whitespace()
-                    .map(AtomicString::from_str)
-                    .collect()
-            })
-            .unwrap_or_default()
+    fn ClassNames(&self, e: &Self::Element) -> Rc<[AtomicString]> {
+        self.selector.ClassNamesForElement(*e)
     }
     fn IsHTMLElement(&self, e: &Self::Element) -> bool {
         SelectorCheckerBackend::IsHTMLElement(self.selector.as_ref(), e)
@@ -582,19 +610,14 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
     fn IsHTMLDocument(&self, document: &Self::RuntimeDocument) -> bool {
         *document
     }
-    fn Attributes(&self, e: &Self::Element) -> Vec<Rc<Self::Attribute>> {
+    fn Attributes(&self, e: &Self::Element) -> &[Self::Attribute] {
         self.AttributesWithoutUpdate(e)
     }
-    fn AttributesWithoutStyleUpdate(&self, e: &Self::Element) -> Vec<Rc<Self::Attribute>> {
+    fn AttributesWithoutStyleUpdate(&self, e: &Self::Element) -> &[Self::Attribute] {
         self.AttributesWithoutUpdate(e)
     }
-    fn AttributesWithoutUpdate(&self, e: &Self::Element) -> Vec<Rc<Self::Attribute>> {
-        self.node(e)
-            .Attributes()
-            .iter()
-            .cloned()
-            .map(Rc::new)
-            .collect()
+    fn AttributesWithoutUpdate(&self, e: &Self::Element) -> &[Self::Attribute] {
+        SelectorCheckerBackend::AttributesWithoutUpdate(self.selector.as_ref(), e)
     }
     fn AttributeLocalName(&self, a: &Self::Attribute) -> AtomicString {
         AtomicString::from_str(&a.local_name)

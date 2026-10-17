@@ -115,6 +115,8 @@ pub enum ElementInvalidationFlag {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContainerInvalidationFlag {
+    ChildrenAffectedByDirectAdjacentRules,
+    ChildrenAffectedByIndirectAdjacentRules,
     ChildrenAffectedByFirstChildRules,
     ChildrenAffectedByLastChildRules,
     ChildrenAffectedByForwardPositionalRules,
@@ -214,7 +216,7 @@ pub trait SelectorCheckerBackend: Sized {
     fn CSSAttributeValueCaseSensitiveNonHTMLEnabled(&self) -> bool;
     fn IsHTMLElement(&self, e: &Self::Element) -> bool;
     fn IsInHTMLDocument(&self, e: &Self::Element) -> bool;
-    fn AttributesWithoutUpdate(&self, e: &Self::Element) -> Vec<Rc<Self::Attribute>>;
+    fn AttributesWithoutUpdate(&self, e: &Self::Element) -> &[Self::Attribute];
     fn AttributeMatchesName(&self, a: &Self::Attribute, name: &QualifiedName) -> bool;
     fn AttributeMatchesNameCaseInsensitive(
         &self,
@@ -1342,7 +1344,7 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
                 && (!self.backend.CSSAttributeValueCaseSensitiveNonHTMLEnabled()
                     || self.backend.IsHTMLElement(e))
                 && self.backend.IsInHTMLDocument(e));
-        for attribute in self.backend.AttributesWithoutUpdate(e) {
+        for attribute in self.backend.AttributesWithoutUpdate(e).iter() {
             if !self.backend.AttributeMatchesName(&attribute, &name) {
                 if self.backend.IsHTMLElement(e) || !self.backend.IsInHTMLDocument(e) {
                     continue;
@@ -3101,3 +3103,7 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
         }
     }
 }
+
+#[path = "easy_selector_checker.rs"]
+mod easy_selector_checker;
+pub(crate) use easy_selector_checker::EasySelectorChecker;

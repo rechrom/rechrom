@@ -131,7 +131,9 @@ fn LayoutSvgText(
 // uses the runtime class to select the translated derived method.
 fn UpdateSvgObjectLayout(object: &mut LayoutObject, info: &SVGLayoutInfo) -> SVGLayoutResult {
     match object.RuntimeClass() {
-        LayoutObjectClass::SvgHiddenContainer | LayoutObjectClass::SvgResourceClipper | LayoutObjectClass::SvgResourceMasker => {
+        LayoutObjectClass::SvgHiddenContainer
+        | LayoutObjectClass::SvgResourceClipper
+        | LayoutObjectClass::SvgResourceMasker => {
             unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGHiddenContainer>() }
                 .UpdateSVGLayout(info)
         }

@@ -12,6 +12,7 @@ use layoutng_assembly::internal::layout_object::LayoutObject;
 use layoutng_assembly::layout_engine::LayoutEngine;
 use layoutng_assembly::layout_engine::{LayoutMutation, LayoutTreeUpdate};
 use layoutng_style::style::appearance::AppearanceValue;
+use std::collections::HashSet;
 
 // cpp: dom_to_layout/layout_object_tree_builder.cc:376-631
 pub(super) fn ElementMetadata(
@@ -378,9 +379,16 @@ fn ElementKind(
                 }
             }
             "foreignObject" => NodeKind::kSvgForeignObject,
+            // SVGGElement::CreateLayoutObject preserves resources below a
+            // display:none group through LayoutSVGHiddenContainer.
+            "g" if unsafe { style.native_style.as_ref() }
+                .is_some_and(|style| style.Display() == foundation::EDisplay::kNone) =>
+            {
+                NodeKind::kSvgHiddenContainer
+            }
             "defs" => NodeKind::kSvgHiddenContainer,
             "clipPath" => NodeKind::kSvgResourceClipper,
-                "mask" => NodeKind::kSvgResourceMasker,
+            "mask" => NodeKind::kSvgResourceMasker,
             "text" => NodeKind::kSvgText,
             // SVGTextPathElement::CreateLayoutObject preserves element identity
             // independently of href resolution. LayoutSVGTextPath::LayoutPath
@@ -474,7 +482,7 @@ fn SelectDisplayedText(document: &Document, index: usize) -> String {
 // cpp: dom_to_layout/layout_object_tree_builder.cc:806-851
 fn DefaultListMarkerText(document: &Document, index: usize, style: &ComputedStyle) -> String {
     let defaults = ExtendedStyle::default();
-    let extra = style.extended.as_ref().unwrap_or(&defaults);
+    let extra = style.extended.as_deref().unwrap_or(&defaults);
     match extra.list_style_type {
         ListStyleType::kNone => return String::new(),
         ListStyleType::kCircle => return "○ ".into(),
@@ -535,11 +543,14 @@ fn DefaultListMarkerText(document: &Document, index: usize, style: &ComputedStyl
 // projection until each adapter migrates together with its native shadow tree;
 // entering a control UA root here would duplicate content or native theme painting.
 // SVGUseElement owns real SVG descendants and uses ordinary flat-tree attachment.
-pub(super) fn AttachmentChildren(document: &Document, index: usize) -> std::borrow::Cow<'_, [usize]> {
+pub(super) fn AttachmentChildren(
+    document: &Document,
+    index: usize,
+) -> std::borrow::Cow<'_, [usize]> {
     if !document.Node(index).IsElement("use", DOMNamespace::kSVG)
-        && document
-        .ShadowRoot(index)
-        .is_some_and(|root| document.ShadowRootMode(root) == Some(DOMShadowRootMode::kUserAgent))
+        && document.ShadowRoot(index).is_some_and(|root| {
+            document.ShadowRootMode(root) == Some(DOMShadowRootMode::kUserAgent)
+        })
     {
         return std::borrow::Cow::Borrowed(document.Node(index).Children());
     }
@@ -1179,7 +1190,7 @@ fn AppendChildren<'a>(
     index: usize,
     parent: *mut LayoutObject,
     flattened: Option<&'a ComputedStyle>,
-    mut first: Option<&mut FirstLetterInsertion<'a>>,
+    first: Option<&mut FirstLetterInsertion<'a>>,
     svg_filter_graphs: &std::sync::Arc<
         Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
     >,
@@ -1187,10 +1198,41 @@ fn AppendChildren<'a>(
         layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot,
     >,
 ) {
+    let children = AttachmentChildren(document, index);
+    AppendSelectedChildren(
+        tree,
+        document,
+        interaction,
+        index,
+        parent,
+        flattened,
+        first,
+        svg_filter_graphs,
+        svg_clip_path_graphs,
+        &children,
+    );
+}
+
+fn AppendSelectedChildren<'a>(
+    tree: &mut LayoutTreeUpdate<'_>,
+    document: &'a Document,
+    interaction: &UserInteractionState,
+    index: usize,
+    parent: *mut LayoutObject,
+    flattened: Option<&'a ComputedStyle>,
+    mut first: Option<&mut FirstLetterInsertion<'a>>,
+    svg_filter_graphs: &std::sync::Arc<
+        Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>,
+    >,
+    svg_clip_path_graphs: &std::sync::Arc<
+        layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot,
+    >,
+    children: &[usize],
+) {
     let dom_parent = document.Node(index);
     // The original host/slot remains the inheritance and attachment context;
     // its ShadowRoot fragment is a carrier, never a styled layout parent.
-    for &child in AttachmentChildren(document, index).iter() {
+    for &child in children {
         let node = document.Node(child);
         if node.Type() == DOMNodeType::kText {
             // SVG character data creates layout text only in SVG text-content
@@ -1248,9 +1290,9 @@ fn AppendChildren<'a>(
         {
             continue;
         }
-        let resolved = document
-            .ResolvedStyleFor(child)
-            .expect("computed styles must be installed before tree build");
+        let Some(resolved) = document.ResolvedStyleFor(child) else {
+            continue;
+        };
         if !resolved.generates_box {
             if resolved.display_contents {
                 AppendPseudoElement(
@@ -1300,12 +1342,16 @@ fn AppendChildren<'a>(
         // Most elements project their resolved style without modification.
         // Own a copy only when resource/control adapters actually need it.
         let mut style = std::borrow::Cow::Borrowed(&resolved.style);
-        style.to_mut().paint.svg_filter_graphs = std::sync::Arc::clone(svg_filter_graphs);
-        resolve_svg_clip_path(
-            style.to_mut(),
-            svg_clip_path_graphs,
-            document.SVGResourceScope(child),
-        );
+        if needs_svg_filter_resources(&style) {
+            style.to_mut().paint.svg_filter_graphs = std::sync::Arc::clone(svg_filter_graphs);
+        }
+        if needs_svg_clip_resources(&style) {
+            resolve_svg_clip_path(
+                style.to_mut(),
+                svg_clip_path_graphs,
+                document.SVGResourceScope(child),
+            );
+        }
         if node.Name() == "img" {
             if let Some(image) = document
                 .CurrentImageSource(child)
@@ -1332,7 +1378,7 @@ fn AppendChildren<'a>(
         if select_list && style.height.is_none() {
             let rows = positive_attribute_integer(node, "size", 4);
             let defaults = ExtendedStyle::default();
-            let e = style.extended.as_ref().unwrap_or(&defaults);
+            let e = style.extended.as_deref().unwrap_or(&defaults);
             let height = rows as f64 * e.line_height.unwrap_or(e.font_size * 1.2) + 2.0;
             style.to_mut().height = Some(height);
         }
@@ -1361,9 +1407,7 @@ fn AppendChildren<'a>(
             let mut track_style = ComputedStyle::default();
             track_style.display = Display::kFlex;
             track_style.height = Some(16.0);
-            track_style
-                .extended
-                .get_or_insert_with(Default::default)
+            std::sync::Arc::make_mut(track_style.extended.get_or_insert_with(Default::default))
                 .width_percent = Some(100.0);
             let track = tree.AddBox(
                 unsafe { &mut *object },
@@ -1381,9 +1425,7 @@ fn AppendChildren<'a>(
             let mut thumb_style = ComputedStyle::default();
             thumb_style.width = Some(16.0);
             thumb_style.height = Some(16.0);
-            thumb_style
-                .extended
-                .get_or_insert_with(Default::default)
+            std::sync::Arc::make_mut(thumb_style.extended.get_or_insert_with(Default::default))
                 .effective_appearance = AppearanceValue::kSliderThumbHorizontal;
             tree.AddBox(
                 unsafe { &mut *track },
@@ -1404,10 +1446,10 @@ fn AppendChildren<'a>(
                 .FileUploadButtonElement(child)
                 .expect("file input must retain its upload button");
             let button_node = document.Node(button_index);
-            let button_resolved = document
+            if let Some(button_resolved) = document
                 .ResolvedStyleFor(button_index)
-                .expect("file upload button style must be resolved");
-            if button_resolved.generates_box {
+                .filter(|style| style.generates_box)
+            {
                 let mut button_style = button_resolved.style.clone();
                 let mut button_data = ElementMetadata(
                     document,
@@ -1445,10 +1487,10 @@ fn AppendChildren<'a>(
                 .FileStatusElement(child)
                 .expect("file input must retain its status element");
             let status_node = document.Node(status_index);
-            let status_resolved = document
+            if let Some(status_resolved) = document
                 .ResolvedStyleFor(status_index)
-                .expect("file status style must be resolved");
-            if status_resolved.generates_box {
+                .filter(|style| style.generates_box)
+            {
                 let status = tree.AddBox(
                     unsafe { &mut *object },
                     status_node.Id(),
@@ -1515,9 +1557,7 @@ fn AppendChildren<'a>(
             inner_style.flex_grow = 1.0;
             inner_style.flex_shrink = 1.0;
             inner_style.min_width = Some(0.0);
-            inner_style
-                .extended
-                .get_or_insert_with(Default::default)
+            std::sync::Arc::make_mut(inner_style.extended.get_or_insert_with(Default::default))
                 .SetOverflow(Overflow::kHidden);
             let inner = tree.AddBox(
                 unsafe { &mut *object },
@@ -1582,7 +1622,9 @@ fn AppendChildren<'a>(
             };
             editor_style.svg_clip_resources = style.svg_clip_resources.clone();
             editor_style.display = Display::kBlock;
-            let e = editor_style.extended.get_or_insert_with(Default::default);
+            let e = std::sync::Arc::make_mut(
+                editor_style.extended.get_or_insert_with(Default::default),
+            );
             e.width_percent = Some(100.0);
             if textarea {
                 e.white_space = WhiteSpace::kPreWrap;
@@ -1628,7 +1670,8 @@ fn AppendChildren<'a>(
             if trailing_newline {
                 let mut break_style = editor_style.clone();
                 break_style.display = Display::kInline;
-                break_style.extended.as_mut().unwrap().width_percent = None;
+                std::sync::Arc::make_mut(break_style.extended.as_mut().unwrap()).width_percent =
+                    None;
                 tree.AddBox(
                     unsafe { &mut *editor },
                     node.Id() | (1 << 50),
@@ -1760,6 +1803,14 @@ pub fn EmitLayoutMutations(
     let _heap_scope = foundation::LayoutHeapScope::new();
     let mut projection = |mut tree: &mut LayoutTreeUpdate<'_>| {
         let document = owner.GetDocument();
+        tree.Reattach(
+            &document
+                .StyleState()
+                .layout_reattach_nodes
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+        );
         let svg_filter_graphs = super::svg_filter_graph::build_persistent(document);
         let svg_clip_path_graphs = document
             .SVGResources()
@@ -1775,15 +1826,25 @@ pub fn EmitLayoutMutations(
         // exists. Synchronous geometry/scroll getters can enter this lifecycle
         // while response bytes have not yet produced any HTML nodes.
         let Some(index) = index else {
-            tree.CreateRootDefault(document.Node(document.Root()).Id(), &ComputedStyle::default());
+            tree.CreateRootDefault(
+                document.Node(document.Root()).Id(),
+                &ComputedStyle::default(),
+            );
             return;
         };
         let node = document.Node(index);
-        let resolved = document
-            .ResolvedStyleFor(index)
-            .expect("computed styles must be installed before tree build");
+        let Some(resolved) = document.ResolvedStyleFor(index) else {
+            tree.CreateRootDefault(
+                document.Node(document.Root()).Id(),
+                &ComputedStyle::default(),
+            );
+            return;
+        };
         if !resolved.generates_box {
-            tree.CreateRootDefault(document.Node(document.Root()).Id(), &ComputedStyle::default());
+            tree.CreateRootDefault(
+                document.Node(document.Root()).Id(),
+                &ComputedStyle::default(),
+            );
             return;
         }
         let mut root_style = resolved.style.clone();
@@ -1855,6 +1916,190 @@ pub fn EmitLayoutMutations(
     // The projection borrows DOM style/metadata only during this callback.
     // The receiver must synchronously apply it to its owned native tree.
     receive(LayoutMutation::TreeUpdate(&mut projection));
+}
+
+// RebuildLayoutTree/WhitespaceAttacher roots retain complete attachment context.
+// Inline/display:contents changes use their enclosing box; first-letter changes
+// include the owning first-letter subtree, not an isolated text fragment.
+fn AttachmentRoot(document: &Document, mut index: usize) -> Option<usize> {
+    if !document.IsConnectedToDocument(index) {
+        return None;
+    }
+    loop {
+        if document.Node(index).Type() == DOMNodeType::kElement
+            && document.ResolvedStyleFor(index).is_some_and(|s| {
+                s.own_generates_box && !s.display_contents && s.style.display != Display::kInline
+            })
+        {
+            break;
+        }
+        index = document.FlatTreeParentElement(index)?;
+    }
+    let mut ancestor = document.FlatTreeParentElement(index);
+    while let Some(parent) = ancestor {
+        if document
+            .ResolvedStyleFor(parent)
+            .is_some_and(|s| s.first_letter.is_some())
+        {
+            index = parent;
+        }
+        ancestor = document.FlatTreeParentElement(parent);
+    }
+    Some(index)
+}
+fn IsWithinAttachmentRoot(document: &Document, root: usize, mut index: usize) -> bool {
+    loop {
+        if root == index {
+            return true;
+        }
+        let Some(parent) = document.FlatTreeParentElement(index) else {
+            return false;
+        };
+        index = parent;
+    }
+}
+
+// Dirty roots cover their flat-tree descendants. Walk a node's ancestor path
+// once, as attachment dirty flags do in Blink, rather than testing every root.
+fn IsWithinAttachmentRoots(document: &Document, roots: &HashSet<usize>, mut index: usize) -> bool {
+    if roots.is_empty() {
+        return false;
+    }
+    loop {
+        if roots.contains(&index) {
+            return true;
+        }
+        let Some(parent) = document.FlatTreeParentElement(index) else {
+            return false;
+        };
+        index = parent;
+    }
+}
+
+pub(super) fn EmitLayoutSubtrees(
+    owner: &DOM,
+    interaction: &UserInteractionState,
+    receive: &mut impl FnMut(LayoutMutation<'_>) -> bool,
+) -> bool {
+    let document = owner.GetDocument();
+    let state = document.StyleState();
+    if state.layout_inputs_require_tree {
+        return false;
+    }
+    let mut select_trace = browser_tracing::span("layout", "DOM.SelectAttachmentRoots");
+    select_trace.set("tree_roots", state.layout_tree_roots.len() as f64);
+    select_trace.set("style_nodes", state.layout_style_nodes.len() as f64);
+    select_trace.set("geometry_nodes", state.geometry_input_nodes.len() as f64);
+    select_trace.set("reattach_nodes", state.layout_reattach_nodes.len() as f64);
+    let mut roots = state
+        .layout_tree_roots
+        .iter()
+        .filter_map(|&id| {
+            document
+                .FindNodeById(id)
+                .and_then(|index| AttachmentRoot(document, index))
+        })
+        .collect::<Vec<_>>();
+    let mut candidates = roots.iter().copied().collect::<HashSet<_>>();
+    for id in state
+        .layout_style_nodes
+        .iter()
+        .chain(&state.geometry_input_nodes)
+        .chain(&state.layout_reattach_nodes)
+    {
+        let Some(index) = document
+            .FindNodeById(*id)
+            .filter(|&i| document.IsConnectedToDocument(i))
+        else {
+            continue;
+        };
+        if IsWithinAttachmentRoots(document, &candidates, index) {
+            continue;
+        }
+        // Element::ReattachLayoutTree starts at the element itself. Missing
+        // layout objects/anonymous contexts expand to the parent below; inline
+        // and first-letter context already expands in AttachmentRoot.
+        let Some(root) = AttachmentRoot(document, index) else {
+            return false;
+        };
+        if candidates.insert(root) {
+            roots.push(root);
+        }
+    }
+    roots.sort_unstable();
+    roots.dedup();
+    roots.retain(|&root| {
+        document
+            .FlatTreeParentElement(root)
+            .is_none_or(|parent| !IsWithinAttachmentRoots(document, &candidates, parent))
+    });
+    select_trace.set("selected_roots", roots.len() as f64);
+    drop(select_trace);
+    if roots.is_empty() {
+        return false;
+    }
+    let resources_trace = browser_tracing::span("layout", "DOM.PrepareAttachmentResources");
+    let filters = super::svg_filter_graph::build_persistent(document);
+    let clips = document
+        .SVGResources()
+        .cloned()
+        .unwrap_or_else(|| super::svg_clip_path_graph::build_persistent(document));
+    drop(resources_trace);
+    let _apply_trace = browser_tracing::span("layout", "DOM.ApplyAttachmentSubtrees");
+    let mut reattach = state
+        .layout_reattach_nodes
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+    let mut completed = HashSet::new();
+    for mut root in roots {
+        if IsWithinAttachmentRoots(document, &completed, root) {
+            continue;
+        }
+        loop {
+            let Some(parent_index) = document.FlatTreeParentElement(root) else {
+                return false;
+            };
+            let mut update = |tree: &mut LayoutTreeUpdate<'_>, parent: &mut LayoutObject| {
+                tree.Reattach(&reattach);
+                AppendSelectedChildren(
+                    tree,
+                    document,
+                    interaction,
+                    parent_index,
+                    parent,
+                    None,
+                    None,
+                    &filters,
+                    &clips,
+                    &[root],
+                );
+            };
+            if receive(LayoutMutation::SubtreeUpdate {
+                node_id: document.Node(root).Id(),
+                parent_id: document.Node(parent_index).Id(),
+                update: &mut update,
+            }) {
+                // A rejected narrow update can expand to a common ancestor.
+                // That completed rebuild covers later roots and consumes its
+                // reattach requests even if another root must expand as well.
+                reattach.retain(|&id| {
+                    document
+                        .FindNodeById(id)
+                        .is_none_or(|index| !IsWithinAttachmentRoot(document, root, index))
+                });
+                completed.insert(root);
+                break;
+            }
+            // Anonymous/flattened native parents require a wider attachment
+            // context. A rejected transaction made no change to the native tree.
+            let Some(parent) = AttachmentRoot(document, parent_index) else {
+                return false;
+            };
+            root = parent;
+        }
+    }
+    true
 }
 
 /// Fixture adapter using the same mutation emission as the Page lifecycle.
@@ -2161,9 +2406,7 @@ mod tests {
         let assembly = layoutng_assembly::layout_assembly::LayoutAssembly::default();
         let mut engine = LayoutEngine::new(&assembly);
         let interaction = UserInteractionState::default();
-        owner.EmitLayoutMutations(&interaction, |mutation| {
-            engine.ApplyMutation(mutation);
-        });
+        owner.EmitLayoutMutations(&interaction, |mutation| engine.ApplyMutation(mutation));
         let root =
             engine.GetLayoutTree().unwrap().Root() as *const LayoutObject as *mut LayoutObject;
         let changed = native(root, changed_id);
@@ -2208,7 +2451,7 @@ mod tests {
                 "emission has not applied its borrowed projection"
             );
             assert_eq!(native(root, sibling_id), sibling);
-            assert!(engine.ApplyMutation(mutation));
+            engine.ApplyMutation(mutation)
         });
         assert_eq!(received, 1);
         let updated_root =

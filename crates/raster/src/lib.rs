@@ -29,7 +29,7 @@ mod tile_worker;
 
 pub use basic_replay::{RasterizeDisplayItemList, WriteDisplayItemListPng};
 pub use engine::{
-    RasterEngine, RasterResource, RasterResourceProvider, RasterRowSupport, RasterStats,
+    RasterEngine, RasterResource, RasterResourceProvider, RasterResourceSnapshot, RasterRowSupport, RasterStats,
     RasterUpdate, RowSupport,
 };
 pub use skia::compat::png::EncodeRgbaPng;

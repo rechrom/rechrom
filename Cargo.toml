@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/executor",
     "crates/tracing",
     "crates/event_loop",
     "crates/devtools",

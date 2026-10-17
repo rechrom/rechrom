@@ -5,10 +5,14 @@ use html::html_parser::{
 };
 use html::HTMLParserHost;
 use resource::ResourceEngine;
-use std::{cell::RefCell, io, rc::Rc};
+use std::{cell::RefCell, io, rc::Rc, time::Duration};
 // Bound unread decoded input while scripts block the tree builder. The stream
 // can continue delivery and preload discovery without unbounded parser storage.
 const MAX_BUFFERED_INPUT_CHARACTERS: usize = 1024 * 1024;
+// Blink's early HTMLParserScheduler budget. A parser continuation is an
+// ordinary loading task, leaving the next BeginFrame free to paint mutations
+// produced by the completed task.
+const PARSER_TIME_BUDGET: Duration = Duration::from_millis(10);
 
 use url_loader::{
     RequestDestination, URLLoadEvent, URLLoader, URLRequest, URLResponseHead, URLStreamOperation,
@@ -345,11 +349,12 @@ impl DocumentLoader {
         if scan.stopped_for_csp {
             self.parser.as_mut().unwrap().DisablePreloadScanning();
         }
-        let result = self
-            .parser
-            .as_mut()
-            .unwrap()
-            .Pump(document, host, budget.parser_tokens);
+        let result = self.parser.as_mut().unwrap().PumpWithTimeBudget(
+            document,
+            host,
+            budget.parser_tokens,
+            PARSER_TIME_BUDGET,
+        );
         self.needs_input = result.status == HTMLParserStatus::kNeedMoreInput;
         if result.status == HTMLParserStatus::kFinished {
             self.status = DocumentLoaderStatus::kFinished;

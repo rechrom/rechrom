@@ -8,19 +8,22 @@ use dom::dom_mutation::{DOMMutation, DOMMutationEmitter, DOMMutationType};
 use dom::persistent_document::{DOMNamespace, DOMNodeType};
 use dom::{Document, DOM};
 use javascript::javascript_runtime::{
-    HostCall, HostContinuation, HostMethodRef, HostObjectId, HostObjectRef, HostOperation,
-    HostResult, HostSymbol, HostValue, JavaScriptExceptionKind, JavaScriptFunction,
+    HostCall, HostContinuation, HostFunctionBinding, HostMethodRef, HostObjectId, HostObjectRef,
+    HostOperation, HostResult, HostSymbol, HostValue, JavaScriptExceptionKind, JavaScriptFunction,
     JavaScriptHostBindings, JavaScriptHostRuntime, JavaScriptNull, JavaScriptRealm,
     JavaScriptValue, WeakJavaScriptRealm,
 };
 use layoutng_assembly::internal::layout_input::PaintPathVerb;
 
-#[path = "dom_custom_elements.rs"]
-mod custom_elements;
 #[path = "dom_attributes.rs"]
 mod attributes;
+#[path = "dom_custom_elements.rs"]
+mod custom_elements;
+#[path = "dom_host_graph.rs"]
+mod host_graph;
 #[path = "dom_services.rs"]
 mod services;
+use host_graph::{DOMHostGraph, LiveCollectionIds};
 pub use services::DOMBindingsHost;
 #[path = "viewport_scroll.rs"]
 mod viewport_scroll;
@@ -95,12 +98,31 @@ struct CollectionIterator {
     done: bool,
 }
 #[derive(Clone)]
+enum ListenerCallback {
+    // Window/global targets live for the realm. Native DOM targets instead
+    // own their callback through the engine-traced owner cell.
+    Rooted(JavaScriptFunction),
+    Traced(javascript::javascript_runtime::WeakJavaScriptFunction),
+}
+impl ListenerCallback {
+    fn Resolve(&self) -> Option<JavaScriptFunction> {
+        match self {
+            Self::Rooted(callback) => Some(callback.clone()),
+            Self::Traced(callback) => callback.Upgrade(),
+        }
+    }
+    fn Matches(&self, callback: &JavaScriptFunction) -> bool {
+        self.Resolve().as_ref() == Some(callback)
+    }
+}
+#[derive(Clone)]
 struct Listener {
     // Shared with dispatch snapshots; removal never revives an old registration.
     active: Rc<Cell<bool>>,
     target: HostObjectId,
     kind: String,
-    callback: JavaScriptFunction,
+    callback: ListenerCallback,
+    reference_slot: u64,
     capture: bool,
     attribute: bool,
     once: bool,
@@ -125,21 +147,30 @@ pub struct DOMJavaScriptBindings {
     focused_node: Option<u64>,
     write_document: Option<Box<dyn FnMut(&str) -> bool>>,
     change_focus: Option<FocusChangeHandler>,
-    collections: RefCell<HashMap<HostObjectId, NodeCollection>>,
-    iterators: RefCell<HashMap<HostObjectId, CollectionIterator>>,
-    records: RefCell<HashMap<HostObjectId, HashMap<String, HostValue>>>,
+    collections: Rc<RefCell<HashMap<HostObjectId, NodeCollection>>>,
+    // cpp: NodeListsNodeData / LiveNodeList collection caching. Index by the
+    // actual owner and collection key, never scan every retained collection.
+    live_collection_ids: Rc<RefCell<LiveCollectionIds>>,
+    iterators: Rc<RefCell<HashMap<HostObjectId, CollectionIterator>>>,
+    records: Rc<RefCell<HashMap<HostObjectId, HashMap<String, HostValue>>>>,
+    host_graph: Rc<DOMHostGraph>,
     next_collection_id: Cell<HostObjectId>,
-    listeners: RefCell<HashMap<HostObjectId, HashMap<String, Vec<Listener>>>>,
-    mutation_observers_active: bool,
+    listeners: Rc<RefCell<HashMap<HostObjectId, HashMap<String, Vec<Listener>>>>>,
+    next_listener_slot: Cell<u64>,
     custom_element_backup_queued: bool,
     selector_service: RefCell<style::persistent_selector::PersistentSelectorService>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DOMHostMemoryDiagnostics {
-    pub collections: usize, pub iterators: usize, pub result_records: usize,
-    pub record_fields: usize, pub listener_targets: usize, pub listener_entries: usize,
-    pub events: usize, pub event_identities: usize,
+    pub collections: usize,
+    pub iterators: usize,
+    pub result_records: usize,
+    pub record_fields: usize,
+    pub listener_targets: usize,
+    pub listener_entries: usize,
+    pub events: usize,
+    pub event_identities: usize,
 }
 impl DOMJavaScriptBindings {
     pub fn MemoryDiagnostics(&self) -> DOMHostMemoryDiagnostics {
@@ -147,10 +178,18 @@ impl DOMJavaScriptBindings {
         let listeners = self.listeners.borrow();
         let (events, event_identities) = self.services.MemoryCounts();
         DOMHostMemoryDiagnostics {
-            collections: self.collections.borrow().len(), iterators: self.iterators.borrow().len(),
-            result_records: records.len(), record_fields: records.values().map(HashMap::len).sum(),
-            listener_targets: listeners.len(), listener_entries: listeners.values()
-                .flat_map(|kinds| kinds.values()).map(Vec::len).sum(), events, event_identities,
+            collections: self.collections.borrow().len(),
+            iterators: self.iterators.borrow().len(),
+            result_records: records.len(),
+            record_fields: records.values().map(HashMap::len).sum(),
+            listener_targets: listeners.len(),
+            listener_entries: listeners
+                .values()
+                .flat_map(|kinds| kinds.values())
+                .map(Vec::len)
+                .sum(),
+            events,
+            event_identities,
         }
     }
     fn selector_error(error: style::persistent_selector::PersistentSelectorError) -> HostResult {
@@ -204,8 +243,23 @@ impl DOMJavaScriptBindings {
         emit_mutation: DOMMutationEmitter,
         host: DOMBindingsHost,
     ) -> Self {
+        let collections = Rc::new(RefCell::new(HashMap::new()));
+        let live_collection_ids = Rc::new(RefCell::new(HashMap::new()));
+        let iterators = Rc::new(RefCell::new(HashMap::new()));
+        let records = Rc::new(RefCell::new(HashMap::new()));
+        let listeners = Rc::new(RefCell::new(HashMap::new()));
+        let services = services::DOMServices::new(host);
+        let host_graph = Rc::new(DOMHostGraph::new(
+            document.clone(),
+            collections.clone(),
+            live_collection_ids.clone(),
+            iterators.clone(),
+            records.clone(),
+            listeners.clone(),
+            services.events.clone(),
+        ));
         Self {
-            services: services::DOMServices::new(host),
+            services,
             document,
             emit_mutation: Rc::new(RefCell::new(emit_mutation)),
             scoped_emit_mutation: None,
@@ -217,14 +271,43 @@ impl DOMJavaScriptBindings {
             focused_node: None,
             write_document: None,
             change_focus: None,
-            collections: RefCell::new(HashMap::new()),
-            iterators: RefCell::new(HashMap::new()),
-            records: RefCell::new(HashMap::new()),
+            collections,
+            live_collection_ids,
+            iterators,
+            records,
+            host_graph,
             next_collection_id: Cell::new(1 << 62),
-            listeners: RefCell::new(HashMap::new()),
-            mutation_observers_active: false,
+            listeners,
+            next_listener_slot: Cell::new(1 << 61),
             custom_element_backup_queued: false,
             selector_service: RefCell::new(Default::default()),
+        }
+    }
+
+    fn NewListenerSlot(&self) -> u64 {
+        let slot = self.next_listener_slot.get();
+        assert!(slot < 1 << 62, "listener reference slots exhausted");
+        self.next_listener_slot.set(slot + 1);
+        slot
+    }
+    fn StoreListenerCallback(
+        &self,
+        target: HostObjectId,
+        slot: u64,
+        callback: &JavaScriptFunction,
+    ) -> ListenerCallback {
+        if self.node(target).is_some() {
+            self.host_graph
+                .ListenerReference(target, slot, Some(callback.clone()));
+            ListenerCallback::Traced(callback.Downgrade())
+        } else {
+            ListenerCallback::Rooted(callback.clone())
+        }
+    }
+    fn RemoveListenerReference(&self, listener: &Listener) {
+        if matches!(listener.callback, ListenerCallback::Traced(_)) {
+            self.host_graph
+                .ListenerReference(listener.target, listener.reference_slot, None);
         }
     }
 
@@ -250,11 +333,23 @@ impl DOMJavaScriptBindings {
     }
 
     pub fn SetCurrentScript(&mut self, id: HostObjectId) {
+        if self.current_script != id {
+            self.host_graph.SetRoot(self.current_script, 5, false);
+            self.host_graph.SetRoot(id, 5, true);
+        }
         self.current_script = id;
     }
 
     // cpp: webapi/dom_bindings.h:58
     pub fn SetFocusedNode(&mut self, id: Option<u64>) {
+        if self.focused_node != id {
+            if let Some(old) = self.focused_node {
+                self.host_graph.SetRoot(old, 3, false);
+            }
+            if let Some(id) = id {
+                self.host_graph.SetRoot(id, 3, true);
+            }
+        }
         self.focused_node = id;
     }
 
@@ -283,6 +378,46 @@ impl DOMJavaScriptBindings {
 
     fn node(&self, id: HostObjectId) -> Option<usize> {
         self.document.borrow().GetDocument().FindNodeById(id)
+    }
+
+    // cpp: EventTarget::IsTopLevelNode, event_target.cc:437-451.
+    fn IsTopLevelEventTarget(&self, receiver: HostObjectId) -> bool {
+        if receiver == 0 {
+            return true;
+        }
+        let owner = self.document.borrow();
+        let document = owner.GetDocument();
+        let Some(index) = document.FindNodeById(receiver) else {
+            return false;
+        };
+        let node = document.Node(index);
+        if node.Type() == DOMNodeType::kDocument {
+            return true;
+        }
+        let root = node
+            .OwnerDocumentNode()
+            .and_then(|owner| document.FindNodeById(owner.Id()))
+            .and_then(|doc| {
+                document
+                    .Node(doc)
+                    .Children()
+                    .iter()
+                    .copied()
+                    .find(|&child| document.Node(child).Type() == DOMNodeType::kElement)
+            });
+        root.is_some_and(|root| {
+            root == index
+                || document
+                    .Node(root)
+                    .Children()
+                    .iter()
+                    .copied()
+                    .find(|&child| {
+                        document.Node(child).IsHTMLElement("body")
+                            || document.Node(child).IsHTMLElement("frameset")
+                    })
+                    == Some(index)
+        })
     }
 
     fn method(&self, receiver: HostObjectId, name: &str) -> HostResult {
@@ -318,9 +453,10 @@ impl DOMJavaScriptBindings {
                 .get(&receiver)
                 .and_then(|kinds| kinds.get(&member[2..]))
                 .and_then(|listeners| listeners.iter().find(|l| l.attribute))
+                .and_then(|listener| listener.callback.Resolve())
                 .map_or_else(
                     || Self::value(HostValue::Null(JavaScriptNull)),
-                    |l| Self::value(HostValue::JavaScriptFunction(l.callback.clone())),
+                    |callback| Self::value(HostValue::JavaScriptFunction(callback)),
                 );
         }
         if let Some(collection) = self.collections.borrow().get(&receiver) {
@@ -406,6 +542,9 @@ impl DOMJavaScriptBindings {
         // cpp: webapi/dom_bindings.cc:384-385
         if matches!(member, "childNodes" | "children") {
             return Self::value(HostValue::Object(self.collection(receiver, member, "")));
+        }
+        if member == "options" && node.IsHTMLElement("select") {
+            return Self::value(HostValue::Object(self.collection(receiver, "options", "")));
         }
         if is_method(node.Type(), member) {
             return self.method(receiver, member);
@@ -608,6 +747,12 @@ impl DOMJavaScriptBindings {
             "value" if is_control(node) => {
                 Self::value(HostValue::String(document.ControlValue(index)))
             }
+            "value" if node.IsHTMLElement("option") => {
+                Self::value(HostValue::String(document.OptionValue(index)))
+            }
+            "selected" if node.IsHTMLElement("option") => {
+                Self::value(HostValue::Boolean(document.OptionSelected(index)))
+            }
             "checked" if node.IsHTMLElement("input") => {
                 Self::value(HostValue::Boolean(document.ControlChecked(index)))
             }
@@ -627,25 +772,53 @@ impl DOMJavaScriptBindings {
     }
 
     fn set(&mut self, receiver: HostObjectId, member: &str, arguments: &[HostValue]) -> HostResult {
+        if member == "selected" {
+            let Some(index) = self.node(receiver) else {
+                return Self::type_error("Invalid option receiver");
+            };
+            if !self
+                .document
+                .borrow()
+                .GetDocument()
+                .Node(index)
+                .IsHTMLElement("option")
+            {
+                return Self::type_error("selected requires an option");
+            }
+            let Some(HostValue::Boolean(value)) = arguments.first() else {
+                return Self::type_error("selected requires a boolean");
+            };
+            (self.emit_mutation.borrow_mut())(&DOMMutation {
+                mutation_type: DOMMutationType::kSetOptionSelected,
+                target_node_id: receiver,
+                bool_value: *value,
+                ..Default::default()
+            });
+            return Self::value(HostValue::Boolean(*value));
+        }
         // cpp: webapi/dom_bindings.cc:479-495
         if is_event_handler(member) {
-            let kinds = self.listeners.get_mut().entry(receiver).or_default();
+            let mut targets = self.listeners.borrow_mut();
+            let kinds = targets.entry(receiver).or_default();
             let listeners = kinds.entry(member[2..].into()).or_default();
-            let position = listeners.iter().position(|l| l.attribute);
+            let position = listeners.iter().position(|listener| listener.attribute);
             if let Some(HostValue::JavaScriptFunction(callback)) = arguments.first() {
                 if let Some(position) = position {
                     let listener = &mut listeners[position];
-                    if listener.callback != *callback {
+                    if !listener.callback.Matches(callback) {
                         listener.active.set(false);
                         listener.active = Rc::new(Cell::new(true));
-                        listener.callback = callback.clone();
+                        listener.callback =
+                            self.StoreListenerCallback(receiver, listener.reference_slot, callback);
                     }
                 } else {
+                    let reference_slot = self.NewListenerSlot();
                     listeners.push(Listener {
                         active: Rc::new(Cell::new(true)),
                         target: receiver,
                         kind: member[2..].into(),
-                        callback: callback.clone(),
+                        callback: self.StoreListenerCallback(receiver, reference_slot, callback),
+                        reference_slot,
                         capture: false,
                         attribute: true,
                         once: false,
@@ -653,13 +826,15 @@ impl DOMJavaScriptBindings {
                     });
                 }
             } else if let Some(position) = position {
-                listeners.remove(position).active.set(false);
+                let listener = listeners.remove(position);
+                listener.active.set(false);
+                self.RemoveListenerReference(&listener);
             }
             if listeners.is_empty() {
                 kinds.remove(&member[2..]);
             }
             if kinds.is_empty() {
-                self.listeners.get_mut().remove(&receiver);
+                targets.remove(&receiver);
             }
             return HostResult::default();
         }
@@ -715,6 +890,7 @@ impl DOMJavaScriptBindings {
         let Some(value) = dom_string_argument(arguments.first()) else {
             return Self::type_error(&format!("{member} requires a string-convertible value"));
         };
+        let option_value = member == "value" && node.IsHTMLElement("option");
         let mutation_type = match member {
             "textContent" | "data" | "nodeValue" => {
                 if matches!(
@@ -738,10 +914,14 @@ impl DOMJavaScriptBindings {
                 DOMMutationType::kSetInnerHTML
             }
             "value" => {
-                if !is_control(node) {
-                    return Self::type_error("value is only writable on form controls");
+                if option_value {
+                    DOMMutationType::kSetAttribute
+                } else {
+                    if !is_control(node) {
+                        return Self::type_error("value is only writable on form controls");
+                    }
+                    DOMMutationType::kSetControlValue
                 }
-                DOMMutationType::kSetControlValue
             }
             "id" | "className" => {
                 if node.Type() != DOMNodeType::kElement {
@@ -760,6 +940,7 @@ impl DOMJavaScriptBindings {
             name: match member {
                 "id" => "id",
                 "className" => "class",
+                "value" if option_value => "value",
                 _ => "",
             }
             .into(),
@@ -775,7 +956,58 @@ impl DOMJavaScriptBindings {
         member: &str,
         arguments: &[HostValue],
     ) -> HostResult {
-        if matches!(member, "__domHasInterface" | "__domAttributeGet" | "__domAttributeSet") {
+        // Opt-in attribution of read/query work hidden inside JS callbacks.
+        // Recording observes this native binding only; it never calls JS.
+        enum CallProfile {
+            Off,
+            All,
+            Layout,
+        }
+        static PROFILE_CALLS: std::sync::OnceLock<CallProfile> = std::sync::OnceLock::new();
+        let mode = PROFILE_CALLS.get_or_init(|| {
+            match std::env::var("BROWSER_PROFILE_DOM_CALLS").as_deref() {
+                Ok("1") => CallProfile::All,
+                Ok("layout") => CallProfile::Layout,
+                _ => CallProfile::Off,
+            }
+        });
+        let selected = matches!(mode, CallProfile::All)
+            || (matches!(mode, CallProfile::Layout)
+                && matches!(
+                    member,
+                    "clientRects" | "metric" | "scrollOffset" | "computedStyle"
+                ));
+        let _profile = selected.then(|| {
+            let trace = browser_tracing::span("dom", "DOM.Call");
+            if browser_tracing::enabled() {
+                let name = match (member, arguments) {
+                    (
+                        "__domAttributeGetter",
+                        [_, HostValue::String(interface), HostValue::String(attribute), ..],
+                    ) => format!("{interface}.{attribute}"),
+                    (
+                        "__domAttributeSet",
+                        [HostValue::String(interface), HostValue::String(attribute), ..],
+                    ) => format!("{interface}.{attribute}"),
+                    (
+                        "metric" | "computedStyle" | "scrollOffset",
+                        [HostValue::String(property), ..],
+                    ) => format!("{member}.{property}"),
+                    _ => member.to_owned(),
+                };
+                browser_tracing::instant_with_text(
+                    "dom",
+                    "DOM.CallName",
+                    &name,
+                    &[("receiver", receiver as f64)],
+                );
+            }
+            trace
+        });
+        if member == "__domAttributeGetter" {
+            return self.NativeAttributeGetter(arguments);
+        }
+        if matches!(member, "__domHasInterface" | "__domAttributeSet") {
             return self.NativeAttributeCall(receiver, member, arguments);
         }
         if member == "__domCollectionBrand" {
@@ -783,7 +1015,9 @@ impl DOMJavaScriptBindings {
                 || Self::type_error("Illegal invocation"),
                 |collection| {
                     Self::value(HostValue::String(
-                        if matches!(collection.kind.as_str(), "snapshot" | "childNodes") {
+                        if collection.kind == "options" {
+                            "HTMLOptionsCollection"
+                        } else if matches!(collection.kind.as_str(), "snapshot" | "childNodes") {
                             "NodeList"
                         } else {
                             "HTMLCollection"
@@ -815,14 +1049,15 @@ impl DOMJavaScriptBindings {
             // Function identity is checked at the public add/remove boundary,
             // never by the dispatch snapshot's per-listener liveness check.
             let matches =
-                |l: &Listener| l.capture == capture && !l.attribute && l.callback == *callback;
+                |l: &Listener| l.capture == capture && !l.attribute && l.callback.Matches(callback);
             if member == "removeEventListener" {
-                let targets = self.listeners.get_mut();
+                let mut targets = self.listeners.borrow_mut();
                 if let Some(kinds) = targets.get_mut(&receiver) {
                     if let Some(listeners) = kinds.get_mut(kind) {
                         listeners.retain(|l| {
                             if matches(l) {
                                 l.active.set(false);
+                                self.RemoveListenerReference(l);
                                 false
                             } else {
                                 true
@@ -839,7 +1074,7 @@ impl DOMJavaScriptBindings {
             } else {
                 if self
                     .listeners
-                    .get_mut()
+                    .borrow()
                     .get(&receiver)
                     .and_then(|kinds| kinds.get(kind))
                     .is_some_and(|listeners| listeners.iter().any(matches))
@@ -851,13 +1086,38 @@ impl DOMJavaScriptBindings {
                     Some(HostValue::Boolean(b)) => *b,
                     _ => return Self::type_error("bad_variant_access"),
                 };
-                let passive = match arguments.get(4) {
-                    None => false,
-                    Some(HostValue::Boolean(b)) => *b,
+                let passive_specified = match arguments.get(4) {
+                    None | Some(HostValue::Undefined(_)) => None,
+                    Some(HostValue::Boolean(b)) => Some(*b),
                     _ => return Self::type_error("bad_variant_access"),
                 };
+                // cpp: EventTarget::SetDefaultAddEventListenerOptions. A plain
+                // boolean capture argument never means explicit passive:false.
+                let passive = passive_specified.unwrap_or_else(|| {
+                    matches!(
+                        kind.as_str(),
+                        "wheel" | "mousewheel" | "touchstart" | "touchmove"
+                    ) && self.IsTopLevelEventTarget(receiver)
+                });
+                if kind == "wheel" {
+                    browser_tracing::instant(
+                        "input",
+                        "WheelListenerAdded",
+                        &[
+                            ("target", receiver as f64),
+                            ("capture", capture as u8 as f64),
+                            ("passive", passive as u8 as f64),
+                            (
+                                "passive_specified",
+                                passive_specified.is_some() as u8 as f64,
+                            ),
+                        ],
+                    );
+                }
+                let reference_slot = self.NewListenerSlot();
+                let callback = self.StoreListenerCallback(receiver, reference_slot, callback);
                 self.listeners
-                    .get_mut()
+                    .borrow_mut()
                     .entry(receiver)
                     .or_default()
                     .entry(kind.clone())
@@ -866,7 +1126,8 @@ impl DOMJavaScriptBindings {
                         active: Rc::new(Cell::new(true)),
                         target: receiver,
                         kind: kind.clone(),
-                        callback: callback.clone(),
+                        callback,
+                        reference_slot,
                         capture,
                         attribute: false,
                         once,
@@ -928,7 +1189,7 @@ impl DOMJavaScriptBindings {
                     HostValue::Object(HostObjectRef { id })
                 };
                 let id = self.allocate_collection_id();
-                self.records.borrow_mut().insert(
+                self.StoreRecord(
                     id,
                     HashMap::from([
                         ("done".into(), HostValue::Boolean(done)),
@@ -942,6 +1203,7 @@ impl DOMJavaScriptBindings {
         if let Some(collection) = self.collections.borrow().get(&receiver) {
             if member == "@@iterator" {
                 let id = self.allocate_collection_id();
+                self.host_graph.Iterator(id, receiver);
                 self.iterators.borrow_mut().insert(
                     id,
                     CollectionIterator {
@@ -986,11 +1248,16 @@ impl DOMJavaScriptBindings {
         // cpp: webapi/dom_bindings.cc:737-759
         if receiver == 0 {
             return match member {
-                "hasAttributes" | "getAttributeNames" | "__validateImportNode" | "importNode"
-                | "__slotBrand" | "__slotName" | "__setSlotName" | "assignedNodes"
-                | "assignedElements" | "assign" => {
-                    Self::type_error("Illegal invocation")
-                }
+                "hasAttributes"
+                | "getAttributeNames"
+                | "__validateImportNode"
+                | "importNode"
+                | "__slotBrand"
+                | "__slotName"
+                | "__setSlotName"
+                | "assignedNodes"
+                | "assignedElements"
+                | "assign" => Self::type_error("Illegal invocation"),
                 "__domInstall" => {
                     if let [HostValue::String(name), HostValue::JavaScriptValue(value), ..] =
                         arguments
@@ -1057,6 +1324,16 @@ impl DOMJavaScriptBindings {
         };
         let node = document.Node(index);
         match member {
+            "isEqualNode" => {
+                let other = match arguments.first() {
+                    Some(HostValue::Object(other)) => document.FindNodeById(other.id),
+                    Some(HostValue::Null(_)) | Some(HostValue::Undefined(_)) => None,
+                    _ => return Self::type_error("isEqualNode requires a Node or null"),
+                };
+                Self::value(HostValue::Boolean(
+                    other.is_some_and(|other| document.IsEqualNode(index, document, other)),
+                ))
+            }
             "__htmlConstructionBrand" => {
                 let Some(HostValue::String(tag)) = arguments.first() else {
                     return Self::type_error("Invalid HTML constructor interface");
@@ -1065,8 +1342,12 @@ impl DOMJavaScriptBindings {
                     && node.Namespace() == DOMNamespace::kHTML
                     && if tag.is_empty() {
                         dom::custom_elements::IsValidCustomElementName(node.Name())
-                    } else { node.Name() == tag };
-                if !compatible { return Self::type_error("Illegal HTML constructor interface"); }
+                    } else {
+                        node.Name() == tag
+                    };
+                if !compatible {
+                    return Self::type_error("Illegal HTML constructor interface");
+                }
                 HostResult::default()
             }
             "getTotalLength"
@@ -1263,7 +1544,9 @@ impl DOMJavaScriptBindings {
                 }
                 if member == "__slotName" {
                     return Self::value(HostValue::String(
-                        node.FindAttribute("name").map_or("", |a| a.value.as_str()).into(),
+                        node.FindAttribute("name")
+                            .map_or("", |a| a.value.as_str())
+                            .into(),
                     ));
                 }
                 if member == "__setSlotName" {
@@ -1291,7 +1574,10 @@ impl DOMJavaScriptBindings {
                         let Some(child) = document.FindNodeById(object.id) else {
                             return Self::type_error("assign accepts only Element or Text nodes");
                         };
-                        if !matches!(document.Node(child).Type(), DOMNodeType::kElement | DOMNodeType::kText) {
+                        if !matches!(
+                            document.Node(child).Type(),
+                            DOMNodeType::kElement | DOMNodeType::kText
+                        ) {
                             return Self::type_error("assign accepts only Element or Text nodes");
                         }
                         node_ids.push(object.id);
@@ -1311,13 +1597,22 @@ impl DOMJavaScriptBindings {
                 } else {
                     document.AssignedNodes(index)
                 };
-                let nodes: Vec<_> = nodes.into_iter().filter(|&child| {
-                    member != "assignedElements" || document.Node(child).Type() == DOMNodeType::kElement
-                }).collect();
+                let nodes: Vec<_> = nodes
+                    .into_iter()
+                    .filter(|&child| {
+                        member != "assignedElements"
+                            || document.Node(child).Type() == DOMNodeType::kElement
+                    })
+                    .collect();
                 let mut fields = Vec::with_capacity(nodes.len() + 1);
                 fields.push(("length".into(), HostValue::Number(nodes.len() as f64)));
                 fields.extend(nodes.into_iter().enumerate().map(|(position, child)| {
-                    (position.to_string(), HostValue::Object(HostObjectRef { id: document.Node(child).Id() }))
+                    (
+                        position.to_string(),
+                        HostValue::Object(HostObjectRef {
+                            id: document.Node(child).Id(),
+                        }),
+                    )
                 }));
                 Self::value(HostValue::Record(fields))
             }
@@ -1367,7 +1662,7 @@ impl DOMJavaScriptBindings {
                     } else {
                         format!("{}:{}", attribute.prefix, attribute.local_name)
                     };
-                    self.records.borrow_mut().insert(
+                    self.StoreRecord(
                         id,
                         HashMap::from([
                             ("name".into(), HostValue::String(name)),
@@ -1399,7 +1694,7 @@ impl DOMJavaScriptBindings {
                         HostValue::Object(HostObjectRef { id }),
                     );
                 }
-                self.records.borrow_mut().insert(list, fields);
+                self.StoreRecord(list, fields);
                 Self::value(HostValue::Object(HostObjectRef { id: list }))
             }
             "importNode" | "__validateImportNode" => {
@@ -1585,42 +1880,66 @@ impl DOMJavaScriptBindings {
                 let Some(HostValue::String(property)) = arguments.first() else {
                     return Self::type_error("style property name is required");
                 };
-                let mut declarations = style::ParseCSSDeclarationList(
-                    node.FindAttribute("style").map_or("", |a| a.value.as_str()),
-                );
+                let inline_style = node.InlineStyle();
+                let standard_mode = node.Namespace() == DOMNamespace::kHTML
+                    && document.GetCompatibilityMode()
+                        != dom::persistent_document::CompatibilityMode::kQuirks;
                 if member == "getStyle" {
-                    return Self::value(HostValue::String(
-                        declarations
-                            .iter()
-                            .rev()
-                            .find(|d| d.property == *property)
-                            .map_or_else(String::new, |d| d.value.clone()),
-                    ));
+                    return Self::value(HostValue::String(style::GetInlineCSSDeclaration(
+                        &inline_style,
+                        property,
+                        standard_mode,
+                    )));
                 }
                 let Some(HostValue::String(value)) = arguments.get(1) else {
                     return Self::type_error("style value is required");
                 };
-                declarations.retain(|d| d.property != *property);
-                if !value.is_empty() {
-                    declarations.push(cssom::CSSDeclaration {property:property.clone(),value:value.clone(),important:matches!(arguments.get(2),Some(HostValue::String(p)) if p=="important")});
-                }
-                let value = declarations
-                    .iter()
-                    .map(|d| {
-                        format!(
-                            "{}: {}{};",
-                            d.property,
-                            d.value,
-                            if d.important { " !important" } else { "" }
+                let priority = match arguments.get(2) {
+                    Some(HostValue::String(priority)) => priority.as_str(),
+                    _ => "",
+                };
+                let Some(result) = style::SetInlineCSSDeclaration(
+                    &inline_style,
+                    property,
+                    value,
+                    priority,
+                    standard_mode,
+                ) else {
+                    return HostResult::default();
+                };
+                let (mutation_type, value, inline_style_independent, inline_style) = match result {
+                    style::CSSInlineDeclarationMutation::Changed(style) => (
+                        DOMMutationType::kSetAttribute,
+                        style.SourceText().to_owned(),
+                        false,
+                        Some(style),
+                    ),
+                    style::CSSInlineDeclarationMutation::ChangedIndependent(style) => (
+                        DOMMutationType::kSetAttribute,
+                        style.SourceText().to_owned(),
+                        true,
+                        Some(style),
+                    ),
+                    style::CSSInlineDeclarationMutation::Unchanged => {
+                        if document.CustomElementDefinitionForElement(index).is_none() {
+                            return HostResult::default();
+                        }
+                        (
+                            DOMMutationType::kNotifyInlineStyleUnchanged,
+                            String::new(),
+                            false,
+                            None,
                         )
-                    })
-                    .collect::<String>();
+                    }
+                };
                 drop(owner);
                 (self.emit_mutation.borrow_mut())(&DOMMutation {
-                    mutation_type: DOMMutationType::kSetAttribute,
+                    mutation_type,
                     target_node_id: receiver,
                     name: "style".into(),
                     value,
+                    inline_style_independent,
+                    inline_style,
                     ..Default::default()
                 });
                 HostResult::default()
@@ -1639,19 +1958,17 @@ impl DOMJavaScriptBindings {
                     Err(error) => return Self::selector_error(error),
                 };
                 let id = self.allocate_collection_id();
-                self.collections.borrow_mut().insert(
-                    id,
-                    NodeCollection {
-                        root: receiver,
-                        kind: "snapshot".into(),
-                        query: selector.clone(),
-                        snapshot: nodes
-                            .into_iter()
-                            .map(|node| document.Node(node).Id())
-                            .collect(),
-                        membership_cache: RefCell::new(None),
-                    },
-                );
+                let collection = NodeCollection {
+                    root: receiver,
+                    kind: "snapshot".into(),
+                    query: selector.clone(),
+                    snapshot: nodes
+                        .into_iter()
+                        .map(|node| document.Node(node).Id())
+                        .collect(),
+                    membership_cache: RefCell::new(None),
+                };
+                self.StoreCollection(id, collection);
                 Self::value(HostValue::Object(HostObjectRef { id }))
             }
             "getElementsByTagName" | "getElementsByClassName" => {
@@ -1761,8 +2078,13 @@ impl DOMJavaScriptBindings {
             }
             // cpp: webapi/dom_bindings.cc:950-962
             "getElementById" => {
-                if !matches!(node.Type(), DOMNodeType::kDocument | DOMNodeType::kDocumentFragment) {
-                    return Self::type_error("getElementById requires a document or fragment receiver");
+                if !matches!(
+                    node.Type(),
+                    DOMNodeType::kDocument | DOMNodeType::kDocumentFragment
+                ) {
+                    return Self::type_error(
+                        "getElementById requires a document or fragment receiver",
+                    );
                 }
                 let Some(HostValue::String(id)) = arguments.first() else {
                     return Self::type_error("getElementById requires a string");
@@ -1849,6 +2171,12 @@ impl DOMJavaScriptBindings {
 }
 
 impl JavaScriptHostBindings for DOMJavaScriptBindings {
+    fn ObjectTraceSource(
+        &self,
+    ) -> Option<Rc<dyn javascript::javascript_runtime::HostObjectTraceSource>> {
+        Some(self.host_graph.clone())
+    }
+
     fn PrepareInvocation(&mut self, call: &HostCall<'_>) -> Option<HostContinuation> {
         // Reads never dispatch JS or emit a mutation through this seam. Leave
         // their receiver validation to get(), instead of looking up every DOM
@@ -1873,24 +2201,41 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         } else {
             (call.receiver, call.member)
         };
+        if call.operation == HostOperation::kCall && member == "__domCreateGetter" {
+            let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
+                &call.arguments[2..]
+            } else {
+                call.arguments
+            };
+            return Some(Self::PrepareNativeGetter(arguments));
+        }
         if call.operation == HostOperation::kCall && member == "__ceIsProxy" {
             let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
                 &call.arguments[2..]
-            } else { call.arguments };
+            } else {
+                call.arguments
+            };
             let value = arguments.first().cloned().unwrap_or_default();
-            return Some(Box::new(move |runtime| Self::value(HostValue::Boolean(runtime.IsProxy(&value)))));
+            return Some(Box::new(move |runtime| {
+                Self::value(HostValue::Boolean(runtime.IsProxy(&value)))
+            }));
         }
         if call.operation == HostOperation::kCall && member == "__ceReportException" {
             let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
                 &call.arguments[2..]
-            } else { call.arguments };
+            } else {
+                call.arguments
+            };
             let thrown = arguments.first().cloned().unwrap_or_default();
             return Some(Box::new(move |runtime| runtime.ReportException(&thrown)));
         }
         // This internal getter only reads the tree. Validate its receiver in
         // call(), without a second node lookup or preparing a mutation emitter.
         if call.operation == HostOperation::kCall
-            && matches!(member, "__sibling" | "__domHasInterface" | "__domAttributeGet")
+            && matches!(
+                member,
+                "__sibling" | "__domHasInterface" | "__domAttributeGetter"
+            )
         {
             return None;
         }
@@ -1919,8 +2264,16 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         // resource may synchronously dispatch its completion event.
         if call.operation == HostOperation::kCall
             && matches!(member, "setAttribute" | "removeAttribute")
-            && !self.mutation_observers_active
-            && !self.document.borrow().GetDocument().HasCustomElementDefinitions()
+            && !self
+                .document
+                .borrow()
+                .GetDocument()
+                .HasMutationObserversOfType(dom::mutation_observers::MutationType::Attributes)
+            && !self
+                .document
+                .borrow()
+                .GetDocument()
+                .HasCustomElementDefinitions()
         {
             let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
                 &call.arguments[2..]
@@ -1970,21 +2323,37 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                 HostResult::default()
             }));
         }
-        let custom_elements_active = self.document.borrow().GetDocument().HasCustomElementDefinitions();
+        let custom_elements_active = self
+            .document
+            .borrow()
+            .GetDocument()
+            .HasCustomElementDefinitions();
         // CEReactions is an attribute of the selected IDL accessor, not of the
         // general host setter bridge (checked/indeterminate/data have no scope).
         let has_reaction_scope = member != "__domAttributeSet" || {
             let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
                 &call.arguments[2..]
-            } else { call.arguments };
+            } else {
+                call.arguments
+            };
             matches!(arguments.get(3), Some(HostValue::Boolean(true)))
         };
-        let reactions = (custom_elements_active && has_reaction_scope).then(|| self.method_wrappers.get("__customElementReactions").cloned()).flatten();
+        let reactions = (custom_elements_active && has_reaction_scope)
+            .then(|| {
+                self.method_wrappers
+                    .get("__customElementReactions")
+                    .cloned()
+            })
+            .flatten();
         let emitter = match self.scoped_emit_mutation.clone() {
             Some(emitter) => emitter,
             None if reactions.is_some() => {
                 let emitter = self.emit_mutation.clone();
-                Rc::new(move |mutation: &DOMMutation, _: &mut dyn JavaScriptHostRuntime| (emitter.borrow_mut())(mutation))
+                Rc::new(
+                    move |mutation: &DOMMutation, _: &mut dyn JavaScriptHostRuntime| {
+                        (emitter.borrow_mut())(mutation)
+                    },
+                )
             }
             None => return None,
         };
@@ -2064,7 +2433,10 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         let document = self.document.clone();
         Some(Box::new(move |runtime| {
             if reactions.is_some() {
-                document.borrow_mut().GetDocumentMut().PushCustomElementReactionScope();
+                document
+                    .borrow_mut()
+                    .GetDocumentMut()
+                    .PushCustomElementReactionScope();
             }
             let mut outcome = result;
             if let Some(mutation) = mutation {
@@ -2077,16 +2449,26 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                             outcome = Self::type_error(error.message);
                         } else if let Some(error) = error.downcast_ref::<std::io::Error>() {
                             outcome = Self::type_error(&error.to_string());
-                        } else { std::panic::resume_unwind(error); }
-                    } else { std::panic::resume_unwind(error); }
+                        } else {
+                            std::panic::resume_unwind(error);
+                        }
+                    } else {
+                        std::panic::resume_unwind(error);
+                    }
                 }
             }
             if let Some(callback) = reactions {
                 let invoked = runtime.Call(&callback, &HostValue::default(), &[]);
-                let popped = document.borrow_mut().GetDocumentMut().PopCustomElementReactionScope();
+                let popped = document
+                    .borrow_mut()
+                    .GetDocumentMut()
+                    .PopCustomElementReactionScope();
                 assert!(popped, "CEReactions scope must be drained before pop");
                 if let Some(error) = invoked.exception {
-                    return HostResult {exception: Some(error), ..HostResult::default()};
+                    return HostResult {
+                        exception: Some(error),
+                        ..HostResult::default()
+                    };
                 }
             }
             outcome
@@ -2128,6 +2510,13 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         }
     }
 
+    fn UsesOrdinaryProperties(&self, id: HostObjectId) -> bool {
+        // Blink's ordinary IDL Node/Element wrappers use their installed
+        // prototype descriptors. Collections and other exotic records still
+        // require host property interception.
+        self.UsesOrdinaryNodeProperties(id)
+    }
+
     fn PrototypeFor(&mut self, id: HostObjectId) -> HostResult {
         if self.services.IsEvent(id) {
             return self
@@ -2139,7 +2528,9 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                 });
         }
         if let Some(collection) = self.collections.borrow().get(&id) {
-            let name = if matches!(collection.kind.as_str(), "snapshot" | "childNodes") {
+            let name = if collection.kind == "options" {
+                "HTMLOptionsCollection"
+            } else if matches!(collection.kind.as_str(), "snapshot" | "childNodes") {
                 "NodeList"
             } else {
                 "HTMLCollection"
@@ -2211,6 +2602,9 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
 }
 
 fn is_method(node_type: DOMNodeType, member: &str) -> bool {
+    if member == "isEqualNode" {
+        return true;
+    }
     if matches!(member, "addEventListener" | "removeEventListener") {
         return matches!(node_type, DOMNodeType::kDocument | DOMNodeType::kElement);
     }
@@ -2278,6 +2672,28 @@ fn is_character_data(node_type: DOMNodeType) -> bool {
 }
 
 impl DOMJavaScriptBindings {
+    fn StoreCollection(&self, id: HostObjectId, collection: NodeCollection) {
+        self.host_graph.Collection(id, &collection);
+        self.collections.borrow_mut().insert(id, collection);
+    }
+    fn StaticNodeList(&self, nodes: Vec<HostObjectId>) -> HostObjectRef {
+        let id = self.allocate_collection_id();
+        self.StoreCollection(
+            id,
+            NodeCollection {
+                root: 0,
+                kind: "snapshot".into(),
+                query: String::new(),
+                snapshot: nodes,
+                membership_cache: RefCell::new(None),
+            },
+        );
+        HostObjectRef { id }
+    }
+    fn StoreRecord(&self, id: HostObjectId, fields: HashMap<String, HostValue>) {
+        self.host_graph.Record(id, &fields);
+        self.records.borrow_mut().insert(id, fields);
+    }
     fn allocate_collection_id(&self) -> HostObjectId {
         let id = self.next_collection_id.get();
         self.next_collection_id.set(id + 1);
@@ -2286,10 +2702,14 @@ impl DOMJavaScriptBindings {
     // cpp: webapi/dom_bindings.cc:990-1006
     fn collection(&self, root: HostObjectId, kind: &str, query: &str) -> HostObjectRef {
         if kind != "snapshot" {
-            for (&id, collection) in self.collections.borrow().iter() {
-                if collection.root == root && collection.kind == kind && collection.query == query {
-                    return HostObjectRef { id };
-                }
+            if let Some(id) = self
+                .live_collection_ids
+                .borrow()
+                .get(&root)
+                .and_then(|kinds| kinds.get(kind))
+                .and_then(|queries| queries.get(query))
+            {
+                return HostObjectRef { id: *id };
             }
         }
         let mut collection = NodeCollection {
@@ -2305,7 +2725,16 @@ impl DOMJavaScriptBindings {
             collection.kind = "snapshot".into();
         }
         let id = self.allocate_collection_id();
-        self.collections.borrow_mut().insert(id, collection);
+        self.StoreCollection(id, collection);
+        if kind != "snapshot" {
+            self.live_collection_ids
+                .borrow_mut()
+                .entry(root)
+                .or_default()
+                .entry(kind.to_owned())
+                .or_default()
+                .insert(query.to_owned(), id);
+        }
         HostObjectRef { id }
     }
     // cpp: webapi/dom_bindings.cc:1008-1037
@@ -2317,7 +2746,11 @@ impl DOMJavaScriptBindings {
         let document = owner.GetDocument();
         let cache_key = matches!(
             collection.kind.as_str(),
-            "childNodes" | "children" | "getElementsByTagName" | "getElementsByClassName"
+            "childNodes"
+                | "children"
+                | "getElementsByTagName"
+                | "getElementsByClassName"
+                | "options"
         )
         .then(|| document.CollectionMembershipKey())
         .flatten();
@@ -2375,7 +2808,11 @@ impl DOMJavaScriptBindings {
             }
         }
         let mut result = Vec::new();
-        visit(document, root, collection, &mut result);
+        if collection.kind == "options" {
+            result = document.SelectOptionNodeIds(root);
+        } else {
+            visit(document, root, collection, &mut result);
+        }
         if let Some(key) = cache_key {
             let ids = Rc::new(result);
             *collection.membership_cache.borrow_mut() = Some(CollectionMembershipCache {
@@ -2974,6 +3411,14 @@ mod tests {
             root.appendChild(a);root.appendChild(b);root.appendChild(document.createElement('p'));
             if(live.length!==3 || !iter.next().done || snap.length!==2)throw Error('done or live snapshot');
             if(Array.from(snap).map(n=>n.id).join('|')!=='a|b')throw Error('snapshot iterable order');
+            // Only the static list retains this removed node. A native ID is
+            // insufficient: StaticNodeList::Trace must preserve its wrapper.
+            const retained=(()=>{
+                const p=document.createElement('p');p.authorState=42;root.appendChild(p);
+                const list=root.querySelectorAll('p:last-child');p.remove();return list;
+            })();
+            for(let i=0;i<40000;i++){const cycle={};cycle.self=cycle;}
+            if(retained.length!==1 || retained[0].authorState!==42)throw Error('snapshot wrapper lifetime');
         "#,"snapshot.js");
         assert!(result.Succeeded(), "{:?}", result.exception);
     }

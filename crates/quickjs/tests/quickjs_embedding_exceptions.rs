@@ -129,6 +129,35 @@ fn retained_function_uses_its_original_source_even_when_filename_is_reused() {
             );
             JS_FreeValue(ctx, JS_GetException(ctx));
             JS_FreeValue(ctx, function);
+
+            // Only read creation metadata after the defining bytecode is freed
+            // and a different script has reused its filename. Source ownership
+            // and UTF-16 columns must survive without eagerly copied text.
+            let creator = eval(
+                ctx,
+                "(function create(){\r\n const smile='😀'; return new Error('saved');\r\n})",
+            );
+            assert_eq!(JS_IsException(creator), 0);
+            let error = JS_Call(ctx, creator, JS_UNDEFINED, 0, std::ptr::null_mut());
+            assert_eq!(JS_IsException(error), 0);
+            JS_FreeValue(ctx, creator);
+            let other = eval(ctx, "'new source under the same filename'");
+            JS_FreeValue(ctx, other);
+            let expected_line = " const smile='😀'; return new Error('saved');";
+            let location = JS_GetErrorCreationMetadata(ctx, error).unwrap();
+            assert_eq!(
+                (
+                    location.filename.as_str(),
+                    location.line,
+                    location.source_line.as_str()
+                ),
+                ("parity.js", 2, expected_line)
+            );
+            let expected_column = expected_line[..expected_line.find("new Error").unwrap()]
+                .encode_utf16()
+                .count();
+            assert_eq!(location.column, expected_column);
+            JS_FreeValue(ctx, error);
         });
     }
 }

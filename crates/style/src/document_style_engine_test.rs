@@ -224,7 +224,7 @@ fn unvisited_link_keeps_visited_color_in_its_private_slot() {
 fn named_custom_highlight_metadata_survives_translated_update() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
-        "<!doctype html><section id=parent><p id=target>target</p></section>",
+        "<!doctype html><section id=parent><p id=target>target<span id=leaf>leaf</span></p></section>",
     );
     owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
         "#parent::highlight(mark) { color: red } \
@@ -256,6 +256,45 @@ fn named_custom_highlight_metadata_survives_translated_update() {
         layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdHighlight
     );
     assert_eq!(highlight.GetCurrentColor(None), Color::FromRGB(0xff, 0, 0));
+    // Element::RecalcHighlightStyles leaves unmatched descendants on the
+    // inherited highlight data, rather than resolving every document-wide name.
+    let leaf = node(&owner, "leaf");
+    let leaf_style = unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(leaf)
+            .unwrap()
+            .native_style
+            .Get()
+    };
+    assert_eq!(
+        leaf_style.HighlightData().CustomHighlight(&mark),
+        highlight as *const _
+    );
+
+    // Highlight matches live in native metadata rather than ordinary match
+    // signatures. Removing the rule and its ancestor condition together must
+    // clear the old highlight even though the current selector no longer matches.
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><style id=sheet>.on p::highlight(mark){color:red}</style><section id=parent class=on><p id=target>target</p></section>",
+    );
+    let target = node(&owner, "target");
+    let parent = node(&owner, "parent");
+    let sheet = node(&owner, "sheet");
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(!unsafe { &*native_pointer(&owner, target) }
+        .HighlightData()
+        .CustomHighlight(&mark)
+        .is_null());
+    owner.GetDocumentMut().Remove(sheet);
+    set_attribute(&mut owner, parent, "class", "off");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let final_style = unsafe { &*native_pointer(&owner, target) };
+    assert!(final_style.HighlightData().CustomHighlight(&mark).is_null());
+    assert!(!final_style.HasPseudoElementStyle(
+        layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdHighlight
+    ));
 }
 
 #[test]
@@ -378,7 +417,7 @@ fn form_state_pseudos_consume_typed_capabilities_and_live_value_state() {
     let mut owner = html::html_parser::ParseHTML(
         "<!doctype html><input id=hidden type=HIDDEN required>\
          <input id=date type=DATE><input id=placeholder placeholder=''>\
-         <fieldset id=fieldset></fieldset>",
+         <textarea id=plain></textarea><fieldset id=fieldset></fieldset>",
     );
     owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
         "#hidden:optional { opacity:.2 } #hidden:required { opacity:.8 } \
@@ -390,6 +429,7 @@ fn form_state_pseudos_consume_typed_capabilities_and_live_value_state() {
     let date = node(&owner, "date");
     let placeholder = node(&owner, "placeholder");
     let fieldset = node(&owner, "fieldset");
+    let plain = node(&owner, "plain");
     let opacity = |owner: &dom::DOM, element| unsafe {
         (&*owner
             .GetDocument()
@@ -410,11 +450,22 @@ fn form_state_pseudos_consume_typed_capabilities_and_live_value_state() {
     assert_eq!(opacity(&owner, placeholder), 0.4);
     assert_eq!(opacity(&owner, fieldset), 1.0);
 
+    // A control without a placeholder edits layout without changing the
+    // :placeholder-shown selector state or invalidating unrelated elements.
+    owner.GetDocumentMut().SetControlValue(plain, "c".into());
+    assert!(!owner.GetDocument().StyleState().changes.iter().any(|change| matches!(change,
+        dom::style_state::StyleChange::Node(index) | dom::style_state::StyleChange::PlaceholderShown(index) if *index == plain)));
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(opacity(&owner, placeholder), 0.4);
+
     set_attribute(&mut owner, hidden, "type", "text");
     set_attribute(&mut owner, date, "readonly", "");
     owner
         .GetDocumentMut()
         .SetControlValue(placeholder, "entered".into());
+    assert!(owner.GetDocument().StyleState().changes.contains(
+        &dom::style_state::StyleChange::PlaceholderShown(placeholder)
+    ));
     engine.Update(&mut owner, &media(), &[]).unwrap();
     assert_eq!(opacity(&owner, hidden), 0.8);
     assert_eq!(opacity(&owner, date), 0.6);
@@ -866,8 +917,7 @@ fn internal_spatial_navigation_focus_is_disabled_for_ordinary_selects() {
          <option id=multiple-option>three</option></optgroup></select>\
          <option id=unowned>four</option>",
     );
-    let ua =
-        crate::ParseUserAgentCSS("option:-internal-spatial-navigation-focus { opacity:.41 }");
+    let ua = crate::ParseUserAgentCSS("option:-internal-spatial-navigation-focus { opacity:.41 }");
     let mut engine = StyleEngine::new(&owner);
     for focus in [None, Some("menu"), Some("list"), Some("multiple")] {
         let focused_node_id = focus.map(|id| owner.GetDocument().Node(node(&owner, id)).Id());
@@ -1120,6 +1170,10 @@ fn internal_is_html_uses_document_type_not_element_namespace() {
     let html = engine.TranslatedRuleShadowStats();
     assert_eq!(html.skipped_unsupported_selector, 0, "{html:?}");
     assert_eq!(html.translated_style_resolver_fallbacks, 0, "{html:?}");
+    assert!(owner.GetDocument().ResolvedStyleFor(form).is_none());
+    engine
+        .EnsureComputedStyle(&mut owner, &media(), &[ua.clone()], form)
+        .unwrap();
     assert_eq!(
         unsafe { &*native_pointer(&owner, form) }.Display(),
         EDisplay::kNone
@@ -1263,6 +1317,113 @@ fn style_engine_retains_each_typed_stylesheet_revision_without_reparsing() {
     );
     engine.Update(&mut owner, &media(), &[]).unwrap();
     assert_eq!(engine.TypedSheetOwnershipStats(), (1, 0));
+
+    // Distinct inline owners share contents/RuleSet just as CreateSheet does,
+    // while a subsequent CSSOM edit still replaces only that owner's revision.
+    let mut owner = html::html_parser::ParseHTML(
+        "<style id=a>.item{color:red}</style><style id=b>.item{color:red}</style><div class=item></div>",
+    );
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let sheets = owner.GetDocument().ActiveStyleSheets().collect::<Vec<_>>();
+    assert_eq!(sheets.len(), 2);
+    assert_ne!(sheets[0].Identity(), sheets[1].Identity());
+    let contents = |sheet: &cssom::CSSStyleSheet| {
+        sheet
+            .ParsedBacking::<crate::production_style_sheet::ProductionStyleSheet>()
+            .unwrap()
+    };
+    assert!(std::rc::Rc::ptr_eq(
+        &contents(sheets[0]),
+        &contents(sheets[1])
+    ));
+    assert_eq!(engine.TranslatedRuleShadowStats().rule_sets_built, 1);
+    let mut changed = crate::ParseCSS(".item{color:blue}");
+    changed.owner_node_id = sheets[1].owner_node_id;
+    owner.GetDocumentMut().AppendStyleSheet(changed);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(engine.TranslatedRuleShadowStats().rule_sets_built, 1);
+
+    // Shared UA owners cross the package boundary without a CSSOM value copy.
+    // Replacing one owner, and switching back to borrowed values, must still
+    // invalidate the old rules; a raw address/length cache would miss the latter.
+    let mut owner = html::html_parser::ParseHTML("<!doctype html><div id=target></div>");
+    let target = node(&owner, "target");
+    let mut engine = StyleEngine::new(&owner);
+    let mut shared = vec![std::rc::Rc::new(crate::ParseUserAgentCSS(
+        "div{width:11px}",
+    ))];
+    engine.Update(&mut owner, &media(), &shared).unwrap();
+    assert_eq!(native_width(&owner, target), 11.0);
+    assert!(
+        std::rc::Rc::strong_count(&shared[0]) > 1,
+        "retain the supplied sheet owner"
+    );
+    engine.Update(&mut owner, &media(), &shared).unwrap();
+    assert_eq!(engine.TranslatedRuleShadowStats().rule_sets_built, 0);
+
+    let author = owner.GetDocumentMut().CreateElement(
+        dom::persistent_document::DOMNamespace::kHTML,
+        "style".into(),
+        vec![],
+    );
+    owner
+        .GetDocumentMut()
+        .AppendText(author, "#target{height:13px}");
+    let root = owner.GetDocument().Node(target).Parent().unwrap();
+    owner.GetDocumentMut().AppendChild(root, author);
+    engine.Update(&mut owner, &media(), &shared).unwrap();
+    assert!(
+        std::rc::Rc::strong_count(&shared[0]) > 1,
+        "author changes retain the UA owner too"
+    );
+    assert_eq!(native_width(&owner, target), 11.0);
+
+    // Copy-on-write can change attachment metadata without changing the
+    // parsed contents identity/revision. The retained owner must be replaced.
+    std::rc::Rc::make_mut(&mut shared[0])
+        .owner_media_conditions
+        .push("(min-width:9999px)".into());
+    engine.Update(&mut owner, &media(), &shared).unwrap();
+    assert!(unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(target)
+            .unwrap()
+            .native_style
+            .Get()
+    }
+    .Width()
+    .IsAuto());
+    std::rc::Rc::make_mut(&mut shared[0])
+        .owner_media_conditions
+        .clear();
+    engine.Update(&mut owner, &media(), &shared).unwrap();
+    assert_eq!(native_width(&owner, target), 11.0);
+
+    shared[0] = std::rc::Rc::new(crate::ParseUserAgentCSS("div{width:22px}"));
+    engine.Update(&mut owner, &media(), &shared).unwrap();
+    assert_eq!(native_width(&owner, target), 22.0);
+    let mut borrowed = vec![crate::ParseUserAgentCSS("div{width:33px}")];
+    engine.Update(&mut owner, &media(), &borrowed).unwrap();
+    assert_eq!(native_width(&owner, target), 33.0);
+    borrowed[0] = crate::ParseUserAgentCSS("div{width:44px}");
+    engine.Update(&mut owner, &media(), &borrowed).unwrap();
+    assert_eq!(native_width(&owner, target), 44.0);
+    borrowed[0]
+        .owner_media_conditions
+        .push("(min-width:9999px)".into());
+    engine.Update(&mut owner, &media(), &borrowed).unwrap();
+    assert!(unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(target)
+            .unwrap()
+            .native_style
+            .Get()
+    }
+    .Width()
+    .IsAuto());
 }
 
 #[test]
@@ -1328,6 +1489,56 @@ fn update_reaches_retained_translated_rule_set_and_selector_checker() {
     assert_eq!(changed.rule_sets_built, 1, "{changed:?}");
     assert!(changed.elements_probed >= 1, "{changed:?}");
     assert!(changed.rule_sets_consulted >= 1, "{changed:?}");
+
+    // Parser-delivered inline sheets bypass DOM text reparsing. Distinct
+    // CSSOM owners still share immutable contents/RuleSets in this engine.
+    // Replace every owner repeatedly so the canonical owner can survive solely
+    // in the retained typed cache while the new attachments are synchronized.
+    for different_context in [false, true] {
+        let mut parsed_owner = html::html_parser::ParseHTML(
+            "<!doctype html><head id=head><style id=one></style><style id=two></style></head><body><b id=target></b></body>");
+        let mut parsed_engine = StyleEngine::new(&parsed_owner);
+        let target = node(&parsed_owner, "target");
+        let head = node(&parsed_owner, "head");
+        let mut owners = [node(&parsed_owner, "one"), node(&parsed_owner, "two")];
+        for round in 0..3 {
+            if round != 0 {
+                for index in &mut owners {
+                    parsed_owner.GetDocumentMut().Remove(*index);
+                    *index = parsed_owner.GetDocumentMut().CreateElementDefault(
+                        dom::persistent_document::DOMNamespace::kHTML,
+                        "style".into(),
+                    );
+                    parsed_owner.GetDocumentMut().AppendChild(head, *index);
+                }
+            }
+            for (position, index) in owners.into_iter().enumerate() {
+                let base = if different_context && position == 1 {
+                    "https://two.test/"
+                } else {
+                    "https://one.test/"
+                };
+                let mut sheet = crate::ParseCSSWithBase("b{width:17px}", base);
+                sheet.owner_node_id = parsed_owner.GetDocument().Node(index).Id();
+                parsed_owner.GetDocumentMut().AppendStyleSheet(sheet);
+            }
+            parsed_engine
+                .Update(&mut parsed_owner, &media(), &[])
+                .unwrap();
+            assert_eq!(native_width(&parsed_owner, target), 17.0);
+            assert_eq!(
+                parsed_engine.TranslatedRuleShadowStats().rule_sets_built,
+                if different_context {
+                    2
+                } else if round == 0 {
+                    1
+                } else {
+                    0
+                },
+                "contexts differ={different_context}, round={round}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -2166,7 +2377,15 @@ fn html_type_selectors_from_ua_styles_reach_native_computed_style() {
     let body = node(&owner, "body");
     let ua = crate::ParseCSS("head,script,style,title{display:none} html,body{display:block}");
     let mut engine = StyleEngine::new(&owner);
-    engine.Update(&mut owner, &media(), &[ua]).unwrap();
+    engine.Update(&mut owner, &media(), &[ua.clone()]).unwrap();
+    assert!(owner.GetDocument().ResolvedStyleFor(sheet).is_none());
+    assert!(owner.GetDocument().ResolvedStyleFor(title).is_none());
+    engine
+        .EnsureComputedStyle(&mut owner, &media(), &[ua.clone()], sheet)
+        .unwrap();
+    engine
+        .EnsureComputedStyle(&mut owner, &media(), &[ua], title)
+        .unwrap();
 
     let display = |index| unsafe {
         (&*owner
@@ -2289,13 +2508,7 @@ fn document_native_style_ua_author_inline_inheritance_and_media() {
         layoutng::internal::layout_input::WhiteSpace::kPre
     );
     assert_eq!(ext.font_families, vec!["serif", "sans-serif"]);
-    assert!(
-        !owner
-            .GetDocument()
-            .ResolvedStyleFor(inside)
-            .unwrap()
-            .generates_box
-    );
+    assert!(owner.GetDocument().ResolvedStyleFor(inside).is_none());
 }
 
 #[test]
@@ -2495,6 +2708,88 @@ fn svg_presentation_attributes_enter_the_author_cascade() {
         shape_resolved.style.paint.svg_fill.unwrap().red,
         0x15 as f32 / 255.0
     );
+    // SVGElement::HasSVGParent uses the flat tree. A <use> instance root is
+    // parented by its shadow host, and display:none g keeps resource objects.
+    let mut instances = html::html_parser::ParseHTML(
+        "<svg><defs><g id=template style='display:none'><rect width=24 height=32 /></g></defs><use href='#template' /></svg>",
+    );
+    instances.GetDocumentMut().UpdateSVGUseInstances();
+    let mut instance_engine = StyleEngine::new(&instances);
+    instance_engine
+        .Update(&mut instances, &media(), &[])
+        .unwrap();
+    let groups = instances
+        .GetDocument()
+        .SVGInstanceElements()
+        .filter(|&index| {
+            instances
+                .GetDocument()
+                .Node(index)
+                .IsElement("g", dom::persistent_document::DOMNamespace::kSVG)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(groups.len(), 1);
+    let group = instances.GetDocument().ResolvedStyleFor(groups[0]).unwrap();
+    assert_eq!(
+        unsafe { &*group.native_style.Get() }.Display(),
+        EDisplay::kNone
+    );
+    assert!(
+        group.generates_box,
+        "SVG hidden container must attach to its use host"
+    );
+
+    // Querying hidden gradient stops must not make their resource renderable.
+    // The same definition becomes available after normal style/attachment.
+    let mut resources = html::html_parser::ParseHTML(
+        "<div id=hidden style='display:none'><svg><defs><linearGradient id=gradient><stop id=first offset=0 stop-color=red /><stop id=last offset=1 stop-color=blue /></linearGradient></defs></svg></div><svg><rect id=client width=24 height=32 fill='url(#gradient) green' /></svg>",
+    );
+    let hidden = node(&resources, "hidden");
+    let client = node(&resources, "client");
+    let first = node(&resources, "first");
+    let last = node(&resources, "last");
+    let mut resource_engine = StyleEngine::new(&resources);
+    resource_engine
+        .Update(&mut resources, &media(), &[])
+        .unwrap();
+    assert!(resources
+        .GetDocument()
+        .ResolvedStyleFor(client)
+        .unwrap()
+        .style
+        .paint
+        .svg_fill_server
+        .is_none());
+    resource_engine
+        .EnsureComputedStyle(&mut resources, &media(), &[], first)
+        .unwrap();
+    resource_engine
+        .EnsureComputedStyle(&mut resources, &media(), &[], last)
+        .unwrap();
+    set_attribute(&mut resources, client, "style", "opacity:.5");
+    resource_engine
+        .Update(&mut resources, &media(), &[])
+        .unwrap();
+    assert!(resources
+        .GetDocument()
+        .ResolvedStyleFor(client)
+        .unwrap()
+        .style
+        .paint
+        .svg_fill_server
+        .is_none());
+    set_attribute(&mut resources, hidden, "style", "display:block");
+    resource_engine
+        .Update(&mut resources, &media(), &[])
+        .unwrap();
+    assert!(resources
+        .GetDocument()
+        .ResolvedStyleFor(client)
+        .unwrap()
+        .style
+        .paint
+        .svg_fill_server
+        .is_some());
 }
 
 #[test]
@@ -2758,6 +3053,48 @@ fn dynamic_style_element_replaces_owner_sheet_and_recalculates_connected_nodes()
             .Get()
     };
     assert_eq!(s.Width().Pixels(), 19.0);
+    // Discover only a new connected branch, then retain detached dirty style
+    // content until its owner reconnects. A removed-before-update branch must
+    // never become an active sheet.
+    let parent = owner.GetDocument().Node(target).Parent().unwrap();
+    let wrapper = owner.GetDocumentMut().CreateElement(
+        dom::persistent_document::DOMNamespace::kHTML,
+        "div".into(),
+        vec![],
+    );
+    let inserted = owner.GetDocumentMut().CreateElement(
+        dom::persistent_document::DOMNamespace::kHTML,
+        "style".into(),
+        vec![],
+    );
+    owner
+        .GetDocumentMut()
+        .AppendText(inserted, "#target{width:23px}");
+    owner.GetDocumentMut().AppendChild(wrapper, inserted);
+    owner.GetDocumentMut().AppendChild(parent, wrapper);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, target), 23.0);
+    owner.GetDocumentMut().Remove(inserted);
+    owner
+        .GetDocumentMut()
+        .SetTextContent(inserted, "#target{width:29px}".into());
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, target), 19.0);
+    owner.GetDocumentMut().AppendChild(wrapper, inserted);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, target), 29.0);
+    let removed = owner.GetDocumentMut().CreateElement(
+        dom::persistent_document::DOMNamespace::kHTML,
+        "style".into(),
+        vec![],
+    );
+    owner
+        .GetDocumentMut()
+        .AppendText(removed, "#target{width:99px}");
+    owner.GetDocumentMut().AppendChild(parent, removed);
+    owner.GetDocumentMut().Remove(removed);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, target), 29.0);
 }
 
 fn set_attribute(owner: &mut dom::DOM, index: usize, name: &str, value: &str) {
@@ -2797,7 +3134,7 @@ fn native_pointer(
 fn incremental_inline_and_class_changes_retain_unrelated_native_styles() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
-        "<html><body><div id=target class=small><b id=descendant></b></div><section id=unrelated><b></b><b></b><b></b></section></body></html>",
+        "<html><body><div id=target class=small><b id=descendant></b></div><section id=unrelated><b></b><b></b><b></b></section><svg><defs><rect id=source width=10 height=10 /></defs><use href=\"#source\" /></svg></body></html>",
     );
     owner
         .GetDocumentMut()
@@ -2805,6 +3142,9 @@ fn incremental_inline_and_class_changes_retain_unrelated_native_styles() {
     let target = node(&owner, "target");
     let descendant = node(&owner, "descendant");
     let unrelated = node(&owner, "unrelated");
+    // An unrelated <use> instance must remain clean during these mutations.
+    owner.GetDocumentMut().UpdateSVGUseInstances();
+    assert_eq!(owner.GetDocument().SVGInstanceElements().count(), 1);
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let full = owner.GetDocument().StyleState().stats.resolved_nodes;
@@ -2835,6 +3175,80 @@ fn incremental_inline_and_class_changes_retain_unrelated_native_styles() {
     assert!(engine.Update(&mut owner, &media(), &[]).unwrap().IsEmpty());
     assert_eq!(owner.GetDocument().StyleState().stats.changed_nodes, 0);
     assert_eq!(native_pointer(&owner, target), pointer);
+
+    // CSSOM's native SetResult, not a text diff, grants MISU eligibility.
+    let mut owner = html::html_parser::ParseHTML("<!doctype html><style>#target{height:5px;--w:41px}#target::before{content:'';width:inherit}.blocked{width:60px!important}</style><div id=target style='width:10px'></div>");
+    let target = node(&owner, "target");
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let write = |owner: &mut dom::DOM, property: &str, value: &str| {
+        let old = owner
+            .GetDocument()
+            .Node(target)
+            .FindAttribute("style")
+            .map_or("", |a| a.value.as_str());
+        let (value, independent) = match crate::SetCSSDeclaration(old, property, value, "").unwrap()
+        {
+            crate::CSSDeclarationMutation::Changed(value) => (value, false),
+            crate::CSSDeclarationMutation::ChangedIndependent(value) => (value, true),
+            crate::CSSDeclarationMutation::Unchanged => return,
+        };
+        let id = owner.GetDocument().Node(target).Id();
+        owner
+            .ApplyMutation(&dom::dom_mutation::DOMMutation {
+                target_node_id: id,
+                name: "style".into(),
+                value,
+                inline_style_independent: independent,
+                ..Default::default()
+            })
+            .unwrap();
+    };
+    write(&mut owner, "width", "20px");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, target), 20.0);
+    assert_eq!(
+        engine.TranslatedRuleShadowStats().incremental_style_updates,
+        1
+    );
+    write(&mut owner, "height", "2px"); // added declaration: ordinary recalc
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(
+        engine.TranslatedRuleShadowStats().incremental_style_updates,
+        0
+    );
+    write(&mut owner, "width", "var(--w)"); // substitution: ordinary cascade
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, target), 41.0);
+    assert_eq!(
+        engine.TranslatedRuleShadowStats().incremental_style_updates,
+        0
+    );
+    write(&mut owner, "width", "42px");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, target), 42.0);
+    assert_eq!(
+        engine.TranslatedRuleShadowStats().incremental_style_updates,
+        1
+    );
+    set_attribute(&mut owner, target, "class", "blocked");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    write(&mut owner, "width", "44px"); // old inline lost to !important
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, target), 60.0);
+    assert_eq!(
+        engine.TranslatedRuleShadowStats().incremental_style_updates,
+        0
+    );
+    set_attribute(&mut owner, target, "class", "");
+    set_attribute(&mut owner, target, "style", "width:50px");
+    write(&mut owner, "width", "51px"); // cannot downgrade pending cssText/class recalc
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, target), 51.0);
+    assert_eq!(
+        engine.TranslatedRuleShadowStats().incremental_style_updates,
+        0
+    );
 }
 #[test]
 fn incremental_inheritance_and_combinator_invalidation_resolve_only_changed_targets() {
@@ -2881,10 +3295,83 @@ fn incremental_inheritance_and_combinator_invalidation_resolve_only_changed_targ
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 2);
 }
 #[test]
+fn attribute_invalidation_uses_compiled_keys_and_link_pseudo_dependencies() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><html><body><script id=script></script><link id=preload><a id=anchor><b id=child></b></a><b id=target class=item></b><section id=unrelated><b class=item></b><b class=item></b></section></body></html>",
+    );
+    owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
+        ":root{color:black}.item+.item{color:blue}.item:nth-child(even){opacity:.9}",
+    ));
+    let script = node(&owner, "script");
+    let preload = node(&owner, "preload");
+    let anchor = node(&owner, "anchor");
+    let child = node(&owner, "child");
+    let target = node(&owner, "target");
+    let unrelated = node(&owner, "unrelated");
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let unrelated_pointer = native_pointer(&owner, unrelated);
+    // Unrelated sibling/positional selectors must not widen attribute changes
+    // to every element under the parent, even with incomplete match signatures.
+    for (index, name, value) in [
+        (script, "src", "one.js"),
+        (script, "nonce", "one"),
+        (preload, "href", "one.js"),
+    ] {
+        set_attribute(&mut owner, index, name, value);
+        engine.Update(&mut owner, &media(), &[]).unwrap();
+        assert_eq!(
+            owner.GetDocument().StyleState().stats.resolved_nodes,
+            1,
+            "{name}"
+        );
+    }
+    owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
+        "script[src='ready'] ~ #target{width:31px}script[nonce='accepted'] ~ #target{height:32px}body:has(script[src='ready']) #child{height:51px}a:any-link #child{width:41px}a:any-link ~ #target{min-width:42px}",
+    ));
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    set_attribute(&mut owner, script, "src", "ready");
+    set_attribute(&mut owner, script, "nonce", "accepted");
+    set_attribute(&mut owner, anchor, "href", "/destination");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, target), 31.0);
+    assert_eq!(
+        unsafe { &*native_pointer(&owner, target) }
+            .Height()
+            .Pixels(),
+        32.0
+    );
+    assert_eq!(native_width(&owner, child), 41.0);
+    assert_eq!(
+        unsafe { &*native_pointer(&owner, child) }.Height().Pixels(),
+        51.0
+    );
+    assert_eq!(
+        unsafe { &*native_pointer(&owner, target) }
+            .MinWidth()
+            .Pixels(),
+        42.0
+    );
+    owner
+        .GetDocumentMut()
+        .RemoveAttributeDefault(anchor, "href");
+    owner.GetDocumentMut().RemoveAttributeDefault(script, "src");
+    owner
+        .GetDocumentMut()
+        .RemoveAttributeDefault(script, "nonce");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(unsafe { &*native_pointer(&owner, target) }.Width().IsAuto());
+    assert!(unsafe { &*native_pointer(&owner, child) }.Width().IsAuto());
+    assert!(unsafe { &*native_pointer(&owner, child) }.Height().IsAuto());
+    assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
+}
+
+#[test]
 fn incremental_sheet_replacement_and_removal_invalidate_old_and_new_targets() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
-        "<html><head><style id=sheet>#first{width:10px}</style></head><body><div id=first></div><div id=second></div><div id=unrelated><b></b><b></b></div></body></html>",
+        "<!doctype html><html><head><style id=sheet>#first{width:10px}</style></head><body><div id=first></div><div id=second></div><div id=unrelated><b></b><b></b></div></body></html>",
     );
     let sheet = node(&owner, "sheet");
     let first = node(&owner, "first");
@@ -2908,6 +3395,50 @@ fn incremental_sheet_replacement_and_removal_invalidate_old_and_new_targets() {
     assert!(unsafe { &*native_pointer(&owner, second) }.Width().IsAuto());
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 1);
     assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
+
+    // Appending a sheet must preserve old matches in an unchanged sheet.
+    // A later batch can remove it and change its ancestor selector together.
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><style id=sheet>.old #target{width:31px}</style><div id=parent class=old><b id=target></b></div><section id=other><b></b><b></b></section>",
+    );
+    let sheet = node(&owner, "sheet");
+    let parent = node(&owner, "parent");
+    let target = node(&owner, "target");
+    let other = node(&owner, "other");
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, target), 31.0);
+    let target_pointer = native_pointer(&owner, target);
+    owner
+        .GetDocumentMut()
+        .AppendStyleSheet(crate::ParseCSS("section{height:7px}b+b{opacity:.9}"));
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_pointer(&owner, target), target_pointer);
+    // DOM and stylesheet revisions are one batch. Attribute invalidation
+    // must keep the old feature owner even after its map key is pruned; an
+    // unrelated sibling rule must not widen the mutation to the whole body.
+    owner
+        .GetDocumentMut()
+        .SetTextContent(sheet, ".new #target{width:42px}".into());
+    set_attribute(&mut owner, parent, "class", "new");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_width(&owner, target), 42.0);
+    assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 2);
+    assert_eq!(
+        unsafe { &*native_pointer(&owner, other) }.Height().Pixels(),
+        7.0
+    );
+    owner.GetDocumentMut().Remove(sheet);
+    owner.GetDocumentMut().SetAttribute(
+        parent,
+        dom::persistent_document::DOMAttribute {
+            local_name: "class".into(),
+            value: "off".into(),
+            ..Default::default()
+        },
+    );
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(unsafe { &*native_pointer(&owner, target) }.Width().IsAuto());
 }
 #[test]
 fn incremental_append_and_reverse_position_invalidation_preserve_other_branches() {
@@ -2956,12 +3487,36 @@ fn incremental_explicit_inheritance_and_display_suppression_follow_parent_change
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let unrelated_pointer = native_pointer(&owner, unrelated);
-    assert!(
-        !owner
-            .GetDocument()
-            .ResolvedStyleFor(child)
-            .unwrap()
-            .generates_box
+    assert!(owner.GetDocument().ResolvedStyleFor(parent).is_none());
+    assert!(owner.GetDocument().ResolvedStyleFor(child).is_none());
+    assert!(owner.GetDocument().ResolvedStyleFor(grandchild).is_none());
+    let geometry_revision = owner.GetMeasurementGeometryRevision();
+    engine
+        .EnsureComputedStyle(&mut owner, &media(), &[], grandchild)
+        .unwrap();
+    assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 3);
+    for target in [parent, child, grandchild] {
+        let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
+        assert!(!resolved.generates_box);
+        assert!(unsafe { &*resolved.native_style.Get() }.IsEnsuredInDisplayNone());
+        assert_eq!(unsafe { &*resolved.native_style.Get() }.Opacity(), 0.1);
+    }
+    assert_eq!(owner.GetMeasurementGeometryRevision(), geometry_revision);
+    let cached = native_pointer(&owner, grandchild);
+    engine
+        .EnsureComputedStyle(&mut owner, &media(), &[], grandchild)
+        .unwrap();
+    assert_eq!(native_pointer(&owner, grandchild), cached);
+    set_attribute(&mut owner, parent, "style", "opacity:.15;display:none");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 1);
+    assert!(owner.GetDocument().ResolvedStyleFor(grandchild).is_none());
+    engine
+        .EnsureComputedStyle(&mut owner, &media(), &[], grandchild)
+        .unwrap();
+    assert_eq!(
+        unsafe { &*native_pointer(&owner, grandchild) }.Opacity(),
+        0.15
     );
     set_attribute(&mut owner, parent, "style", "opacity:.2;display:contents");
     let impact = engine.Update(&mut owner, &media(), &[]).unwrap();
@@ -2994,6 +3549,16 @@ fn incremental_explicit_inheritance_and_display_suppression_follow_parent_change
         0.3
     );
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 3);
+
+    // Switching the parent to flex forces descendant recalc for blockification.
+    // The grandchild still has the same computed values and explicit opacity;
+    // traversal must not manufacture a changed style or replace its owner.
+    let grandchild_style = native_pointer(&owner, grandchild);
+    set_attribute(&mut owner, parent, "style", "opacity:.3;display:flex");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 3);
+    assert_eq!(native_pointer(&owner, grandchild), grandchild_style);
+    assert_eq!(unsafe { &*grandchild_style }.Opacity(), 0.3);
 }
 #[test]
 fn incremental_child_state_and_sibling_selectors_invalidate_beyond_the_container() {
@@ -3031,7 +3596,7 @@ fn incremental_has_and_filtered_nth_selectors_track_mutated_selector_dependencie
         "<html><body><section id=host><b id=first class=selected></b><b id=second class=selected></b></section><section id=unrelated><b></b><b></b></section></body></html>",
     );
     owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
-        "#host:has(.active){width:25px}.selected:nth-child(2 of .selected){height:17px}",
+        "#host:has(.active){width:25px}.selected:nth-child(2 of .selected){height:17px}#host:has(.active) #second{opacity:.41}",
     ));
     let host = node(&owner, "host");
     let first = node(&owner, "first");
@@ -3049,10 +3614,27 @@ fn incremental_has_and_filtered_nth_selectors_track_mutated_selector_dependencie
     set_attribute(&mut owner, first, "class", "active");
     engine.Update(&mut owner, &media(), &[]).unwrap();
     assert_eq!(native_width(&owner, host), 25.0);
+    assert_eq!(unsafe { &*native_pointer(&owner, second) }.Opacity(), 0.41);
     assert!(unsafe { &*native_pointer(&owner, second) }
         .Height()
         .IsAuto());
     assert_eq!(owner.GetDocument().StyleState().stats.resolved_nodes, 3);
+    assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
+    // A temporary measurement node elsewhere must not promote the unrelated
+    // branch through this non-subject :has descendant invalidation.
+    let body = owner.GetDocument().Node(host).Parent().unwrap();
+    let probe = owner.GetDocumentMut().CreateElementDefault(
+        dom::persistent_document::DOMNamespace::kHTML,
+        "canvas".into(),
+    );
+    owner.GetDocumentMut().AppendChild(body, probe);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
+    assert_eq!(unsafe { &*native_pointer(&owner, second) }.Opacity(), 0.41);
+    owner.GetDocumentMut().Remove(probe);
+    set_attribute(&mut owner, first, "class", "selected");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(unsafe { &*native_pointer(&owner, second) }.Opacity(), 1.0);
     assert_eq!(native_pointer(&owner, unrelated), unrelated_pointer);
 }
 #[test]
@@ -3090,7 +3672,7 @@ fn production_pseudo_styles_have_independent_cascade_and_native_content() {
     };
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
-        "<style>#target{display:block;color:red;font-size:20px} #target::before{content:'wrong';color:blue} .host::before{content:attr(data-label) ' \\41';color:green} #target::after{content:'';display:contents} #target::first-letter{font-size:40px} input::placeholder{color:blue;font-style:italic}</style><div id=target class=host data-label=hello style='color:red;content:none'>Alpha</div><input id=control placeholder=hint>",
+        "<!doctype html><style>#target{display:block;color:red;font-size:20px} #target::before{content:'wrong';color:blue} .host::before{content:attr(data-label) ' \\41';color:green} #target::after{content:'';display:contents} #target::first-letter{font-size:40px} input::placeholder{color:blue;font-style:italic}</style><div id=target class=host data-label=hello style='color:red;content:none'>Alpha</div><input id=control placeholder=hint>",
     );
     // A normal selector in the same list applies only to its ordinary subject.
     owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
@@ -3098,6 +3680,19 @@ fn production_pseudo_styles_have_independent_cascade_and_native_content() {
     ));
     let target = node(&owner, "target");
     let control = node(&owner, "control");
+    let parent = owner.GetDocument().Node(control).Parent().unwrap();
+    for _ in 0..24 {
+        let hidden = owner.GetDocumentMut().CreateElement(
+            dom::persistent_document::DOMNamespace::kHTML,
+            "div".into(),
+            vec![dom::persistent_document::DOMAttribute {
+                local_name: "style".into(),
+                value: "display:none".into(),
+                ..Default::default()
+            }],
+        );
+        owner.GetDocumentMut().AppendChild(parent, hidden);
+    }
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
     let style = owner.GetDocument().ResolvedStyleFor(target).unwrap();
@@ -3156,6 +3751,81 @@ fn production_pseudo_styles_have_independent_cascade_and_native_content() {
         stats.translated_style_cascade_pseudo_applied,
         "{stats:?}"
     );
+    // Changed author placeholder rules enter the retained UA shadow element,
+    // while the public output remains cached on the originating control.
+    let sheet = owner.GetDocumentMut().CreateElement(
+        dom::persistent_document::DOMNamespace::kHTML,
+        "style".into(),
+        vec![],
+    );
+    owner
+        .GetDocumentMut()
+        .AppendText(sheet, "input::placeholder{color:red !important}");
+    let parent = owner.GetDocument().Node(control).Parent().unwrap();
+    owner.GetDocumentMut().AppendChild(parent, sheet);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(
+        owner
+            .GetDocument()
+            .ResolvedStyleFor(control)
+            .unwrap()
+            .placeholder
+            .as_ref()
+            .unwrap()
+            .style
+            .paint
+            .color
+            .red,
+        1.0
+    );
+    let resolved = owner.GetDocument().StyleState().stats.resolved_nodes;
+    assert!(resolved < 24, "resolved={resolved}");
+    owner.GetDocumentMut().SetTextContent(
+        sheet,
+        "input::-webkit-input-placeholder{color:green !important}".into(),
+    );
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(
+        owner
+            .GetDocument()
+            .ResolvedStyleFor(control)
+            .unwrap()
+            .placeholder
+            .as_ref()
+            .unwrap()
+            .style
+            .paint
+            .color
+            .green
+            > 0.4,
+        "{:?}",
+        owner
+            .GetDocument()
+            .ResolvedStyleFor(control)
+            .unwrap()
+            .placeholder
+            .as_ref()
+            .unwrap()
+            .style
+            .paint
+            .color
+    );
+    owner.GetDocumentMut().Remove(sheet);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(
+        owner
+            .GetDocument()
+            .ResolvedStyleFor(control)
+            .unwrap()
+            .placeholder
+            .as_ref()
+            .unwrap()
+            .style
+            .paint
+            .color
+            .blue,
+        1.0
+    );
 }
 
 #[test]
@@ -3199,6 +3869,10 @@ fn production_marker_pseudo_owns_cascade_cache_and_content() {
         .unwrap()
         .marker
         .is_none());
+    // The UA defaults belong to a marker request, not to the ordinary div.
+    // A phantom marker bit with no cached style makes equal styles differ.
+    assert!(!unsafe { &*native_pointer(&owner, ordinary) }
+        .HasPseudoElementStyle(PseudoId::kPseudoIdMarker));
 }
 
 #[test]
@@ -3476,7 +4150,12 @@ fn production_pseudo_generation_respects_contents_and_suppressed_ancestors() {
         .HasPseudoElementStyle(PseudoId::kPseudoIdFirstLetter));
     assert!(!unsafe { &*contents.native_style.Get() }
         .CanGeneratePseudoElement(PseudoId::kPseudoIdFirstLetter));
+    assert!(owner.GetDocument().ResolvedStyleFor(suppressed).is_none());
+    engine
+        .EnsureComputedStyle(&mut owner, &media(), &[], suppressed)
+        .unwrap();
     let suppressed = owner.GetDocument().ResolvedStyleFor(suppressed).unwrap();
+    assert!(unsafe { &*suppressed.native_style.Get() }.IsEnsuredInDisplayNone());
     assert!(suppressed.before.is_none());
     assert!(suppressed.first_letter.is_none());
     assert!(unsafe { &*suppressed.native_style.Get() }
@@ -3978,10 +4657,10 @@ fn production_scope_implicit_owner_and_root_limit_mutation_invalidation() {
 fn production_container_query_reaches_translated_style_resolver_main_entry() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
-        "<!doctype html><section id=container><p id=target class=item></p></section>",
+        "<!doctype html><main id=root><section id=container><p id=target class=item></p></section>         <p id=unrelated></p><p></p><p></p><p></p><p></p></main>",
     );
     owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
-        "#container{container-type:inline-size}.item{width:7px}\
+        "#container{container-type:inline-size}.item{width:7px}.enabled .item{height:23px}\
          @container (width > 100px){.item{width:41px}}",
     ));
     let container = node(&owner, "container");
@@ -3989,6 +4668,54 @@ fn production_container_query_reaches_translated_style_resolver_main_entry() {
     let mut engine = StyleEngine::new(&owner);
 
     engine.Update(&mut owner, &media(), &[]).unwrap();
+    let full = owner.GetDocument().StyleState().stats.resolved_nodes;
+    let initial = owner
+        .GetDocument()
+        .ResolvedStyleFor(target)
+        .unwrap()
+        .native_style
+        .clone();
+    assert!(
+        unsafe { &*initial.Get() }.DependsOnSizeContainerQueries(),
+        "a false query still records its dependency"
+    );
+    let unrelated = node(&owner, "unrelated");
+    owner.GetDocumentMut().SetAttribute(
+        unrelated,
+        dom::persistent_document::DOMAttribute {
+            local_name: "data-value".into(),
+            value: "typed".into(),
+            ..Default::default()
+        },
+    );
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(
+        owner.GetDocument().StyleState().stats.resolved_nodes < full,
+        "unrelated edits must not recalc the whole document because @container exists"
+    );
+    let root = node(&owner, "root");
+    set_attribute(&mut owner, root, "class", "enabled");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert_eq!(
+        unsafe { &*native_pointer(&owner, target) }
+            .Height()
+            .Pixels(),
+        23.0
+    );
+    assert!(
+        owner.GetDocument().StyleState().stats.resolved_nodes <= 2,
+        "compiled class invalidation must reach only its subject even beside conditional rules"
+    );
+    owner.GetDocumentMut().RemoveAttributeDefault(root, "class");
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    assert!(unsafe { &*native_pointer(&owner, target) }
+        .Height()
+        .IsAuto());
+    assert!(
+        owner.GetDocument().StyleState().stats.resolved_nodes <= 2,
+        "removed class keys must remain available to invalidation"
+    );
+
     assert!(engine
         .SetContainerSizes(&mut owner, [(container, 200.0, 50.0)])
         .unwrap());
@@ -4002,6 +4729,10 @@ fn production_container_query_reaches_translated_style_resolver_main_entry() {
             .Get()
     };
     assert_eq!(wide.Width().Pixels(), 41.0);
+    assert!(
+        owner.GetDocument().StyleState().stats.resolved_nodes < full,
+        "a size change visits container dependents rather than the whole document"
+    );
     let stats = engine.TranslatedRuleShadowStats();
     assert!(stats.translated_style_resolver_applied >= 1, "{stats:?}");
     assert_eq!(stats.translated_style_resolver_fallbacks, 0, "{stats:?}");
@@ -4577,6 +5308,9 @@ fn html_hidden_presentation_hint_uses_native_display_and_author_hint_origin() {
         ("direction", EDisplay::kNone),
     ] {
         let index = node(&owner, name);
+        engine
+            .EnsureComputedStyle(&mut owner, &media(), &[], index)
+            .unwrap();
         let resolved = owner.GetDocument().ResolvedStyleFor(index).unwrap();
         assert_eq!(
             unsafe { &*resolved.native_style.Get() }.Display(),
@@ -4640,6 +5374,11 @@ fn html_hidden_until_found_uses_content_visibility_and_attribute_mutations_recom
             "{name}"
         );
     }
+    let space = node(&owner, "space");
+    assert!(owner.GetDocument().ResolvedStyleFor(space).is_none());
+    engine
+        .EnsureComputedStyle(&mut owner, &media(), &[], space)
+        .unwrap();
     let spaced = owner
         .GetDocument()
         .ResolvedStyleFor(node(&owner, "space"))
@@ -4659,6 +5398,9 @@ fn html_hidden_until_found_uses_content_visibility_and_attribute_mutations_recom
     for value in ["", "until-found", "false", "UNTIL-FOUND"] {
         set_attribute(&mut owner, target, "hidden", value);
         engine.Update(&mut owner, &media(), &[]).unwrap();
+        engine
+            .EnsureComputedStyle(&mut owner, &media(), &[], target)
+            .unwrap();
         let native = unsafe {
             &*owner
                 .GetDocument()
@@ -4788,6 +5530,10 @@ fn html_hidden_hint_does_not_apply_to_foreign_elements_or_namespaced_attributes(
     );
     set_attribute(&mut owner, html, "hidden", "");
     engine.Update(&mut owner, &media(), &sheets).unwrap();
+    assert!(owner.GetDocument().ResolvedStyleFor(html).is_none());
+    engine
+        .EnsureComputedStyle(&mut owner, &media(), &sheets, html)
+        .unwrap();
     let native = unsafe {
         &*owner
             .GetDocument()

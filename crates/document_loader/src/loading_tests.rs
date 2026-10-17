@@ -304,7 +304,10 @@ impl ResourceFetcherClient for Client {
 fn fetcher(backend: Rc<RefCell<dyn URLLoader>>) -> ResourceFetcher {
     fetcher_with_constraints(backend, Rc::new(RefCell::new(Default::default())))
 }
-fn fetcher_with_constraints(backend: Rc<RefCell<dyn URLLoader>>, constraints: Rc<RefCell<layoutng_assembly::internal::layout_input::ConstraintSpace>>) -> ResourceFetcher {
+fn fetcher_with_constraints(
+    backend: Rc<RefCell<dyn URLLoader>>,
+    constraints: Rc<RefCell<layoutng_assembly::internal::layout_input::ConstraintSpace>>,
+) -> ResourceFetcher {
     let decode = Rc::new(decode::DecodeEngine::WithDecoders(
         Rc::new(RefCell::new(Images)),
         Rc::new(RefCell::new(DocumentImages)),
@@ -314,11 +317,7 @@ fn fetcher_with_constraints(backend: Rc<RefCell<dyn URLLoader>>, constraints: Rc
         decode,
         "https://page.test/root/entry".into(),
     ));
-    ResourceFetcher::WithEngine(
-        resources,
-        Rc::new(RefCell::new(DOM::new())),
-        constraints,
-    )
+    ResourceFetcher::WithEngine(resources, Rc::new(RefCell::new(DOM::new())), constraints)
 }
 #[test]
 fn fetcher_deduplicates_image_requests_and_delivers_only_completed_mutations() {
@@ -395,8 +394,13 @@ impl URLLoader for FailingLoader {
 #[test]
 fn font_fallback_progresses_one_poll_pass_at_a_time_and_keeps_failure_callbacks() {
     let requests = Rc::new(RefCell::new(vec![]));
-    let constraints = Rc::new(RefCell::new(layoutng_assembly::internal::layout_input::ConstraintSpace::default()));
-    let fetcher = fetcher_with_constraints(Rc::new(RefCell::new(FailingLoader(requests.clone()))), constraints.clone());
+    let constraints = Rc::new(RefCell::new(
+        layoutng_assembly::internal::layout_input::ConstraintSpace::default(),
+    ));
+    let fetcher = fetcher_with_constraints(
+        Rc::new(RefCell::new(FailingLoader(requests.clone()))),
+        constraints.clone(),
+    );
     // Resource transport fixture; stylesheet acceptance belongs to Style.
     let sheet = style::ParseCSS("@font-face { font-family: X; src: url(a.ttf),url(b.ttf); }");
     fetcher
@@ -406,8 +410,16 @@ fn font_fallback_progresses_one_poll_pass_at_a_time_and_keeps_failure_callbacks(
     assert!(!fetcher.HasPendingFonts());
     let mut description = font_engine::FontDescription::default();
     description.SetFamily(&font_engine::SharedFontFamily::Create(
-        foundation::AtomicString::FromUtf8(b"X"), font_engine::FontFamilyType::kFamilyName, None));
-    constraints.borrow().font_queries.as_ref().unwrap().RequestWebFonts(&description, &[65], false);
+        foundation::AtomicString::FromUtf8(b"X"),
+        font_engine::FontFamilyType::kFamilyName,
+        None,
+    ));
+    constraints
+        .borrow()
+        .font_queries
+        .as_ref()
+        .unwrap()
+        .RequestWebFonts(&description, &[65], false);
     fetcher.StartPendingFonts();
     let mut client = Client::default();
     assert!(fetcher.HasPendingFonts());

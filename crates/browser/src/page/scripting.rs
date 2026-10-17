@@ -15,8 +15,24 @@ pub(super) struct PageScripts {
     flush_dynamic_scripts: Option<Rc<dyn Fn()>>,
 }
 impl PageScripts {
-    pub(super) fn MemoryDiagnostics(&self) -> (Option<javascript::javascript_runtime::JavaScriptMemoryDiagnostics>, webapi::dom_bindings::DOMHostMemoryDiagnostics) {
-        (self.script.borrow().MemoryDiagnostics(), self.web_api.DOMBindings().borrow().MemoryDiagnostics())
+    pub(super) fn GarbageCollectionRequested(&self) -> bool {
+        self.script.borrow().GarbageCollectionRequested()
+    }
+
+    pub(super) fn CollectGarbage(&mut self) {
+        self.script.borrow_mut().CollectGarbage();
+    }
+
+    pub(super) fn MemoryDiagnostics(
+        &self,
+    ) -> (
+        Option<javascript::javascript_runtime::JavaScriptMemoryDiagnostics>,
+        webapi::dom_bindings::DOMHostMemoryDiagnostics,
+    ) {
+        (
+            self.script.borrow().MemoryDiagnostics(),
+            self.web_api.DOMBindings().borrow().MemoryDiagnostics(),
+        )
     }
     pub(super) fn HasBlockingWheelListener(&self) -> bool {
         self.web_api
@@ -369,7 +385,11 @@ impl PageScripts {
         }
     }
     fn ScheduleCustomElementBackupReactions(&self) {
-        let callback = self.web_api.DOMBindings().borrow_mut().TakeCustomElementBackupCallback();
+        let callback = self
+            .web_api
+            .DOMBindings()
+            .borrow_mut()
+            .TakeCustomElementBackupCallback();
         if let Some(callback) = callback {
             let mut script = self.script.borrow_mut();
             let (runtime, realm) = script.RuntimeAndRealm();

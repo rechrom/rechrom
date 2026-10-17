@@ -4,6 +4,13 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+executor = { path = "../executor" }
 browser_tracing = { path = "../tracing" }
 icu_locale = "2.3"
+icu_decimal = { version = "2.3", features = ["ryu"] }
+icu_datetime = "2.3"
+icu_plurals = "2.3"
+icu_provider = "2.3"
+fixed_decimal = { version = "0.7", features = ["ryu"] }
+writeable = "0.6"
 quickjs = { path = "../quickjs" }

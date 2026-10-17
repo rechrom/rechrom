@@ -81,6 +81,11 @@ struct ParserResources {
     // pause; see docs/baidu-render-blocking-timeline.md for the source review.
     rendering_has_begun: bool,
     styles: VecDeque<PendingStyle>,
+    // StyleSheetResource owns parsed StyleSheetContents in Blink. ResourceEngine
+    // already coalesces the bytes; retain the corresponding parsed projection
+    // by that transfer identity so distinct <link> owners share contents while
+    // keeping their owner/media metadata independent.
+    parsed_styles: HashMap<u64, (Rc<cssom::CSSStyleSheet>, String)>,
     page: Option<Rc<document_loader::ResourceFetcher>>,
     dynamic: Option<std::rc::Weak<DynamicScriptTasks>>,
     modules: Rc<document_loader::ModuleResources>,
@@ -400,25 +405,49 @@ fn PollParserStyleSheets(
                     return Ok(false);
                 }
                 let owner_node = metadata.owner_node_id;
+                let resource_identity = resource.Identity();
                 browser_tracing::instant_with_text(
                     "loading",
                     "ParserStyleSheetResponse",
                     &url,
                     &[("owner_node", owner_node as f64)],
                 );
-                match RequireResponse(resource.TakeResult()).and_then(|response| {
-                    let base = if response.final_url.is_empty() {
-                        url.clone()
-                    } else {
-                        response.final_url.clone()
-                    };
-                    let mut trace = browser_tracing::span("loading", "ParseExternalStyleSheet");
-                    trace.set("owner_node", owner_node as f64);
-                    trace.set("bytes", response.body.len() as f64);
-                    let css = DecodeText(&response)?;
-                    let mut sheet = style::ParseCSSWithBase(&css, &base);
+                let cached = resources
+                    .borrow()
+                    .parsed_styles
+                    .get(&resource_identity)
+                    .cloned();
+                let loaded = if let Some((sheet, base)) = cached {
+                    browser_tracing::instant_with_text(
+                        "loading",
+                        "ParserStyleSheetParseCacheHit",
+                        &url,
+                        &[("owner_node", owner_node as f64)],
+                    );
+                    Ok((sheet.as_ref().clone(), base))
+                } else {
+                    RequireResponse(resource.TakeResult()).and_then(|response| {
+                        let base = if response.final_url.is_empty() {
+                            url.clone()
+                        } else {
+                            response.final_url.clone()
+                        };
+                        let mut trace =
+                            browser_tracing::span("loading", "ParseExternalStyleSheet");
+                        trace.set("owner_node", owner_node as f64);
+                        trace.set("bytes", response.body.len() as f64);
+                        let css = DecodeText(&response)?;
+                        let sheet = style::ParseCSSWithBase(&css, &base);
+                        resources
+                            .borrow_mut()
+                            .parsed_styles
+                            .insert(resource_identity, (Rc::new(sheet.clone()), base.clone()));
+                        Ok((sheet, base))
+                    })
+                };
+                match loaded.map(|(mut sheet, base)| {
                     metadata.Apply(&mut sheet);
-                    Ok((sheet, base))
+                    (sheet, base)
                 }) {
                     Ok(loaded) => loaded,
                     Err(error) => {
@@ -484,6 +513,7 @@ pub struct ScriptScheduler {
     tasks: ParserScriptTasks,
     resources: Rc<RefCell<ParserResources>>,
     script_resources: HashMap<u64, ResourceLoader>,
+    prepared_classic_sources: HashMap<u64, io::Result<(String, String)>>,
     async_scripts: Vec<ParserScript>,
     deferred_scripts: Vec<ParserScript>,
     running_async: bool,
@@ -545,6 +575,7 @@ impl ScriptScheduler {
                 base_seen: false,
                 rendering_has_begun: false,
                 styles: VecDeque::new(),
+                parsed_styles: HashMap::new(),
                 page: None,
                 dynamic: None,
                 modules,
@@ -554,6 +585,7 @@ impl ScriptScheduler {
                 preload_csp_seen: false,
             })),
             script_resources: HashMap::new(),
+            prepared_classic_sources: HashMap::new(),
             async_scripts: Vec::new(),
             deferred_scripts: Vec::new(),
             running_async: false,
@@ -720,7 +752,10 @@ impl ScriptScheduler {
             }
             return Ok(());
         }
-        if descriptor.src.is_empty() || self.script_resources.contains_key(&script.node_id) {
+        if descriptor.src.is_empty()
+            || self.script_resources.contains_key(&script.node_id)
+            || self.prepared_classic_sources.contains_key(&script.node_id)
+        {
             return Ok(());
         }
         let request = URLRequest {
@@ -764,6 +799,31 @@ impl ScriptScheduler {
             .get_mut(&script.node_id)
             .is_none_or(|p| p.Poll())
     }
+    // cpp: ScriptStreamer / PendingScript::IsReady. Preparation may yield
+    // while external classic source is compiled off the document owner. The
+    // parser, async list and deferred list retain their existing ordering.
+    fn prepared_script_ready(
+        &mut self,
+        script: ParserScript,
+        descriptor: &ScriptDescriptor,
+        runtime: &mut dyn JavaScriptRuntime,
+        realm: &JavaScriptRealm,
+    ) -> bool {
+        if descriptor.src.is_empty() || !Self::classic(descriptor, runtime) {
+            return self.script_ready(script, descriptor);
+        }
+        if !self.prepared_classic_sources.contains_key(&script.node_id) {
+            if !self.script_ready(script, descriptor) {
+                return false;
+            }
+            let source = self.script_source(script, descriptor);
+            self.prepared_classic_sources.insert(script.node_id, source);
+        }
+        match self.prepared_classic_sources.get(&script.node_id).unwrap() {
+            Ok((source, name)) => runtime.PrepareClassicScript(realm, source, name),
+            Err(_) => true, // run_script reports the existing resource failure.
+        }
+    }
     // cpp: browser/browser.cc:1453-1467
     fn run_async(
         &mut self,
@@ -781,7 +841,7 @@ impl ScriptScheduler {
             while index < self.async_scripts.len() && self.HasTaskBudget() {
                 let script = self.async_scripts[index];
                 let descriptor = self.descriptor(parser.as_deref_mut(), script)?;
-                if !self.script_ready(script, &descriptor) {
+                if !self.prepared_script_ready(script, &descriptor, runtime, realm) {
                     index += 1;
                     continue;
                 }
@@ -807,6 +867,9 @@ impl ScriptScheduler {
         script: ParserScript,
         descriptor: &ScriptDescriptor,
     ) -> io::Result<(String, String)> {
+        if let Some(source) = self.prepared_classic_sources.remove(&script.node_id) {
+            return source;
+        }
         if descriptor.src.is_empty() {
             return Ok((
                 descriptor.source.clone(),
@@ -1195,7 +1258,7 @@ impl ScriptScheduler {
                         } else {
                             let styles_ready = PollParserStyleSheets(&self.resources, &self.document, Some(parser), client)?;
                             // Preserve the existing short-circuit readiness policy.
-                            let script_ready = styles_ready && self.script_ready(script, &descriptor);
+                            let script_ready = styles_ready && self.prepared_script_ready(script, &descriptor, runtime, realm);
                             browser_tracing::instant_with_text("loading", "ParserScriptReadiness", &descriptor.src, &[
                                 ("script_node", script.node_id as f64),
                                 ("styles_ready", styles_ready as u8 as f64),
@@ -1333,7 +1396,7 @@ impl ScriptScheduler {
         while !self.deferred_scripts.is_empty() && remaining > 0 && self.HasTaskBudget() {
             let script = self.deferred_scripts[0];
             let descriptor = self.descriptor(None, script)?;
-            if !self.script_ready(script, &descriptor) {
+            if !self.prepared_script_ready(script, &descriptor, runtime, realm) {
                 return Ok(false);
             }
             self.deferred_scripts.remove(0);
@@ -1468,6 +1531,7 @@ impl ParserResourceDiscovery {
                 base_seen: false,
                 rendering_has_begun: false,
                 styles: VecDeque::new(),
+                parsed_styles: HashMap::new(),
                 page: Some(page),
                 dynamic: None,
                 modules,

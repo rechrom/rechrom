@@ -57,16 +57,22 @@ pub struct ResourceEngine {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ResourceMemoryDiagnostics {
-    pub cached_loads: usize, pub loading: usize, pub encoded_response_capacity: usize,
+    pub cached_loads: usize,
+    pub loading: usize,
+    pub encoded_response_capacity: usize,
 }
 impl ResourceEngine {
     pub fn MemoryDiagnostics(&self) -> ResourceMemoryDiagnostics {
         let loads = self.loads.borrow();
-        let mut usage = ResourceMemoryDiagnostics { cached_loads: loads.len(), ..Default::default() };
+        let mut usage = ResourceMemoryDiagnostics {
+            cached_loads: loads.len(),
+            ..Default::default()
+        };
         for load in loads.values() {
             let (loading, capacity) = load.borrow().MemoryUsage();
             usage.loading += usize::from(loading);
-            usage.encoded_response_capacity = usage.encoded_response_capacity.saturating_add(capacity);
+            usage.encoded_response_capacity =
+                usage.encoded_response_capacity.saturating_add(capacity);
         }
         usage
     }
@@ -227,10 +233,25 @@ impl ResourceEngine {
 
     pub fn SetWakeCallback(&self, callback: URLWakeCallback) {
         *self.wake_callback.borrow_mut() = Some(callback.clone());
+        self.decode.SetWakeCallback(Some(callback.clone()));
         let loads = self.loads.borrow().values().cloned().collect::<Vec<_>>();
         for shared in loads {
             ResourceLoader::FromShared(shared).SetWakeCallback(callback.clone());
         }
+    }
+
+    pub fn BeginImageDecode(
+        &self,
+        bytes: Arc<[u8]>,
+        mime_type: &str,
+        container: &ContainerKey,
+    ) -> io::Result<decode::ImageDecodeJob> {
+        if !self.active.get() {
+            return Err(io::Error::other("resource engine is cancelled"));
+        }
+        Ok(self
+            .decode
+            .BeginImageDecode(self.AllocateImageId()?, bytes, mime_type, container))
     }
 
     pub fn DecodeImage(
@@ -276,6 +297,7 @@ impl ResourceEngine {
 
     pub fn Cancel(&self) {
         self.active.set(false);
+        self.decode.SetWakeCallback(None);
         for shared in self.loads.borrow().values() {
             ResourceLoader::CancelShared(shared);
         }

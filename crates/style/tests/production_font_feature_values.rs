@@ -33,7 +33,12 @@ fn features(description: &FontDescription, family: &str) -> Vec<(String, u32)> {
         .ResolvedFontFeaturesForFamilies()
         .iter()
         .find(|(name, _)| name.Utf8() == family)
-        .unwrap_or_else(|| panic!("missing family {family}, entries: {:?}", description.ResolvedFontFeaturesForFamilies()))
+        .unwrap_or_else(|| {
+            panic!(
+                "missing family {family}, entries: {:?}",
+                description.ResolvedFontFeaturesForFamilies()
+            )
+        })
         .1
         .iter()
         .map(|f| {
@@ -145,7 +150,7 @@ fn alias_only_sheet_edits_invalidate_fonts_and_preserve_old_native_snapshot() {
         aliases,
         "@font-feature-values Probe{@styleset{readable:7}}".into(),
     );
-    let impact=update(&mut engine, &mut owner, 800.);
+    let impact = update(&mut engine, &mut owner, 800.);
     assert_eq!(actual(&owner, "target", "Probe"), ss(7));
     assert!(impact.layout);
     assert_eq!(
@@ -180,7 +185,7 @@ fn layer_order_source_order_owner_media_and_nested_media_rebuild_aliases() {
     owner
         .GetDocumentMut()
         .SetTextContent(order, "@layer late,early;".into());
-    let impact=update(&mut engine, &mut owner, 600.);
+    let impact = update(&mut engine, &mut owner, 600.);
     assert_eq!(actual(&owner, "target", "Probe"), ss(2));
     assert!(impact.layout);
     let conditional = node(&owner, "conditional");

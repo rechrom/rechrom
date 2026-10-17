@@ -1553,6 +1553,7 @@ impl<'a, B: StyleResolverRuleMatchingBackend> StyleResolver<'a, B> {
         collector: &mut B::ElementRuleCollector,
         include_smil_properties: bool,
     ) {
+        let _trace = browser_tracing::span("style", "StyleResolver.MatchAllRules");
         let element = self.backend.StateGetElement(state);
         self.MatchUARules(element, collector);
         self.MatchUserRules(collector);

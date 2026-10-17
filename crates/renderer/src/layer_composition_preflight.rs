@@ -51,7 +51,7 @@ pub(super) fn prepare(
     bounds: &[Option<SurfaceBounds>],
     direct_clips: &[Option<layer_direct_clip::DirectClipRun>],
     visible: &[Vec<Option<SurfaceBounds>>],
-    pixels: &HashMap<TileId, CachedTile>,
+    pixels: &HashMap<TileId, Arc<CachedTile>>,
     clips: &mut ClipMaskCache,
     width: u32,
     height: u32,

@@ -1,7 +1,10 @@
 #![allow(non_snake_case)]
 
 use crate::CSSStyleSheet;
-use std::{collections::HashMap, hash::Hash};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+};
 
 pub enum CSSOMMutation<Owner = ()> {
     AddStyleSheet {
@@ -28,6 +31,7 @@ pub enum CSSOMAdoptionError {
 /// StyleEngine::document_style_sheet_collection_ in Blink.
 pub struct CSSOM<Owner: Eq + Hash = ()> {
     style_sheets: Vec<CSSStyleSheet>,
+    style_sheet_owners: HashSet<u64>,
     detached_style_sheets: HashMap<Owner, Vec<CSSStyleSheet>>,
     // cpp: tree_scope.h:182-190; css_style_sheet.h:200-203,321.
     // Constructed sheets belong to their constructor Document (this CSSOM
@@ -42,6 +46,7 @@ impl<Owner: Eq + Hash> Default for CSSOM<Owner> {
     fn default() -> Self {
         Self {
             style_sheets: Vec::new(),
+            style_sheet_owners: HashSet::new(),
             detached_style_sheets: HashMap::new(),
             constructed_style_sheets: HashMap::new(),
             adopted_style_sheet_ids: HashMap::new(),
@@ -63,6 +68,16 @@ impl<Owner: Eq + Hash> CSSOM<Owner> {
                 .get(owner)
                 .map_or(&[], Vec::as_slice),
         }
+    }
+
+    /// Tests membership in the document-owned candidate collection without
+    /// enumerating unrelated sheets. Detached Document collections are separate.
+    pub fn HasStyleSheetForOwner(&self, owner_node_id: u64) -> bool {
+        self.style_sheet_owners.contains(&owner_node_id)
+    }
+
+    pub fn HasAdoptedStyleSheets(&self, scope: &Owner) -> bool {
+        self.adopted_style_sheet_ids.contains_key(scope)
     }
 
     /// Registers the backing created by `new CSSStyleSheet()` in this
@@ -153,6 +168,9 @@ impl<Owner: Eq + Hash> CSSOM<Owner> {
             mut sheet,
             detached_owner,
         } = mutation;
+        if detached_owner.is_none() && sheet.owner_node_id != 0 {
+            self.style_sheet_owners.insert(sheet.owner_node_id);
+        }
         let sheets = if let Some(owner) = detached_owner {
             self.detached_style_sheets.entry(owner).or_default()
         } else {
@@ -218,6 +236,9 @@ mod tests {
         );
         assert_eq!(catalog.GetStyleSheets(Some(&42)), &[sheet]);
         assert!(catalog.GetStyleSheets(Some(&43)).is_empty());
+        assert!(catalog.HasStyleSheetForOwner(7));
+        assert!(!catalog.HasStyleSheetForOwner(0));
+        assert!(!catalog.HasStyleSheetForOwner(42));
         assert_eq!(catalog.Generation(), 5);
         assert_eq!(notifications, 5);
     }
@@ -312,6 +333,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             [first_id, second_id, first_id]
         );
+        assert!(catalog.HasAdoptedStyleSheets(&10));
+        assert!(catalog.HasAdoptedStyleSheets(&20));
+        assert!(!catalog.HasAdoptedStyleSheets(&30));
         assert!(catalog.IsStyleSheetAdoptedBy(first_id, &10));
         assert!(catalog.IsStyleSheetAdoptedBy(first_id, &20));
         assert!(!catalog.IsStyleSheetAdoptedBy(second_id, &20));

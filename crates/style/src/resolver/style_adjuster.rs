@@ -1775,10 +1775,16 @@ mod z_index_adjustment_tests {
     fn source_parent_predicates_include_inline_legacy_and_grid_lanes_displays() {
         let _heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
-        for display in [EDisplay::kFlex, EDisplay::kInlineFlex,
-                        EDisplay::kWebkitBox, EDisplay::kWebkitInlineBox,
-                        EDisplay::kGrid, EDisplay::kInlineGrid,
-                        EDisplay::kGridLanes, EDisplay::kInlineGridLanes] {
+        for display in [
+            EDisplay::kFlex,
+            EDisplay::kInlineFlex,
+            EDisplay::kWebkitBox,
+            EDisplay::kWebkitInlineBox,
+            EDisplay::kGrid,
+            EDisplay::kInlineGrid,
+            EDisplay::kGridLanes,
+            EDisplay::kInlineGridLanes,
+        ] {
             let mut parent = ComputedStyleBuilder::from_style(initial);
             parent.SetDisplay(display);
             let parent = unsafe { &*parent.TakeStyle() };

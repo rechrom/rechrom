@@ -319,6 +319,7 @@ pub struct CompositorRenderPass {
     /// Effect whose descendants are rendered by this pass. `None` identifies
     /// the root pass. The owner is applied by the parent RenderPassDrawQuad.
     pub owner_effect: Option<Arc<EffectPaintPropertyNode>>,
+    pub has_transparent_background: bool,
     pub output_rect: DeviceRect,
     pub damage_rect: DeviceRect,
     pub shared_quad_state_list: Vec<SharedQuadState>,
@@ -693,7 +694,14 @@ struct OrderedEffectSurface {
     composition: LayerComposition,
     visible_polygon: Option<TargetPolygon>,
     representative_layer_index: usize,
+    /// Raw content stored by this render pass, corresponding to
+    /// RenderSurfaceImpl::content_rect(). The owning effect is applied when
+    /// the parent draws the RenderPassDrawQuad.
     output_bounds: Option<DeviceRect>,
+    /// Post-filter contribution to the parent surface, corresponding to
+    /// RenderSurfaceImpl::DrawableContentRect(). Keep this separate from the
+    /// pass output rect so a filter never inflates the backing to the viewport.
+    drawable_bounds: Option<DeviceRect>,
     units: Vec<OrderedCompositionUnit>,
 }
 
@@ -703,9 +711,17 @@ enum OrderedCompositionUnit {
     Surface(OrderedEffectSurface),
 }
 
-fn effect_needs_render_surface(effect: &EffectPaintPropertyNode) -> bool {
+fn effect_needs_render_surface(
+    effect: &EffectPaintPropertyNode,
+    subtree_layers_that_draw: usize,
+) -> bool {
+    let opacity_requires_group = (effect.opacity != 1.0
+        || effect
+            .direct_compositing_reasons
+            .contains(&"ActiveOpacityAnimation"))
+        && subtree_layers_that_draw >= 2;
     !effect.is_mask
-        && (effect.opacity != 1.0
+        && (opacity_requires_group
             || effect.blend_mode != PaintBlendMode::kNormal
             || effect.isolates_blending
             || effect.has_mask
@@ -723,6 +739,22 @@ fn effect_chain(layer: &LayerPlan) -> Vec<Arc<EffectPaintPropertyNode>> {
     }
     chain.reverse();
     chain
+}
+
+// EffectTree::UpdateIsDrawn excludes a zero-opacity subtree on the active
+// tree unless it can still contribute through a backdrop filter or an active
+// opacity animation. Copy requests and subtree capture are not represented by
+// this compositor input. Cull before render-surface construction so invisible
+// descendants never allocate passes or replay their tiles.
+fn effect_chain_is_drawn(effects: &[Arc<EffectPaintPropertyNode>]) -> bool {
+    effects.iter().all(|effect| {
+        effect.opacity != 0.0
+            || !effect.backdrop_filters.is_empty()
+            || effect.backdrop_filter_has_reference
+            || effect
+                .direct_compositing_reasons
+                .contains(&"ActiveOpacityAnimation")
+    })
 }
 
 fn intersect_paint_rect(a: PaintRect, b: PaintRect) -> Option<PaintRect> {
@@ -1260,7 +1292,7 @@ fn ordered_unit_bounds(
             viewport,
             plan.config.raster_scale,
         ),
-        OrderedCompositionUnit::Surface(surface) => Ok(surface.output_bounds),
+        OrderedCompositionUnit::Surface(surface) => Ok(surface.drawable_bounds),
     }
 }
 
@@ -1290,22 +1322,30 @@ fn lower_pending_units(
                         ordered_unit_bounds(plan, unit, viewport)?,
                     );
                 }
-                if !surface.owner.filters.is_empty()
-                    || !surface.owner.backdrop_filters.is_empty()
-                    || surface.owner.backdrop_filter_has_reference
-                {
-                    output_bounds = Some(viewport);
-                }
+                // Chromium keeps RenderSurfaceImpl::content_rect() as the raw
+                // child output and expands only DrawableContentRect() for the
+                // contribution to its parent. Reference/filter bounds remain
+                // conservative here; the renderer applies the actual filter
+                // against the tight raw input rect.
+                let drawable_bounds = if surface.owner.filters.is_empty() {
+                    output_bounds
+                } else {
+                    Some(viewport)
+                };
                 // RenderSurfaceImpl only appends a render-pass quad for a
                 // nonempty drawable content rect. Here None is proven empty
                 // output, whereas LayerComposition::content_bounds=None means
                 // unconstrained sampling. Do not turn an offscreen surface
                 // into a full-viewport transparent bitmap/quad at that boundary.
                 if output_bounds.is_none() {
-                    browser_tracing::instant("compose", "EmptyEffectSurfaceSkipped", &[
-                        ("effect_id", surface.owner.id as f64),
-                        ("child_units", child_units.len() as f64),
-                    ]);
+                    browser_tracing::instant(
+                        "compose",
+                        "EmptyEffectSurfaceSkipped",
+                        &[
+                            ("effect_id", surface.owner.id as f64),
+                            ("child_units", child_units.len() as f64),
+                        ],
+                    );
                     continue;
                 }
                 let mut properties = plan.layers[representative].properties.clone();
@@ -1322,7 +1362,9 @@ fn lower_pending_units(
                         plan.layers[representative].compositor_scroll,
                     )
                     .map_err(|_| FrameBuildError("unsupported-effect-output-clip"))?
-                    .1.map(|rect| device_rect(rect, 1.0)).transpose()?
+                    .1
+                    .map(|rect| device_rect(rect, 1.0))
+                    .transpose()?
                 } else {
                     None
                 };
@@ -1349,6 +1391,7 @@ fn lower_pending_units(
                     visible_polygon: None,
                     representative_layer_index: representative,
                     output_bounds,
+                    drawable_bounds,
                     units: child_units,
                 }));
             }
@@ -1365,23 +1408,43 @@ fn ordered_composition_units(
         .iter()
         .map(|layer| LayerComposition::from_layer(layer, plan.config.raster_scale))
         .collect::<Result<_, _>>()?;
-    let masked_parents: Vec<_> = plan
-        .layers
+    let layer_effects: Vec<_> = plan.layers.iter().map(effect_chain).collect();
+    let drawn_effects: Vec<_> = layer_effects
         .iter()
-        .flat_map(effect_chain)
+        .map(|effects| effect_chain_is_drawn(effects).then_some(effects))
+        .collect();
+    let mut subtree_layers_that_draw = HashMap::new();
+    for effects in drawn_effects.iter().flatten() {
+        for effect in effects.iter() {
+            *subtree_layers_that_draw
+                .entry(Arc::as_ptr(&effect.lifecycle.identity) as usize)
+                .or_insert(0usize) += 1;
+        }
+    }
+    let masked_parents: Vec<_> = drawn_effects
+        .iter()
+        .flatten()
+        .flat_map(|effects| effects.iter().cloned())
         .filter(|effect| effect.is_mask)
         .filter_map(|effect| effect.parent.clone())
         .collect();
     let mut pending = Vec::new();
-    for (layer_index, layer) in plan.layers.iter().enumerate() {
-        let surfaces: Vec<_> = effect_chain(layer)
-            .into_iter()
+    for (layer_index, effects) in drawn_effects.into_iter().enumerate() {
+        let Some(effects) = effects else { continue };
+        let surfaces: Vec<_> = effects
+            .iter()
             .filter(|effect| {
-                effect_needs_render_surface(effect)
-                    || masked_parents
-                        .iter()
-                        .any(|parent| parent.lifecycle.same_node(&effect.lifecycle))
+                effect_needs_render_surface(
+                    effect,
+                    subtree_layers_that_draw
+                        .get(&(Arc::as_ptr(&effect.lifecycle.identity) as usize))
+                        .copied()
+                        .unwrap_or_default(),
+                ) || masked_parents
+                    .iter()
+                    .any(|parent| parent.lifecycle.same_node(&effect.lifecycle))
             })
+            .cloned()
             .collect();
         insert_pending_layer(&mut pending, &surfaces, layer_index);
     }
@@ -1884,11 +1947,13 @@ fn append_composition_units(
                         resource_keys,
                         viewport,
                     )?;
-                    let output_rect = surface.output_bounds
+                    let output_rect = surface
+                        .output_bounds
                         .ok_or(FrameBuildError("empty-effect-output"))?;
                     render_pass_list.push(CompositorRenderPass {
                         id: pass_id,
                         owner_effect: Some(surface.owner.clone()),
+                        has_transparent_background: true,
                         // RenderSurfaceImpl::CreateRenderPassCommon carries
                         // the drawable content rect, not framebuffer allocation.
                         // Filter outsets are already included by lowering.
@@ -1980,6 +2045,7 @@ impl FrameBuilder {
         render_pass_list.push(CompositorRenderPass {
             id: root_pass_id,
             owner_effect: None,
+            has_transparent_background: false,
             output_rect: viewport,
             damage_rect: root_damage,
             shared_quad_state_list,
@@ -2034,7 +2100,19 @@ impl CompositorFrame {
             .render_pass_list
             .last_mut()
             .expect("CompositorFrame always has a root render pass");
-        root.damage_rect = union_device_rect(root.damage_rect, damage);
+        // RenderSurfaceImpl::CreateRenderPassCommon clips damage to the output
+        // rect, including compositor overlay damage from the previous viewport.
+        // A retained scrollbar track may extend beyond a resized fallback.
+        root.damage_rect = intersect_rect(
+            union_device_rect(root.damage_rect, damage),
+            root.output_rect,
+        )
+        .unwrap_or(DeviceRect::new(
+            root.output_rect.x,
+            root.output_rect.y,
+            0,
+            0,
+        ));
         self.metadata.root_damage_rect = root.damage_rect;
         self
     }

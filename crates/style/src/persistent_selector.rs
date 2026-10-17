@@ -188,9 +188,37 @@ pub struct ScopedSelectorMatch {
     pub specificity: u32,
     pub proximity: u32,
 }
+// Blink's AttributeCollection is a borrowed view over ElementData. Keep the
+// document's attributes resident instead of copying their strings and building
+// per-attribute Rc owners for every attribute revision.
+fn AttributeNameMatches(data: &DOMAttribute, name: &QualifiedName, ignore_case: bool) -> bool {
+    (if ignore_case {
+        name.LocalName()
+            .EqualsUtf8IgnoringAsciiCase(&data.local_name)
+    } else {
+        name.LocalName().EqualsUtf8(&data.local_name)
+    }) && (name.NamespaceURI().IsNull() && data.namespace_uri.is_empty()
+        || name.NamespaceURI() == &AtomicString::from_str("*")
+        || name.NamespaceURI().EqualsUtf8(&data.namespace_uri))
+}
+
+#[derive(Default)]
+struct PersistentElementFilters {
+    ancestor: Rc<RefCell<SelectorFilter>>,
+    subjects: HashMap<usize, (u64, u32)>,
+    subtrees: HashMap<usize, (u64, u32)>,
+    identifiers: HashMap<usize, (u64, Rc<Vec<u32>>)>,
+    classes: HashMap<usize, (u64, Rc<[AtomicString]>)>,
+    empty_classes: Rc<[AtomicString]>,
+    local_name_atoms: HashMap<usize, AtomicString>,
+    id_atoms: HashMap<usize, (u64, AtomicString)>,
+    ancestor_revision: Option<(DOMOwnerHandle, u64)>,
+}
 pub(crate) struct PersistentSelectorBackend<'d> {
     document: &'d Document,
-    nodes: Rc<Vec<Rc<usize>>>,
+    ancestor: Rc<RefCell<SelectorFilter>>,
+    filters: Rc<RefCell<PersistentElementFilters>>,
+    nodes: Rc<RefCell<HashMap<usize, Rc<usize>>>>,
     interaction: UserInteractionState,
     spatial_navigation_policy: SpatialNavigationPolicy,
     forced: HashMap<u64, Vec<PseudoType>>,
@@ -200,16 +228,21 @@ pub(crate) struct PersistentSelectorBackend<'d> {
     has_depth: Cell<u32>,
     query_depth: Cell<u32>,
     nth_depth: Cell<u32>,
-    element_flags: RefCell<HashMap<usize, Vec<ElementInvalidationFlag>>>,
-    container_flags: RefCell<HashMap<usize, Vec<ContainerInvalidationFlag>>>,
-    local_name_atoms: RefCell<HashMap<usize, AtomicString>>,
-    id_atoms: RefCell<HashMap<usize, AtomicString>>,
+    element_flags: Rc<RefCell<HashMap<usize, Vec<ElementInvalidationFlag>>>>,
+    subject_flags: Rc<RefCell<HashMap<usize, crate::resolver::match_flags::MatchFlags>>>,
+    sibling_has_flags: Rc<RefCell<HashMap<usize, u8>>>,
+    container_flags: Rc<RefCell<HashMap<usize, Vec<ContainerInvalidationFlag>>>>,
     logical_pseudo_enabled: Cell<bool>,
 }
 impl<'d> PersistentSelectorBackend<'d> {
     fn new(
         document: &'d Document,
-        nodes: Rc<Vec<Rc<usize>>>,
+        filters: Rc<RefCell<PersistentElementFilters>>,
+        element_flags: Rc<RefCell<HashMap<usize, Vec<ElementInvalidationFlag>>>>,
+        subject_flags: Rc<RefCell<HashMap<usize, crate::resolver::match_flags::MatchFlags>>>,
+        sibling_has_flags: Rc<RefCell<HashMap<usize, u8>>>,
+        container_flags: Rc<RefCell<HashMap<usize, Vec<ContainerInvalidationFlag>>>>,
+        nodes: Rc<RefCell<HashMap<usize, Rc<usize>>>>,
         interaction: UserInteractionState,
         spatial_navigation_policy: SpatialNavigationPolicy,
         forced: HashMap<u64, Vec<PseudoType>>,
@@ -217,8 +250,11 @@ impl<'d> PersistentSelectorBackend<'d> {
         slot_assignment_dirty: HashSet<u64>,
         vtt_elements: HashSet<u64>,
     ) -> Rc<Self> {
+        let ancestor = filters.borrow().ancestor.clone();
         Rc::new(Self {
             document,
+            ancestor,
+            filters,
             nodes,
             interaction,
             spatial_navigation_policy,
@@ -229,15 +265,23 @@ impl<'d> PersistentSelectorBackend<'d> {
             has_depth: Cell::new(0),
             query_depth: Cell::new(0),
             nth_depth: Cell::new(0),
-            element_flags: RefCell::new(HashMap::new()),
-            container_flags: RefCell::new(HashMap::new()),
-            local_name_atoms: RefCell::new(HashMap::new()),
-            id_atoms: RefCell::new(HashMap::new()),
+            element_flags,
+            subject_flags,
+            sibling_has_flags,
+            container_flags,
             logical_pseudo_enabled: Cell::new(true),
         })
     }
     pub(crate) fn handle(&self, index: usize) -> Rc<usize> {
-        self.nodes[index].clone()
+        assert!(
+            index < self.document.NodeCount(),
+            "selector node belongs to the document"
+        );
+        self.nodes
+            .borrow_mut()
+            .entry(index)
+            .or_insert_with(|| Rc::new(index))
+            .clone()
     }
 
     pub(crate) fn document(&self) -> &'d Document {
@@ -352,17 +396,31 @@ impl<'d> PersistentSelectorBackend<'d> {
             DOMNamespace::kNone => "",
         })
     }
-    fn bloom(&self, index: usize) -> u32 {
+    pub(crate) fn RememberSubjectFlags(
+        &self,
+        element: usize,
+        flags: crate::resolver::match_flags::MatchFlags,
+    ) {
+        *self.subject_flags.borrow_mut().entry(element).or_default() |= flags;
+    }
+    pub(crate) fn ElementSubjectFilter(&self, index: usize) -> u32 {
+        let revision = self.document.SelectorFilterRevisions(index).0;
+        if let Some((_, bits)) = self
+            .filters
+            .borrow()
+            .subjects
+            .get(&index)
+            .filter(|(key, _)| *key == revision)
+        {
+            return *bits;
+        }
         let mut bits = 0;
-        if let Some(classes) = self.attr(index, "class") {
-            for c in classes.split_ascii_whitespace() {
-                let atom = AtomicString::from_str(c);
-                bits |= FilterForString(&if self.InQuirksMode(&index) {
-                    atom.ToAsciiLower()
-                } else {
-                    atom
-                });
-            }
+        for atom in self.ClassNamesForElement(index).iter() {
+            bits |= FilterForString(&if self.InQuirksMode(&index) {
+                atom.ToAsciiLower()
+            } else {
+                atom.clone()
+            });
         }
         for a in self.document.Node(index).Attributes() {
             let name = QualifiedName::new(
@@ -377,10 +435,151 @@ impl<'d> PersistentSelectorBackend<'d> {
                 bits |= FilterForAttribute(&name);
             }
         }
+        self.filters
+            .borrow_mut()
+            .subjects
+            .insert(index, (revision, bits));
+        bits
+    }
+    fn bloom(&self, index: usize) -> u32 {
+        // cpp: Element::UpdateSubtreeBloomFilterAfterInsert/ChildRemoval.
+        // Blink retains these subtree facts and propagates attribute/child
+        // changes through parents. The DOM supplies that affected path through
+        // revisions, so clean branches keep their existing style-owned bloom.
+        let revision = self.document.SelectorFilterRevisions(index).1;
+        if let Some((_, bits)) = self
+            .filters
+            .borrow()
+            .subtrees
+            .get(&index)
+            .filter(|(key, _)| *key == revision)
+        {
+            return *bits;
+        }
+        let _trace = browser_tracing::span("style", "SelectorFilter.BuildSubtree");
+        let mut bits = self.ElementSubjectFilter(index);
         for &child in self.document.Node(index).Children() {
             bits |= self.bloom(child);
         }
+        self.filters
+            .borrow_mut()
+            .subtrees
+            .insert(index, (revision, bits));
         bits
+    }
+    // cpp: SelectorFilter::PushAllParentsOf/PushAncestors/PushParent.
+    pub(crate) fn SelectorFilterForElement(
+        &self,
+        element: usize,
+    ) -> std::cell::Ref<'_, SelectorFilter> {
+        let parent = self.document.ParentOrShadowHostElement(element);
+        let filter = self.ancestor.borrow();
+        // A valid parent stack also serves every sibling and each later
+        // origin/pseudo pass of this element. DOM membership revisions reset
+        // the owner before a new session, including ancestor attribute edits.
+        if filter.ParentStackIsConsistent(parent) {
+            return filter;
+        }
+        drop(filter);
+        let mut parents = Vec::new();
+        let mut parent = parent;
+        while let Some(index) = parent {
+            parents.push(index);
+            parent = self.document.ParentOrShadowHostElement(index);
+        }
+        parents.reverse();
+        let mut filter = self.ancestor.borrow_mut();
+        let common = filter
+            .Parents()
+            .iter()
+            .zip(&parents)
+            .take_while(|(a, b)| a == b)
+            .count();
+        filter.PopToParentCount(common);
+        for &index in &parents[common..] {
+            let hashes = self.ElementIdentifierHashes(index);
+            filter.PushParent(index, hashes.iter().copied());
+        }
+        drop(filter);
+        // ElementRuleCollector borrows the resolver's resident SelectorFilter
+        // in Blink. Keep that lifetime separate from mutable identifier caches;
+        // no bitmap, parent stack or identifier-vector copy is made per pass.
+        self.ancestor.borrow()
+    }
+
+    // ElementData retains the atomized class list in Blink. Reuse the
+    // unchanged element's immutable owner across collectors and RuleSetGroups.
+    // Typed attribute revisions revoke only that element's retained facts.
+    pub(crate) fn ClassNamesForElement(&self, index: usize) -> Rc<[AtomicString]> {
+        let revision = self.document.SelectorFilterRevisions(index).0;
+        if let Some((_, classes)) = self
+            .filters
+            .borrow()
+            .classes
+            .get(&index)
+            .filter(|(key, _)| *key == revision)
+        {
+            return classes.clone();
+        }
+        let mut names = self
+            .attr(index, "class")
+            .unwrap_or("")
+            .split_ascii_whitespace()
+            .peekable();
+        let classes: Rc<[AtomicString]> = if names.peek().is_none() {
+            self.filters.borrow().empty_classes.clone()
+        } else {
+            names.map(AtomicString::from_str).collect::<Vec<_>>().into()
+        };
+        self.filters
+            .borrow_mut()
+            .classes
+            .insert(index, (revision, classes.clone()));
+        classes
+    }
+
+    fn ElementIdentifierHashes(&self, index: usize) -> Rc<Vec<u32>> {
+        let revision = self.document.SelectorFilterRevisions(index).0;
+        if let Some((_, hashes)) = self
+            .filters
+            .borrow()
+            .identifiers
+            .get(&index)
+            .filter(|(key, _)| *key == revision)
+        {
+            return hashes.clone();
+        }
+        let mut hashes = vec![self
+            .ElementLocalName(&index)
+            .Hash()
+            .wrapping_mul(kTagNameSalt)];
+        if self.HasID(&index) {
+            hashes.push(
+                self.IdForStyleResolution(&index)
+                    .Hash()
+                    .wrapping_mul(kIdSalt),
+            );
+        }
+        for atom in self.ClassNamesForElement(index).iter() {
+            let atom = if self.InQuirksMode(&index) {
+                atom.ToAsciiLower()
+            } else {
+                atom.clone()
+            };
+            hashes.push(atom.Hash().wrapping_mul(kClassSalt));
+        }
+        for attribute in self.document.Node(index).Attributes() {
+            let name = AtomicString::from_str(&attribute.local_name).ToAsciiLower();
+            if !matches!(name.Utf8().as_str(), "id" | "class" | "style") {
+                hashes.push(name.Hash().wrapping_mul(kAttributeSalt));
+            }
+        }
+        let hashes = Rc::new(hashes);
+        self.filters
+            .borrow_mut()
+            .identifiers
+            .insert(index, (revision, hashes.clone()));
+        hashes
     }
     fn tag_matches(&self, index: usize, name: &QualifiedName) -> bool {
         self.ElementTagQName(&index) == *name
@@ -659,18 +858,16 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
             .map(|p| self.handle(p))
     }
     fn SetChildrenAffectedByDirectAdjacentRules(&self, node: &Self::ContainerNode) {
-        self.container_flags
-            .borrow_mut()
-            .entry(*node)
-            .or_default()
-            .push(ContainerInvalidationFlag::ChildrenAffectedByForwardPositionalRules);
+        self.SetContainerFlag(
+            node,
+            ContainerInvalidationFlag::ChildrenAffectedByDirectAdjacentRules,
+        );
     }
     fn SetChildrenAffectedByIndirectAdjacentRules(&self, node: &Self::ContainerNode) {
-        self.container_flags
-            .borrow_mut()
-            .entry(*node)
-            .or_default()
-            .push(ContainerInvalidationFlag::ChildrenAffectedByForwardPositionalRules);
+        self.SetContainerFlag(
+            node,
+            ContainerInvalidationFlag::ChildrenAffectedByIndirectAdjacentRules,
+        );
     }
     fn OwnerShadowHost(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
         self.document
@@ -701,10 +898,8 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         let html_element = self.IsHTMLElement(e);
         let html_document = self.IsInHTMLDocument(e);
         self.document.Node(*e).Attributes().iter().any(|attribute| {
-            self.AttributeMatchesName(attribute, name)
-                || (!html_element
-                    && html_document
-                    && self.AttributeMatchesNameCaseInsensitive(attribute, name))
+            AttributeNameMatches(attribute, name, false)
+                || (!html_element && html_document && AttributeNameMatches(attribute, name, true))
         })
     }
     fn CSSAttributeValueCaseSensitiveNonHTMLEnabled(&self) -> bool {
@@ -716,30 +911,18 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
     fn IsInHTMLDocument(&self, e: &Self::Element) -> bool {
         self.document.IsInHTMLDocument(*e)
     }
-    fn AttributesWithoutUpdate(&self, e: &Self::Element) -> Vec<Rc<Self::Attribute>> {
-        self.document
-            .Node(*e)
-            .Attributes()
-            .iter()
-            .cloned()
-            .map(Rc::new)
-            .collect()
+    fn AttributesWithoutUpdate(&self, e: &Self::Element) -> &[Self::Attribute] {
+        self.document.Node(*e).Attributes()
     }
     fn AttributeMatchesName(&self, a: &Self::Attribute, name: &QualifiedName) -> bool {
-        name.LocalName().EqualsUtf8(&a.local_name)
-            && (name.NamespaceURI().IsNull() && a.namespace_uri.is_empty()
-                || name.NamespaceURI() == &AtomicString::from_str("*")
-                || name.NamespaceURI().EqualsUtf8(&a.namespace_uri))
+        AttributeNameMatches(a, name, false)
     }
     fn AttributeMatchesNameCaseInsensitive(
         &self,
         a: &Self::Attribute,
         name: &QualifiedName,
     ) -> bool {
-        name.LocalName().EqualsUtf8IgnoringAsciiCase(&a.local_name)
-            && (name.NamespaceURI().IsNull() && a.namespace_uri.is_empty()
-                || name.NamespaceURI() == &AtomicString::from_str("*")
-                || name.NamespaceURI().EqualsUtf8(&a.namespace_uri))
+        AttributeNameMatches(a, name, true)
     }
     fn AttributeValue(&self, a: &Self::Attribute) -> AtomicString {
         AtomicString::from_str(&a.value)
@@ -757,7 +940,14 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         self.attr(*e, "id").is_some_and(|v| !v.is_empty())
     }
     fn IdForStyleResolution(&self, e: &Self::Element) -> AtomicString {
-        if let Some(value) = self.id_atoms.borrow().get(e) {
+        let revision = self.document.SelectorFilterRevisions(*e).0;
+        if let Some((_, value)) = self
+            .filters
+            .borrow()
+            .id_atoms
+            .get(e)
+            .filter(|(key, _)| *key == revision)
+        {
             return value.clone();
         }
         let value = self
@@ -772,7 +962,10 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
                 }
             })
             .unwrap_or_default();
-        self.id_atoms.borrow_mut().insert(*e, value.clone());
+        self.filters
+            .borrow_mut()
+            .id_atoms
+            .insert(*e, (revision, value.clone()));
         value
     }
     fn ElementIs(&self, e: &Self::Element, class: ElementClass) -> bool {
@@ -815,18 +1008,18 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         }
     }
     fn SetElementFlag(&self, e: &Self::Element, flag: ElementInvalidationFlag) {
-        self.element_flags
-            .borrow_mut()
-            .entry(*e)
-            .or_default()
-            .push(flag);
+        let mut all = self.element_flags.borrow_mut();
+        let flags = all.entry(*e).or_default();
+        if !flags.contains(&flag) {
+            flags.push(flag);
+        }
     }
     fn SetContainerFlag(&self, n: &Self::ContainerNode, flag: ContainerInvalidationFlag) {
-        self.container_flags
-            .borrow_mut()
-            .entry(*n)
-            .or_default()
-            .push(flag);
+        let mut all = self.container_flags.borrow_mut();
+        let flags = all.entry(*n).or_default();
+        if !flags.contains(&flag) {
+            flags.push(flag);
+        }
     }
     fn FeatureEnabled(&self, e: &Self::Element, feature: SelectorRuntimeFeature) -> bool {
         match feature {
@@ -838,11 +1031,14 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         }
     }
     fn ElementLocalName(&self, e: &Self::Element) -> AtomicString {
-        if let Some(value) = self.local_name_atoms.borrow().get(e) {
+        if let Some(value) = self.filters.borrow().local_name_atoms.get(e) {
             return value.clone();
         }
         let value = AtomicString::from_str(self.document.Node(*e).Name());
-        self.local_name_atoms.borrow_mut().insert(*e, value.clone());
+        self.filters
+            .borrow_mut()
+            .local_name_atoms
+            .insert(*e, value.clone());
         value
     }
     fn ElementNamespaceURI(&self, e: &Self::Element) -> AtomicString {
@@ -985,6 +1181,24 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         checker: &SelectorChecker<Self>,
         context: &SelectorCheckingContext<'_, Self>,
     ) -> u32 {
+        static PROFILE_RULES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let _trace = (*PROFILE_RULES.get_or_init(|| {
+            std::env::var_os("BROWSER_PROFILE_STYLE_RULES").is_some_and(|value| value == "1")
+        }))
+        .then(|| {
+            let mut trace = browser_tracing::span("style", "SelectorChecker.NthIndex");
+            trace.set(
+                "siblings",
+                self.document
+                    .Node(*e)
+                    .Parent()
+                    .map_or(0, |parent| self.document.Node(parent).Children().len())
+                    as f64,
+            );
+            trace.set("filtered", list.is_some() as u8 as f64);
+            trace.set("kind", kind as u32 as f64);
+            trace
+        });
         let mut siblings = if let Some(parent) = self.document.Node(*e).Parent() {
             self.document
                 .Node(parent)
@@ -1295,11 +1509,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         }
     }
     fn SetSiblingsAffectedByHasFlags(&self, e: &Self::Element, flags: u8) {
-        self.element_flags
-            .borrow_mut()
-            .entry(*e)
-            .or_default()
-            .push(ElementInvalidationFlag::AncestorsOrAncestorSiblingsAffectedByHas);
+        *self.sibling_has_flags.borrow_mut().entry(*e).or_default() |= flags;
     }
     fn CreateHasTraversal(
         &self,
@@ -1753,9 +1963,15 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
 }
 
 pub struct PersistentSelectorService {
+    container_flags: Rc<RefCell<HashMap<usize, Vec<ContainerInvalidationFlag>>>>,
+    element_flags: Rc<RefCell<HashMap<usize, Vec<ElementInvalidationFlag>>>>,
+    subject_flags: Rc<RefCell<HashMap<usize, crate::resolver::match_flags::MatchFlags>>>,
+    sibling_has_flags: Rc<RefCell<HashMap<usize, u8>>>,
+    filter_owner: Option<(DOMOwnerHandle, u64, CompatibilityMode)>,
+    filters: Rc<RefCell<PersistentElementFilters>>,
     cache: SelectorQueryCache,
     owner: Option<(DOMOwnerHandle, CompatibilityMode)>,
-    nodes: Rc<Vec<Rc<usize>>>,
+    nodes: Rc<RefCell<HashMap<usize, Rc<usize>>>>,
     pub interaction: UserInteractionState,
     pub spatial_navigation_policy: SpatialNavigationPolicy,
     pub forced_pseudo_states: HashMap<u64, Vec<PseudoType>>,
@@ -1779,9 +1995,15 @@ impl From<SelectorQuerySyntaxError> for PersistentSelectorError {
 impl Default for PersistentSelectorService {
     fn default() -> Self {
         Self {
+            container_flags: Default::default(),
+            element_flags: Default::default(),
+            subject_flags: Default::default(),
+            sibling_has_flags: Default::default(),
+            filter_owner: None,
+            filters: Default::default(),
             cache: SelectorQueryCache::default(),
             owner: None,
-            nodes: Rc::new(vec![]),
+            nodes: Default::default(),
             interaction: Default::default(),
             spatial_navigation_policy: Default::default(),
             forced_pseudo_states: HashMap::new(),
@@ -1795,18 +2017,47 @@ impl PersistentSelectorService {
     fn backend<'d>(&mut self, document: &'d Document) -> Rc<PersistentSelectorBackend<'d>> {
         let owner = (document.RootHandle(), document.GetCompatibilityMode());
         if self.owner.map(|previous| previous.0) != Some(owner.0) {
-            Rc::make_mut(&mut self.nodes).clear();
+            self.nodes = Default::default();
+            self.container_flags = Default::default();
+            self.element_flags = Default::default();
+            self.subject_flags = Default::default();
+            self.sibling_has_flags = Default::default();
         }
         if self.owner != Some(owner) {
             self.owner = Some(owner);
             self.cache.Invalidate();
         }
-        while self.nodes.len() < document.NodeCount() {
-            let next = self.nodes.len();
-            Rc::make_mut(&mut self.nodes).push(Rc::new(next));
+        // Native Node identity is needed only for visited elements. Sessions
+        // share these stable handles without preallocating or copying an
+        // arena-sized vector when unrelated detached nodes are created.
+        // Local attributes and affected ancestor paths carry their own
+        // revisions. Replace the complete owner only for document/mode changes,
+        // unknown NodeMut edits or exhausted revisions, never ordinary input.
+        let filter_owner = document
+            .SelectorFilterKey()
+            .map(|(owner, generation)| (owner, generation, document.GetCompatibilityMode()));
+        if filter_owner.is_none() || self.filter_owner != filter_owner {
+            self.filters = Default::default();
+            self.filter_owner = filter_owner;
+        }
+        // Parent-stack membership is distinct from local element facts.
+        // Reset its aggregate on mutations while retaining unaffected cached
+        // attributes and subtree blooms. Sessions borrow immutable DOM state.
+        let membership = document.CollectionMembershipKey();
+        {
+            let mut filters = self.filters.borrow_mut();
+            if membership.is_none() || filters.ancestor_revision != membership {
+                *filters.ancestor.borrow_mut() = Default::default();
+                filters.ancestor_revision = membership;
+            }
         }
         PersistentSelectorBackend::new(
             document,
+            self.filters.clone(),
+            self.element_flags.clone(),
+            self.subject_flags.clone(),
+            self.sibling_has_flags.clone(),
+            self.container_flags.clone(),
             self.nodes.clone(),
             self.interaction,
             self.spatial_navigation_policy,
@@ -1817,6 +2068,46 @@ impl PersistentSelectorService {
         )
     }
 
+    pub(crate) fn ElementHasInvalidationFlag(
+        &self,
+        element: usize,
+        flag: ElementInvalidationFlag,
+    ) -> bool {
+        self.element_flags
+            .borrow()
+            .get(&element)
+            .is_some_and(|flags| flags.contains(&flag))
+    }
+    pub(crate) fn ContainerHasInvalidationFlag(
+        &self,
+        container: usize,
+        flag: ContainerInvalidationFlag,
+    ) -> bool {
+        self.container_flags
+            .borrow()
+            .get(&container)
+            .is_some_and(|flags| flags.contains(&flag))
+    }
+    pub(crate) fn SiblingsAffectedByHasFlags(&self, element: usize) -> u8 {
+        self.sibling_has_flags
+            .borrow()
+            .get(&element)
+            .copied()
+            .unwrap_or_default()
+    }
+    pub(crate) fn SubjectMatchFlags(
+        &self,
+        element: usize,
+    ) -> crate::resolver::match_flags::MatchFlags {
+        self.subject_flags
+            .borrow()
+            .get(&element)
+            .copied()
+            .unwrap_or_default()
+    }
+    pub(crate) fn ResetSubjectMatchFlags(&self, element: usize) {
+        self.subject_flags.borrow_mut().remove(&element);
+    }
     pub fn StyleMatchSession<'d>(
         &mut self,
         document: &'d Document,
@@ -1832,13 +2123,6 @@ impl PersistentSelectorService {
         selector: &str,
     ) -> Result<(Rc<SelectorQuery>, Rc<PersistentSelectorBackend<'d>>), PersistentSelectorError>
     {
-        let text = foundation::String::from(selector);
-        if let Some(feature) = CSSSelectorParser::UnsupportedFeature(&text) {
-            return Err(PersistentSelectorError::Unsupported(format!(
-                "selector backend pending: :{}",
-                feature
-            )));
-        }
         let backend = self.backend(document);
         let context = SelectorParserContext {
             html: backend.IsInHTMLDocument(&document.Root()),
@@ -1848,6 +2132,13 @@ impl PersistentSelectorService {
             &AtomicString::from_str(selector),
             &context,
             &*backend,
+            |selectors| match CSSSelectorParser::UnsupportedParsedFeature(selectors) {
+                Some(feature) => Err(PersistentSelectorError::Unsupported(format!(
+                    "selector backend pending: :{}",
+                    feature
+                ))),
+                None => Ok(()),
+            },
         )?;
         Ok((query, backend))
     }
@@ -2095,6 +2386,29 @@ impl<'d> PersistentSelectorMatchSession<'d> {
         true
     }
 
+    fn AncestorsMayMatch(
+        &self,
+        index: usize,
+        selector: crate::css_selector::CSSSelectorComplex<'_>,
+    ) -> bool {
+        // cpp: ElementRuleCollector::CollectMatchingRules. Compatibility
+        // declarations still use the translated SelectorChecker, so they need
+        // the same ancestor rejection before it records dependency flags.
+        // Without it, testing an impossible .class:hover ancestor can mark
+        // html/body as hover dependencies before the class check fails.
+        if self.backend.document.GetCompatibilityMode() == CompatibilityMode::kQuirks {
+            return true;
+        }
+        let filter = self.backend.SelectorFilterForElement(index);
+        if !filter.ParentStackIsConsistent(self.backend.document.FlatTreeParentElement(index)) {
+            return true;
+        }
+        let mut hashes = Vec::new();
+        let mut subject = 0;
+        crate::selector_filter::CollectIdentifierHashes(selector, None, &mut hashes, &mut subject);
+        !filter.FastRejectSelector(&hashes)
+    }
+
     /// Matches one retained complex selector from a translated `RuleData`.
     ///
     /// ElementRuleCollector operates on the selector selected by
@@ -2170,7 +2484,7 @@ impl<'d> PersistentSelectorMatchSession<'d> {
         let checker = SelectorChecker::new(backend.clone(), Mode::kResolvingStyle);
         let mut best = None;
         for selector in list.ComplexSelectors() {
-            if !self.SubjectMayMatch(index, selector) {
+            if !self.SubjectMayMatch(index, selector) || !self.AncestorsMayMatch(index, selector) {
                 continue;
             }
             let mut context = SelectorCheckingContext::new(backend.handle(index));
@@ -2261,6 +2575,19 @@ mod tests {
         let section = element(d, root, "section", "section", "");
         let leaf = element(d, section, "span", "leaf", "leaf");
         let mut service = PersistentSelectorService::default();
+        let class_owner = service.backend(d).ClassNamesForElement(a);
+        assert!(Rc::ptr_eq(
+            &class_owner,
+            &service.backend(d).ClassNamesForElement(a)
+        ));
+        {
+            let backend = service.backend(d);
+            let attributes = backend.AttributesWithoutUpdate(&a);
+            assert!(
+                std::ptr::eq(attributes, d.Node(a).Attributes()),
+                "selector checks borrow the canonical DOM attribute collection"
+            );
+        }
         assert_eq!(
             service.QueryFirst(d, d.Root(), "#duplicate").unwrap(),
             Some(a)
@@ -2281,7 +2608,66 @@ mod tests {
         assert!(service.Matches(d, root, ":has(> section .leaf)").unwrap());
         assert!(service.Matches(d, a, "*").unwrap());
         assert!(!service.Matches(d, a, "p::before").unwrap());
-        let identity = service.nodes[a].clone();
+        // Inline writes and ordinary value changes preserve filter inputs,
+        // while actual selector matching must read the new attribute values.
+        let filter_revision = d.SelectorFilterRevisions(root);
+        for value in ["width: 40px", "width: 41px"] {
+            d.SetAttribute(
+                a,
+                DOMAttribute {
+                    local_name: "style".into(),
+                    value: value.into(),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(d.SelectorFilterRevisions(root), filter_revision);
+            assert!(service
+                .Matches(d, a, &format!("[style='{value}']"))
+                .unwrap());
+            assert!(Rc::ptr_eq(
+                &class_owner,
+                &service.backend(d).ClassNamesForElement(a)
+            ));
+        }
+        d.RemoveAttribute(a, "style", "");
+        assert_eq!(d.SelectorFilterRevisions(root), filter_revision);
+        assert!(!service.Matches(d, a, "[style]").unwrap());
+        d.SetAttribute(
+            a,
+            DOMAttribute {
+                local_name: "data-state".into(),
+                value: "old".into(),
+                ..Default::default()
+            },
+        );
+        assert_ne!(d.SelectorFilterRevisions(root), filter_revision);
+        assert!(service.Matches(d, root, ":has([data-state=old])").unwrap());
+        let filter_revision = d.SelectorFilterRevisions(root);
+        d.SetAttribute(
+            a,
+            DOMAttribute {
+                local_name: "data-state".into(),
+                value: "new".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(d.SelectorFilterRevisions(root), filter_revision);
+        assert!(!service.Matches(d, root, ":has([data-state=old])").unwrap());
+        assert!(service.Matches(d, root, ":has([data-state=new])").unwrap());
+        d.RemoveAttribute(a, "data-state", "");
+        assert_ne!(d.SelectorFilterRevisions(root), filter_revision);
+        assert!(!service.Matches(d, root, ":has([data-state])").unwrap());
+        let identity = service.backend(d).handle(a);
+        let visited_handles = service.nodes.borrow().len();
+        for _ in 0..64 {
+            d.CreateElementDefault(DOMNamespace::kHTML, "unvisited".into());
+        }
+        drop(service.backend(d));
+        assert_eq!(
+            service.nodes.borrow().len(),
+            visited_handles,
+            "detached allocation does not materialize selector handles"
+        );
         d.SetAttribute(
             a,
             DOMAttribute {
@@ -2295,7 +2681,19 @@ mod tests {
         assert_eq!(service.QueryAll(d, root, "p").unwrap(), vec![b, a]);
         assert!(!service.Matches(d, a, ".one").unwrap());
         assert!(service.Matches(d, a, ".changed:last-child").unwrap());
-        assert!(Rc::ptr_eq(&identity, &service.nodes[a]));
+        let changed_classes = service.backend(d).ClassNamesForElement(a);
+        assert!(!Rc::ptr_eq(&class_owner, &changed_classes));
+        assert_eq!(changed_classes[0].Utf8(), "changed");
+        {
+            let backend = service.backend(d);
+            let attributes = backend.AttributesWithoutUpdate(&a);
+            assert!(std::ptr::eq(attributes, d.Node(a).Attributes()));
+            assert!(attributes
+                .iter()
+                .any(|attribute| attribute.local_name == "class" && attribute.value == "changed"));
+        }
+        assert!(service.Matches(d, a, "[class=changed]").unwrap());
+        assert!(Rc::ptr_eq(&identity, &service.backend(d).handle(a)));
         assert!(service.QueryFirst(d, root, "p >").is_err());
         assert!(service.QueryAll(d, root, "").is_err());
     }

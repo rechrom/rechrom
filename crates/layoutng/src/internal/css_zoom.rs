@@ -77,6 +77,7 @@ pub fn ZoomedStyle(style: &ComputedStyle) -> Cow<'_, ComputedStyle> {
         *width *= zoom;
     }
     if let Some(e) = &mut output.extended {
+        let e = std::sync::Arc::make_mut(e);
         e.font_size *= zoom;
         e.letter_spacing *= zoom;
         e.word_spacing *= zoom;

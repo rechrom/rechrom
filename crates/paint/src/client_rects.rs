@@ -25,6 +25,41 @@ struct GeometryNode<'a> {
     physical_subtree_end: usize,
 }
 
+// CSSOM line boxes are not paint children. Keep their native enumeration
+// order while using the physical container's established coordinate mapping.
+struct InlineRectMapper<'a> {
+    by_container: HashMap<
+        u64,
+        Vec<(
+            u64,
+            usize,
+            &'a layoutng_assembly::fragment_tree::FragmentPaintRect,
+        )>,
+    >,
+    rects: HashMap<u64, Vec<Option<PaintRect>>>,
+}
+impl<'a> InlineRectMapper<'a> {
+    fn new(root: &'a FragmentNode) -> Self {
+        let mut result = Self {
+            by_container: HashMap::new(),
+            rects: HashMap::new(),
+        };
+        for inline in &root.inline_geometry {
+            result
+                .rects
+                .insert(inline.node_id, vec![None; inline.rects.len()]);
+            for (index, rect) in inline.rects.iter().enumerate() {
+                result
+                    .by_container
+                    .entry(rect.container_fragment_instance_id)
+                    .or_default()
+                    .push((inline.node_id, index, &rect.rect));
+            }
+        }
+        result
+    }
+}
+
 fn Gather<'a>(
     fragment: &'a FragmentNode,
     parent_offset: Offset,
@@ -33,6 +68,7 @@ fn Gather<'a>(
     property_world: TransformMatrix,
     parent: usize,
     nodes: &mut Vec<GeometryNode<'a>>,
+    inline: &mut InlineRectMapper<'a>,
 ) -> usize {
     let inherited = transforms.len();
     let delta = FlatToWorldSpaceOffset(transforms, &property_world).unwrap_or_default();
@@ -99,6 +135,19 @@ fn Gather<'a>(
         transforms.push(matrix);
         child_property_world = MultiplyTransforms(&child_property_world, &matrix);
     }
+    if let Some(rects) = inline.by_container.get(&fragment.fragment_instance_id) {
+        for &(id, index, rect) in rects {
+            inline.rects.get_mut(&id).unwrap()[index] = MapRectToRoot(
+                PaintRect {
+                    x: child_origin.x + rect.offset.x - geometry.paint_space_origin.x,
+                    y: child_origin.y + rect.offset.y - geometry.paint_space_origin.y,
+                    width: rect.size.width,
+                    height: rect.size.height,
+                },
+                transforms,
+            );
+        }
+    }
     for child in &fragment.children {
         let child_index = if child.paint.fixed_to_view {
             // Match PrePaint's LayoutView fixed-position context. Client rects
@@ -112,6 +161,7 @@ fn Gather<'a>(
                 TransformMatrix::default(),
                 index,
                 nodes,
+                inline,
             )
         } else {
             let origin =
@@ -124,6 +174,7 @@ fn Gather<'a>(
                 child_property_world,
                 index,
                 nodes,
+                inline,
             )
         };
         AppendChild(nodes, index, child_index);
@@ -416,6 +467,7 @@ fn Collect(nodes: &[GeometryNode<'_>], index: usize, output: &mut HashMap<u64, V
 
 pub(crate) fn CollectFragmentClientRects(root: &FragmentNode) -> HashMap<u64, Vec<PaintRect>> {
     let mut nodes = Vec::new();
+    let mut inline = InlineRectMapper::new(root);
     Gather(
         root,
         Offset::default(),
@@ -424,6 +476,7 @@ pub(crate) fn CollectFragmentClientRects(root: &FragmentNode) -> HashMap<u64, Ve
         TransformMatrix::default(),
         NONE,
         &mut nodes,
+        &mut inline,
     );
     if nodes.iter().any(|node| {
         node.fragment.paint.logical_parent_node_id.is_some()
@@ -438,6 +491,9 @@ pub(crate) fn CollectFragmentClientRects(root: &FragmentNode) -> HashMap<u64, Ve
     RestoreLogicalSiblingOrder(&mut nodes);
     let mut output = HashMap::new();
     Collect(&nodes, 0, &mut output);
+    for (id, rects) in inline.rects {
+        output.insert(id, rects.into_iter().flatten().collect());
+    }
     // cpp: document.cc:AdjustRectForScrollAndAbsoluteZoom;
     // cpp: layout/adjust_for_absolute_zoom.h. Client quads are collected in
     // LayoutZoomFactor coordinates, then exposed to script in CSS pixels. CSS

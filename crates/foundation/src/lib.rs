@@ -109,11 +109,13 @@ pub use compositor_element_id::{
 };
 pub use css_bitset::{CSSBitset, CSSBitsetBase, CSSBitsetIterator};
 pub use gc_heap::{
-    BasicPersistent, CollectLayoutHeapForTesting, CollectLayoutHeapIfRequested, FreeLayoutBacking,
-    IsLayoutHeapCollectionRequested, IsLayoutHeapSweepingOnOwningThread, IsManagedLayoutAddress,
-    LayoutHeapAllocationCountForTesting, LayoutHeapMemoryDiagnostics, LayoutHeapScope, LayoutObjectSize, LivenessBroker,
-    MakeGarbageCollected, MakeGarbageCollectedWithAdditionalBytes, Persistent,
-    RequestLayoutHeapCollection, TraceIfNeeded, Traceable, Visitor, WeakPersistent,
+    BasicPersistent, CollectLayoutHeapForTesting, CollectLayoutHeapIfRequested,
+    CollectLayoutHeapIncrementally, FreeLayoutBacking, IsLayoutHeapCollectionRequested,
+    IsLayoutHeapSweepingOnOwningThread, IsManagedLayoutAddress,
+    LayoutHeapAllocationCountForTesting, LayoutHeapMemoryDiagnostics, LayoutHeapScope,
+    LayoutObjectSize, LivenessBroker, MakeGarbageCollected,
+    MakeGarbageCollectedWithAdditionalBytes, Persistent, RequestLayoutHeapCollection,
+    TraceIfNeeded, Traceable, Visitor, WeakPersistent,
 };
 pub use gc_member::{kMemberDeletedValue, Member, ReferenceKind, UntracedMember, WeakMember};
 pub use graphics_enums::InterpolationQuality::kInterpolationNone;

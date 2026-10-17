@@ -38,9 +38,7 @@ fn map_pixel_diff_to_paint_records() {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(
-            &assembly,
-        ))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
         constraints,
         None,
         Some(Rc::new(RefCell::new(Client))),

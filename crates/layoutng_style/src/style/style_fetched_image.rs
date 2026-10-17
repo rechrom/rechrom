@@ -74,7 +74,9 @@ impl StyleFetchedImage {
         self.url_data.resolved_url.as_ref()
     }
 
-    pub fn IsDocumentImage(&self) -> bool { self.is_document_image }
+    pub fn IsDocumentImage(&self) -> bool {
+        self.is_document_image
+    }
 
     pub fn ResourceId(&self) -> u64 {
         self.resource_id

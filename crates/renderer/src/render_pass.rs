@@ -10,6 +10,12 @@ use std::io;
 use std::sync::Arc;
 use viz::{AggregatedRenderPass, DrawQuad};
 
+pub(crate) fn effect_opacity_has_output(opacity: f32) -> bool {
+    // N32 effect restore rounds every premultiplied channel independently.
+    // At and below this value even 255 rounds ties-to-even to zero.
+    opacity > 0.5 / 255.0
+}
+
 use crate::renderer::RenderUpdate;
 use layer_tile::{TileId, TilePlacement};
 use paint::paint_engine::PaintRect;
@@ -167,7 +173,7 @@ impl CompositionPlan {
             raster_task_count: pass.RasterTaskCount(),
             root_damage: compositor_damage_bounds(pass.DamageRect(), pass.SurfaceViewport())?,
             output_bounds: compositor_damage_bounds(pass.Viewport(), pass.SurfaceViewport())?,
-            transparent_root: !pass.IsRoot(),
+            transparent_root: !pass.IsRoot() || pass.HasTransparentBackground(),
             owner_effect: pass.OwnerEffect().cloned(),
             layers,
             solid_quads,
@@ -1428,9 +1434,10 @@ impl RenderPassRenderer {
     pub(crate) fn backing_usage(&self) -> (usize, usize, usize) {
         (
             self.composed_pixels.capacity() * std::mem::size_of::<u32>(),
-            self.effect_scratch.iter().map(|scratch| {
-                scratch.pixels.capacity() * std::mem::size_of::<u32>()
-            }).sum(),
+            self.effect_scratch
+                .iter()
+                .map(|scratch| scratch.pixels.capacity() * std::mem::size_of::<u32>())
+                .sum(),
             self.clip_masks.accounted_bytes(),
         )
     }
@@ -1546,6 +1553,15 @@ impl RenderPassRenderer {
             group.touched = touched;
         }
         if !group.filters.is_empty() && !group.pixels.is_empty() {
+            let mut trace = browser_tracing::span("compose", "ApplySurfaceFilters");
+            trace.set("storage_pixels", group.pixels.len() as f64);
+            trace.set("filter_count", group.filters.len() as f64);
+            trace.set(
+                "touched_pixels",
+                group
+                    .touched
+                    .map_or(0, |b| (b.right - b.left) * (b.bottom - b.top)) as f64,
+            );
             let width = group.view.stride;
             let height = group.pixels.len() / width;
             // Effect surfaces store native little-endian RGBA words, the same
@@ -1730,7 +1746,8 @@ impl RenderPassRenderer {
     }
 
     pub(crate) fn backing_pixels(&self) -> Option<&[u32]> {
-        self.composed_valid.then_some(self.composed_pixels.as_slice())
+        self.composed_valid
+            .then_some(self.composed_pixels.as_slice())
     }
 
     fn compose_with_output(
@@ -1746,6 +1763,27 @@ impl RenderPassRenderer {
     ) -> io::Result<RenderUpdate> {
         let mut render_trace = browser_tracing::span("render", "LayerTilePaint");
         render_trace.set("frame_id", pass.SourceFrameId() as f64);
+        render_trace.set("render_pass_id", pass.RenderPassId().0 as f64);
+        render_trace.set("output_width", pass.Viewport().width as f64);
+        render_trace.set("output_height", pass.Viewport().height as f64);
+        render_trace.set("force_full_damage", force_full_damage as u8 as f64);
+        if let Some(effect) = pass.OwnerEffect() {
+            render_trace.set("effect_id", effect.id as f64);
+            render_trace.set("effect_opacity", effect.opacity as f64);
+            render_trace.set(
+                "effect_blend",
+                (effect.blend_mode != PaintBlendMode::kNormal) as u8 as f64,
+            );
+            render_trace.set("effect_filters", effect.filters.len() as f64);
+            render_trace.set(
+                "effect_backdrop_filters",
+                effect.backdrop_filters.len() as f64,
+            );
+            render_trace.set(
+                "effect_isolates_blending",
+                effect.isolates_blending as u8 as f64,
+            );
+        }
         if resources.prepared_frame_id() != Some(pass.SourceFrameId()) {
             return Err(io::Error::other(
                 "aggregated render-pass raster resources are not prepared",
@@ -1778,7 +1816,8 @@ impl RenderPassRenderer {
                 for y in old.top.min(height as usize)..old.bottom.min(height as usize) {
                     let left = old.left.min(width as usize);
                     let right = old.right.min(width as usize);
-                    self.composed_pixels[y * width as usize + left..y * width as usize + right].fill(0);
+                    self.composed_pixels[y * width as usize + left..y * width as usize + right]
+                        .fill(0);
                 }
             }
         }
@@ -1788,7 +1827,8 @@ impl RenderPassRenderer {
             plan.root_damage = plan.output_bounds;
         }
         plan.root_damage = plan.root_damage.and_then(|damage| {
-            plan.output_bounds.and_then(|output| intersect_bounds(damage, output))
+            plan.output_bounds
+                .and_then(|output| intersect_bounds(damage, output))
         });
         // Keep one renderer-owned root render-pass backing. Native IOSurfaces
         // are a rotating presentation queue, so repainting them directly would
@@ -1846,7 +1886,7 @@ impl RenderPassRenderer {
         buffer: &mut [u32],
         format: skia::PixelFormat,
         row_stride: usize,
-        resident: &HashMap<TileId, CachedTile>,
+        resident: &HashMap<TileId, Arc<CachedTile>>,
         raster_damage_pixels: usize,
         render_pass_outputs: &HashMap<viz::RenderPassId, &[u32]>,
     ) -> io::Result<RenderUpdate> {
@@ -1878,8 +1918,7 @@ impl RenderPassRenderer {
         let nearly_equal = |a: f64, b: f64| {
             a.is_finite()
                 && b.is_finite()
-                && (a - b).abs()
-                    <= f64::EPSILON * 8.0 * a.abs().max(b.abs()).max(1.0)
+                && (a - b).abs() <= f64::EPSILON * 8.0 * a.abs().max(b.abs()).max(1.0)
         };
         if !nearly_equal(plan.viewport.x, expected_viewport.x)
             || !nearly_equal(plan.viewport.y, expected_viewport.y)
@@ -1897,6 +1936,7 @@ impl RenderPassRenderer {
             .layers
             .iter()
             .filter(|layer| layer.render_pass.is_some())
+            .filter(|layer| effect_opacity_has_output(layer.properties.effect.opacity))
         {
             if layer.properties.effect.is_mask {
                 return Err(io::Error::new(
@@ -1928,7 +1968,7 @@ impl RenderPassRenderer {
         }
         let replay_done = timing.map(|start| start.elapsed());
         drop(replay_trace);
-        let staged: HashMap<TileId, CachedTile> = HashMap::new();
+        let staged: HashMap<TileId, Arc<CachedTile>> = HashMap::new();
         let (effect_plans, effect_bounds) = effect_allocation_plan(plan, width, height, scale)?;
         let mut compose_damage = plan.root_damage;
         if let Some(mut damage) = compose_damage {
@@ -1978,7 +2018,9 @@ impl RenderPassRenderer {
                     }
                 }
             }
-            compose_damage = plan.output_bounds.and_then(|output| intersect_bounds(damage, output));
+            compose_damage = plan
+                .output_bounds
+                .and_then(|output| intersect_bounds(damage, output));
         }
         let damage_pixels = compose_damage.map_or(0, |bounds| {
             (bounds.right - bounds.left) * (bounds.bottom - bounds.top)
@@ -2127,6 +2169,14 @@ impl RenderPassRenderer {
             .zip(direct_clips)
             .enumerate()
         {
+            if layer.render_pass.is_some()
+                && !effect_opacity_has_output(layer.properties.effect.opacity)
+            {
+                // The software output is N32. Do not request a child backing
+                // whose final group opacity cannot contribute a single bit.
+                // Renderer prunes the same quad from the reachable pass DAG.
+                continue;
+            }
             if layer.properties.effect.is_mask {
                 if let Some(cost) = &mut compose_costs {
                     cost.mask_layers += 1;
@@ -2171,7 +2221,13 @@ impl RenderPassRenderer {
                     let group = groups.pop().expect("active effect group");
                     debug_assert!(suspended_groups.insert(run, group).is_none());
                 } else {
-                    self.finish_effect_group(&mut groups, buffer, frame_view, format, compose_damage);
+                    self.finish_effect_group(
+                        &mut groups,
+                        buffer,
+                        frame_view,
+                        format,
+                        compose_damage,
+                    );
                 }
             }
             if let Some(cost) = &mut compose_costs {
@@ -2392,8 +2448,52 @@ impl RenderPassRenderer {
                     }
                     continue;
                 }
+                let quad_bounds = render_pass_quad_bounds(composition, width, height);
+                quad_trace.set(
+                    "quad_pixels",
+                    quad_bounds.map_or(0, |b| (b.right - b.left) * (b.bottom - b.top)) as f64,
+                );
+                // RenderSurfaceImpl keeps a tight content_rect backing. Its
+                // filters are evaluated while the parent draws the render-pass
+                // quad, but that does not turn the filter input into a
+                // viewport-sized bitmap. Reserve only the raw quad plus the
+                // pixels an image/backdrop filter can read or produce.
+                let mut storage_bounds =
+                    expanded_for_filters(quad_bounds, &filters, width, height);
+                if let Some(output) = backdrop_output {
+                    union_bounds(
+                        &mut storage_bounds,
+                        expanded_for_filters(Some(output), &backdrop_filters, width, height),
+                    );
+                }
+                let Some(storage_bounds) = storage_bounds else {
+                    if let Some(cost) = &mut compose_costs {
+                        cost.blit += blit_start.unwrap().elapsed();
+                    }
+                    continue;
+                };
+                let storage_width = storage_bounds.right - storage_bounds.left;
+                let storage_height = storage_bounds.bottom - storage_bounds.top;
+                let storage_len = storage_width
+                    .checked_mul(storage_height)
+                    .ok_or_else(|| io::Error::other("render-pass effect surface is too large"))?;
+                quad_trace.set("storage_pixels", storage_len as f64);
                 let copy_started = std::time::Instant::now();
-                let pixels = source.to_vec();
+                let mut pixels = vec![0; storage_len];
+                if let Some(input) = quad_bounds.and_then(|input| {
+                    intersect_bounds(input, storage_bounds)
+                }) {
+                    for y in input.top..input.bottom {
+                        let source_start = y * width as usize + input.left;
+                        let destination_start =
+                            (y - storage_bounds.top) * storage_width
+                                + input.left
+                                - storage_bounds.left;
+                        let columns = input.right - input.left;
+                        pixels[destination_start..destination_start + columns]
+                            .copy_from_slice(&source[source_start..source_start + columns]);
+                    }
+                }
                 quad_trace.set(
                     "source_copy_ms",
                     copy_started.elapsed().as_secs_f64() * 1000.0,
@@ -2407,15 +2507,10 @@ impl RenderPassRenderer {
                     coverage,
                     pixels,
                     view: TargetView {
-                        origin: (0, 0),
-                        stride: width as usize,
+                        origin: (storage_bounds.left, storage_bounds.top),
+                        stride: storage_width,
                     },
-                    touched: Some(SurfaceBounds {
-                        left: 0,
-                        top: 0,
-                        right: width as usize,
-                        bottom: height as usize,
-                    }),
+                    touched: quad_bounds,
                     filters,
                     backdrop_filters,
                     backdrop_output,
@@ -2615,7 +2710,8 @@ impl RenderPassRenderer {
                     neighbors
                         .get(&(tile.tile_index.0 + 1, tile.tile_index.1 + 1))
                         .copied(),
-                ];
+                ]
+                .map(|resource| resource.map(Arc::as_ref));
                 let pixels = if let Some(pixels) = staged.get(&tile.tile_id) {
                     pixels
                 } else {
@@ -6285,7 +6381,10 @@ fn composite_effect_surface(
     visible_polygon: Option<&viz::TargetPolygon>,
 ) -> Option<SurfaceBounds> {
     let mut bounds = touched?;
-    if opacity == 0.0 {
+    // Every premultiplied 8-bit channel rounds to zero at this opacity. Skia's
+    // alpha-zero draw is a no-op as well; avoid walking a full render pass for
+    // animation values that are nonzero only in floating-point representation.
+    if !effect_opacity_has_output(opacity) {
         return None;
     }
     if let Some(mask) = mask {
@@ -6298,6 +6397,17 @@ fn composite_effect_surface(
             return None;
         }
     }
+    let mut trace = browser_tracing::span("compose", "CompositeEffectSurface");
+    trace.set(
+        "write_pixels",
+        ((bounds.right - bounds.left) * (bounds.bottom - bounds.top)) as f64,
+    );
+    trace.set(
+        "mask_pixels",
+        mask.map_or(0, |mask| mask.pixels.len()) as f64,
+    );
+    trace.set("polygon", visible_polygon.is_some() as u8 as f64);
+    trace.set("opacity", opacity as f64);
     // Same N32 restore mapping as SkCanvas: scale each premultiplied channel
     // in f32 and round ties-even, rather than quantizing opacity to an 8-bit alpha.
     let alpha: Option<[u8; 256]> = (opacity != 1.0)

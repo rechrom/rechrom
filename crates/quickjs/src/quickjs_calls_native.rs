@@ -40,14 +40,20 @@ unsafe fn js_call_c_function(
     sf.cur_func = func_obj;
     sf.arg_count = argc;
     let mut arg_buf = argv;
-    // The C length field is uint8_t. A fixed local buffer replaces its
-    // bounded alloca without a host allocator call or observable OOM.
-    let mut padded = [JS_UNDEFINED; 255];
+    // C allocates this buffer only when arguments need padding. Keep the
+    // bounded stack storage uninitialized on the overwhelmingly common fast
+    // path; eagerly filling all 255 slots made every JS-to-native call pay for
+    // an alloca buffer that C never created.
+    let mut padded = core::mem::MaybeUninit::<[JSValue; 255]>::uninit();
     if argc < arg_count {
+        let padded = padded.as_mut_ptr().cast::<JSValue>();
         for i in 0..argc {
-            padded[i as usize] = *argv.add(i as usize);
+            padded.add(i as usize).write(*argv.add(i as usize));
         }
-        arg_buf = padded.as_mut_ptr();
+        for i in argc..arg_count {
+            padded.add(i as usize).write(JS_UNDEFINED);
+        }
+        arg_buf = padded;
         sf.arg_count = arg_count;
     }
     sf.arg_buf = arg_buf;
@@ -182,10 +188,25 @@ unsafe fn js_c_function_data_call(
     _flags: i32,
 ) -> JSValue {
     let s = JS_GetOpaque(func_obj, JS_CLASS_C_FUNCTION_DATA).cast::<JSCFunctionDataRecord>();
-    let mut padded = [JS_UNDEFINED; 255];
+    let mut padded = core::mem::MaybeUninit::<[JSValue; 255]>::uninit();
     let arg_buf = if argc < (*s).length as i32 {
-        for i in 0..argc as usize { padded[i] = *argv.add(i); }
-        padded.as_mut_ptr()
-    } else { argv };
-    (*s).func.expect("C function data callback")(ctx, this_val, argc, arg_buf, (*s).magic as i32, (*s).data.as_mut_ptr())
+        let padded = padded.as_mut_ptr().cast::<JSValue>();
+        for i in 0..argc as usize {
+            padded.add(i).write(*argv.add(i));
+        }
+        for i in argc as usize..(*s).length as usize {
+            padded.add(i).write(JS_UNDEFINED);
+        }
+        padded
+    } else {
+        argv
+    };
+    (*s).func.expect("C function data callback")(
+        ctx,
+        this_val,
+        argc,
+        arg_buf,
+        (*s).magic as i32,
+        (*s).data.as_mut_ptr(),
+    )
 }

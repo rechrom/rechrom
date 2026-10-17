@@ -290,7 +290,11 @@ fn sfnt_checksum(bytes: &[u8]) -> u32 {
 unsafe fn exact_native_system_font(face: &FontFace<'_>, size: f32) -> Option<Owned> {
     exact_native_system_font_with_tables(face, size, false)
 }
-unsafe fn exact_native_system_font_with_tables(face: &FontFace<'_>, size: f32, all_tables: bool) -> Option<Owned> {
+unsafe fn exact_native_system_font_with_tables(
+    face: &FontFace<'_>,
+    size: f32,
+    all_tables: bool,
+) -> Option<Owned> {
     let raw = ttf_parser::RawFace::parse(face.bytes, face.face_index & 0xffff).ok()?;
     let names = raw.table(ttf_parser::Tag::from_bytes(b"name"))?;
     let count = usize::from(u16::from_be_bytes(names.get(2..4)?.try_into().ok()?));
@@ -328,25 +332,30 @@ unsafe fn exact_native_system_font_with_tables(face: &FontFace<'_>, size: f32, a
         }
         let font = Owned::new(font);
         let tags = if all_tables {
-            raw.table_records.into_iter().map(|record| record.tag).collect::<Vec<_>>()
+            raw.table_records
+                .into_iter()
+                .map(|record| record.tag)
+                .collect::<Vec<_>>()
         } else {
-            [*b"name", *b"head", *b"maxp", *b"cmap"].map(|tag| ttf_parser::Tag::from_bytes(&tag)).to_vec()
+            [*b"name", *b"head", *b"maxp", *b"cmap"]
+                .map(|tag| ttf_parser::Tag::from_bytes(&tag))
+                .to_vec()
         };
         let matches = tags.into_iter().all(|tag| {
-                let Some(expected) = raw.table(tag) else {
-                    return false;
-                };
-                let actual = CTFontCopyTable(font.get(), tag.0, 0);
-                if actual.is_null() {
-                    return false;
-                }
-                let actual = Owned::new(actual);
-                let length = CFDataGetLength(actual.get());
-                let bytes = CFDataGetBytePtr(actual.get());
-                length >= 0
-                    && !bytes.is_null()
-                    && std::slice::from_raw_parts(bytes, length as usize) == expected
-            });
+            let Some(expected) = raw.table(tag) else {
+                return false;
+            };
+            let actual = CTFontCopyTable(font.get(), tag.0, 0);
+            if actual.is_null() {
+                return false;
+            }
+            let actual = Owned::new(actual);
+            let length = CFDataGetLength(actual.get());
+            let bytes = CFDataGetBytePtr(actual.get());
+            length >= 0
+                && !bytes.is_null()
+                && std::slice::from_raw_parts(bytes, length as usize) == expected
+        });
         if matches {
             return Some(font);
         }
@@ -948,12 +957,12 @@ impl SkScalerContext_Mac {
             fvar: Some(fvar),
             ..Default::default()
         })
-            .ok()
-            .is_some_and(|font| {
-                font.variation_axes()
-                    .into_iter()
-                    .any(|axis| axis.tag == ttf_parser::Tag::from_bytes(b"opsz"))
-            });
+        .ok()
+        .is_some_and(|font| {
+            font.variation_axes()
+                .into_iter()
+                .any(|axis| axis.tag == ttf_parser::Tag::from_bytes(b"opsz"))
+        });
         let size: usize = key.iter().map(|table| table.len()).sum();
         if size <= 64 * 1024 {
             if self.optical_axes.len() >= 32
@@ -983,7 +992,9 @@ impl SkScalerContext_Mac {
         device_size: f32,
         variations: &[FontVariation],
     ) -> Ref {
-        let profile = std::env::var_os("BROWSER_PROFILE_TILES").is_some().then(std::time::Instant::now);
+        let profile = std::env::var_os("BROWSER_PROFILE_TILES")
+            .is_some()
+            .then(std::time::Instant::now);
         let typeface = if let Some(entry) =
             self.typefaces.iter().find(|entry| entry.data.matches(face))
         {
@@ -1072,28 +1083,44 @@ impl SkScalerContext_Mac {
             if raw.table(ttf_parser::Tag::from_bytes(b"hvgl")).is_some() {
                 None
             } else {
-                let identity = self.typefaces.iter_mut().find(|identity| identity.id == typeface)
+                let identity = self
+                    .typefaces
+                    .iter_mut()
+                    .find(|identity| identity.id == typeface)
                     .expect("selected native typeface has identity");
-                Some(identity.native_descriptor.get_or_insert_with(|| unsafe {
-                    // FontCache's system Typeface already has a native face.
-                    // The current resource boundary carries its immutable data:
-                    // recover that native face only after EVERY selected SFNT
-                    // table agrees. This avoids unpacking large system TTCs
-                    // without allowing family-name substitution or altered
-                    // downloaded outlines with the same name/head/cmap.
-                    if face.bytes.starts_with(b"ttcf") {
-                        if let Some(native) = exact_native_system_font_with_tables(face, source_size, true) {
-                            return Owned::new(CTFontCopyFontDescriptor(native.get()));
-                        }
-                    }
-                    let bytes = native_font_data(face).expect("invalid selected paint font face");
-                    let data = Owned::new(CFDataCreate(ptr::null(), bytes.as_ptr(), bytes.len() as isize));
-                    Owned::new(CTFontManagerCreateFontDescriptorFromData(data.get()))
-                }).get())
+                Some(
+                    identity
+                        .native_descriptor
+                        .get_or_insert_with(|| unsafe {
+                            // FontCache's system Typeface already has a native face.
+                            // The current resource boundary carries its immutable data:
+                            // recover that native face only after EVERY selected SFNT
+                            // table agrees. This avoids unpacking large system TTCs
+                            // without allowing family-name substitution or altered
+                            // downloaded outlines with the same name/head/cmap.
+                            if face.bytes.starts_with(b"ttcf") {
+                                if let Some(native) =
+                                    exact_native_system_font_with_tables(face, source_size, true)
+                                {
+                                    return Owned::new(CTFontCopyFontDescriptor(native.get()));
+                                }
+                            }
+                            let bytes =
+                                native_font_data(face).expect("invalid selected paint font face");
+                            let data = Owned::new(CFDataCreate(
+                                ptr::null(),
+                                bytes.as_ptr(),
+                                bytes.len() as isize,
+                            ));
+                            Owned::new(CTFontManagerCreateFontDescriptorFromData(data.get()))
+                        })
+                        .get(),
+                )
             }
         };
         let descriptor_ms = profile.map(|start| start.elapsed().as_secs_f64() * 1000.0);
-        let font = self.fonts
+        let font = self
+            .fonts
             .entry(key)
             .or_insert_with(|| unsafe {
                 // The shaping face is already resolved. Reconstruct that
@@ -1102,7 +1129,9 @@ impl SkScalerContext_Mac {
                 let base = {
                     match descriptor {
                         Some(descriptor) => Owned::new(CTFontCreateWithFontDescriptor(
-                            descriptor, source_size.into(), ptr::null(),
+                            descriptor,
+                            source_size.into(),
+                            ptr::null(),
                         )),
                         None => exact_native_system_font(face, source_size)
                             .expect("native paint font does not match selected source face"),
@@ -1194,7 +1223,9 @@ impl SkScalerContext_Mac {
                 (size, matrix)
             }
         };
-        let profile = std::env::var_os("BROWSER_PROFILE_TILES").is_some().then(std::time::Instant::now);
+        let profile = std::env::var_os("BROWSER_PROFILE_TILES")
+            .is_some()
+            .then(std::time::Instant::now);
         let font = self.font(face_index, face, size, device_size, variations);
         let font_ms = profile.map(|start| start.elapsed().as_secs_f64() * 1000.0);
         let metadata_cached = self.font_bounds.contains_key(&(font as usize));

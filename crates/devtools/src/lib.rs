@@ -1,6 +1,7 @@
 //! Local Performance UI and a small JSON control endpoint for browser tracing.
 use base64::Engine;
 use browser_tracing::{Snapshot, StartOptions};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -88,6 +89,7 @@ pub fn set_wheel_handler(handler: WheelHandler) {
 /// same typed input queue used by the native window.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MouseInjection {
+    pub target_id: u64,
     pub event_type: String,
     pub x: f64,
     pub y: f64,
@@ -112,6 +114,69 @@ fn insert_text_handler() -> &'static std::sync::Mutex<Option<InsertTextHandler>>
 }
 pub fn set_insert_text_handler(handler: InsertTextHandler) {
     *insert_text_handler().lock().unwrap() = Some(handler);
+}
+
+/// CDP-shaped key input, dispatched to the currently focused host Page.
+/// This local transport supports rawKeyDown/keyDown/keyUp, not CDP char events.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeyInjection {
+    pub event_type: String,
+    pub key: String,
+    pub text: String,
+    pub modifiers: u8,
+    pub repeat: bool,
+}
+pub type KeyHandler = Arc<dyn Fn(KeyInjection) -> Result<(), String> + Send + Sync>;
+fn key_handler() -> &'static std::sync::Mutex<Option<KeyHandler>> {
+    static HANDLER: std::sync::OnceLock<std::sync::Mutex<Option<KeyHandler>>> =
+        std::sync::OnceLock::new();
+    HANDLER.get_or_init(|| std::sync::Mutex::new(None))
+}
+pub fn set_key_handler(handler: KeyHandler) {
+    *key_handler().lock().unwrap() = Some(handler);
+}
+impl KeyInjection {
+    fn from_params(params: &Value) -> Result<Self, String> {
+        let event_type = params
+            .get("type")
+            .and_then(Value::as_str)
+            .filter(|t| matches!(*t, "rawKeyDown" | "keyDown" | "keyUp"))
+            .ok_or("type must be rawKeyDown, keyDown or keyUp")?;
+        let key = params
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty() && s.len() <= 256)
+            .ok_or("key must be a nonempty string of at most 256 bytes")?;
+        let text = params
+            .get("text")
+            .map(|v| v.as_str().ok_or("text must be a string"))
+            .transpose()?
+            .unwrap_or("");
+        if text.len() > MAX_BODY {
+            return Err("text exceeds 64 KiB".into());
+        }
+        let modifiers = params
+            .get("modifiers")
+            .map(|v| {
+                v.as_u64()
+                    .filter(|n| *n <= 15)
+                    .ok_or("modifiers must be an integer in [0, 15]")
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let repeat = params
+            .get("autoRepeat")
+            .map(|v| v.as_bool().ok_or("autoRepeat must be a boolean"))
+            .transpose()?
+            .unwrap_or(false);
+        Ok(Self {
+            event_type: event_type.into(),
+            key: key.into(),
+            text: text.into(),
+            modifiers: modifiers as u8,
+            repeat,
+        })
+    }
 }
 
 impl WheelInjection {
@@ -149,6 +214,15 @@ impl WheelInjection {
 
 impl MouseInjection {
     fn from_params(params: &Value) -> Result<Self, String> {
+        let target_id = params
+            .get("target_id")
+            .map(|v| {
+                v.as_u64()
+                    .filter(|id| matches!(*id, 1 | 2))
+                    .ok_or("target_id must be 1 (page) or 2 (browser toolbar)")
+            })
+            .transpose()?
+            .unwrap_or(1);
         let number = |name: &str| -> Result<f64, String> {
             params
                 .get(name)
@@ -188,6 +262,7 @@ impl MouseInjection {
             return Err("clickCount must be 0, 1 or 2".into());
         }
         Ok(Self {
+            target_id,
             event_type: event_type.into(),
             x: number("x")?,
             y: number("y")?,
@@ -386,17 +461,42 @@ fn handle_connection(stream: &mut TcpStream, port: u16) {
         );
         return;
     }
-    let response = match serde_json::from_slice::<Value>(&request.body) {
-        Ok(value) => match dispatch(value) {
-            Ok(result) => json!({"result":result}),
-            Err(error) => json!({"error":error}),
-        },
-        Err(error) => json!({"error":format!("Invalid JSON: {error}")}),
-    };
-    let _ = respond_json(stream, "200 OK", response);
+    let response = serde_json::from_slice::<Value>(&request.body)
+        .map_err(|error| format!("Invalid JSON: {error}"))
+        .and_then(dispatch);
+    match response {
+        Ok(result) => {
+            let _ = respond_json(stream, "200 OK", SuccessResponse { result });
+        }
+        Err(error) => {
+            let _ = respond_json(stream, "200 OK", json!({"error":error}));
+        }
+    }
 }
 
-fn respond_json(stream: &mut TcpStream, status: &str, value: Value) -> io::Result<()> {
+#[derive(Serialize)]
+struct SuccessResponse {
+    result: ApiResult,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ApiResult {
+    Json(Value),
+    Performance(PerformanceSnapshot),
+}
+
+// Serialize the recorded typed output directly. Materializing a second JSON
+// object tree for every span multiplies memory while the inspected Page runs.
+// Flattening preserves the existing Performance.snapshot wire format.
+#[derive(Serialize)]
+struct PerformanceSnapshot {
+    #[serde(flatten)]
+    snapshot: Snapshot,
+    summary: Value,
+}
+
+fn respond_json(stream: &mut TcpStream, status: &str, value: impl Serialize) -> io::Result<()> {
     let bytes = serde_json::to_vec(&value).map_err(io::Error::other)?;
     respond(stream, status, "application/json; charset=utf-8", &bytes)
 }
@@ -421,7 +521,7 @@ fn recording_id(params: &Value) -> Result<Option<u64>, String> {
     }
 }
 
-fn dispatch(request: Value) -> Result<Value, String> {
+fn dispatch(request: Value) -> Result<ApiResult, String> {
     let method = request
         .get("method")
         .and_then(Value::as_str)
@@ -430,7 +530,20 @@ fn dispatch(request: Value) -> Result<Value, String> {
     if !params.is_object() {
         return Err("params must be an object".into());
     }
-    match method {
+    if method == "Performance.snapshot" {
+        let collect_started = std::time::Instant::now();
+        let snapshot = browser_tracing::snapshot(recording_id(&params)?)?;
+        let collection_ms = collect_started.elapsed().as_secs_f64() * 1000.;
+        let analysis_started = std::time::Instant::now();
+        let mut summary = analyze_snapshot(&snapshot);
+        let analysis_ms = analysis_started.elapsed().as_secs_f64() * 1000.;
+        summary["measurement_overhead"] = json!({"collection_ms":collection_ms,"analysis_ms":analysis_ms,"producer_overhead":"not calibrated","serialization_ms":null});
+        return Ok(ApiResult::Performance(PerformanceSnapshot {
+            snapshot,
+            summary,
+        }));
+    }
+    let result = match method {
         "Input.dispatchWheel" => {
             let input = WheelInjection::from_params(&params)?;
             let wheel = wheel_handler()
@@ -468,6 +581,17 @@ fn dispatch(request: Value) -> Result<Value, String> {
                 .ok_or("No browser target")?;
             insert(text.to_owned())?;
             // This acknowledges queueing, not completion or presentation.
+            Ok(json!({}))
+        }
+        "Input.dispatchKeyEvent" => {
+            let input = KeyInjection::from_params(&params)?;
+            let key = key_handler()
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("No browser target")?;
+            key(input)?;
+            // This acknowledges queueing, not dispatch or navigation completion.
             Ok(json!({}))
         }
         "Page.reload" => {
@@ -534,18 +658,6 @@ fn dispatch(request: Value) -> Result<Value, String> {
         }
         "Tracing.end" => Ok(json!({"recording_id":browser_tracing::stop()?})),
         "Performance.status" => Ok(browser_tracing::status()),
-        "Performance.snapshot" => {
-            let collect_started = std::time::Instant::now();
-            let snapshot = browser_tracing::snapshot(recording_id(&params)?)?;
-            let collection_ms = collect_started.elapsed().as_secs_f64() * 1000.;
-            let analysis_started = std::time::Instant::now();
-            let mut summary = analyze_snapshot(&snapshot);
-            let analysis_ms = analysis_started.elapsed().as_secs_f64() * 1000.;
-            summary["measurement_overhead"] = json!({"collection_ms":collection_ms,"analysis_ms":analysis_ms,"producer_overhead":"not calibrated","serialization_ms":null});
-            let mut value = serde_json::to_value(snapshot).map_err(|e| e.to_string())?;
-            value["summary"] = summary;
-            Ok(value)
-        }
         "Performance.smoothness" => Ok(smoothness::analyze(&browser_tracing::snapshot(
             recording_id(&params)?,
         )?)),
@@ -556,7 +668,8 @@ fn dispatch(request: Value) -> Result<Value, String> {
             recording_id(&params)?,
         )?)),
         _ => Err(format!("Unknown method: {method}")),
-    }
+    };
+    result.map(ApiResult::Json)
 }
 
 /// Stage durations are inclusive; nested categories must not be added together.
@@ -711,6 +824,43 @@ mod tests {
         assert_eq!(recording_id(&json!({"recording_id":7})).unwrap(), Some(7));
         assert!(recording_id(&json!({"recording_id":-1})).is_err());
         assert!(dispatch(json!({"method":"Missing"})).is_err());
+        let snapshot = Snapshot {
+            version: 1,
+            recording_id: 7,
+            active: false,
+            duration_ns: 100,
+            dropped_events: 0,
+            spans: vec![],
+            instants: vec![],
+        };
+        let summary = json!({"duration_ms": 0.0001, "nested": {"count": 0}});
+        let mut expected = serde_json::to_value(&snapshot).unwrap();
+        expected["summary"] = summary.clone();
+        let response = SuccessResponse {
+            result: ApiResult::Performance(PerformanceSnapshot { snapshot, summary }),
+        };
+        let wire: Value = serde_json::from_slice(&serde_json::to_vec(&response).unwrap()).unwrap();
+        assert_eq!(wire, json!({"result": expected}));
+        let key = KeyInjection::from_params(&json!({"type":"rawKeyDown", "key":"Enter"})).unwrap();
+        assert_eq!(key.key, "Enter");
+        assert_eq!(key.modifiers, 0);
+        assert!(KeyInjection::from_params(&json!({"type":"char", "key":"a"})).is_err());
+        assert!(
+            KeyInjection::from_params(&json!({"type":"keyDown", "key":"a", "modifiers":16}))
+                .is_err()
+        );
+        assert_eq!(
+            MouseInjection::from_params(
+                &json!({"type":"mousePressed", "x":200, "y":60, "target_id":2})
+            )
+            .unwrap()
+            .target_id,
+            2
+        );
+        assert!(MouseInjection::from_params(
+            &json!({"type":"mouseMoved", "x":0, "y":0, "target_id":3})
+        )
+        .is_err());
     }
     #[test]
     fn cached_frames_require_proven_scroll_and_exclude_actual_layout_paint() {

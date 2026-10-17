@@ -189,10 +189,19 @@ mod active_style_sheet_order {
                 ..Default::default()
             };
             document.SetAttribute(style_node, attribute.clone());
-            assert!(document.StyleState().dirty_style_elements.contains(&owner_id));
+            assert!(document
+                .StyleState()
+                .dirty_style_elements
+                .contains(&owner_id));
             append_owned_sheet(document, style_node);
-            assert!(document.StyleState().parsed_style_elements.contains(&owner_id));
-            assert!(!document.StyleState().dirty_style_elements.contains(&owner_id));
+            assert!(document
+                .StyleState()
+                .parsed_style_elements
+                .contains(&owner_id));
+            assert!(!document
+                .StyleState()
+                .dirty_style_elements
+                .contains(&owner_id));
 
             // Equal writes and attributes outside the HTML owner contract do
             // not trigger another stylesheet parse.
@@ -202,7 +211,10 @@ mod active_style_sheet_order {
             namespaced.namespace_uri = "urn:test".into();
             document.SetAttribute(style_node, namespaced);
             document.RemoveAttribute(style_node, name, "urn:test");
-            assert!(!document.StyleState().dirty_style_elements.contains(&owner_id));
+            assert!(!document
+                .StyleState()
+                .dirty_style_elements
+                .contains(&owner_id));
 
             document.SetAttribute(
                 style_node,
@@ -211,13 +223,22 @@ mod active_style_sheet_order {
                     ..attribute
                 },
             );
-            assert!(document.StyleState().dirty_style_elements.contains(&owner_id));
+            assert!(document
+                .StyleState()
+                .dirty_style_elements
+                .contains(&owner_id));
             append_owned_sheet(document, style_node);
             document.RemoveAttributeDefault(style_node, name);
-            assert!(document.StyleState().dirty_style_elements.contains(&owner_id));
+            assert!(document
+                .StyleState()
+                .dirty_style_elements
+                .contains(&owner_id));
             append_owned_sheet(document, style_node);
             document.RemoveAttributeDefault(style_node, name);
-            assert!(!document.StyleState().dirty_style_elements.contains(&owner_id));
+            assert!(!document
+                .StyleState()
+                .dirty_style_elements
+                .contains(&owner_id));
         }
     }
 
@@ -327,7 +348,9 @@ mod active_style_sheet_order {
         let adopted = document
             .RegisterConstructedStyleSheet(style::ParseCSS(".item { color: blue }"))
             .unwrap();
-        document.SetAdoptedStyleSheets(shadow, vec![adopted]).unwrap();
+        document
+            .SetAdoptedStyleSheets(shadow, vec![adopted])
+            .unwrap();
         assert_eq!(identities(document, shadow), [first_id, last_id, adopted]);
         assert!(identities(document, root).is_empty());
 

@@ -245,12 +245,46 @@ pub(crate) fn SelectResponsiveImageFromAttributes(
 }
 
 // cpp: browser/browser.cc:649-671
+/// CSSOM used dimensions require a CSS layout box, rather than line boxes.
+/// Preserve that distinction in the typed host result instead of reporting a
+/// fabricated zero used width for an ordinary inline (ComputedStyleUtils::UsedBoxSize).
+pub(crate) fn ReadFragmentMetric(root: &FragmentNode, id: u64, name: &str) -> Option<f64> {
+    if matches!(
+        name,
+        "contentWidth" | "contentHeight" | "borderBoxWidth" | "borderBoxHeight"
+    ) && root
+        .inline_geometry
+        .iter()
+        .any(|inline| inline.node_id == id)
+    {
+        return None;
+    }
+    Some(FragmentMetric(root, id, name))
+}
+
 pub(crate) fn FragmentMetric(root: &FragmentNode, id: u64, name: &str) -> f64 {
     fn find(node: &FragmentNode, id: u64) -> Option<&FragmentNode> {
         if node.node_id == id && node.kind == FragmentKind::kBox {
             return Some(node);
         }
         node.children.iter().find_map(|child| find(child, id))
+    }
+    if let Some(inline) = root
+        .inline_geometry
+        .iter()
+        .find(|inline| inline.node_id == id)
+    {
+        let unzoom = |value: f64| (value as f32 / inline.effective_zoom) as f64;
+        match name {
+            "offsetWidth" => return unzoom(inline.local_bounds.size.width).round(),
+            "offsetHeight" => return unzoom(inline.local_bounds.size.height).round(),
+            "offsetLeft" => return unzoom(inline.local_bounds.offset.x).round(),
+            "offsetTop" => return unzoom(inline.local_bounds.offset.y).round(),
+            // Non-replaced inlines have no client/scroll CSS layout box.
+            "clientWidth" | "clientHeight" | "clientLeft" | "clientTop" | "scrollWidth"
+            | "scrollHeight" => return 0.0,
+            _ => {}
+        }
     }
     let Some(fragment) = find(root, id) else {
         return 0.0;
@@ -286,6 +320,8 @@ pub(crate) fn FragmentMetric(root: &FragmentNode, id: u64, name: &str) -> f64 {
             |size| size.height,
         ))
         .round(),
+        "borderBoxWidth" => unzoom(fragment.size.width),
+        "borderBoxHeight" => unzoom(fragment.size.height),
         "contentWidth" => unzoom(fragment.content_size.width),
         "contentHeight" => unzoom(fragment.content_size.height),
         "clientLeft" => unzoom(p.border.left).round(),
@@ -323,36 +359,73 @@ pub fn CreateLayoutBindingsHost(
 ) -> DOMBindingsHost {
     let resolve_document = document.clone();
     let resolve_constraints = constraints.clone();
-    let engine = RefCell::new(crate::LayoutEngine::new(&crate::CreateLayoutAssembly()));
+    let engine = Rc::new(RefCell::new(crate::LayoutEngine::new(
+        &crate::CreateLayoutAssembly(),
+    )));
     let measure = Rc::new(move || {
         let constraints = constraints.borrow();
         let mut document = document.borrow_mut();
         ResolveLayoutStyles(&mut document, &constraints);
-        let mut engine = engine.borrow_mut();
-        crate::persistent_layout::LayoutDocumentWithEngine(
-            &mut engine,
+        let mut layout = engine.borrow_mut();
+        crate::persistent_layout::LayoutDocumentWithEngineAtStage(
+            &mut layout,
             &mut document,
             &interaction.borrow(),
             &constraints,
+            layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Layout,
         );
-        engine
-            .GetLayoutResult()
-            .expect("successful layout has fragments")
-            .clone()
+        drop(layout);
+        engine.clone()
     });
     let geometry = measure.clone();
     DOMBindingsHost {
-        update_style: Some(Box::new(move || {
-            ResolveLayoutStyles(
-                &mut resolve_document.borrow_mut(),
-                &resolve_constraints.borrow(),
-            )
+        update_style: Some(Box::new(move |id| {
+            let mut document = resolve_document.borrow_mut();
+            let constraints = resolve_constraints.borrow();
+            let mut engine = style::StyleEngine::new(&document);
+            ResolveLayoutStylesWithEngine(
+                &mut engine,
+                &mut document,
+                &constraints,
+                style::PreferredColorScheme::kLight,
+            );
+            if let Some(node) = document.GetDocument().FindNodeById(id) {
+                EnsureComputedStyleForNode(
+                    &mut engine,
+                    &mut document,
+                    &constraints,
+                    style::PreferredColorScheme::kLight,
+                    style::media_queries::forced_colors::ForcedColors::kNone,
+                    node,
+                );
+            }
         })),
         read_metric: Some(Box::new(move |id, name| {
-            FragmentMetric(&measure(), id, name)
+            let layout = measure();
+            let layout = layout.borrow();
+            let metric = layoutng_assembly::layout_engine::LayoutMetric::try_from(name).ok()?;
+            layout
+                .Output()?
+                .Node(id)
+                .map_or(Some(0.), |node| node.Metric(metric))
         })),
         read_geometry: Some(Box::new(move |id| {
-            paint::paint_engine::FragmentClientRects(&geometry(), id)
+            let layout = geometry();
+            let layout = layout.borrow();
+            layout
+                .Output()
+                .and_then(|output| output.Node(id))
+                .map_or_else(Vec::new, |node| {
+                    node.ClientRects()
+                        .into_iter()
+                        .map(|r| paint::paint_engine::PaintRect {
+                            x: r.x,
+                            y: r.y,
+                            width: r.width,
+                            height: r.height,
+                        })
+                        .collect()
+                })
         })),
         ..Default::default()
     }
@@ -405,6 +478,29 @@ pub(crate) fn ResolveLayoutStylesWithEngineAndForcedColors(
     heap_scope.DeferCollection();
 }
 
+pub(crate) fn EnsureComputedStyleForNode(
+    engine: &mut style::StyleEngine,
+    owner: &mut DOM,
+    constraints: &ConstraintSpace,
+    preferred_color_scheme: style::PreferredColorScheme,
+    forced_colors: style::media_queries::forced_colors::ForcedColors,
+    node: usize,
+) {
+    // Element::EnsureComputedStyle returns an existing style before preparing
+    // the resolver/selector environment. The normal lifecycle already ran.
+    if owner.GetDocument().ResolvedStyleFor(node).is_some() {
+        return;
+    }
+    let mut heap_scope = foundation::LayoutHeapScope::new();
+    let user_agent = UserAgentStyleSheets::new();
+    let environment = MediaValuesForLayout(constraints, preferred_color_scheme, forced_colors);
+    let sheets = user_agent.ForDocument(owner.GetDocument());
+    engine
+        .EnsureComputedStyle(owner, &environment, sheets, node)
+        .unwrap_or_else(|error| panic!("computed style ensure failed: {error}"));
+    heap_scope.DeferCollection();
+}
+
 /// The browser joins DOM identity, neutral native layout sizes and the
 /// document's StyleEngine. Layout itself does not import StyleEngine.
 pub(crate) fn PublishContainerSizes(
@@ -437,7 +533,7 @@ pub fn CreateStyleBindingsHost(
     let user_agent = UserAgentStyleSheets::new();
     let engine = RefCell::new(style::StyleEngine::new(&document.borrow()));
     DOMBindingsHost {
-        update_style: Some(Box::new(move || {
+        update_style: Some(Box::new(move |id| {
             let mut heap_scope = foundation::LayoutHeapScope::new();
             let mut owner = document.borrow_mut();
             let environment = environment.borrow();
@@ -446,6 +542,12 @@ pub fn CreateStyleBindingsHost(
                 .borrow_mut()
                 .Update(&mut owner, &environment, sheets)
                 .unwrap_or_else(|error| panic!("StyleEngine update failed: {error}"));
+            if let Some(node) = owner.GetDocument().FindNodeById(id) {
+                engine
+                    .borrow_mut()
+                    .EnsureComputedStyle(&mut owner, &environment, sheets, node)
+                    .unwrap_or_else(|error| panic!("computed style ensure failed: {error}"));
+            }
             heap_scope.DeferCollection();
         })),
         ..Default::default()

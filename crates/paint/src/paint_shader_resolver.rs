@@ -415,38 +415,41 @@ fn PatternCommandBounds(
 
 // SVGResources::ResolveRectangle and SVGMaskPainter content-units transform.
 // Shared by local mask layers and masks within immutable pattern records.
-fn ResolveSvgMaskGeometry(resolved: &mut layoutng_assembly::internal::paint_input::SvgMaskGraph,
-    object: [f64;4], geometry_size:(f64,f64)) {
+fn ResolveSvgMaskGeometry(
+    resolved: &mut layoutng_assembly::internal::paint_input::SvgMaskGraph,
+    object: [f64; 4],
+    geometry_size: (f64, f64),
+) {
     use layoutng_assembly::internal::paint_input::SvgMaskUnits;
     let axis = |length: layoutng_assembly::internal::paint_input::SvgClipLength,
-                    origin: f64,
-                    extent: f64,
-                    units: SvgMaskUnits| {
-            if units == SvgMaskUnits::kObjectBoundingBox {
-                origin + (length.value + length.percentage) * extent
-            } else {
-                length.value + length.percentage * extent
-            }
-        };
-        let (origin_x, origin_y, basis_width, basis_height) =
-            if resolved.mask_units == SvgMaskUnits::kObjectBoundingBox {
-                (object[0], object[1], object[2], object[3])
-            } else {
-                (0.0, 0.0, geometry_size.0, geometry_size.1)
-            };
-        let x = axis(resolved.x, origin_x, basis_width, resolved.mask_units);
-        let y = axis(resolved.y, origin_y, basis_height, resolved.mask_units);
-        let width = axis(resolved.width, 0.0, basis_width, resolved.mask_units);
-        let height = axis(resolved.height, 0.0, basis_height, resolved.mask_units);
-        resolved.resolved_clip = Some([x, y, width.max(0.0), height.max(0.0)]);
-        resolved.content_transform = if resolved.content_units == SvgMaskUnits::kObjectBoundingBox {
-            let mut transform = ScaleTransform(object[2], object[3]);
-            transform.values[12] = object[0];
-            transform.values[13] = object[1];
-            transform
+                origin: f64,
+                extent: f64,
+                units: SvgMaskUnits| {
+        if units == SvgMaskUnits::kObjectBoundingBox {
+            origin + (length.value + length.percentage) * extent
         } else {
-            TransformMatrix::default()
+            length.value + length.percentage * extent
+        }
+    };
+    let (origin_x, origin_y, basis_width, basis_height) =
+        if resolved.mask_units == SvgMaskUnits::kObjectBoundingBox {
+            (object[0], object[1], object[2], object[3])
+        } else {
+            (0.0, 0.0, geometry_size.0, geometry_size.1)
         };
+    let x = axis(resolved.x, origin_x, basis_width, resolved.mask_units);
+    let y = axis(resolved.y, origin_y, basis_height, resolved.mask_units);
+    let width = axis(resolved.width, 0.0, basis_width, resolved.mask_units);
+    let height = axis(resolved.height, 0.0, basis_height, resolved.mask_units);
+    resolved.resolved_clip = Some([x, y, width.max(0.0), height.max(0.0)]);
+    resolved.content_transform = if resolved.content_units == SvgMaskUnits::kObjectBoundingBox {
+        let mut transform = ScaleTransform(object[2], object[3]);
+        transform.values[12] = object[0];
+        transform.values[13] = object[1];
+        transform
+    } else {
+        TransformMatrix::default()
+    };
 }
 
 fn ResolvePatternMaskGeometry(
@@ -1690,19 +1693,60 @@ fn pattern_document_container_uses_embedding_environment_not_last_resource_use()
 /// SVGMaskPainter's resource-record route. CSS background tiling does not
 /// participate; replay consumes the existing non-repeating pattern record.
 pub(crate) fn ResolveLocalSvgMask(
-    graph:&layoutng_assembly::internal::paint_input::SvgMaskGraph,
-    object:crate::paint_engine::PaintRect, offset:Offset, zoom:f64, viewport:Size,
-    resources:Option<&PaintResources>,
-) -> (crate::paint_engine::PaintRect,Option<PaintShader>) {
+    graph: &layoutng_assembly::internal::paint_input::SvgMaskGraph,
+    object: crate::paint_engine::PaintRect,
+    offset: Offset,
+    zoom: f64,
+    viewport: Size,
+    resources: Option<&PaintResources>,
+) -> (crate::paint_engine::PaintRect, Option<PaintShader>) {
     use layoutng_assembly::internal::paint_input::SvgPatternData;
-    let mut resolved=graph.clone();
-    ResolveSvgMaskGeometry(&mut resolved,[(object.x-offset.x)/zoom,(object.y-offset.y)/zoom,object.width/zoom,object.height/zoom],(viewport.width,viewport.height));
-    let [x,y,width,height]=resolved.resolved_clip.unwrap();
-    let region=crate::paint_engine::PaintRect{x:offset.x+x*zoom,y:offset.y+y*zoom,width:width*zoom,height:height*zoom};
-    if width<=0.0 || height<=0.0 || graph.commands.is_empty() {return (region,None);}
-    let to_paint=MultiplyTransforms(&TranslationTransform(offset.x,offset.y),&ScaleTransform(zoom,zoom));
-    let content_transform=MultiplyTransforms(&TranslationTransform(-region.x,-region.y),&MultiplyTransforms(&to_paint,&resolved.content_transform));
-    let commands=ResolvePatternCommands(graph.commands.clone(),resources,(viewport.width,viewport.height));
-    (region,Some(PaintShader {kind:PaintShaderKind::kPattern,tile_width:region.width,tile_height:region.height,
-        pattern:Some(std::sync::Arc::new(SvgPatternData {commands,content_transform,..Default::default()})),..Default::default()}))
+    let mut resolved = graph.clone();
+    ResolveSvgMaskGeometry(
+        &mut resolved,
+        [
+            (object.x - offset.x) / zoom,
+            (object.y - offset.y) / zoom,
+            object.width / zoom,
+            object.height / zoom,
+        ],
+        (viewport.width, viewport.height),
+    );
+    let [x, y, width, height] = resolved.resolved_clip.unwrap();
+    let region = crate::paint_engine::PaintRect {
+        x: offset.x + x * zoom,
+        y: offset.y + y * zoom,
+        width: width * zoom,
+        height: height * zoom,
+    };
+    if width <= 0.0 || height <= 0.0 || graph.commands.is_empty() {
+        return (region, None);
+    }
+    let to_paint = MultiplyTransforms(
+        &TranslationTransform(offset.x, offset.y),
+        &ScaleTransform(zoom, zoom),
+    );
+    let content_transform = MultiplyTransforms(
+        &TranslationTransform(-region.x, -region.y),
+        &MultiplyTransforms(&to_paint, &resolved.content_transform),
+    );
+    let commands = ResolvePatternCommands(
+        graph.commands.clone(),
+        resources,
+        (viewport.width, viewport.height),
+    );
+    (
+        region,
+        Some(PaintShader {
+            kind: PaintShaderKind::kPattern,
+            tile_width: region.width,
+            tile_height: region.height,
+            pattern: Some(std::sync::Arc::new(SvgPatternData {
+                commands,
+                content_transform,
+                ..Default::default()
+            })),
+            ..Default::default()
+        }),
+    )
 }

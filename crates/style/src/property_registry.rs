@@ -182,14 +182,17 @@ impl PropertyRegistry {
     }
     /// AtRuleCascadeMap: normal origin/layer priority, then last source wins.
     /// Replaces only declarations; script registrations survive every rebuild.
-    pub fn UpdateDeclaredProperties(
+    pub fn UpdateDeclaredProperties<
+        S: std::borrow::Borrow<cssom::css_style_sheet::CSSStyleSheet>,
+    >(
         &mut self,
-        sheets: &[(cssom::css_style_sheet::CSSStyleSheet, CascadeOrigin)],
+        sheets: &[(S, CascadeOrigin)],
         values: &DocumentMediaValues<'_>,
     ) -> bool {
         let evaluator = MediaQueryEvaluator::<MediaQueryValueBackend>::ForMediaValues(values);
         let mut layers = HashMap::new();
         for (sheet, origin) in sheets {
+            let sheet = sheet.borrow();
             for layer in &sheet.layer_order {
                 let next = layers.len() + 1;
                 layers.entry((*origin as u8, layer.clone())).or_insert(next);
@@ -198,6 +201,7 @@ impl PropertyRegistry {
         let mut winners: HashMap<std::string::String, ((u8, usize, usize, u32), CSSPropertyRule)> =
             HashMap::new();
         for (sheet_index, (sheet, origin)) in sheets.iter().enumerate() {
+            let sheet = sheet.borrow();
             // AtRuleCascadeMap only collects user and document author sheets.
             if *origin == CascadeOrigin::kUserAgent {
                 continue;

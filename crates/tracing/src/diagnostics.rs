@@ -1,9 +1,37 @@
 //! Default-off durable mirrors of structural trace spans. A killed owner leaves
 //! its actual entry record behind; a compositor request is never an entry.
 //! Allocation labels describe the birth phase, not a semantic retained owner.
-use std::{io::Write, cell::Cell, sync::{OnceLock, atomic::{AtomicU64, Ordering}}, time::Instant};
+use std::{
+    cell::Cell,
+    io::Write,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        OnceLock,
+    },
+    time::Instant,
+};
 
-pub const PHASE_NAMES: [&str; 19] = ["unscoped", "host_task", "main_frame", "page", "loading", "style", "layout_tree", "layout_native", "layout_export", "javascript", "paint", "raster", "render", "resource", "font", "native_gc", "diagnostic_trace", "diagnostic_report", "layer_tile"];
+pub const PHASE_NAMES: [&str; 19] = [
+    "unscoped",
+    "host_task",
+    "main_frame",
+    "page",
+    "loading",
+    "style",
+    "layout_tree",
+    "layout_native",
+    "layout_export",
+    "javascript",
+    "paint",
+    "raster",
+    "render",
+    "resource",
+    "font",
+    "native_gc",
+    "diagnostic_trace",
+    "diagnostic_report",
+    "layer_tile",
+];
 thread_local! {
     static ALLOCATION_PHASE: Cell<usize> = const { Cell::new(0) };
     static PARENT: Cell<u64> = const { Cell::new(0) };
@@ -15,11 +43,23 @@ pub struct AllocationScope(usize, std::marker::PhantomData<std::rc::Rc<()>>);
 impl AllocationScope {
     pub fn new(phase: usize) -> Self {
         #[cfg(feature = "allocation_diagnostics")]
-        { Self(ALLOCATION_PHASE.try_with(|p| p.replace(if phase < PHASE_NAMES.len() { phase } else { 0 })).unwrap_or(0), std::marker::PhantomData) }
+        {
+            Self(
+                ALLOCATION_PHASE
+                    .try_with(|p| p.replace(if phase < PHASE_NAMES.len() { phase } else { 0 }))
+                    .unwrap_or(0),
+                std::marker::PhantomData,
+            )
+        }
         #[cfg(not(feature = "allocation_diagnostics"))]
-        { let _ = phase; Self(0, std::marker::PhantomData) }
+        {
+            let _ = phase;
+            Self(0, std::marker::PhantomData)
+        }
     }
-    pub(crate) fn trace() -> Self { Self::new(16) }
+    pub(crate) fn trace() -> Self {
+        Self::new(16)
+    }
 }
 impl Drop for AllocationScope {
     fn drop(&mut self) {
@@ -36,9 +76,17 @@ fn phase(category: &str, name: &str) -> Option<usize> {
         "Page.ResolveStyles" => 5,
         "LayoutEngine.TreeUpdate" | "Page.SynchronizeLayoutTree" => 6,
         "Host.MemoryCensus" => 17,
-        "LayoutEngine.ExportFragments" | "LayoutEngine.ExportPaintOnly" | "LayoutEngine.ExportTargetedPaintOnly" => 8,
+        "LayoutEngine.ExportFragments"
+        | "LayoutEngine.ExportPaintOnly"
+        | "LayoutEngine.ExportTargetedPaintOnly" => 8,
         "NativeHeapCollection" => 15,
-        "Page.PumpLoading" | "Page.ResolveStylesAndLoadResources" | "Page.DiscoverImages" | "Page.DiscoverFonts" | "Page.PollImages" | "Page.PollFonts" | "Page.FlushScriptTasks" => 4,
+        "Page.PumpLoading"
+        | "Page.ResolveStylesAndLoadResources"
+        | "Page.DiscoverImages"
+        | "Page.DiscoverFonts"
+        | "Page.PollImages"
+        | "Page.PollFonts"
+        | "Page.FlushScriptTasks" => 4,
         "RasterWorkerWait" | "RasterTile" => return None,
         _ => match category {
             "owner_task" | "task" => 1,
@@ -53,7 +101,7 @@ fn phase(category: &str, name: &str) -> Option<usize> {
             "font" => 14,
             "layer_tile" => 18,
             _ => return None,
-        }
+        },
     })
 }
 pub struct PhaseGuard {
@@ -70,19 +118,34 @@ pub struct PhaseGuard {
 impl PhaseGuard {
     pub(crate) fn enter(category: &'static str, name: &'static str) -> Option<Self> {
         let durable = enabled();
-        if !durable && !cfg!(feature = "allocation_diagnostics") { return None; }
+        if !durable && !cfg!(feature = "allocation_diagnostics") {
+            return None;
+        }
         let phase = phase(category, name)?;
         static IDS: AtomicU64 = AtomicU64::new(1);
         let id = IDS.fetch_add(1, Ordering::Relaxed);
         let parent = PARENT.with(|p| p.replace(id));
-        let guard = Self { owner: AllocationScope::new(phase), id, parent, category, name, phase,
-            started: Instant::now(), context: crate::context(), durable };
-        if durable { guard.report("begin"); }
+        let guard = Self {
+            owner: AllocationScope::new(phase),
+            id,
+            parent,
+            category,
+            name,
+            phase,
+            started: Instant::now(),
+            context: crate::context(),
+            durable,
+        };
+        if durable {
+            guard.report("begin");
+        }
         Some(guard)
     }
     fn report(&self, edge: &str) {
         let _allocation = AllocationScope::new(17);
-        let time_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let time_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
         let _ = writeln!(std::io::stderr().lock(), "owner-phase time_ns={} edge={} id={} parent={} thread={:?} category={} name={} phase={} elapsed_us={} context={:?}",
             time_ns, edge, self.id, self.parent, std::thread::current().id(), self.category, self.name,
             PHASE_NAMES[self.phase], self.started.elapsed().as_micros(), self.context);
@@ -90,7 +153,9 @@ impl PhaseGuard {
 }
 impl Drop for PhaseGuard {
     fn drop(&mut self) {
-        if self.durable { self.report("end"); }
+        if self.durable {
+            self.report("end");
+        }
         let _ = PARENT.try_with(|p| p.set(self.parent));
         // owner restores the nearest enclosing structural phase after this drop.
         let _ = &self.owner;

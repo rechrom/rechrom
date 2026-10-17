@@ -9,6 +9,7 @@ mod render_pass;
 mod renderer;
 
 pub use renderer::{
-    BackingStats, RasterResourceRegistry, RenderTarget, RenderUpdate, Renderer, SingleSurfaceResources,
+    BackingStats, RasterResourceRegistry, RenderTarget, RenderUpdate, Renderer,
+    SingleSurfaceResources,
 };
 pub use skia::PixelFormat;

@@ -851,8 +851,26 @@ impl PaintProperties {
 }
 
 // cpp: layoutng_fragment_tree/fragment_tree.h:303-322
+/// Native inline client boxes can exist without paint-backed inline fragments.
+/// Coordinates belong to the named physical container occurrence; rectangle
+/// order is InlineCursor's order, independent of the paint child list.
+#[derive(Clone, Default, PartialEq)]
+pub struct InlineGeometryRect {
+    pub container_fragment_instance_id: u64,
+    pub rect: FragmentPaintRect,
+}
+#[derive(Clone, Default, PartialEq)]
+pub struct InlineGeometry {
+    pub node_id: u64,
+    pub effective_zoom: f32,
+    pub local_bounds: FragmentPaintRect,
+    pub rects: Vec<InlineGeometryRect>,
+}
+
 #[derive(Clone)]
 pub struct FragmentNode {
+    /// Native inline query geometry, independent of paint-backed fragments.
+    pub inline_geometry: Vec<InlineGeometry>,
     /// Certified layout-output input revision. Zero means unobserved input.
     pub pre_paint_revision: u64,
     /// Includes the exact ordered child input revisions and topology.
@@ -876,6 +894,7 @@ pub struct FragmentNode {
 impl Default for FragmentNode {
     fn default() -> Self {
         Self {
+            inline_geometry: Vec::new(),
             pre_paint_revision: 0,
             pre_paint_subtree_revision: 0,
             pre_paint_owner_retained: false,

@@ -37,9 +37,7 @@ fn profile_full_page_creation_and_bootstrap_isolation() {
                 Rc::new(RefCell::new(
                     image_decoder::skia_image_decoder::SkiaImageDecoder,
                 )),
-                Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
-                    &assembly,
-                ))),
+                Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
                 crate::CreateBrowserConstraints(1280, 720),
                 Some(crate::page::ScriptEnvironment {
                     runtime: Box::new(QuickJsJavaScriptRuntime::with_native_stack_budget(

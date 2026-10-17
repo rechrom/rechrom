@@ -56,6 +56,29 @@ unsafe fn js_weakref_new(_ctx: *mut JSContext, val: JSValueConst) -> JSValue {
     }
     val
 }
+// Embedding weak slots use the same tombstone ownership as WeakRef targets.
+// They do not create a JS root or enqueue cleanup work. The weak count keeps
+// only the allocation header alive after ordinary object/cycle destruction;
+// JS_IsLiveObject guards reacquisition before any payload can be read.
+// cpp: quickjs.c js_weakref_new/free, JS_IsLiveObject.
+/// Duplicate an object into an embedder-owned weak slot. The caller must keep
+/// the runtime alive and release this slot with JS_FreeWeakValue, not FreeValue.
+pub unsafe fn JS_DupWeakValue(ctx: *mut JSContext, value: JSValueConst) -> JSValue {
+    assert!(JS_IsObject(value) != 0);
+    js_weakref_new(ctx, value)
+}
+/// Acquire an ordinary owned reference, or undefined after object destruction.
+/// Runs only outside GC/finalizers, on the runtime owner thread.
+pub unsafe fn JS_LockWeakValue(ctx: *mut JSContext, value: JSValueConst) -> JSValue {
+    if JS_IsLiveObject((*ctx).rt, value) != 0 {
+        JS_DupValue(ctx, value)
+    } else {
+        JS_UNDEFINED
+    }
+}
+pub unsafe fn JS_FreeWeakValue(rt: *mut JSRuntime, value: JSValue) {
+    js_weakref_free(rt, value);
+}
 const MAGIC_SET: i32 = 1 << 0;
 const MAGIC_WEAK: i32 = 1 << 1;
 fn map_normalize_key(ctx: *mut JSContext, mut key: JSValue) -> JSValue {

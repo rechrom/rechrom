@@ -189,6 +189,7 @@ impl PaintTreeNode<'_> {
         // Do not keep a layout-root Rc or clone the source subtree. Painters use
         // this node's resident children, not FragmentNode.children.
         let FragmentNode {
+            inline_geometry: _,
             fragment_instance_id,
             fragmentainer_instance_id,
             node_id,
@@ -205,6 +206,7 @@ impl PaintTreeNode<'_> {
             children: _,
         } = source;
         self.fragment = Some(Arc::new(FragmentNode {
+            inline_geometry: Vec::new(),
             fragment_instance_id: *fragment_instance_id,
             fragmentainer_instance_id: *fragmentainer_instance_id,
             node_id: *node_id,
@@ -2369,30 +2371,71 @@ fn ResolveMaskLayers(
 ) -> Vec<DisplayMaskLayer> {
     let mut output = Vec::with_capacity(layers.len());
     for layer in layers {
-        if let Some(reason)=layer.source_error.as_ref() { std::panic::panic_any(foundation::UnsupportedLayout::new(format!("unsupported SVG mask resource: {reason}"))); }
+        if let Some(reason) = layer.source_error.as_ref() {
+            std::panic::panic_any(foundation::UnsupportedLayout::new(format!(
+                "unsupported SVG mask resource: {reason}"
+            )));
+        }
         if let Some(reference) = &layer.svg_reference {
-            let object=ClipPathReferenceRect(fragment,absolute_offset,if IsSvgEffectChild(fragment.paint.source_kind) {ClipPathReferenceBox::kFillBox} else {ClipPathReferenceBox::kBorderBox});
-            let mut resolved=DisplayMaskLayer {clip_rect:object,tile_rect:object,mode:layer.mode,composite:layer.composite,source_error:layer.source_error.clone(),..Default::default()};
-            if let Some(graph)=reference.graph.as_deref() {
+            let object = ClipPathReferenceRect(
+                fragment,
+                absolute_offset,
+                if IsSvgEffectChild(fragment.paint.source_kind) {
+                    ClipPathReferenceBox::kFillBox
+                } else {
+                    ClipPathReferenceBox::kBorderBox
+                },
+            );
+            let mut resolved = DisplayMaskLayer {
+                clip_rect: object,
+                tile_rect: object,
+                mode: layer.mode,
+                composite: layer.composite,
+                source_error: layer.source_error.clone(),
+                ..Default::default()
+            };
+            if let Some(graph) = reference.graph.as_deref() {
                 use layoutng_assembly::internal::paint_input::SvgMaskUnits;
-                if IsSvgEffectChild(fragment.paint.source_kind) && fragment.paint.svg_shape.is_none()
-                    && (graph.mask_units==SvgMaskUnits::kObjectBoundingBox || graph.content_units==SvgMaskUnits::kObjectBoundingBox) {
-                    resolved.source_error=Some("SVG group object bounding box for local mask".into());
+                if IsSvgEffectChild(fragment.paint.source_kind)
+                    && fragment.paint.svg_shape.is_none()
+                    && (graph.mask_units == SvgMaskUnits::kObjectBoundingBox
+                        || graph.content_units == SvgMaskUnits::kObjectBoundingBox)
+                {
+                    resolved.source_error =
+                        Some("SVG group object bounding box for local mask".into());
                 }
                 if resolved.source_error.is_none() {
-                    if let Some(viewport)=reference.viewport {
-                        let zoom=if IsSvgEffectChild(fragment.paint.source_kind) {1.0} else {f64::from(fragment.paint.effective_zoom)};
-                        let (region,shader)=crate::paint_shader_resolver::ResolveLocalSvgMask(graph,object,absolute_offset,zoom,viewport,fragment.paint.resources.as_deref());
-                        resolved.clip_rect=region;resolved.tile_rect=region;resolved.paint_shader=shader;
-                    } else {resolved.source_error=Some("missing SVG mask resource viewport".into());}
+                    if let Some(viewport) = reference.viewport {
+                        let zoom = if IsSvgEffectChild(fragment.paint.source_kind) {
+                            1.0
+                        } else {
+                            f64::from(fragment.paint.effective_zoom)
+                        };
+                        let (region, shader) = crate::paint_shader_resolver::ResolveLocalSvgMask(
+                            graph,
+                            object,
+                            absolute_offset,
+                            zoom,
+                            viewport,
+                            fragment.paint.resources.as_deref(),
+                        );
+                        resolved.clip_rect = region;
+                        resolved.tile_rect = region;
+                        resolved.paint_shader = shader;
+                    } else {
+                        resolved.source_error = Some("missing SVG mask resource viewport".into());
+                    }
                 }
             }
-            if let Some(reason)=resolved.source_error.as_ref() {
+            if let Some(reason) = resolved.source_error.as_ref() {
                 // Validate before culling: a zero-sized SVG group must not turn
                 // unsupported resource content into a successful empty mask.
-                std::panic::panic_any(foundation::UnsupportedLayout::new(format!("unsupported SVG mask resource: {reason}")));
+                std::panic::panic_any(foundation::UnsupportedLayout::new(format!(
+                    "unsupported SVG mask resource: {reason}"
+                )));
             }
-            output.push(resolved);continue;
+            output.push(resolved);
+            continue;
         }
         if !layer.image.position.x.is_finite() || !layer.image.position.y.is_finite() {
             panic!("mask position must be finite");
@@ -3130,7 +3173,9 @@ fn SameSourceIdentity(a: &FragmentNode, b: &FragmentNode) -> bool {
 // LayoutSVGHiddenContainer::Paint is a subtree boundary. Preserve its
 // descendants in immutable Layout snapshots for resource consumers, but do
 // not create ordinary paint owners, properties, or reparentable paint layers.
-pub(crate) fn OrdinaryPaintChildren(fragment: &FragmentNode) -> impl Iterator<Item = &FragmentNode> {
+pub(crate) fn OrdinaryPaintChildren(
+    fragment: &FragmentNode,
+) -> impl Iterator<Item = &FragmentNode> {
     fragment
         .children
         .iter()
@@ -3258,9 +3303,10 @@ impl PrePaintTreeWalk {
         if self.property_node_store.scroll_offsets() == *basis {
             return;
         }
-        if let Some((store, _)) = self.property_node_store.retained_scroll_update(
-            basis, &self.property_node_store.sticky_offsets(),
-        ) {
+        if let Some((store, _)) = self
+            .property_node_store
+            .retained_scroll_update(basis, &self.property_node_store.sticky_offsets())
+        {
             // Advance the authoritative immutable snapshot lifecycle, also
             // when projecting back to the recording view. Walk refreshes the
             // final states; raw contexts continue describing this same basis.

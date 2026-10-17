@@ -59,6 +59,7 @@ pub struct CustomProperties {
     pub diagnostics: Vec<(std::string::String, VariableResolutionError)>,
     // cpp: style_cascade.cc:1470-1529 CascadeResolver::shorthand_cache_.
     shorthand_cache: RefCell<Option<(Rc<Value>, Vec<PropertyValue>)>>,
+    cache_hash: std::cell::Cell<Option<u32>>,
 }
 impl std::fmt::Debug for CustomProperties {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -69,32 +70,124 @@ impl std::fmt::Debug for CustomProperties {
             .finish()
     }
 }
-pub(crate) fn ComputedVariablesEquivalent(a: &ComputedVariableValue, b: &ComputedVariableValue) -> bool {
+pub(crate) fn ComputedVariablesEquivalent(
+    a: &ComputedVariableValue,
+    b: &ComputedVariableValue,
+) -> bool {
     match (a, b) {
         (ComputedVariableValue::Invalid, ComputedVariableValue::Invalid)
         | (ComputedVariableValue::Cyclic, ComputedVariableValue::Cyclic) => true,
-        (ComputedVariableValue::Data(a), ComputedVariableValue::Data(b)) => Rc::ptr_eq(a, b)
-            || a.original_text == b.original_text && a.features == b.features
-                && a.is_animation_tainted == b.is_animation_tainted && a.is_attr_tainted == b.is_attr_tainted,
+        (ComputedVariableValue::Data(a), ComputedVariableValue::Data(b)) => {
+            Rc::ptr_eq(a, b)
+                || a.original_text == b.original_text
+                    && a.features == b.features
+                    && a.is_animation_tainted == b.is_animation_tainted
+                    && a.is_attr_tainted == b.is_attr_tainted
+        }
         _ => false,
     }
 }
 impl CustomProperties {
+    // cpp: StyleInheritedVariables::GetHash / StyleVariables equality.
+    // A hash partitions the existing MPC; full equality below still decides
+    // hits, including taint and registered typed values. Map order is irrelevant.
+    pub(crate) fn CacheHash(&self) -> u32 {
+        use std::hash::{Hash, Hasher};
+        if let Some(hash) = self.cache_hash.get() {
+            return hash;
+        }
+        static PROFILE_HASH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let _trace = (*PROFILE_HASH.get_or_init(|| {
+            std::env::var_os("BROWSER_PROFILE_STYLE_VARIABLES").is_some_and(|value| value == "1")
+        }))
+        .then(|| {
+            let mut trace = browser_tracing::span("style", "CustomProperties.HashInherited");
+            trace.set("variables", self.values.len() as f64);
+            trace.set("registered", self.registered_values.len() as f64);
+            trace
+        });
+        let mut hash = 0u32;
+        for (name, value) in self.values.iter() {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            name.hash(&mut h);
+            match value {
+                ComputedVariableValue::Data(data) => {
+                    0u8.hash(&mut h);
+                    data.original_text.hash(&mut h);
+                    data.features.hash(&mut h);
+                    data.is_animation_tainted.hash(&mut h);
+                    data.is_attr_tainted.hash(&mut h);
+                }
+                ComputedVariableValue::Invalid => 1u8.hash(&mut h),
+                ComputedVariableValue::Cyclic => 2u8.hash(&mut h),
+            }
+            hash ^= h.finish() as u32;
+        }
+        for (name, value) in self.registered_values.iter() {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            name.hash(&mut h);
+            value.CssText().Utf8().hash(&mut h);
+            hash ^= (h.finish() as u32).rotate_left(1);
+        }
+        self.cache_hash.set(Some(hash));
+        hash
+    }
+
+    pub(crate) fn CacheEquivalent(&self, other: &Self) -> bool {
+        self.diagnostics == other.diagnostics
+            && (Rc::ptr_eq(&self.values, &other.values)
+                || self.values.len() == other.values.len()
+                    && self.values.iter().all(|(name, value)| {
+                        other
+                            .values
+                            .get(name)
+                            .is_some_and(|v| ComputedVariablesEquivalent(value, v))
+                    }))
+            && (Rc::ptr_eq(&self.registered_values, &other.registered_values)
+                || self.registered_values.len() == other.registered_values.len()
+                    && self.registered_values.iter().all(|(name, value)| {
+                        other
+                            .registered_values
+                            .get(name)
+                            .is_some_and(|v| Rc::ptr_eq(value, v) || value.as_ref() == v.as_ref())
+                    }))
+    }
+
     // cpp: style_variables.h:99-165. Equality precedes copy-on-write, including
     // resetting an already-initial non-inherited registered property.
     pub(crate) fn SetData(&mut self, name: std::string::String, value: ComputedVariableValue) {
-        if self.values.get(&name).is_some_and(|old| ComputedVariablesEquivalent(old, &value)) { return; }
+        if self
+            .values
+            .get(&name)
+            .is_some_and(|old| ComputedVariablesEquivalent(old, &value))
+        {
+            return;
+        }
+        self.cache_hash.set(None);
         Rc::make_mut(&mut self.values).insert(name, value);
     }
     pub(crate) fn RemoveData(&mut self, name: &str) {
-        if self.values.contains_key(name) { Rc::make_mut(&mut self.values).remove(name); }
+        if self.values.contains_key(name) {
+            self.cache_hash.set(None);
+            Rc::make_mut(&mut self.values).remove(name);
+        }
     }
     pub(crate) fn SetRegistered(&mut self, name: std::string::String, value: Rc<Value>) {
-        if self.registered_values.get(&name).is_some_and(|old| Rc::ptr_eq(old, &value) || old.as_ref() == value.as_ref()) { return; }
+        if self
+            .registered_values
+            .get(&name)
+            .is_some_and(|old| Rc::ptr_eq(old, &value) || old.as_ref() == value.as_ref())
+        {
+            return;
+        }
+        self.cache_hash.set(None);
         Rc::make_mut(&mut self.registered_values).insert(name, value);
     }
     pub(crate) fn RemoveRegistered(&mut self, name: &str) {
-        if self.registered_values.contains_key(name) { Rc::make_mut(&mut self.registered_values).remove(name); }
+        if self.registered_values.contains_key(name) {
+            self.cache_hash.set(None);
+            Rc::make_mut(&mut self.registered_values).remove(name);
+        }
     }
     /// `winners` must contain the winning declaration for each custom name.
     /// Cascade priority, origins, layers and revert are handled by the caller.
@@ -150,8 +243,13 @@ impl CustomProperties {
         let mut initials = HashMap::new();
         let mut diagnostics = Vec::new();
         if let Some(registry) = registry {
-            if inherited.registered_values.keys().any(|name| registry.Registration(name).is_none()) {
-                Rc::make_mut(&mut inherited.registered_values).retain(|name, _| registry.Registration(name).is_some());
+            if inherited
+                .registered_values
+                .keys()
+                .any(|name| registry.Registration(name).is_none())
+            {
+                Rc::make_mut(&mut inherited.registered_values)
+                    .retain(|name, _| registry.Registration(name).is_some());
             }
             for (name, registration) in registry.Registrations() {
                 let initial = registration.initial.as_ref().and_then(|value| {
@@ -209,13 +307,26 @@ impl CustomProperties {
         for name in names {
             resolver.ResolveName(&name);
         }
+        // cpp: StyleVariables copy constructor copies roots and their hashes.
+        // Preserve the existing lazy hash when both inherited stores are still
+        // the exact parent owners. Registry resets may have detached either
+        // store, and the SetData calls below still invalidate on real changes.
+        let inherited_hash = parent
+            .filter(|parent| {
+                Rc::ptr_eq(&parent.values, &resolver.inherited)
+                    && Rc::ptr_eq(&parent.registered_values, &resolver.registered_values)
+            })
+            .and_then(|parent| parent.cache_hash.get());
         let mut result = Self {
             values: resolver.inherited,
             registered_values: resolver.registered_values,
             diagnostics: resolver.diagnostics,
             shorthand_cache: RefCell::default(),
+            cache_hash: std::cell::Cell::new(inherited_hash),
         };
-        for (name, value) in resolver.computed { result.SetData(name, value); }
+        for (name, value) in resolver.computed {
+            result.SetData(name, value);
+        }
         result
     }
     pub fn Get(&self, name: &str) -> Option<&Rc<CSSVariableData>> {
@@ -422,8 +533,11 @@ impl VariableResolver<'_> {
                         Ok(typed) => {
                             let data =
                                 crate::property_registry::RegisteredVariableData(&typed, data);
-                            if !self.registered_values.get(name).is_some_and(|old| Rc::ptr_eq(old, &typed) || old.as_ref() == typed.as_ref()) {
-                                Rc::make_mut(&mut self.registered_values).insert(name.to_owned(), typed);
+                            if !self.registered_values.get(name).is_some_and(|old| {
+                                Rc::ptr_eq(old, &typed) || old.as_ref() == typed.as_ref()
+                            }) {
+                                Rc::make_mut(&mut self.registered_values)
+                                    .insert(name.to_owned(), typed);
                             }
                             ComputedVariableValue::Data(data)
                         }
@@ -444,7 +558,9 @@ impl VariableResolver<'_> {
                     .cloned()
                     .unwrap_or(ComputedVariableValue::Invalid),
                 _ => {
-                    if self.registered_values.contains_key(name) { Rc::make_mut(&mut self.registered_values).remove(name); }
+                    if self.registered_values.contains_key(name) {
+                        Rc::make_mut(&mut self.registered_values).remove(name);
+                    }
                     value
                 }
             }
@@ -934,6 +1050,7 @@ mod tests {
     #[test]
     fn inherits_computed_values_before_child_overrides() {
         let parent = custom("--x: 12px; --y: var(--x);");
+        let parent_hash = parent.CacheHash();
         let child = CustomProperties::Compute(
             Some(&parent),
             declarations("--x: 22px; --z:var(--y);").iter(),
@@ -956,6 +1073,24 @@ mod tests {
                 .Utf8(),
             "22px"
         );
+        let inherited = CustomProperties::Compute(Some(&parent), std::iter::empty());
+        assert!(Rc::ptr_eq(&inherited.values, &parent.values));
+        assert!(Rc::ptr_eq(
+            &inherited.registered_values,
+            &parent.registered_values
+        ));
+        assert_eq!(inherited.cache_hash.get(), Some(parent_hash));
+        let unchanged = CustomProperties::Compute(Some(&parent), declarations("--x:12px;").iter());
+        assert_eq!(unchanged.cache_hash.get(), Some(parent_hash));
+        assert_eq!(
+            child.cache_hash.get(),
+            None,
+            "an actual override revokes the inherited hash"
+        );
+        let recomputed = child.clone();
+        recomputed.cache_hash.set(None);
+        assert_eq!(child.CacheHash(), recomputed.CacheHash());
+        assert_eq!(parent.CacheHash(), parent_hash);
     }
     #[test]
     fn nested_fallback_and_function_substitution() {

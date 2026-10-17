@@ -21,12 +21,16 @@ impl xhr_transport::XMLHttpRequestTransport for NoNetwork {
 }
 
 fn run(script: &str) {
+    run_steps(&[script]);
+}
+
+fn run_steps(scripts: &[&str]) {
     let document = Rc::new(RefCell::new(html::html_parser::ParseHTML(
         "<!doctype html><html><head></head><body><main id=root></main></body></html>",
     )));
     let changed = document.clone();
     let dom = Rc::new(RefCell::new(DOMJavaScriptBindings::new(
-        document,
+        document.clone(),
         Box::new(move |mutation| {
             ApplyDOMMutations(
                 changed.borrow_mut().GetDocumentMut(),
@@ -34,8 +38,60 @@ fn run(script: &str) {
             );
         }),
     )));
+    // Use the same notification boundary as Page; no JS runs under DOM/host borrows.
+    let scoped_document = document.clone();
+    let scoped_bindings = Rc::downgrade(&dom);
+    dom.borrow_mut()
+        .SetScopedMutationEmitter(Rc::new(move |mutation, runtime| {
+            let bindings = scoped_bindings.upgrade().unwrap();
+            let notification = bindings.borrow().PrepareMutationNotification(mutation);
+            ApplyDOMMutations(
+                scoped_document.borrow_mut().GetDocumentMut(),
+                std::slice::from_ref(mutation),
+            );
+            DOMJavaScriptBindings::DeliverMutationNotification(
+                &bindings,
+                notification,
+                &mut |callback, args| {
+                    runtime.Call(
+                        callback,
+                        &javascript::javascript_runtime::HostValue::Object(
+                            javascript::javascript_runtime::HostObjectRef { id: 0 },
+                        ),
+                        args,
+                    );
+                },
+            );
+        }));
+    // This bindings-only fixture has no Page. Supply its at-target dispatch
+    // adapter through the same injected service used by the embedding.
+    let weak_dom = Rc::downgrade(&dom);
+    dom.borrow_mut()
+        .SetSyntheticEventHandler(Some(Rc::new(move |event, target, runtime| {
+            let dom = weak_dom.upgrade().unwrap();
+            let invocation = interaction::event::EventListenerInvocation {
+                event,
+                target_node_id: target,
+                current_target_node_id: target,
+                phase: interaction::event::EventPhase::kAtTarget,
+                capture_listeners: false,
+                focused_node_id: None,
+            };
+            let result = DOMJavaScriptBindings::DispatchEventListenersScoped(
+                &dom,
+                &invocation,
+                runtime,
+                &mut |error| panic!("listener error: {error:?}"),
+            );
+            event.default_prevented |= result.prevent_default;
+            *event.dispatch_state.borrow_mut() = interaction::event_path::EventDispatchState {
+                path: None,
+                final_target: Some(target),
+                finished: true,
+            };
+        })));
     let window = Rc::new(RefCell::new(WindowJavaScriptBindings::new(
-        dom,
+        dom.clone(),
         Box::new(NoNetwork),
         "host-property-dispatch-fixture".into(),
         None,
@@ -43,6 +99,7 @@ fn run(script: &str) {
     let mut runtime = QuickJsJavaScriptRuntime::new();
     let realm = runtime.CreateRealm(window.clone());
     window.borrow_mut().BindRuntime(&realm);
+    dom.borrow_mut().BindRuntime(&realm);
     for (source, name) in [
         (webapi::DOMBootstrapSource().to_owned(), "dom-webidl"),
         (webapi::WindowBootstrapSource(), "window-webidl"),
@@ -50,10 +107,11 @@ fn run(script: &str) {
         let result = runtime.Evaluate(&realm, &source, name);
         assert!(result.Succeeded(), "{name}: {:?}", result.exception);
     }
-    let result = runtime.Evaluate(
-        &realm,
-        &format!(
-            r#"function check(value, message) {{ if (!value) throw new Error(message); }}
+    for script in scripts {
+        let result = runtime.Evaluate(
+            &realm,
+            &format!(
+                r#"function check(value, message) {{ if (!value) throw new Error(message); }}
                 function equal(actual, expected, message) {{
                     check(Object.is(actual, expected), message);
                 }}
@@ -68,13 +126,14 @@ fn run(script: &str) {
                     check(didThrow && caught instanceof TypeError, message);
                 }}
                 {script}"#
-        ),
-        "host-property-dispatch.js",
-    );
-    assert!(result.Succeeded(), "{:?}", result.exception);
-    runtime.PerformMicrotaskCheckpoint();
-    let errors = runtime.TakePendingExceptions(&realm);
-    assert!(errors.is_empty(), "unexpected reported errors: {errors:?}");
+            ),
+            "host-property-dispatch.js",
+        );
+        assert!(result.Succeeded(), "{:?}", result.exception);
+        runtime.PerformMicrotaskCheckpoint();
+        let errors = runtime.TakePendingExceptions(&realm);
+        assert!(errors.is_empty(), "unexpected reported errors: {errors:?}");
+    }
 }
 
 #[test]
@@ -891,4 +950,115 @@ fn fragment_get_element_by_id_uses_the_selected_receiver_tree() {
         equal(fragment.getElementById('missing'), null, 'fragment missing id returns null');
         check(!Object.hasOwn(Element.prototype, 'getElementById'), 'Element does not implement NonElementParentNode');
     "#);
+}
+
+#[test]
+fn event_listener_cycles_follow_target_and_dispatch_lifetimes() {
+    run_steps(&[
+        r#"
+        globalThis.callbackWeakRefs = [];
+        globalThis.gcTargetRefs = {plain:[], removed:[], cycle:[], handler:[], dispatched:[]};
+        for (const kind of Object.keys(gcTargetRefs)) {
+            for (let i=0;i<80;i++) {
+                const target = document.createElement('i');
+                if (kind === 'handler') target.onclick = () => target.nodeType;
+                else if (kind !== 'plain') {
+                    const callback = () => target.nodeType;
+                    target.addEventListener('ping', callback);
+                    if (kind === 'removed') target.removeEventListener('ping', callback);
+                    if (kind === 'dispatched') target.dispatchEvent(new Event('ping'));
+                }
+                gcTargetRefs[kind].push(new WeakRef(target));
+            }
+        }
+        globalThis.gcHeldTarget = document.createElement('button');
+        globalThis.gcOnceCalls = 0; globalThis.gcHandlerCalls = 0;
+        (() => {
+            const once = () => { gcOnceCalls++; gcHeldTarget.dispatchEvent(new Event('ping')); };
+            const handler = () => { gcHandlerCalls++; };
+            callbackWeakRefs.push(new WeakRef(once), new WeakRef(handler));
+            gcHeldTarget.addEventListener('ping', once, {once:true});
+            gcHeldTarget.onclick = handler;
+        })();
+        globalThis.churnListenerGarbage = () => {
+            for (let i=0;i<50000;i++) { const cycle = {}; cycle.self = cycle; }
+        };
+        "#,
+        r#"for (let i=0;i<4;i++) churnListenerGarbage();"#,
+        r#"
+        for (const [kind, refs] of Object.entries(gcTargetRefs))
+            equal(refs.filter(ref=>ref.deref()!==undefined).length, 0, kind+' targets are reclaimable');
+        check(callbackWeakRefs.every(ref=>ref.deref()!==undefined), 'live target owns callbacks');
+        gcHeldTarget.dispatchEvent(new Event('ping'));
+        gcHeldTarget.dispatchEvent(new Event('ping'));
+        equal(gcOnceCalls, 1, 'once callback survives edge removal and nested dispatch');
+        gcHeldTarget.dispatchEvent(new Event('click'));
+        equal(gcHandlerCalls, 1, 'attribute handler survives GC');
+        gcHeldTarget.onclick = null;
+        "#,
+        r#"for (let i=0;i<4;i++) churnListenerGarbage();"#,
+        r#"
+        check(callbackWeakRefs.every(ref=>ref.deref()===undefined), 'removed callbacks are reclaimable');
+        "#,
+    ]);
+}
+
+#[test]
+fn mutation_observer_interest_and_node_list_lifetime_follow_native_ownership() {
+    run_steps(&[
+        r#"
+        const root=document.getElementById('root'), target=document.createElement('section');
+        root.appendChild(target);
+        const text=document.createTextNode('before');target.appendChild(text);
+        const childOnly=new MutationObserver(()=>{});
+        childOnly.observe(root,{childList:true,subtree:true});
+        for(let i=0;i<100;i++)target.setAttribute('data-unused',String(i));
+        equal(childOnly.takeRecords().length,0,'unrelated mutation type');
+        const observer=new MutationObserver(()=>{});
+        observer.observe(target,{attributes:true,attributeOldValue:true,attributeFilter:['data-state']});
+        observer.observe(root,{attributes:true,subtree:true});
+        target.setAttribute('data-state','one');target.setAttribute('data-state','two');
+        target.setAttribute('data-other','value');
+        globalThis.heldAttributeRecords=observer.takeRecords();
+        equal(heldAttributeRecords.length,3,'one record per observer despite two matching registrations');
+        equal(heldAttributeRecords[0].oldValue,null,'absent old attribute');
+        equal(heldAttributeRecords[1].oldValue,'one','merged old-value interest');
+        equal(heldAttributeRecords[2].oldValue,null,'other registration did not request old value');
+        equal(heldAttributeRecords[0].attributeNamespace,null,'null attribute namespace');
+        check(heldAttributeRecords[0].addedNodes instanceof NodeList,'lazy empty NodeList');
+        equal(heldAttributeRecords[0].addedNodes,heldAttributeRecords[0].addedNodes,'stable added list');
+        equal(heldAttributeRecords[0].removedNodes.length,0,'empty removed list');
+        globalThis.emptyListRefs=[new WeakRef(heldAttributeRecords[0].addedNodes),new WeakRef(heldAttributeRecords[0].removedNodes)];
+        observer.observe(root,{childList:true});
+        target.setAttribute('data-other','updated');equal(observer.takeRecords().length,0,'reobserve replaces type options');
+        const chars=new MutationObserver(()=>{});chars.observe(target,{characterData:true,subtree:true,characterDataOldValue:true});
+        text.data='after';const changes=chars.takeRecords();
+        equal(changes.length,1,'character-data interest');equal(changes[0].oldValue,'before','character-data old value');
+        equal(changes[0].addedNodes.length,0,'character data has an empty added list');
+        const host=document.createElement('div');root.appendChild(host);
+        const shadow=host.attachShadow({mode:'open'}), inside=document.createElement('i');shadow.appendChild(inside);
+        observer.takeRecords();observer.observe(root,{attributes:true,subtree:true});
+        inside.setAttribute('data-state','hidden');equal(observer.takeRecords().length,0,'raw DOM ancestry stops at shadow root');
+        const shadowObserver=new MutationObserver(()=>{});shadowObserver.observe(shadow,{attributes:true,subtree:true});
+        inside.setAttribute('data-state','seen');equal(shadowObserver.takeRecords().length,1,'explicit shadow observation');
+        let removed=document.createElement('em');removed.authorState=91;target.appendChild(removed);childOnly.takeRecords();
+        globalThis.removedNodeRef=new WeakRef(removed);target.removeChild(removed);
+        globalThis.heldRemovedList=childOnly.takeRecords()[0].removedNodes;removed=null;
+        childOnly.disconnect();observer.disconnect();chars.disconnect();shadowObserver.disconnect();
+        target.setAttribute('data-state','disconnected');equal(observer.takeRecords().length,0,'disconnected observer');
+        globalThis.churnMutationGarbage=()=>{for(let i=0;i<50000;i++){const cycle={};cycle.self=cycle;}};
+        "#,
+        r#"for(let i=0;i<4;i++)churnMutationGarbage();"#,
+        r#"
+        equal(heldRemovedList[0].authorState,91,'retained removed NodeList traces its node wrapper');
+        equal(removedNodeRef.deref(),heldRemovedList[0],'removed wrapper identity survives collection');
+        equal(emptyListRefs[0].deref(),heldAttributeRecords[0].addedNodes,'record owns lazy list');
+        globalThis.heldRemovedList=null;globalThis.heldAttributeRecords=null;
+        "#,
+        r#"for(let i=0;i<4;i++)churnMutationGarbage();"#,
+        r#"
+        check(emptyListRefs.every(ref=>ref.deref()===undefined),'unreferenced lazy lists are reclaimable');
+        equal(removedNodeRef.deref(),undefined,'unreferenced removed wrapper is reclaimable');
+        "#,
+    ]);
 }

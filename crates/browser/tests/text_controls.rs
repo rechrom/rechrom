@@ -37,11 +37,9 @@ fn editing_fixture() -> Page {
     let mut space = browser::CreateBrowserConstraints(640, 480);
     space.fonts = vec![layoutng_assembly::internal::layout_input::FontFace {
         family: "sans-serif".into(),
-        bytes: include_bytes!(
-            "../../../assets/fonts/Roboto-Regular.ttf"
-        )
-        .as_slice()
-        .into(),
+        bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
+            .as_slice()
+            .into(),
         ..Default::default()
     }];
     let mut page = Page::Create(

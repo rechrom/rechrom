@@ -38,7 +38,8 @@ impl HTTPURLLoad {
 
 impl URLLoadOperation for HTTPURLLoad {
     fn SetDefer(&mut self, defer: crate::RequestDefer) {
-        self.request.SetPriority(PriorityFor(self.destination, defer));
+        self.request
+            .SetPriority(PriorityFor(self.destination, defer));
     }
     fn Poll(&mut self) -> io::Result<Option<URLResponse>> {
         let Some(response) = self.request.Poll()? else {
@@ -93,13 +94,17 @@ impl HTTPURLStream {
     }
 }
 
-fn PriorityFor(destination: crate::RequestDestination, defer: crate::RequestDefer) -> HTTPRequestPriority {
+fn PriorityFor(
+    destination: crate::RequestDestination,
+    defer: crate::RequestDefer,
+) -> HTTPRequestPriority {
     match destination {
         crate::RequestDestination::kDocument
         | crate::RequestDestination::kStyleSheet
         | crate::RequestDestination::kImage => HTTPRequestPriority::High,
-        crate::RequestDestination::kScript if defer == crate::RequestDefer::None =>
-            HTTPRequestPriority::High,
+        crate::RequestDestination::kScript if defer == crate::RequestDefer::None => {
+            HTTPRequestPriority::High
+        }
         _ => HTTPRequestPriority::Normal,
     }
 }

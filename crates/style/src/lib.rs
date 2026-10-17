@@ -41,6 +41,7 @@ pub mod media_queries;
 pub mod media_value_change;
 pub mod parser;
 pub mod pending_sheet_type;
+mod persistent_invalidation;
 pub mod persistent_selector;
 pub mod post_style_update_scope;
 #[path = "production_border_image_values.rs"]
@@ -96,8 +97,9 @@ pub use media_queries::preferred_color_scheme::PreferredColorScheme;
 pub use media_value_change::MediaValueChange;
 pub use pending_sheet_type::PendingSheetType;
 pub use production_style_sheet_projection::{
-    ParseCSS, ParseCSSDeclarationList, ParseCSSWithBase, ParseUserAgentCSS,
-    ParseUserAgentCSSWithRole,
+    CSSDeclarationMutation, CSSInlineDeclarationMutation, GetInlineCSSDeclaration, ParseCSS,
+    ParseCSSDeclarationList, ParseCSSWithBase, ParseUserAgentCSS, ParseUserAgentCSSWithRole,
+    SetCSSDeclaration, SetInlineCSSDeclaration,
 };
 pub use style_engine::{
     AllowMarkForReattachFromRebuildLayoutTreeScope, AllowMarkStyleDirtyFromRecalcScope,
@@ -108,7 +110,9 @@ pub use style_engine::{
 pub use vision_deficiency::{CreateVisionDeficiencyFilterUrl, VisionDeficiency};
 
 pub mod document_style_engine;
-pub use document_style_engine::{DocumentStyleEngine as StyleEngine, DocumentStyleError};
+pub use document_style_engine::{
+    DocumentStyleEngine as StyleEngine, DocumentStyleError, UserAgentStyleSheetInput,
+};
 #[cfg(test)]
 mod document_style_engine_test;
 #[cfg(test)]

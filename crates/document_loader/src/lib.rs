@@ -4,8 +4,8 @@
 #[cfg(test)]
 extern crate layoutng_replaced;
 
-mod document_loader;
 mod diagnostic_read_ahead;
+mod document_loader;
 mod import_map;
 mod module_resources;
 mod resource_fetcher;

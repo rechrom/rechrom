@@ -262,6 +262,11 @@ impl StyleRecalcChange {
         let Some(style) = B::ElementComputedStyle(element) else {
             return true;
         };
+        self.RecalcContainerQueryDependentStyle(style)
+    }
+    /// Same source predicate for retained owners whose canonical style is
+    /// already available, without reconstructing a foreign DOM Element.
+    pub fn RecalcContainerQueryDependentStyle(&self, style: &ComputedStyle) -> bool {
         (self.RecalcSizeContainerQueryDependent()
             && (style.DependsOnSizeContainerQueries()
                 || style.HighlightPseudoElementStylesDependOnContainerUnits()))

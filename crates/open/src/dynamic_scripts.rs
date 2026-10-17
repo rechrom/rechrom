@@ -47,6 +47,7 @@ pub struct DynamicScriptTasks {
     supports_modules: bool,
     modules: RefCell<Rc<document_loader::ModuleResources>>,
     resources: RefCell<HashMap<u64, ResourceLoader>>,
+    prepared_classic_sources: RefCell<HashMap<u64, io::Result<(String, String)>>>,
     registrations: RefCell<VecDeque<u64>>,
     pending_modules: RefCell<HashSet<u64>>,
     pending_host_errors:
@@ -133,6 +134,7 @@ impl DynamicScriptTasks {
             supports_modules,
             modules: RefCell::new(modules),
             resources: RefCell::new(HashMap::new()),
+            prepared_classic_sources: RefCell::new(HashMap::new()),
             registrations: RefCell::new(VecDeque::new()),
             pending_modules: RefCell::new(HashSet::new()),
             pending_host_errors: RefCell::new(None),
@@ -151,7 +153,9 @@ impl DynamicScriptTasks {
         *self.modules.borrow_mut() = modules;
     }
     pub fn PendingLoads(&self) -> usize {
-        self.resources.borrow().len() + self.pending_modules.borrow().len()
+        self.resources.borrow().len()
+            + self.pending_modules.borrow().len()
+            + self.prepared_classic_sources.borrow().len()
     }
     pub fn SetPendingHostErrors(
         &self,
@@ -274,8 +278,51 @@ impl DynamicScriptTasks {
             .get_mut(&id)
             .is_none_or(|p| p.Poll())
     }
+    // Blink's ScriptLoader uses ClassicPendingScript for both parser and
+    // dynamic external scripts. Loading/compilation gates readiness, while
+    // execution and its checkpoint remain in the original task queue.
+    fn PreparedScriptReady(
+        &self,
+        id: u64,
+        runtime: &mut dyn JavaScriptRuntime,
+        realm: &JavaScriptRealm,
+    ) -> bool {
+        if self.started.borrow().executed.contains(&id) {
+            return true;
+        }
+        if !self.prepared_classic_sources.borrow().contains_key(&id) {
+            if !self.ScriptReady(id) {
+                return false;
+            }
+            let external_classic = {
+                let owner = self.document.borrow();
+                let tree = owner.GetDocument();
+                tree.FindNodeById(id).is_some_and(|index| {
+                    KindFor(tree, index, self.supports_modules) == Kind::Classic
+                        && tree
+                            .Node(index)
+                            .FindAttribute("src")
+                            .is_some_and(|a| !a.value.is_empty())
+                })
+            };
+            if !external_classic {
+                return true;
+            }
+            let source = self.ScriptSource(id);
+            self.prepared_classic_sources
+                .borrow_mut()
+                .insert(id, source);
+        }
+        match self.prepared_classic_sources.borrow().get(&id).unwrap() {
+            Ok((source, name)) => runtime.PrepareClassicScript(realm, source, name),
+            Err(_) => true,
+        }
+    }
     // cpp: browser/browser.cc:1469-1499
     fn ScriptSource(&self, id: u64) -> io::Result<(String, String)> {
+        if let Some(source) = self.prepared_classic_sources.borrow_mut().remove(&id) {
+            return source;
+        }
         let (src, inline) = {
             let owner = self.document.borrow();
             let tree = owner.GetDocument();
@@ -361,6 +408,19 @@ impl DynamicScriptTasks {
                 }
             }
         };
+        let mut trace = browser_tracing::span("javascript", "DynamicScriptExecute");
+        trace.set("script_node", id as f64);
+        trace.set("source_bytes", source.len() as f64);
+        trace.set("module", (kind == Kind::Module) as u8 as f64);
+        browser_tracing::instant_with_text(
+            "javascript",
+            "DynamicScriptSource",
+            &name,
+            &[
+                ("script_node", id as f64),
+                ("source_bytes", source.len() as f64),
+            ],
+        );
         // No Document, service state, Window or client borrow survives Evaluate.
         self.bindings
             .borrow_mut()
@@ -426,13 +486,14 @@ impl DynamicScriptTasks {
             let ready = Rc::downgrade(self);
             let run = Rc::downgrade(self);
             let report = Rc::downgrade(&client);
-            window.borrow_mut().EnqueueTaskWithRuntime(
+            window.borrow_mut().EnqueueTaskWithRuntimeReadiness(
                 Box::new(move |runtime, realm| {
                     let (Some(service), Some(client)) = (run.upgrade(), report.upgrade()) else {
                         return;
                     };
                     if !service.started.borrow_mut().ClaimExecution(id) {
                         service.resources.borrow_mut().remove(&id);
+                        service.prepared_classic_sources.borrow_mut().remove(&id);
                         service.pending_modules.borrow_mut().remove(&id);
                         return;
                     }
@@ -457,11 +518,11 @@ impl DynamicScriptTasks {
                     );
                     service.ReportHostErrors(&client);
                 }),
-                Some(Rc::new(move || {
-                    ready.upgrade().is_none_or(|s| {
-                        s.started.borrow().executed.contains(&id) || s.ScriptReady(id)
-                    })
-                })),
+                Rc::new(move |runtime, realm| {
+                    ready
+                        .upgrade()
+                        .is_none_or(|s| s.PreparedScriptReady(id, runtime, realm))
+                }),
             );
         }
     }

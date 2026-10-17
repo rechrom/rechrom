@@ -30,14 +30,15 @@ impl Page {
             self.processed_compositor_scroll_sequence = sequence;
             return Ok(());
         }
-        self.state.EnsureMeasurement();
+        self.state.EnsureLayoutOutput();
         let range = self
             .state
-            .measurement
+            .layout_engine
             .borrow()
-            .as_ref()
-            .filter(|measurement| measurement.paint.display_item_client_id == owner_client_id)
-            .and_then(|measurement| measurement.paint.scroll_container);
+            .Output()
+            .map(|output| output.Root())
+            .filter(|node| node.PaintClientId() == owner_client_id)
+            .map(|node| node.ScrollRange());
         let Some(range) = range else {
             self.processed_compositor_scroll_sequence = sequence;
             return Ok(());
@@ -65,12 +66,8 @@ impl Page {
         // next delta-bearing main frame waits for this commit to activate,
         // matching the non-overlapping cc main/pending scheduler branch.
         let offset = Offset {
-            x: accumulated
-                .x
-                .clamp(range.minimum_scroll_offset.x, range.maximum_scroll_offset.x),
-            y: accumulated
-                .y
-                .clamp(range.minimum_scroll_offset.y, range.maximum_scroll_offset.y),
+            x: accumulated.x.clamp(range.minimum.x, range.maximum.x),
+            y: accumulated.y.clamp(range.minimum.y, range.maximum.y),
         };
         let mutation = PageMutation::ScrollMutation(page_mutation::ScrollMutation {
             target_node_id,

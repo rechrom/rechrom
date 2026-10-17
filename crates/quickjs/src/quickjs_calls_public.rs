@@ -7,6 +7,9 @@ pub unsafe fn JS_Call(
     argc: i32,
     argv: *mut JSValueConst,
 ) -> JSValue {
+    // Opt-in embedding diagnostics share the existing interrupt-poll sampler.
+    // The guard only snapshots native frames and preserves reentrant scopes.
+    let _stack_profile = js_stack_profile_begin((*ctx).rt, JS_VALUE_GET_PTR(func_obj) as usize, "call");
     JS_CallInternal(
         ctx,
         func_obj,

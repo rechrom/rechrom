@@ -25,7 +25,6 @@ thread_local! {
 }
 
 pub type JsResult<T> = Result<T, Value>;
-pub type Gc<T> = Rc<T>;
 #[derive(Clone, Copy)]
 pub enum SourceType {
     Script,
@@ -56,7 +55,7 @@ pub trait RejectionTracker {
     fn on_rejection(
         &mut self,
         ctx: &mut Context,
-        promise: &Gc<JsObject>,
+        promise: &JsObject,
         reason: &Value,
         handled: bool,
     );
@@ -101,6 +100,58 @@ unsafe fn native_holder_finalizer(_: *mut JSRuntime, value: JSValue) {
         drop(Box::from_raw(opaque));
     }
 }
+// Host-owned edges must be visible to QuickJS's ordinary cycle collector.
+// Each slot owns one raw reference and marks that same reference exactly once.
+// No runtime/context owner is held here: GC must be able to collect the cycle.
+struct TracedObjectData {
+    references: HashMap<u64, JSValue>,
+    list: Vec<JSValue>,
+    on_release: Option<Box<dyn FnOnce()>>,
+}
+static TRACED_OBJECT_CLASS: OnceLock<JSClassID> = OnceLock::new();
+fn traced_object_class() -> JSClassID {
+    *TRACED_OBJECT_CLASS.get_or_init(|| unsafe {
+        let mut id = 0;
+        JS_NewClassID(&mut id);
+        id
+    })
+}
+unsafe fn traced_object_mark(rt: *mut JSRuntime, value: JSValueConst, mark: Option<JS_MarkFunc>) {
+    let data = JS_GetOpaque(value, traced_object_class()).cast::<TracedObjectData>();
+    if let (Some(data), Some(mark)) = (data.as_ref(), mark) {
+        super::bridge_profile::native_gc_work(
+            true,
+            data.references.len() + data.list.len(),
+            data.references.capacity() + data.list.len(),
+        );
+        for &reference in data.references.values().chain(data.list.iter()) {
+            JS_MarkValue(rt, reference, mark);
+        }
+    }
+}
+unsafe fn traced_object_finalizer(rt: *mut JSRuntime, value: JSValue) {
+    let data = JS_GetOpaque(value, traced_object_class()).cast::<TracedObjectData>();
+    if !data.is_null() {
+        JS_SetOpaque(value, ptr::null_mut());
+        let mut data = Box::from_raw(data);
+        super::bridge_profile::native_gc_work(
+            false,
+            data.references.len() + data.list.len(),
+            data.references.capacity() + data.list.len(),
+        );
+        for (_, reference) in data.references.drain() {
+            JS_FreeValueRT(rt, reference);
+        }
+        for reference in data.list.drain(..) {
+            JS_FreeValueRT(rt, reference);
+        }
+        // Internal owner notification only. This callback may enqueue released
+        // identities; it must not execute JS or inspect another owner's heap.
+        if let Some(release) = data.on_release.take() {
+            release();
+        }
+    }
+}
 struct CallbackState {
     owner: Weak<EngineOwner>,
     functions: RefCell<Vec<Weak<NativeHolder>>>,
@@ -121,6 +172,7 @@ struct EngineOwner {
     rt: *mut JSRuntime,
     ctx: *mut JSContext,
     callbacks: *mut CallbackState,
+    gc_target_bytes: Cell<usize>,
 }
 impl Drop for EngineOwner {
     fn drop(&mut self) {
@@ -148,6 +200,14 @@ pub struct OwnedRaw {
     raw: JSValue,
     owner: Rc<EngineOwner>,
 }
+impl Clone for OwnedRaw {
+    fn clone(&self) -> Self {
+        Self {
+            raw: unsafe { JS_DupValueRT(self.owner.rt, self.raw) },
+            owner: self.owner.clone(),
+        }
+    }
+}
 impl Drop for OwnedRaw {
     fn drop(&mut self) {
         unsafe { JS_FreeValueRT(self.owner.rt, self.raw) }
@@ -157,9 +217,10 @@ impl Drop for OwnedRaw {
 pub struct JsString(Rc<OwnedRaw>);
 #[derive(Clone)]
 pub struct JsSymbol(Rc<OwnedRaw>);
-// Gc<JsObject> already supplies shared ownership. Keeping another Rc around
-// its OwnedRaw doubles native argument/result allocation without sharing it
-// independently; release the JS reference with the last outer Gc instead.
+// Public QuickJS values are owned handles. Clone duplicates the engine
+// reference directly; returning or locking an object never allocates a Rust
+// Rc box per handle. Identity remains the engine's object identity.
+#[derive(Clone)]
 pub struct JsObject(OwnedRaw);
 impl JsObject {
     pub(super) fn identity(&self) -> (usize, usize) {
@@ -167,6 +228,39 @@ impl JsObject {
             self.0.owner.rt as usize,
             JS_VALUE_GET_PTR(self.0.raw) as usize,
         )
+    }
+}
+/// A runtime-owned weak identity slot. It never exposes a freed object's
+/// payload: QuickJS retains the tombstone until the last weak slot is dropped.
+/// Acquiring a live slot immediately produces a normal owned JS reference.
+pub(super) struct WeakObject {
+    raw: JSValue,
+    owner: Rc<EngineOwner>,
+}
+impl WeakObject {
+    pub(super) fn new(object: &JsObject) -> Self {
+        let owner = object.0.owner.clone();
+        let raw = unsafe { JS_DupWeakValue(owner.ctx, object.0.raw) };
+        Self { raw, owner }
+    }
+    pub(super) fn upgrade(&self) -> Option<JsObject> {
+        let raw = unsafe { JS_LockWeakValue(self.owner.ctx, self.raw) };
+        if unsafe { JS_IsUndefined(raw) } != 0 {
+            None
+        } else {
+            Some(JsObject(OwnedRaw {
+                raw,
+                owner: self.owner.clone(),
+            }))
+        }
+    }
+    pub(super) fn identity(&self) -> (usize, usize) {
+        (self.owner.rt as usize, JS_VALUE_GET_PTR(self.raw) as usize)
+    }
+}
+impl Drop for WeakObject {
+    fn drop(&mut self) {
+        unsafe { JS_FreeWeakValue(self.owner.rt, self.raw) }
     }
 }
 impl PartialEq for JsObject {
@@ -201,7 +295,7 @@ pub enum Value {
     Int(i32),
     Float(f64),
     Str(JsString),
-    Object(Gc<JsObject>),
+    Object(JsObject),
     Symbol(JsSymbol),
     Other(Rc<OwnedRaw>),
 }
@@ -257,7 +351,7 @@ impl Value {
             None
         }
     }
-    pub fn as_object(&self) -> Option<&Gc<JsObject>> {
+    pub fn as_object(&self) -> Option<&JsObject> {
         if let Self::Object(v) = self {
             Some(v)
         } else {
@@ -306,10 +400,10 @@ impl Value {
             JS_TAG_BOOL => Self::Bool(JS_VALUE_GET_BOOL(raw) != 0),
             JS_TAG_INT => Self::Int(JS_VALUE_GET_INT(raw)),
             JS_TAG_FLOAT64 => Self::Float(JS_VALUE_GET_FLOAT64(raw)),
-            JS_TAG_OBJECT => Self::Object(Rc::new(JsObject(OwnedRaw {
+            JS_TAG_OBJECT => Self::Object(JsObject(OwnedRaw {
                 raw,
                 owner: owner.clone(),
-            }))),
+            })),
             tag => {
                 let owned = Rc::new(OwnedRaw {
                     raw,
@@ -447,6 +541,33 @@ impl Context {
         unsafe { JS_ComputeMemoryUsage(self.owner.rt, &mut usage) };
         usage
     }
+    /// Browser embedders run cycle collection as a background event-loop task.
+    /// Reference counting still releases acyclic values immediately; only the
+    /// stop-the-world cycle scan moves out of author callbacks.
+    pub(super) fn defer_cycle_collection(&self) {
+        unsafe { JS_SetGCThreshold(self.owner.rt, usize::MAX) };
+        self.update_gc_target();
+    }
+
+    pub(super) fn cycle_collection_requested(&self) -> bool {
+        (unsafe { JS_GetAllocatedMemory(self.owner.rt) }) >= self.owner.gc_target_bytes.get()
+    }
+
+    pub(super) fn collect_cycles(&self) {
+        unsafe { JS_RunGC(self.owner.rt) };
+        self.update_gc_target();
+    }
+
+    fn update_gc_target(&self) {
+        let allocated = unsafe { JS_GetAllocatedMemory(self.owner.rt) };
+        // Preserve QuickJS's post-GC 1.5x growth policy. The floor avoids
+        // scheduling collection while a fresh realm installs its built-ins.
+        self.owner.gc_target_bytes.set(
+            allocated
+                .saturating_add(allocated >> 1)
+                .max(8 * 1024 * 1024),
+        );
+    }
     pub fn new() -> Self {
         Self::with_native_stack_budget(1024 * 1024)
     }
@@ -478,6 +599,22 @@ impl Context {
                 0,
                 "host capture class"
             );
+            let traced_class = JSClassDef {
+                class_name: c"BrowserTracedObject".as_ptr(),
+                finalizer: Some(traced_object_finalizer),
+                gc_mark: Some(traced_object_mark),
+                call: None,
+                exotic: ptr::null_mut(),
+            };
+            assert_eq!(
+                JS_NewClass(rt, traced_object_class(), &traced_class),
+                0,
+                "traced host class"
+            );
+            let ordinary = JS_NewObject(ctx);
+            let object_prototype = JS_GetPrototype(ctx, ordinary);
+            JS_FreeValue(ctx, ordinary);
+            JS_SetClassProto(ctx, traced_object_class(), object_prototype);
             let callbacks = Box::into_raw(Box::new(CallbackState {
                 owner: Weak::new(),
                 functions: RefCell::new(Vec::new()),
@@ -494,7 +631,12 @@ impl Context {
                 intrinsics: HashMap::new(),
                 proxy_class: 0,
             }));
-            let owner = Rc::new(EngineOwner { rt, ctx, callbacks });
+            let owner = Rc::new(EngineOwner {
+                rt,
+                ctx,
+                callbacks,
+                gc_target_bytes: Cell::new(usize::MAX),
+            });
             (*callbacks).owner = Rc::downgrade(&owner);
             JS_SetContextOpaque(ctx, callbacks.cast());
             JS_SetModuleEmbeddingHooks(
@@ -606,7 +748,7 @@ impl Context {
             ))
         }
     }
-    pub fn global(&mut self) -> Gc<JsObject> {
+    pub fn global(&mut self) -> JsObject {
         unsafe {
             match self.accept(JS_GetGlobalObject(self.owner.ctx)).unwrap() {
                 Value::Object(o) => o,
@@ -619,7 +761,7 @@ impl Context {
         let key = PropKey::from_string(&self.intern(name));
         self.get_property(&global, &key).unwrap_or(Value::Undefined)
     }
-    pub fn new_object(&mut self) -> Gc<JsObject> {
+    pub fn new_object(&mut self) -> JsObject {
         unsafe {
             match self
                 .accept(JS_NewObject(self.owner.ctx))
@@ -632,7 +774,7 @@ impl Context {
     }
     // Fresh data snapshots use fallible public QuickJS operations. Defining
     // own data properties bypasses inherited setters, including __proto__.
-    pub fn try_new_object(&mut self) -> JsResult<Gc<JsObject>> {
+    pub fn try_new_object(&mut self) -> JsResult<JsObject> {
         unsafe {
             match self.accept(JS_NewObject(self.owner.ctx))? {
                 Value::Object(object) => Ok(object),
@@ -642,7 +784,7 @@ impl Context {
     }
     pub fn define_data_value(
         &mut self,
-        object: &Gc<JsObject>,
+        object: &JsObject,
         name: &str,
         value: Value,
         flags: PropFlags,
@@ -691,7 +833,7 @@ impl Context {
             self.accept(result)
         }
     }
-    pub fn has_property(&mut self, obj: &Gc<JsObject>, key: &PropKey) -> JsResult<bool> {
+    pub fn has_property(&mut self, obj: &JsObject, key: &PropKey) -> JsResult<bool> {
         self.validate_value(&Value::Object(obj.clone()))?;
         let atom = self.key_atom(key)?;
         unsafe {
@@ -730,11 +872,7 @@ impl Context {
         self.to_rust_string(value)
             .unwrap_or_else(|_| format!("{value:?}"))
     }
-    pub fn set_prototype_of(
-        &mut self,
-        obj: &Gc<JsObject>,
-        proto: Option<Gc<JsObject>>,
-    ) -> JsResult<bool> {
+    pub fn set_prototype_of(&mut self, obj: &JsObject, proto: Option<JsObject>) -> JsResult<bool> {
         self.validate_value(&Value::Object(obj.clone()))?;
         if let Some(value) = &proto {
             self.validate_value(&Value::Object(value.clone()))?;
@@ -752,11 +890,11 @@ impl Context {
             }
         }
     }
-    pub fn define_value(&mut self, obj: &Gc<JsObject>, name: &str, value: Value, flags: PropFlags) {
+    pub fn define_value(&mut self, obj: &JsObject, name: &str, value: Value, flags: PropFlags) {
         let key = PropKey::from_string(&self.intern(name));
         self.define_own(obj, key, Property::Data(value, flags));
     }
-    pub fn define_own(&mut self, obj: &Gc<JsObject>, key: PropKey, property: Property) -> bool {
+    pub fn define_own(&mut self, obj: &JsObject, key: PropKey, property: Property) -> bool {
         if self.validate_value(&Value::Object(obj.clone())).is_err() {
             return false;
         }
@@ -801,11 +939,7 @@ impl Context {
             n > 0
         }
     }
-    pub fn new_proxy(
-        &mut self,
-        target: Gc<JsObject>,
-        handler: Gc<JsObject>,
-    ) -> JsResult<Gc<JsObject>> {
+    pub fn new_proxy(&mut self, target: JsObject, handler: JsObject) -> JsResult<JsObject> {
         self.validate_value(&Value::Object(target.clone()))?;
         self.validate_value(&Value::Object(handler.clone()))?;
         unsafe {
@@ -1029,13 +1163,109 @@ impl Context {
     pub fn range_error(&mut self, message: &str) -> Value {
         self.make_error(ErrorKind::Range, message)
     }
+    /// An ordinary object with private, GC-traced native edges. The values in
+    /// those slots are not JS properties and cannot be observed or overwritten
+    /// through reflection. This is the native ownership half of a host wrapper.
+    pub(super) fn new_traced_object(
+        &mut self,
+        on_release: Option<Box<dyn FnOnce()>>,
+    ) -> JsResult<JsObject> {
+        unsafe {
+            let raw = JS_NewObjectClass(self.owner.ctx, traced_object_class() as i32);
+            if JS_IsException(raw) != 0 {
+                return Err(self.take_exception());
+            }
+            JS_SetOpaque(
+                raw,
+                Box::into_raw(Box::new(TracedObjectData {
+                    references: HashMap::new(),
+                    list: Vec::new(),
+                    on_release,
+                }))
+                .cast(),
+            );
+            self.accept(raw)
+                .map(|value| value.as_object().expect("traced object").clone())
+        }
+    }
+    pub(super) fn set_traced_references(
+        &mut self,
+        object: &JsObject,
+        values: &[Value],
+    ) -> JsResult<Vec<Value>> {
+        let object = Value::Object(object.clone()).checked(self)?;
+        // Validate the whole update before acquiring ownership or changing the
+        // old graph. Foreign-realm rejection cannot leave half an edge update.
+        let raw = values
+            .iter()
+            .map(|value| value.checked(self))
+            .collect::<JsResult<Vec<_>>>()?;
+        unsafe {
+            let data = JS_GetOpaque2(self.owner.ctx, object, traced_object_class())
+                .cast::<TracedObjectData>();
+            if data.is_null() {
+                return Err(self.take_exception());
+            }
+            let replacement = raw
+                .into_iter()
+                .map(|value| JS_DupValue(self.owner.ctx, value))
+                .collect();
+            let old = std::mem::replace(&mut (*data).list, replacement);
+            // Transfer removed references to the caller's native stack scope;
+            // a returned HostValue still needs to acquire its JS wrapper.
+            Ok(old
+                .into_iter()
+                .map(|value| Value::take(&self.owner, value))
+                .collect())
+        }
+    }
+    /// Native write barrier for a single named reference slot. Updating one
+    /// child edge never copies an owner's entire child list.
+    pub(super) fn set_traced_reference(
+        &mut self,
+        object: &JsObject,
+        slot: u64,
+        value: Option<&JsObject>,
+    ) -> JsResult<Option<JsObject>> {
+        let raw = Value::Object(object.clone()).checked(self)?;
+        let target = value
+            .map(|value| Value::Object(value.clone()).checked(self))
+            .transpose()?;
+        unsafe {
+            let data = JS_GetOpaque2(self.owner.ctx, raw, traced_object_class())
+                .cast::<TracedObjectData>();
+            if data.is_null() {
+                return Err(self.take_exception());
+            }
+            let old = if let Some(target) = target {
+                (*data)
+                    .references
+                    .insert(slot, JS_DupValue(self.owner.ctx, target))
+            } else {
+                (*data).references.remove(&slot)
+            };
+            Ok(old.map(|value| {
+                Value::take(&self.owner, value)
+                    .as_object()
+                    .expect("native object edge")
+                    .clone()
+            }))
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn collect_garbage(&mut self) {
+        unsafe {
+            JS_RunGC(self.owner.rt);
+        }
+    }
+
     pub fn new_host_function(
         &mut self,
         callable: Rc<dyn HostCallable>,
         data: Vec<Value>,
         name: &str,
         length: u32,
-    ) -> Gc<JsObject> {
+    ) -> JsObject {
         for value in &data {
             value.checked(self).expect("native capture realm");
         }
@@ -1092,7 +1322,7 @@ impl Context {
         name: &str,
         length: u32,
         magic: i32,
-    ) -> Gc<JsObject> {
+    ) -> JsObject {
         self.new_host_function(
             Rc::new(NativeCallback { callback, magic }),
             Vec::new(),
@@ -1152,7 +1382,20 @@ impl Context {
             loop {
                 let mut ctx = ptr::null_mut();
                 let job_started = profile.then(std::time::Instant::now);
+                // Use the same opt-in boundary accounting as callbacks. The
+                // native job owns this scope; a reentrant host call is still
+                // attributed to its enclosing entry. No per-binding spans.
+                let boundary = super::bridge_profile::Measurement::start();
+                let mut boundary_trace = boundary
+                    .as_ref()
+                    .map(|_| browser_tracing::span("javascript", "JobBoundary"));
                 let n = JS_ExecutePendingJob(self.owner.rt, &mut ctx);
+                if let Some(trace) = boundary_trace.as_mut() {
+                    trace.set("executed", (n != 0) as u8 as f64);
+                    trace.set("failed", (n < 0) as u8 as f64);
+                    super::bridge_profile::Measurement::finish(boundary, trace);
+                }
+                drop(boundary_trace);
                 let elapsed = job_started.map(|time| time.elapsed().as_secs_f64() * 1000.0);
                 if n == 0 {
                     break;
@@ -1391,6 +1634,37 @@ impl Context {
             );
         }
         result
+    }
+    pub fn hydrate_classic_script(
+        &mut self,
+        bytes: &[u8],
+        metadata: &JSCompiledSourceMetadata,
+    ) -> JsResult<Value> {
+        unsafe {
+            let raw = JS_ReadObject(
+                self.owner.ctx,
+                bytes.as_ptr(),
+                bytes.len(),
+                JS_READ_OBJ_BYTECODE,
+            );
+            let value = self.accept(raw)?;
+            if JS_VALUE_GET_TAG(value.raw()) != JS_TAG_FUNCTION_BYTECODE {
+                return Err(self.type_error("Compiler output is not a classic script"));
+            }
+            if !JS_ImportCompiledSourceMetadata(self.owner.ctx, value.raw(), metadata) {
+                return Err(self.type_error("Compiler source metadata is unavailable"));
+            }
+            Ok(value)
+        }
+    }
+    pub fn evaluate_classic_script(&mut self, script: &Value) -> JsResult<Value> {
+        script.checked(self)?;
+        unsafe {
+            self.accept(JS_EvalFunction(
+                self.owner.ctx,
+                JS_DupValue(self.owner.ctx, script.raw()),
+            ))
+        }
     }
     /// Hydrate only trusted in-process compiler output on this context owner.
     /// The module remains unresolved and unevaluated, as in CompileModule.
@@ -1860,7 +2134,7 @@ mod tests {
         seen: Rc<RefCell<Vec<String>>>,
     }
     impl RejectionTracker for NestedTracker {
-        fn on_rejection(&mut self, ctx: &mut Context, _: &Gc<JsObject>, reason: &Value, _: bool) {
+        fn on_rejection(&mut self, ctx: &mut Context, _: &JsObject, reason: &Value, _: bool) {
             self.seen
                 .borrow_mut()
                 .push(ctx.to_rust_string(reason).unwrap());
@@ -1983,8 +2257,20 @@ mod tests {
     fn engine_marks_native_capture_values_in_an_unreachable_js_cycle() {
         let count = Rc::new(std::cell::Cell::new(0));
         let mut context = Context::new();
+        let immediate = context.new_object();
+        let weak_immediate = WeakObject::new(&immediate);
+        drop(immediate);
+        assert!(
+            weak_immediate.upgrade().is_none(),
+            "weak slot retained an acyclic object"
+        );
+        drop(weak_immediate);
+        let weak;
         {
             let object = context.new_object();
+            weak = WeakObject::new(&object);
+            assert_eq!(weak.identity(), object.identity());
+            assert!(weak.upgrade().as_ref() == Some(&object));
             let function = context.new_host_function(
                 Rc::new(DropTracked(count.clone())),
                 vec![Value::Object(object.clone())],
@@ -2003,6 +2289,59 @@ mod tests {
             JS_RunGC(context.owner.rt);
         }
         assert_eq!(count.get(), 1);
+        assert!(weak.upgrade().is_none());
+        // A collected slot cannot alias another allocation, and the slot's
+        // runtime ownership also permits release after its Context is dropped.
+        for _ in 0..1000 {
+            drop(context.new_object());
+        }
+        assert!(weak.upgrade().is_none());
+        let released = Rc::new(Cell::new(0));
+        let first = context.new_traced_object(None).unwrap();
+        let count = released.clone();
+        let second = context
+            .new_traced_object(Some(Box::new(move || count.set(count.get() + 1))))
+            .unwrap();
+        let weak_first = WeakObject::new(&first);
+        let weak_second = WeakObject::new(&second);
+        context
+            .set_traced_references(&first, &[Value::Object(second.clone())])
+            .unwrap();
+        context
+            .set_traced_references(&second, &[Value::Object(first.clone())])
+            .unwrap();
+        drop(second);
+        let mut foreign = Context::new();
+        let foreign_object = foreign.new_object();
+        assert!(
+            context
+                .set_traced_references(
+                    &first,
+                    &[Value::Object(first.clone()), Value::Object(foreign_object),]
+                )
+                .is_err(),
+            "foreign realm edge was admitted"
+        );
+        drop(foreign);
+        unsafe {
+            JS_RunGC(context.owner.rt);
+        }
+        assert!(
+            weak_second.upgrade().is_some(),
+            "reachable native edge was dropped"
+        );
+        assert_eq!(released.get(), 0);
+        drop(first);
+        unsafe {
+            JS_RunGC(context.owner.rt);
+        }
+        assert!(weak_first.upgrade().is_none() && weak_second.upgrade().is_none());
+        assert_eq!(released.get(), 1, "native-only cycle was retained");
+        drop(context);
+        assert!(weak.upgrade().is_none());
+        drop(weak);
+        drop(weak_first);
+        drop(weak_second);
     }
 
     #[test]

@@ -51,6 +51,9 @@ fn flat_tree_mutations_revoke_geometry_independently_of_style_equality() {
     let mut owner = dom::DOM::new();
     let d = owner.GetDocumentMut();
     let host = d.CreateElementDefault(DOMNamespace::kHTML, "div".into());
+    // Geometry invalidation belongs to the active document. Detached shadow
+    // construction is covered separately by the retained style pipeline test.
+    d.AppendChild(d.Root(), host);
     d.StyleStateMut().impact = Default::default();
     let before = d.StyleState().measurement_geometry_revision;
     let root = d.AttachShadowRootWithSlotAssignment(

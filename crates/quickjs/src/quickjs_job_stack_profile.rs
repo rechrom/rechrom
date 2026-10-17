@@ -14,6 +14,7 @@ struct JSJobStackProfile {
     runtime: *mut JSRuntime,
     sequence: u64,
     job_func: usize,
+    kind: &'static str,
     started: std::time::Instant,
     next_threshold: usize,
     snapshots: Vec<(f64, String)>,
@@ -42,8 +43,8 @@ impl Drop for JSJobStackProfileGuard {
         use std::io::Write;
         let mut stderr = std::io::stderr().lock();
         let _ = writeln!(stderr,
-            "quickjs-slow-job id={} rt={:p} job_func=0x{:x} execute_ms={elapsed_ms:.3} snapshots={}",
-            profile.sequence, profile.runtime, profile.job_func, profile.snapshots.len());
+            "quickjs-slow-job id={} rt={:p} job_func=0x{:x} execute_ms={elapsed_ms:.3} snapshots={} kind={}",
+            profile.sequence, profile.runtime, profile.job_func, profile.snapshots.len(), profile.kind);
         for (sample_ms, stack) in profile.snapshots {
             let _ = writeln!(stderr,
                 "quickjs-slow-job-stack id={} elapsed_ms={sample_ms:.3} stack={stack:?}",
@@ -56,6 +57,14 @@ fn js_job_stack_profile_begin(
     runtime: *mut JSRuntime,
     job_func: usize,
 ) -> Option<JSJobStackProfileGuard> {
+    js_stack_profile_begin(runtime, job_func, "job")
+}
+
+fn js_stack_profile_begin(
+    runtime: *mut JSRuntime,
+    job_func: usize,
+    kind: &'static str,
+) -> Option<JSJobStackProfileGuard> {
     if !js_job_stack_profile_enabled() {
         return None;
     }
@@ -63,6 +72,7 @@ fn js_job_stack_profile_begin(
         runtime,
         sequence: JS_JOB_STACK_PROFILE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
         job_func,
+        kind,
         started: std::time::Instant::now(),
         next_threshold: 0,
         snapshots: Vec::new(),

@@ -118,7 +118,9 @@ fn validate_mask(item: &DisplayItem) -> Result<(), ReplayUnsupported> {
         return Err(ReplayUnsupported("missing-mask-payload"));
     }
     for (index, layer) in item.mask_layers.iter().enumerate() {
-        if layer.source_error.is_some() { return Err(ReplayUnsupported("unsupported-svg-mask-resource")); }
+        if layer.source_error.is_some() {
+            return Err(ReplayUnsupported("unsupported-svg-mask-resource"));
+        }
         let source_count =
             usize::from(layer.resource_id != 0) + usize::from(layer.paint_shader.is_some());
         let radii = [
@@ -416,7 +418,8 @@ fn rounded_clips_between_in_raster_space(
                 while let Some(current) = transform {
                     let Ok(offset) = crate::geometry::record_plane_transform(&current.matrix)
                         .ok_or(ReplayUnsupported("unsupported-clip-transform-plane"))
-                        .and_then(|matrix| translation(&matrix, scale)) else {
+                        .and_then(|matrix| translation(&matrix, scale))
+                    else {
                         return true;
                     };
                     delta.0 += offset.0;
@@ -438,7 +441,8 @@ fn rounded_clips_between_in_raster_space(
             while let Some(space) = current {
                 match crate::geometry::record_plane_transform(&space.matrix)
                     .ok_or(ReplayUnsupported("unsupported-clip-transform-plane"))
-                    .and_then(|matrix| translation(&matrix, scale)) {
+                    .and_then(|matrix| translation(&matrix, scale))
+                {
                     Ok(offset) => {
                         delta.0 += offset.0;
                         delta.1 += offset.1;
@@ -908,9 +912,15 @@ fn rect_record_pixel_bounds(
 // conservative bounds until their actual path/paint support is available.
 fn decoration_line_bounds(item: &DisplayItem, state: State, scale: f64) -> Option<PaintRect> {
     use layoutng_assembly::internal::layout_input::TextDecorationStyle;
-    if !item.is_text_decoration || item.rect.height != 0.0 || item.blur_radius != 0.0
-        || !item.stroke_width.is_finite() || item.stroke_width < 0.0 || !finite_rect(item.rect)
-    { return None; }
+    if !item.is_text_decoration
+        || item.rect.height != 0.0
+        || item.blur_radius != 0.0
+        || !item.stroke_width.is_finite()
+        || item.stroke_width < 0.0
+        || !finite_rect(item.rect)
+    {
+        return None;
+    }
     let mut rect = item.rect;
     match item.decoration_style {
         TextDecorationStyle::kSolid | TextDecorationStyle::kDouble => {
@@ -929,8 +939,10 @@ fn decoration_line_bounds(item: &DisplayItem, state: State, scale: f64) -> Optio
     }
     let mut rect = mapped_rect(rect, state);
     let fringe = 1.0 / scale;
-    rect.x -= fringe; rect.y -= fringe;
-    rect.width += 2.0 * fringe; rect.height += 2.0 * fringe;
+    rect.x -= fringe;
+    rect.y -= fringe;
+    rect.width += 2.0 * fringe;
+    rect.height += 2.0 * fringe;
     finite_rect(rect).then_some(rect)
 }
 pub fn record_pixel_bounds(
@@ -1068,16 +1080,22 @@ pub fn record_pixel_bounds(
                     })
                 } else if kind == Kind::kStrokeLine {
                     decoration_line_bounds(item, state, scale)
-                } else if kind == Kind::kDrawGlyphRun && item.blur_radius == 0.0
-                    && !item.stroke_glyphs && item.transform == TransformMatrix::default()
+                } else if kind == Kind::kDrawGlyphRun
+                    && item.blur_radius == 0.0
+                    && !item.stroke_glyphs
+                    && item.transform == TransformMatrix::default()
                 {
-                    item.glyph_ink_rect.filter(|rect| finite_rect(*rect)).map(|rect| {
-                        let mut rect = mapped_rect(rect, state);
-                        let fringe = 1.0 / scale;
-                        rect.x -= fringe; rect.y -= fringe;
-                        rect.width += 2.0 * fringe; rect.height += 2.0 * fringe;
-                        rect
-                    })
+                    item.glyph_ink_rect
+                        .filter(|rect| finite_rect(*rect))
+                        .map(|rect| {
+                            let mut rect = mapped_rect(rect, state);
+                            let fringe = 1.0 / scale;
+                            rect.x -= fringe;
+                            rect.y -= fringe;
+                            rect.width += 2.0 * fringe;
+                            rect.height += 2.0 * fringe;
+                            rect
+                        })
                 } else if kind == Kind::kDrawGlyphRun
                     && item.blur_radius > 0.0
                     && finite_rect(item.rect)
@@ -1955,8 +1973,10 @@ fn validate_property_only_update(
             .all(|(a, b)| same_chunk_metadata(a.chunk, b, false) && a.properties == &b.properties)
     {
         browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 1.0)]);
-            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=1"); }
-            return Err(reject);
+        if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+            eprintln!("recording-space-rejected stage=1");
+        }
+        return Err(reject);
     }
     if recording
         .iter()
@@ -1977,8 +1997,10 @@ fn validate_property_only_update(
         || old.scrolls.keys().ne(new.scrolls.keys())
     {
         browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 2.0)]);
-            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=2"); }
-            return Err(reject);
+        if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+            eprintln!("recording-space-rejected stage=2");
+        }
+        return Err(reject);
     }
     let root = PropertyTreeState::default();
     for (&id, a) in &old.transforms {
@@ -1997,17 +2019,23 @@ fn validate_property_only_update(
             })
         {
             browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 3.0)]);
-            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=3"); }
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+                eprintln!("recording-space-rejected stage=3");
+            }
             return Err(reject);
         }
         // PropertyTreeManager carries sticky constraints independently of
         // recorded drawing content. Reuse that content only when the native
         // constraint geometry/topology remains fixed; current offsets may move.
-        let real_sticky = a.sticky_constraint.zip(b.sticky_constraint)
+        let real_sticky = a
+            .sticky_constraint
+            .zip(b.sticky_constraint)
             .is_some_and(|(before, after)| before.same_geometry(&after));
         if a.sticky_constraint != b.sticky_constraint && !real_sticky {
             browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 4.0)]);
-            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=4"); }
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+                eprintln!("recording-space-rejected stage=4");
+            }
             return Err(reject);
         }
         if a.matrix != b.matrix {
@@ -2022,8 +2050,10 @@ fn validate_property_only_update(
                 || translation(&b.matrix, scale).is_err()
             {
                 browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 5.0)]);
-            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=5"); }
-            return Err(reject);
+                if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+                    eprintln!("recording-space-rejected stage=5");
+                }
+                return Err(reject);
             }
         }
     }
@@ -2051,7 +2081,9 @@ fn validate_property_only_update(
             )
         {
             browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 6.0)]);
-            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=6"); }
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+                eprintln!("recording-space-rejected stage=6");
+            }
             return Err(reject);
         }
     }
@@ -2083,7 +2115,9 @@ fn validate_property_only_update(
             })
         {
             browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 7.0)]);
-            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=7"); }
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+                eprintln!("recording-space-rejected stage=7");
+            }
             return Err(reject);
         }
     }
@@ -2104,7 +2138,9 @@ fn validate_property_only_update(
             )
         {
             browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 8.0)]);
-            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=8"); }
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+                eprintln!("recording-space-rejected stage=8");
+            }
             return Err(reject);
         }
     }
@@ -2120,7 +2156,9 @@ fn validate_property_only_update(
         let new = crate::raster_properties(&b.properties).map_err(property_error)?;
         if old != new {
             browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 9.0)]);
-            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=9"); }
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+                eprintln!("recording-space-rejected stage=9");
+            }
             return Err(reject);
         }
         let old_origin = resolved(&old, scale)?.translation;
@@ -2131,7 +2169,9 @@ fn validate_property_only_update(
             .map(|r| pixel_bounds(shift(r, (-new_origin.0, -new_origin.1)), scale));
         if old_clip != new_clip {
             browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 10.0)]);
-            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=10"); }
+            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+                eprintln!("recording-space-rejected stage=10");
+            }
             return Err(reject);
         }
         // The retained raster clip's phase is local to its anchor. Root-space
@@ -2147,9 +2187,15 @@ fn validate_property_only_update(
             let new_shape = removed_clip_bounds(new_node, new_parent)?
                 .map(|r| shift(r, (-new_origin.0, -new_origin.1)));
             if old_shape != new_shape {
-                browser_tracing::instant("layer_tile", "RecordingSpaceRejected", &[("stage", 11.0)]);
-            if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() { eprintln!("recording-space-rejected stage=11"); }
-            return Err(reject);
+                browser_tracing::instant(
+                    "layer_tile",
+                    "RecordingSpaceRejected",
+                    &[("stage", 11.0)],
+                );
+                if std::env::var_os("LAYOUTNG_LAYER_REPLAY_DIAGNOSTICS").is_some() {
+                    eprintln!("recording-space-rejected stage=11");
+                }
+                return Err(reject);
             }
             old_node = old_parent;
             new_node = new_parent;
@@ -2423,16 +2469,36 @@ mod canonical_directory_tests {
             clip_path_is_empty: true,
             ..(*root.clip).clone()
         });
-        let original = PropertyTreeState { clip: clip.clone(), ..root.clone() };
-        assert!(crate::raster_properties(&original).unwrap().clip.lifecycle.same_node(&root.clip.lifecycle));
+        let original = PropertyTreeState {
+            clip: clip.clone(),
+            ..root.clone()
+        };
+        assert!(crate::raster_properties(&original)
+            .unwrap()
+            .clip
+            .lifecycle
+            .same_node(&root.clip.lifecycle));
         let mut failed = (*clip).clone();
         failed.clip_path_error = Some("unsupported-nested-clip".into());
         let failed = Arc::new(failed);
-        let changed = PropertyTreeState { clip: failed.clone(), ..root.clone() };
-        assert!(crate::raster_properties(&changed).unwrap().clip.lifecycle.same_node(&failed.lifecycle));
+        let changed = PropertyTreeState {
+            clip: failed.clone(),
+            ..root.clone()
+        };
+        assert!(crate::raster_properties(&changed)
+            .unwrap()
+            .clip
+            .lifecycle
+            .same_node(&failed.lifecycle));
         assert!(removed_clip_bounds(&failed, &root.clip).is_err());
-        let old = vec![PaintChunk { properties: original, ..Default::default() }];
-        let new = vec![PaintChunk { properties: changed, ..Default::default() }];
+        let old = vec![PaintChunk {
+            properties: original,
+            ..Default::default()
+        }];
+        let new = vec![PaintChunk {
+            properties: changed,
+            ..Default::default()
+        }];
         assert!(validate_property_only_update(RecordingChunks::current(&old), &new, 1.0).is_err());
     }
 
@@ -2568,14 +2634,17 @@ mod canonical_directory_tests {
         let constraint = layoutng_assembly::fragment_tree::StickyPositionPaintData {
             owner_client_id: 1,
             vertical: Some(layoutng_assembly::fragment_tree::StickyAxisPaintData {
-                min_inset: Some(0.0), ..Default::default()
+                min_inset: Some(0.0),
+                ..Default::default()
             }),
             ..Default::default()
         };
         let root_transform = PropertyTreeState::default().transform;
         let source = Arc::new(paint::paint_property_tree::TransformPaintPropertyNode {
-            id: 17, parent: Some(root_transform.clone()),
-            lifecycle: Default::default(), sticky_constraint: Some(constraint),
+            id: 17,
+            parent: Some(root_transform.clone()),
+            lifecycle: Default::default(),
+            sticky_constraint: Some(constraint),
             ..(*root_transform).clone()
         });
         artifact.recorded_properties[0].transform = source.clone();
@@ -2585,15 +2654,33 @@ mod canonical_directory_tests {
         cache.commit();
         let mut moved = (*source).clone();
         moved.matrix.values[13] = 6.0;
-        let axis = moved.sticky_constraint.as_mut().unwrap().vertical.as_mut().unwrap();
+        let axis = moved
+            .sticky_constraint
+            .as_mut()
+            .unwrap()
+            .vertical
+            .as_mut()
+            .unwrap();
         axis.current_sticky_offset = 6.0;
         axis.current_total_sticky_box_offset = 6.0;
         artifact.chunks[0].properties.transform = Arc::new(moved.clone());
-        assert!(Arc::ptr_eq(&sticky_content, &cache.prepare(&artifact, 1.0).unwrap()));
-        moved.sticky_constraint.as_mut().unwrap().vertical.as_mut().unwrap().min_inset = Some(2.0);
+        assert!(Arc::ptr_eq(
+            &sticky_content,
+            &cache.prepare(&artifact, 1.0).unwrap()
+        ));
+        moved
+            .sticky_constraint
+            .as_mut()
+            .unwrap()
+            .vertical
+            .as_mut()
+            .unwrap()
+            .min_inset = Some(2.0);
         artifact.chunks[0].properties.transform = Arc::new(moved);
-        assert_eq!(cache.prepare(&artifact, 1.0).err(),
-            Some(ReplayUnsupported("property-update-changes-recording-space")));
+        assert_eq!(
+            cache.prepare(&artifact, 1.0).err(),
+            Some(ReplayUnsupported("property-update-changes-recording-space"))
+        );
         assert_eq!(
             original[0]
                 .items
@@ -2713,6 +2800,7 @@ fn prepare_raster_content(
     previous: Option<&[RasterRecordContent]>,
     previous_source: Option<&CanonicalSourceSnapshot>,
 ) -> Result<Vec<RasterRecordContent>, ReplayUnsupported> {
+    let properties_trace = browser_tracing::span("layer_tile", "CanonicalRecording.Properties");
     if !scale.is_finite() || scale <= 0.0 || scale as f32 as f64 != scale {
         return Err(ReplayUnsupported("unsupported-raster-scale"));
     }
@@ -2888,6 +2976,8 @@ fn prepare_raster_content(
             expected_effects[index] = effects.clone();
         }
     }
+    drop(properties_trace);
+    let context_trace = browser_tracing::span("layer_tile", "CanonicalRecording.Context");
     let mut owners = vec![None; list.items.len()];
     let mut begins: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     let mut ends: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
@@ -2916,6 +3006,8 @@ fn prepare_raster_content(
                     owners[cursor].is_some() || old.items.get(cursor).is_some_and(|old| old == item)
                 }))
     });
+    drop(context_trace);
+    let validation_trace = browser_tracing::span("layer_tile", "CanonicalRecording.ValidateStream");
     let mut state = State::default();
     let mut stack = Vec::new();
     let mut starts = vec![None; list.display_items.len()];
@@ -3293,6 +3385,8 @@ fn prepare_raster_content(
     {
         return Err(ReplayUnsupported("unbalanced-external-state"));
     }
+    drop(validation_trace);
+    let records_trace = browser_tracing::span("layer_tile", "CanonicalRecording.Records");
     let mut content = Vec::with_capacity(list.display_items.len());
     let mut already_canonical = vec![false; list.display_items.len()];
     for (record_index, record) in list.display_items.iter().enumerate() {
@@ -3659,5 +3753,6 @@ fn prepare_raster_content(
             &record.items,
         );
     }
+    drop(records_trace);
     Ok(content)
 }

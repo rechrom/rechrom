@@ -41,8 +41,11 @@ pub fn MarkScrollPropertyChange(node: &mut FragmentNode, own_changed: bool) {
 
 #[derive(Default)]
 pub struct PrePaintRevisionTracker {
-    inputs: HashMap<Vec<usize>, Input>,
+    // Move stable observation handles between passes, not complete fragments.
+    inputs: HashMap<Vec<usize>, Box<Input>>,
+    spare_inputs: HashMap<Vec<usize>, Box<Input>>,
     owners: HashMap<u64, LiveOwner>,
+    spare_owners: HashMap<u64, LiveOwner>,
 }
 
 struct LiveOwner {
@@ -66,7 +69,9 @@ impl PrePaintRevisionTracker {
 
     pub fn invalidate(&mut self) {
         self.inputs.clear();
+        self.spare_inputs.clear();
         self.owners.clear();
+        self.spare_owners.clear();
     }
 
     /// Mirror the lifecycle validation performed by the real PaintController
@@ -146,11 +151,15 @@ impl PrePaintRevisionTracker {
     /// make this assertion; mutable external inputs default to revision zero.
     pub fn update(&mut self, root: &mut FragmentNode) {
         let generation = next_revision();
-        let mut next = HashMap::with_capacity(self.inputs.len());
+        let mut next = std::mem::take(&mut self.spare_inputs);
+        debug_assert!(next.is_empty());
+        next.reserve(self.inputs.len());
         let mut resource_matches = HashMap::new();
         let mut previous = std::mem::take(&mut self.inputs);
         let mut previous_owners = std::mem::take(&mut self.owners);
-        let mut next_owners = HashMap::with_capacity(previous_owners.len());
+        let mut next_owners = std::mem::take(&mut self.spare_owners);
+        debug_assert!(next_owners.is_empty());
+        next_owners.reserve(previous_owners.len());
         Self::visit(
             root,
             &mut Vec::new(),
@@ -163,14 +172,20 @@ impl PrePaintRevisionTracker {
         );
         self.inputs = next;
         self.owners = next_owners;
+        // Removed fragments/clients retire now. Keep only empty bucket arrays;
+        // no previous observation or weak-owner proof survives in the spares.
+        previous.clear();
+        previous_owners.clear();
+        self.spare_inputs = previous;
+        self.spare_owners = previous_owners;
     }
 
     fn visit(
         node: &mut FragmentNode,
         path: &mut Vec<usize>,
         generation: u64,
-        previous: &mut HashMap<Vec<usize>, Input>,
-        next: &mut HashMap<Vec<usize>, Input>,
+        previous: &mut HashMap<Vec<usize>, Box<Input>>,
+        next: &mut HashMap<Vec<usize>, Box<Input>>,
         resource_matches: &mut HashMap<(usize, usize), bool>,
         previous_owners: &mut HashMap<u64, LiveOwner>,
         next_owners: &mut HashMap<u64, LiveOwner>,
@@ -189,7 +204,10 @@ impl PrePaintRevisionTracker {
             );
             path.pop();
         }
-        let old = previous.remove(path);
+        let (key, old) = match previous.remove_entry(path) {
+            Some((key, old)) => (key, Some(old)),
+            None => (path.clone(), None),
+        };
         let owners_live = retain_owners(&node.paint, previous_owners, next_owners);
         node.pre_paint_owner_retained = owners_live
             && old
@@ -200,17 +218,14 @@ impl PrePaintRevisionTracker {
                 && self_equal(&old.fragment, node)
                 && resources_equal(&old.resources, &node.paint.resources, resource_matches)
         });
-        let children: Vec<_> = node
-            .children
-            .iter()
-            .map(|child| (child.pre_paint_revision, child.pre_paint_subtree_revision))
-            .collect();
+        let children_same = old.as_ref().is_some_and(|old| old.children.iter().copied().eq(
+            node.children.iter().map(|child| (child.pre_paint_revision, child.pre_paint_subtree_revision))));
         node.pre_paint_revision = if self_same {
             old.as_ref().unwrap().fragment.pre_paint_revision
         } else {
             generation
         };
-        node.pre_paint_subtree_revision = if self_same && old.as_ref().unwrap().children == children
+        node.pre_paint_subtree_revision = if self_same && children_same
         {
             old.as_ref().unwrap().fragment.pre_paint_subtree_revision
         } else {
@@ -218,16 +233,25 @@ impl PrePaintRevisionTracker {
         };
         // Keep unchanged shallow payloads, including glyph vectors, rather than
         // cloning them on every layout. No fragment tree ownership is retained.
-        let mut current = if self_same {
-            old.unwrap()
+        let mut current = if let Some(mut old) = old {
+            if !self_same {
+                let children = std::mem::take(&mut old.children);
+                *old = Input::from_fragment(node);
+                old.children = children;
+            }
+            old
         } else {
-            Input::from_fragment(node)
+            Box::new(Input::from_fragment(node))
         };
-        current.children = children;
+        if !children_same {
+            current.children.clear();
+            current.children.extend(node.children.iter().map(|child|
+                (child.pre_paint_revision, child.pre_paint_subtree_revision)));
+        }
         current.fragment.pre_paint_revision = node.pre_paint_revision;
         current.fragment.pre_paint_subtree_revision = node.pre_paint_subtree_revision;
         current.fragment.pre_paint_owner_retained = node.pre_paint_owner_retained;
-        next.insert(path.clone(), current);
+        next.insert(key, current);
     }
 }
 
@@ -236,6 +260,8 @@ impl Input {
         // Exhaustive pattern: a new exported self field cannot accidentally be
         // omitted from the observer without a compiler error here.
         let FragmentNode {
+            // CSSOM-only inline rectangles do not affect paint recording.
+            inline_geometry: _,
             pre_paint_revision: _,
             pre_paint_subtree_revision: _,
             pre_paint_owner_retained: _,
@@ -255,6 +281,7 @@ impl Input {
         let resources = paint.resources.take();
         Self {
             fragment: FragmentNode {
+                inline_geometry: Vec::new(),
                 pre_paint_revision: 0,
                 pre_paint_subtree_revision: 0,
                 pre_paint_owner_retained: false,

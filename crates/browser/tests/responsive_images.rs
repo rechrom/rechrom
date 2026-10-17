@@ -64,9 +64,7 @@ fn lazy_auto_sizes_reselects_from_the_rendered_content_width() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(
-                &assembly,
-            ))),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
             browser::CreateBrowserConstraints(800, 600),
             None,
             None,

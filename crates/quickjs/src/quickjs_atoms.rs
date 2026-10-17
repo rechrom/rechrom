@@ -47,6 +47,12 @@ pub unsafe fn JS_SetMemoryLimit(rt: *mut JSRuntime, limit: usize) {
 pub unsafe fn JS_SetGCThreshold(rt: *mut JSRuntime, threshold: usize) {
     (*rt).malloc_gc_threshold = threshold;
 }
+/// Constant-time allocator accounting for embedders which schedule cycle
+/// collection as a low-priority event-loop task. Unlike
+/// `JS_ComputeMemoryUsage`, this does not walk the heap.
+pub unsafe fn JS_GetAllocatedMemory(rt: *mut JSRuntime) -> usize {
+    (*rt).malloc_ctx.malloc_state.malloc_size
+}
 pub unsafe fn JS_SetInterruptHandler(
     rt: *mut JSRuntime,
     cb: Option<JSInterruptHandler>,

@@ -2,12 +2,15 @@
 
 pub mod engine;
 pub mod resolver;
-pub use resolver::{FontFace, FontUnicodeRange, FontSmoothing};
+pub use resolver::{FontFace, FontSmoothing, FontUnicodeRange};
 pub mod system_fonts;
 mod web_fonts;
-pub use web_fonts::WebFontFace;
-pub use engine::{FontEngine, FontMutation, FontCompute, FontPending, FontError, FontRule, FontFaceState, FontShapeRequest, RetainedShapeResult};
+pub use engine::{
+    FontCompute, FontEngine, FontError, FontFaceState, FontMutation, FontPending, FontRule,
+    FontShapeRequest, RetainedShapeResult,
+};
 pub use system_fonts::*;
+pub use web_fonts::WebFontFace;
 pub mod clip_text_outline;
 pub mod font_family_names;
 pub mod fonts;

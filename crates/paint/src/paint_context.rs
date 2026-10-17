@@ -10,7 +10,9 @@ use crate::paint_engine::{
     RecordedDisplayItem, RecordedDisplayItemKind,
 };
 use crate::paint_property_tree::PropertyTreeState;
-use crate::pre_paint_tree_walk::{EnclosingRectInPropertySpace, MaskAdjustedOpacity, PaintTreeNode};
+use crate::pre_paint_tree_walk::{
+    EnclosingRectInPropertySpace, MaskAdjustedOpacity, PaintTreeNode,
+};
 use crate::PaintRect;
 use layoutng_assembly::internal::layout_input::Offset;
 

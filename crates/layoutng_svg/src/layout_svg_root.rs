@@ -239,8 +239,7 @@ pub fn SvgRootLayout(object: &mut LayoutObject, rect: &PhysicalRect) {
     unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGRoot>() }.LayoutRoot(rect);
 }
 pub fn SvgRootSetContainerSize(object: &mut LayoutObject, size: PhysicalSize) {
-    unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGRoot>() }
-        .SetContainerSize(size);
+    unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGRoot>() }.SetContainerSize(size);
 }
 pub fn QuerySvgRootSizing(object: &LayoutObject) -> SvgRootSizingInfo {
     let root = unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGRoot>() };

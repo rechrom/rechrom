@@ -237,6 +237,15 @@ impl PartialEq for ComputedStyle {
 }
 
 #[allow(non_snake_case)]
+/// Element-specific reattachment facts supplied by the DOM owner. Canonical
+/// style comparisons remain here; no DOM arena or LayoutObject crosses this
+/// style-value boundary.
+pub trait LayoutTreeElement {
+    fn IsHTMLProgressElement(&self) -> bool;
+    fn IsHTMLLegendElement(&self) -> bool;
+    fn SupportsBaseAppearance(&self, appearance: AppearanceValue) -> bool;
+}
+
 impl ComputedStyle {
     // These declarations have no definition in the supplied style sources.
     // cpp: layoutng_style/style/computed_style.h:728
@@ -269,9 +278,24 @@ impl ComputedStyle {
         unsafe { ComputedStyleHighlightPseudoElementStylesDependOnRelativeUnits(self) }
     }
 
-    // cpp: layoutng_style/style/computed_style.h:822
+    // cpp: third_party/blink/renderer/core/style/computed_style.cc:583-611
     pub fn HighlightPseudoElementStylesDependOnContainerUnits(&self) -> bool {
-        unsafe { ComputedStyleHighlightPseudoElementStylesDependOnContainerUnits(self) }
+        let data = self.HighlightData();
+        if [
+            data.Selection(),
+            data.TargetText(),
+            data.SpellingError(),
+            data.GrammarError(),
+        ]
+        .into_iter()
+        .any(|style| {
+            unsafe { style.as_ref() }.is_some_and(|style| style.HasContainerRelativeValue())
+        }) {
+            return true;
+        }
+        data.CustomHighlights()
+            .iter()
+            .any(|(_, style)| unsafe { &*style.Get() }.HasContainerRelativeValue())
     }
 
     // cpp: layoutng_style/style/computed_style.h:823
@@ -321,7 +345,8 @@ impl ComputedStyle {
         field_diff & F::kVisualOverflow.bits() != 0
             || (field_diff & F::kBorderImage.bits() != 0 && !self.BorderVisualOverflowEqual(other))
             || (field_diff & F::kOutline.bits() != 0 && !self.OutlineVisuallyEqual(other))
-            || (field_diff & F::kTextDecoration.bits() != 0 && self.TextDecorationVisualOverflowChanged(other))
+            || (field_diff & F::kTextDecoration.bits() != 0
+                && self.TextDecorationVisualOverflowChanged(other))
     }
 
     // cpp: layoutng_style/style/computed_style.h:2788-2789
@@ -536,16 +561,64 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:419-422
     pub fn NeedsReattachLayoutTree(
-        element: &Element,
+        element: &impl LayoutTreeElement,
         old_style: *const ComputedStyle,
         new_style: *const ComputedStyle,
     ) -> bool {
-        unsafe { ComputedStyleNeedsReattachLayoutTree(element, old_style, new_style) }
+        // cpp: core/style/computed_style.cc:310-389.
+        if old_style == new_style {
+            return false;
+        }
+        let (Some(old), Some(new)) = (unsafe { old_style.as_ref() }, unsafe { new_style.as_ref() })
+        else {
+            return true;
+        };
+        if old.Display() != new.Display()
+            || old.HasPseudoElementStyle(PseudoId::kPseudoIdFirstLetter)
+                != new.HasPseudoElementStyle(PseudoId::kPseudoIdFirstLetter)
+            || !old.ContentDataEquivalent(new)
+            || old.HasTextCombine() != new.HasTextCombine()
+            || !old.ScrollMarkerGroupEqual(new)
+            || old.EffectiveOverscrollContainerType() != new.EffectiveOverscrollContainerType()
+            || old.DisplayLayoutCustomName() != new.DisplayLayoutCustomName()
+        {
+            return true;
+        }
+        if old.HasEffectiveAppearance() != new.HasEffectiveAppearance()
+            && element.IsHTMLProgressElement()
+        {
+            return true;
+        }
+        if element.SupportsBaseAppearance(old.EffectiveAppearance())
+            != element.SupportsBaseAppearance(new.EffectiveAppearance())
+        {
+            return true;
+        }
+        if element.IsHTMLLegendElement()
+            && (old.IsFloating() != new.IsFloating()
+                || old.HasOutOfFlowPosition() != new.HasOutOfFlowPosition())
+        {
+            return true;
+        }
+        if new.HasTextCombine()
+            && old.IsHorizontalTypographicMode() != new.IsHorizontalTypographicMode()
+        {
+            return true;
+        }
+        if new.HasPseudoElementStyle(PseudoId::kPseudoIdFirstLine)
+            && !old.HasPseudoElementStyle(PseudoId::kPseudoIdFirstLine)
+        {
+            return true;
+        }
+        old.Overlay() != new.Overlay() || old.ListStylePosition() != new.ListStylePosition()
     }
 
     // cpp: layoutng_style/style/computed_style.h:424-427
     pub fn NeedsReinsertLayoutTree(old_style: &ComputedStyle, new_style: &ComputedStyle) -> bool {
-        unsafe { ComputedStyleNeedsReinsertLayoutTree(old_style, new_style) }
+        // cpp: core/style/computed_style.cc:392-405.
+        old_style.HasOutOfFlowPosition() != new_style.HasOutOfFlowPosition()
+            || (!new_style.HasOutOfFlowPosition()
+                && old_style.IsFloating() != new_style.IsFloating())
     }
 
     // cpp: layoutng_style/style/computed_style.h:436-438
@@ -636,7 +709,12 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:1603
     pub fn ContentDataEquivalent(&self, other: &ComputedStyle) -> bool {
-        unsafe { ComputedStyleContentDataEquivalent(self, other) }
+        // cpp: core/style/computed_style.h ContentDataEquivalent:1622-1624.
+        match (self.GetContentData(), other.GetContentData()) {
+            (None, None) => true,
+            (Some(a), Some(b)) => std::ptr::eq(a, b) || unsafe { &*a == &*b },
+            _ => false,
+        }
     }
 
     // cpp: layoutng_style/style/computed_style.h:920-922
@@ -2630,8 +2708,10 @@ impl ComputedStyle {
         let previous = other.AppliedTextDecorations();
         current.size() != previous.size()
             || current.iter().zip(previous.iter()).any(|(a, b)| {
-                a.Thickness() != b.Thickness() || a.UnderlineOffset() != b.UnderlineOffset()
-                    || a.Style() != b.Style() || a.Lines() != b.Lines()
+                a.Thickness() != b.Thickness()
+                    || a.UnderlineOffset() != b.UnderlineOffset()
+                    || a.Style() != b.Style()
+                    || a.Lines() != b.Lines()
                     || a.DecorationInset() != b.DecorationInset()
                     || a.BoxDecorationBreak() != b.BoxDecorationBreak()
             })
@@ -4753,10 +4833,6 @@ unsafe extern "Rust" {
     fn ComputedStyleHighlightPseudoElementStylesDependOnRelativeUnits(
         style: &ComputedStyle,
     ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:822
-    fn ComputedStyleHighlightPseudoElementStylesDependOnContainerUnits(
-        style: &ComputedStyle,
-    ) -> bool;
     // cpp: layoutng_style/style/computed_style.h:823
     fn ComputedStyleHighlightPseudoElementStylesHaveVariableReferences(
         style: &ComputedStyle,
@@ -4888,19 +4964,6 @@ unsafe extern "Rust" {
         old_style: *const ComputedStyle,
         new_style: *const ComputedStyle,
     ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:419-422
-    fn ComputedStyleNeedsReattachLayoutTree(
-        element: &Element,
-        old_style: *const ComputedStyle,
-        new_style: *const ComputedStyle,
-    ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:424-427
-    fn ComputedStyleNeedsReinsertLayoutTree(
-        old_style: &ComputedStyle,
-        new_style: &ComputedStyle,
-    ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:1603
-    fn ComputedStyleContentDataEquivalent(style: &ComputedStyle, other: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2362
     fn ComputedStyleBorderObscuresBackground(style: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2363-2365
@@ -5037,6 +5100,91 @@ mod difference_tests {
             ComputedStyleBase::FieldInvalidationDiff(initial(), &independent),
             0
         );
+
+        struct ElementFacts {
+            progress: bool,
+            base: bool,
+        }
+        impl LayoutTreeElement for ElementFacts {
+            fn IsHTMLProgressElement(&self) -> bool {
+                self.progress
+            }
+            fn IsHTMLLegendElement(&self) -> bool {
+                false
+            }
+            fn SupportsBaseAppearance(&self, a: AppearanceValue) -> bool {
+                self.base && a == AppearanceValue::kBase
+            }
+        }
+        let ordinary = ElementFacts {
+            progress: false,
+            base: false,
+        };
+        assert!(!ComputedStyle::NeedsReattachLayoutTree(
+            &ordinary,
+            std::ptr::null(),
+            std::ptr::null()
+        ));
+        assert!(ComputedStyle::NeedsReattachLayoutTree(
+            &ordinary,
+            initial(),
+            std::ptr::null()
+        ));
+        assert!(!ComputedStyle::NeedsReattachLayoutTree(
+            &ordinary,
+            initial(),
+            same
+        ));
+        let width = changed(|b| b.SetWidth(&Length::Fixed(120.0)));
+        assert!(!ComputedStyle::NeedsReattachLayoutTree(
+            &ordinary,
+            initial(),
+            width
+        ));
+        for rebuilt in [
+            changed(|b| b.SetDisplay(EDisplay::kFlex)),
+            changed(|b| b.SetTextCombine(ETextCombine::kAll)),
+            changed(|b| {
+                b.SetPseudoElementStyles(
+                    PseudoIdFlags::from_list(&[PseudoId::kPseudoIdFirstLine]).Bits(),
+                )
+            }),
+            changed(|b| b.SetOverlay(EOverlay::kAuto)),
+            changed(|b| b.SetListStylePosition(foundation::EListStylePosition::kInside)),
+        ] {
+            assert!(ComputedStyle::NeedsReattachLayoutTree(
+                &ordinary,
+                initial(),
+                rebuilt
+            ));
+        }
+        let appearance = changed(|b| b.SetEffectiveAppearance(AppearanceValue::kAuto));
+        assert!(!ComputedStyle::NeedsReattachLayoutTree(
+            &ordinary,
+            initial(),
+            appearance
+        ));
+        assert!(ComputedStyle::NeedsReattachLayoutTree(
+            &ElementFacts {
+                progress: true,
+                base: false
+            },
+            initial(),
+            appearance
+        ));
+        let base = changed(|b| b.SetEffectiveAppearance(AppearanceValue::kBase));
+        assert!(ComputedStyle::NeedsReattachLayoutTree(
+            &ElementFacts {
+                progress: false,
+                base: true
+            },
+            initial(),
+            base
+        ));
+        let relative = changed(|b| b.SetPosition(EPosition::kRelative));
+        let absolute = changed(|b| b.SetPosition(EPosition::kAbsolute));
+        assert!(!ComputedStyle::NeedsReinsertLayoutTree(initial(), relative));
+        assert!(ComputedStyle::NeedsReinsertLayoutTree(initial(), absolute));
     }
 
     #[test]

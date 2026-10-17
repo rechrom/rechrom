@@ -1067,6 +1067,38 @@ fn SvgColor(style: &ComputedStyle, paint: &SVGPaint, opacity: f32) -> Option<Col
 /// Serializes the canonical Chromium ComputedStyle into the immutable paint
 /// payload carried by the exported fragment tree. StyleEngine and Layout do
 /// not maintain a second paint style; this is the single thread boundary.
+// ComputedStyle's coordinate inputs are shared by CSSOM and Paint. Keep this
+// translation in one place; measuring does not resolve shaders/images/effects.
+fn ExportGeometryProperties(style: &ComputedStyle, output: &mut PaintStyleData) {
+    output.transform = Transform(style);
+    output.transform_origin = output.transform.as_ref().map(|_| TransformOrigin(style));
+    output.perspective = style
+        .HasPerspective()
+        .then(|| f64::from(style.UsedPerspective()));
+    output.perspective_origin = PerspectiveOrigin(style);
+    output.preserves_3d = style.Preserves3D();
+    output.has_3d_transform_operation = style.Has3DTransformOperation();
+    output.backface_visibility_hidden = style.BackfaceVisibility() == EBackfaceVisibility::kHidden;
+    output.transform_reference_box = match style.UsedTransformBox(TransformBoxContext::kLayoutBox) {
+        ETransformBox::kContentBox => PaintTransformReferenceBox::kContentBox,
+        ETransformBox::kBorderBox => PaintTransformReferenceBox::kBorderBox,
+        ETransformBox::kFillBox | ETransformBox::kStrokeBox | ETransformBox::kViewBox => {
+            panic!("layout transform-box must be normalized to content-box or border-box")
+        }
+    };
+    output.will_change_transform = style.HasWillChangeAnyTransformProperty();
+}
+
+pub(crate) fn ExportGeometryStyle(
+    style: &ComputedStyle,
+) -> crate::internal::layout_input::PaintStyle {
+    let mut data = PaintStyleData::default();
+    ExportGeometryProperties(style, &mut data);
+    crate::internal::layout_input::PaintStyle {
+        data: Arc::new(data),
+    }
+}
+
 pub fn Export(style: &ComputedStyle, image_resource_id: Option<u64>) -> PaintStyleData {
     let mut output = PaintStyleData::default();
     output.color = StyleColor(style, style.Color());
@@ -1128,23 +1160,7 @@ pub fn Export(style: &ComputedStyle, image_resource_id: Option<u64>) -> PaintSty
     output.z_index = (!style.HasAutoZIndex()).then(|| style.ZIndex());
     output.blend_mode = BlendValue(style.GetBlendMode());
     output.isolate_blending = style.Isolation() == EIsolation::kIsolate;
-    output.transform = Transform(style);
-    output.transform_origin = output.transform.as_ref().map(|_| TransformOrigin(style));
-    output.perspective = style
-        .HasPerspective()
-        .then(|| f64::from(style.UsedPerspective()));
-    output.perspective_origin = PerspectiveOrigin(style);
-    output.preserves_3d = style.Preserves3D();
-    output.has_3d_transform_operation = style.Has3DTransformOperation();
-    output.backface_visibility_hidden = style.BackfaceVisibility() == EBackfaceVisibility::kHidden;
-    output.transform_reference_box = match style.UsedTransformBox(TransformBoxContext::kLayoutBox) {
-        ETransformBox::kContentBox => PaintTransformReferenceBox::kContentBox,
-        ETransformBox::kBorderBox => PaintTransformReferenceBox::kBorderBox,
-        ETransformBox::kFillBox | ETransformBox::kStrokeBox | ETransformBox::kViewBox => {
-            panic!("layout transform-box must be normalized to content-box or border-box")
-        }
-    };
-    output.will_change_transform = style.HasWillChangeAnyTransformProperty();
+    ExportGeometryProperties(style, &mut output);
     output.clip_path = clip_path_export::ExportClipPath(style);
     output.svg_fill = SvgColor(style, style.FillPaint(), style.FillOpacity());
     output.svg_stroke = SvgColor(style, style.StrokePaint(), style.StrokeOpacity());
