@@ -3252,9 +3252,35 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     }
                 })
         };
-        let selection_rect = editing
+        let control_selection = editing
             .and_then(|state| state.selection)
             .and_then(range_rect);
+        let document_selection = (!text_clip
+            && fragment.paint.text_control_host.is_none()
+            && !fragment.paint.style.user_select_none)
+            .then(|| self.context.borrow().document_selection)
+            .flatten()
+            .and_then(|selection| {
+                if selection.Collapsed() {
+                    return None;
+                }
+                let (start, end) = selection.Ordered();
+                let order = fragment.paint.logical_tree_order;
+                if order < start.tree_order || order > end.tree_order {
+                    return None;
+                }
+                let mut range_start = fragment.text_start?;
+                let mut range_end = fragment.text_end?;
+                if order == start.tree_order {
+                    range_start = range_start.max(start.offset);
+                }
+                if order == end.tree_order {
+                    range_end = range_end.min(end.offset);
+                }
+                (range_start < range_end).then_some((range_start, range_end))
+            })
+            .and_then(range_rect);
+        let selection_rect = control_selection.or(document_selection);
         if let Some(rect) = selection_rect {
             self.context.borrow_mut().Append(
                 DisplayItem {

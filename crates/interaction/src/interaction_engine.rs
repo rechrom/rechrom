@@ -12,6 +12,7 @@ use dom::{
     InteractionStateMutation, UserInteractionState,
 };
 use layoutng_assembly::{
+    editing_state::{DocumentSelection, DocumentSelectionPosition, SelectionState},
     fragment_tree::FragmentNode,
     internal::layout_input::{Display, Offset},
 };
@@ -385,6 +386,88 @@ fn ControlPoint(
     }
     None
 }
+
+fn TextPositionAtPoint(
+    fragment: &FragmentNode,
+    point: Offset,
+    require_inside: bool,
+) -> Option<DocumentSelectionPosition> {
+    fn visit(
+        fragment: &FragmentNode,
+        point: Offset,
+        parent: Offset,
+        root_point: Offset,
+        require_inside: bool,
+        best: &mut Option<(f64, f64, DocumentSelectionPosition)>,
+    ) {
+        let Some((point, absolute, inside)) = HitGeometry(fragment, point, parent) else {
+            return;
+        };
+        if matches!(
+            fragment.kind,
+            layoutng_assembly::fragment_tree::FragmentKind::kText
+                | layoutng_assembly::fragment_tree::FragmentKind::kGeneratedText
+        ) && fragment.paint.text_control_host.is_none()
+            && fragment.paint.style.visible
+            && !fragment.paint.style.user_select_none
+            && !fragment.paint.text_caret_positions.is_empty()
+            && (!require_inside || inside)
+        {
+            let dy = (absolute.y - point.y)
+                .max(0.0)
+                .max(point.y - absolute.y - fragment.size.height);
+            if let Some(&(offset, x)) = fragment
+                .paint
+                .text_caret_positions
+                .iter()
+                .min_by(|(_, a), (_, b)| {
+                    (absolute.x + *a - point.x)
+                        .abs()
+                        .total_cmp(&(absolute.x + *b - point.x).abs())
+                })
+            {
+                let dx = (absolute.x + x - point.x).abs();
+                let candidate = DocumentSelectionPosition {
+                    tree_order: fragment.paint.logical_tree_order,
+                    node_id: fragment.node_id,
+                    offset,
+                };
+                if best
+                    .as_ref()
+                    .is_none_or(|(old_dy, old_dx, _)| (dy, dx) < (*old_dy, *old_dx))
+                {
+                    *best = Some((dy, dx, candidate));
+                }
+            }
+        }
+        for child in fragment.children.iter().rev() {
+            let (child_point, child_parent) = if child.paint.fixed_to_view {
+                (root_point, Offset::default())
+            } else {
+                (point, ChildOrigin(fragment, absolute))
+            };
+            visit(
+                child,
+                child_point,
+                child_parent,
+                root_point,
+                require_inside,
+                best,
+            );
+        }
+    }
+
+    let mut best = None;
+    visit(
+        fragment,
+        point,
+        Offset::default(),
+        point,
+        require_inside,
+        &mut best,
+    );
+    best.map(|(_, _, position)| position)
+}
 // cpp: interaction/interaction_engine.cc:38-45
 fn EventElement(document: &InteractionDocument, target: Option<u64>) -> Option<u64> {
     let owner = document.borrow();
@@ -543,8 +626,15 @@ pub struct Interaction<'a> {
     listeners: Rc<RefCell<Option<EventListenerDispatcher<'a>>>>,
     state: Rc<RefCell<InteractionState>>,
     editor: Rc<TextEditor>,
-    selection_drag: Rc<Cell<Option<u64>>>,
+    selections: Rc<SelectionState>,
+    selection_drag: Rc<Cell<Option<SelectionDrag>>>,
     submitting_forms: Rc<RefCell<Vec<u64>>>,
+}
+
+#[derive(Clone, Copy)]
+enum SelectionDrag {
+    TextControl(u64),
+    Document(DocumentSelectionPosition),
 }
 // cpp: interaction/interaction_engine.cc:149-161
 struct EmitStateMutationAtExit {
@@ -576,11 +666,13 @@ impl<'a> Interaction<'a> {
         listeners: Option<EventListenerDispatcher<'a>>,
         selections: Rc<layoutng_assembly::editing_state::SelectionState>,
     ) -> Self {
+        let editor = Rc::new(TextEditor::WithSelectionState(selections.clone()));
         Self {
             emit,
             listeners: Rc::new(RefCell::new(listeners)),
             state: Rc::new(RefCell::new(InteractionState::default())),
-            editor: Rc::new(TextEditor::WithSelectionState(selections)),
+            editor,
+            selections,
             selection_drag: Rc::new(Cell::new(None)),
             submitting_forms: Rc::new(RefCell::new(Vec::new())),
         }
@@ -611,6 +703,7 @@ impl<'a> Interaction<'a> {
             listeners: Rc::new(RefCell::new(Some(listeners))),
             state: self.state.clone(),
             editor: self.editor.clone(),
+            selections: self.selections.clone(),
             selection_drag: self.selection_drag.clone(),
             submitting_forms: self.submitting_forms.clone(),
         }
@@ -845,7 +938,9 @@ impl<'a> Interaction<'a> {
                             && v.button == MouseButton::kPrimary
                             && self.State().focused_node_id == Some(control)
                         {
-                            self.selection_drag.set(Some(control));
+                            self.selection_drag
+                                .set(Some(SelectionDrag::TextControl(control)));
+                            self.selections.SetDocument(None);
                             self.PlaceCaretAtPoint(
                                 document,
                                 fragments,
@@ -856,14 +951,39 @@ impl<'a> Interaction<'a> {
                         }
                     }
                 }
+                if v.button == MouseButton::kPrimary && self.selection_drag.get().is_none() {
+                    if let Some(anchor) =
+                        TextPositionAtPoint(fragments, LayoutPoint(fragments, v.position), true)
+                    {
+                        self.selection_drag
+                            .set(Some(SelectionDrag::Document(anchor)));
+                        self.selections.SetDocument(Some(DocumentSelection {
+                            anchor,
+                            focus: anchor,
+                        }));
+                    }
+                }
             }
             if v.r#type == MouseEventType::kMove && !result.default_prevented {
-                if let Some(control) = self
-                    .selection_drag
-                    .get()
-                    .filter(|id| Some(*id) == self.State().focused_node_id)
-                {
-                    self.PlaceCaretAtPoint(document, fragments, control, v.position, true);
+                match self.selection_drag.get() {
+                    Some(SelectionDrag::TextControl(control))
+                        if Some(control) == self.State().focused_node_id =>
+                    {
+                        self.PlaceCaretAtPoint(document, fragments, control, v.position, true);
+                    }
+                    Some(SelectionDrag::Document(anchor)) => {
+                        if let Some(focus) = TextPositionAtPoint(
+                            fragments,
+                            LayoutPoint(fragments, v.position),
+                            false,
+                        ) {
+                            self.selections.SetDocument(Some(DocumentSelection {
+                                anchor,
+                                focus,
+                            }));
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

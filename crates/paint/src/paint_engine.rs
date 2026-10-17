@@ -546,6 +546,7 @@ pub struct RecordedDisplayItem {
 }
 
 pub use layoutng_assembly::caret::CaretPaintState as CaretPosition;
+pub use layoutng_assembly::editing_state::EditingPaintState;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CaretGeometry {
     pub node_id: u64,
@@ -1213,7 +1214,10 @@ pub fn PaintWithCaretAndCapacity(
     RecordPaint(
         &mut PrePaintTreeWalk::default(),
         fragments,
-        caret,
+        EditingPaintState {
+            caret,
+            document_selection: None,
+        },
         item_capacity,
         display_item_capacity,
         chunk_capacity,
@@ -1224,7 +1228,7 @@ pub fn PaintWithCaretAndCapacity(
 fn RecordPaint(
     pre_paint: &mut PrePaintTreeWalk,
     fragments: &FragmentNode,
-    caret: Option<CaretPosition>,
+    editing: EditingPaintState,
     item_capacity: usize,
     display_item_capacity: usize,
     chunk_capacity: usize,
@@ -1265,14 +1269,14 @@ fn RecordPaint(
             .iter()
             .find_map(|child| caret_owner(child, id))
     }
-    let caret_local_rect = caret.and_then(|state| {
+    let caret_local_rect = editing.caret.and_then(|state| {
         layoutng_assembly::caret::geometry::TextControlCaretRect(
             caret_owner(fragments, state.node_id)?,
             state.offset,
             state.empty,
         )
     });
-    let mut paint_context = PaintContext::WithCaret(&mut output, caret);
+    let mut paint_context = PaintContext::WithEditing(&mut output, editing);
     paint_context.caret_local_rect = caret_local_rect;
     let context = RefCell::new(paint_context);
     context
@@ -1352,12 +1356,12 @@ impl PaintEngine {
     /// Update resident properties and record a new artifact. Publish only once
     /// this pass completes; a failed paint cannot expose the previous result
     /// as if it represented the new inputs.
-    pub fn Paint(&mut self, layout_result: &FragmentNode, caret: Option<CaretPosition>) {
+    pub fn Paint(&mut self, layout_result: &FragmentNode, editing: EditingPaintState) {
         let mut trace = browser_tracing::span("paint", "PaintEngine.Paint");
         let capacities = self.paint_result.take().map_or((0, 0, 0), |old| {
             (old.items.len(), old.display_items.len(), old.chunks.len())
         });
-        if caret.is_some() {
+        if editing.caret.is_some() || editing.document_selection.is_some() {
             self.pre_paint.ResetScrollRecordingBasis();
         }
         self.pre_paint.PrepareScrollRecordingBasis(layout_result);
@@ -1365,7 +1369,7 @@ impl PaintEngine {
         let mut result = RecordPaint(
             &mut self.pre_paint,
             layout_result,
-            caret,
+            editing,
             capacities.0,
             capacities.1,
             capacities.2,
@@ -1392,7 +1396,7 @@ impl PaintEngine {
                 result = RecordPaint(
                     &mut self.pre_paint,
                     layout_result,
-                    caret,
+                    editing,
                     capacities.0,
                     capacities.1,
                     capacities.2,

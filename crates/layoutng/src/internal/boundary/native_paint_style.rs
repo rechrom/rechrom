@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use foundation::{
     BlendMode, EBackfaceVisibility, EBorderStyle, EImageRendering, EIsolation, EObjectFit,
-    EPointerEvents, EShapeRendering, ETransformBox, EVectorEffect, EVisibility, Length, LineCap,
-    LineJoin, TransformOperationType, TranslateTransformOperation, WindRule,
+    EPointerEvents, EShapeRendering, ETransformBox, EUserSelect, EVectorEffect, EVisibility, Length,
+    LineCap, LineJoin, TransformOperationType, TranslateTransformOperation, WindRule,
 };
 use layoutng_style::style::{
     border_image_length::BorderImageLength,
@@ -1156,6 +1156,7 @@ pub fn Export(style: &ComputedStyle, image_resource_id: Option<u64>) -> PaintSty
     output.opacity = style.Opacity();
     output.visible = style.Visibility() == EVisibility::kVisible;
     output.pointer_events_none = style.PointerEvents() == EPointerEvents::kNone;
+    output.user_select_none = style.UsedUserSelect() == EUserSelect::kNone;
     output.cursor = style.Cursor();
     output.z_index = (!style.HasAutoZIndex()).then(|| style.ZIndex());
     output.blend_mode = BlendValue(style.GetBlendMode());

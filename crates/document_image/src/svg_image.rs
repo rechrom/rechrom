@@ -788,7 +788,7 @@ impl SVGDocumentAnimation {
             .engine
             .TakeLayoutResult()
             .ok_or_else(|| io::Error::other("animated SVG layout produced no fragments"))?;
-        self.paint_engine.Paint(&fragments, None);
+        self.paint_engine.Paint(&fragments, Default::default());
         let artifact = self
             .paint_engine
             .GetPaintResult()

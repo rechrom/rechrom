@@ -827,7 +827,7 @@ impl PageState {
                 }
                 paint.Paint(
                     &frame.fragments,
-                    self.layout_editing.caret.borrow().paint_state(),
+                    self.layout_editing.PaintState(),
                 );
                 paint.CommitPaintResult(|artifact| {
                     CommitPaint(
@@ -2790,7 +2790,7 @@ impl Page {
             trace.set("full_paint", 1.0);
             self.state.paint_engine.borrow_mut().Paint(
                 &fragments,
-                self.state.layout_editing.caret.borrow().paint_state(),
+                self.state.layout_editing.PaintState(),
             );
             let document_image_requirements = self
                 .state
@@ -2808,7 +2808,7 @@ impl Page {
                 // variants arrive so every display item names its exact key.
                 self.state.paint_engine.borrow_mut().Paint(
                     &fragments,
-                    self.state.layout_editing.caret.borrow().paint_state(),
+                    self.state.layout_editing.PaintState(),
                 );
             }
             let mut paint = self.state.paint_engine.borrow_mut();

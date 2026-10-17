@@ -2957,7 +2957,11 @@ fn ExportInlineItem(
                 ExportListMarkerSymbol(item, &mut output.paint);
                 ExportGlyphRuns(item, &mut output.paint);
             }
-            if purpose == LayoutUpdateKind::Paint && output.paint.text_control_host.is_some() {
+            // SelectionController and FrameCaret use the same shaped caret
+            // boundaries. Export them for ordinary document text as well as
+            // text controls so Interaction can hit-test a range and Paint can
+            // highlight it without reaching back into LayoutObject.
+            if purpose == LayoutUpdateKind::Paint {
                 let text = item.Text(fragment_items);
                 let view = item.TextShapeResult();
                 let shape = (!view.is_null()).then(|| unsafe { &*view }.CreateShapeResult());

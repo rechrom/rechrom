@@ -1449,6 +1449,8 @@ pub struct PaintStyleData {
     pub visible: bool,
     /// Inherited CSS pointer-events; HTML hit testing ignores only `none`.
     pub pointer_events_none: bool,
+    /// Used user-select value needed by text-position hit testing and selection paint.
+    pub user_select_none: bool,
     pub cursor: ECursor,
     pub z_index: Option<i32>,
     pub transform_origin: Option<PaintTransformOrigin>,
@@ -1549,6 +1551,7 @@ impl Default for PaintStyleData {
             opacity: 1.0,
             visible: true,
             pointer_events_none: false,
+            user_select_none: false,
             cursor: ECursor::kAuto,
             z_index: None,
             transform_origin: None,

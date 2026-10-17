@@ -141,6 +141,8 @@ pub fn CalculateRectKnownToBeOpaqueForRecord(
 pub struct PaintContext<'o> {
     output: &'o mut PaintArtifact,
     pub(crate) caret: Option<crate::paint_engine::CaretPosition>,
+    pub(crate) document_selection:
+        Option<layoutng_assembly::editing_state::DocumentSelection>,
     pub(crate) caret_local_rect: Option<layoutng_assembly::caret::geometry::LocalCaretRect>,
     chunker: PaintChunker,
     drawing_recorder: Option<(
@@ -164,6 +166,22 @@ impl<'o> PaintContext<'o> {
         Self {
             output,
             caret: None,
+            document_selection: None,
+            caret_local_rect: None,
+            chunker: PaintChunker::default(),
+            drawing_recorder: None,
+            next_property_id: 1,
+        }
+    }
+
+    pub(crate) fn WithEditing(
+        output: &'o mut PaintArtifact,
+        editing: crate::paint_engine::EditingPaintState,
+    ) -> Self {
+        Self {
+            output,
+            caret: editing.caret,
+            document_selection: editing.document_selection,
             caret_local_rect: None,
             chunker: PaintChunker::default(),
             drawing_recorder: None,
@@ -175,14 +193,13 @@ impl<'o> PaintContext<'o> {
         output: &'o mut PaintArtifact,
         caret: Option<crate::paint_engine::CaretPosition>,
     ) -> Self {
-        Self {
+        Self::WithEditing(
             output,
-            caret,
-            caret_local_rect: None,
-            chunker: PaintChunker::default(),
-            drawing_recorder: None,
-            next_property_id: 1,
-        }
+            crate::paint_engine::EditingPaintState {
+                caret,
+                document_selection: None,
+            },
+        )
     }
     pub(crate) fn SetCaretGeometry(&mut self, geometry: crate::paint_engine::CaretGeometry) {
         self.output.caret = Some(geometry);

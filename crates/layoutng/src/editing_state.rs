@@ -1,7 +1,7 @@
 //! Persistent layout-owned editing state. Interaction writes logical positions;
 //! layout/paint consume them without taking ownership of the editor commands.
 #![allow(non_snake_case)]
-use crate::caret::{FrameCaret, TextCaret};
+use crate::caret::{CaretPaintState, FrameCaret, TextCaret};
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -13,6 +13,36 @@ use std::{
 pub struct Selection {
     pub anchor: usize,
     pub focus: usize,
+}
+
+/// A DOM-text boundary expressed in the immutable layout output.  The tree
+/// order is exported by LayoutNG, so Interaction and Paint can compare text
+/// positions without retaining or snapshotting the DOM/LayoutObject tree.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DocumentSelectionPosition {
+    pub tree_order: u64,
+    pub node_id: u64,
+    pub offset: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DocumentSelection {
+    pub anchor: DocumentSelectionPosition,
+    pub focus: DocumentSelectionPosition,
+}
+
+impl DocumentSelection {
+    pub fn Collapsed(&self) -> bool {
+        self.anchor == self.focus
+    }
+
+    pub fn Ordered(&self) -> (DocumentSelectionPosition, DocumentSelectionPosition) {
+        if self.anchor <= self.focus {
+            (self.anchor, self.focus)
+        } else {
+            (self.focus, self.anchor)
+        }
+    }
 }
 impl Selection {
     pub fn Start(&self) -> usize {
@@ -29,6 +59,7 @@ impl Selection {
 pub struct SelectionState {
     selections: RefCell<HashMap<u64, Selection>>,
     compositions: RefCell<HashMap<u64, Selection>>,
+    document: Cell<Option<DocumentSelection>>,
     revision: Cell<u64>,
 }
 impl SelectionState {
@@ -55,6 +86,15 @@ impl SelectionState {
             compositions.remove(&id);
         }
         self.revision.set(self.revision.get().wrapping_add(1));
+    }
+    pub fn Document(&self) -> Option<DocumentSelection> {
+        self.document.get()
+    }
+    pub fn SetDocument(&self, selection: Option<DocumentSelection>) {
+        if self.Document() != selection {
+            self.document.set(selection);
+            self.revision.set(self.revision.get().wrapping_add(1));
+        }
     }
     pub fn Revision(&self) -> u64 {
         self.revision.get()
@@ -97,6 +137,20 @@ impl SelectionState {
 pub struct LayoutEditingState {
     pub selections: Rc<SelectionState>,
     pub caret: RefCell<FrameCaret>,
+}
+impl LayoutEditingState {
+    pub fn PaintState(&self) -> EditingPaintState {
+        EditingPaintState {
+            caret: self.caret.borrow().paint_state(),
+            document_selection: self.selections.Document(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EditingPaintState {
+    pub caret: Option<CaretPaintState>,
+    pub document_selection: Option<DocumentSelection>,
 }
 
 /// Clamp stale/script/native offsets without slicing into a Unicode code point.
