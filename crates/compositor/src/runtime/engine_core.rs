@@ -618,6 +618,30 @@ impl NativeEngineCore {
         drop(query);
         scheduler.NotifyReadyToCommit(None, self);
     }
+
+    // Source: cc/trees/proxy_impl.cc:309-326. A main frame which applied
+    // compositor deltas but produced no new PaintArtifact still has to finish
+    // its Proxy transaction so SyncedProperty can retire the reflected slot.
+    pub(crate) fn FinishMainFrameWithoutUpdates(&mut self, scheduler: &mut Scheduler) {
+        assert!(self.awaiting_main);
+        let next_bmf = self.HasReadyCommit();
+        let args = scheduler.last_dispatched_begin_main_frame_args().clone();
+        self.host.as_mut().unwrap().BeginMainFrameAborted(
+            crate::cc::scheduler::commit_earlyout_reason::CommitEarlyOutReason::kFinishedNoUpdates,
+            Vec::new(),
+            &args,
+            next_bmf,
+            true,
+            &mut ClientHostContext {
+                services: &mut self.services,
+            },
+        );
+        self.awaiting_main = false;
+        scheduler.BeginMainFrameAborted(
+            crate::cc::scheduler::commit_earlyout_reason::CommitEarlyOutReason::kFinishedNoUpdates,
+            self,
+        );
+    }
 }
 
 impl Drop for NativeEngineCore {

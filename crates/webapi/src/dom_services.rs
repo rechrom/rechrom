@@ -614,6 +614,11 @@ impl DOMJavaScriptBindings {
             "isTrusted" => HostValue::Boolean(event.trusted),
             "defaultPrevented" => HostValue::Boolean(event.default_prevented),
             "key" => HostValue::String(event.key.clone()),
+            "code" => HostValue::String(event.code.clone()),
+            "location" => HostValue::Number(event.key_location as f64),
+            "keyCode" | "which" => HostValue::Number(event.key_code as f64),
+            "charCode" => HostValue::Number(event.char_code as f64),
+            "isComposing" => HostValue::Boolean(event.is_composing),
             "data" => HostValue::String(event.text.clone()),
             "inputType" => HostValue::String(event.input_type.clone()),
             "button" => HostValue::Number(match event.button {

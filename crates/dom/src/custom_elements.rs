@@ -436,7 +436,11 @@ impl PersistentDocument {
             // this element, including pre-constructor attribute/connected work.
             self.custom_elements.reactions.remove(&element);
         }
-        self.InvalidateNodeStyle(element);
+        // cpp: CustomElementDefinition::Upgrade / Element::PseudoStateChanged.
+        // Completing an upgrade changes :defined on this element. Treating it
+        // as an unknown node mutation widens any sibling selector in the
+        // document to the element's complete parent subtree.
+        self.RecordDefinedStyleChange(element);
     }
 
     pub(crate) fn CustomElementAttributeWillChange(

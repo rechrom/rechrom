@@ -1,0 +1,51 @@
+source	start	end	status	mapping
+components/viz/service/display/draw_polygon.h	1	21	language-mapping	module/imports
+components/viz/service/display/draw_polygon.h	22	76	language-mapping	DrawPolygon fields, API, Rust Drop and index handle
+components/viz/service/display/draw_polygon.h	77	80	language-mapping	module boundary
+components/viz/service/display/draw_polygon.cc	1	19	language-mapping	imports/module
+components/viz/service/display/draw_polygon.cc	20	34	translated	thresholds and point_interpolate
+components/viz/service/display/draw_polygon.cc	35	38	language-mapping	namespace
+components/viz/service/display/draw_polygon.cc	39	40	language-mapping	Default
+components/viz/service/display/draw_polygon.cc	41	56	translated	from_points
+components/viz/service/display/draw_polygon.cc	57	85	translated	new clipped-quad constructor
+components/viz/service/display/draw_polygon.cc	86	87	language-mapping	Rust Drop
+components/viz/service/display/draw_polygon.cc	88	99	translated	create_copy
+components/viz/service/display/draw_polygon.cc	100	125	translated	construct_normal
+components/viz/service/display/draw_polygon.cc	126	134	translated	recompute_normal_for_testing (available all targets)
+components/viz/service/display/draw_polygon.cc	135	138	translated	signed_point_distance
+components/viz/service/display/draw_polygon.cc	139	156	translated	apply_transform_to_normal
+components/viz/service/display/draw_polygon.cc	157	161	translated	apply_transform
+components/viz/service/display/draw_polygon.cc	162	170	translated	transform_to_screen_space
+components/viz/service/display/draw_polygon.cc	171	180	translated	transform_to_layer_space
+components/viz/service/display/draw_polygon.cc	181	235	translated	split_polygon distances and non-splitting cases
+components/viz/service/display/draw_polygon.cc	236	289	translated	split_polygon intersections
+components/viz/service/display/draw_polygon.cc	290	320	translated	split_polygon output
+components/viz/service/display/draw_polygon.cc	321	352	translated	to_quads_2d
+components/viz/service/display/draw_polygon.cc	353	354	language-mapping	module boundary
+components/viz/service/display/bsp_tree.h	1	20	language-mapping	imports/module
+components/viz/service/display/bsp_tree.h	21	34	translated	BspNode
+components/viz/service/display/bsp_tree.h	35	51	translated	BspTree ownership and traversal API
+components/viz/service/display/bsp_tree.h	52	52	language-mapping	unused FromList declaration has no C++ definition
+components/viz/service/display/bsp_tree.h	53	58	translated	build_tree and action dispatch declarations
+components/viz/service/display/bsp_tree.h	59	112	translated	walk and FnMut dispatch
+components/viz/service/display/bsp_tree.h	113	116	translated	get_camera_position_relative
+components/viz/service/display/bsp_tree.h	117	120	language-mapping	module boundary
+components/viz/service/display/bsp_tree.cc	1	17	language-mapping	imports/module
+components/viz/service/display/bsp_tree.cc	18	19	translated	BspNode::new
+components/viz/service/display/bsp_tree.cc	20	21	language-mapping	Rust Drop
+components/viz/service/display/bsp_tree.cc	22	29	translated	BspTree::new
+components/viz/service/display/bsp_tree.cc	30	31	language-mapping	Rust Drop
+components/viz/service/display/bsp_tree.cc	32	80	translated	build_tree
+components/viz/service/display/bsp_tree.cc	81	89	translated	get_camera_position_relative
+components/viz/service/display/bsp_tree.cc	90	91	language-mapping	module boundary
+components/viz/service/display/bsp_walk_action.h	1	19	language-mapping	imports/module
+components/viz/service/display/bsp_walk_action.h	20	23	translated	BspWalkAction capability trait
+components/viz/service/display/bsp_walk_action.h	24	39	translated	BspWalkActionDrawPolygon and private PolygonDrawBackend
+components/viz/service/display/bsp_walk_action.h	40	49	translated	BspWalkActionToVector borrowed collection
+components/viz/service/display/bsp_walk_action.h	50	51	language-mapping	module boundary
+components/viz/service/display/bsp_walk_action.cc	1	16	language-mapping	imports/module
+components/viz/service/display/bsp_walk_action.cc	17	23	translated	BspWalkActionDrawPolygon::new
+components/viz/service/display/bsp_walk_action.cc	24	40	translated	draw action inverse, degenerate skip, draw
+components/viz/service/display/bsp_walk_action.cc	41	44	translated	BspWalkActionToVector::new
+components/viz/service/display/bsp_walk_action.cc	45	48	translated	BspWalkActionToVector::call
+components/viz/service/display/bsp_walk_action.cc	49	50	language-mapping	module boundary

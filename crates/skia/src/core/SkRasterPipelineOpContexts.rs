@@ -11,6 +11,8 @@ pub mod SkRasterPipelineContexts {
         pub tile_mode_x: SpreadMode,
         pub tile_mode_y: SpreadMode,
         pub round_down_at_integer: bool,
+        /// Rounded-out CPU image subset, expressed in original image pixels.
+        pub source_subset: Option<[f32; 4]>,
         pub inv_width: f32,
         pub inv_height: f32,
     }

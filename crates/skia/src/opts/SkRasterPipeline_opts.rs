@@ -1079,6 +1079,13 @@ pub mod SK_OPTS_NS {
             x = (x.to_u32x8_bitcast() + u32x8::splat(u32::MAX)).to_f32x8_bitcast();
             y = (y.to_u32x8_bitcast() + u32x8::splat(u32::MAX)).to_f32x8_bitcast();
         }
+        // Source: SkBitmapDevice.cpp:478-498. This is the gather domain of
+        // extractSubset(roundOut(src)), with the original row stride retained.
+        // Clamp each filtered tap, rather than its pre-filter center coordinate.
+        if let Some([left, top, right, bottom]) = ctx.source_subset {
+            x = x.max(f32x8::splat(left)).min(f32x8::splat(ulp_sub(right)));
+            y = y.max(f32x8::splat(top)).min(f32x8::splat(ulp_sub(bottom)));
+        }
         let ix = gather_ix(pixmap, x, y);
         load_8888(pixmap.format, &pixmap.gather(ix), r, g, b, a);
         *r = (r.to_u32x8_bitcast() & mask).to_f32x8_bitcast();

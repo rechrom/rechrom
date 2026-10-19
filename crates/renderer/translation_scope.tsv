@@ -1,0 +1,7 @@
+source_base	commit	h_lines	cc_lines	rust_file	owner
+components/viz/service/display/direct_renderer	6c1d401fcca5e1b0030563a90c2f2bba168e0c15	454	1334	src/components/viz/service/display/direct_renderer.rs	renderer_direct
+components/viz/service/display/draw_polygon	6c1d401fcca5e1b0030563a90c2f2bba168e0c15	80	354	src/components/viz/service/display/draw_polygon.rs	renderer_geometry
+components/viz/service/display/bsp_tree	6c1d401fcca5e1b0030563a90c2f2bba168e0c15	120	91	src/components/viz/service/display/bsp_tree.rs	renderer_geometry
+components/viz/service/display/bsp_walk_action	6c1d401fcca5e1b0030563a90c2f2bba168e0c15	51	50	src/components/viz/service/display/bsp_walk_action.rs	renderer_geometry
+components/viz/service/display/render_pass_alpha_type	6c1d401fcca5e1b0030563a90c2f2bba168e0c15	28	0	src/components/viz/service/display/render_pass_alpha_type.rs	root
+components/viz/common/display/renderer_settings	6c1d401fcca5e1b0030563a90c2f2bba168e0c15	93	15	src/components/viz/common/display/renderer_settings.rs	root

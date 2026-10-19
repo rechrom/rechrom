@@ -25,8 +25,15 @@ pub enum StyleChange {
     AttributeValue(usize),
     /// TextControlElement::UpdatePlaceholderVisibility changed its pseudo state.
     PlaceholderShown(usize),
+    /// A character-data mutation toggled the parent's `:empty` state without
+    /// changing its element-child sequence. Chromium carries this distinction
+    /// in ChildrenChange::affects_elements.
+    EmptyState(usize),
     /// Element::UpdateDirectionalityAndDescendant changed the cached direction.
     Directionality(usize),
+    /// CustomElementDefinition::Upgrade changed the element's `:defined`
+    /// pseudo state. Constructor DOM mutations are recorded independently.
+    Defined(usize),
     /// Form association/group observers notify a specific pseudo, without
     /// changing this control's attributes or every sibling selector input.
     ControlPseudo(usize, ControlPseudoState),

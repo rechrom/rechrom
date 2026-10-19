@@ -360,6 +360,9 @@ pub(crate) struct SavedFrame {
     pub(crate) state: MCRec,
     pub(crate) layer: Option<(Pixmap, f32, Option<crate::cpu::f16_surface::Surface>)>,
     pub(crate) filters: Vec<crate::cpu::layer_filters::RenderSurfaceFilter>,
+    // SkCanvas::SaveLayerRec::fFilters are independent image-filter branches.
+    // A Paint image filter remains the ordinary single ordered chain above.
+    pub(crate) filter_branches: Option<Vec<Vec<crate::cpu::layer_filters::RenderSurfaceFilter>>>,
     pub(crate) layer_origin: (i32, i32),
     pub(crate) parent_opaque: bool,
     pub(crate) blend_mode: PaintBlendMode,
@@ -694,6 +697,7 @@ impl SkCanvas {
             state: self.state.clone(),
             layer: None,
             filters: Vec::new(),
+            filter_branches: None,
             layer_origin: (0, 0),
             parent_opaque: self.known_opaque,
             blend_mode: PaintBlendMode::kNormal,
@@ -833,6 +837,154 @@ impl SkCanvas {
             .expect("native saveLayer device")
             .native_blend_mode = Some(blend);
     }
+
+    /// CPU device implementation of SkCanvas::SaveLayerRec with fFilters and
+    /// fBackdrop. Each fFilters entry consumes the same immutable layer input;
+    /// backdrop filtering initializes the child from the prior device before
+    /// subsequent drawing begins.
+    pub fn save_layer_with_native_filter_branches(
+        &mut self,
+        item: &DrawCommand,
+        mut branches: Vec<Vec<crate::cpu::layer_filters::RenderSurfaceFilter>>,
+        mut backdrop: Vec<crate::cpu::layer_filters::RenderSurfaceFilter>,
+        backdrop_bounds: Option<PaintRect>,
+        blend: crate::BlendMode,
+    ) {
+        if branches.is_empty() {
+            branches.push(Vec::new());
+        }
+        // Allocation must cover the required input of every independent
+        // branch and of the backdrop. Flattening only over-allocates; replay
+        // below retains the independent-branch semantics.
+        let allocation_filters = branches
+            .iter()
+            .chain(std::iter::once(&backdrop))
+            .flatten()
+            .cloned()
+            .collect();
+        self.save_layer_device(item, false, allocation_filters);
+        let origin = self
+            .stack
+            .last()
+            .expect("native filtered saveLayer device")
+            .layer_origin;
+        let parent_transform = self
+            .stack
+            .last()
+            .expect("native filtered saveLayer device")
+            .state
+            .transform;
+        for branch in &mut branches {
+            Self::adjust_filter_origins(branch, origin.0, origin.1);
+        }
+        Self::adjust_filter_origins(&mut backdrop, origin.0, origin.1);
+
+        if !backdrop.is_empty() {
+            let (parent_width, parent_height, parent_format, parent_pixels) = {
+                let frame = self.stack.last().expect("native backdrop frame");
+                let parent = &frame.layer.as_ref().expect("native backdrop layer").0;
+                (
+                    parent.width(),
+                    parent.height(),
+                    parent.format,
+                    parent.data(),
+                )
+            };
+            let child_format = self.pixmap.format;
+            let child_width = self.pixmap.width();
+            let child_height = self.pixmap.height();
+            for y in 0..child_height as i32 {
+                let parent_y = y + origin.1;
+                if parent_y < 0 || parent_y >= parent_height as i32 {
+                    continue;
+                }
+                let child_left = (-origin.0).max(0) as usize;
+                let child_right = (child_width as i32)
+                    .min(parent_width as i32 - origin.0)
+                    .max(0) as usize;
+                if child_left >= child_right {
+                    continue;
+                }
+                let src = (parent_y as usize * parent_width as usize
+                    + (origin.0 + child_left as i32) as usize)
+                    * 4;
+                let dst = (y as usize * child_width as usize + child_left) * 4;
+                let bytes = (child_right - child_left) * 4;
+                let source = &parent_pixels[src..src + bytes];
+                let destination = &mut self.pixmap.data_mut()[dst..dst + bytes];
+                // Source: third_party/skia/src/core/SkCanvas.cpp:378-383;
+                // SkBitmapDevice.cpp:353-355; SkPixmap.cpp:174-189.
+                // readPixels converts source pixels to the requested info. The isolated
+                // filter device uses canonical RGBA storage; the parent may
+                // be BGRA/BGRX. Equal color layouts can copy bytes, while
+                // differing layouts must decode/encode their actual types.
+                if child_format == parent_format {
+                    let copied = crate::src::core::SkConvertPixels::copy_same_info_pixels(
+                        destination,
+                        source,
+                    );
+                    debug_assert!(copied);
+                } else {
+                    for (output, input) in
+                        destination.chunks_exact_mut(4).zip(source.chunks_exact(4))
+                    {
+                        let rgba = parent_format.decode(input.try_into().unwrap());
+                        output.copy_from_slice(&child_format.encode(rgba));
+                    }
+                }
+            }
+            for filter in &backdrop {
+                let width = self.pixmap.width();
+                let height = self.pixmap.height();
+                let ok = crate::cpu::layer_filters::apply_rgba(
+                    self.pixmap.data_mut(),
+                    width,
+                    height,
+                    filter,
+                );
+                debug_assert!(ok);
+            }
+            // cc::SaveLayerFiltersOp wraps a crop around only the backdrop
+            // filter. The saveLayer itself deliberately receives no bounds.
+            if let Some(bounds) = backdrop_bounds {
+                let transformed = rect(bounds)
+                    .and_then(|bounds| bounds.transform(parent_transform))
+                    .and_then(|bounds| {
+                        crate::raster::IntRect::from_ltrb(
+                            bounds.left().floor() as i32 - origin.0,
+                            bounds.top().floor() as i32 - origin.1,
+                            bounds.right().ceil() as i32 - origin.0,
+                            bounds.bottom().ceil() as i32 - origin.1,
+                        )
+                    });
+                let width = self.pixmap.width() as usize;
+                for (y, row) in self
+                    .pixmap
+                    .data_mut()
+                    .chunks_exact_mut(width * 4)
+                    .enumerate()
+                {
+                    for (x, pixel) in row.chunks_exact_mut(4).enumerate() {
+                        if !transformed.is_some_and(|bounds| {
+                            x as i32 >= bounds.left()
+                                && (x as i32) < bounds.right()
+                                && y as i32 >= bounds.top()
+                                && (y as i32) < bounds.bottom()
+                        }) {
+                            pixel.fill(0);
+                        }
+                    }
+                }
+            }
+        }
+        let frame = self
+            .stack
+            .last_mut()
+            .expect("native filtered saveLayer frame");
+        frame.filters.clear();
+        frame.filter_branches = Some(branches);
+        frame.native_blend_mode = Some(blend);
+    }
     pub fn save_layer_with_filters(
         &mut self,
         item: &DrawCommand,
@@ -855,6 +1007,45 @@ impl SkCanvas {
                 graph,
             )],
         );
+    }
+
+    fn adjust_filter_origins(
+        filters: &mut [crate::cpu::layer_filters::RenderSurfaceFilter],
+        left: i32,
+        top: i32,
+    ) {
+        // SVG/filter regions are expressed in the owning device space while
+        // the isolated saveLayer stores pixels relative to its allocation.
+        for filter in filters {
+            if let crate::cpu::layer_filters::RenderSurfaceFilter::AlphaThreshold {
+                local_to_device,
+                ..
+            } = filter
+            {
+                local_to_device[4] -= left as f32;
+                local_to_device[5] -= top as f32;
+            } else if let crate::cpu::layer_filters::RenderSurfaceFilter::SvgGraph(graph) = filter {
+                graph.region[0] -= left as f32;
+                graph.region[1] -= top as f32;
+                for primitive in &mut graph.primitives {
+                    primitive.region[0] -= left as f32;
+                    primitive.region[1] -= top as f32;
+                }
+            } else if let crate::cpu::layer_filters::RenderSurfaceFilter::BoxReflect {
+                matrix,
+                mask,
+            } = filter
+            {
+                let ox = left as f32;
+                let oy = top as f32;
+                matrix[4] += matrix[0] * ox + matrix[2] * oy - ox;
+                matrix[5] += matrix[1] * ox + matrix[3] * oy - oy;
+                if let Some(mask) = mask {
+                    mask.local_to_device[4] -= ox;
+                    mask.local_to_device[5] -= oy;
+                }
+            }
+        }
     }
 
     fn save_layer_device(
@@ -945,42 +1136,7 @@ impl SkCanvas {
         }
         let (left, top, width, height) =
             bounds.map_or((0, 0, 1, 1), |b| (b.left(), b.top(), b.width(), b.height()));
-        // SVG filter regions are expressed in the owning device space while
-        // the isolated saveLayer stores pixels relative to its allocation.
-        // Translate every graph region by the actual layer origin before the
-        // CPU graph executor clips its intermediate surfaces.
-        for filter in &mut filters {
-            if let crate::cpu::layer_filters::RenderSurfaceFilter::AlphaThreshold {
-                local_to_device,
-                ..
-            } = filter
-            {
-                local_to_device[4] -= left as f32;
-                local_to_device[5] -= top as f32;
-            } else if let crate::cpu::layer_filters::RenderSurfaceFilter::SvgGraph(graph) = filter {
-                graph.region[0] -= left as f32;
-                graph.region[1] -= top as f32;
-                for primitive in &mut graph.primitives {
-                    primitive.region[0] -= left as f32;
-                    primitive.region[1] -= top as f32;
-                }
-            } else if let crate::cpu::layer_filters::RenderSurfaceFilter::BoxReflect {
-                matrix,
-                mask,
-            } = filter
-            {
-                // The filter matrix was built in parent-device coordinates;
-                // saveLayer storage is translated to its allocation origin.
-                let ox = left as f32;
-                let oy = top as f32;
-                matrix[4] += matrix[0] * ox + matrix[2] * oy - ox;
-                matrix[5] += matrix[1] * ox + matrix[3] * oy - oy;
-                if let Some(mask) = mask {
-                    mask.local_to_device[4] -= ox;
-                    mask.local_to_device[5] -= oy;
-                }
-            }
-        }
+        Self::adjust_filter_origins(&mut filters, left, top);
         let child = cleared_layer_pixmap(width, height);
         let parent = std::mem::replace(&mut self.pixmap, child);
         let previous = self.f16_surface.take();
@@ -993,6 +1149,7 @@ impl SkCanvas {
             state: self.state.clone(),
             layer: Some((parent, item.opacity.clamp(0.0, 1.0), previous)),
             filters,
+            filter_branches: None,
             layer_origin: (left, top),
             parent_opaque: self.known_opaque,
             blend_mode: item.blend_mode,
@@ -1058,7 +1215,7 @@ impl SkCanvas {
             return;
         }
         if let Some(frame) = self.stack.pop() {
-            if let Some((parent, opacity, mut previous)) = frame.layer {
+            if let Some((parent, mut opacity, mut previous)) = frame.layer {
                 #[cfg(feature = "profiling")]
                 let layer_started =
                     std::env::var_os("SKIA_TRACE_LAYERS").map(|_| std::time::Instant::now());
@@ -1070,16 +1227,79 @@ impl SkCanvas {
                     self.pixmap.height(),
                     frame.filters.len(),
                 );
-                for filter in &frame.filters {
-                    let width = self.pixmap.width();
-                    let height = self.pixmap.height();
-                    let ok = crate::cpu::layer_filters::apply_rgba(
-                        self.pixmap.data_mut(),
-                        width,
-                        height,
-                        filter,
-                    );
-                    debug_assert!(ok);
+                if let Some(branches) = &frame.filter_branches {
+                    if branches.len() == 1 {
+                        for filter in &branches[0] {
+                            let width = self.pixmap.width();
+                            let height = self.pixmap.height();
+                            let ok = crate::cpu::layer_filters::apply_rgba(
+                                self.pixmap.data_mut(),
+                                width,
+                                height,
+                                filter,
+                            );
+                            debug_assert!(ok);
+                        }
+                    } else {
+                        // SkCanvas draws each fFilters result independently
+                        // from the same layer source. SrcOver is associative,
+                        // so pre-compose those branches over transparent and
+                        // restore the resulting group once onto the parent.
+                        debug_assert!(frame
+                            .native_blend_mode
+                            .is_none_or(|mode| { mode == crate::BlendMode::kSrcOver }));
+                        let original = self.pixmap.clone();
+                        self.pixmap.data_mut().fill(0);
+                        let format = self.pixmap.format;
+                        let width = self.pixmap.width() as usize;
+                        for branch in branches {
+                            let mut filtered = original.clone();
+                            for filter in branch {
+                                let filter_width = filtered.width();
+                                let filter_height = filtered.height();
+                                let ok = crate::cpu::layer_filters::apply_rgba(
+                                    filtered.data_mut(),
+                                    filter_width,
+                                    filter_height,
+                                    filter,
+                                );
+                                debug_assert!(ok);
+                            }
+                            if opacity != 1.0 {
+                                for channel in filtered.data_mut() {
+                                    *channel = (f32::from(*channel) * opacity)
+                                        .round_ties_even()
+                                        .clamp(0.0, 255.0)
+                                        as u8;
+                                }
+                            }
+                            for (destination, source) in self
+                                .pixmap
+                                .data_mut()
+                                .chunks_exact_mut(width * 4)
+                                .zip(filtered.data().chunks_exact(width * 4))
+                            {
+                                crate::src::opts::SkBlitRow_opts::blit_row_s32a_opaque(
+                                    destination,
+                                    source,
+                                    format,
+                                );
+                            }
+                        }
+                        opacity = 1.0;
+                    }
+                } else {
+                    for filter in &frame.filters {
+                        let width = self.pixmap.width();
+                        let height = self.pixmap.height();
+                        let ok = crate::cpu::layer_filters::apply_rgba(
+                            self.pixmap.data_mut(),
+                            width,
+                            height,
+                            filter,
+                        );
+                        debug_assert!(ok);
+                    }
                 }
                 #[cfg(feature = "profiling")]
                 let blur_elapsed = layer_started.map(|started| started.elapsed());
@@ -1415,6 +1635,67 @@ impl SkCanvas {
             antialias,
         );
     }
+    /// Source: third_party/skia/src/core/SkBitmapDevice.cpp:419-543.
+    /// CPU drawImageRect with kStrict_SrcRectConstraint. The source rect keeps
+    /// its fractional mapping; each sample clamps to its rounded-out subset.
+    /// Source pixels remain borrowed and keep their original allocation/stride.
+    pub fn draw_premultiplied_image_strict(
+        &mut self,
+        image: crate::raster::PixmapRef<'_>,
+        source: PaintRect,
+        destination: PaintRect,
+        quality: FilterQuality,
+        opacity: f32,
+        blend: crate::BlendMode,
+        antialias: bool,
+    ) {
+        if rect(destination).is_none() || rect(source).is_none() {
+            return;
+        }
+        let left = (source.x as f32).max(0.);
+        let top = (source.y as f32).max(0.);
+        let right = ((source.x + source.width) as f32).min(image.width() as f32);
+        let bottom = ((source.y + source.height) as f32).min(image.height() as f32);
+        if ![left, top, right, bottom].iter().all(|v| v.is_finite())
+            || right <= left
+            || bottom <= top
+        {
+            return;
+        }
+        let sx = (destination.width / source.width) as f32;
+        let sy = (destination.height / source.height) as f32;
+        let tx = destination.x as f32 - source.x as f32 * sx;
+        let ty = destination.y as f32 - source.y as f32 * sy;
+        let mapping = Transform::from_row(sx, 0., 0., sy, tx, ty);
+        let clipped_destination = if left == source.x as f32
+            && top == source.y as f32
+            && right == (source.x + source.width) as f32
+            && bottom == (source.y + source.height) as f32
+        {
+            destination
+        } else {
+            let x = left * sx + tx;
+            let y = top * sy + ty;
+            PaintRect {
+                x: x as f64,
+                y: y as f64,
+                width: (right * sx + tx - x) as f64,
+                height: (bottom * sy + ty - y) as f64,
+            }
+        };
+        self.draw_premultiplied_image_shader_subset(
+            image,
+            mapping,
+            clipped_destination,
+            SpreadMode::Pad,
+            quality,
+            opacity,
+            blend,
+            antialias,
+            Some([left.floor(), top.floor(), right.ceil(), bottom.ceil()]),
+        );
+    }
+
     /// Native image-shader draw used by the source backdrop mirror crop. The
     /// caller supplies its actual image mapping; Skia owns tiling/sampling.
     pub fn draw_premultiplied_image_shader(
@@ -1428,14 +1709,42 @@ impl SkCanvas {
         blend: crate::BlendMode,
         antialias: bool,
     ) {
-        if self.try_fast_image_blit(
+        self.draw_premultiplied_image_shader_subset(
             image,
             image_to_local,
             bounds,
+            tile_mode,
+            quality,
             opacity,
             blend,
             antialias,
-        ) {
+            None,
+        );
+    }
+    fn draw_premultiplied_image_shader_subset(
+        &mut self,
+        image: crate::raster::PixmapRef<'_>,
+        image_to_local: Transform,
+        bounds: PaintRect,
+        tile_mode: SpreadMode,
+        quality: FilterQuality,
+        opacity: f32,
+        blend: crate::BlendMode,
+        antialias: bool,
+        source_subset: Option<[f32; 4]>,
+    ) {
+        // A strict sprite must preserve the exact source sampling domain.
+        let matrix = self.state.transform.pre_concat(image_to_local);
+        let strict_sprite_compatible = source_subset.is_none()
+            || (matrix.sx == 1.
+                && matrix.sy == 1.
+                && matrix.kx == 0.
+                && matrix.ky == 0.
+                && matrix.tx == matrix.tx.trunc()
+                && matrix.ty == matrix.ty.trunc());
+        if strict_sprite_compatible
+            && self.try_fast_image_blit(image, image_to_local, bounds, opacity, blend, antialias)
+        {
             self.known_opaque = false;
             return;
         }
@@ -1443,7 +1752,19 @@ impl SkCanvas {
             return;
         };
         let paint = Paint {
-            shader: Pattern::new(image, tile_mode, quality, opacity, image_to_local),
+            shader: match source_subset {
+                Some(subset) => {
+                    Pattern::new_native_subset(image, subset, quality, opacity, image_to_local)
+                }
+                None => Pattern::new_native(
+                    image,
+                    tile_mode,
+                    tile_mode,
+                    quality,
+                    opacity,
+                    image_to_local,
+                ),
+            },
             blend_mode: blend,
             anti_alias: antialias,
             ..Paint::default()
@@ -1463,7 +1784,11 @@ impl SkCanvas {
             bounds,
             &paint,
             self.state.transform,
-            if use_mask { self.state.clip.as_deref() } else { None },
+            if use_mask {
+                self.state.clip.as_deref()
+            } else {
+                None
+            },
         );
         self.known_opaque = false;
     }
@@ -1484,9 +1809,13 @@ impl SkCanvas {
         if antialias
             || opacity != 1.
             || !matches!(blend, crate::BlendMode::kSrc | crate::BlendMode::kSrcOver)
-            || image.format != self.pixmap.format
-            || self.state.clip.is_some()
         {
+            return false;
+        }
+        if image.format != self.pixmap.format {
+            return false;
+        }
+        if self.state.clip.is_some() {
             return false;
         }
         let matrix = self.state.transform.pre_concat(image_to_local);
@@ -1500,15 +1829,15 @@ impl SkCanvas {
         let Some(local_bounds) = rect(bounds) else {
             return true;
         };
-        let Some(mut device) = local_bounds.transform(self.state.transform).and_then(|r| r.round_out()) else {
+        let Some(mut device) = local_bounds
+            .transform(self.state.transform)
+            .and_then(|r| r.round_out())
+        else {
             return true;
         };
-        let Some(canvas) = crate::raster::IntRect::from_xywh(
-            0,
-            0,
-            self.pixmap.width(),
-            self.pixmap.height(),
-        ) else {
+        let Some(canvas) =
+            crate::raster::IntRect::from_xywh(0, 0, self.pixmap.width(), self.pixmap.height())
+        else {
             return true;
         };
         let Some(clipped) = device.intersect(&canvas) else {
@@ -1526,8 +1855,7 @@ impl SkCanvas {
         }
         let origin_x = matrix.tx.round() as i32;
         let origin_y = matrix.ty.round() as i32;
-        if (matrix.tx - origin_x as f32).abs() > 1e-6
-            || (matrix.ty - origin_y as f32).abs() > 1e-6
+        if (matrix.tx - origin_x as f32).abs() > 1e-6 || (matrix.ty - origin_y as f32).abs() > 1e-6
         {
             return false;
         }
@@ -1548,8 +1876,7 @@ impl SkCanvas {
             let src = (source_y as usize + row) * source_stride + source_x as usize * 4;
             let dst = (device.y() as usize + row) * target_stride + device.x() as usize * 4;
             if blend == crate::BlendMode::kSrc {
-                target[dst..dst + row_bytes]
-                    .copy_from_slice(&image.data()[src..src + row_bytes]);
+                target[dst..dst + row_bytes].copy_from_slice(&image.data()[src..src + row_bytes]);
             } else {
                 // Source and destination have identical native channel order,
                 // so the premultiplied SrcOver kernel operates on raw lanes.
@@ -1710,10 +2037,15 @@ impl SkCanvas {
             bounds,
             &paint,
             self.state.transform,
-            if use_mask { self.state.clip.as_deref() } else { None },
+            if use_mask {
+                self.state.clip.as_deref()
+            } else {
+                None
+            },
         );
         self.known_opaque = false;
     }
+
     /// SoftwareRenderer::DrawDebugBorderQuad transforms the rectangle path
     /// before applying a device-space miter stroke width.
     pub fn draw_native_debug_border(
@@ -3881,6 +4213,83 @@ pub type Canvas = SkCanvas;
 #[cfg(test)]
 mod readback_and_path_tests {
     use super::*;
+    #[test]
+    fn backdrop_capture_preserves_parent_color_layout() {
+        use crate::cpu::layer_filters::RenderSurfaceFilter;
+        let context = ResourceContext::default();
+        let (width, height) = (7, 5);
+        let mut reference = None;
+        for format in [
+            crate::PixelFormat::Rgba8888,
+            crate::PixelFormat::Bgra8888,
+            crate::PixelFormat::Bgrx8888,
+        ] {
+            let mut canvas = SkCanvas::make_raster_direct_with_format_preserving(
+                &context,
+                width,
+                height,
+                width as usize * 4,
+                crate::raster::PixelStorage::owned(vec![0; width as usize * height as usize * 4]),
+                format,
+                false,
+            )
+            .unwrap();
+            canvas.clear_color_src(Color {
+                red: 0.87,
+                green: 0.23,
+                blue: 0.09,
+                alpha: 1.,
+            });
+            canvas.draw_native_rect(
+                PaintRect {
+                    x: 2.,
+                    y: 1.,
+                    width: 3.,
+                    height: 3.,
+                },
+                Color {
+                    red: 0.08,
+                    green: 0.31,
+                    blue: 0.93,
+                    alpha: 0.61,
+                },
+                crate::BlendMode::kSrcOver,
+                false,
+            );
+            // A nonzero layer origin also checks capture's parent->child row
+            // offset. Identity filtering isolates the format-conversion bug.
+            canvas.save_layer_with_native_filter_branches(
+                &DrawCommand {
+                    rect: PaintRect {
+                        x: 1.,
+                        y: 1.,
+                        width: 5.,
+                        height: 3.,
+                    },
+                    ..Default::default()
+                },
+                vec![Vec::new()],
+                vec![RenderSurfaceFilter::ColorMatrix([
+                    1., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 1., 0.,
+                ])],
+                None,
+                crate::BlendMode::kSrcOver,
+            );
+            canvas.restore();
+            let canonical = canvas
+                .pixmap
+                .data()
+                .chunks_exact(4)
+                .flat_map(|pixel| format.decode(pixel.try_into().unwrap()))
+                .collect::<Vec<_>>();
+            if let Some(expected) = &reference {
+                assert_eq!(&canonical, expected, "parent format {format:?}");
+            } else {
+                reference = Some(canonical);
+            }
+        }
+    }
+
     #[test]
     fn f16_mask_runs_preserve_per_pixel_clipping_and_half_storage() {
         use crate::src::core::SkRasterClip::SkRasterClip;
@@ -6594,5 +7003,87 @@ mod exact_matrix_clip_tests {
         canvas.restore();
         assert_eq!(canvas.local_to_device(), base);
         assert!(canvas.state.clip.is_none());
+    }
+}
+
+#[cfg(test)]
+mod strict_source_sampling_tests {
+    use super::*;
+
+    #[test]
+    fn native_image_fractional_translation_keeps_linear_sampling_and_integer_sprite() {
+        let resources = ResourceContext::default();
+        let pixels = [255, 0, 0, 255, 0, 255, 0, 255];
+        let image = crate::raster::PixmapRef::from_bytes(&pixels, 2, 1).unwrap();
+        for translation in [0., 0.25] {
+            let mut canvas = SkCanvas::new(&resources, 2, 1);
+            canvas.draw_premultiplied_image_shader(
+                image,
+                Transform::from_translate(translation, 0.),
+                PaintRect {
+                    x: translation as f64,
+                    y: 0.,
+                    width: 2.,
+                    height: 1.,
+                },
+                SpreadMode::Pad,
+                FilterQuality::Bilinear,
+                1.,
+                crate::BlendMode::kSrc,
+                false,
+            );
+            let actual = canvas.finish();
+            if translation == 0. {
+                // Exact integer mapping retains the existing sprite result.
+                assert_eq!(actual, pixels);
+            } else {
+                // Center 1.5 maps to source 1.25: 25% red + 75% green.
+                assert_eq!(&actual[..4], &[255, 0, 0, 255]);
+                assert!((actual[4] as i16 - 64).abs() <= 1);
+                assert!((actual[5] as i16 - 191).abs() <= 1);
+                assert_eq!(&actual[6..], &[0, 255]);
+            }
+        }
+    }
+
+    #[test]
+    fn strict_fractional_source_bilinear_clamps_subset_taps_without_edge_bleed() {
+        let resources = ResourceContext::default();
+        let pixels = [
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let image = crate::raster::PixmapRef::from_bytes(&pixels, 4, 1).unwrap();
+        let mut canvas = SkCanvas::new(&resources, 4, 1);
+        canvas.draw_premultiplied_image_strict(
+            image,
+            PaintRect {
+                x: 1.25,
+                y: 0.,
+                width: 1.5,
+                height: 1.,
+            },
+            PaintRect {
+                x: 0.,
+                y: 0.,
+                width: 4.,
+                height: 1.,
+            },
+            FilterQuality::Bilinear,
+            1.,
+            crate::BlendMode::kSrc,
+            false,
+        );
+        // SkBitmapDevice extracts roundOut([1.25,2.75]) == [1,3]. Pixel
+        // centers map to 1.4375,1.8125,2.1875,2.5625. The first/last
+        // bilinear taps clamp to green/blue, never red/white.
+        let actual = canvas.finish();
+        assert_eq!(&actual[..4], &[0, 255, 0, 255]);
+        assert_eq!(&actual[12..], &[0, 0, 255, 255]);
+        for (pixel, blue) in actual.chunks_exact(4).zip([0_i16, 80, 175, 255]) {
+            assert_eq!(pixel[0], 0);
+            assert!((pixel[2] as i16 - blue).abs() <= 1);
+            assert_eq!(pixel[1] as u16 + pixel[2] as u16, 255);
+            assert_eq!(pixel[3], 255);
+        }
     }
 }

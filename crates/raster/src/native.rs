@@ -42,6 +42,7 @@ pub struct CpuPixels {
     format: PixelFormat,
     row_bytes: usize,
     pixels: Vec<u8>,
+    opaque: bool,
     content_id: u64,
 }
 impl CpuRasterResourceLease for CpuPixels {
@@ -57,6 +58,9 @@ impl CpuRasterResourceLease for CpuPixels {
     }
     fn row_bytes(&self) -> usize {
         self.row_bytes
+    }
+    fn is_opaque(&self) -> bool {
+        self.opaque
     }
     fn pixels(&self) -> &[u8] {
         &self.pixels
@@ -77,6 +81,9 @@ impl CpuRasterResourceLease for CpuPixelLease {
     }
     fn row_bytes(&self) -> usize {
         self.0.row_bytes()
+    }
+    fn is_opaque(&self) -> bool {
+        self.0.is_opaque()
     }
     fn pixels(&self) -> &[u8] {
         self.0.pixels()
@@ -123,10 +130,11 @@ impl CpuWriteMapping for CpuMappedWrite {
 }
 impl Drop for CpuMappedWrite {
     fn drop(&mut self) {
-        let pixels = self
+        let mut pixels = self
             .pixels
             .take()
             .expect("CPU write lease published exactly once");
+        pixels.opaque = pixels_opaque(&pixels.pixels);
         let mut state = self
             .allocation
             .state
@@ -177,6 +185,7 @@ impl NativeSharedImage for Allocation {
                         format: self.format,
                         row_bytes: self.size.width() as usize * 4,
                         pixels: bytes,
+                        opaque: false,
                         content_id: 0,
                     }
                 }
@@ -427,7 +436,12 @@ impl CpuRasterProvider {
         let allocation = self.allocation(id)?;
         Ok(allocation.EndImport(&allocation.creation))
     }
-    pub fn RasterizePicture(
+    /// Source: components/viz/service/display/software_renderer.cc:393-431.
+    /// Replay directly into the active render-pass Canvas. Ownership moves
+    /// through the raster capability; its pixel allocation is never copied.
+    /// The caller installs PictureDrawQuad's texture-to-quad transform first.
+    #[allow(clippy::too_many_arguments)]
+    pub fn RasterizePictureInto(
         &self,
         list: &compositor_core::runtime::paint::ContentDisplayItemList<SkRegion>,
         content: Rect,
@@ -438,29 +452,17 @@ impl CpuRasterProvider {
             usize,
         >,
         scrolls: &ScrollOffsetMap,
-    ) -> io::Result<Arc<dyn CpuRasterResourceLease<PixelFormat = PixelFormat>>> {
-        let size = content.size();
-        let len = pixel_len(size)?;
+        opacity: f32,
+        canvas: skia::cpu::canvas::Canvas,
+    ) -> io::Result<skia::cpu::canvas::Canvas> {
         let mut cache = self.CacheForPlayback();
-        let pixels = canvas::RasterPicture(
-            list,
-            content,
-            scale,
-            nearest,
-            animation,
-            scrolls,
-            vec![0; len],
-            &mut cache,
-        )?;
-        Ok(Arc::new(CpuPixels {
-            resource: ResourceId::default(),
-            size,
-            format: PixelFormat::Rgba8888,
-            row_bytes: size.width() as usize * 4,
-            pixels,
-            content_id: 0,
-        }))
+        canvas::RasterPictureInto(
+            list, content, scale, nearest, animation, scrolls, opacity, canvas, &mut cache,
+        )
     }
+}
+fn pixels_opaque(pixels: &[u8]) -> bool {
+    pixels.chunks_exact(4).all(|pixel| pixel[3] == u8::MAX)
 }
 fn pixel_len(size: Size) -> io::Result<usize> {
     if size.width() <= 0 || size.height() <= 0 {
@@ -580,12 +582,14 @@ impl<'image>
             storage,
             &mut cache,
         )?;
+        let opaque = pixels_opaque(&pixels);
         let pixels = Arc::new(CpuPixels {
             resource: self.allocation.resource,
             size: self.allocation.size,
             format: self.allocation.format,
             row_bytes: self.allocation.size.width() as usize * 4,
             pixels,
+            opaque,
             content_id: new_content_id,
         });
         let mut state = self

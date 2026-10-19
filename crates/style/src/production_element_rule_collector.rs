@@ -620,13 +620,13 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
         SelectorCheckerBackend::AttributesWithoutUpdate(self.selector.as_ref(), e)
     }
     fn AttributeLocalName(&self, a: &Self::Attribute) -> AtomicString {
-        AtomicString::from_str(&a.local_name)
+        self.selector.AttributeAtom(&a.local_name)
     }
     fn AttributeNamespaceURI(&self, a: &Self::Attribute) -> AtomicString {
-        AtomicString::from_str(&a.namespace_uri)
+        self.selector.AttributeAtom(&a.namespace_uri)
     }
     fn AttributeValue(&self, a: &Self::Attribute) -> AtomicString {
-        AtomicString::from_str(&a.value)
+        self.selector.AttributeAtom(&a.value)
     }
     fn LocalName(&self, e: &Self::Element) -> AtomicString {
         SelectorCheckerBackend::ElementLocalName(self.selector.as_ref(), e)
@@ -637,7 +637,7 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
     fn InputTypeAttribute(&self, e: &Self::Element) -> AtomicString {
         self.node(e)
             .FindAttribute("type")
-            .map(|attribute| AtomicString::from_str(&attribute.value))
+            .map(|attribute| self.selector.AttributeAtom(&attribute.value))
             .unwrap_or_default()
     }
     fn IsLink(&self, e: &Self::Element) -> bool {

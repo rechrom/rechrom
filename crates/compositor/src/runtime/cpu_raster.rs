@@ -59,6 +59,9 @@ pub trait CpuRasterResourceLease: Send + Sync {
     fn size(&self) -> Size;
     fn format(&self) -> Self::PixelFormat;
     fn row_bytes(&self) -> usize;
+    /// True when every pixel in this immutable allocation has full alpha.
+    /// This describes the resource, independent of layer opacity analysis.
+    fn is_opaque(&self) -> bool;
     fn pixels(&self) -> &[u8];
 }
 pub trait CpuRasterResourceProvider {

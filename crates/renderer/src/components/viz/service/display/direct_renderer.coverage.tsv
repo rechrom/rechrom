@@ -1,0 +1,61 @@
+source	start	end	status	implementation_or_boundary
+components/viz/service/display/direct_renderer.h	1	59	declaration_only	C++ includes forward declarations export attributes
+components/viz/service/display/direct_renderer.h	60	135	adapted_interface	generic DirectRenderer CPU public API; swap/presentation remains host capability
+components/viz/service/display/direct_renderer.h	136	153	adapted_interface	DrawingFrame borrows aggregate; root identity per RootDestination; color/overlay state unavailable
+components/viz/service/display/direct_renderer.h	155	208	partial_interface	allocation/scissor/enlargement test accessors; raw pointer frame injection/ink/platform callbacks excluded
+components/viz/service/display/direct_renderer.h	210	223	partial_interface	RenderPassRequirements CPU size/mipmap/alpha/scanout; display color format DComp excluded
+components/viz/service/display/direct_renderer.h	225	273	adapted_interface	named source CPU transform/scissor/quad/pass decision helpers and backing drawn rect capabilities
+components/viz/service/display/direct_renderer.h	275	315	adapted_interface	DirectRendererBackend capability methods; source base nullopt bypass; copy request unavailable
+components/viz/service/display/direct_renderer.h	317	339	partial_interface	output sizing state; mask receiver in software; white level color space requires host capability
+components/viz/service/display/direct_renderer.h	341	454	adapted_interface	resident settings/feature/damage/allocation/resize state; borrowed frames replace raw pointers; external overlay/ink/color owners omitted
+components/viz/service/display/direct_renderer.cc	1	85	declaration_only	includes; UMA enum; C++ default constructors
+components/viz/service/display/direct_renderer.cc	86	106	adapted	new/Initialize; feature defaults exposed as typed bools; backend replaces external output surface
+components/viz/service/display/direct_renderer.cc	108	110	excluded	unused base allocated-buffer query (returns zero); host owns output buffers
+components/viz/service/display/direct_renderer.cc	112	121	excluded	axis device projection delegated to software canvas BeginDrawingRenderPass
+components/viz/service/display/direct_renderer.cc	123	129	translated	MoveFromDrawToWindowSpace explicit origin subtraction
+components/viz/service/display/direct_renderer.cc	131	135	adapted	base CanPassBeDrawnDirectly nullopt selected; CPU has no bypass capability
+components/viz/service/display/direct_renderer.cc	137	151	translated	SetOutputSurfaceClipRect; SetVisible unchanged guard and callback; full-frame reallocation invalidation
+components/viz/service/display/direct_renderer.cc	153	156	excluded	OutputSurface::Reshape host API
+components/viz/service/display/direct_renderer.cc	158	198	adapted	allocations iterate borrowed passes; root skip decision and requirements; base nullopt bypass; metrics omitted
+components/viz/service/display/direct_renderer.cc	200	217	adapted	borrowed frame setup and root damage; multiple roots by RootDestination not last pass
+components/viz/service/display/direct_renderer.cc	218	231	excluded	overlay and ink damage external owners
+components/viz/service/display/direct_renderer.cc	233	238	partial	root damage constrained to its own output plane; output sizing translated; display colors unavailable
+components/viz/service/display/direct_renderer.cc	240	262	excluded	Windows DComp resize clear and output latency tracing
+components/viz/service/display/direct_renderer.cc	263	291	translated	BeginDrawingFrame; feature-disabled ordered backdrop rect candidate map and foreground movement tracking
+components/viz/service/display/direct_renderer.cc	293	356	excluded	display color/format and overlay/GPU plane processing
+components/viz/service/display/direct_renderer.cc	357	376	partial	reshape size/full redraw/reallocation state; no color/format/display-transform input capability
+components/viz/service/display/direct_renderer.cc	377	390	excluded	Apple/Windows delegated redraw policy
+components/viz/service/display/direct_renderer.cc	391	395	translated	portable reshape forces full redraw
+components/viz/service/display/direct_renderer.cc	397	409	excluded	Windows delegated root allocation
+components/viz/service/display/direct_renderer.cc	410	449	adapted	CPU retains ordered pass dependencies; root skip/full-redraw branches per RootDestination; fresh CPU root bitmap invalidation included before skip
+components/viz/service/display/direct_renderer.cc	451	467	excluded	UMA pixel-count metrics
+components/viz/service/display/direct_renderer.cc	468	471	excluded	overlay candidate transfer
+components/viz/service/display/direct_renderer.cc	472	473	translated	FinishDrawingFrame backend call with propagated failure
+components/viz/service/display/direct_renderer.cc	475	476	excluded	overlay scheduling
+components/viz/service/display/direct_renderer.cc	478	489	adapted	borrowed frame drops without mutating Viz aggregate; temporary lookup map/foreground flag cleared; Rust draw errors abort backings and force next full redraw
+components/viz/service/display/direct_renderer.cc	492	495	adapted	GetCurrentFramebufferDamage backend capability (default zero for single retained CPU backing)
+components/viz/service/display/direct_renderer.cc	497	499	translated	base GetTargetDamageBoundingRect returns empty exactly as fixed source
+components/viz/service/display/direct_renderer.cc	501	515	adapted	multi-root output surface draw space is each canonical pass output rect
+components/viz/service/display/direct_renderer.cc	517	540	translated	ShouldSkipQuad empty scissor; filter-expanded visible bounds; transform; shared clip; scissor intersection
+components/viz/service/display/direct_renderer.cc	542	564	translated	SetScissorStateForQuad branch order and window origin conversion
+components/viz/service/display/direct_renderer.cc	566	584	translated	DoDrawPolygon unsplit fast path and split local quad clips
+components/viz/service/display/direct_renderer.cc	586	589	excluded	SupportsBGRA CPU target format supplied by host
+components/viz/service/display/direct_renderer.cc	591	604	translated	FlushPolygons empty guard; BspTree and translated BspWalkActionDrawPolygon; backend errors propagated
+components/viz/service/display/direct_renderer.cc	606	622	adapted	borrowed current pass; no CPU bypass; source slow-down loop
+components/viz/service/display/direct_renderer.cc	623	702	excluded	VizOutput aggregate has no CopyOutputRequest or tracked-element readback capability
+components/viz/service/display/direct_renderer.cc	704	738	excluded	delegated ink pass damage external owner
+components/viz/service/display/direct_renderer.cc	740	874	adapted	DrawRenderPass source branch order: skip/scissor/clip/allocation/clear/viewport/back-to-front/BSP/finish/drawn rect; traces metrics and ink omitted
+components/viz/service/display/direct_renderer.cc	876	897	adapted	root never skipped; cache or feature gate; contributing damage; allocation; no copy-request input capability
+components/viz/service/display/direct_renderer.cc	899	958	partial	size/mipmap/alpha CPU requirements translated; Windows scanout/DComp and display format/color external
+components/viz/service/display/direct_renderer.cc	960	973	excluded	RenderPassColorSpace requires absent display-color-spaces capability
+components/viz/service/display/direct_renderer.cc	975	990	adapted	CPU root backings allocated by renderer; nonroot enlargement and allocation call preserve order
+components/viz/service/display/direct_renderer.cc	992	1074	translated	both feature branches; backdrop output union and foreground expansion with clip; child filters resolved via canonical pass IDs
+components/viz/service/display/direct_renderer.cc	1076	1174	adapted	root framebuffer damage+filter expansion; nonroot drawn rect match; BufferQueue damage branch; first backing full output; metrics omitted
+components/viz/service/display/direct_renderer.cc	1176	1202	translated	64 pixel checked rounding and positive max texture clamp
+components/viz/service/display/direct_renderer.cc	1204	1267	translated	output sizing early return; one-second shrink; padded 256 rounding; resize timestamp; max texture clamp (CPU supports_viewporter false)
+components/viz/service/display/direct_renderer.cc	1269	1272	excluded	raw pointer test frame injection incompatible with borrowed lifetime
+components/viz/service/display/direct_renderer.cc	1274	1277	translated	allocation query testing accessor
+components/viz/service/display/direct_renderer.cc	1279	1285	translated	ShouldApplyRoundedCorner maps visible quad and checks four corner bounds
+components/viz/service/display/direct_renderer.cc	1286	1286	language-mapping	blank
+components/viz/service/display/direct_renderer.cc	1287	1307	excluded	gradient query has no software caller; HDR/display white/format requires host color capability
+components/viz/service/display/direct_renderer.cc	1309	1334	excluded	delegated ink; optional tracing noops; Ozone primary mailbox

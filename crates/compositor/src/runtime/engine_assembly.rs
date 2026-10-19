@@ -132,6 +132,18 @@ impl NativeEngineAssembly {
         }
         self.Poll()
     }
+
+    pub(crate) fn FinishMainFrameWithoutUpdates(
+        &mut self,
+    ) -> Result<CompositorOutput, CompositorError> {
+        if !self.core.awaiting_main {
+            return Err(CompositorError::NotReady {
+                stage: "no BeginMainFrame awaits a no-update response",
+            });
+        }
+        self.core.FinishMainFrameWithoutUpdates(&mut self.scheduler);
+        self.Poll()
+    }
     pub(crate) fn BeginFrame(
         &mut self,
         args: BeginFrameArgs,

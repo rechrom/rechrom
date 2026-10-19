@@ -20,6 +20,9 @@ pub(super) struct ReplayCanvas {
     error: Option<io::Error>,
     depth: usize,
     nearest: bool,
+    // skia/ext/opacity_filter_canvas.cc:17-22. Per-primitive paint alpha,
+    // independent of SaveLayer restore opacity and playback folding alpha.
+    opacity: f32,
 }
 impl ReplayCanvas {
     fn command(&mut self, command: &DrawCommand, resources: &ResourceContext) {
@@ -40,7 +43,70 @@ impl ReplayCanvas {
             }
             _ => {}
         }
-        self.canvas.replay_item(command, resources);
+        // Source: skia/ext/opacity_filter_canvas.cc:17-47. Matrix, clips and
+        // layer saves forward unchanged; only individual draw paints filter.
+        let is_draw = !matches!(
+            command.r#type,
+            CommandKind::kSave
+                | CommandKind::kRestore
+                | CommandKind::kConcat
+                | CommandKind::kClipRect
+                | CommandKind::kClipRoundedRect
+                | CommandKind::kClipOutRoundedRect
+                | CommandKind::kClipPath
+                | CommandKind::kClipOutRect
+                | CommandKind::kSaveLayer
+                | CommandKind::kSaveLayerAlpha
+                | CommandKind::kSaveLayerBlend
+                | CommandKind::kSaveLayerFilter
+                | CommandKind::kSaveLayerDstIn
+                | CommandKind::kBeginMask
+                | CommandKind::kEndMask
+        );
+        if is_draw && (self.opacity < 1. || self.nearest) {
+            let mut filtered = command.clone();
+            if self.opacity < 1. {
+                // Each receiver selects ONE alpha representation:
+                // SkCanvas::drawImageRect -> item.flags_alpha;
+                // solid/glyph/path/shadow -> item.color.alpha;
+                // compat::paint_for_shader gradients -> stop alpha;
+                // compat::with_paint_for_shader patterns -> shader.flags_alpha.
+                // Shader and solid-color fallback branches are exclusive.
+                if matches!(
+                    filtered.r#type,
+                    CommandKind::kDrawImageRect | CommandKind::kDrawTiledImage
+                ) {
+                    filtered.flags_alpha *= self.opacity;
+                } else {
+                    filtered.color.alpha *= self.opacity;
+                    if let Some(shader) = &mut filtered.paint_shader {
+                        match shader.kind {
+                            command::PaintShaderKind::kPattern => {
+                                shader.flags_alpha *= self.opacity
+                            }
+                            _ => {
+                                for stop in &mut shader.stops {
+                                    stop.color.alpha *= self.opacity;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // draw_tiled_image forwards each tile into drawImageRect, so it
+            // needs the same image-sampling override as a direct image draw.
+            if self.nearest
+                && matches!(
+                    filtered.r#type,
+                    CommandKind::kDrawImageRect | CommandKind::kDrawTiledImage
+                )
+            {
+                filtered.image_interpolation_quality = command::ImageInterpolationQuality::kNone;
+            }
+            self.canvas.replay_item(&filtered, resources);
+        } else {
+            self.canvas.replay_item(command, resources);
+        }
     }
     fn simple(&mut self, kind: CommandKind) {
         self.command(
@@ -127,7 +193,7 @@ impl ReplayCanvas {
                         red: c.fR,
                         green: c.fG,
                         blue: c.fB,
-                        alpha: c.fA * folded_alpha,
+                        alpha: c.fA * folded_alpha * self.opacity,
                     },
                     flags.getBlendMode(),
                     flags.isAntiAlias(),
@@ -163,7 +229,7 @@ impl ReplayCanvas {
                         Ok(filters) => {
                             self.canvas.save_layer_with_native_filters(
                                 &DrawCommand {
-                                    opacity: flags.getAlphaf(),
+                                    opacity: flags.getAlphaf() * folded_alpha * self.opacity,
                                     ..Default::default()
                                 },
                                 filters,
@@ -188,7 +254,7 @@ impl ReplayCanvas {
                         alpha: if filtered {
                             1.
                         } else {
-                            flags.getAlphaf() * folded_alpha
+                            flags.getAlphaf() * folded_alpha * self.opacity
                         },
                     },
                     if filtered {
@@ -308,7 +374,7 @@ impl ReplayCanvas {
                 &ResourceContext { resources: None },
             ),
             CpuPaintOp::SaveLayerFilters {
-                bounds: _,
+                bounds,
                 filters,
                 backdrop_filter,
                 flags,
@@ -324,15 +390,34 @@ impl ReplayCanvas {
                         .map(|filter| crate::native_filters::BuildGraph(filter.as_ref(), matrix))
                         .collect::<io::Result<Vec<_>>>()
                 };
-                match (backdrop,branches){
-                    (Ok(backdrop),Ok(mut branches)) if backdrop.is_empty()&&branches.len()<=1=>{
+                match (backdrop, branches) {
+                    (Ok(backdrop), Ok(mut branches)) => {
                         // SkCanvas.cpp:904-909: Paint.imageFilter overrides the
-                        // independent fFilters span; a single branch is one
-                        // image-filter graph, never a sequence of branches.
-                        self.canvas.save_layer_with_native_filters(&DrawCommand{opacity:flags.getAlphaf(),..Default::default()},branches.pop().unwrap_or_default(),flags.getBlendMode());self.depth+=1;
+                        // independent fFilters span. Color filters are restore
+                        // paint, so apply them to every independent result.
+                        if flags.color_filter.is_some() {
+                            if branches.is_empty() {
+                                branches.push(Vec::new());
+                            }
+                            for branch in &mut branches {
+                                branch.push(skia::cpu::layer_filters::RenderSurfaceFilter::Luma);
+                            }
+                        }
+                        self.canvas.save_layer_with_native_filter_branches(
+                            &DrawCommand {
+                                opacity: flags.getAlphaf(),
+                                ..Default::default()
+                            },
+                            branches,
+                            backdrop,
+                            bounds.map(float_rect),
+                            flags.getBlendMode(),
+                        );
+                        self.depth += 1;
                     }
-                    (Err(error),_)|(_,Err(error))=>{self.error.get_or_insert(error);}
-                    _=>self.fail("native SaveLayer backdrop or multiple independent filter branches require the matching Skia device primitive"),
+                    (Err(error), _) | (_, Err(error)) => {
+                        self.error.get_or_insert(error);
+                    }
                 }
             }
             CpuPaintOp::DrawColor { color, blend } => self.canvas.draw_native_paint(
@@ -340,7 +425,7 @@ impl ReplayCanvas {
                     red: color.red,
                     green: color.green,
                     blue: color.blue,
-                    alpha: color.alpha * folded_alpha,
+                    alpha: color.alpha * folded_alpha * self.opacity,
                 },
                 *blend,
             ),
@@ -429,10 +514,6 @@ impl CpuPaintCanvas<SkRegion> for ReplayCanvas {
                             stop.color.alpha *= item.alpha;
                         }
                     }
-                    if self.nearest {
-                        command.image_interpolation_quality =
-                            command::ImageInterpolationQuality::kNone;
-                    }
                     self.command(&command, &resources(record.artifact()));
                 }
                 FoldedOp::Borrowed(CpuPaintOpRef::Converted(op)) => {
@@ -445,7 +526,7 @@ impl CpuPaintCanvas<SkRegion> for ReplayCanvas {
                             red: color[0],
                             green: color[1],
                             blue: color[2],
-                            alpha: color[3],
+                            alpha: color[3] * self.opacity,
                         },
                         skia::BlendMode::kSrcOver,
                     );
@@ -504,6 +585,7 @@ fn new_canvas(
         error: None,
         depth: 0,
         nearest: false,
+        opacity: 1.,
     })
 }
 fn finish(mut canvas: ReplayCanvas, cache: &mut RasterImageCache) -> io::Result<Vec<u8>> {
@@ -623,8 +705,12 @@ pub(super) fn RasterSource(
     canvas.simple(CommandKind::kRestore);
     finish(canvas, cache)
 }
-// Source: components/viz/service/display/software_renderer.cc:393-432.
-pub(super) fn RasterPicture(
+// Source: components/viz/service/display/software_renderer.cc:398-431;
+// skia/ext/opacity_filter_canvas.cc:9-47. The caller has already concatenated
+// RectToRect(texture, quad). This routine applies content origin, clip and scale
+// to the very same pass canvas and filters each playback primitive's paint.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn RasterPictureInto(
     list: &ContentDisplayItemList<SkRegion>,
     content: Rect,
     scale: f32,
@@ -634,30 +720,49 @@ pub(super) fn RasterPicture(
         usize,
     >,
     scrolls: &ScrollOffsetMap,
-    storage: Vec<u8>,
+    opacity: f32,
+    mut target: Canvas,
     cache: &mut RasterImageCache,
-) -> io::Result<Vec<u8>> {
+) -> io::Result<Canvas> {
+    // AnimatedImagesProvider requires a PaintImage frame-selection resolver.
+    // CpuPaintImage's existing resource ABI has no such resolver; rejecting the
+    // missing capability preserves correctness instead of choosing frame zero.
     if !animation.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "animated Picture replay requires the native PaintImage frame resolver",
         ));
     }
-    let mut canvas = new_canvas(content.size(), PixelFormat::Rgba8888, storage, cache)?;
-    canvas.nearest = nearest;
-    canvas.simple(CommandKind::kSave);
-    canvas.translate(-content.x as f32, -content.y as f32);
-    canvas.clip(content, false);
-    canvas.scale(scale, scale);
+    let original_cache = target.take_image_cache();
+    target.install_image_cache(std::mem::take(cache));
+    // Source uses SkScalarRoundToInt(opacity*255)<255 to choose the filter
+    // canvas. A nearest-only wrapper still applies opacity_ when it is <1.
+    let wrap = (opacity * 255.).round() < 255. || nearest;
+    let mut replay = ReplayCanvas {
+        canvas: target,
+        error: None,
+        depth: 0,
+        nearest,
+        opacity: if wrap && opacity < 1. { opacity } else { 1. },
+    };
+    replay.simple(CommandKind::kSave);
+    replay.translate(-content.x as f32, -content.y as f32);
+    replay.clip(content, false);
+    replay.scale(scale, scale);
     list.RasterWithParams(
-        &mut canvas,
+        &mut replay,
         &mut CpuPlaybackParams {
             raster_inducing_scroll_offsets: Some(scrolls),
             image_provider: None,
         },
     );
-    canvas.simple(CommandKind::kRestore);
-    finish(canvas, cache)
+    replay.simple(CommandKind::kRestore);
+    *cache = replay.canvas.take_image_cache();
+    replay.canvas.install_image_cache(original_cache);
+    if let Some(error) = replay.error {
+        return Err(error);
+    }
+    Ok(replay.canvas)
 }
 
 #[derive(Clone)]
@@ -747,7 +852,7 @@ impl ReplayCanvas {
                 red: p.color.fR,
                 green: p.color.fG,
                 blue: p.color.fB,
-                alpha: p.color.fA,
+                alpha: p.color.fA * canvas.opacity,
             };
             if let Some((sigma, respect_ctm)) = p.sigma {
                 canvas.canvas.draw_native_shadow_rrect(
@@ -802,7 +907,7 @@ impl ReplayCanvas {
                     red: c.fR,
                     green: c.fG,
                     blue: c.fB,
-                    alpha: c.fA * folded_alpha,
+                    alpha: c.fA * folded_alpha * self.opacity,
                 },
                 flags.getBlendMode(),
                 flags.isAntiAlias(),
@@ -880,7 +985,8 @@ impl ReplayCanvas {
                 canvas,
                 error: None,
                 depth: 0,
-                nearest: self.nearest,
+                nearest: false,
+                opacity: 1.,
             };
             replay.record(record, params);
             if let Some(error) = replay.error {
@@ -900,7 +1006,7 @@ impl ReplayCanvas {
                 *tile_mode_x,
                 *tile_mode_y,
                 skia::raster::FilterQuality::Bilinear,
-                flags.getAlphaf() * folded_alpha,
+                flags.getAlphaf() * folded_alpha * self.opacity,
                 flags.getBlendMode(),
                 flags.isAntiAlias(),
             );
@@ -948,7 +1054,13 @@ impl ReplayCanvas {
                 stop.color.alpha *= command.flags_alpha;
             }
         }
+        // OpacityFilterCanvas overrides drawImage sampling, not sampling
+        // embedded in a DrawRect's SkShader. This local tiled-image command
+        // executes that shader, so preserve its authored filtering choice.
+        let nearest = self.nearest;
+        self.nearest = false;
         self.command(&command, &resources(source.record().artifact()));
+        self.nearest = nearest;
     }
 }
 
@@ -987,7 +1099,11 @@ impl ReplayCanvas {
         let transform = self.canvas.local_to_device();
         let sx = (dst.width / src.width) as f32;
         let sy = (dst.height / src.height) as f32;
-        let quality = match op.image_interpolation_quality.to_skia() {
+        let quality = match if self.nearest {
+            command::ImageInterpolationQuality::kNone
+        } else {
+            op.image_interpolation_quality.to_skia()
+        } {
             command::ImageInterpolationQuality::kNone => CpuFilterQuality::kNone,
             command::ImageInterpolationQuality::kLow => CpuFilterQuality::kLow,
             command::ImageInterpolationQuality::kMedium => CpuFilterQuality::kMedium,
@@ -1062,7 +1178,11 @@ impl ReplayCanvas {
                     width: src.width * f64::from(scale.width()),
                     height: src.height * f64::from(scale.height()),
                 };
-                let quality = match lease.filter_quality() {
+                let quality = match if self.nearest {
+                    CpuFilterQuality::kNone
+                } else {
+                    lease.filter_quality()
+                } {
                     CpuFilterQuality::kNone => skia::FilterQuality::Nearest,
                     CpuFilterQuality::kLow | CpuFilterQuality::kMedium => {
                         skia::FilterQuality::Bilinear
@@ -1077,7 +1197,7 @@ impl ReplayCanvas {
                     source,
                     dst.to_skia(),
                     quality,
-                    alpha,
+                    alpha * self.opacity,
                     skia::BlendMode::kSrcOver,
                     op.antialias,
                 );

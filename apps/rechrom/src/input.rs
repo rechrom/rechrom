@@ -4,8 +4,28 @@ use layoutng_assembly::internal::layout_input::Offset;
 use std::time::{Duration, Instant};
 use winit::{
     event::{ElementState, Ime, MouseScrollDelta, TouchPhase, WindowEvent},
-    keyboard::{Key, ModifiersState, NamedKey},
+    keyboard::{Key, KeyLocation, ModifiersState, NamedKey, PhysicalKey},
 };
+
+fn physical_code(key: PhysicalKey) -> String {
+    let PhysicalKey::Code(key) = key else {
+        return String::new();
+    };
+    match format!("{key:?}").as_str() {
+        "SuperLeft" => "MetaLeft".into(),
+        "SuperRight" => "MetaRight".into(),
+        code => code.into(),
+    }
+}
+
+fn key_location(location: KeyLocation) -> u32 {
+    match location {
+        KeyLocation::Standard => 0,
+        KeyLocation::Left => 1,
+        KeyLocation::Right => 2,
+        KeyLocation::Numpad => 3,
+    }
+}
 
 #[derive(Default)]
 pub struct InputState {
@@ -287,6 +307,10 @@ impl InputState {
                     } else {
                         KeyEventType::kUp
                     },
+                    code: physical_code(event.physical_key),
+                    key_code: LegacyKeyCode(&key),
+                    location: key_location(event.location),
+                    is_composing: self.composing,
                     key,
                     text,
                     modifiers: self.modifiers(),

@@ -118,6 +118,7 @@ pub(crate) fn InvalidateProductionRuleSets(
                     &data.Rule().Selectors().CopySelectors(),
                 )
                 .is_some()
+                    && !IsUnretainedScrollbarPseudoTarget(data)
                 {
                     Some("selector")
                 } else if data.Selector().SimpleSelectors().any(|selector| {
@@ -433,6 +434,20 @@ fn HasSupportedPseudoTarget(data: &RuleData<Backend>) -> bool {
         }
     }
     true
+}
+
+fn IsUnretainedScrollbarPseudoTarget(data: &RuleData<Backend>) -> bool {
+    data.Selector().SimpleSelectors().any(|selector| {
+        matches!(
+            selector.GetPseudoType(),
+            PseudoType::kPseudoScrollbar
+                | PseudoType::kPseudoScrollbarButton
+                | PseudoType::kPseudoScrollbarCorner
+                | PseudoType::kPseudoScrollbarThumb
+                | PseudoType::kPseudoScrollbarTrack
+                | PseudoType::kPseudoScrollbarTrackPiece
+        )
+    })
 }
 
 /// Revision-scoped routing plan built beside the cached RuleSet. Element hot

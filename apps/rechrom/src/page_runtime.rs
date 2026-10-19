@@ -9,11 +9,11 @@ use crate::{
     page_presentation::{ContentFrameProvenance, Document, FrameProvenance, PageFrame},
     window_runtime,
 };
-use browser::page::{Page, PageClient};
 use browser::page::{
     CompositorMainThreadEffect, PageCompositorFrame, PageFramePresenter, PageRenderPipeline,
     PageReturnedResource,
 };
+use browser::page::{Page, PageClient};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use foundation::begin_frame::BeginFrameSource;
 use interaction::input_event::*;
@@ -149,9 +149,7 @@ impl WakingExecutor {
         let pending = self.pending.clone();
         Box::new(move || {
             task();
-            if !pending.swap(true, Ordering::AcqRel)
-                && sender.send(ImplCommand::Pump).is_err()
-            {
+            if !pending.swap(true, Ordering::AcqRel) && sender.send(ImplCommand::Pump).is_err() {
                 pending.store(false, Ordering::Release);
             }
         })
@@ -488,6 +486,7 @@ struct ImplPresentation {
     viewport: Viewport,
     needs_publish: bool,
     required_main_frame_epoch: u64,
+    responded_main_frame_epoch: u64,
 }
 
 impl ImplPresentation {
@@ -504,6 +503,7 @@ impl ImplPresentation {
             viewport,
             needs_publish: false,
             required_main_frame_epoch: 0,
+            responded_main_frame_epoch: 0,
         }
     }
 
@@ -517,10 +517,12 @@ impl ImplPresentation {
         content: ContentFrameProvenance,
         viewport: Viewport,
     ) {
-        // Source: cc/trees/proxy_impl.cc DataForCommit. A main commit can only
-        // satisfy the BeginMainFrame whose impl deltas were applied before its
-        // lifecycle. An artifact already in flight on the Page sequence cannot
-        // be admitted as that commit.
+        // ProxyImpl::data_for_commit_ pairs a commit with the BeginMainFrame
+        // that produced it. An older Page artifact cannot satisfy a newer BMF:
+        // doing so advances SyncedScrollOffset's reflected slot without the
+        // corresponding main-thread delta and rolls the active offset back.
+        // The active tree keeps drawing while the matching artifact is built.
+        // Source: cc/trees/proxy_impl.cc:450-501,801-814.
         if content.main_frame_epoch < self.required_main_frame_epoch {
             return;
         }
@@ -537,18 +539,28 @@ impl ImplPresentation {
         let Some(artifact) = self.artifact.as_ref() else {
             return Ok(false);
         };
-        let Some(_) = self.content else {
+        let Some(content) = self.content else {
             return Ok(false);
         };
         let viewport = self.viewport;
-        let render = self.pipeline.CommitArtifact(
-            artifact,
-            viewport.width,
-            viewport.height,
-            viewport.scale,
-        );
+        let responds_to_main_frame = content.main_frame_epoch > self.responded_main_frame_epoch;
+        let render = if responds_to_main_frame {
+            self.pipeline.CommitArtifactForMainFrame(
+                artifact,
+                viewport.width,
+                viewport.height,
+                viewport.scale,
+            )
+        } else {
+            self.pipeline
+                .CommitArtifact(artifact, viewport.width, viewport.height, viewport.scale)
+        };
         match render {
-            Ok(_) => {}
+            Ok(_) => {
+                if responds_to_main_frame {
+                    self.responded_main_frame_epoch = content.main_frame_epoch;
+                }
+            }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
             Err(error) => return Err(error.into()),
         }
@@ -593,9 +605,9 @@ impl ImplPresentation {
                     viewport,
                 })
                 .map_err(|_| RuntimeFailure {
-                stage: "compositor",
-                error: io::Error::other("Page renderer stopped"),
-            })?;
+                    stage: "compositor",
+                    error: io::Error::other("Page renderer stopped"),
+                })?;
             submitted = true;
         }
         Ok(submitted)
@@ -665,12 +677,7 @@ fn run_presenter(
         if target.len() != pixel_count {
             target.resize(pixel_count, 0);
         }
-        presenter.RenderCurrent(
-            viewport.width,
-            viewport.height,
-            target,
-            retained,
-        )?;
+        presenter.RenderCurrent(viewport.width, viewport.height, target, retained)?;
         if let Some(started) = profile {
             eprintln!(
                 "page-presenter-profile total_ms={:.3} coalesced={} width={} height={}",
@@ -741,9 +748,13 @@ fn run_impl(
             .stack_size(16 * 1024 * 1024)
             .spawn(move || {
                 crate::engine::set_page_thread_presentation_priority();
-                if let Err(error) =
-                    run_presenter(presenter_receiver, presenter, presenter_self.clone(), document, frames)
-                {
+                if let Err(error) = run_presenter(
+                    presenter_receiver,
+                    presenter,
+                    presenter_self.clone(),
+                    document,
+                    frames,
+                ) {
                     let _ = presenter_self.send(ImplCommand::RendererFailed(error.to_string()));
                 }
             })
@@ -851,9 +862,10 @@ fn run_impl(
                 let result = presentation.pipeline.Wheel(&wheel)?;
                 wheel.compositor_handled = result.handled;
                 presentation.needs_publish |= result.submitted;
-                let requested = result.effects.iter().any(|effect| {
-                    matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
-                });
+                let requested = result
+                    .effects
+                    .iter()
+                    .any(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame));
                 let epoch = requested.then(|| {
                     main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
                     presentation.require_main_frame(main_frame_epoch);
@@ -872,9 +884,9 @@ fn run_impl(
         if let Some(presentation) = presentation.as_mut() {
             let effects = presentation.pipeline.TakeMainThreadEffects();
             if !effects.is_empty() {
-                let requested = effects.iter().any(|effect| {
-                    matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
-                });
+                let requested = effects
+                    .iter()
+                    .any(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame));
                 let epoch = requested.then(|| {
                     main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
                     presentation.require_main_frame(main_frame_epoch);
@@ -1517,42 +1529,42 @@ fn run_document(
                     published = Some(identity);
                 } else {
                     let render_started = std::env::var_os("BROWSER_PROFILE_INPUT")
-                    .is_some()
-                    .then(std::time::Instant::now);
+                        .is_some()
+                        .then(std::time::Instant::now);
                     let mut pixels = vec![0u32; viewport.width as usize * viewport.height as usize];
                     let allocated_at = render_started.map(|_| std::time::Instant::now());
                     let ready = match page.PaintInto(
-                    viewport.width,
-                    viewport.height,
-                    viewport.scale,
-                    &mut pixels,
-                    skia::PixelFormat::Bgra8888,
-                    viewport.width as usize,
-                ) {
-                    Ok(_) => true,
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        // The Page has retained this commit. Retry through the
-                        // same frame-demand owner, keeping the last completed
-                        // surface visible until a presentable frame exists.
-                        source.request_begin_frame();
-                        false
-                    }
-                    Err(error) => return Err(error),
-                };
+                        viewport.width,
+                        viewport.height,
+                        viewport.scale,
+                        &mut pixels,
+                        skia::PixelFormat::Bgra8888,
+                        viewport.width as usize,
+                    ) {
+                        Ok(_) => true,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            // The Page has retained this commit. Retry through the
+                            // same frame-demand owner, keeping the last completed
+                            // surface visible until a presentable frame exists.
+                            source.request_begin_frame();
+                            false
+                        }
+                        Err(error) => return Err(error),
+                    };
                     if ready {
                         let painted_at = render_started.map(|_| std::time::Instant::now());
                         let completed = PageFrame {
-                        provenance: FrameProvenance {
-                            document: params.document,
-                            content: Some(ContentFrameProvenance {
-                                sequence: frame.sequence,
-                                recording_revision: frame.display_items.recording_revision,
-                                main_frame_epoch: completed_main_frame_epoch,
-                            }),
-                        },
-                        viewport,
-                        pixels: Arc::new(pixels),
-                    };
+                            provenance: FrameProvenance {
+                                document: params.document,
+                                content: Some(ContentFrameProvenance {
+                                    sequence: frame.sequence,
+                                    recording_revision: frame.display_items.recording_revision,
+                                    main_frame_epoch: completed_main_frame_epoch,
+                                }),
+                            },
+                            viewport,
+                            pixels: Arc::new(pixels),
+                        };
                         params
                             .frames
                             .send(window_runtime::Command::Display(

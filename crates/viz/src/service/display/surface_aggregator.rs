@@ -9,8 +9,7 @@ use crate::{
         },
     },
     native::{
-        DeviceRect, DrawReceipt, RootPresentation, SurfaceId, SurfacePlacement, VizError,
-        VizOutput,
+        DeviceRect, DrawReceipt, RootPresentation, SurfaceId, SurfacePlacement, VizError, VizOutput,
     },
     service::{
         display::{
@@ -861,8 +860,7 @@ impl SurfaceAggregator {
                 .content_color_usage
                 .max(source.frame.metadata.content_color_usage);
             if source.frame.metadata.delegated_ink_metadata.is_some() {
-                frame.delegated_ink_metadata =
-                    source.frame.metadata.delegated_ink_metadata.clone();
+                frame.delegated_ink_metadata = source.frame.metadata.delegated_ink_metadata.clone();
             }
             for (feature, rects) in &source.frame.metadata.tracked_element_rects.0 {
                 frame

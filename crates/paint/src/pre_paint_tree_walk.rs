@@ -4692,13 +4692,20 @@ impl PrePaintTreeWalk {
                     isolates_blending: style.isolate_blending,
                     has_mask: false,
                     is_mask: false,
-                    // UpdateEffect's kAdditionalEffectCompositingTrigger includes
-                    // the source will-change:transform reason. Opacity alone does
-                    // not justify adding a direct compositing reason.
-                    direct_compositing_reasons: if style.will_change_transform {
-                        vec!["WillChangeTransform"]
-                    } else {
-                        Vec::new()
+                    // Source: core/paint/compositing/compositing_reason_finder.cc:461-462;
+                    // core/paint/paint_property_tree_builder.cc:2232-2240.
+                    // BackdropFilter is a direct effect reason: decompositing it
+                    // would restrict backdrop reads to individual raster tiles.
+                    // The additional effect trigger also carries transform hints.
+                    direct_compositing_reasons: {
+                        let mut reasons = Vec::new();
+                        if !style.backdrop_filters.is_empty() {
+                            reasons.push("BackdropFilter");
+                        }
+                        if style.will_change_transform {
+                            reasons.push("WillChangeTransform");
+                        }
+                        reasons
                     },
                 }
                 .with_filter_presence()
@@ -5398,10 +5405,7 @@ impl PrePaintTreeWalk {
                 direct_compositing_reasons: Vec::new(),
             });
             child_properties.transform_id = id;
-            child_transforms.push(TranslationTransform(
-                -geometry_scroll.x,
-                -geometry_scroll.y,
-            ));
+            child_transforms.push(TranslationTransform(-geometry_scroll.x, -geometry_scroll.y));
         }
         node.contents_properties = child_properties.clone();
         node.properties = border_box_properties;

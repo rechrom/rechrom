@@ -81,11 +81,11 @@ impl Page {
         let compositor_demand = false;
         let demand = compositor_demand
             || (self.IsRenderingReady()
-            && (self.HasPendingFrameInput()
-                || self.state.dirty.get()
-                || self.hover_state_dirty
-                || (self.scripts.is_some()
-                    && !self.state.scroll_event_targets.borrow().is_empty())))
+                && (self.HasPendingFrameInput()
+                    || self.state.dirty.get()
+                    || self.hover_state_dirty
+                    || (self.scripts.is_some()
+                        && !self.state.scroll_event_targets.borrow().is_empty())))
             || self.state.animation_begin_frame_requested.get()
             || self.resources.HasAnimatedImages()
             || self
@@ -348,6 +348,7 @@ impl Page {
             if let InputEvent::Wheel(wheel) = &entry.input {
                 input_trace.set("delta_x", wheel.delta.x);
                 input_trace.set("delta_y", wheel.delta.y);
+                input_trace.set("compositor_handled", wheel.compositor_handled as u8 as f64);
             }
             let result = self.DispatchInputWithoutLifecycle(&entry.input);
             let result = result.map(|result| {

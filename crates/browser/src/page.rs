@@ -50,22 +50,24 @@ use webapi::{
 };
 
 #[cfg(feature = "pure_source_png")]
+pub use compositor::CompositorMainThreadEffect;
+#[cfg(feature = "pure_source_png")]
 use compositor::{
     adapter::{
         begin_frame::{BeginFrameArgs, BeginFrameArgsType, BeginFrameId},
         geometry::{PointF as CompositorPointF, Size as CompositorSize, Vector2dF},
         time::{TimeDelta as CompositorTimeDelta, TimeTicks as CompositorTimeTicks},
     },
-    CompositorConfig, CompositorEngine, CompositorExecutor, CompositorExecutors, CompositorInput,
-    CompositorError, CompositorOutput, CompositorViewportState,
-    NativeCompositorFrameSubmission, ScrollPhase,
+    CompositorConfig, CompositorEngine, CompositorError, CompositorExecutor, CompositorExecutors,
+    CompositorInput, CompositorOutput, CompositorViewportState, NativeCompositorFrameSubmission,
+    ScrollPhase,
 };
-#[cfg(feature = "pure_source_png")]
-pub use compositor::CompositorMainThreadEffect;
 #[cfg(feature = "pure_source_png")]
 use raster::native::CpuRasterProvider;
 #[cfg(feature = "pure_source_png")]
-use renderer::{PixelFormat, RenderUpdate};
+use renderer::RenderUpdate;
+#[cfg(feature = "pure_source_png")]
+use renderer_skia::{PixelFormat, RendererSkiaBackend};
 
 #[cfg(feature = "pure_source_png")]
 struct PageCompositorExecutor {
@@ -167,7 +169,7 @@ pub struct PageRenderPipeline {
     executor: Arc<PageCompositorExecutor>,
     pixels: CpuRasterProvider,
     viz: viz::native::VizEngine,
-    renderer: renderer::Renderer,
+    renderer: renderer::Renderer<RendererSkiaBackend>,
     surface: viz::native::SurfaceId,
     next_surface: u64,
     local_surface_id: Option<compositor::runtime::types::LocalSurfaceId>,
@@ -206,7 +208,7 @@ pub type PageReturnedResource = compositor::runtime::resources::CpuReturnedResou
 #[cfg(feature = "pure_source_png")]
 pub struct PageFramePresenter {
     viz: viz::native::VizEngine,
-    renderer: renderer::Renderer,
+    renderer: renderer::Renderer<RendererSkiaBackend>,
     surface: viz::native::SurfaceId,
     next_surface: u64,
     local_surface_id: Option<compositor::runtime::types::LocalSurfaceId>,
@@ -219,7 +221,7 @@ impl PageFramePresenter {
     fn new(pixels: CpuRasterProvider) -> Self {
         Self {
             viz: viz::native::VizEngine::New(),
-            renderer: renderer::Renderer::WithPictureRasterizer(Box::new(pixels)),
+            renderer: renderer::Renderer::new(RendererSkiaBackend::new(Box::new(pixels))),
             surface: viz::native::SurfaceId(1),
             next_surface: 2,
             local_surface_id: None,
@@ -231,7 +233,10 @@ impl PageFramePresenter {
     pub fn Submit(
         &mut self,
         submission: PageCompositorFrame,
-    ) -> io::Result<(bool, Vec<compositor::runtime::resources::CpuReturnedResource>)> {
+    ) -> io::Result<(
+        bool,
+        Vec<compositor::runtime::resources::CpuReturnedResource>,
+    )> {
         let local_surface_id = submission.local_surface_id;
         let frame = submission.frame;
         let root = frame
@@ -250,12 +255,9 @@ impl PageFramePresenter {
             // sequence numbers rather than lexicographically ordering them.
             // Source: components/viz/common/surfaces/local_surface_id.cc:47-70.
             if same_embed && !local_surface_id.IsSameOrNewerThan(&current) {
-                returned.extend(
-                    frame
-                        .resource_list
-                        .iter()
-                        .map(compositor::runtime::resources::CpuTransferableResource::ToReturnedResource),
-                );
+                returned.extend(frame.resource_list.iter().map(
+                    compositor::runtime::resources::CpuTransferableResource::ToReturnedResource,
+                ));
                 return Ok((false, returned));
             }
         }
@@ -287,11 +289,10 @@ impl PageFramePresenter {
         self.local_surface_id = Some(local_surface_id);
         self.surface_parameters = Some(parameters);
         returned.extend(
-            self
-            .viz
-            .SubmitFrame(self.surface, frame)
-            .map_err(|error| io::Error::other(error.to_string()))?
-            .returned_resources,
+            self.viz
+                .SubmitFrame(self.surface, frame)
+                .map_err(|error| io::Error::other(error.to_string()))?
+                .returned_resources,
         );
         Ok((true, returned))
     }
@@ -314,7 +315,7 @@ impl PageFramePresenter {
             .map_err(|error| io::Error::other(error.to_string()))?;
         let update = self.renderer.Render(
             &aggregated,
-            renderer::RenderTarget {
+            renderer_skia::RenderTarget {
                 width,
                 height,
                 pixels: target,
@@ -339,9 +340,7 @@ impl PageRenderPipeline {
     /// Moving the consumer to a Page renderer sequence preserves Chromium's
     /// FrameSink boundary: impl-thread input submits owned CompositorFrames and
     /// never waits for software drawing to finish.
-    pub fn new_external(
-        executor: Arc<dyn executor::Executor>,
-    ) -> (Self, PageFramePresenter) {
+    pub fn new_external(executor: Arc<dyn executor::Executor>) -> (Self, PageFramePresenter) {
         Self::NewWithPresentation(executor, true)
     }
 
@@ -355,29 +354,32 @@ impl PageRenderPipeline {
         let pixels = CpuRasterProvider::new(command_buffer, 64 * 1024 * 1024);
         let presenter = PageFramePresenter::new(pixels.clone());
         let renderer = if external_presentation {
-            renderer::Renderer::default()
+            renderer::Renderer::new(RendererSkiaBackend::default())
         } else {
-            renderer::Renderer::WithPictureRasterizer(Box::new(pixels.clone()))
+            renderer::Renderer::new(RendererSkiaBackend::new(Box::new(pixels.clone())))
         };
-        (Self {
-            compositor: None,
-            executor: Arc::new(PageCompositorExecutor::new(executor)),
-            pixels,
-            viz: viz::native::VizEngine::New(),
-            renderer,
-            surface: viz::native::SurfaceId(1),
-            next_surface: 2,
-            local_surface_id: None,
-            surface_parameters: None,
-            rendered_surface: None,
-            external_presentation,
-            outbound_frames: Default::default(),
-            deferred_effects: Vec::new(),
-            begin_frame_sequence: 0,
-            needs_begin_frames: false,
-            pending: None,
-            presentable: None,
-        }, presenter)
+        (
+            Self {
+                compositor: None,
+                executor: Arc::new(PageCompositorExecutor::new(executor)),
+                pixels,
+                viz: viz::native::VizEngine::New(),
+                renderer,
+                surface: viz::native::SurfaceId(1),
+                next_surface: 2,
+                local_surface_id: None,
+                surface_parameters: None,
+                rendered_surface: None,
+                external_presentation,
+                outbound_frames: Default::default(),
+                deferred_effects: Vec::new(),
+                begin_frame_sequence: 0,
+                needs_begin_frames: false,
+                pending: None,
+                presentable: None,
+            },
+            presenter,
+        )
     }
 
     fn SubmitInternalFrame(
@@ -524,9 +526,10 @@ impl PageRenderPipeline {
         // behind a frame Chromium intentionally does not emit.
         let stable_frame_reuse = output.frame.is_none()
             && !output.needs_begin_frames
-            && !output.main_thread_effects.iter().any(|effect| {
-                matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
-            });
+            && !output
+                .main_thread_effects
+                .iter()
+                .any(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame));
         let (submitted, needs_begin_frames, main_commit_pending) = self.AcceptOutput(output)?;
         if let Some(pending) = self.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
@@ -634,9 +637,10 @@ impl PageRenderPipeline {
         let stable_frame_reuse = self.pending.is_some()
             && output.frame.is_none()
             && !output.needs_begin_frames
-            && !output.main_thread_effects.iter().any(|effect| {
-                matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
-            });
+            && !output
+                .main_thread_effects
+                .iter()
+                .any(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame));
         for effect in std::mem::take(&mut output.main_thread_effects) {
             if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
                 result.handled |= handled;
@@ -703,9 +707,10 @@ impl PageRenderPipeline {
         let stable_frame_reuse = self.pending.is_some()
             && output.frame.is_none()
             && !output.needs_begin_frames
-            && !output.main_thread_effects.iter().any(|effect| {
-                matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
-            });
+            && !output
+                .main_thread_effects
+                .iter()
+                .any(|effect| matches!(effect, CompositorMainThreadEffect::RequestMainFrame));
         for effect in std::mem::take(&mut output.main_thread_effects) {
             if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
                 result.handled |= handled;
@@ -781,10 +786,7 @@ impl PageRenderPipeline {
             .as_mut()
             .expect("checked compositor")
             .Input(CompositorInput::Wheel {
-                position: CompositorPointF::new(
-                    wheel.position.x as f32,
-                    wheel.position.y as f32,
-                ),
+                position: CompositorPointF::new(wheel.position.x as f32, wheel.position.y as f32),
                 delta: Vector2dF::new(wheel.delta.x as f32, wheel.delta.y as f32),
                 phase,
             })
@@ -832,7 +834,9 @@ impl PageRenderPipeline {
         format: PixelFormat,
         stride: usize,
     ) -> io::Result<RenderUpdate> {
-        self.RenderToTarget(artifact, width, height, scale, target, format, stride, false)
+        self.RenderToTarget(
+            artifact, width, height, scale, target, format, stride, false,
+        )
     }
 
     pub fn RenderRetained(
@@ -857,6 +861,30 @@ impl PageRenderPipeline {
         width: u32,
         height: u32,
         scale: f64,
+    ) -> io::Result<()> {
+        self.CommitArtifactInternal(artifact, width, height, scale, false)
+    }
+
+    /// Completes the BeginMainFrame which admitted this Page lifecycle. If
+    /// PaintEngine retained the exact presentable artifact, cc receives
+    /// Chromium's FINISHED_NO_UPDATES response instead of a duplicate commit.
+    pub fn CommitArtifactForMainFrame(
+        &mut self,
+        artifact: &Arc<paint::PaintArtifact>,
+        width: u32,
+        height: u32,
+        scale: f64,
+    ) -> io::Result<()> {
+        self.CommitArtifactInternal(artifact, width, height, scale, true)
+    }
+
+    fn CommitArtifactInternal(
+        &mut self,
+        artifact: &Arc<paint::PaintArtifact>,
+        width: u32,
+        height: u32,
+        scale: f64,
+        responds_to_main_frame: bool,
     ) -> io::Result<()> {
         if !scale.is_finite() || scale <= 0.0 {
             return Err(io::Error::new(
@@ -910,6 +938,16 @@ impl PageRenderPipeline {
                     },
                 ));
             }
+            // Commit() already consumed the BeginMainFrame before raster and
+            // frame submission complete.  A retry for that same accepted
+            // artifact must therefore complete the Page transaction even
+            // while its pixels are still pending; presentation progresses on
+            // subsequent impl frames.  Chromium likewise acknowledges the
+            // main-thread commit at ProxyImpl::ScheduledActionCommit, not when
+            // DrawLayers later submits a CompositorFrame.
+            if responds_to_main_frame {
+                return Ok(());
+            }
             if !submitted {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
@@ -924,6 +962,20 @@ impl PageRenderPipeline {
                     .upgrade()
                     .is_some_and(|prepared| Arc::ptr_eq(&prepared, artifact))
         });
+        if already_presentable && responds_to_main_frame {
+            let output = self
+                .compositor
+                .as_mut()
+                .expect("a presentable artifact has an initialized compositor")
+                .FinishMainFrameWithoutUpdates()
+                .map_err(|error| match error {
+                    CompositorError::NotReady { stage } => {
+                        io::Error::new(io::ErrorKind::WouldBlock, stage)
+                    }
+                    error => io::Error::other(error.to_string()),
+                })?;
+            self.AcceptOutput(output)?;
+        }
         if !already_presentable {
             self.EnsureCompositor()?;
             let first = match self
@@ -944,7 +996,24 @@ impl PageRenderPipeline {
                 viewport,
                 needs_begin_frames: false,
             });
-            if !self.AcceptPendingOutput(first)? && !self.ContinuePending()? {
+            let presentable = self.AcceptPendingOutput(first)?;
+            if self.external_presentation {
+                // Commit transfers this PaintArtifact to cc at
+                // ScheduledActionCommit. Raster, activation and frame
+                // submission continue independently on impl BeginFrames, so
+                // they cannot hold the Page's next main-frame response slot.
+                // This is the threaded Proxy boundary in Chromium: the main
+                // commit completes before DrawLayers submits its frame.
+                if let Some(accepted) = self.pending.take() {
+                    self.presentable = Some(PresentablePageRender {
+                        artifact: Arc::downgrade(&accepted.artifact),
+                        input: accepted.input,
+                    });
+                }
+                return Ok(());
+            }
+            let presentable = presentable || self.ContinuePending()?;
+            if !presentable && !responds_to_main_frame {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
                     "compositor is still preparing the committed PaintArtifact",
@@ -986,7 +1055,7 @@ impl PageRenderPipeline {
             let aggregate_damage_pixels = viz_output.DamagePixels();
             let update = self.renderer.Render(
                 &viz_output,
-                renderer::RenderTarget {
+                renderer_skia::RenderTarget {
                     width,
                     height,
                     pixels: target,

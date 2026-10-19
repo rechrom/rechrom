@@ -199,10 +199,121 @@ impl WheelEvent {
 pub struct KeyEvent {
     pub r#type: KeyEventType,
     pub key: String,
+    /// UI Events `code`, derived from the physical key rather than the active
+    /// keyboard layout (Blink's WebKeyboardEvent::dom_code).
+    pub code: String,
     pub text: String,
+    /// Blink exposes WebKeyboardEvent::windows_key_code as KeyboardEvent.keyCode
+    /// for keydown/keyup. Keypress derives its character code at dispatch.
+    pub key_code: u32,
+    /// DOM_KEY_LOCATION_STANDARD/LEFT/RIGHT/NUMPAD.
+    pub location: u32,
+    pub is_composing: bool,
     pub modifiers: EventModifiers,
     pub repeat: bool,
     pub target_node_id: Option<u64>,
+}
+
+/// Chromium retains the legacy Windows virtual-key value even on non-Windows
+/// platforms because web content still consumes KeyboardEvent.keyCode/which.
+pub fn LegacyKeyCode(key: &str) -> u32 {
+    if key.len() == 1 {
+        let byte = key.as_bytes()[0];
+        return match byte {
+            b'a'..=b'z' => u32::from(byte.to_ascii_uppercase()),
+            b'A'..=b'Z' | b'0'..=b'9' => u32::from(byte),
+            b';' | b':' => 186,
+            b'=' | b'+' => 187,
+            b',' | b'<' => 188,
+            b'-' | b'_' => 189,
+            b'.' | b'>' => 190,
+            b'/' | b'?' => 191,
+            b'`' | b'~' => 192,
+            b'[' | b'{' => 219,
+            b'\\' | b'|' => 220,
+            b']' | b'}' => 221,
+            b'\'' | b'"' => 222,
+            _ => 0,
+        };
+    }
+    match key {
+        "Backspace" => 8,
+        "Tab" => 9,
+        "Enter" => 13,
+        "Shift" => 16,
+        "Control" => 17,
+        "Alt" => 18,
+        "CapsLock" => 20,
+        "Escape" => 27,
+        " " | "Spacebar" => 32,
+        "PageUp" => 33,
+        "PageDown" => 34,
+        "End" => 35,
+        "Home" => 36,
+        "ArrowLeft" => 37,
+        "ArrowUp" => 38,
+        "ArrowRight" => 39,
+        "ArrowDown" => 40,
+        "Insert" => 45,
+        "Delete" => 46,
+        "Meta" => 91,
+        "ContextMenu" => 93,
+        "NumLock" => 144,
+        "ScrollLock" => 145,
+        _ if key.starts_with('F') => key[1..]
+            .parse::<u32>()
+            .ok()
+            .filter(|number| (1..=24).contains(number))
+            .map_or(0, |number| 111 + number),
+        _ => 0,
+    }
+}
+
+/// Best-effort DOM `code` for protocol input that did not supply a physical
+/// code. Native input always supplies the real winit physical key.
+pub fn DomCodeForKey(key: &str) -> String {
+    if key.len() == 1 {
+        let byte = key.as_bytes()[0];
+        return match byte {
+            b'a'..=b'z' | b'A'..=b'Z' => format!("Key{}", (byte as char).to_ascii_uppercase()),
+            b'0'..=b'9' => format!("Digit{}", byte as char),
+            b' ' => "Space".into(),
+            _ => String::new(),
+        };
+    }
+    match key {
+        "Control" => "ControlLeft",
+        "Shift" => "ShiftLeft",
+        "Alt" => "AltLeft",
+        "Meta" => "MetaLeft",
+        value
+            if matches!(
+                value,
+                "Backspace"
+                    | "Tab"
+                    | "Enter"
+                    | "Escape"
+                    | "PageUp"
+                    | "PageDown"
+                    | "End"
+                    | "Home"
+                    | "ArrowLeft"
+                    | "ArrowUp"
+                    | "ArrowRight"
+                    | "ArrowDown"
+                    | "Insert"
+                    | "Delete"
+                    | "ContextMenu"
+                    | "CapsLock"
+                    | "NumLock"
+                    | "ScrollLock"
+            ) || value.starts_with('F') =>
+        {
+            value
+        }
+        _ => "",
+    }
+    .into()
 }
 #[derive(Clone, Debug, Default)]
 pub struct CompositionEvent {

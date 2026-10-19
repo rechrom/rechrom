@@ -522,9 +522,7 @@ impl<'o> PaintContext<'o> {
         node: &PaintTreeNode<'_>,
         rect: PaintRect,
         opaqueness: crate::paint_engine::PaintHitTestOpaqueness,
-        scroll_translation: std::sync::Arc<
-            crate::paint_property_tree::TransformPaintPropertyNode,
-        >,
+        scroll_translation: std::sync::Arc<crate::paint_property_tree::TransformPaintPropertyNode>,
         scrolling_contents_cull_rect: PaintRect,
     ) {
         let fragment = node.fragment.as_deref().expect("scroll hit-test fragment");

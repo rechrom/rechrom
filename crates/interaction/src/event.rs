@@ -80,7 +80,12 @@ pub struct Event {
     pub modifiers: EventModifiers,
     pub button: MouseButton,
     pub key: String,
+    pub code: String,
     pub text: String,
+    pub key_code: u32,
+    pub char_code: u32,
+    pub key_location: u32,
+    pub is_composing: bool,
     pub input_type: String,
     pub repeat: bool,
     pub identity: u64,
@@ -109,7 +114,12 @@ impl Default for Event {
             modifiers: EventModifiers::default(),
             button: MouseButton::kNone,
             key: String::new(),
+            code: String::new(),
             text: String::new(),
+            key_code: 0,
+            char_code: 0,
+            key_location: 0,
+            is_composing: false,
             input_type: String::new(),
             repeat: false,
             identity: NextEventIdentity(),
@@ -169,7 +179,11 @@ pub fn MakeEvent(input: &InputEvent) -> Event {
                 EventType::kKeyUp
             };
             event.key = v.key.clone();
+            event.code = v.code.clone();
             event.text = v.text.clone();
+            event.key_code = v.key_code;
+            event.key_location = v.location;
+            event.is_composing = v.is_composing;
             event.modifiers = v.modifiers;
             event.repeat = v.repeat;
             event.target_node_id = v.target_node_id.unwrap_or(0);

@@ -2726,6 +2726,7 @@ impl CSSSelectorParser {
                         | kPseudoHas
                         | kPseudoScope
                         | kPseudoRoot
+                        | kPseudoTarget
                         | kPseudoEmpty
                         | kPseudoFirstChild
                         | kPseudoLastChild

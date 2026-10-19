@@ -212,7 +212,9 @@ pub(crate) fn attach_commands(commands: &mpsc::Sender<Command>) {
     }));
     let key_commands = commands.clone();
     devtools::set_key_handler(Arc::new(move |key| {
-        use interaction::input_event::{EventModifiers, InputEvent, KeyEvent, KeyEventType};
+        use interaction::input_event::{
+            DomCodeForKey, EventModifiers, InputEvent, KeyEvent, KeyEventType, LegacyKeyCode,
+        };
         let down = key.event_type != "keyUp";
         let modifiers = EventModifiers {
             alt: key.modifiers & 1 != 0,
@@ -235,6 +237,17 @@ pub(crate) fn attach_commands(commands: &mpsc::Sender<Command>) {
                     } else {
                         KeyEventType::kUp
                     },
+                    code: if key.code.is_empty() {
+                        DomCodeForKey(&key.key)
+                    } else {
+                        key.code
+                    },
+                    key_code: if key.windows_virtual_key_code == 0 {
+                        LegacyKeyCode(&key.key)
+                    } else {
+                        key.windows_virtual_key_code
+                    },
+                    location: key.location,
                     key: key.key,
                     text,
                     modifiers,

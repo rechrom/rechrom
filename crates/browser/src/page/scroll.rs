@@ -167,7 +167,10 @@ impl Page {
                     let Some((owner, target)) = self.CompositorScrollOwner(element) else {
                         continue;
                     };
-                    let sequence = self.processed_compositor_scroll_sequence.wrapping_add(1).max(1);
+                    let sequence = self
+                        .processed_compositor_scroll_sequence
+                        .wrapping_add(1)
+                        .max(1);
                     self.ApplyCompositorScrollOffset(
                         sequence,
                         owner,

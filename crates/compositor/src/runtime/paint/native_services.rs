@@ -49,6 +49,7 @@ struct Diagnostics {
     config: CpuNativePaintDiagnostics,
     crash_keys: Mutex<BTreeMap<(String, String), String>>,
     random: AtomicU64,
+    diagnostic_dump_count: AtomicU64,
 }
 impl Diagnostics {
     fn event(&self, kind: &str, name: &str, value: serde_json::Value) {
@@ -375,13 +376,37 @@ impl CpuPaintPlatform<SkRegion> for CpuNativePaintPlatform {
         })
     }
     fn DumpWithoutCrashing(&self) {
-        eprintln!(
-            "Paint diagnostic dump: {:?}",
-            self.diagnostics
+        // Chromium sends these crash keys to its out-of-process dump
+        // reporter. Serializing the full property trees to stderr on the Page
+        // path can itself block rendering for seconds. Preserve an observable,
+        // rate-limited diagnostic while keeping the already-retained keys in
+        // their owner for a debugger/dump backend.
+        let count = self
+            .diagnostics
+            .diagnostic_dump_count
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        if count == 1 || count.is_power_of_two() {
+            let keys = self
+                .diagnostics
                 .crash_keys
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
-        );
+                .unwrap_or_else(|e| e.into_inner());
+            let chunk = keys
+                .get(&("ChunkId".to_owned(), "id".to_owned()))
+                .cloned()
+                .unwrap_or_default();
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "component": "paint",
+                    "kind": "diagnostic-dump",
+                    "count": count,
+                    "crash_key_count": keys.len(),
+                    "chunk": chunk,
+                })
+            );
+        }
     }
     fn BeginPacUpdateTrace(&self) -> PaintTraceScope {
         self.diagnostics
@@ -514,6 +539,7 @@ impl CpuPaintServices<SkRegion> {
             config: diagnostics,
             crash_keys: Mutex::new(BTreeMap::new()),
             random: AtomicU64::new(u64::from_ne_bytes(seed)),
+            diagnostic_dump_count: AtomicU64::new(0),
         });
         let values = Arc::new(CpuNativePaintValueServices {
             diagnostics: diagnostics.clone(),

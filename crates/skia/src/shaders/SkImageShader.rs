@@ -34,6 +34,7 @@ pub struct SkImageShader<'a> {
     tile_mode_x: SpreadMode,
     tile_mode_y: SpreadMode,
     native_sampling: bool,
+    source_subset: Option<[f32; 4]>,
     pub(crate) opacity: NormalizedF32,
     pub(crate) transform: Transform,
 }
@@ -55,6 +56,7 @@ impl<'a> SkImageShader<'a> {
             tile_mode_x: spread_mode,
             tile_mode_y: spread_mode,
             native_sampling: false,
+            source_subset: None,
             quality,
             opacity: NormalizedF32::new_clamped(opacity),
             transform,
@@ -77,7 +79,30 @@ impl<'a> SkImageShader<'a> {
             tile_mode_x,
             tile_mode_y,
             native_sampling: true,
+            source_subset: None,
             quality,
+            opacity: NormalizedF32::new_clamped(opacity),
+            transform,
+        })
+    }
+
+    /// Source: SkBitmapDevice.cpp:478-498,527-543. The CPU strict draw uses
+    /// a rounded-out pixel subset, retaining the fractional source mapping.
+    /// Carrying its gather domain avoids copying or snapshotting source pixels.
+    pub fn new_native_subset(
+        pixmap: PixmapRef<'a>,
+        source_subset: [f32; 4],
+        quality: FilterQuality,
+        opacity: f32,
+        transform: Transform,
+    ) -> Shader<'a> {
+        Shader::Pattern(Self {
+            pixmap,
+            quality,
+            tile_mode_x: SpreadMode::Pad,
+            tile_mode_y: SpreadMode::Pad,
+            native_sampling: true,
+            source_subset: Some(source_subset),
             opacity: NormalizedF32::new_clamped(opacity),
             transform,
         })
@@ -117,6 +142,7 @@ impl<'a> SkImageShader<'a> {
             tile_mode_x: self.tile_mode_x,
             tile_mode_y: self.tile_mode_y,
             round_down_at_integer: self.native_sampling && quality == FilterQuality::Nearest,
+            source_subset: self.source_subset,
             inv_width: 1.0 / self.pixmap.width() as f32,
             inv_height: 1.0 / self.pixmap.height() as f32,
         };

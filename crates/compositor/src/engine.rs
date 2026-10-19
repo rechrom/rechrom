@@ -322,6 +322,9 @@ impl CompositorEngine {
     ) -> Result<CompositorOutput, CompositorError> {
         self.assembly.Commit(artifact, viewport)
     }
+    pub fn FinishMainFrameWithoutUpdates(&mut self) -> Result<CompositorOutput, CompositorError> {
+        self.assembly.FinishMainFrameWithoutUpdates()
+    }
     pub fn BeginFrame(
         &mut self,
         args: BeginFrameArgs,

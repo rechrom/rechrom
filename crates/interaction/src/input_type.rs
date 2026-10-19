@@ -95,7 +95,14 @@ fn DispatchKeyPress(event: &mut Event, id: u64, dispatch: &SyntheticEventDispatc
     }
     let mut keypress = MakeSyntheticEvent(EventType::kKeyPress, id);
     keypress.key = event.key.clone();
+    keypress.code = event.code.clone();
     keypress.text = event.text.clone();
+    // KeyboardEvent::KeyboardEvent(WebKeyboardEvent) uses the first text
+    // character for both charCode and keyCode on keypress.
+    keypress.char_code = event.text.chars().next().map_or(0, u32::from);
+    keypress.key_code = keypress.char_code;
+    keypress.key_location = event.key_location;
+    keypress.is_composing = event.is_composing;
     keypress.modifiers = event.modifiers;
     keypress.repeat = event.repeat;
     dispatch(&mut keypress, id);

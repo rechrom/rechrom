@@ -36,6 +36,7 @@ members = [
     "crates/compositor",
     "crates/viz",
     "crates/renderer",
+    "crates/renderer_skia",
     "crates/dom",
     "crates/html",
     "crates/css_parser",

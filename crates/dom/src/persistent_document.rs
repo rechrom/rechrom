@@ -5929,7 +5929,9 @@ impl PersistentDocument {
         let (C::Node(node)
         | C::AttributeValue(node)
         | C::PlaceholderShown(node)
+        | C::EmptyState(node)
         | C::Directionality(node)
+        | C::Defined(node)
         | C::ControlPseudo(node, _)
         | C::InlineStyle(node)
         | C::ExportParts(node)
@@ -5993,11 +5995,7 @@ impl PersistentDocument {
         }
         self.MarkStyleElementTextDirty(parent);
         if was_empty != is_empty || self.arena[parent].IsHTMLElement("textarea") {
-            self.RecordStyleChange(crate::style_state::StyleChange::Children(parent));
-            if self.ShouldRecordStyleChange(parent) {
-                self.style_state.non_append_children.insert(parent);
-                self.style_state.append_only_children.remove(&parent);
-            }
+            self.RecordStyleChange(crate::style_state::StyleChange::EmptyState(parent));
         }
         self.RecordLayoutGeometryChange(parent);
         self.RecordSelectContentGeometryChange(parent);
@@ -6284,6 +6282,9 @@ impl PersistentDocument {
         self.RecordStyleChange(crate::style_state::StyleChange::Node(node));
         self.RecordSiblingSensitivity(node, true);
         self.RecordDescendantSensitivity(node, true);
+    }
+    pub(crate) fn RecordDefinedStyleChange(&mut self, node: usize) {
+        self.RecordStyleChange(crate::style_state::StyleChange::Defined(node));
     }
     pub fn ResolvedStyleHandle(&self, node: usize) -> Option<std::sync::Arc<ResolvedNodeStyle>> {
         self.resolved_styles.get(&self.arena[node].id).cloned()

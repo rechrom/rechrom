@@ -198,7 +198,7 @@ fn AttributeNameMatches(data: &DOMAttribute, name: &QualifiedName, ignore_case: 
     } else {
         name.LocalName().EqualsUtf8(&data.local_name)
     }) && (name.NamespaceURI().IsNull() && data.namespace_uri.is_empty()
-        || name.NamespaceURI() == &AtomicString::from_str("*")
+        || name.NamespaceURI().EqualsUtf8("*")
         || name.NamespaceURI().EqualsUtf8(&data.namespace_uri))
 }
 
@@ -209,6 +209,11 @@ struct PersistentElementFilters {
     subtrees: HashMap<usize, (u64, u32)>,
     identifiers: HashMap<usize, (u64, Rc<Vec<u32>>)>,
     classes: HashMap<usize, (u64, Rc<[AtomicString]>)>,
+    // Blink's Attribute stores atomized names and values in ElementData. The
+    // compact DOM boundary keeps UTF-8 strings, so retain their exact atoms in
+    // the document-owned selector cache instead of re-entering the global atom
+    // table for every RuleData candidate.
+    attribute_atoms: HashMap<String, AtomicString>,
     empty_classes: Rc<[AtomicString]>,
     local_name_atoms: HashMap<usize, AtomicString>,
     id_atoms: HashMap<usize, (u64, AtomicString)>,
@@ -378,23 +383,41 @@ impl<'d> PersistentSelectorBackend<'d> {
         }
     }
     fn class_contains(&self, index: usize, class: &AtomicString) -> bool {
-        self.attr(index, "class").is_some_and(|v| {
-            v.split_ascii_whitespace().any(|v| {
-                if self.InQuirksMode(&index) {
-                    class.EqualsUtf8IgnoringAsciiCase(v)
-                } else {
-                    class.EqualsUtf8(v)
-                }
-            })
+        let classes = self.ClassNamesForElement(index);
+        classes.iter().any(|candidate| {
+            if self.InQuirksMode(&index) {
+                candidate.EqualsUtf8IgnoringAsciiCase(&class.Utf8())
+            } else {
+                candidate == class
+            }
         })
     }
     fn namespace(namespace: DOMNamespace) -> AtomicString {
-        AtomicString::from_str(match namespace {
-            DOMNamespace::kHTML => "http://www.w3.org/1999/xhtml",
-            DOMNamespace::kSVG => "http://www.w3.org/2000/svg",
-            DOMNamespace::kMathML => "http://www.w3.org/1998/Math/MathML",
-            DOMNamespace::kNone => "",
-        })
+        static HTML: std::sync::LazyLock<AtomicString> =
+            std::sync::LazyLock::new(|| AtomicString::from_str("http://www.w3.org/1999/xhtml"));
+        static SVG: std::sync::LazyLock<AtomicString> =
+            std::sync::LazyLock::new(|| AtomicString::from_str("http://www.w3.org/2000/svg"));
+        static MATHML: std::sync::LazyLock<AtomicString> = std::sync::LazyLock::new(|| {
+            AtomicString::from_str("http://www.w3.org/1998/Math/MathML")
+        });
+        match namespace {
+            DOMNamespace::kHTML => HTML.clone(),
+            DOMNamespace::kSVG => SVG.clone(),
+            DOMNamespace::kMathML => MATHML.clone(),
+            DOMNamespace::kNone => AtomicString::from_str(""),
+        }
+    }
+
+    pub(crate) fn AttributeAtom(&self, value: &str) -> AtomicString {
+        if let Some(atom) = self.filters.borrow().attribute_atoms.get(value) {
+            return atom.clone();
+        }
+        let atom = AtomicString::from_str(value);
+        self.filters
+            .borrow_mut()
+            .attribute_atoms
+            .insert(value.to_owned(), atom.clone());
+        atom
     }
     pub(crate) fn RememberSubjectFlags(
         &self,
@@ -925,13 +948,13 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         AttributeNameMatches(a, name, true)
     }
     fn AttributeValue(&self, a: &Self::Attribute) -> AtomicString {
-        AtomicString::from_str(&a.value)
+        self.AttributeAtom(&a.value)
     }
     fn CouldHaveClass(&self, e: &Self::Element, class: &AtomicString) -> bool {
         self.class_contains(*e, class)
     }
     fn HasClass(&self, e: &Self::Element) -> bool {
-        self.attr(*e, "class").is_some_and(|v| !v.is_empty())
+        !self.ClassNamesForElement(*e).is_empty()
     }
     fn ClassNamesContain(&self, e: &Self::Element, class: &AtomicString) -> bool {
         self.class_contains(*e, class)

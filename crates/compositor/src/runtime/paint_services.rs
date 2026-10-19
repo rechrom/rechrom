@@ -816,7 +816,27 @@ impl<R: CpuSkiaBackend> CpuPaintServices<R> {
                 property_tree_sequence_number: sequence,
             };
         if let Some(previous) = previous_artifact {
-            pac.SetNeedsUpdateAfterRepaint(previous, input.artifact(), self);
+            // Blink's LocalFrameView/PaintArtifactCompositor owner calls
+            // SetNeedsUpdate before SetNeedsUpdateAfterRepaint when the paint
+            // property trees changed. Page publishes both immutable artifacts
+            // here, so compare their resident node identities directly and
+            // preserve that caller contract. Otherwise PAC treats this known
+            // lifecycle change as an under-invalidation and builds a full
+            // crash-key dump before falling back to the same full update.
+            //
+            // Source: local_frame_view.cc:3545-3563;
+            // paint_artifact_compositor.cc:468-515,646-671.
+            let property_trees_changed = previous.chunks.len() == input.artifact().chunks.len()
+                && previous
+                    .chunks
+                    .iter()
+                    .zip(&input.artifact().chunks)
+                    .any(|(old, new)| !old.properties.same_nodes(&new.properties));
+            if property_trees_changed {
+                pac.SetNeedsUpdate();
+            } else {
+                pac.SetNeedsUpdateAfterRepaint(previous, input.artifact(), self);
+            }
         }
         if !pac.TryFastPathUpdate(input.artifact().clone(), &mut context) {
             pac.Update(

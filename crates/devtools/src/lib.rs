@@ -140,7 +140,10 @@ pub fn set_insert_text_handler(handler: InsertTextHandler) {
 pub struct KeyInjection {
     pub event_type: String,
     pub key: String,
+    pub code: String,
     pub text: String,
+    pub windows_virtual_key_code: u32,
+    pub location: u32,
     pub modifiers: u8,
     pub repeat: bool,
 }
@@ -170,6 +173,37 @@ impl KeyInjection {
             .map(|v| v.as_str().ok_or("text must be a string"))
             .transpose()?
             .unwrap_or("");
+        let code = params
+            .get("code")
+            .map(|v| v.as_str().ok_or("code must be a string"))
+            .transpose()?
+            .unwrap_or("");
+        if code.len() > 256 {
+            return Err("code exceeds 256 bytes".into());
+        }
+        let windows_virtual_key_code = params
+            .get("windowsVirtualKeyCode")
+            .map(|v| {
+                v.as_u64()
+                    .and_then(|value| u32::try_from(value).ok())
+                    .ok_or("windowsVirtualKeyCode must be an unsigned 32-bit integer")
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let location = if params
+            .get("isKeypad")
+            .map(|v| v.as_bool().ok_or("isKeypad must be a boolean"))
+            .transpose()?
+            .unwrap_or(false)
+        {
+            3
+        } else if code.ends_with("Left") {
+            1
+        } else if code.ends_with("Right") {
+            2
+        } else {
+            0
+        };
         if text.len() > MAX_BODY {
             return Err("text exceeds 64 KiB".into());
         }
@@ -190,7 +224,10 @@ impl KeyInjection {
         Ok(Self {
             event_type: event_type.into(),
             key: key.into(),
+            code: code.into(),
             text: text.into(),
+            windows_virtual_key_code,
+            location,
             modifiers: modifiers as u8,
             repeat,
         })

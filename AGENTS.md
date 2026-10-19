@@ -292,11 +292,20 @@ URL/input
   swap acknowledgements; output is a validated aggregate render pass and swap
   decision for Renderer. It owns surface aggregation and display scheduling as
   pure state/logic, with no Skia, window, IOSurface, GPU, or OS dependency.
-- `renderer`: input is Viz's immutable aggregate/frame data plus raster
-  resources and an abstract render target; output is rendered damage/resource
-  usage and presentation-ready pixels. Platform surface allocation and actual
-  swap/present remain host responsibilities; Renderer never drives Page, DOM,
-  Style, Layout, or Paint backward.
+- `renderer`: input is Viz's immutable aggregate/frame data and a backend-owned
+  render target; output is rendered damage/resource usage and completed output.
+  It owns translated DirectRenderer traversal, damage, allocation requirements,
+  clipping decisions and BSP ordering. The embedding injects `RendererBackend`
+  at construction. It never reads backend pixel maps or depends directly on
+  Skia, Raster, or a native window, and never drives Page, DOM, Style, Layout,
+  or Paint backward.
+- `renderer_skia`: implements `RendererBackend` using the translated
+  SoftwareRenderer and renderer utilities. It owns CPU pass backings, Canvas
+  execution, sampling/blending/filter execution, Picture playback capability
+  and writes into a borrowed CPU target. Its dependency on `renderer` is
+  one-way; Page constructs and injects `RendererSkiaBackend`. No GPU backend is
+  currently implemented. Native surface allocation and swap/present remain
+  host responsibilities.
 - `browser::Page`: is an independent domain. Pages never reference or invoke
   each other or share mutable document/rendering state. The embedding owns
   their execution placement, lifetime, input routing, and surface embedding.

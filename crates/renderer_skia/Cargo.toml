@@ -1,0 +1,25 @@
+[package]
+name = "renderer_skia"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+renderer = { path = "../renderer" }
+bytemuck = "1.24"
+compositor_core = { package = "compositor", path = "../compositor" }
+foundation = { package = "layoutng_foundation", path = "../foundation" }
+skia = { path = "../skia" }
+paint = { path = "../paint" }
+viz = { path = "../viz" }
+raster = { path = "../raster" }
+
+[dev-dependencies]
+layoutng_assembly = { path = "../layoutng_assembly" }
+
+[features]
+default = []
+text = ["raster/text"]
+source_replay = ["raster/source_replay"]
+pure_replay = ["raster/pure_replay"]
+compose_work_profile = []
+profiling = ["raster/profiling", "skia/profiling"]

@@ -40,6 +40,30 @@ impl FilterOperations {
             .iter()
             .fold(rect, |r, op| op.MapRect(r, ctm))
     }
+    /// Typed geometry adapter for the render-pass filter scale/origin carried
+    /// by the frame. Preserve the existing MapRect algorithm without exposing
+    /// its Skia matrix representation to the Renderer management boundary.
+    pub fn MapRectWithScaleAndOrigin(
+        &self,
+        rect: Rect,
+        scale: foundation::gfx::Vector2dF,
+        origin: foundation::gfx::PointF,
+    ) -> Rect {
+        let matrix = SkMatrix3x3 {
+            values: [
+                scale.x(),
+                0.,
+                origin.x() * scale.x(),
+                0.,
+                scale.y(),
+                origin.y() * scale.y(),
+                0.,
+                0.,
+                1.,
+            ],
+        };
+        self.MapRect(rect, Some(&matrix))
+    }
     pub fn MapRectReverse(&self, rect: Rect, ctm: &SkMatrix3x3) -> Rect {
         self.operations_
             .iter()

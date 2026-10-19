@@ -114,7 +114,10 @@ fn draw_page_surfaces(
     {
         return Err(io::Error::other("invalid window target"));
     }
-    for row in pixels.chunks_exact_mut(stride).take(viewport.height as usize) {
+    for row in pixels
+        .chunks_exact_mut(stride)
+        .take(viewport.height as usize)
+    {
         row[..viewport.width as usize].fill(0);
     }
     for (frame, destination) in pages {

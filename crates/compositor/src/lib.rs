@@ -35,9 +35,8 @@ pub type NativeCompositorRenderPass = runtime::frame::CompositorRenderPass<Nativ
 pub type NativeCompositorFrameMetadata =
     runtime::metadata::CompositorFrameMetadata<NativeCompositorTypes>;
 pub type NativeTransferableResource = runtime::resources::CpuTransferableResource;
-pub type NativeCpuResourceLease = dyn runtime::cpu_raster::CpuRasterResourceLease<
-    PixelFormat = skia::PixelFormat,
->;
+pub type NativeCpuResourceLease =
+    dyn runtime::cpu_raster::CpuRasterResourceLease<PixelFormat = skia::PixelFormat>;
 /// The value submitted through LayerTreeFrameSink. Chromium carries the
 /// LocalSurfaceId beside each CompositorFrame; keeping that pair intact lets
 /// Viz reject an older resize generation instead of guessing from dimensions.

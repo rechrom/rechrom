@@ -288,6 +288,7 @@ dependencies = [
  "paint",
  "raster",
  "renderer",
+ "renderer_skia",
  "resource",
  "style",
  "url",
@@ -3169,12 +3170,22 @@ dependencies = [
 name = "renderer"
 version = "0.0.1"
 dependencies = [
+ "compositor",
+ "layoutng_foundation",
+ "viz",
+]
+
+[[package]]
+name = "renderer_skia"
+version = "0.0.1"
+dependencies = [
  "bytemuck",
  "compositor",
  "layoutng_assembly",
  "layoutng_foundation",
  "paint",
  "raster",
+ "renderer",
  "skia",
  "viz",
 ]

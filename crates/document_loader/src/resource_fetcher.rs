@@ -653,29 +653,46 @@ impl ResourceFetcher {
                 DecodedImageResource::Bitmap {
                     resource_id,
                     image: bitmap,
-                } => (
-                    resource_id,
-                    PaintImage {
-                        id: resource_id,
-                        paint_image_id: image_resource::PaintImageId::allocate(),
-                        // Source: platform/graphics/bitmap_image.cc:155-166.
-                        // Only full-response successful decode reaches this
-                        // point; incremental/partial image publication is a
-                        // separate contract that this loader does not emit.
-                        compositor_metadata: Ok(image_resource::PaintImageMetadata {
-                            animation: bitmap.animation,
-                            completion_state: image_resource::PaintImageCompletionState::Done,
-                            is_multipart,
-                        }),
-                        revision: 1,
-                        width: bitmap.width,
-                        height: bitmap.height,
-                        orientation: bitmap.orientation,
-                        content: PaintImageContent::Bitmap(bitmap.rgba8.into()),
-                        ..Default::default()
-                    },
-                    false,
-                ),
+                } => {
+                    // BitmapImage retains a concrete decoder/frame owner for
+                    // animated formats before it publishes a PaintImage. This
+                    // CPU decoder currently exposes only one immutable pixel
+                    // buffer, so reject that individual resource at the image
+                    // loading boundary. Letting incomplete animation facts
+                    // enter PaintArtifact would turn a recoverable image
+                    // decode failure into a terminal compositor/Page error.
+                    //
+                    // Source: third_party/blink/renderer/platform/graphics/
+                    // bitmap_image.cc:155-166; image.cc:217-234.
+                    if let image_resource::PaintImageAnimationMetadata::Unavailable(error) =
+                        &bitmap.animation
+                    {
+                        return Err(io::Error::new(io::ErrorKind::Unsupported, error.clone()));
+                    }
+                    (
+                        resource_id,
+                        PaintImage {
+                            id: resource_id,
+                            paint_image_id: image_resource::PaintImageId::allocate(),
+                            // Source: platform/graphics/bitmap_image.cc:155-166.
+                            // Only full-response successful decode reaches this
+                            // point; incremental/partial image publication is a
+                            // separate contract that this loader does not emit.
+                            compositor_metadata: Ok(image_resource::PaintImageMetadata {
+                                animation: bitmap.animation,
+                                completion_state: image_resource::PaintImageCompletionState::Done,
+                                is_multipart,
+                            }),
+                            revision: 1,
+                            width: bitmap.width,
+                            height: bitmap.height,
+                            orientation: bitmap.orientation,
+                            content: PaintImageContent::Bitmap(bitmap.rgba8.into()),
+                            ..Default::default()
+                        },
+                        false,
+                    )
+                }
             };
             // Source catches validation while committing the decoded image,
             // as well as decoder failures. Keep the consumed id and continue
