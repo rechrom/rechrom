@@ -155,7 +155,7 @@ impl Renderer {
                 .any(|pass| pass.Surface() == *surface && pass.RenderPassId() == *id)
         });
         for pass in frame.RenderPasses() {
-            let pass_rect = pass.RenderPass().output_rect;
+            let pass_rect = pass.OutputRect();
             if pass_rect.IsEmpty() {
                 continue;
             }
@@ -247,7 +247,7 @@ impl Renderer {
                 .ok_or_else(|| io::Error::other("completed root pass is unavailable"))?;
             let d = pass.Destination();
             let mut damage = if target.retained && pass.DamageIsContinuous() {
-                let source = pass.RenderPass().output_rect;
+                let source = pass.OutputRect();
                 let damage = pass.DamageRect();
                 if source.width == d.width && source.height == d.height {
                     Rect::new(
@@ -435,14 +435,13 @@ fn draw_pass(
     rasterizer: &mut Option<Box<dyn PictureRasterizer>>,
     update: &mut RenderUpdate,
 ) -> io::Result<()> {
-    let output = pass.RenderPass().output_rect;
+    let output = pass.OutputRect();
     // Source: SoftwareRenderer visits the source front-to-back quad list in reverse.
     for quad in pass.Quads().iter().rev() {
         let quad_started = std::env::var_os("BROWSER_PROFILE_INPUT")
             .is_some()
             .then(std::time::Instant::now);
         let shared = pass
-            .RenderPass()
             .TrySharedQuadState(
                 quad.geometry
                     .shared_quad_state
@@ -625,8 +624,7 @@ fn draw_pass(
                     .find(|p| p.Surface() == pass.Surface() && p.RenderPassId() == *render_pass_id)
                     .ok_or_else(|| {
                         io::Error::other("native child render-pass value is unavailable")
-                    })?
-                    .RenderPass();
+                    })?;
                 let filter_matrix = SkTransform::from_row(
                     filters_scale.x(),
                     0.,
@@ -636,7 +634,7 @@ fn draw_pass(
                     filters_origin.y() * filters_scale.y(),
                 );
                 let filters = raster::native_filters::BuildFilters(
-                    &child_pass.filters,
+                    child_pass.Filters(),
                     canvas.local_to_device().pre_concat(filter_matrix),
                 )?;
                 let has_filters = !filters.is_empty();
@@ -656,7 +654,7 @@ fn draw_pass(
                             1.,
                         ],
                     };
-                    let r = child_pass.filters.MapRect(
+                    let r = child_pass.Filters().MapRect(
                         foundation::gfx::Rect::new(
                             Point::new(r.x, r.y),
                             Size::new(r.width, r.height),
@@ -686,7 +684,7 @@ fn draw_pass(
                     width: mask_uv_rect.width() as f64 * mask_texture_size.width() as f64,
                     height: mask_uv_rect.height() as f64 * mask_texture_size.height() as f64,
                 };
-                if !child_pass.backdrop_filters.IsEmpty() {
+                if !child_pass.BackdropFilters().IsEmpty() {
                     if mask.is_some() {
                         canvas.save_layer_with_native_filters(
                             &DrawCommand::default(),
@@ -696,8 +694,8 @@ fn draw_pass(
                     }
                     draw_backdrop(
                         canvas,
-                        &child_pass.backdrop_filters,
-                        child_pass.backdrop_filter_bounds.as_ref(),
+                        child_pass.BackdropFilters(),
+                        child_pass.BackdropFilterBounds(),
                         filter_matrix,
                         quad.geometry.visible_rect,
                         shared.opacity,

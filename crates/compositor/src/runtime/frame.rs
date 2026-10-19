@@ -31,6 +31,17 @@ impl From<u64> for RenderPassId {
 /// Only that pass can allocate them; source EraseQuad invalidates later handles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SharedQuadStateHandle(usize);
+impl SharedQuadStateHandle {
+    /// Rebind a copied Viz quad to a shared state in its destination pass.
+    pub const fn FromIndex(index: usize) -> Self {
+        Self(index)
+    }
+
+    /// Resolves an immutable handle in an owning Viz render pass.
+    pub const fn Index(self) -> usize {
+        self.0
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DrawQuadHandle(usize);
 /// External geometry/Paint values selected once by the production family.
@@ -180,7 +191,7 @@ pub struct QuadGeometry {
     pub visible_rect: Rect,
     pub needs_blending: bool,
 }
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum QuadMaterial<L> {
     /// Source components/viz/common/quads/picture_draw_quad.h:29-50.
     Picture {
@@ -223,10 +234,89 @@ pub enum QuadMaterial<L> {
         intersects_damage_under: bool,
     },
 }
-#[derive(Clone, Debug)]
+impl<L> Clone for QuadMaterial<L> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Picture {
+                tex_coord_rect,
+                nearest_neighbor,
+                content_rect,
+                contents_scale,
+                image_animation_map,
+                display_item_list,
+                raster_inducing_scroll_offsets,
+            } => Self::Picture {
+                tex_coord_rect: *tex_coord_rect,
+                nearest_neighbor: *nearest_neighbor,
+                content_rect: *content_rect,
+                contents_scale: *contents_scale,
+                image_animation_map: image_animation_map.clone(),
+                display_item_list: display_item_list.clone(),
+                raster_inducing_scroll_offsets: raster_inducing_scroll_offsets.clone(),
+            },
+            Self::SharedElement {
+                element_resource_id,
+            } => Self::SharedElement {
+                element_resource_id: *element_resource_id,
+            },
+            Self::SolidColor {
+                color,
+                force_anti_aliasing_off,
+            } => Self::SolidColor {
+                color: *color,
+                force_anti_aliasing_off: *force_anti_aliasing_off,
+            },
+            Self::DebugBorder { color, width } => Self::DebugBorder {
+                color: *color,
+                width: *width,
+            },
+            Self::Tile {
+                resource_id,
+                tex_coord_rect,
+                nearest_neighbor,
+                force_anti_aliasing_off,
+            } => Self::Tile {
+                resource_id: *resource_id,
+                tex_coord_rect: *tex_coord_rect,
+                nearest_neighbor: *nearest_neighbor,
+                force_anti_aliasing_off: *force_anti_aliasing_off,
+            },
+            Self::CompositorRenderPass {
+                render_pass_id,
+                mask_resource_id,
+                mask_uv_rect,
+                mask_texture_size,
+                filters_scale,
+                filters_origin,
+                force_anti_aliasing_off,
+                backdrop_filter_quality,
+                intersects_damage_under,
+            } => Self::CompositorRenderPass {
+                render_pass_id: *render_pass_id,
+                mask_resource_id: *mask_resource_id,
+                mask_uv_rect: *mask_uv_rect,
+                mask_texture_size: *mask_texture_size,
+                filters_scale: *filters_scale,
+                filters_origin: *filters_origin,
+                force_anti_aliasing_off: *force_anti_aliasing_off,
+                backdrop_filter_quality: *backdrop_filter_quality,
+                intersects_damage_under: *intersects_damage_under,
+            },
+        }
+    }
+}
+#[derive(Debug)]
 pub struct DrawQuad<L> {
     pub geometry: QuadGeometry,
     pub material: QuadMaterial<L>,
+}
+impl<L> Clone for DrawQuad<L> {
+    fn clone(&self) -> Self {
+        Self {
+            geometry: self.geometry,
+            material: self.material.clone(),
+        }
+    }
 }
 impl<L> LayerImplDrawQuad for DrawQuad<L> {
     fn resource_id(&self) -> ResourceId {

@@ -167,6 +167,11 @@ pub struct PageRenderPipeline {
     pixels: CpuRasterProvider,
     viz: viz::native::VizEngine,
     renderer: renderer::Renderer,
+    surface: viz::native::SurfaceId,
+    next_surface: u64,
+    local_surface_id: Option<compositor::runtime::types::LocalSurfaceId>,
+    surface_parameters: Option<(u32, u32, u32)>,
+    rendered_surface: Option<viz::native::SurfaceId>,
     external_presentation: bool,
     outbound_frames: std::collections::VecDeque<NativeCompositorFrameSubmission>,
     deferred_effects: Vec<CompositorMainThreadEffect>,
@@ -361,6 +366,11 @@ impl PageRenderPipeline {
             pixels,
             viz: viz::native::VizEngine::New(),
             renderer,
+            surface: viz::native::SurfaceId(1),
+            next_surface: 2,
+            local_surface_id: None,
+            surface_parameters: None,
+            rendered_surface: None,
             external_presentation,
             outbound_frames: Default::default(),
             deferred_effects: Vec::new(),
@@ -369,6 +379,66 @@ impl PageRenderPipeline {
             pending: None,
             presentable: None,
         }, presenter)
+    }
+
+    fn SubmitInternalFrame(
+        &mut self,
+        submission: NativeCompositorFrameSubmission,
+    ) -> io::Result<(
+        bool,
+        Vec<compositor::runtime::resources::CpuReturnedResource>,
+    )> {
+        let local_surface_id = submission.local_surface_id;
+        let frame = submission.frame;
+        let root = frame
+            .render_pass_list
+            .last()
+            .ok_or_else(|| io::Error::other("compositor frame has no root render pass"))?;
+        let parameters = (
+            root.output_rect.width.max(0) as u32,
+            root.output_rect.height.max(0) as u32,
+            frame.metadata.device_scale_factor.to_bits(),
+        );
+        let mut returned = Vec::new();
+        if let Some(current) = self.local_surface_id {
+            let same_embed = current.embed_token == local_surface_id.embed_token;
+            if same_embed && !local_surface_id.IsSameOrNewerThan(&current) {
+                returned.extend(frame.resource_list.iter().map(
+                    compositor::runtime::resources::CpuTransferableResource::ToReturnedResource,
+                ));
+                return Ok((false, returned));
+            }
+        }
+        let generation_changed = self
+            .local_surface_id
+            .is_some_and(|current| current != local_surface_id);
+        if !generation_changed
+            && self
+                .surface_parameters
+                .is_some_and(|current| current != parameters)
+        {
+            return Err(io::Error::other(
+                "CompositorFrame dimensions changed without a new LocalSurfaceId",
+            ));
+        }
+        if generation_changed {
+            if let Some(resources) = self.viz.DestroySurface(self.surface) {
+                returned.extend(resources);
+            }
+            self.renderer.InvalidateSurface(self.surface);
+            self.surface = viz::native::SurfaceId(self.next_surface);
+            self.next_surface = self.next_surface.wrapping_add(1).max(1);
+            self.rendered_surface = None;
+        }
+        self.local_surface_id = Some(local_surface_id);
+        self.surface_parameters = Some(parameters);
+        returned.extend(
+            self.viz
+                .SubmitFrame(self.surface, frame)
+                .map_err(|error| io::Error::other(error.to_string()))?
+                .returned_resources,
+        );
+        Ok((true, returned))
     }
 
     fn EnsureCompositor(&mut self) -> io::Result<()> {
@@ -413,9 +483,9 @@ impl PageRenderPipeline {
             let Some(frame) = output.frame else {
                 continue;
             };
-            submitted = true;
-            let compositor = self.compositor.as_mut().expect("initialized compositor");
             if self.external_presentation {
+                submitted = true;
+                let compositor = self.compositor.as_mut().expect("initialized compositor");
                 // The move into the Page FrameSink queue transfers ownership;
                 // Chromium acknowledges submission at this boundary, before
                 // Viz draws the frame. Resource returns arrive separately when
@@ -427,19 +497,18 @@ impl PageRenderPipeline {
                         .map_err(|error| io::Error::other(error.to_string()))?,
                 );
             } else {
-                let submission = self
-                    .viz
-                    .SubmitFrame(viz::native::SurfaceId(1), frame.frame)
-                    .map_err(|error| io::Error::other(error.to_string()))?;
+                let (accepted, returned_resources) = self.SubmitInternalFrame(frame)?;
+                submitted |= accepted;
+                let compositor = self.compositor.as_mut().expect("initialized compositor");
                 pending.push_back(
                     compositor
                         .DidReceiveFrameAck()
                         .map_err(|error| io::Error::other(error.to_string()))?,
                 );
-                if !submission.returned_resources.is_empty() {
+                if !returned_resources.is_empty() {
                     pending.push_back(
                         compositor
-                            .ReclaimResources(submission.returned_resources)
+                            .ReclaimResources(returned_resources)
                             .map_err(|error| io::Error::other(error.to_string()))?,
                     );
                 }
@@ -904,7 +973,7 @@ impl PageRenderPipeline {
         self.CommitArtifact(artifact, width, height, scale)?;
         let committed_at = profile_started.map(|_| std::time::Instant::now());
 
-        let surface = viz::native::SurfaceId(1);
+        let surface = self.surface;
         let output = viz::native::DeviceRect::new(0, 0, width as i32, height as i32);
         let placement = viz::native::SurfacePlacement {
             surface_id: surface,
@@ -933,7 +1002,7 @@ impl PageRenderPipeline {
                     pixels: target,
                     format,
                     row_stride: stride,
-                    retained,
+                    retained: retained && self.rendered_surface == Some(surface),
                 },
             )?;
             if let (Some(started), Some(committed), Some(aggregated)) =
@@ -954,6 +1023,7 @@ impl PageRenderPipeline {
             (update, receipt)
         };
         self.viz.AcknowledgeDraw(receipt);
+        self.rendered_surface = Some(surface);
         Ok(update)
     }
 
