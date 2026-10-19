@@ -153,7 +153,7 @@ impl SkConicalGradient {
         start_radius: f32,
         end_point: Point,
         end_radius: f32,
-        stops: Vec<GradientStop>,
+        mut stops: Vec<GradientStop>,
         mode: SpreadMode,
         transform: Transform,
         interpolation_space: GradientInterpolationSpace,
@@ -164,6 +164,10 @@ impl SkConicalGradient {
             return None;
         }
 
+        if mode == SpreadMode::kDecal && stops.len() == 1 {
+            let c = stops[0].color;
+            stops = alloc::vec![GradientStop::new(0., c), GradientStop::new(1., c)];
+        }
         match stops.as_slice() {
             [] => return None,
             [stop] => return Some(Shader::SolidColor(stop.color)),
@@ -221,6 +225,9 @@ impl SkConicalGradient {
                         )))
                     }
                     SpreadMode::Pad => None,
+                    SpreadMode::kDecal => {
+                        Some(Shader::SolidColor(crate::raster::Color::TRANSPARENT))
+                    }
                 };
             }
 
@@ -276,7 +283,7 @@ impl SkConicalGradient {
     fn new_radial_unchecked(
         center: Point,
         radius: f32,
-        stops: Vec<GradientStop>,
+        mut stops: Vec<GradientStop>,
         mode: SpreadMode,
         transform: Transform,
         interpolation_space: GradientInterpolationSpace,

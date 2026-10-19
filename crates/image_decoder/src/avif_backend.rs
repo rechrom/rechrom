@@ -204,6 +204,10 @@ fn decode_with_limits(bytes: &[u8], limits: Limits) -> io::Result<DecodedImage> 
         width: image.width,
         height: image.height,
         orientation,
+        // admit_still_image above rejects sequence tracks before publication.
+        animation: image_resource::PaintImageAnimationMetadata::Known(
+            image_resource::PaintImageAnimationInfo::confirmed_static(),
+        ),
         rgba8,
     })
 }

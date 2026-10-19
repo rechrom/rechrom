@@ -60,6 +60,22 @@ impl SkBitmap {
         })
     }
 
+    /// Native eager PaintImage upload: immutable decoder output is straight
+    /// RGBA8888; the resulting Skia image owns premultiplied N32 pixels.
+    /// SkConvertPixels owns the source integer/NEON alpha conversion.
+    pub fn from_straight_rgba(width: u32, height: u32, pixels: &[u8]) -> Option<Self> {
+        let mut image = Self::new(width, height)?;
+        if !crate::src::core::SkConvertPixels::SkConvertPixels(
+            image.data_mut(),
+            pixels,
+            crate::src::core::SkConvertPixels::Rgba8888AlphaType::Unpremul,
+            crate::src::core::SkConvertPixels::Rgba8888AlphaType::Premul,
+        ) {
+            return None;
+        }
+        Some(image)
+    }
+
     /// Creates a new pixmap by taking ownership over an image buffer
     /// (premultiplied RGBA pixels).
     ///

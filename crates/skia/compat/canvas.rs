@@ -516,7 +516,8 @@ pub(crate) fn with_paint_for_shader<R>(
         shader
             .pattern
             .as_ref()
-            .map_or(1.0, |pattern| pattern.opacity),
+            .map_or(1.0, |pattern| pattern.opacity)
+            * shader.flags_alpha,
         placement,
     );
     paint.anti_alias = antialias;
@@ -896,6 +897,94 @@ impl SkCanvas {
         true
     }
 
+    /// Replays SkCanvas::clipPath using its actual path fill rule and clip op.
+    /// Inverse fill and difference cancel (SkRasterClip.cpp path op contract).
+    /// Both receivers use the existing native RLE clip implementation.
+    pub fn replay_clip_path(&mut self, item: &DrawCommand, difference: bool) {
+        if difference ^ item.inverse_winding {
+            let Some(old_bounds) = self.state.clip_encoding.bounds() else {
+                return;
+            };
+            let Some(path) = path_from_commands(&item.path) else {
+                return;
+            };
+            let rule = if item.even_odd {
+                FillRule::EvenOdd
+            } else {
+                FillRule::Winding
+            };
+            let mut mask = None;
+            let cache = &mut self.clip_product_cache;
+            let dims = (self.pixmap.width(), self.pixmap.height());
+            let transform = self.state.transform;
+            self.state
+                .clip_encoding
+                .difference_path(item.antialias, |bounds, receiver| {
+                    let product = crate::src::core::SkColorGlyphClip::produce_path_cached(
+                        cache,
+                        &path,
+                        Some(&item.path),
+                        rule,
+                        item.antialias,
+                        transform,
+                        dims.0,
+                        dims.1,
+                        bounds,
+                        receiver,
+                    );
+                    mask = Some(product.mask);
+                    product.owner
+                });
+            self.install_difference_clip(old_bounds, mask, None);
+            return;
+        }
+        let Some(path) = path_from_commands(&item.path) else {
+            self.state.clip_encoding.set_empty();
+            self.state.clip = None;
+            self.state.clip_summary = Some(Default::default());
+            self.state.clip_is_aa = false;
+            self.state.clip_runs = None;
+            self.state.clip_aa_tiles = None;
+            return;
+        };
+        // SkAAClip uses an RLE alpha target. Retain the analytic path
+        // scanner and force its RLE receiver before intersecting the
+        // previous clip once. SkRasterClip.cpp:188-206 first rasterizes
+        // the new path within the current clip bounds, even for an AA
+        // old clip; coverage intersection follows afterward.
+        // The old path handles unsupported curves.
+        let rule = if item.even_odd {
+            FillRule::EvenOdd
+        } else {
+            FillRule::Winding
+        };
+        let prepared = self.state.clip_encoding.bounds().map(|bounds| {
+            let kind = self.state.clip_encoding.path_receiver_kind(item.antialias);
+            crate::src::core::SkColorGlyphClip::produce_path_cached(
+                &mut self.clip_product_cache,
+                &path,
+                Some(&item.path),
+                rule,
+                item.antialias,
+                self.state.transform,
+                self.pixmap.width(),
+                self.pixmap.height(),
+                bounds,
+                kind,
+            )
+        });
+        self.clip_path_with_mask(
+            &path,
+            item.antialias,
+            if item.even_odd {
+                FillRule::EvenOdd
+            } else {
+                FillRule::Winding
+            },
+            prepared,
+        );
+    }
+
     pub fn replay_item(&mut self, item: &DrawCommand, list: &ResourceContext) {
         // SkCanvas::internalQuickReject and SkRasterClip::setEmpty: drawing
         // and intersect/difference clips cannot make an empty clip visible.
@@ -1272,53 +1361,7 @@ impl SkCanvas {
                 }
             }
 
-            CommandKind::kClipPath => {
-                let Some(path) = path_from_commands(&item.path) else {
-                    self.state.clip_encoding.set_empty();
-                    self.state.clip = None;
-                    self.state.clip_summary = Some(Default::default());
-                    self.state.clip_is_aa = false;
-                    self.state.clip_runs = None;
-                    self.state.clip_aa_tiles = None;
-                    return;
-                };
-                // SkAAClip uses an RLE alpha target. Retain the analytic path
-                // scanner and force its RLE receiver before intersecting the
-                // previous clip once. SkRasterClip.cpp:188-206 first rasterizes
-                // the new path within the current clip bounds, even for an AA
-                // old clip; coverage intersection follows afterward.
-                // The old path handles unsupported curves.
-                let rule = if item.even_odd {
-                    FillRule::EvenOdd
-                } else {
-                    FillRule::Winding
-                };
-                let prepared = self.state.clip_encoding.bounds().map(|bounds| {
-                    let kind = self.state.clip_encoding.path_receiver_kind(item.antialias);
-                    crate::src::core::SkColorGlyphClip::produce_path_cached(
-                        &mut self.clip_product_cache,
-                        &path,
-                        Some(&item.path),
-                        rule,
-                        item.antialias,
-                        self.state.transform,
-                        self.pixmap.width(),
-                        self.pixmap.height(),
-                        bounds,
-                        kind,
-                    )
-                });
-                self.clip_path_with_mask(
-                    &path,
-                    item.antialias,
-                    if item.even_odd {
-                        FillRule::EvenOdd
-                    } else {
-                        FillRule::Winding
-                    },
-                    prepared,
-                );
-            }
+            CommandKind::kClipPath => self.replay_clip_path(item, false),
 
             CommandKind::kClipRoundedRect => {
                 if let Some(commands) = rounded_clip_commands {
@@ -2753,6 +2796,96 @@ impl SkCanvas {
     }
 
     fn draw_box_shadow(&mut self, item: &DrawCommand) {
+        self.draw_box_shadow_impl(item, true, true, None);
+    }
+
+    /// SkMaskFilter's actual path-caster execution. The caller's cc clip and
+    /// DrawLooper have already selected shape/offset/color; no box-paint policy
+    /// or second clip-out is introduced here.
+    pub fn draw_native_shadow_rrect(
+        &mut self,
+        bounds: PaintRect,
+        radii: PaintCornerRadii,
+        hole: Option<(PaintRect, PaintCornerRadii)>,
+        offset: Offset,
+        sigma: f32,
+        respect_ctm: bool,
+        color: Color,
+        antialias: bool,
+    ) {
+        let Some(path) = rounded_rect_path(bounds, radii) else {
+            return;
+        };
+        let (path, rule) = if let Some((hole, radii)) = hole {
+            let mut builder = PathBuilder::new();
+            builder.push_path(&path);
+            if let Some(inner) = rounded_rect_path(hole, radii) {
+                builder.push_path(&inner);
+            }
+            let Some(path) = builder.finish() else {
+                return;
+            };
+            (path, FillRule::EvenOdd)
+        } else {
+            (path, FillRule::Winding)
+        };
+        self.draw_box_shadow_impl(
+            &DrawCommand {
+                rect: bounds,
+                corner_radii: radii,
+                shadow_offset: offset,
+                blur_radius: f64::from(sigma) * 2.,
+                color,
+                antialias,
+                ..Default::default()
+            },
+            false,
+            respect_ctm,
+            Some((path, rule)),
+        );
+    }
+
+    pub fn draw_native_drrect(
+        &mut self,
+        outer: PaintRect,
+        outer_radii: PaintCornerRadii,
+        inner: PaintRect,
+        inner_radii: PaintCornerRadii,
+        color: Color,
+        blend: crate::BlendMode,
+        antialias: bool,
+    ) {
+        let Some(outer) = rounded_rect_path(outer, outer_radii) else {
+            return;
+        };
+        let mut builder = PathBuilder::new();
+        builder.push_path(&outer);
+        if let Some(inner) = rounded_rect_path(inner, inner_radii) {
+            builder.push_path(&inner);
+        }
+        let Some(path) = builder.finish() else {
+            return;
+        };
+        let mut paint = solid_paint(color, antialias);
+        paint.blend_mode = blend;
+        self.ensure_clip_mask();
+        self.pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::EvenOdd,
+            self.state.transform,
+            self.state.clip.as_deref(),
+        );
+        self.known_opaque = false;
+    }
+
+    fn draw_box_shadow_impl(
+        &mut self,
+        item: &DrawCommand,
+        clip_box: bool,
+        respect_ctm: bool,
+        caster: Option<(Path, FillRule)>,
+    ) {
         if item.inset {
             if item.blur_radius == 0.0 && self.draw_integer_rectangular_inset_shadow(item) {
                 return;
@@ -2770,14 +2903,24 @@ impl SkCanvas {
             width: item.rect.width + item.spread * 2.0,
             height: item.rect.height + item.spread * 2.0,
         };
-        let Some(path) = rounded_rect_path(shadow_box, item.corner_radii) else {
-            return;
+        let (path, fill_rule) = match caster {
+            Some(caster) => caster,
+            None => {
+                let Some(path) = rounded_rect_path(shadow_box, item.corner_radii) else {
+                    return;
+                };
+                (path, FillRule::Winding)
+            }
         };
         let mut transform = self.state.transform.pre_concat(Transform::from_translate(
             item.shadow_offset.x as f32,
             item.shadow_offset.y as f32,
         ));
-        let sigma = xformed_shadow_sigma((item.blur_radius * 0.5) as f32, transform);
+        let sigma = if respect_ctm {
+            xformed_shadow_sigma((item.blur_radius * 0.5) as f32, transform)
+        } else {
+            (item.blur_radius * 0.5) as f32
+        };
         let outside = rect(shadow_box)
             .and_then(|r| r.transform(transform))
             .is_some_and(|r| {
@@ -2831,7 +2974,8 @@ impl SkCanvas {
         transform.ty += padding as f32;
         let width = self.pixmap.width() + padding * 2;
         let height = self.pixmap.height() + padding * 2;
-        if item.blur_radius > 0.0
+        if clip_box
+            && item.blur_radius > 0.0
             && item.corner_radii.HasRadius()
             && self.draw_nine_patch_shadow(
                 item, shadow_box, transform, sigma, padding, width, height, support,
@@ -2839,7 +2983,8 @@ impl SkCanvas {
         {
             return;
         }
-        if (item.antialias || item.blur_radius > 0.0)
+        if clip_box
+            && (item.antialias || item.blur_radius > 0.0)
             && item.corner_radii.HasRadius()
             && self.draw_analytic_shadow_region(
                 item, shadow_box, transform, sigma, padding, width, height, support,
@@ -2847,24 +2992,26 @@ impl SkCanvas {
         {
             return;
         }
-        let analytic =
-            if (item.antialias || item.blur_radius > 0.0) && item.corner_radii.HasRadius() {
-                crate::cpu::analytic_aa::rounded_rect_alpha_mask(
-                    shadow_box,
-                    item.corner_radii,
-                    transform,
-                    width,
-                    height,
-                    false,
-                )
-            } else {
-                None
-            };
+        let analytic = if clip_box
+            && (item.antialias || item.blur_radius > 0.0)
+            && item.corner_radii.HasRadius()
+        {
+            crate::cpu::analytic_aa::rounded_rect_alpha_mask(
+                shadow_box,
+                item.corner_radii,
+                transform,
+                width,
+                height,
+                false,
+            )
+        } else {
+            None
+        };
         let mut mask = analytic.unwrap_or_else(|| {
             let mut mask = Mask::new(width, height).expect("valid shadow mask size");
             mask.fill_path(
                 &path,
-                FillRule::Winding,
+                fill_rule,
                 item.antialias || (item.blur_radius > 0.0 && item.corner_radii.HasRadius()),
                 transform,
             );
@@ -2892,7 +3039,7 @@ impl SkCanvas {
             }
             mask = cropped;
         }
-        if !item.inset {
+        if clip_box && !item.inset {
             let mut hole = item.rect;
             let mut radii = item.inner_corner_radii;
             if item.shadow_has_opaque_background {

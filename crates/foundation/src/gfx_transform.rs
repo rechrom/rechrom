@@ -69,7 +69,7 @@ impl Transform {
             && m[1][3] == 0.0
     }
 
-    fn clamp_float_geometry(value: f64) -> f32 {
+    pub fn clamp_float_geometry(value: f64) -> f32 {
         if value.is_nan() {
             return 0.0;
         }
@@ -257,10 +257,14 @@ impl Transform {
                 let mapped_x = matrix[0][0] * x + matrix[1][0] * y + matrix[3][0];
                 let mapped_y = matrix[0][1] * x + matrix[1][1] * y + matrix[3][1];
                 let w = matrix[0][3] * x + matrix[1][3] * y + matrix[3][3];
-                let divisor = if w != 1.0 && w.is_normal() { w } else { 1.0 };
+                let inverse_w = if w != 1.0 && w.is_normal() {
+                    1.0 / w
+                } else {
+                    1.0
+                };
                 PointF::new(
-                    Self::clamp_float_geometry(mapped_x / divisor),
-                    Self::clamp_float_geometry(mapped_y / divisor),
+                    Self::clamp_float_geometry(mapped_x * inverse_w),
+                    Self::clamp_float_geometry(mapped_y * inverse_w),
                 )
             }
         }
@@ -411,3 +415,5 @@ mod tests {
 }
 
 include!("gfx_transform_rotation_scale.rs");
+
+include!("gfx_transform_compositor.rs");

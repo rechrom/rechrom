@@ -1783,8 +1783,16 @@ impl Decoder {
         let category = decoding_item.category;
 
         let codec = &mut self.codecs[tile.codec_index];
-        let item = if sample.item_id == 0 { None } else { self.items.get(&sample.item_id) };
-        let data_buffer = if let Some(item) = item { &item.data_buffer } else { &None };
+        let item = if sample.item_id == 0 {
+            None
+        } else {
+            self.items.get(&sample.item_id)
+        };
+        let data_buffer = if let Some(item) = item {
+            &item.data_buffer
+        } else {
+            &None
+        };
         let data = match (
             self.settings.allow_progressive,
             sample.data(io, data_buffer),

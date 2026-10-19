@@ -1175,7 +1175,11 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<ItemProperty> {
             ..Nclx::default()
         };
         // unsigned int(1) full_range_flag;
-        nclx.yuv_range = if stream.read_bool()? { YuvRange::Full } else { YuvRange::Limited };
+        nclx.yuv_range = if stream.read_bool()? {
+            YuvRange::Full
+        } else {
+            YuvRange::Limited
+        };
         // unsigned int(7) reserved = 0;
         if stream.read_bits(7)? != 0 {
             return AvifError::bmff_parse_failed("colr box contains invalid reserved bits");

@@ -130,6 +130,8 @@ impl ReusableLayoutEnvironment {
                 device_pixel_ratio: input.device_pixel_ratio,
                 layout_zoom_factor: input.layout_zoom_factor,
                 canvas_draw_element_enabled: input.canvas_draw_element_enabled,
+                prefer_non_composited_scrolling_enabled: input
+                    .prefer_non_composited_scrolling_enabled,
                 viewport: input.viewport,
                 control_theme: input.control_theme,
                 hyphenation: input.hyphenation.clone(),
@@ -180,6 +182,7 @@ impl ReusableLayoutEnvironment {
             && self.snapshot.device_pixel_ratio == space.device_pixel_ratio
             && self.snapshot.layout_zoom_factor == space.layout_zoom_factor
             && self.snapshot.canvas_draw_element_enabled == space.canvas_draw_element_enabled
+            && self.snapshot.prefer_non_composited_scrolling_enabled == space.prefer_non_composited_scrolling_enabled
             && self.snapshot.control_theme == space.control_theme
             && match (
                 &self.snapshot.font_backend_factory,
@@ -831,13 +834,38 @@ fn ExportProperties(
         return output;
     }
     output.svg_hidden_container = unsafe { &*object }.IsSVGHiddenContainer();
+    output.is_layout_view = unsafe { &*object }.IsLayoutView();
     if purpose == LayoutUpdateKind::Paint {
+        // Blink's PrePaintTreeWalk runs ObjectPaintInvalidator before paint
+        // records are produced.  The boundary owns that transition here: a
+        // LayoutObject's pending full-invalidation reason must invalidate its
+        // DisplayItemClient before the immutable fragment snapshot captures
+        // the client state.
+        // cpp: core/paint/object_paint_invalidator.cc:56-121
+        // cpp: core/layout/layout_object.cc:2514-2520
+        let object_ref = unsafe { &*object };
+        let client = unsafe { &*(object as *const DisplayItemClient) };
+        if object_ref.ShouldDoFullPaintInvalidation() {
+            // LayoutObject's default virtual implementation invalidates this
+            // base DisplayItemClient. Derived auxiliary clients are exported
+            // separately by their owning paint data.
+            client.Invalidate(object_ref.PaintInvalidationReasonForPrePaint());
+        }
         // LayoutObject's base-first representation preserves the native
         // DisplayItemClient subobject, including anonymous layout clients.
         // cpp: core/layout/layout_object.h:280
         // cpp: platform/graphics/paint/display_item_client.h:33-35,71-82
-        let client = unsafe { &*(object as *const DisplayItemClient) };
+        // Source: paint_property_tree_builder.cc:464-470. Allocate on the
+        // actual FragmentData owner before publishing immutable Paint input.
+        unsafe { &mut *object.cast_mut() }
+            .GetMutableForPainting()
+            .EnsureId();
+        output.property_fragment_unique_id = unsafe { &*object }.UniqueId();
         output.display_item_client_id = client.Id() as u64;
+        output.display_item_client_owner_node_id =
+            unsafe { &*object }.OwnerNodeIdDefault();
+        output.display_item_client_invalidation_reason = Some(client.GetPaintInvalidationReason());
+        output.display_item_client_debug_name = Arc::from(unsafe { &*object }.DebugName().Utf8());
         output.display_item_client_is_cacheable = client.IsCacheable();
         output.display_item_client_is_just_created = client.IsJustCreated();
         output.display_item_raster_effect_outset = client.VisualRectOutsetForRasterEffects();
@@ -946,6 +974,8 @@ fn ExportProperties(
             if !layer.is_null() {
                 let layer = unsafe { &*layer };
                 output.paint_layer_client_id = layer.Id();
+                output.paint_layer_client_invalidation_reason =
+                    Some(layer.DisplayItemClient().GetPaintInvalidationReason());
                 output.paint_layer_client_is_cacheable = layer.IsCacheable();
                 output.paint_layer_client_is_just_created = layer.IsJustCreated();
                 output.paint_layer_is_self_painting = layer.IsSelfPaintingLayer();
@@ -1092,6 +1122,9 @@ fn ExportProperties(
     };
     output.overscroll_behavior_x = export_overscroll(native_paint_style.OverscrollBehaviorX());
     output.overscroll_behavior_y = export_overscroll(native_paint_style.OverscrollBehaviorY());
+    // Source: core/paint/paint_property_tree_builder.cc:3634-3635.
+    output.prevent_scroll_axis_locking =
+        native_paint_style.ScrollAxisLock() == foundation::EScrollAxisLock::kNone;
     let element_data = if source.IsElementNode() {
         unsafe { &*(source as *const Node as *const Element) }
             .InputElementData()
@@ -1218,17 +1251,19 @@ fn ExportProperties(
         if let Some(accent_color) = paint_style.paint.accent_color {
             control.accent_color = accent_color;
         }
-        if source.InputKind() == NodeKind::kFormControl {
-            let style = unsafe { &*object }.StyleRef();
-            let height = style.GetFontHeightForDefaultBaseline();
-            output.text_control_caret_metrics =
-                Some(crate::fragment_tree::TextControlCaretMetrics {
-                    font_height: Number(height.LineHeight()),
-                    ascent: Number(height.ascent),
-                    line_height: style.ComputedLineHeight() as f64,
-                });
-        }
         output.form_control = Some(Arc::new(control));
+    }
+    // Blink can resolve an insertion position before focus style has changed.
+    // Keep text-control editing geometry in every fragment export; appearance
+    // and focus only decide whether FormControlPainter has anything to draw.
+    if source.InputKind() == NodeKind::kFormControl {
+        let style = unsafe { &*object }.StyleRef();
+        let height = style.GetFontHeightForDefaultBaseline();
+        output.text_control_caret_metrics = Some(crate::fragment_tree::TextControlCaretMetrics {
+            font_height: Number(height.LineHeight()),
+            ascent: Number(height.ascent),
+            line_height: style.ComputedLineHeight() as f64,
+        });
     }
     output
 }
@@ -1624,8 +1659,13 @@ fn ExportListMarkerSymbol(item: &FragmentItem, paint: &mut PaintProperties) {
         if !node.is_null() && unsafe { &*node }.InputKind() == NodeKind::kListItem {
             let defaults = ExtendedStyle::default();
             let style = unsafe { &*node }.InputStyle();
-            paint.list_marker_symbol =
-                Some(style.extended.as_deref().unwrap_or(&defaults).list_style_type);
+            paint.list_marker_symbol = Some(
+                style
+                    .extended
+                    .as_deref()
+                    .unwrap_or(&defaults)
+                    .list_style_type,
+            );
             return;
         }
         object = layout_object.Parent();
@@ -1819,7 +1859,11 @@ fn ExportBoxPaintGeometry(box_fragment: &PhysicalBoxFragment, paint: &mut PaintP
         // shapes/containers share LayoutBox storage but are not CSS boxes;
         // SVGRoot and SVGBlock subclasses (text/foreignObject) really are.
         let object = unsafe { &*box_fragment.GetLayoutObject() };
-        if object.IsSVG() && !object.IsSVGRoot() && !object.IsSVGText() && !object.IsSVGForeignObject() {
+        if object.IsSVG()
+            && !object.IsSVGRoot()
+            && !object.IsSVGText()
+            && !object.IsSVGForeignObject()
+        {
             paint.client_size = Some(Size::default());
             paint.scroll_size = Size::default();
         }
@@ -1873,6 +1917,33 @@ fn ExportBoxPaintGeometry(box_fragment: &PhysicalBoxFragment, paint: &mut PaintP
                 (layout_box.ScrollsOverflowX(), layout_box.ScrollsOverflowY())
             };
             paint.scroll_container = Some(ScrollContainerPaintData {
+                prefers_non_composited_scrolling: if area.is_null() {
+                    None
+                } else {
+                    Some(unsafe { &*area }.PrefersNonCompositedScrolling())
+                },
+                scroll_snap_type_is_none: Some(layout_box.StyleRef().GetScrollSnapType().is_none),
+                background_needs_repaint_on_scroll: if area.is_null() {
+                    None
+                } else {
+                    Some(unsafe { &*area }.BackgroundNeedsRepaintOnScroll())
+                },
+                // Source: core/paint/paint_layer_scrollable_area.cc:2515-2538.
+                scrollable_axes: if !layout_box.IsScrollContainer() {
+                    [false, false]
+                } else if layout_box.IsLayoutView() {
+                    [true, true]
+                } else {
+                    [
+                        layout_box.StyleRef().IsOverflowValueScrollableX(),
+                        layout_box.StyleRef().IsOverflowValueScrollableY(),
+                    ]
+                },
+                compositor_element_id: if area.is_null() {
+                    Default::default()
+                } else {
+                    unsafe { &*area }.GetScrollElementId()
+                },
                 container_rect: FragmentPaintRect {
                     offset: Offset {
                         x: Number(clip.offset.left),
@@ -2007,6 +2078,8 @@ fn ExportScrollbarPaintData(box_fragment: &PhysicalBoxFragment, paint: &mut Pain
 
     let corner_client = area.ScrollCornerDisplayItemClient();
     let mut data = ScrollbarPaintData {
+        corner_client_invalidation_reason: corner_client
+            .map(|client| client.GetPaintInvalidationReason()),
         corner_client_id: corner_client.map_or(0, |client| client.Id() as u64),
         corner_client_is_cacheable: corner_client.is_some_and(|client| client.IsCacheable()),
         corner_client_is_just_created: corner_client.is_some_and(|client| client.IsJustCreated()),
@@ -2038,6 +2111,12 @@ fn ExportScrollbarPaintData(box_fragment: &PhysicalBoxFragment, paint: &mut Pain
         let client = (!scrollbar.is_null()).then(|| unsafe { &*scrollbar }.DisplayItemClient());
         let mut axis = ScrollbarPaintAxis {
             display_item_client_id: client.map_or(0, |client| client.Id() as u64),
+            display_item_client_invalidation_reason: client
+                .map(|client| client.GetPaintInvalidationReason()),
+            // Source: ScrollbarDisplayItem::NeedsUpdateDisplay delegates to
+            // cc::Scrollbar. This native owner uses the same persistent
+            // DisplayItemClient invalidation lifecycle as its update bit.
+            needs_update_display: Some(client.is_none_or(|client| !client.IsValid())),
             display_item_client_is_cacheable: client.is_some_and(|client| client.IsCacheable()),
             display_item_client_is_just_created: client
                 .is_some_and(|client| client.IsJustCreated()),
@@ -2078,6 +2157,9 @@ fn ExportScrollbarPaintData(box_fragment: &PhysicalBoxFragment, paint: &mut Pain
         let client = (!scrollbar.is_null()).then(|| unsafe { &*scrollbar }.DisplayItemClient());
         let mut axis = ScrollbarPaintAxis {
             display_item_client_id: client.map_or(0, |client| client.Id() as u64),
+            display_item_client_invalidation_reason: client
+                .map(|client| client.GetPaintInvalidationReason()),
+            needs_update_display: Some(client.is_none_or(|client| !client.IsValid())),
             display_item_client_is_cacheable: client.is_some_and(|client| client.IsCacheable()),
             display_item_client_is_just_created: client
                 .is_some_and(|client| client.IsJustCreated()),
@@ -2658,20 +2740,41 @@ impl FragmentOwners {
 
 // cpp: LayoutInline::QuadsForSelfInternal / LocalBoundingBoxRectF. Paint may
 // cull a plain inline, but CSSOM still gets each native line/column rectangle.
-fn ExportInlineGeometry(objects: &[*mut LayoutObject], owners: &FragmentOwners) -> Vec<layoutng_fragment_tree::fragment_tree::InlineGeometry> {
+fn ExportInlineGeometry(
+    objects: &[*mut LayoutObject],
+    owners: &FragmentOwners,
+) -> Vec<layoutng_fragment_tree::fragment_tree::InlineGeometry> {
     use layoutng_fragment_tree::fragment_tree::{InlineGeometry, InlineGeometryRect};
     let mut output = Vec::new();
     for &object in objects {
         let native = unsafe { &*object };
-        if !native.IsLayoutInline() || native.IsSVG() || native.GetNode().is_null() { continue; }
-        if unsafe { &*native.GetNode() }.InputIsStyleGenerated() { continue; }
+        if !native.IsLayoutInline() || native.IsSVG() || native.GetNode().is_null() {
+            continue;
+        }
+        if unsafe { &*native.GetNode() }.InputIsStyleGenerated() {
+            continue;
+        }
         let inline = unsafe { &*DynamicTo::<LayoutInline>(object) };
         let native_geometry = inline.ClientRectsInContainers();
-        if native_geometry.rects.is_empty() { continue; }
-        let mut geometry = InlineGeometry { node_id: InputId(object), effective_zoom: native.StyleRef().EffectiveZoom(), local_bounds: ExportNativeInkRect(native_geometry.bounds), ..Default::default() };
+        if native_geometry.rects.is_empty() {
+            continue;
+        }
+        let mut geometry = InlineGeometry {
+            node_id: InputId(object),
+            effective_zoom: native.StyleRef().EffectiveZoom(),
+            local_bounds: ExportNativeInkRect(native_geometry.bounds),
+            ..Default::default()
+        };
         for (container, rect) in native_geometry.rects {
-            let instance = owners.instances.get(&container).copied().expect("inline geometry requires its exported physical container");
-            geometry.rects.push(InlineGeometryRect { container_fragment_instance_id: instance, rect: ExportNativeInkRect(rect) });
+            let instance = owners
+                .instances
+                .get(&container)
+                .copied()
+                .expect("inline geometry requires its exported physical container");
+            geometry.rects.push(InlineGeometryRect {
+                container_fragment_instance_id: instance,
+                rect: ExportNativeInkRect(rect),
+            });
         }
         output.push(geometry);
     }
@@ -2899,8 +3002,14 @@ fn ExportInlineItem(
     } else {
         std::ptr::null()
     };
-    output.paint =
-        ExportProperties(object, sources, style_sources, effective_style, resources, purpose);
+    output.paint = ExportProperties(
+        object,
+        sources,
+        style_sources,
+        effective_style,
+        resources,
+        purpose,
+    );
     // cpp: core/paint/box_fragment_painter.cc:2025-2026,2071-2072
     // cpp: core/paint/inline_box_fragment_painter.cc:63-64
     output.paint.display_item_fragment = item.FragmentId();
@@ -2924,7 +3033,9 @@ fn ExportInlineItem(
         };
         ExportNativeNinePieceImages(native_style, output.size, resources, &mut output.paint);
     }
-    if purpose == LayoutUpdateKind::Paint { ExportInlineInkOverflow(item, &mut output.paint); }
+    if purpose == LayoutUpdateKind::Paint {
+        ExportInlineInkOverflow(item, &mut output.paint);
+    }
     ExportSvgTextPaintData(item, rect, &mut output.paint);
     match item.Type() {
         ItemType::kText | ItemType::kGeneratedText => {
@@ -2995,9 +3106,15 @@ fn ExportInlineItem(
             if !box_fragment.is_null() {
                 let box_fragment = unsafe { &*box_fragment };
                 ExportBoxPaintGeometry(box_fragment, &mut output.paint);
-                if purpose == LayoutUpdateKind::Paint { ExportOverflowClipMargin(box_fragment, &mut output.paint); }
-                if purpose == LayoutUpdateKind::Paint { ExportScrollbarPaintData(box_fragment, &mut output.paint); }
-                if purpose == LayoutUpdateKind::Paint { ExportTablePaintData(box_fragment, sources, &mut output.paint); }
+                if purpose == LayoutUpdateKind::Paint {
+                    ExportOverflowClipMargin(box_fragment, &mut output.paint);
+                }
+                if purpose == LayoutUpdateKind::Paint {
+                    ExportScrollbarPaintData(box_fragment, &mut output.paint);
+                }
+                if purpose == LayoutUpdateKind::Paint {
+                    ExportTablePaintData(box_fragment, sources, &mut output.paint);
+                }
                 if box_fragment.IsTableCell() {
                     output.paint.table_cell_column =
                         Some(box_fragment.TableCellColumnIndex() as usize);
@@ -3010,13 +3127,25 @@ fn ExportInlineItem(
                 } else {
                     owner_fragment
                 };
-                output.paint.establishes_paint_state = paint_state_owners.insert(owner_fragment, output.fragment_instance_id);
-                paint_state_owners.instances.entry(box_fragment as *const PhysicalBoxFragment).or_insert(output.fragment_instance_id);
+                output.paint.establishes_paint_state =
+                    paint_state_owners.insert(owner_fragment, output.fragment_instance_id);
+                paint_state_owners
+                    .instances
+                    .entry(box_fragment as *const PhysicalBoxFragment)
+                    .or_insert(output.fragment_instance_id);
                 output.content_size = ExportContentSize(box_fragment);
-                if purpose == LayoutUpdateKind::Paint { ExportMathMLPaintData(box_fragment, &mut output.paint); }
-                if purpose == LayoutUpdateKind::Paint { ExportFrameSetPaintData(box_fragment, &mut output.paint); }
-                if purpose == LayoutUpdateKind::Paint { ExportFieldsetPaintData(box_fragment, &mut output.paint); }
-                if purpose == LayoutUpdateKind::Paint { ExportColumnRulePaintData(box_fragment, &mut output.paint); }
+                if purpose == LayoutUpdateKind::Paint {
+                    ExportMathMLPaintData(box_fragment, &mut output.paint);
+                }
+                if purpose == LayoutUpdateKind::Paint {
+                    ExportFrameSetPaintData(box_fragment, &mut output.paint);
+                }
+                if purpose == LayoutUpdateKind::Paint {
+                    ExportFieldsetPaintData(box_fragment, &mut output.paint);
+                }
+                if purpose == LayoutUpdateKind::Paint {
+                    ExportColumnRulePaintData(box_fragment, &mut output.paint);
+                }
                 if item.DescendantsCount() <= 1 {
                     let nested_items = box_fragment.Items();
                     for child in box_fragment.Children() {
@@ -3173,8 +3302,14 @@ fn ExportFragment(
     } else {
         std::ptr::null()
     };
-    output.paint =
-        ExportProperties(object, sources, style_sources, effective_style, resources, purpose);
+    output.paint = ExportProperties(
+        object,
+        sources,
+        style_sources,
+        effective_style,
+        resources,
+        purpose,
+    );
     output.paint.display_item_fragment = display_item_fragment;
     output.paint.hidden =
         fragment.IsHiddenForPaint() || output.paint.svg_viewport.is_some_and(|v| v.disabled);
@@ -3206,7 +3341,9 @@ fn ExportFragment(
         };
         ExportNativeNinePieceImages(native_style, output.size, resources, &mut output.paint);
     }
-    if purpose == LayoutUpdateKind::Paint { ExportBoxInkOverflow(box_fragment, &mut output.paint); }
+    if purpose == LayoutUpdateKind::Paint {
+        ExportBoxInkOverflow(box_fragment, &mut output.paint);
+    }
     if box_fragment.IsFragmentainerBox() {
         fragmentainer_instance_id = *next_fragmentainer_instance_id;
         *next_fragmentainer_instance_id += 1;
@@ -3234,22 +3371,40 @@ fn ExportFragment(
     output.paint.display_item_fragment = display_item_fragment;
     output.fragmentainer_instance_id = fragmentainer_instance_id;
     ExportBoxPaintGeometry(box_fragment, &mut output.paint);
-    if purpose == LayoutUpdateKind::Paint { ExportOverflowClipMargin(box_fragment, &mut output.paint); }
-    if purpose == LayoutUpdateKind::Paint { ExportScrollbarPaintData(box_fragment, &mut output.paint); }
-    if purpose == LayoutUpdateKind::Paint { ExportTablePaintData(box_fragment, sources, &mut output.paint); }
+    if purpose == LayoutUpdateKind::Paint {
+        ExportOverflowClipMargin(box_fragment, &mut output.paint);
+    }
+    if purpose == LayoutUpdateKind::Paint {
+        ExportScrollbarPaintData(box_fragment, &mut output.paint);
+    }
+    if purpose == LayoutUpdateKind::Paint {
+        ExportTablePaintData(box_fragment, sources, &mut output.paint);
+    }
     if box_fragment.IsTableCell() {
         output.paint.table_cell_column = Some(box_fragment.TableCellColumnIndex() as usize);
     }
     output.paint.painted_atomically = fragment.IsPaintedAtomically();
     output.paint.has_collapsed_borders = fragment.HasCollapsedBorders();
-    output.paint.establishes_paint_state =
-        paint_state_owners.insert(box_fragment as *const PhysicalBoxFragment, output.fragment_instance_id);
+    output.paint.establishes_paint_state = paint_state_owners.insert(
+        box_fragment as *const PhysicalBoxFragment,
+        output.fragment_instance_id,
+    );
     output.content_size = ExportContentSize(box_fragment);
-    if purpose == LayoutUpdateKind::Paint { ExportMathMLPaintData(box_fragment, &mut output.paint); }
-    if purpose == LayoutUpdateKind::Paint { ExportFrameSetPaintData(box_fragment, &mut output.paint); }
-    if purpose == LayoutUpdateKind::Paint { ExportFieldsetPaintData(box_fragment, &mut output.paint); }
-    if purpose == LayoutUpdateKind::Paint { ExportColumnRulePaintData(box_fragment, &mut output.paint); }
-    if purpose == LayoutUpdateKind::Paint { ExportCollapsedTablePaintData(box_fragment, style_sources, &mut output.paint); }
+    if purpose == LayoutUpdateKind::Paint {
+        ExportMathMLPaintData(box_fragment, &mut output.paint);
+    }
+    if purpose == LayoutUpdateKind::Paint {
+        ExportFrameSetPaintData(box_fragment, &mut output.paint);
+    }
+    if purpose == LayoutUpdateKind::Paint {
+        ExportFieldsetPaintData(box_fragment, &mut output.paint);
+    }
+    if purpose == LayoutUpdateKind::Paint {
+        ExportColumnRulePaintData(box_fragment, &mut output.paint);
+    }
+    if purpose == LayoutUpdateKind::Paint {
+        ExportCollapsedTablePaintData(box_fragment, style_sources, &mut output.paint);
+    }
     output.children.reserve(box_fragment.Children().len());
     let items = box_fragment.Items();
     for child in box_fragment.Children() {
@@ -3371,6 +3526,38 @@ fn ExportCanvasBackground(
         style: source.style.clone(),
         effective_zoom: source.effective_zoom,
     });
+}
+
+// Source: third_party/blink/renderer/core/frame/local_frame_view.cc:1504-1527.
+// The native membership bit is exactly the membership of the source frame's
+// background_attachment_fixed_objects_ set; borrow the existing owner range.
+fn ExportGlobalMainThreadScrollFacts(
+    root: &LayoutObject,
+    objects: &[*mut LayoutObject],
+    output: &mut FragmentNode,
+) {
+    if !root.IsLayoutView() {
+        return;
+    }
+    output
+        .paint
+        .requires_main_thread_scrolling_for_background_attachment_fixed =
+        Some(objects.iter().any(|object| {
+            let object = unsafe { &**object };
+            if !object.IsBackgroundAttachmentFixedObject() {
+                return false;
+            }
+            let model = DynamicTo::<LayoutBoxModelObject>(object as *const LayoutObject);
+            debug_assert!(!model.is_null());
+            debug_assert!(!unsafe { &*model }.BackgroundTransfersToViewDefault());
+            if object.IsLayoutView()
+                && object.GetBackgroundPaintLocation()
+                    == crate::internal::layout_object::kBackgroundPaintInBorderBoxSpace
+            {
+                return false;
+            }
+            !object.CanCompositeBackgroundAttachmentFixed()
+        }));
 }
 
 // cpp: layoutng/internal/boundary/layout_boundary.cc:714-726
@@ -3831,7 +4018,9 @@ pub(crate) fn UpdateStickyOffsets(
                 // scrolling. Preserve that native constraint input here.
                 let mut ancestor = box_model.Parent();
                 let mut is_fixed_to_view = false;
-                while !ancestor.is_null() && ancestor as *const LayoutObject != scroll_container as *const LayoutObject {
+                while !ancestor.is_null()
+                    && ancestor as *const LayoutObject != scroll_container as *const LayoutObject
+                {
                     let ancestor_box = DynamicTo::<LayoutBox>(ancestor);
                     if !ancestor_box.is_null()
                         && unsafe { &*ancestor_box }.IsFixedToView(std::ptr::null())
@@ -4545,10 +4734,22 @@ pub(crate) fn RefreshRetainedPaintInputs(
         let node = current.GetNode();
         if !node.is_null() {
             logical_order += 1;
-            sources.insert(object as *const _, SourceEntry { node, logical_tree_order: logical_order });
-            style_sources.insert(current.StyleRef() as *const _, unsafe { &*node }.InputStyle() as *const _);
+            sources.insert(
+                object as *const _,
+                SourceEntry {
+                    node,
+                    logical_tree_order: logical_order,
+                },
+            );
+            style_sources.insert(
+                current.StyleRef() as *const _,
+                unsafe { &*node }.InputStyle() as *const _,
+            );
             if changed.contains(&unsafe { &*node }.InputId()) {
-                clients.insert(unsafe { &*(object as *const DisplayItemClient) }.Id() as u64, object);
+                clients.insert(
+                    unsafe { &*(object as *const DisplayItemClient) }.Id() as u64,
+                    object,
+                );
             }
         }
         object = current.NextInPreOrder(root_ptr);
@@ -4568,37 +4769,60 @@ pub(crate) fn RefreshRetainedPaintInputs(
             }
         }
         let box_ = DynamicTo::<LayoutBox>(object);
-        let Some(box_) = (unsafe { box_.as_ref() }) else { continue; };
+        let Some(box_) = (unsafe { box_.as_ref() }) else {
+            continue;
+        };
         for index in 0..box_.PhysicalFragmentCount() {
             let fragment = box_.GetPhysicalFragment(index);
-            let Some(fragment) = (unsafe { fragment.as_ref() }) else { continue; };
-            let Some(items) = (unsafe { fragment.Items().as_ref() }) else { continue; };
+            let Some(fragment) = (unsafe { fragment.as_ref() }) else {
+                continue;
+            };
+            let Some(items) = (unsafe { fragment.Items().as_ref() }) else {
+                continue;
+            };
             for item in items.Items() {
                 let source = item.GetLayoutObject();
-                if source.is_null() || !item.IsText()
-                    || !inline_ink_changes.contains(&InputId(unsafe { &*source })) { continue; }
+                if source.is_null()
+                    || !item.IsText()
+                    || !inline_ink_changes.contains(&InputId(unsafe { &*source }))
+                {
+                    continue;
+                }
                 let client = unsafe { &*(source as *const DisplayItemClient) }.Id() as u64;
                 let key = (client, item.FragmentId());
-                if ink_items.insert(key, item).is_some_and(|old| !std::ptr::eq(old, item)) {
+                if ink_items
+                    .insert(key, item)
+                    .is_some_and(|old| !std::ptr::eq(old, item))
+                {
                     return false;
                 }
             }
         }
     }
-    for &item in ink_items.values() { unsafe { &*item }.InvalidateInkOverflow(); }
+    for &item in ink_items.values() {
+        unsafe { &*item }.InvalidateInkOverflow();
+    }
     fn validate(node: &FragmentNode, clients: &HashMap<u64, *mut LayoutObject>) -> bool {
         if clients.contains_key(&node.paint.display_item_client_id)
-            && (node.paint.has_collapsed_borders || node.paint.svg_text.is_some()
+            && (node.paint.has_collapsed_borders
+                || node.paint.svg_text.is_some()
                 || node.paint.text_combine.is_some())
         {
             return false;
         }
         node.children.iter().all(|child| validate(child, clients))
     }
-    if !validate(fragments, &clients) { return false; }
-    fn refresh(node: &mut FragmentNode, clients: &HashMap<u64, *mut LayoutObject>,
-        sources: &SourceMap, styles: &StyleSourceMap,
-        ink_clients: &HashSet<u64>, ink_items: &HashMap<(u64, u32), *const FragmentItem>) {
+    if !validate(fragments, &clients) {
+        return false;
+    }
+    fn refresh(
+        node: &mut FragmentNode,
+        clients: &HashMap<u64, *mut LayoutObject>,
+        sources: &SourceMap,
+        styles: &StyleSourceMap,
+        ink_clients: &HashSet<u64>,
+        ink_items: &HashMap<(u64, u32), *const FragmentItem>,
+    ) {
         node.paint.background_transfers_to_view = false;
         node.paint.canvas_background = None;
         if ink_clients.contains(&node.paint.display_item_client_id) {
@@ -4609,30 +4833,61 @@ pub(crate) fn RefreshRetainedPaintInputs(
             node.paint.ink_overflow = None;
         }
         if let Some(&object) = clients.get(&node.paint.display_item_client_id) {
-            let resources = node.paint.resources.as_ref().expect("completed fragment has resources");
-            let current = ExportPaintProperties(object, sources, styles, std::ptr::null(), resources);
+            let resources = node
+                .paint
+                .resources
+                .as_ref()
+                .expect("completed fragment has resources");
+            let current =
+                ExportPaintProperties(object, sources, styles, std::ptr::null(), resources);
             node.paint.style = current.style;
             node.paint.form_control = current.form_control;
             node.paint.display_item_client_is_cacheable = current.display_item_client_is_cacheable;
-            node.paint.display_item_client_is_just_created = current.display_item_client_is_just_created;
-            node.paint.display_item_raster_effect_outset = current.display_item_raster_effect_outset;
+            node.paint.display_item_client_invalidation_reason =
+                current.display_item_client_invalidation_reason;
+            node.paint.property_fragment_unique_id = current.property_fragment_unique_id;
+            node.paint.is_layout_view = current.is_layout_view;
+            node.paint.display_item_client_debug_name =
+                current.display_item_client_debug_name.clone();
+            node.paint.display_item_client_owner_node_id =
+                current.display_item_client_owner_node_id;
+            node.paint.display_item_client_is_just_created =
+                current.display_item_client_is_just_created;
+            node.paint.display_item_raster_effect_outset =
+                current.display_item_raster_effect_outset;
             node.paint.paint_layer_client_id = current.paint_layer_client_id;
+            node.paint.paint_layer_client_invalidation_reason =
+                current.paint_layer_client_invalidation_reason;
             node.paint.paint_layer_client_is_cacheable = current.paint_layer_client_is_cacheable;
-            node.paint.paint_layer_client_is_just_created = current.paint_layer_client_is_just_created;
+            node.paint.paint_layer_client_is_just_created =
+                current.paint_layer_client_is_just_created;
             node.paint.paint_layer_is_self_painting = current.paint_layer_is_self_painting;
             node.paint.paint_layer_is_stacking_context = current.paint_layer_is_stacking_context;
             node.paint.paint_layer_stacking_level = current.paint_layer_stacking_level;
             node.paint.background_paint_location = current.background_paint_location;
         }
-        if let Some(&item) = ink_items.get(&(node.paint.display_item_client_id, node.paint.display_item_fragment)) {
+        if let Some(&item) = ink_items.get(&(
+            node.paint.display_item_client_id,
+            node.paint.display_item_fragment,
+        )) {
             node.paint.self_ink_overflow = None;
             node.paint.ink_overflow = None;
             ExportInlineInkOverflow(unsafe { &*item }, &mut node.paint);
         }
-        for child in &mut node.children { refresh(child, clients, sources, styles, ink_clients, ink_items); }
+        for child in &mut node.children {
+            refresh(child, clients, sources, styles, ink_clients, ink_items);
+        }
     }
-    refresh(fragments, &clients, &sources, &style_sources, &ink_clients, &ink_items);
+    refresh(
+        fragments,
+        &clients,
+        &sources,
+        &style_sources,
+        &ink_clients,
+        &ink_items,
+    );
     ExportCanvasBackground(root, &objects, fragments);
+    ExportGlobalMainThreadScrollFacts(root, &objects, fragments);
     true
 }
 
@@ -4645,7 +4900,6 @@ pub fn ExportLayoutObjectTree(
 ) -> FragmentNode {
     ExportObjectTree(root, result, space, LayoutUpdateKind::Paint)
 }
-
 
 fn ExportObjectTree(
     root: &mut LayoutObject,
@@ -4723,6 +4977,7 @@ fn ExportObjectTree(
     );
     if purpose == LayoutUpdateKind::Paint {
         ExportCanvasBackground(root, &objects, &mut output);
+        ExportGlobalMainThreadScrollFacts(root, &objects, &mut output);
     }
     output.inline_geometry = ExportInlineGeometry(&objects, &paint_state_owners);
     ResolveLogicalParentOccurrences(&mut output);

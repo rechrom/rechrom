@@ -14,3 +14,5 @@ font_engine = { path = "../font_engine" }
 layoutng_assembly = { path = "../layoutng_assembly" }
 layoutng_style = { path = "../layoutng_style" }
 image_resource = { path = "../image_resource" }
+skia = { path = "../skia" }
+serde_json = "1"

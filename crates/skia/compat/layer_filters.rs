@@ -18,7 +18,19 @@ pub enum ColorMatrixKind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RenderSurfaceFilter {
+    /// Source: SkKnownRuntimeEffects.cpp:419-430; sksl_rt_shader.sksl:5-7.
+    Luma,
     ColorMatrix([f32; 20]),
+    /// cc/paint/paint_filter.cc:502-542: exact integer region mask value.
+    AlphaThreshold {
+        region: crate::include::core::SkRegion::SkRegion,
+        local_to_device: [f32; 6],
+    },
+    /// SkImageFilters::Offset samples the immutable input in translated space.
+    Offset {
+        x: f32,
+        y: f32,
+    },
     Blur {
         sigma_x: f32,
         sigma_y: f32,
@@ -735,7 +747,73 @@ pub fn apply_rgba_at(
     surface_origin: (i32, i32),
 ) -> bool {
     match filter {
+        RenderSurfaceFilter::Luma => {
+            if pixels.len() % 4 != 0 {
+                return false;
+            }
+            // The runtime color filter consumes premultiplied RGB, writes
+            // black RGB and its Rec709 luminance as alpha.
+            for pixel in pixels.chunks_exact_mut(4) {
+                let a = (f32::from(pixel[0]) / 255.).mul_add(
+                    0.2126,
+                    (f32::from(pixel[1]) / 255.)
+                        .mul_add(0.7152, (f32::from(pixel[2]) / 255.) * 0.0722),
+                );
+                pixel[0] = 0;
+                pixel[1] = 0;
+                pixel[2] = 0;
+                pixel[3] = unit_to_byte(a.clamp(0., 1.));
+            }
+            true
+        }
         RenderSurfaceFilter::ColorMatrix(matrix) => color_matrix_rgba(pixels, matrix),
+        RenderSurfaceFilter::Offset { x, y } => {
+            if pixels.len() != width as usize * height as usize * 4 {
+                return false;
+            }
+            let input = pixels.to_vec();
+            for py in 0..height as usize {
+                for px in 0..width as usize {
+                    for channel in 0..4 {
+                        pixels[(py * width as usize + px) * 4 + channel] = sample_channel(
+                            &input,
+                            width as usize,
+                            height as usize,
+                            px as f32 - *x,
+                            py as f32 - *y,
+                            channel,
+                        );
+                    }
+                }
+            }
+            true
+        }
+        RenderSurfaceFilter::AlphaThreshold {
+            region,
+            local_to_device,
+        } => {
+            if pixels.len() != width as usize * height as usize * 4 {
+                return false;
+            }
+            let Some(inverse) = affine_inverse(*local_to_device) else {
+                pixels.fill(0);
+                return true;
+            };
+            for py in 0..height as usize {
+                for px in 0..width as usize {
+                    let point = affine_point(
+                        inverse,
+                        px as f32 + surface_origin.0 as f32 + 0.5,
+                        py as f32 + surface_origin.1 as f32 + 0.5,
+                    );
+                    if !region.contains_point(point.0.floor() as i32, point.1.floor() as i32) {
+                        pixels[(py * width as usize + px) * 4..(py * width as usize + px + 1) * 4]
+                            .fill(0);
+                    }
+                }
+            }
+            true
+        }
         RenderSurfaceFilter::Blur { sigma_x, sigma_y } => {
             blur_rgba(pixels, width, height, *sigma_x, *sigma_y)
         }

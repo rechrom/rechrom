@@ -108,9 +108,11 @@ pub fn LocalRectForBoxQuad(fragment: &PhysicalBoxFragment, box_type: BoxQuadType
     let mut rect = PhysicalRect::new(PhysicalOffset::default(), fragment.Size());
     match box_type {
         BoxQuadType::kMargin => rect.Expand(&fragment.Margins()),
-        BoxQuadType::kBorder => {},
+        BoxQuadType::kBorder => {}
         BoxQuadType::kPadding => rect.Contract(&(fragment.Borders() + fragment.Scrollbar())),
-        BoxQuadType::kContent => rect.Contract(&(fragment.Borders() + fragment.Scrollbar() + fragment.Padding())),
+        BoxQuadType::kContent => {
+            rect.Contract(&(fragment.Borders() + fragment.Scrollbar() + fragment.Padding()))
+        }
     }
     rect.size.width = rect.size.width.ClampNegativeToZero();
     rect.size.height = rect.size.height.ClampNegativeToZero();
@@ -983,8 +985,6 @@ unsafe extern "Rust" {
         object: *mut LayoutObject,
         mark_style_dirty: bool,
     );
-    fn LayoutObjectIsCanvasOrInCanvasSubtreeProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectIsInCanvasSubtreeProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectRecalcNormalFlowChildVisualOverflowIfNeededProvider(object: *mut LayoutObject);
     fn LayoutObjectCanUpdateSelectionOnRootLineBoxesProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectAbsoluteSelectionRectProvider(object: *const LayoutObject) -> PhysicalRect;
@@ -999,7 +999,6 @@ unsafe extern "Rust" {
         object: *const LayoutObject,
     ) -> *mut LayoutObject;
     fn LayoutObjectSetShouldInvalidatePaintForHitTestProvider(object: *mut LayoutObject);
-    fn LayoutObjectClearPaintInvalidationFlagsProvider(object: *mut LayoutObject);
     fn LayoutObjectSetMayNeedPaintInvalidationAnimatedBackgroundImageProvider(
         object: *mut LayoutObject,
     );
@@ -4626,14 +4625,15 @@ impl LayoutObject {
         unsafe { LayoutObjectInvalidateSubtreePositionTryProvider(self, mark_style_dirty) }
     }
 
-    // cpp: layoutng/internal/layout_object.h:1919-1919
+    // cpp: third_party/blink/renderer/core/layout/layout_object.cc:5738-5743
     pub fn IsCanvasOrInCanvasSubtree(&self) -> bool {
-        unsafe { LayoutObjectIsCanvasOrInCanvasSubtreeProvider(self) }
+        self.IsCanvas() || self.IsInCanvasSubtree()
     }
 
-    // cpp: layoutng/internal/layout_object.h:1920-1920
+    // cpp: third_party/blink/renderer/core/layout/layout_object.cc:5745-5756
     pub fn IsInCanvasSubtree(&self) -> bool {
-        unsafe { LayoutObjectIsInCanvasSubtreeProvider(self) }
+        let parent = self.Parent();
+        !parent.is_null() && unsafe { &*parent }.IsCanvasOrInCanvasSubtree()
     }
 
     // cpp: layoutng/internal/layout_object.h:2113-2113
@@ -4681,9 +4681,22 @@ impl LayoutObject {
         unsafe { LayoutObjectSetShouldInvalidatePaintForHitTestProvider(self) }
     }
 
-    // cpp: layoutng/internal/layout_object.h:2768-2768
+    // cpp: layoutng/internal/layout_object.h:2868
+    // cpp: layoutng/internal/layout_object.cc:5318-5339
     pub fn ClearPaintInvalidationFlags(&mut self) {
-        unsafe { LayoutObjectClearPaintInvalidationFlagsProvider(self) }
+        self.CheckIsNotDestroyed();
+        if !self.bitfields_.should_delay_full_paint_invalidation_ {
+            self.bitfields_.paint_invalidation_reason_for_pre_paint_ =
+                PaintInvalidationReason::kNone as u8;
+            self.bitfields_.background_needs_full_paint_invalidation_ = false;
+        }
+        self.bitfields_.should_check_for_paint_invalidation_ = false;
+        self.bitfields_.subtree_should_check_for_paint_invalidation_ = false;
+        self.bitfields_.subtree_should_do_full_paint_invalidation_ = false;
+        self.bitfields_.may_need_paint_invalidation_animated_background_image_ = false;
+        self.bitfields_.should_check_layout_for_paint_invalidation_ = false;
+        self.bitfields_.descendant_should_check_layout_for_paint_invalidation_ = false;
+        self.bitfields_.should_invalidate_selection_ = false;
     }
 
     // cpp: layoutng/internal/layout_object.h:2802-2802

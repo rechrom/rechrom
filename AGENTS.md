@@ -191,7 +191,7 @@ URL/input
   -> style
   -> layoutng
   -> paint
-  -> compositor (owns layer_tile + raster scheduling)
+  -> compositor (owns layerization, layers, tiles, and raster scheduling)
   -> CompositorFrame
   -> viz
   -> renderer
@@ -261,28 +261,29 @@ URL/input
   `PaintArtifact` containing display items, paint chunks, property state, and
   resource-dependency indices. It does not own network, DOM/Layout mutation,
   tiles, raster resources, or a render target.
-- `layer_tile`: input is `Arc<PaintArtifact>` plus `FrameConfig`; output is a
-  pending/active `FramePlan`, `RasterBatch`, and typed tile resource releases.
-  It owns retained layer identity, tilings, tile metadata, visibility/damage,
-  and activation state. It does not execute raster, own platform surfaces, or
-  mutate Paint.
-- `raster`: input is immutable `FramePlan`/`RasterBatch`; output is immutable
-  raster resources and `RasterCompletion` values. It owns Skia replay and tile
-  pixel resources. It never calls DOM, Style, Layout, Paint, Page, Viz, or the
-  native window.
+- `raster`: input is immutable raster work selected by Compositor from its
+  resident picture layers and tiles; output is immutable raster resources and
+  typed completion values. It owns Skia replay and tile pixel resources. It
+  never owns layerization, layers, tilings, tile priority, activation, DOM,
+  Style, Layout, Paint, Page, Viz, or the native window.
 - `compositor`: each instance belongs to exactly one Page domain and consumes
-  only that Page's local viewport, recording, input, and resource completions.
-  It has no toolbar/content roles, tab collection, or other Page recordings.
-  Its active/pending tile and raster resources remain private to that instance;
+  that Page's immutable `Arc<PaintArtifact>` directly, together with its local
+  viewport, input, BeginFrame, and resource completions. It translates Blink's
+  `PaintArtifactCompositor`/`PendingLayer` path and Chromium's `cc::Layer`,
+  `PictureLayer`, tiling, tile-priority, damage, pending/active-tree, and raster
+  scheduling logic. There is no separate `LayerTileEngine` or `FramePlan`
+  lifecycle between Paint and Compositor.
+  It consumes only that Page's local state. It has no toolbar/content roles,
+  tab collection, or other Page recordings.
+  Its active/pending layer and tile state remains private to that instance;
   the host gives each Page an independent raster executor and routes immutable
   `CompositorFrame` output plus immutable frame-scoped raster read leases to
-  the window. Tile/raster engines, caches, completion polling, and teardown
-  stay with the Page presentation owner; Viz/Renderer never take those engines.
-  Input is immutable artifact/viewport snapshots, BeginFrame,
-  input-scroll, resize, and raster-completion commands; it internally
-  coordinates `layer_tile` and `raster`; output is typed effects culminating in
-  a `CompositorFrame`. It owns active/pending frame scheduling and compositor
-  scrolling, but not surface aggregation or platform presentation. Typed
+  the window. Raster execution and pixel caches are injected services; the
+  compositor owns their task selection, completion accounting, and teardown
+  policy. Viz/Renderer never take the compositor's layer or tile owners. Output
+  is typed raster work, lifecycle effects, and a `CompositorFrame`. It owns
+  active/pending frame scheduling and compositor scrolling, but not raster
+  playback, surface aggregation, or platform presentation. Typed
   main-thread effects carry wheel disposition and acknowledged impl-scroll
   deltas; Page returns a completed frame's acknowledgement. Main-frame
   completion and pending-tree activation gate commits without blocking impl
@@ -314,8 +315,8 @@ URL/input
   Browser chrome and popups use the same independent Page presentation
   contract; window-level Viz/Renderer consume their frames without reaching
   back into Pages. Page owns and assembles the document-side engines, routes their
-  mutations/effects in the order above, and publishes immutable snapshots to
-  the compositor boundary. Page contains lifecycle orchestration, not copied
+  mutations/effects in the order above, and passes each engine's typed resident
+  output object to the next boundary. Page contains lifecycle orchestration, not copied
   Style/Layout/Paint/tile/raster algorithms. The application embedding supplies
   platform services, BeginFrame sources, thread placement, event pumping,
   render targets, and presentation.

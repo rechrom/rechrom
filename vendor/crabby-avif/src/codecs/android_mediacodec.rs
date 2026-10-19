@@ -579,8 +579,11 @@ impl MediaCodec {
                             break;
                         }
                         image.row_bytes[i] = plane_info.row_stride[i];
-                        let plane_height =
-                            if i == 0 { image.height } else { (image.height + 1) / 2 };
+                        let plane_height = if i == 0 {
+                            image.height
+                        } else {
+                            (image.height + 1) / 2
+                        };
                         image.planes[i] = Some(Pixels::from_raw_pointer(
                             unsafe { buffer.offset(plane_info.offset[i]) },
                             image.depth as u32,
@@ -680,7 +683,11 @@ impl MediaCodec {
                     self.enqueue_payload(
                         input_index,
                         payload,
-                        if signal_eos { AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM as _ } else { 0 },
+                        if signal_eos {
+                            AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM as _
+                        } else {
+                            0
+                        },
                     )?;
                     break;
                 } else if input_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {

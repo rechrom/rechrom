@@ -15,6 +15,9 @@ pub struct DecodedImage {
     pub width: u32,
     pub height: u32,
     pub orientation: image_resource::ImageOrientation,
+    /// Source PaintImageGenerator frame metadata, when the codec's complete
+    /// frame owner is available. Unknown animation is explicit, not frame 1.
+    pub animation: image_resource::PaintImageAnimationMetadata,
     pub rgba8: Vec<u8>,
 }
 

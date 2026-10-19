@@ -147,6 +147,8 @@ pub mod SK_OPTS_NS {
         repeat,
         bilinear,
         bicubic,
+        decal_x_1,
+        check_decal_mask,
         clamp_x_1,
         mirror_x_1,
         repeat_x_1,
@@ -381,10 +383,13 @@ pub mod SK_OPTS_NS {
     }
 
     pub fn gather(p: &mut Pipeline) {
-        let ix = gather_ix(p.pixmap_src, p.r, p.g);
-        load_8888(
-            p.pixmap_src.format,
-            &p.pixmap_src.gather(ix),
+        let x = p.r;
+        let y = p.g;
+        sample(
+            p.pixmap_src,
+            &p.ctx.sampler,
+            x,
+            y,
             &mut p.r,
             &mut p.g,
             &mut p.b,
@@ -1044,20 +1049,67 @@ pub mod SK_OPTS_NS {
         b: &mut f32x8,
         a: &mut f32x8,
     ) {
-        x = tile(x, ctx.spread_mode, pixmap.width() as f32, ctx.inv_width);
-        y = tile(y, ctx.spread_mode, pixmap.height() as f32, ctx.inv_height);
-
+        // Source: SkImageShader.cpp:455-468 and SkRasterPipeline_opts.h:3612-3646.
+        // The nearest pipeline snaps exact integer coordinates toward the
+        // previous pixel, so its Decal domain is (0,limit]; filtered taps use
+        // [0,limit). Preserve the mask before gather clamps the coordinates.
+        let valid_axis = |v: f32x8, mode: SpreadMode, limit: f32| {
+            if mode != SpreadMode::kDecal {
+                return u32x8::splat(u32::MAX);
+            }
+            let edge = if ctx.round_down_at_integer { limit } else { 0. };
+            cond_to_mask(
+                ((v.cmp_gt(f32x8::default()) & v.cmp_lt(f32x8::splat(limit)))
+                    | v.cmp_eq(f32x8::splat(edge)))
+                .to_u32x8_bitcast(),
+            )
+        };
+        let mask = valid_axis(x, ctx.tile_mode_x, pixmap.width() as f32)
+            & valid_axis(y, ctx.tile_mode_y, pixmap.height() as f32);
+        x = tile(x, ctx.tile_mode_x, pixmap.width() as f32, ctx.inv_width);
+        y = tile(y, ctx.tile_mode_y, pixmap.height() as f32, ctx.inv_height);
+        if ctx.round_down_at_integer {
+            // Source: SkRasterPipeline_opts.h:2252-2253, after nonnegative clamp.
+            x = x
+                .max(f32x8::splat(f32::MIN_POSITIVE))
+                .min(f32x8::splat(ulp_sub(pixmap.width() as f32)));
+            y = y
+                .max(f32x8::splat(f32::MIN_POSITIVE))
+                .min(f32x8::splat(ulp_sub(pixmap.height() as f32)));
+            x = (x.to_u32x8_bitcast() + u32x8::splat(u32::MAX)).to_f32x8_bitcast();
+            y = (y.to_u32x8_bitcast() + u32x8::splat(u32::MAX)).to_f32x8_bitcast();
+        }
         let ix = gather_ix(pixmap, x, y);
         load_8888(pixmap.format, &pixmap.gather(ix), r, g, b, a);
+        *r = (r.to_u32x8_bitcast() & mask).to_f32x8_bitcast();
+        *g = (g.to_u32x8_bitcast() & mask).to_f32x8_bitcast();
+        *b = (b.to_u32x8_bitcast() & mask).to_f32x8_bitcast();
+        *a = (a.to_u32x8_bitcast() & mask).to_f32x8_bitcast();
     }
 
     #[inline(always)]
     fn tile(v: f32x8, mode: SpreadMode, limit: f32, inv_limit: f32) -> f32x8 {
         match mode {
-            SpreadMode::Pad => v,
+            SpreadMode::Pad | SpreadMode::kDecal => v,
             SpreadMode::Repeat => exclusive_repeat(v, limit, inv_limit),
             SpreadMode::Reflect => exclusive_reflect(v, limit, inv_limit),
         }
+    }
+
+    // Source: SkGradientBaseShader.cpp decal_x_1/check_decal_mask stages.
+    fn decal_x_1(p: &mut Pipeline) {
+        p.ctx.decal_mask = cond_to_mask(
+            (p.r.cmp_ge(f32x8::default()) & p.r.cmp_le(f32x8::splat(1.))).to_u32x8_bitcast(),
+        );
+        p.next_stage();
+    }
+    fn check_decal_mask(p: &mut Pipeline) {
+        let mask = p.ctx.decal_mask;
+        p.r = (p.r.to_u32x8_bitcast() & mask).to_f32x8_bitcast();
+        p.g = (p.g.to_u32x8_bitcast() & mask).to_f32x8_bitcast();
+        p.b = (p.b.to_u32x8_bitcast() & mask).to_f32x8_bitcast();
+        p.a = (p.a.to_u32x8_bitcast() & mask).to_f32x8_bitcast();
+        p.next_stage();
     }
 
     fn clamp_x_1(p: &mut Pipeline) {
@@ -1759,6 +1811,8 @@ pub mod SK_OPTS_NS {
             null_fn, // Repeat
             null_fn, // Bilinear
             null_fn, // Bicubic
+            null_fn, // decal_x_1
+            null_fn, // check_decal_mask
             clamp_x_1,
             mirror_x_1,
             repeat_x_1,

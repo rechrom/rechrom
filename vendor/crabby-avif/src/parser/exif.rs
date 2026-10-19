@@ -64,11 +64,18 @@ pub(crate) fn get_orientation_offset(exif: &[u8]) -> AvifResult<Option<usize>> {
     let mut stream = IStream::create(tiff_data);
     let _ = stream.skip(4); // skip tiff header
 
-    let offset_to_0th_ifd =
-        if little_endian { stream.read_u32_le()? } else { stream.read_u32()? };
+    let offset_to_0th_ifd = if little_endian {
+        stream.read_u32_le()?
+    } else {
+        stream.read_u32()?
+    };
     stream.offset = usize_from_u32(offset_to_0th_ifd)?;
 
-    let field_count = if little_endian { stream.read_u16_le()? } else { stream.read_u16()? };
+    let field_count = if little_endian {
+        stream.read_u16_le()?
+    } else {
+        stream.read_u16()?
+    };
     for _ in 0..field_count {
         let (tag, field_type, count, value_offset) = if little_endian {
             (

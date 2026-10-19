@@ -617,7 +617,11 @@ impl Encoder {
                 let mantissa_lsb_row = mantissa_lsb.row16_mut(plane, y)?;
                 for x in 0..width {
                     let f = float_plane[y as usize * width + x];
-                    let f = if f.is_normal() || f.is_subnormal() { f } else { 0.0 };
+                    let f = if f.is_normal() || f.is_subnormal() {
+                        f
+                    } else {
+                        0.0
+                    };
                     let bits = f.to_bits();
                     sign_exponent_msb_row[x] = (bits >> 24) as u8;
                     exponent_lsb_mantissa_msb_row[x] = ((bits >> 12) & 0xFFF) as u16;

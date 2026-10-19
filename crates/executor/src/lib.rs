@@ -1,15 +1,22 @@
 //! Injectable execution of finite, owned work. No engine or Page dependencies.
-use std::{io, sync::Arc};
+use std::{io, sync::Arc, time::Duration};
 pub type Task = Box<dyn FnOnce() + Send + 'static>;
 /// An accepted task runs exactly once. Implementations may execute inline or
 /// on another thread. Err means it was not executed. Panics are not IO errors.
 pub trait Executor: Send + Sync {
     fn execute(&self, task: Task) -> io::Result<()>;
+    fn execute_after(&self, delay: Duration, task: Task) -> io::Result<()>;
 }
 #[derive(Default)]
 pub struct InlineExecutor;
 impl Executor for InlineExecutor {
     fn execute(&self, task: Task) -> io::Result<()> {
+        task();
+        Ok(())
+    }
+
+    fn execute_after(&self, delay: Duration, task: Task) -> io::Result<()> {
+        std::thread::sleep(delay);
         task();
         Ok(())
     }
@@ -36,6 +43,17 @@ impl Executor for ThreadExecutor {
             .spawn(task)
             .map(|_| ())
     }
+
+    fn execute_after(&self, delay: Duration, task: Task) -> io::Result<()> {
+        std::thread::Builder::new()
+            .name(format!("{}-timer", self.name))
+            .stack_size(self.stack_size)
+            .spawn(move || {
+                std::thread::sleep(delay);
+                task();
+            })
+            .map(|_| ())
+    }
 }
 pub fn inline() -> Arc<dyn Executor> {
     Arc::new(InlineExecutor)
@@ -49,6 +67,7 @@ pub struct PoolExecutor {
     lanes: usize,
     busy: Arc<std::sync::atomic::AtomicUsize>,
     sender: std::sync::mpsc::Sender<Task>,
+    delayed_sender: std::sync::mpsc::Sender<(std::time::Instant, Task)>,
 }
 impl PoolExecutor {
     pub fn new(name: &str, stack_size: usize, lanes: usize) -> io::Result<Self> {
@@ -83,11 +102,50 @@ impl PoolExecutor {
                     }
                 })?;
         }
+        // A delayed task waits on this timer thread and enters the worker queue
+        // only when due. Sleeping in a worker would starve the pool when callers
+        // repeatedly replace deadlines, as compositor schedulers routinely do.
+        let (delayed_sender, delayed_receiver) =
+            std::sync::mpsc::channel::<(std::time::Instant, Task)>();
+        let ready = sender.clone();
+        std::thread::Builder::new()
+            .name(format!("{name}-timer"))
+            .stack_size(stack_size)
+            .spawn(move || {
+                let mut pending: Vec<(std::time::Instant, Task)> = Vec::new();
+                loop {
+                    if pending.is_empty() {
+                        match delayed_receiver.recv() {
+                            Ok(task) => pending.push(task),
+                            Err(_) => break,
+                        }
+                        continue;
+                    }
+                    let next = pending
+                        .iter()
+                        .enumerate()
+                        .min_by_key(|(_, (deadline, _))| *deadline)
+                        .map(|(index, (deadline, _))| (index, *deadline))
+                        .unwrap();
+                    let wait = next.1.saturating_duration_since(std::time::Instant::now());
+                    match delayed_receiver.recv_timeout(wait) {
+                        Ok(task) => pending.push(task),
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            let (_, task) = pending.swap_remove(next.0);
+                            if ready.send(task).is_err() {
+                                break;
+                            }
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            })?;
         Ok(Self {
             id,
             lanes,
             busy,
             sender,
+            delayed_sender,
         })
     }
 }
@@ -106,6 +164,12 @@ impl Executor for PoolExecutor {
         self.sender
             .send(task)
             .map_err(|_| io::Error::other("executor stopped"))
+    }
+
+    fn execute_after(&self, delay: Duration, task: Task) -> io::Result<()> {
+        self.delayed_sender
+            .send((std::time::Instant::now() + delay, task))
+            .map_err(|_| io::Error::other("executor timer stopped"))
     }
 }
 

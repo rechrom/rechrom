@@ -79,7 +79,11 @@ fn avm_format(image: &Image, category: Category) -> AvifResult<avm_img_fmt_t> {
             _ => return AvifError::invalid_argument(),
         },
     };
-    Ok(if image.depth > 8 { format | AVM_IMG_FMT_HIGHBITDEPTH } else { format })
+    Ok(if image.depth > 8 {
+        format | AVM_IMG_FMT_HIGHBITDEPTH
+    } else {
+        format
+    })
 }
 
 fn avm_seq_profile(image: &Image, category: Category) -> AvifResult<u32> {
@@ -609,7 +613,11 @@ impl Decoder for Avm {
 
             self.codec_control(
                 avm_dec_control_id_AV2D_SET_OUTPUT_ALL_LAYERS,
-                if self.decoder_config.unwrap_ref().all_layers { 1 } else { 0 },
+                if self.decoder_config.unwrap_ref().all_layers {
+                    1
+                } else {
+                    0
+                },
             )?;
 
             self.decoder_iter = std::ptr::null();

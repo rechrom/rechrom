@@ -829,8 +829,16 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
             continue;
         }
         let chroma_shift = src.yuvFormat.chroma_shift_x();
-        let x = if plane == 0 { x } else { (x >> chroma_shift.0) << chroma_shift.1 };
-        let y = if plane == 0 { y } else { y >> src.yuvFormat.chroma_shift_y() };
+        let x = if plane == 0 {
+            x
+        } else {
+            (x >> chroma_shift.0) << chroma_shift.1
+        };
+        let y = if plane == 0 {
+            y
+        } else {
+            y >> src.yuvFormat.chroma_shift_y()
+        };
         let offset = match isize_from_u32(y * src.yuvRowBytes[plane] + x * pixel_size) {
             Ok(x) => x,
             _ => return avifResult::InvalidArgument,

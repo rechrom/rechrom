@@ -49,29 +49,713 @@ use webapi::{
 };
 
 #[cfg(feature = "pure_source_png")]
-use layer_tile::{FrameConfig, LayerTileEngine};
+use compositor::{
+    adapter::{
+        begin_frame::{BeginFrameArgs, BeginFrameArgsType, BeginFrameId},
+        geometry::{PointF as CompositorPointF, Size as CompositorSize, Vector2dF},
+        time::{TimeDelta as CompositorTimeDelta, TimeTicks as CompositorTimeTicks},
+    },
+    CompositorConfig, CompositorEngine, CompositorExecutor, CompositorExecutors, CompositorInput,
+    CompositorError, CompositorOutput, CompositorViewportState,
+    NativeCompositorFrameSubmission, ScrollPhase,
+};
 #[cfg(feature = "pure_source_png")]
-use raster::{RasterEngine, RasterStats};
+pub use compositor::CompositorMainThreadEffect;
 #[cfg(feature = "pure_source_png")]
-use renderer::{PixelFormat, RenderTarget, RenderUpdate, Renderer, SingleSurfaceResources};
+use raster::native::CpuRasterProvider;
+#[cfg(feature = "pure_source_png")]
+use renderer::{PixelFormat, RenderUpdate};
+
+#[cfg(feature = "pure_source_png")]
+struct PageCompositorExecutor {
+    executor: Arc<dyn executor::Executor>,
+    origin: std::time::Instant,
+    sequence: std::thread::ThreadId,
+}
+
+#[cfg(feature = "pure_source_png")]
+impl PageCompositorExecutor {
+    fn new(executor: Arc<dyn executor::Executor>) -> Self {
+        Self {
+            executor,
+            origin: std::time::Instant::now(),
+            sequence: std::thread::current().id(),
+        }
+    }
+
+    fn TimeTicks(&self, instant: std::time::Instant) -> CompositorTimeTicks {
+        let micros = instant
+            .checked_duration_since(self.origin)
+            .unwrap_or_default()
+            .as_micros()
+            .min(i64::MAX as u128) as i64;
+        CompositorTimeTicks::FromMicroseconds(micros.max(1))
+    }
+}
+
+#[cfg(feature = "pure_source_png")]
+impl CompositorExecutor for PageCompositorExecutor {
+    fn Now(&self) -> CompositorTimeTicks {
+        let micros = self.origin.elapsed().as_micros().min(i64::MAX as u128) as i64;
+        CompositorTimeTicks::FromMicroseconds(micros.max(1))
+    }
+
+    fn Execute(&self, task: Box<dyn FnOnce() + Send>) {
+        let _ = self.executor.execute(task);
+    }
+
+    fn ExecuteAfter(&self, delay: CompositorTimeDelta, task: Box<dyn FnOnce() + Send>) {
+        let delay = delay.InMicroseconds().max(0) as u64;
+        let _ = self
+            .executor
+            .execute_after(std::time::Duration::from_micros(delay), task);
+    }
+
+    fn RunsTasksInCurrentSequence(&self) -> bool {
+        std::thread::current().id() == self.sequence
+    }
+}
+
+#[cfg(feature = "pure_source_png")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreparedRenderInput {
+    width: u32,
+    height: u32,
+    scale: u64,
+    layout_zoom: u64,
+}
+
+#[cfg(feature = "pure_source_png")]
+struct PendingPageRender {
+    artifact: Arc<paint::PaintArtifact>,
+    input: PreparedRenderInput,
+    viewport: CompositorViewportState,
+    needs_begin_frames: bool,
+}
+
+#[cfg(feature = "pure_source_png")]
+impl PendingPageRender {
+    fn Matches(
+        &self,
+        artifact: &Arc<paint::PaintArtifact>,
+        input: PreparedRenderInput,
+        viewport: CompositorViewportState,
+    ) -> bool {
+        Arc::ptr_eq(&self.artifact, artifact)
+            && self.input == input
+            && self.viewport.size == viewport.size
+            && self.viewport.device_scale_factor.to_bits() == viewport.device_scale_factor.to_bits()
+            && self.viewport.page_scale_factor.to_bits() == viewport.page_scale_factor.to_bits()
+            && self.viewport.min_page_scale_factor.to_bits()
+                == viewport.min_page_scale_factor.to_bits()
+            && self.viewport.max_page_scale_factor.to_bits()
+                == viewport.max_page_scale_factor.to_bits()
+            && self.viewport.visible == viewport.visible
+    }
+}
+
+#[cfg(feature = "pure_source_png")]
+struct PresentablePageRender {
+    artifact: std::sync::Weak<paint::PaintArtifact>,
+    input: PreparedRenderInput,
+}
+
+#[cfg(feature = "pure_source_png")]
+pub struct PageRenderPipeline {
+    compositor: Option<CompositorEngine>,
+    executor: Arc<PageCompositorExecutor>,
+    pixels: CpuRasterProvider,
+    viz: viz::native::VizEngine,
+    renderer: renderer::Renderer,
+    external_presentation: bool,
+    outbound_frames: std::collections::VecDeque<NativeCompositorFrameSubmission>,
+    deferred_effects: Vec<CompositorMainThreadEffect>,
+    begin_frame_sequence: u64,
+    needs_begin_frames: bool,
+    // A committed input remains strongly identified until its compositor frame
+    // reaches Viz. Calls made while it is pending advance that commit instead
+    // of issuing a second main commit.
+    pending: Option<PendingPageRender>,
+    // A weak identity marker avoids forcing PaintEngine's next property-only
+    // scroll update to deep-copy the complete PaintArtifact.
+    presentable: Option<PresentablePageRender>,
+}
 
 #[cfg(feature = "pure_source_png")]
 #[derive(Default)]
-struct PageRenderPipeline {
-    tiles: LayerTileEngine,
-    resources: RasterEngine,
-    compositor: compositor::FrameBuilder,
-    viz: viz::VizEngine,
-    renderer: Renderer,
-    // Identity-only marker. A strong Arc here would force PaintEngine's next
-    // property-only scroll update to deep-copy the complete PaintArtifact.
-    prepared_artifact: Option<std::sync::Weak<paint::PaintArtifact>>,
-    prepared_config: Option<FrameConfig>,
+pub struct CompositorWheelResult {
+    pub handled: bool,
+    pub submitted: bool,
+    pub effects: Vec<CompositorMainThreadEffect>,
+}
+
+#[cfg(feature = "pure_source_png")]
+pub type PageCompositorFrame = NativeCompositorFrameSubmission;
+#[cfg(feature = "pure_source_png")]
+pub type PageReturnedResource = compositor::runtime::resources::CpuReturnedResource;
+
+/// Viz and software Renderer state owned by a Page presentation sequence.
+/// It consumes the Page's move-only CompositorFrame output without access to
+/// Blink, PaintEngine, cc trees, tiles, or input scheduling.
+#[cfg(feature = "pure_source_png")]
+pub struct PageFramePresenter {
+    viz: viz::native::VizEngine,
+    renderer: renderer::Renderer,
+    surface: viz::native::SurfaceId,
+    next_surface: u64,
+    local_surface_id: Option<compositor::runtime::types::LocalSurfaceId>,
+    surface_parameters: Option<(u32, u32, u32)>,
+    rendered_surface: Option<viz::native::SurfaceId>,
+}
+
+#[cfg(feature = "pure_source_png")]
+impl PageFramePresenter {
+    fn new(pixels: CpuRasterProvider) -> Self {
+        Self {
+            viz: viz::native::VizEngine::New(),
+            renderer: renderer::Renderer::WithPictureRasterizer(Box::new(pixels)),
+            surface: viz::native::SurfaceId(1),
+            next_surface: 2,
+            local_surface_id: None,
+            surface_parameters: None,
+            rendered_surface: None,
+        }
+    }
+
+    pub fn Submit(
+        &mut self,
+        submission: PageCompositorFrame,
+    ) -> io::Result<(bool, Vec<compositor::runtime::resources::CpuReturnedResource>)> {
+        let local_surface_id = submission.local_surface_id;
+        let frame = submission.frame;
+        let root = frame
+            .render_pass_list
+            .last()
+            .ok_or_else(|| io::Error::other("compositor frame has no root render pass"))?;
+        let parameters = (
+            root.output_rect.width.max(0) as u32,
+            root.output_rect.height.max(0) as u32,
+            frame.metadata.device_scale_factor.to_bits(),
+        );
+        let mut returned = Vec::new();
+        if let Some(current) = self.local_surface_id {
+            let same_embed = current.embed_token == local_surface_id.embed_token;
+            // Chromium compares the two independently allocated, wrapping
+            // sequence numbers rather than lexicographically ordering them.
+            // Source: components/viz/common/surfaces/local_surface_id.cc:47-70.
+            if same_embed && !local_surface_id.IsSameOrNewerThan(&current) {
+                returned.extend(
+                    frame
+                        .resource_list
+                        .iter()
+                        .map(compositor::runtime::resources::CpuTransferableResource::ToReturnedResource),
+                );
+                return Ok((false, returned));
+            }
+        }
+        let generation_changed = self
+            .local_surface_id
+            .is_some_and(|current| current != local_surface_id);
+        if !generation_changed
+            && self
+                .surface_parameters
+                .is_some_and(|current| current != parameters)
+        {
+            return Err(io::Error::other(
+                "CompositorFrame dimensions changed without a new LocalSurfaceId",
+            ));
+        }
+        if generation_changed {
+            // Chromium allocates a new LocalSurfaceId whenever size or device
+            // scale changes.  Mirror that generation boundary at this Page's
+            // Viz adapter so render-pass backings and retained damage cannot
+            // cross between incompatible surface coordinate spaces.
+            // Source: components/viz/common/surfaces/
+            //         parent_local_surface_id_allocator.cc:74-96.
+            if let Some(resources) = self.viz.DestroySurface(self.surface) {
+                returned.extend(resources);
+            }
+            self.renderer.InvalidateSurface(self.surface);
+            self.surface = viz::native::SurfaceId(self.next_surface);
+            self.next_surface = self.next_surface.wrapping_add(1).max(1);
+        }
+        self.local_surface_id = Some(local_surface_id);
+        self.surface_parameters = Some(parameters);
+        returned.extend(
+            self
+            .viz
+            .SubmitFrame(self.surface, frame)
+            .map_err(|error| io::Error::other(error.to_string()))?
+            .returned_resources,
+        );
+        Ok((true, returned))
+    }
+
+    pub fn RenderCurrent(
+        &mut self,
+        width: u32,
+        height: u32,
+        target: &mut [u32],
+        retained: bool,
+    ) -> io::Result<RenderUpdate> {
+        let output = viz::native::DeviceRect::new(0, 0, width as i32, height as i32);
+        let placement = viz::native::SurfacePlacement {
+            surface_id: self.surface,
+            destination: output,
+        };
+        let aggregated = self
+            .viz
+            .Aggregate(output, &[placement])
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let receipt = aggregated.Receipt();
+        let update = self.renderer.Render(
+            &aggregated,
+            renderer::RenderTarget {
+                width,
+                height,
+                pixels: target,
+                format: PixelFormat::Bgra8888,
+                row_stride: width as usize,
+                retained: retained && self.rendered_surface == Some(self.surface),
+            },
+        )?;
+        self.viz.AcknowledgeDraw(receipt);
+        self.rendered_surface = Some(self.surface);
+        Ok(update)
+    }
 }
 
 #[cfg(feature = "pure_source_png")]
 impl PageRenderPipeline {
-    fn Render(
+    pub fn new(executor: Arc<dyn executor::Executor>) -> Self {
+        Self::NewWithPresentation(executor, false).0
+    }
+
+    /// Builds the cc producer and the Viz/Renderer consumer as separate owners.
+    /// Moving the consumer to a Page renderer sequence preserves Chromium's
+    /// FrameSink boundary: impl-thread input submits owned CompositorFrames and
+    /// never waits for software drawing to finish.
+    pub fn new_external(
+        executor: Arc<dyn executor::Executor>,
+    ) -> (Self, PageFramePresenter) {
+        Self::NewWithPresentation(executor, true)
+    }
+
+    fn NewWithPresentation(
+        executor: Arc<dyn executor::Executor>,
+        external_presentation: bool,
+    ) -> (Self, PageFramePresenter) {
+        static NEXT_COMMAND_BUFFER: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
+        let command_buffer = NEXT_COMMAND_BUFFER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let pixels = CpuRasterProvider::new(command_buffer, 64 * 1024 * 1024);
+        let presenter = PageFramePresenter::new(pixels.clone());
+        let renderer = if external_presentation {
+            renderer::Renderer::default()
+        } else {
+            renderer::Renderer::WithPictureRasterizer(Box::new(pixels.clone()))
+        };
+        (Self {
+            compositor: None,
+            executor: Arc::new(PageCompositorExecutor::new(executor)),
+            pixels,
+            viz: viz::native::VizEngine::New(),
+            renderer,
+            external_presentation,
+            outbound_frames: Default::default(),
+            deferred_effects: Vec::new(),
+            begin_frame_sequence: 0,
+            needs_begin_frames: false,
+            pending: None,
+            presentable: None,
+        }, presenter)
+    }
+
+    fn EnsureCompositor(&mut self) -> io::Result<()> {
+        if self.compositor.is_none() {
+            let executor: Arc<dyn CompositorExecutor> = self.executor.clone();
+            let pixels = Arc::new(self.pixels.clone());
+            self.compositor = Some(
+                CompositorEngine::new(
+                    CompositorConfig::default(),
+                    CompositorExecutors {
+                        compositor: executor.clone(),
+                        raster: executor,
+                        pixels,
+                    },
+                )
+                .map_err(|error| io::Error::other(error.to_string()))?,
+            );
+        }
+        Ok(())
+    }
+
+    fn AcceptOutput(&mut self, first: CompositorOutput) -> io::Result<(bool, bool, bool)> {
+        let mut pending = std::collections::VecDeque::from([first]);
+        let mut submitted = false;
+        let mut needs_begin_frames = false;
+        let mut main_commit_pending = false;
+        let mut turns = 0usize;
+        while let Some(mut output) = pending.pop_front() {
+            turns += 1;
+            if turns > 64 {
+                return Err(io::Error::other(
+                    "compositor output did not reach a stable frame boundary",
+                ));
+            }
+            // Each output reports the engine's current subscription state.
+            // Ack/reclaim outputs later in this queue supersede earlier values.
+            needs_begin_frames = output.needs_begin_frames;
+            main_commit_pending = output.main_commit_pending;
+            self.needs_begin_frames = needs_begin_frames;
+            self.deferred_effects
+                .append(&mut output.main_thread_effects);
+            let Some(frame) = output.frame else {
+                continue;
+            };
+            submitted = true;
+            let compositor = self.compositor.as_mut().expect("initialized compositor");
+            if self.external_presentation {
+                // The move into the Page FrameSink queue transfers ownership;
+                // Chromium acknowledges submission at this boundary, before
+                // Viz draws the frame. Resource returns arrive separately when
+                // Viz replaces the prior surface frame.
+                self.outbound_frames.push_back(frame);
+                pending.push_back(
+                    compositor
+                        .DidReceiveFrameAck()
+                        .map_err(|error| io::Error::other(error.to_string()))?,
+                );
+            } else {
+                let submission = self
+                    .viz
+                    .SubmitFrame(viz::native::SurfaceId(1), frame.frame)
+                    .map_err(|error| io::Error::other(error.to_string()))?;
+                pending.push_back(
+                    compositor
+                        .DidReceiveFrameAck()
+                        .map_err(|error| io::Error::other(error.to_string()))?,
+                );
+                if !submission.returned_resources.is_empty() {
+                    pending.push_back(
+                        compositor
+                            .ReclaimResources(submission.returned_resources)
+                            .map_err(|error| io::Error::other(error.to_string()))?,
+                    );
+                }
+            }
+        }
+        Ok((submitted, needs_begin_frames, main_commit_pending))
+    }
+
+    fn AcceptPendingOutput(&mut self, output: CompositorOutput) -> io::Result<bool> {
+        // Source: cc/trees/single_thread_proxy.cc CompositeImmediately and
+        // Scheduler::DidNotProduceFrame. Once Poll is stable, requests neither
+        // another BeginFrame nor main-frame work, and emitted no replacement,
+        // the committed main frame is complete and keeps the existing surface.
+        // Waiting for a CompositorFrame here would block the next artifact
+        // behind a frame Chromium intentionally does not emit.
+        let stable_frame_reuse = output.frame.is_none()
+            && !output.needs_begin_frames
+            && !output.main_thread_effects.iter().any(|effect| {
+                matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
+            });
+        let (submitted, needs_begin_frames, main_commit_pending) = self.AcceptOutput(output)?;
+        if let Some(pending) = self.pending.as_mut() {
+            pending.needs_begin_frames = needs_begin_frames;
+        }
+        if !main_commit_pending && (submitted || stable_frame_reuse) {
+            let pending = self
+                .pending
+                .take()
+                .expect("a compositor completion must answer a pending Page commit");
+            self.presentable = Some(PresentablePageRender {
+                artifact: Arc::downgrade(&pending.artifact),
+                input: pending.input,
+            });
+        }
+        Ok(submitted || stable_frame_reuse)
+    }
+
+    fn ContinuePending(&mut self) -> io::Result<bool> {
+        let output = self
+            .compositor
+            .as_mut()
+            .expect("initialized compositor")
+            .Poll()
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        if self.AcceptPendingOutput(output)? {
+            return Ok(true);
+        }
+        for _ in 0..8 {
+            if !self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.needs_begin_frames)
+            {
+                break;
+            }
+            let output = self.BeginFrame()?;
+            if self.AcceptPendingOutput(output)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn BeginFrame(&mut self) -> io::Result<CompositorOutput> {
+        self.begin_frame_sequence = self.begin_frame_sequence.wrapping_add(1).max(1);
+        let now = self.executor.Now();
+        let interval = BeginFrameArgs::DefaultInterval();
+        self.compositor
+            .as_mut()
+            .expect("initialized compositor")
+            .BeginFrame(BeginFrameArgs {
+                frame_time: now,
+                deadline: now + interval,
+                interval,
+                unthrottled_interval: interval,
+                frame_id: BeginFrameId {
+                    source_id: BeginFrameArgs::kManualSourceId,
+                    sequence_number: self.begin_frame_sequence,
+                },
+                trace_id: self.begin_frame_sequence as i64,
+                dispatch_time: now,
+                client_arrival_time: now,
+                type_: BeginFrameArgsType::NORMAL,
+                ..BeginFrameArgs::default()
+            })
+            .map_err(|error| io::Error::other(error.to_string()))
+    }
+
+    pub fn BeginPhysicalFrame(
+        &mut self,
+        args: foundation::begin_frame::BeginFrameArgs,
+    ) -> io::Result<CompositorWheelResult> {
+        if self.compositor.is_none() {
+            return Ok(CompositorWheelResult::default());
+        }
+        let interval = CompositorTimeDelta::Microseconds(
+            args.interval.as_micros().min(i64::MAX as u128) as i64,
+        );
+        let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
+            .is_some()
+            .then(std::time::Instant::now);
+        let output = self
+            .compositor
+            .as_mut()
+            .expect("checked compositor")
+            .BeginFrame(BeginFrameArgs {
+                frame_time: self.executor.TimeTicks(args.frame_time),
+                deadline: self.executor.TimeTicks(args.deadline),
+                interval,
+                unthrottled_interval: interval,
+                frame_id: BeginFrameId {
+                    source_id: args.source_id,
+                    sequence_number: args.sequence_number,
+                },
+                trace_id: args.sequence_number.min(i64::MAX as u64) as i64,
+                dispatch_time: self.executor.Now(),
+                client_arrival_time: self.executor.Now(),
+                type_: BeginFrameArgsType::NORMAL,
+                ..BeginFrameArgs::default()
+            })
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let began_at = profile.map(|_| std::time::Instant::now());
+        let mut result = CompositorWheelResult::default();
+        let mut output = output;
+        let stable_frame_reuse = self.pending.is_some()
+            && output.frame.is_none()
+            && !output.needs_begin_frames
+            && !output.main_thread_effects.iter().any(|effect| {
+                matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
+            });
+        for effect in std::mem::take(&mut output.main_thread_effects) {
+            if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
+                result.handled |= handled;
+            } else {
+                result.effects.push(effect);
+            }
+        }
+        let (submitted, needs_begin_frames, main_commit_pending) = self.AcceptOutput(output)?;
+        for effect in self.TakeMainThreadEffects() {
+            if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
+                result.handled |= handled;
+            } else {
+                result.effects.push(effect);
+            }
+        }
+        if let Some(pending) = self.pending.as_mut() {
+            pending.needs_begin_frames = needs_begin_frames;
+        }
+        if !main_commit_pending && (submitted || stable_frame_reuse) {
+            if let Some(pending) = self.pending.take() {
+                self.presentable = Some(PresentablePageRender {
+                    artifact: Arc::downgrade(&pending.artifact),
+                    input: pending.input,
+                });
+            }
+        }
+        result.submitted = submitted;
+        if let (Some(started), Some(began)) = (profile, began_at) {
+            eprintln!(
+                "page-compositor-begin-profile begin_ms={:.3} output_ms={:.3} total_ms={:.3} submitted={} effects={}",
+                (began - started).as_secs_f64() * 1000.0,
+                began.elapsed().as_secs_f64() * 1000.0,
+                started.elapsed().as_secs_f64() * 1000.0,
+                result.submitted,
+                result.effects.len(),
+            );
+        }
+        Ok(result)
+    }
+
+    pub fn NeedsBeginFrames(&self) -> bool {
+        self.needs_begin_frames
+    }
+
+    pub fn TakeFrames(&mut self) -> Vec<NativeCompositorFrameSubmission> {
+        self.outbound_frames.drain(..).collect()
+    }
+
+    pub fn TakeMainThreadEffects(&mut self) -> Vec<CompositorMainThreadEffect> {
+        std::mem::take(&mut self.deferred_effects)
+    }
+
+    /// Runs work posted to cc's injected task runner on the Page impl sequence.
+    /// The executor only transports owned callbacks; tree and scheduler owners
+    /// remain resident here, matching Chromium's task-runner wakeup boundary.
+    pub fn Pump(&mut self) -> io::Result<CompositorWheelResult> {
+        let Some(compositor) = self.compositor.as_mut() else {
+            return Ok(CompositorWheelResult::default());
+        };
+        let mut output = compositor
+            .Poll()
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let mut result = CompositorWheelResult::default();
+        let stable_frame_reuse = self.pending.is_some()
+            && output.frame.is_none()
+            && !output.needs_begin_frames
+            && !output.main_thread_effects.iter().any(|effect| {
+                matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
+            });
+        for effect in std::mem::take(&mut output.main_thread_effects) {
+            if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
+                result.handled |= handled;
+            } else {
+                result.effects.push(effect);
+            }
+        }
+        let (submitted, needs_begin_frames, main_commit_pending) = self.AcceptOutput(output)?;
+        for effect in self.TakeMainThreadEffects() {
+            if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
+                result.handled |= handled;
+            } else {
+                result.effects.push(effect);
+            }
+        }
+        if let Some(pending) = self.pending.as_mut() {
+            pending.needs_begin_frames = needs_begin_frames;
+        }
+        if !main_commit_pending && (submitted || stable_frame_reuse) {
+            if let Some(pending) = self.pending.take() {
+                self.presentable = Some(PresentablePageRender {
+                    artifact: Arc::downgrade(&pending.artifact),
+                    input: pending.input,
+                });
+            }
+        }
+        result.submitted = submitted;
+        Ok(result)
+    }
+
+    pub fn ReclaimResources(
+        &mut self,
+        resources: Vec<compositor::runtime::resources::CpuReturnedResource>,
+    ) -> io::Result<()> {
+        if resources.is_empty() || self.compositor.is_none() {
+            return Ok(());
+        }
+        let output = self
+            .compositor
+            .as_mut()
+            .expect("checked compositor")
+            .ReclaimResources(resources)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        self.AcceptOutput(output)?;
+        Ok(())
+    }
+
+    /// Route a wheel gesture through cc's InputHandler on the resident active
+    /// tree. The returned frame is already submitted to this Page's Viz surface;
+    /// Page later reflects the emitted offset on its main-thread DOM owner.
+    pub fn Wheel(
+        &mut self,
+        wheel: &interaction::input_event::WheelEvent,
+    ) -> io::Result<CompositorWheelResult> {
+        // Chromium continues routing impl-thread input to the active tree while
+        // a newer main-frame commit is pending. The pending tree does not own
+        // the gesture latch and must not force wheel updates back to Blink.
+        if self.compositor.is_none() {
+            return Ok(CompositorWheelResult::default());
+        }
+        let phase = match wheel.phase {
+            interaction::input_event::WheelPhase::kBegan => ScrollPhase::Begin,
+            interaction::input_event::WheelPhase::kEnded
+            | interaction::input_event::WheelPhase::kCancelled => ScrollPhase::End,
+            interaction::input_event::WheelPhase::kNone
+            | interaction::input_event::WheelPhase::kChanged => ScrollPhase::Update,
+        };
+        let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
+            .is_some()
+            .then(std::time::Instant::now);
+        let first = self
+            .compositor
+            .as_mut()
+            .expect("checked compositor")
+            .Input(CompositorInput::Wheel {
+                position: CompositorPointF::new(
+                    wheel.position.x as f32,
+                    wheel.position.y as f32,
+                ),
+                delta: Vector2dF::new(wheel.delta.x as f32, wheel.delta.y as f32),
+                phase,
+            })
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let input_done = profile.map(|start| start.elapsed());
+        let mut result = CompositorWheelResult::default();
+        let mut output = first;
+        for effect in std::mem::take(&mut output.main_thread_effects) {
+            if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
+                result.handled |= handled;
+            } else {
+                result.effects.push(effect);
+            }
+        }
+        let (submitted, _, _) = self.AcceptOutput(output)?;
+        for effect in self.TakeMainThreadEffects() {
+            if let CompositorMainThreadEffect::WheelDisposition { handled } = effect {
+                result.handled |= handled;
+            } else {
+                result.effects.push(effect);
+            }
+        }
+        result.submitted = submitted;
+        if let Some(start) = profile {
+            eprintln!(
+                "page-compositor-wheel-profile input_ms={:.3} output_ms={:.3} total_ms={:.3} handled={} submitted={} effects={}",
+                input_done.unwrap().as_secs_f64() * 1000.0,
+                (start.elapsed() - input_done.unwrap()).as_secs_f64() * 1000.0,
+                start.elapsed().as_secs_f64() * 1000.0,
+                result.handled,
+                result.submitted,
+                result.effects.len(),
+            );
+        }
+        Ok(result)
+    }
+
+    pub fn Render(
         &mut self,
         artifact: &Arc<paint::PaintArtifact>,
         width: u32,
@@ -81,107 +765,207 @@ impl PageRenderPipeline {
         format: PixelFormat,
         stride: usize,
     ) -> io::Result<RenderUpdate> {
+        self.RenderToTarget(artifact, width, height, scale, target, format, stride, false)
+    }
+
+    pub fn RenderRetained(
+        &mut self,
+        artifact: &Arc<paint::PaintArtifact>,
+        width: u32,
+        height: u32,
+        scale: f64,
+        target: &mut [u32],
+        format: PixelFormat,
+        stride: usize,
+    ) -> io::Result<RenderUpdate> {
+        self.RenderToTarget(artifact, width, height, scale, target, format, stride, true)
+    }
+
+    /// Commit PaintEngine output and produce zero or more move-only frames.
+    /// External Page runtimes call `TakeFrames` and hand those values to their
+    /// Page-owned Viz/Renderer sequence.
+    pub fn CommitArtifact(
+        &mut self,
+        artifact: &Arc<paint::PaintArtifact>,
+        width: u32,
+        height: u32,
+        scale: f64,
+    ) -> io::Result<()> {
         if !scale.is_finite() || scale <= 0.0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "raster scale must be positive",
             ));
         }
-
-        // Page is the composition root. Every stage keeps its own retained
-        // state, while immutable protocol values cross each boundary directly.
+        if width > i32::MAX as u32 || height > i32::MAX as u32 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "render target exceeds compositor geometry range",
+            ));
+        }
         let layout_zoom = artifact
             .resources
             .as_ref()
             .map_or(1.0, |resources| resources.layout_zoom_factor)
             .max(f64::MIN_POSITIVE);
         let raster_scale = scale / layout_zoom;
-        let config = FrameConfig {
-            viewport: paint::PaintRect {
-                x: 0.0,
-                y: 0.0,
-                width: width as f64 / raster_scale,
-                height: height as f64 / raster_scale,
-            },
-            raster_scale,
-            device_scale_factor: scale,
-            layout_zoom_factor: layout_zoom,
-            activation_scroll: None,
-            frame_time: None,
-        };
-        let already_prepared = self.prepared_config == Some(config)
-            && self
-                .prepared_artifact
-                .as_ref()
-                .and_then(std::sync::Weak::upgrade)
-                .is_some_and(|prepared| Arc::ptr_eq(&prepared, artifact));
-        if !already_prepared {
-            let pending = self
-                .tiles
-                .UpdatePending(artifact, config)
-                .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error.reason()))?;
-            let raster = self.resources.prepare(
-                &pending.frame_plan,
-                &pending.raster_batch,
-                width,
-                height,
-            )?;
-            self.tiles.ApplyRasterResults(&raster.completions);
-            let release = self.tiles.ActivatePending().ok_or_else(|| {
-                io::Error::other("pending Page layer tree is not ready for activation")
-            })?;
-            let released = self.resources.release_resources(&release)?;
-            self.tiles.AcknowledgeResourceRelease(&released);
-            self.prepared_artifact = Some(Arc::downgrade(artifact));
-            self.prepared_config = Some(config);
+        if !raster_scale.is_finite() || raster_scale <= 0.0 || raster_scale > f32::MAX as f64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "artifact-to-device scale is outside compositor range",
+            ));
         }
-
-        let compositor_frame = self
-            .compositor
-            .BuildFrame(
-                self.tiles
-                    .GetActiveFramePlan()
-                    .expect("prepared Page has FramePlan"),
-            )
-            .map_err(io::Error::other)?;
-        let surface = viz::SurfaceId(1);
-        self.viz
-            .SubmitFrame(surface, compositor_frame)
-            .map_err(io::Error::other)?;
-        let output = compositor::DeviceRect::new(0, 0, width, height);
-        let aggregated_frame = self
-            .viz
-            .Aggregate(
-                output,
-                &[viz::SurfacePlacement {
-                    surface_id: surface,
-                    destination: output,
-                }],
-            )
-            .map_err(io::Error::other)?;
-        let resources = SingleSurfaceResources {
-            surface_id: surface,
-            resources: &self.resources,
+        let input = PreparedRenderInput {
+            width,
+            height,
+            scale: scale.to_bits(),
+            layout_zoom: layout_zoom.to_bits(),
         };
-        self.renderer.Render(
-            &aggregated_frame,
-            &resources,
-            RenderTarget {
-                width,
-                height,
-                pixels: target,
-                format,
-                row_stride: stride,
-            },
-        )
+        let viewport = CompositorViewportState {
+            size: CompositorSize::new(width as i32, height as i32),
+            device_scale_factor: raster_scale as f32,
+            page_scale_factor: 1.0,
+            min_page_scale_factor: 1.0,
+            max_page_scale_factor: 1.0,
+            visible: true,
+        };
+        if let Some(pending) = self.pending.as_ref() {
+            let requested_pending = pending.Matches(artifact, input, viewport);
+            self.EnsureCompositor()?;
+            let submitted = self.ContinuePending()?;
+            if !requested_pending {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    if submitted {
+                        "previous Page compositor commit became presentable; retry the newer PaintArtifact"
+                    } else {
+                        "previous Page compositor commit is still pending"
+                    },
+                ));
+            }
+            if !submitted {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "compositor is still preparing the committed PaintArtifact",
+                ));
+            }
+        }
+        let already_presentable = self.presentable.as_ref().is_some_and(|presentable| {
+            presentable.input == input
+                && presentable
+                    .artifact
+                    .upgrade()
+                    .is_some_and(|prepared| Arc::ptr_eq(&prepared, artifact))
+        });
+        if !already_presentable {
+            self.EnsureCompositor()?;
+            let first = match self
+                .compositor
+                .as_mut()
+                .expect("initialized compositor")
+                .Commit(artifact.clone(), viewport)
+            {
+                Ok(output) => output,
+                Err(CompositorError::NotReady { stage }) => {
+                    return Err(io::Error::new(io::ErrorKind::WouldBlock, stage));
+                }
+                Err(error) => return Err(io::Error::other(error.to_string())),
+            };
+            self.pending = Some(PendingPageRender {
+                artifact: artifact.clone(),
+                input,
+                viewport,
+                needs_begin_frames: false,
+            });
+            if !self.AcceptPendingOutput(first)? && !self.ContinuePending()? {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "compositor is still preparing the committed PaintArtifact",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn RenderToTarget(
+        &mut self,
+        artifact: &Arc<paint::PaintArtifact>,
+        width: u32,
+        height: u32,
+        scale: f64,
+        target: &mut [u32],
+        format: PixelFormat,
+        stride: usize,
+        retained: bool,
+    ) -> io::Result<RenderUpdate> {
+        let profile_started = std::env::var_os("BROWSER_PROFILE_INPUT")
+            .is_some()
+            .then(std::time::Instant::now);
+        self.CommitArtifact(artifact, width, height, scale)?;
+        let committed_at = profile_started.map(|_| std::time::Instant::now());
+
+        let surface = viz::native::SurfaceId(1);
+        let output = viz::native::DeviceRect::new(0, 0, width as i32, height as i32);
+        let placement = viz::native::SurfacePlacement {
+            surface_id: surface,
+            destination: output,
+        };
+        let (update, receipt) = {
+            let aggregated_frame = self
+                .viz
+                .Aggregate(output, &[placement])
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            let aggregated_at = profile_started.map(|_| std::time::Instant::now());
+            let receipt = aggregated_frame.Receipt();
+            let aggregate_damage_pixels = aggregated_frame
+                .RenderPasses()
+                .iter()
+                .map(|pass| {
+                    let damage = pass.DamageRect();
+                    damage.width.max(0) as usize * damage.height.max(0) as usize
+                })
+                .sum::<usize>();
+            let update = self.renderer.Render(
+                &aggregated_frame,
+                renderer::RenderTarget {
+                    width,
+                    height,
+                    pixels: target,
+                    format,
+                    row_stride: stride,
+                    retained,
+                },
+            )?;
+            if let (Some(started), Some(committed), Some(aggregated)) =
+                (profile_started, committed_at, aggregated_at)
+            {
+                eprintln!(
+                    "page-render-profile commit_ms={:.3} aggregate_ms={:.3} raster_ms={:.3} total_ms={:.3} passes={} quads={} frame_damage_pixels={} replay_damage_pixels={}",
+                    (committed - started).as_secs_f64() * 1000.0,
+                    (aggregated - committed).as_secs_f64() * 1000.0,
+                    aggregated.elapsed().as_secs_f64() * 1000.0,
+                    started.elapsed().as_secs_f64() * 1000.0,
+                    update.passes,
+                    update.quads,
+                    aggregate_damage_pixels,
+                    update.damage_pixels,
+                );
+            }
+            (update, receipt)
+        };
+        self.viz.AcknowledgeDraw(receipt);
+        Ok(update)
     }
 
     fn InvalidatePreparedArtifact(&mut self) {
-        // FramePlan owns the artifact used by its raster tasks. Tile identity
-        // and resident pixels remain retained by their respective engines.
-        self.tiles.ReleaseFramePlans();
-        self.prepared_artifact = None;
-        self.prepared_config = None;
+        self.presentable = None;
+    }
+}
+
+#[cfg(feature = "pure_source_png")]
+impl Default for PageRenderPipeline {
+    fn default() -> Self {
+        Self::new(executor::inline())
     }
 }
 
@@ -804,11 +1588,8 @@ impl PageState {
             let mut paint = self.paint_engine.borrow_mut();
             #[cfg(feature = "pure_source_png")]
             {
-                // The old FramePlan retains the artifact needed to replay its
-                // raster tasks. This scroll is about to replace that plan;
-                // release only the publication so Arc::make_mut below does not
-                // clone the complete PaintArtifact. Tile identities and pixels
-                // remain resident in their owning engines.
+                // Stop identifying the currently submitted artifact as the next
+                // commit input before Paint mutates its retained snapshot.
                 self.rendering.borrow_mut().InvalidatePreparedArtifact();
             }
             // The frame and Engine reference the same committed artifact.
@@ -825,10 +1606,7 @@ impl PageState {
                         eprintln!("scroll-paint-reuse rejected={reason:?}");
                     }
                 }
-                paint.Paint(
-                    &frame.fragments,
-                    self.layout_editing.PaintState(),
-                );
+                paint.Paint(&frame.fragments, self.layout_editing.PaintState());
                 paint.CommitPaintResult(|artifact| {
                     CommitPaint(
                         &mut self.layout_engine.borrow_mut(),
@@ -1268,6 +2046,7 @@ impl PageState {
                     dom::error::invalid_argument("animated image revision must increase");
                 }
                 image.revision = m.frame.revision;
+                image.UpdateDocumentFrameMetadata(&m.frame);
                 image.document_container_key = Some(m.frame.container_key.clone());
                 let image_resource::PaintImageContent::Document(content) = &image.content else {
                     dom::error::invalid_argument("document image frame targeted a bitmap resource")
@@ -1426,6 +2205,12 @@ pub struct Page {
     // gesture, after compositor scrolling has stopped moving content beneath
     // a stationary pointer.
     wheel_scroll_active: bool,
+    // Impl-thread offsets are reflected to DOM immediately for CSSOM/events,
+    // then folded into one main-thread property update when the gesture ends.
+    compositor_scroll_targets: Vec<u64>,
+    // Native Page runtimes place the compositor on their impl executor. Direct
+    // embedders keep the inline pipeline used by PaintInto.
+    external_compositor: bool,
     processed_compositor_scroll_sequence: u64,
     cursor: Cursor,
     // HitTestCache's point/DOM version proof, restricted to one clean committed
@@ -1533,8 +2318,7 @@ impl Page {
         &mut self,
         mut fragments: Rc<FragmentNode>,
     ) -> io::Result<Rc<FragmentNode>> {
-        let mut trace =
-            browser_tracing::span("lifecycle", "Page.ReconcileResponsiveAutoSizes");
+        let mut trace = browser_tracing::span("lifecycle", "Page.ReconcileResponsiveAutoSizes");
         fn collect(document: &Document, node: &FragmentNode, output: &mut Vec<(usize, f64)>) {
             if node.kind == FragmentKind::kBox && node.paint.replaced_content.is_some() {
                 if let Some(index) = document.FindNodeById(node.node_id) {
@@ -1560,10 +2344,7 @@ impl Page {
         let mut responsive_images = 0usize;
         for _ in 0..limit {
             let widths = {
-                let _trace = browser_tracing::span(
-                    "lifecycle",
-                    "Page.CollectResponsiveAutoSizes",
-                );
+                let _trace = browser_tracing::span("lifecycle", "Page.CollectResponsiveAutoSizes");
                 let owner = self.state.document.borrow();
                 let mut widths = Vec::new();
                 collect(owner.GetDocument(), &fragments, &mut widths);
@@ -1582,10 +2363,7 @@ impl Page {
                 break;
             }
             let width_changed = {
-                let _trace = browser_tracing::span(
-                    "lifecycle",
-                    "Page.PublishResponsiveAutoSizes",
-                );
+                let _trace = browser_tracing::span("lifecycle", "Page.PublishResponsiveAutoSizes");
                 let mut owner = self.state.document.borrow_mut();
                 let document = owner.GetDocumentMut();
                 widths.into_iter().fold(false, |changed, (node, width)| {
@@ -1596,17 +2374,13 @@ impl Page {
                 break;
             }
             let selection_changed = {
-                let _trace = browser_tracing::span(
-                    "lifecycle",
-                    "Page.ReselectResponsiveImages",
-                );
+                let _trace = browser_tracing::span("lifecycle", "Page.ReselectResponsiveImages");
                 self.resources.QueueReferencedImages()?
             };
             if !selection_changed {
                 break;
             }
-            let _trace =
-                browser_tracing::span("lifecycle", "Page.RelayoutResponsiveImages");
+            let _trace = browser_tracing::span("lifecycle", "Page.RelayoutResponsiveImages");
             self.state
                 .LayoutWithContainerQueries(LayoutUpdateKind::Paint);
             fragments = self
@@ -1930,7 +2704,11 @@ impl Page {
             layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly());
         let paint_engine = paint::PaintEngine::new();
         #[cfg(feature = "pure_source_png")]
-        let rendering = PageRenderPipeline::default();
+        let rendering = PageRenderPipeline::new(if threads.raster {
+            threads.executor.clone()
+        } else {
+            executor::inline()
+        });
         let state = PageState::WithEngines(
             document,
             layout_engine,
@@ -2020,6 +2798,8 @@ impl Page {
             cursor_position: None,
             hover_state_dirty: false,
             wheel_scroll_active: false,
+            compositor_scroll_targets: Vec::new(),
+            external_compositor: false,
             processed_compositor_scroll_sequence: 0,
             cursor: Cursor::kDefault,
             cursor_hit_test: None,
@@ -2181,6 +2961,13 @@ impl Page {
     }
     pub fn Threads(&self) -> &PageThreads {
         &self.threads
+    }
+
+    /// Select the native Page runtime's impl-executor compositor. The runtime
+    /// routes compositor disposition back through the same InputEvent, while
+    /// direct embedders continue using Page's inline PaintInto pipeline.
+    pub fn SetExternalCompositor(&mut self, external: bool) {
+        self.external_compositor = external;
     }
 
     pub fn SetLoadingWakeCallback(&mut self, callback: URLWakeCallback) {
@@ -2439,23 +3226,84 @@ impl Page {
             // before dispatching script. Native feedback must not await paint.
             self.UpdateCursorFeedback(true);
         }
+
+        // Chromium sends a non-blocking wheel gesture to cc first. DOM still
+        // receives the same event, marked with the impl-thread disposition, so
+        // its default action does not apply the delta a second time. Regions
+        // with a cancelable listener stay wholly on the main-thread fallback.
+        let dispatch_profile = std::env::var_os("BROWSER_PROFILE_INPUT")
+            .is_some()
+            .then(std::time::Instant::now);
+        let mut routed_input = input.clone();
+        #[cfg(feature = "pure_source_png")]
+        let mut compositor_wheel = CompositorWheelResult::default();
+        #[cfg(feature = "pure_source_png")]
+        if let interaction::input_event::InputEvent::Wheel(wheel) = &mut routed_input {
+            let regions = self.BlockingWheelEventRegions();
+            let contains = |rect: paint::paint_engine::PaintRect| {
+                wheel.position.x >= rect.x
+                    && wheel.position.y >= rect.y
+                    && wheel.position.x < rect.x + rect.width
+                    && wheel.position.y < rect.y + rect.height
+            };
+            let blocked = regions.covers_viewport
+                || regions.scrolling_rects.iter().copied().any(contains)
+                || regions.fixed_rects.iter().copied().any(contains);
+            if !self.external_compositor && !blocked {
+                compositor_wheel = self.state.rendering.borrow_mut().Wheel(wheel)?;
+                wheel.compositor_handled = compositor_wheel.handled;
+            }
+        }
+        let compositor_done = dispatch_profile.map(|start| start.elapsed());
+
         let frame = self
             .frame
             .as_ref()
             .ok_or_else(|| io::Error::other("cannot dispatch input before the first frame"))?;
         let result = if let Some(scripts) = &mut self.scripts {
-            scripts.Dispatch(input, &frame.fragments)?
+            scripts.Dispatch(&routed_input, &frame.fragments)?
         } else {
-            self.interaction
-                .Dispatch(input, &self.state.document.Handle(), &frame.fragments)
+            self.interaction.Dispatch(
+                &routed_input,
+                &self.state.document.Handle(),
+                &frame.fragments,
+            )
         };
+        let dom_done = dispatch_profile.map(|start| start.elapsed());
+
+        if !result.default_prevented {
+            if let interaction::input_event::InputEvent::Wheel(wheel) = &routed_input {
+                #[cfg(feature = "pure_source_png")]
+                if compositor_wheel.handled {
+                    self.ApplyCompositorWheelEffects(compositor_wheel.effects)?;
+                    if compositor_wheel.submitted {
+                        self.PresentCompositorOnlyFrame();
+                    }
+                }
+                self.ApplyWheelDefaultWithoutLifecycle(wheel, result.target_node_id)?;
+            }
+        }
+        if let (Some(start), Some(compositor), Some(dom)) =
+            (dispatch_profile, compositor_done, dom_done)
+        {
+            if matches!(routed_input, interaction::input_event::InputEvent::Wheel(_)) {
+                eprintln!(
+                    "page-wheel-dispatch-profile compositor_ms={:.3} dom_ms={:.3} reflect_ms={:.3} total_ms={:.3}",
+                    compositor.as_secs_f64() * 1000.0,
+                    (dom - compositor).as_secs_f64() * 1000.0,
+                    (start.elapsed() - dom).as_secs_f64() * 1000.0,
+                    start.elapsed().as_secs_f64() * 1000.0,
+                );
+            }
+        }
+
         let restart = matches!(
-            input,
+            routed_input,
             interaction::input_event::InputEvent::Key(_)
                 | interaction::input_event::InputEvent::TextInput(_)
                 | interaction::input_event::InputEvent::Composition(_)
                 | interaction::input_event::InputEvent::Focus(_)
-        ) || matches!(input, interaction::input_event::InputEvent::Mouse(event)
+        ) || matches!(&routed_input, interaction::input_event::InputEvent::Mouse(event)
                 if event.r#type == interaction::input_event::MouseEventType::kDown);
         self.UpdateCaret(restart);
         Ok(result)
@@ -2485,11 +3333,31 @@ impl Page {
                     .CaretFor(&self.state.document.Handle(), id)
             });
         let mut caret = self.state.layout_editing.caret.borrow_mut();
+        let previous_node = caret.paint_state().map(|state| state.node_id);
         let changed = caret.update(position, std::time::Instant::now(), restart);
+        let current_node = caret.paint_state().map(|state| state.node_id);
         drop(caret);
         let revision = self.state.layout_editing.selections.Revision();
         let selection_changed = self.selection_revision != revision;
         self.selection_revision = revision;
+        if selection_changed || previous_node != current_node {
+            // LayoutSelection::Commit invalidates both sides of a moved
+            // selection and the common object when only its offsets changed.
+            // Keep that lifecycle inside Layout; Page only routes the logical
+            // owner ids through the existing typed mutation boundary.
+            let mut layout = self.state.layout_engine.borrow_mut();
+            for node_id in [previous_node, current_node].into_iter().flatten() {
+                if previous_node == current_node && !selection_changed {
+                    continue;
+                }
+                layout.ApplyMutation(
+                    layoutng_assembly::layout_engine::LayoutMutation::SelectionPaint { node_id },
+                );
+                if previous_node == current_node {
+                    break;
+                }
+            }
+        }
         if changed || selection_changed {
             self.editing_paint_dirty = true;
             // FrameCaret and CaretDisplayItemClient schedule paint
@@ -2563,9 +3431,10 @@ impl Page {
             }
             _ => Cursor::kDefault,
         };
-        // A host may have switched from another Page (browser toolbar) even
-        // when this Page's cached cursor has not changed.
-        if force || cursor != self.cursor {
+        // The embedding restores the active Page's current cursor when routing
+        // changes between toolbar/content. Re-hit-testing a forced mouse move
+        // must not turn an unchanged cursor value into another host event.
+        if cursor != self.cursor {
             self.cursor = cursor;
             self.state.client.borrow_mut().DidChangeCursor(cursor);
         }
@@ -2801,10 +3670,10 @@ impl Page {
         );
         let display_items = {
             trace.set("full_paint", 1.0);
-            self.state.paint_engine.borrow_mut().Paint(
-                &fragments,
-                self.state.layout_editing.PaintState(),
-            );
+            self.state
+                .paint_engine
+                .borrow_mut()
+                .Paint(&fragments, self.state.layout_editing.PaintState());
             let document_image_requirements = self
                 .state
                 .paint_engine
@@ -2819,10 +3688,10 @@ impl Page {
                 // Background, mask and border-image target sizes are owned by
                 // Paint geometry. Re-record once after their typed SVG
                 // variants arrive so every display item names its exact key.
-                self.state.paint_engine.borrow_mut().Paint(
-                    &fragments,
-                    self.state.layout_editing.PaintState(),
-                );
+                self.state
+                    .paint_engine
+                    .borrow_mut()
+                    .Paint(&fragments, self.state.layout_editing.PaintState());
             }
             let mut paint = self.state.paint_engine.borrow_mut();
             paint.CommitPaintResult(|artifact| {
@@ -3238,8 +4107,8 @@ impl Page {
     }
 
     /// The host may append transient chrome content to this Page's recording.
-    /// Both paths use the same Page-owned LayerTile, Raster, Compositor, Viz
-    /// and Renderer instances, so retained identities stay coherent.
+    /// Both paths use the same Page-owned Compositor, Viz and Renderer instances,
+    /// so retained identities stay coherent.
     pub fn PaintArtifactInto(
         &self,
         artifact: &Arc<paint::PaintArtifact>,
@@ -3254,9 +4123,5 @@ impl Page {
             .rendering
             .borrow_mut()
             .Render(artifact, width, height, scale, target, format, stride)
-    }
-
-    pub fn LayerTileStats(&self) -> RasterStats {
-        self.state.rendering.borrow().resources.stats()
     }
 }

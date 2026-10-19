@@ -43,12 +43,14 @@ impl LayoutBox {
     pub fn CanSkipComputeScrollbars(&self) -> bool {
         self.CheckIsNotDestroyed();
         ((!self.IsLayoutView()
-            && (self.StyleRef().IsOverflowVisibleAlongBothAxes() || !self.HasNonVisibleOverflow())) || {
-            let scrollable_area = self.GetScrollableArea();
-            !scrollable_area.is_null()
-                && !unsafe { &*scrollable_area }.HasHorizontalScrollbar()
-                && !unsafe { &*scrollable_area }.HasVerticalScrollbar()
-        }) && self.StyleRef().IsScrollbarGutterAuto()
+            && (self.StyleRef().IsOverflowVisibleAlongBothAxes() || !self.HasNonVisibleOverflow()))
+            || {
+                let scrollable_area = self.GetScrollableArea();
+                !scrollable_area.is_null()
+                    && !unsafe { &*scrollable_area }.HasHorizontalScrollbar()
+                    && !unsafe { &*scrollable_area }.HasVerticalScrollbar()
+            })
+            && self.StyleRef().IsScrollbarGutterAuto()
     }
 
     // cpp: layoutng/internal/layout_box_layout.cc:54-114

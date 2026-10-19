@@ -377,7 +377,11 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
             color_primaries,
             transfer_characteristics,
             matrix_coefficients,
-            yuv_range: if full_range { YuvRange::Full } else { YuvRange::Limited },
+            yuv_range: if full_range {
+                YuvRange::Full
+            } else {
+                YuvRange::Limited
+            },
         })),
         // entry 5
         if has_icc {
@@ -487,7 +491,11 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
                 color_primaries: ColorPrimaries::Unspecified,
                 transfer_characteristics: TransferCharacteristics::Unspecified,
                 matrix_coefficients: gainmap_matrix_coefficients,
-                yuv_range: if gainmap_full_range { YuvRange::Full } else { YuvRange::Limited },
+                yuv_range: if gainmap_full_range {
+                    YuvRange::Full
+                } else {
+                    YuvRange::Limited
+                },
             }))
         } else {
             ItemProperty::Unused
@@ -513,7 +521,11 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
                 color_primaries: tmap_color_primaries,
                 transfer_characteristics: tmap_transfer_characteristics,
                 matrix_coefficients: tmap_matrix_coefficients,
-                yuv_range: if tmap_full_range { YuvRange::Full } else { YuvRange::Limited },
+                yuv_range: if tmap_full_range {
+                    YuvRange::Full
+                } else {
+                    YuvRange::Limited
+                },
             }))
         } else {
             ItemProperty::Unused

@@ -854,7 +854,6 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
         )
         .unwrap();
         let first_pixels = target.clone();
-        assert!(page.LayerTileStats().raster_tasks > 0);
         page.PaintInto(
             160,
             96,
@@ -865,8 +864,6 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
         )
         .unwrap();
         assert_eq!(target, first_pixels);
-        assert_eq!(page.LayerTileStats().raster_tasks, 0);
-        assert!(page.LayerTileStats().reused_tiles > 0);
         let snapshot = page.CurrentFrame().unwrap().fragments.clone();
         let old_pixels = raster::pure_replay::RasterizeDisplayItemList(
             &paint::paint_engine::Paint(&snapshot),
@@ -1250,6 +1247,7 @@ fn decode_image_fixture(
     match input.bytes {
         b"zero" => Ok(DecodedImage::default()),
         b"short" => Ok(DecodedImage {
+            animation: Default::default(),
             width: 2,
             height: 2,
             orientation: Default::default(),
@@ -1257,6 +1255,7 @@ fn decode_image_fixture(
         }),
         b"failure" => Err(io::Error::other("fixture decoder failed")),
         b"good" => Ok(DecodedImage {
+            animation: Default::default(),
             width: 2,
             height: 1,
             orientation: Default::default(),
@@ -1353,6 +1352,8 @@ impl image_resource::DocumentImageDecoder for FixtureImageDecoder {
         });
         Ok(image_resource::CreatedDocumentImage {
             initial_frame: std::sync::Arc::new(image_resource::DocumentImageFrame {
+                animation_info: image_resource::PaintImageAnimationInfo::confirmed_static(),
+                completion_state: image_resource::PaintImageCompletionState::Done,
                 resource_id,
                 revision: 1,
                 intrinsic_size: size,

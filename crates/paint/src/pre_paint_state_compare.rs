@@ -13,10 +13,7 @@ use crate::{
     },
     PaintRect,
 };
-use layoutng_assembly::internal::{
-    layout_input::PaintPathCommand,
-    paint_input::{PaintCornerRadii, PaintFilterOperation},
-};
+use layoutng_assembly::internal::paint_input::PaintCornerRadii;
 use std::{collections::BTreeMap, sync::Arc};
 
 pub(crate) fn SameBuilderState(
@@ -118,6 +115,9 @@ impl Compare<'_> {
         // Exhaustive destructuring makes newly added semantic fields require
         // an explicit comparison here. Raw IDs/lifecycles are handled as slots.
         let TransformPaintPropertyNode {
+            compositor,
+            geometry_mapper_cache: _,
+            scroll_parent_scroll_translation,
             lifecycle,
             id,
             parent,
@@ -131,6 +131,7 @@ impl Compare<'_> {
             direct_compositing_reasons,
         } = &**a;
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
+            && compositor == &b.compositor
             && matrix.values.iter().all(|v| v.is_finite())
             && matrix == &b.matrix
             && origin.iter().all(|v| v.is_finite())
@@ -141,7 +142,12 @@ impl Compare<'_> {
             && sticky_constraint == &b.sticky_constraint
             && direct_compositing_reasons == &b.direct_compositing_reasons
             && self.optional(parent, &b.parent, Self::transform)
-            && self.optional(scroll, &b.scroll, Self::scroll);
+            && self.optional(scroll, &b.scroll, Self::scroll)
+            && self.optional(
+                scroll_parent_scroll_translation,
+                &b.scroll_parent_scroll_translation,
+                Self::transform,
+            );
         self.finish(key, same)
     }
     fn clip(&mut self, a: &Arc<ClipPaintPropertyNode>, b: &Arc<ClipPaintPropertyNode>) -> bool {
@@ -153,6 +159,8 @@ impl Compare<'_> {
             return result;
         }
         let ClipPaintPropertyNode {
+            geometry_mapper_cache: _,
+            layout_clip_rects,
             lifecycle,
             id,
             parent,
@@ -160,9 +168,6 @@ impl Compare<'_> {
             rect,
             radii,
             clip_path,
-            clip_path_is_empty,
-            clip_path_children,
-            clip_path_even_odd,
             clip_path_error,
             pixel_moving_filter,
         } = &**a;
@@ -171,14 +176,9 @@ impl Compare<'_> {
             && rect == &b.rect
             && finite_radii(radii)
             && radii == &b.radii
-            && clip_path.iter().all(finite_path)
+            && layout_clip_rects == &b.layout_clip_rects
+            && clip_path.as_ref().is_none_or(|path| path.is_finite())
             && clip_path == &b.clip_path
-            && clip_path_is_empty == &b.clip_path_is_empty
-            && clip_path_children
-                .iter()
-                .all(|child| child.commands.iter().all(finite_path))
-            && clip_path_children == &b.clip_path_children
-            && clip_path_even_odd == &b.clip_path_even_odd
             && clip_path_error == &b.clip_path_error
             && self.optional(parent, &b.parent, Self::clip)
             && self.transform(local_transform_space, &b.local_transform_space)
@@ -198,6 +198,9 @@ impl Compare<'_> {
             return result;
         }
         let EffectPaintPropertyNode {
+            compositor,
+            backdrop_filter_bounds,
+            self_or_ancestor_participates_in_view_transition,
             lifecycle,
             id,
             parent,
@@ -217,14 +220,18 @@ impl Compare<'_> {
             direct_compositing_reasons,
         } = &**a;
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
+            && compositor == &b.compositor
+            && backdrop_filter_bounds == &b.backdrop_filter_bounds
             && opacity.is_finite()
             && opacity == &b.opacity
+            && self_or_ancestor_participates_in_view_transition
+                == &b.self_or_ancestor_participates_in_view_transition
             && blend_mode == &b.blend_mode
-            && filters.iter().all(finite_filter)
+            && filters.is_finite()
             && filters == &b.filters
             && filter_reference_box == &b.filter_reference_box
             && filter_reference_scale == &b.filter_reference_scale
-            && backdrop_filters.iter().all(finite_filter)
+            && backdrop_filters.is_finite()
             && backdrop_filters == &b.backdrop_filters
             && backdrop_filter_has_reference == &b.backdrop_filter_has_reference
             && self.optional(backdrop_filter_clip, &b.backdrop_filter_clip, Self::clip)
@@ -250,6 +257,7 @@ impl Compare<'_> {
             return result;
         }
         let ScrollPaintPropertyNode {
+            compositor,
             lifecycle,
             id,
             owner_client_id,
@@ -263,6 +271,7 @@ impl Compare<'_> {
             user_scrollable_vertical,
         } = &**a;
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
+            && compositor == &b.compositor
             && owner_client_id == &b.owner_client_id
             && finite_rect(container_rect)
             && container_rect == &b.container_rect
@@ -296,38 +305,4 @@ fn finite_radii(radii: &PaintCornerRadii) -> bool {
     [top_left, top_right, bottom_right, bottom_left]
         .iter()
         .all(|radius| radius.x.is_finite() && radius.y.is_finite())
-}
-fn finite_path(command: &PaintPathCommand) -> bool {
-    let PaintPathCommand {
-        verb: _,
-        control1,
-        control2,
-        point,
-        conic_weight,
-    } = command;
-    [control1, control2, point]
-        .iter()
-        .all(|p| p.x.is_finite() && p.y.is_finite())
-        && conic_weight.is_finite()
-}
-fn finite_filter(filter: &PaintFilterOperation) -> bool {
-    let PaintFilterOperation {
-        r#type: _,
-        amount,
-        offset,
-        blur_radius,
-        color,
-        reflection_offset,
-        reflection_offset_percentage,
-        ..
-    } = filter;
-    amount.is_finite()
-        && offset.x.is_finite()
-        && offset.y.is_finite()
-        && blur_radius.is_finite()
-        && reflection_offset.is_finite()
-        && reflection_offset_percentage.is_finite()
-        && [color.red, color.green, color.blue, color.alpha]
-            .iter()
-            .all(|v| v.is_finite())
 }

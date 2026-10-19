@@ -264,6 +264,7 @@ impl image_decoder::image_decoder::ImageDecoder for Images {
     ) -> io::Result<image_decoder::image_decoder::DecodedImage> {
         assert_eq!(input.bytes, [1, 2, 3, 255]);
         Ok(image_decoder::image_decoder::DecodedImage {
+            animation: Default::default(),
             width: 1,
             height: 1,
             orientation: Default::default(),

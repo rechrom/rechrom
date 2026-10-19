@@ -30,7 +30,10 @@ use graphics_types::graphics::visual_rect_flags::VisualRectFlags;
 
 pub(crate) struct InlineClientGeometry {
     pub bounds: PhysicalRect,
-    pub rects: Vec<(*const layoutng_fragment_tree::physical_box_fragment::PhysicalBoxFragment, PhysicalRect)>,
+    pub rects: Vec<(
+        *const layoutng_fragment_tree::physical_box_fragment::PhysicalBoxFragment,
+        PhysicalRect,
+    )>,
 }
 
 // Non-inline methods live mainly in //src/layoutng_inline. Declarations with
@@ -246,19 +249,28 @@ impl LayoutInline {
     /// rectangles even when Paint culled this inline. The boundary maps each
     /// container occurrence to ancestor coordinates; no paint box is created.
     pub(crate) fn ClientRectsInContainers(&self) -> InlineClientGeometry {
+        use super::layout_object::{BoxQuadType, LocalRectForBoxQuad};
         use layoutng_geometry::geometry::physical_rect::PhysicalRectExt;
-        use super::layout_object::{LocalRectForBoxQuad, BoxQuadType};
         let native: &LayoutObject = self;
         let mut cursor = InlineCursor::default();
-        if native.IsInLayoutNGInlineFormattingContext() { cursor.MoveToIncludingCulledInline(native); }
-        let mut result = InlineClientGeometry { bounds: PhysicalRect::default(), rects: Vec::new() };
+        if native.IsInLayoutNGInlineFormattingContext() {
+            cursor.MoveToIncludingCulledInline(native);
+        }
+        let mut result = InlineClientGeometry {
+            bounds: PhysicalRect::default(),
+            rects: Vec::new(),
+        };
         let mut bounds: Option<PhysicalRect> = None;
         while cursor.IsNotNull() {
             let target = cursor.Current().GetLayoutObject();
             let mut in_ruby_text = false;
-            if native.IsInlineRuby() && !target.is_null() && target != native as *const LayoutObject {
+            if native.IsInlineRuby() && !target.is_null() && target != native as *const LayoutObject
+            {
                 let mut child = target;
-                while !child.is_null() && unsafe { &*child }.Parent() != native as *const LayoutObject as *mut LayoutObject {
+                while !child.is_null()
+                    && unsafe { &*child }.Parent()
+                        != native as *const LayoutObject as *mut LayoutObject
+                {
                     child = unsafe { &*child }.Parent();
                 }
                 in_ruby_text = !child.is_null() && unsafe { &*child }.IsInlineRubyText();
@@ -274,19 +286,31 @@ impl LayoutInline {
                 rect.size.width = rect.size.width.ClampNegativeToZero();
                 rect.size.height = rect.size.height.ClampNegativeToZero();
                 let mut first_rect = rect;
-                first_rect.offset += cursor.CurrentRectInFirstContainerFragment().offset - cursor.Current().RectInContainerFragment().offset;
-                if let Some(bounds) = &mut bounds { bounds.UniteEvenIfEmpty(&first_rect); } else { bounds = Some(first_rect); }
+                first_rect.offset += cursor.CurrentRectInFirstContainerFragment().offset
+                    - cursor.Current().RectInContainerFragment().offset;
+                if let Some(bounds) = &mut bounds {
+                    bounds.UniteEvenIfEmpty(&first_rect);
+                } else {
+                    bounds = Some(first_rect);
+                }
                 result.rects.push((cursor.ContainerFragment(), rect));
             }
             cursor.MoveToNextForSameLayoutObject();
         }
-        if let Some(bounds) = bounds { result.bounds = bounds; }
-        else {
+        if let Some(bounds) = bounds {
+            result.bounds = bounds;
+        } else {
             let block = native.ContainingBlock();
-            let container = if cursor.HasRoot() { cursor.ContainerFragment() as *const _ }
-                else if !block.is_null() && unsafe { &*block }.PhysicalFragmentCount() != 0 { unsafe { &*block }.GetPhysicalFragment(0) }
-                else { std::ptr::null() };
-            if !container.is_null() { result.rects.push((container, PhysicalRect::default())); }
+            let container = if cursor.HasRoot() {
+                cursor.ContainerFragment() as *const _
+            } else if !block.is_null() && unsafe { &*block }.PhysicalFragmentCount() != 0 {
+                unsafe { &*block }.GetPhysicalFragment(0)
+            } else {
+                std::ptr::null()
+            };
+            if !container.is_null() {
+                result.rects.push((container, PhysicalRect::default()));
+            }
         }
         result
     }

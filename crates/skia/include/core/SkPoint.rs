@@ -20,6 +20,16 @@ impl From<(f32, f32)> for SkPoint {
 }
 
 impl SkPoint {
+    /// Source: third_party/skia/src/core/SkPoint.cpp:79-88. Preserve native
+    /// float accumulation and only use the double fallback for nonfinite mag².
+    pub fn native_length(x: f32, y: f32) -> f32 {
+        let mag2 = x * x + y * y;
+        if mag2.is_finite() {
+            mag2.sqrt()
+        } else {
+            (f64::from(x) * f64::from(x) + f64::from(y) * f64::from(y)).sqrt() as f32
+        }
+    }
     /// Creates a new `SkPoint`.
     pub fn from_xy(x: f32, y: f32) -> Self {
         SkPoint { x, y }

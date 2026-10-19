@@ -356,6 +356,7 @@ mod tests {
     impl ImageDecoder for BitmapDecoder {
         fn Decode(&mut self, _: &ImageDecodeInput<'_>) -> io::Result<DecodedImage> {
             Ok(DecodedImage {
+                animation: Default::default(),
                 width: 1,
                 height: 1,
                 orientation: Default::default(),

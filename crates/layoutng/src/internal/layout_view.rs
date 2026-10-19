@@ -557,10 +557,14 @@ impl LayoutView {
         self.CheckIsNotDestroyed();
         assert_eq!(overflow_x.is_some(), overflow_y.is_some());
         let viewport = self.ViewportDefiningElementForLayout();
-        let viewport_object = if viewport.is_null() { std::ptr::null_mut() } else {
+        let viewport_object = if viewport.is_null() {
+            std::ptr::null_mut()
+        } else {
             unsafe { &*viewport }.GetLayoutObject()
         };
-        let style = if viewport_object.is_null() { self.StyleRef() } else {
+        let style = if viewport_object.is_null() {
+            self.StyleRef()
+        } else {
             unsafe { &*viewport_object }.StyleRef()
         };
         let x = overflow_x.unwrap_or_else(|| style.OverflowX());

@@ -1,13 +1,12 @@
 //! Software window target backed by softbuffer and winit native handles.
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use renderer::{RasterResourceRegistry, RenderTarget, Renderer};
 use skia::compat::surface::RasterSurface;
 use std::{io, num::NonZeroU32, sync::Arc};
 pub(crate) type WindowTarget =
     WindowSurface<std::sync::Arc<winit::window::Window>, std::sync::Arc<winit::window::Window>>;
 
 /// Host allocation/presentation choice. Both targets consume the same Viz
-/// aggregate through Renderer; offscreen mode owns only ordinary CPU memory.
+/// Page output through native Skia placement; offscreen owns ordinary CPU memory.
 pub(crate) enum DisplayTarget {
     Native(WindowTarget),
     Offscreen,
@@ -26,7 +25,7 @@ impl PreparedDisplayTarget {
         match self {
             Self::Native(frame) => frame.readback_rgba(viewport),
             Self::Offscreen { pixels, row_stride } => {
-                take_offscreen_frame(std::mem::take(pixels), *row_stride, viewport)
+                readback_pixels(pixels, *row_stride, true, viewport)
             }
         }
     }
@@ -37,40 +36,32 @@ impl DisplayTarget {
         matches!(self, Self::Native(_))
     }
 
-    pub(crate) fn render_aggregated_frame(
+    pub(crate) fn render_page_surfaces(
         &mut self,
-        frame: &viz::AggregatedFrame,
-        renderer: &mut Renderer,
-        page_rasters: &[(viz::SurfaceId, &raster::RasterResourceSnapshot)],
+        pages: &[(
+            &crate::page_presentation::PageFrame,
+            crate::page_presentation::DeviceRect,
+        )],
         viewport: crate::engine::Viewport,
         present_sequence: u64,
     ) -> io::Result<PreparedDisplayTarget> {
         match self {
             Self::Native(target) => target
-                .render_aggregated_frame(frame, renderer, page_rasters, viewport, present_sequence)
+                .render_page_surfaces(pages, viewport, present_sequence)
                 .map(PreparedDisplayTarget::Native),
             Self::Offscreen => {
-                if !viewport.valid() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "invalid offscreen viewport",
-                    ));
-                }
                 let mut pixels = vec![0u32; viewport.width as usize * viewport.height as usize];
-                let row_stride = viewport.width as usize;
-                let resources = WindowRasterResources(page_rasters);
-                renderer.Render(
-                    frame,
-                    &resources,
-                    RenderTarget {
-                        width: viewport.width,
-                        height: viewport.height,
-                        pixels: &mut pixels,
-                        format: skia::PixelFormat::Rgba8888,
-                        row_stride,
-                    },
+                draw_page_surfaces(
+                    pages,
+                    &mut pixels,
+                    viewport.width as usize,
+                    viewport,
+                    skia::PixelFormat::Bgra8888,
                 )?;
-                Ok(PreparedDisplayTarget::Offscreen { pixels, row_stride })
+                Ok(PreparedDisplayTarget::Offscreen {
+                    pixels,
+                    row_stride: viewport.width as usize,
+                })
             }
         }
     }
@@ -106,30 +97,58 @@ impl DisplayTarget {
     }
 }
 
-fn take_offscreen_frame(
-    pixels: Vec<u32>,
-    row_stride: usize,
+/// Page output already passed its own Viz and Renderer. Window embedding
+/// performs same-scale image placement without PaintArtifact or cc owners.
+fn draw_page_surfaces(
+    pages: &[(
+        &crate::page_presentation::PageFrame,
+        crate::page_presentation::DeviceRect,
+    )],
+    pixels: &mut [u32],
+    stride: usize,
     viewport: crate::engine::Viewport,
-) -> io::Result<crate::engine::WindowFrame> {
-    if row_stride != viewport.width as usize
-        || pixels.len() != row_stride * viewport.height as usize
+    format: skia::PixelFormat,
+) -> io::Result<()> {
+    if stride < viewport.width as usize
+        || pixels.len() < stride.saturating_mul(viewport.height as usize)
     {
-        return Err(io::Error::other("offscreen readback size differs"));
+        return Err(io::Error::other("invalid window target"));
     }
-    let pixels = Arc::new(pixels);
-    let toolbar_height = viewport.toolbar_pixels();
-    let content_height = viewport.height - toolbar_height;
-    Ok(crate::engine::WindowFrame {
-        provenance: None,
-        viewport,
-        toolbar: RasterSurface::from_rgba_words(viewport.width, toolbar_height, pixels.clone(), 0)?,
-        content: RasterSurface::from_rgba_words(
-            viewport.width,
-            content_height,
-            pixels,
-            viewport.width as usize * toolbar_height as usize,
-        )?,
-    })
+    for row in pixels.chunks_exact_mut(stride).take(viewport.height as usize) {
+        row[..viewport.width as usize].fill(0);
+    }
+    for (frame, destination) in pages {
+        if frame.viewport.width != destination.width || frame.viewport.height != destination.height
+        {
+            return Err(io::Error::other(
+                "Page placement must match rendered dimensions",
+            ));
+        }
+        let left = destination.x.max(0) as usize;
+        let top = destination.y.max(0) as usize;
+        let right = (destination.x as i64 + destination.width as i64)
+            .clamp(0, viewport.width as i64) as usize;
+        let bottom = (destination.y as i64 + destination.height as i64)
+            .clamp(0, viewport.height as i64) as usize;
+        if left >= right || top >= bottom {
+            continue;
+        }
+        let source_x = (left as i64 - destination.x as i64) as usize;
+        let source_y = (top as i64 - destination.y as i64) as usize;
+        for row in 0..bottom - top {
+            let src = (source_y + row) * frame.viewport.width as usize + source_x;
+            let dst = (top + row) * stride + left;
+            let source = &frame.pixels[src..src + right - left];
+            let target = &mut pixels[dst..dst + right - left];
+            target.copy_from_slice(source);
+            if format == skia::PixelFormat::Bgrx8888 {
+                for pixel in target {
+                    *pixel &= 0x00ff_ffff;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -153,19 +172,6 @@ pub(crate) struct PreparedWindowFrame {
     pixels: Vec<u32>,
     #[cfg(not(target_os = "macos"))]
     row_stride: usize,
-}
-
-struct WindowRasterResources<'a>(&'a [(viz::SurfaceId, &'a raster::RasterResourceSnapshot)]);
-impl RasterResourceRegistry for WindowRasterResources<'_> {
-    fn ResourcesFor(
-        &self,
-        surface_id: viz::SurfaceId,
-    ) -> Option<&dyn raster::RasterResourceProvider> {
-        self.0
-            .iter()
-            .find(|(id, _)| *id == surface_id)
-            .map(|(_, raster)| *raster as &dyn raster::RasterResourceProvider)
-    }
 }
 
 impl PreparedWindowFrame {
@@ -241,13 +247,13 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         Ok(())
     }
 
-    /// Render Viz aggregate output into a prepared native buffer. Page never
-    /// reaches this platform boundary; it publishes immutable frame inputs.
-    pub(crate) fn render_aggregated_frame(
+    /// Place completed Page surfaces into a prepared native buffer.
+    pub(crate) fn render_page_surfaces(
         &mut self,
-        frame: &viz::AggregatedFrame,
-        renderer: &mut Renderer,
-        page_rasters: &[(viz::SurfaceId, &raster::RasterResourceSnapshot)],
+        pages: &[(
+            &crate::page_presentation::PageFrame,
+            crate::page_presentation::DeviceRect,
+        )],
         viewport: crate::engine::Viewport,
         present_sequence: u64,
     ) -> io::Result<PreparedWindowFrame> {
@@ -281,24 +287,7 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         let pixels = buffer.pixels_mut();
         #[cfg(not(target_os = "macos"))]
         let pixels = buffer.as_mut_slice();
-        let resources = WindowRasterResources(page_rasters);
-        let render_update = {
-            let _target = browser_tracing::scope(browser_tracing::Context {
-                target_id: 1,
-                ..Default::default()
-            });
-            renderer.Render(
-                frame,
-                &resources,
-                RenderTarget {
-                    width: self.width,
-                    height: self.height,
-                    pixels,
-                    format,
-                    row_stride,
-                },
-            )?
-        };
+        draw_page_surfaces(pages, pixels, row_stride, viewport, format)?;
         static OPTICAL_PROBE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let optical_probe = *OPTICAL_PROBE.get_or_init(|| {
             std::env::var_os("BROWSER_PRESENTATION_PROBE").is_some_and(|v| v == "1")
@@ -314,8 +303,11 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
                 present_sequence,
             );
         }
-        frame_trace.set("damage_pixels", render_update.damage_pixels as f64);
-        frame_trace.set("copied_bytes", render_update.copied_bytes as f64);
+        frame_trace.set(
+            "damage_pixels",
+            viewport.width as f64 * viewport.height as f64,
+        );
+
         frame_trace.set("succeeded", 1.0);
         #[cfg(target_os = "macos")]
         {

@@ -604,7 +604,8 @@ impl LayoutObject {
                 if box_.IsScrollContainer()
                     && (box_.IsLayoutView()
                         || (axis == PhysicalAxis::kVertical && style.IsOverflowValueScrollableY())
-                        || (axis == PhysicalAxis::kHorizontal && style.IsOverflowValueScrollableX()))
+                        || (axis == PhysicalAxis::kHorizontal
+                            && style.IsOverflowValueScrollableX()))
                 {
                     return box_ as *const LayoutBox;
                 }

@@ -35,7 +35,7 @@ impl SkSweepGradient {
         center: Point,
         start_angle: f32,
         end_angle: f32,
-        stops: Vec<GradientStop>,
+        mut stops: Vec<GradientStop>,
         mut mode: SpreadMode,
         transform: Transform,
     ) -> Option<Shader<'static>> {
@@ -43,6 +43,10 @@ impl SkSweepGradient {
             return None;
         }
 
+        if mode == SpreadMode::kDecal && stops.len() == 1 {
+            let c = stops[0].color;
+            stops = alloc::vec![GradientStop::new(0., c), GradientStop::new(1., c)];
+        }
         match stops.as_slice() {
             [] => return None,
             [stop] => return Some(Shader::SolidColor(stop.color)),
@@ -87,7 +91,7 @@ impl SkSweepGradient {
     }
 
     pub(crate) fn is_opaque(&self) -> bool {
-        self.base.colors_are_opaque
+        self.base.is_opaque()
     }
 
     pub(crate) fn appendStages(&self, cs: ColorSpace, p: &mut RasterPipelineBuilder) -> bool {

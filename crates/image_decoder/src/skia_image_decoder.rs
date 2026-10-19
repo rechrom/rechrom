@@ -29,27 +29,89 @@ fn DecodeImage(
             io::Error::other(format!("image format could not be read: {error}"))
         })?;
     }
-    let mut decoder = reader.into_decoder().map_err(|error| {
-        io::Error::other(format!(
-            "image could not be decoded ({}): {error}",
-            if input.mime_type.is_empty() {
-                "unknown image format"
+    // Keep the codec's actual animation classification before erasing its
+    // concrete type. The current pixel ABI cannot retain animated frame sets.
+    let (mut decoder, animation): (Box<dyn image::ImageDecoder + '_>, _) = match reader.format() {
+        Some(image::ImageFormat::Png) => {
+            let mut decoder = image::codecs::png::PngDecoder::with_limits(
+                Cursor::new(input.bytes),
+                image::Limits::default(),
+            )
+            .map_err(io::Error::other)?;
+            decoder
+                .set_limits(image::Limits::default())
+                .map_err(io::Error::other)?;
+            let animation = if decoder.is_apng().map_err(io::Error::other)? {
+                image_resource::PaintImageAnimationMetadata::Unavailable(
+                    image_resource::PaintImageMetadataUnavailable::EncodedAnimationTimeline {
+                        format: "APNG",
+                    },
+                )
             } else {
-                input.mime_type
-            }
-        ))
-    })?;
+                image_resource::PaintImageAnimationMetadata::Known(
+                    image_resource::PaintImageAnimationInfo::confirmed_static(),
+                )
+            };
+            (Box::new(decoder), animation)
+        }
+        Some(image::ImageFormat::WebP) => {
+            let mut decoder = image::codecs::webp::WebPDecoder::new(Cursor::new(input.bytes))
+                .map_err(io::Error::other)?;
+            decoder
+                .set_limits(image::Limits::default())
+                .map_err(io::Error::other)?;
+            let animation = if decoder.has_animation() {
+                image_resource::PaintImageAnimationMetadata::Unavailable(
+                    image_resource::PaintImageMetadataUnavailable::EncodedAnimationTimeline {
+                        format: "animated WebP",
+                    },
+                )
+            } else {
+                image_resource::PaintImageAnimationMetadata::Known(
+                    image_resource::PaintImageAnimationInfo::confirmed_static(),
+                )
+            };
+            (Box::new(decoder), animation)
+        }
+        format => {
+            let animation = match format {
+                Some(image::ImageFormat::Gif) => {
+                    image_resource::PaintImageAnimationMetadata::Unavailable(
+                        image_resource::PaintImageMetadataUnavailable::EncodedAnimationTimeline {
+                            format: "GIF",
+                        },
+                    )
+                }
+                Some(_) => image_resource::PaintImageAnimationMetadata::Known(
+                    image_resource::PaintImageAnimationInfo::confirmed_static(),
+                ),
+                None => image_resource::PaintImageAnimationMetadata::default(),
+            };
+            let decoder = reader.into_decoder().map_err(|error| {
+                io::Error::other(format!(
+                    "image could not be decoded ({}): {error}",
+                    if input.mime_type.is_empty() {
+                        "unknown image format"
+                    } else {
+                        input.mime_type
+                    }
+                ))
+            })?;
+            (Box::new(decoder), animation)
+        }
+    };
     let orientation = decoder
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
     let decoded = image::DynamicImage::from_decoder(decoder)
         .map_err(|error| io::Error::other(format!("image pixels could not be decoded: {error}")))?;
-    IntoDecodedImage(decoded, orientation)
+    IntoDecodedImage(decoded, orientation, animation)
 }
 
 fn IntoDecodedImage(
     decoded: image::DynamicImage,
     orientation: image::metadata::Orientation,
+    animation: image_resource::PaintImageAnimationMetadata,
 ) -> io::Result<DecodedImage> {
     let (width, height) = (decoded.width(), decoded.height());
     if width == 0 || height == 0 {
@@ -63,6 +125,7 @@ fn IntoDecodedImage(
         width,
         height,
         orientation: image_resource::ImageOrientation::from_exif(orientation.to_exif()),
+        animation,
         rgba8: decoded.into_rgba8().into_raw(),
     })
 }

@@ -59,6 +59,19 @@ impl<'a> SkPixmap<'a> {
         })
     }
 
+    /// SkPixmap's non-owning pixels/color-type view. The caller retains the
+    /// actual immutable allocation; this method neither converts nor copies it.
+    pub fn from_bytes_with_format(
+        data: &'a [u8],
+        width: u32,
+        height: u32,
+        format: crate::raster::PixelFormat,
+    ) -> Option<Self> {
+        let mut view = Self::from_bytes(data, width, height)?;
+        view.format = format;
+        Some(view)
+    }
+
     /// Creates a new `Pixmap` from the current data.
     ///
     /// Clones the underlying data.
@@ -345,6 +358,18 @@ impl<'a> SkPixmapMut<'a> {
             size,
             format: crate::raster::PixelFormat::Rgba8888,
         })
+    }
+
+    /// Mutable native N32 view of the caller's actual borrowed target.
+    pub fn from_bytes_with_format(
+        data: &'a mut [u8],
+        width: u32,
+        height: u32,
+        format: crate::raster::PixelFormat,
+    ) -> Option<Self> {
+        let mut view = Self::from_bytes(data, width, height)?;
+        view.format = format;
+        Some(view)
     }
 
     /// Creates a new `Pixmap` from the current data.

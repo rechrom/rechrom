@@ -14,6 +14,9 @@ pub struct CaretDisplayItemClient {
 
 #[allow(non_snake_case)]
 impl CaretDisplayItemClient {
+    pub fn GetPaintInvalidationReason(&self) -> PaintInvalidationReason {
+        self.display_item_client.GetPaintInvalidationReason()
+    }
     pub fn Id(&self) -> u64 {
         self.display_item_client.Id() as u64
     }

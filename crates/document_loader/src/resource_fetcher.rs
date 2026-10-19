@@ -51,6 +51,7 @@ struct PendingImage {
     url: String,
     resource: ResourceLoader,
     decode: Option<decode::ImageDecodeJob>,
+    is_multipart_response: Option<bool>,
     blocks_load: bool,
 }
 
@@ -526,6 +527,7 @@ impl ResourceFetcher {
                         url: image.url,
                         resource,
                         decode: None,
+                        is_multipart_response: None,
                         blocks_load: true,
                     });
                 }
@@ -551,6 +553,7 @@ impl ResourceFetcher {
             url,
             resource,
             decode: None,
+            is_multipart_response: None,
             blocks_load,
         });
         Ok(())
@@ -577,6 +580,7 @@ impl ResourceFetcher {
                 url: image.url,
                 resource,
                 decode: None,
+                is_multipart_response: None,
                 blocks_load: false,
             });
         }
@@ -585,12 +589,24 @@ impl ResourceFetcher {
     // cpp: browser/browser.cc:1260-1291
     fn BeginImageResult(
         &self,
-        image: &PendingImage,
+        image: &mut PendingImage,
         result: ResourceLoadResult,
     ) -> io::Result<decode::ImageDecodeJob> {
         let Some(response) = result.response else {
             return Err(io::Error::other(result.error));
         };
+        // Source: platform/graphics/image.h is_multipart_; image.cc:357.
+        // The transport publishes one completed response here; preserve the
+        // actual MIME classification instead of guessing in the compositor.
+        image.is_multipart_response = Some(
+            response
+                .mime_type
+                .split(';')
+                .next()
+                .expect("MIME first component")
+                .trim()
+                .eq_ignore_ascii_case("multipart/x-mixed-replace"),
+        );
         ImageResultBoundary(|| {
             let mut container =
                 ContainerKey::new(0, 0, 1.0, self.constraints.borrow().device_pixel_ratio);
@@ -607,10 +623,21 @@ impl ResourceFetcher {
     ) {
         let decoded = ImageResultBoundary(|| -> io::Result<_> {
             let decoded_resource = result?;
+            let is_multipart = image.is_multipart_response.ok_or_else(|| {
+                io::Error::other("image transport did not publish its response classification")
+            })?;
             let (id, decoded, document_image) = match decoded_resource {
                 DecodedImageResource::Document { resource_id, frame } => {
                     let paint_image = PaintImage {
                         id: resource_id,
+                        paint_image_id: image_resource::PaintImageId::allocate(),
+                        compositor_metadata: Ok(image_resource::PaintImageMetadata {
+                            animation: image_resource::PaintImageAnimationMetadata::Known(
+                                frame.animation_info,
+                            ),
+                            completion_state: frame.completion_state,
+                            is_multipart,
+                        }),
                         revision: frame.revision,
                         width: frame.intrinsic_size.width,
                         height: frame.intrinsic_size.height,
@@ -630,6 +657,16 @@ impl ResourceFetcher {
                     resource_id,
                     PaintImage {
                         id: resource_id,
+                        paint_image_id: image_resource::PaintImageId::allocate(),
+                        // Source: platform/graphics/bitmap_image.cc:155-166.
+                        // Only full-response successful decode reaches this
+                        // point; incremental/partial image publication is a
+                        // separate contract that this loader does not emit.
+                        compositor_metadata: Ok(image_resource::PaintImageMetadata {
+                            animation: bitmap.animation,
+                            completion_state: image_resource::PaintImageCompletionState::Done,
+                            is_multipart,
+                        }),
                         revision: 1,
                         width: bitmap.width,
                         height: bitmap.height,
@@ -1121,7 +1158,7 @@ impl ResourceFetcher {
                 job.poll()
             } else if image.resource.Poll() {
                 let response = image.resource.TakeResult();
-                match self.BeginImageResult(&image, response) {
+                match self.BeginImageResult(&mut image, response) {
                     Ok(mut job) => {
                         let result = job.poll();
                         if result.is_none() {

@@ -1346,6 +1346,54 @@ impl LayoutObjectTree {
         found
     }
 
+    /// Invalidate selection drawing without invalidating text-control geometry.
+    ///
+    /// Chromium's LayoutSelection marks every LayoutObject whose selection
+    /// state or boundary changed, and ObjectPaintInvalidator converts that bit
+    /// to kSelection invalidation. Rechrom records a control's selection with
+    /// the text object's ordinary display-item client, so invalidate the
+    /// resident selection leaves below the control input before the paint-only
+    /// export. Text controls use generated editor/text inputs with derived ids,
+    /// so looking up only the host id would miss the client that records glyphs.
+    ///
+    /// Source: third_party/blink/renderer/core/editing/layout_selection.cc:
+    ///         217-334, 954-977;
+    ///         core/paint/object_paint_invalidator.cc:96-116.
+    pub fn InvalidateSelectionPaint(&mut self, id: u64) -> bool {
+        let storage = unsafe { &mut *self.storage_ };
+        assert!(!storage.updating);
+        let roots = storage
+            .InputKeys(id)
+            .iter()
+            .map(|key| storage.managed[key].object)
+            .collect::<Vec<_>>();
+        let mut stack = roots.clone();
+        let mut visited = std::collections::HashSet::new();
+        let mut leaves = Vec::new();
+        while let Some(object) = stack.pop() {
+            if !visited.insert(object) {
+                continue;
+            }
+            // Text-control selections are painted by their generated
+            // LayoutText descendants. The translated generic
+            // CanBeSelectionLeaf provider is not part of this assembly, and
+            // invalidating unrelated generated boxes would discard more
+            // recordings than Chromium's selection client invalidation.
+            if unsafe { &*object }.IsText() {
+                leaves.push(object);
+            }
+            for key in storage.ChildKeys(object).to_vec() {
+                stack.push(storage.managed[&key].object);
+            }
+        }
+        for object in leaves {
+            unsafe { &mut *object }.SetShouldDoFullPaintInvalidationWithoutLayoutChange(
+                foundation::PaintInvalidationReason::kSelection,
+            );
+        }
+        !roots.is_empty()
+    }
+
     /// Synchronize ordinary scroll paint metadata while retaining geometry,
     /// node identity and the owning tree's source descriptor.
     pub fn UpdateScrollOffset(&mut self, id: u64, offset: super::layout_input::Offset) -> bool {
@@ -1692,6 +1740,23 @@ impl LayoutObjectTree {
             projected.svg_clip_resources = record.effective_style.svg_clip_resources.clone();
             projected.paint.svg_filter_graphs =
                 record.effective_style.paint.svg_filter_graphs.clone();
+            // This path admits only style updates whose geometry remains
+            // valid. Chromium's LayoutObject::SetStyle turns the corresponding
+            // VisualInvalidationDiff into kStyle before PrePaint. Preserve that
+            // lifecycle instead of letting the retained DisplayItemClient
+            // treat changed colors, backgrounds or borders as valid content.
+            // cpp: core/layout/layout_object.cc:3102-3258
+            let native_fields =
+                layoutng_style::style::computed_style_base::ComputedStyleBase::FieldInvalidationDiff(
+                    previous,
+                    unsafe { &*native_style },
+                );
+            if native_fields != 0 || record.effective_style.paint != projected.paint {
+                unsafe { &mut *record.object }
+                    .SetShouldDoFullPaintInvalidationWithoutLayoutChange(
+                        foundation::PaintInvalidationReason::kStyle,
+                    );
+            }
             // A generated text-source projection supplies transport metadata,
             // while StyleRef supplies the canonical text paint. Preserve the
             // former exactly as Create's source_text_style branch does.

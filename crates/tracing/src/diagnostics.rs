@@ -11,7 +11,7 @@ use std::{
     time::Instant,
 };
 
-pub const PHASE_NAMES: [&str; 19] = [
+pub const PHASE_NAMES: [&str; 18] = [
     "unscoped",
     "host_task",
     "main_frame",
@@ -30,7 +30,6 @@ pub const PHASE_NAMES: [&str; 19] = [
     "native_gc",
     "diagnostic_trace",
     "diagnostic_report",
-    "layer_tile",
 ];
 thread_local! {
     static ALLOCATION_PHASE: Cell<usize> = const { Cell::new(0) };
@@ -99,7 +98,6 @@ fn phase(category: &str, name: &str) -> Option<usize> {
             "render" | "compose" => 12,
             "resource" | "loading" => 13,
             "font" => 14,
-            "layer_tile" => 18,
             _ => return None,
         },
     })

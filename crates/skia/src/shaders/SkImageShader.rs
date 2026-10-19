@@ -31,7 +31,9 @@ pub use crate::extensions::ShaderCompatibility::{FilterQuality, PixmapPaint};
 pub struct SkImageShader<'a> {
     pub(crate) pixmap: PixmapRef<'a>,
     quality: FilterQuality,
-    spread_mode: SpreadMode,
+    tile_mode_x: SpreadMode,
+    tile_mode_y: SpreadMode,
+    native_sampling: bool,
     pub(crate) opacity: NormalizedF32,
     pub(crate) transform: Transform,
 }
@@ -50,7 +52,31 @@ impl<'a> SkImageShader<'a> {
     ) -> Shader<'a> {
         Shader::Pattern(SkImageShader {
             pixmap,
-            spread_mode,
+            tile_mode_x: spread_mode,
+            tile_mode_y: spread_mode,
+            native_sampling: false,
+            quality,
+            opacity: NormalizedF32::new_clamped(opacity),
+            transform,
+        })
+    }
+
+    /// Source: third_party/skia/src/shaders/SkImageShader.cpp:547-580.
+    /// X/Y tile modes are independent; Decal is an out-of-domain sample mask,
+    /// not transparent padding or clamping of the source allocation.
+    pub fn new_native(
+        pixmap: PixmapRef<'a>,
+        tile_mode_x: SpreadMode,
+        tile_mode_y: SpreadMode,
+        quality: FilterQuality,
+        opacity: f32,
+        transform: Transform,
+    ) -> Shader<'a> {
+        Shader::Pattern(Self {
+            pixmap,
+            tile_mode_x,
+            tile_mode_y,
+            native_sampling: true,
             quality,
             opacity: NormalizedF32::new_clamped(opacity),
             transform,
@@ -72,7 +98,7 @@ impl<'a> SkImageShader<'a> {
 
         let mut quality = self.quality;
 
-        if ts.is_identity() || ts.is_translate() {
+        if !self.native_sampling && (ts.is_identity() || ts.is_translate()) {
             quality = FilterQuality::Nearest;
         }
 
@@ -87,43 +113,18 @@ impl<'a> SkImageShader<'a> {
 
         // TODO: minimizing scale via mipmap
 
+        p.ctx.sampler = pipeline::SamplerCtx {
+            tile_mode_x: self.tile_mode_x,
+            tile_mode_y: self.tile_mode_y,
+            round_down_at_integer: self.native_sampling && quality == FilterQuality::Nearest,
+            inv_width: 1.0 / self.pixmap.width() as f32,
+            inv_height: 1.0 / self.pixmap.height() as f32,
+        };
         match quality {
-            FilterQuality::Nearest => {
-                p.ctx.limit_x = pipeline::TileCtx {
-                    scale: self.pixmap.width() as f32,
-                    inv_scale: 1.0 / self.pixmap.width() as f32,
-                };
-
-                p.ctx.limit_y = pipeline::TileCtx {
-                    scale: self.pixmap.height() as f32,
-                    inv_scale: 1.0 / self.pixmap.height() as f32,
-                };
-
-                match self.spread_mode {
-                    SpreadMode::Pad => { /* The gather() stage will clamp for us. */ }
-                    SpreadMode::Repeat => p.push(pipeline::Stage::Repeat),
-                    SpreadMode::Reflect => p.push(pipeline::Stage::Reflect),
-                }
-
-                p.push(pipeline::Stage::Gather);
-            }
-            FilterQuality::Bilinear => {
-                p.ctx.sampler = pipeline::SamplerCtx {
-                    spread_mode: self.spread_mode,
-                    inv_width: 1.0 / self.pixmap.width() as f32,
-                    inv_height: 1.0 / self.pixmap.height() as f32,
-                };
-                p.push(pipeline::Stage::Bilinear);
-            }
+            FilterQuality::Nearest => p.push(pipeline::Stage::Gather),
+            FilterQuality::Bilinear => p.push(pipeline::Stage::Bilinear),
             FilterQuality::Bicubic => {
-                p.ctx.sampler = pipeline::SamplerCtx {
-                    spread_mode: self.spread_mode,
-                    inv_width: 1.0 / self.pixmap.width() as f32,
-                    inv_height: 1.0 / self.pixmap.height() as f32,
-                };
                 p.push(pipeline::Stage::Bicubic);
-
-                // Bicubic filtering naturally produces out of range values on both sides of [0,1].
                 p.push(pipeline::Stage::Clamp0);
                 p.push(pipeline::Stage::ClampA);
             }

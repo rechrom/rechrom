@@ -1,4 +1,4 @@
-//! Window presentation receives only Surface placement and CompositorFrames.
+//! Window presentation receives placement and already rendered Page surfaces.
 //! No document, paint artifact, Page compositor, or raster worker lives here.
 use crate::{
     begin_frame_source::{LogicalBeginFrameSource, NativeBeginFrame},
@@ -216,7 +216,7 @@ fn run(
                         scroll_active: false,
                     }))?;
                 }
-                // Page compositors already prepared their own output. Window
+                // Pages already rendered their own output. Window
                 // deadlines never execute or wait for a Page producer.
                 let pending = scheduler.PendingFrame().unwrap();
                 scheduler.MarkPrepared(pending, true);

@@ -185,6 +185,10 @@ pub struct SkGradientBaseShader {
 }
 
 impl SkGradientBaseShader {
+    // Source: SkGradientBaseShader.cpp:627-629. Decal is transparent outside its domain.
+    pub(crate) fn is_opaque(&self) -> bool {
+        self.colors_are_opaque && self.tile_mode != SpreadMode::kDecal
+    }
     pub fn new(
         mut stops: Vec<GradientStop>,
         tile_mode: SpreadMode,
@@ -336,6 +340,9 @@ impl SkGradientBaseShader {
         }
 
         match self.tile_mode {
+            SpreadMode::kDecal => {
+                p.push(pipeline::Stage::decal_x_1);
+            }
             SpreadMode::Reflect => {
                 p.push(pipeline::Stage::ReflectX1);
             }
@@ -465,6 +472,9 @@ impl SkGradientBaseShader {
             p.push(pipeline::Stage::Premultiply);
         }
 
+        if self.tile_mode == SpreadMode::kDecal {
+            p.push(pipeline::Stage::check_decal_mask);
+        }
         appendStages_post(p);
 
         true

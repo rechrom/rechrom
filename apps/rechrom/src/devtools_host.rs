@@ -65,6 +65,22 @@ pub(crate) fn attach_screenshots(mailbox: FrameMailbox) {
 }
 
 pub(crate) fn attach_commands(commands: &mpsc::Sender<Command>) {
+    let resize_commands = commands.clone();
+    devtools::set_device_metrics_handler(Arc::new(move |metrics| {
+        let scale = metrics.device_scale_factor;
+        let viewport = crate::engine::Viewport {
+            width: (f64::from(metrics.width) * scale).round() as u32,
+            height: (f64::from(metrics.height) * scale).round() as u32
+                + (crate::engine::TOOLBAR_HEIGHT * scale).round() as u32,
+            scale,
+        };
+        if !viewport.valid() {
+            return Err("device viewport exceeds render target limits".into());
+        }
+        resize_commands
+            .send(Command::Resize(viewport))
+            .map_err(|error| error.to_string())
+    }));
     let navigate_commands = commands.clone();
     devtools::set_navigate_handler(Arc::new(move |url| {
         navigate_commands

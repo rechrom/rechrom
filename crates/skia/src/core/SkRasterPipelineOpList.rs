@@ -55,6 +55,8 @@ pub enum SkRasterPipelineOp {
     compat_repeat_xy,
     compat_bilinear,
     compat_bicubic,
+    decal_x_1,
+    check_decal_mask,
     clamp_x_1,
     mirror_x_1,
     repeat_x_1,

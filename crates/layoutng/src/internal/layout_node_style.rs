@@ -139,9 +139,10 @@ impl LayoutBox {
         };
         self.SetHasTransformRelatedProperty(has_transform_related_property);
         self.SetHasReflection(!style.BoxReflect().is_null());
-        let should_clip_overflow = self.IsLayoutView() || ((!self.StyleRef().IsOverflowVisibleAlongBothAxes()
-            || self.ShouldApplyPaintContainment())
-            && self.RespectsCSSOverflow());
+        let should_clip_overflow = self.IsLayoutView()
+            || ((!self.StyleRef().IsOverflowVisibleAlongBothAxes()
+                || self.ShouldApplyPaintContainment())
+                && self.RespectsCSSOverflow());
         self.SetHasNonVisibleOverflow(should_clip_overflow);
         self.UpdateScrollableAreaForLayout();
     }

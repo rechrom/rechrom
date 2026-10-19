@@ -47,6 +47,24 @@ pub fn blend_effect_row(
     opacity: f32,
     coverage: Option<&[u8]>,
 ) {
+    blend_effect_row_native(
+        target,
+        source,
+        format,
+        raster_blend_mode(mode),
+        opacity,
+        coverage,
+    );
+}
+/// Same saveLayer restore for the complete native SkBlendMode vocabulary.
+pub fn blend_effect_row_native(
+    target: &mut [u32],
+    source: &[u32],
+    format: PixelFormat,
+    mode: crate::BlendMode,
+    opacity: f32,
+    coverage: Option<&[u8]>,
+) {
     assert_eq!(target.len(), source.len());
     assert!(coverage.is_none_or(|coverage| coverage.len() == target.len()));
     if target.is_empty() || opacity <= 0.0 {
@@ -89,7 +107,7 @@ pub fn blend_effect_row(
             source,
             &PixmapPaint {
                 opacity: opacity.clamp(0.0, 1.0),
-                blend_mode: raster_blend_mode(mode),
+                blend_mode: mode,
                 quality: FilterQuality::Nearest,
             },
             Transform::identity(),

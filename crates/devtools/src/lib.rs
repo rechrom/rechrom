@@ -64,6 +64,24 @@ pub fn set_screenshot_handler(handler: ScreenshotHandler) {
     *screenshot_handler().lock().unwrap() = Some(handler);
 }
 
+/// CDP device metrics in CSS pixels. The browser embedding remains responsible
+/// for converting them into its device-pixel viewport and chrome placement.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DeviceMetrics {
+    pub width: u32,
+    pub height: u32,
+    pub device_scale_factor: f64,
+}
+pub type DeviceMetricsHandler = Arc<dyn Fn(DeviceMetrics) -> Result<(), String> + Send + Sync>;
+fn device_metrics_handler() -> &'static std::sync::Mutex<Option<DeviceMetricsHandler>> {
+    static HANDLER: std::sync::OnceLock<std::sync::Mutex<Option<DeviceMetricsHandler>>> =
+        std::sync::OnceLock::new();
+    HANDLER.get_or_init(|| std::sync::Mutex::new(None))
+}
+pub fn set_device_metrics_handler(handler: DeviceMetricsHandler) {
+    *device_metrics_handler().lock().unwrap() = Some(handler);
+}
+
 /// Synthetic wheel input in window CSS coordinates, including the toolbar.
 /// Deltas are CSS pixels with the same sign as the dispatched DOM wheel event.
 #[derive(Clone, Debug, PartialEq)]
@@ -650,6 +668,34 @@ fn dispatch(request: Value) -> Result<ApiResult, String> {
                 .ok_or("No browser target")?;
             let png = capture(target_id)?;
             Ok(json!({"data":base64::engine::general_purpose::STANDARD.encode(png)}))
+        }
+        "Emulation.setDeviceMetricsOverride" => {
+            let width = params
+                .get("width")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0 && *value <= u32::MAX as u64)
+                .ok_or("width must be a positive integer")? as u32;
+            let height = params
+                .get("height")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0 && *value <= u32::MAX as u64)
+                .ok_or("height must be a positive integer")? as u32;
+            let device_scale_factor = params
+                .get("deviceScaleFactor")
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0 && *value <= 4.0)
+                .ok_or("deviceScaleFactor must be finite and in (0, 4]")?;
+            let resize = device_metrics_handler()
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("No browser target")?;
+            resize(DeviceMetrics {
+                width,
+                height,
+                device_scale_factor,
+            })?;
+            Ok(json!({}))
         }
         "Tracing.start" => {
             let options: StartOptions =

@@ -1956,7 +1956,8 @@ pub struct ComputedStyle {
 }
 impl PartialEq for ComputedStyle {
     fn eq(&self, other: &Self) -> bool {
-        self.native_style == other.native_style && self.paint == other.paint
+        self.native_style == other.native_style
+            && self.paint == other.paint
             && self.GeometryInputsEqual(other)
     }
 }
@@ -2033,13 +2034,39 @@ impl ComputedStyle {
                 $($field == &other.$field)&&*
             }};
         }
-        extended_equal && same_inputs!(
-            svg_clip_resources, display, width, height, min_height, max_height,
-            flex_basis, flex_grow, flex_shrink, min_width, max_width, margin,
-            border, border_styles, padding, gap, flex_direction, flex_wrap,
-            align_items, direction, writing_mode, position, left, top, right,
-            bottom, css_clip, floating, column_count, grid_template_columns,
-        )
+        extended_equal
+            && same_inputs!(
+                svg_clip_resources,
+                display,
+                width,
+                height,
+                min_height,
+                max_height,
+                flex_basis,
+                flex_grow,
+                flex_shrink,
+                min_width,
+                max_width,
+                margin,
+                border,
+                border_styles,
+                padding,
+                gap,
+                flex_direction,
+                flex_wrap,
+                align_items,
+                direction,
+                writing_mode,
+                position,
+                left,
+                top,
+                right,
+                bottom,
+                css_clip,
+                floating,
+                column_count,
+                grid_template_columns,
+            )
     }
 }
 
@@ -2248,6 +2275,11 @@ pub use font_engine::{FontFallbackRole, FontVariation};
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintImage {
     pub id: u64,
+    /// cc::PaintImage::Id. This is allocated once when the image value is
+    /// created and remains stable while `revision` and frame content advance.
+    pub paint_image_id: image_resource::PaintImageId,
+    pub compositor_metadata:
+        Result<image_resource::PaintImageMetadata, image_resource::PaintImageMetadataUnavailable>,
     pub revision: u64,
     pub width: u32,
     pub height: u32,
@@ -2266,6 +2298,10 @@ impl Default for PaintImage {
     fn default() -> Self {
         Self {
             id: 0,
+            paint_image_id: Default::default(),
+            compositor_metadata: Err(
+                image_resource::PaintImageMetadataUnavailable::ProducerFactsNotPublished,
+            ),
             revision: 0,
             width: 0,
             height: 0,
@@ -2277,6 +2313,44 @@ impl Default for PaintImage {
     }
 }
 impl PaintImage {
+    /// A document-frame mutation updates the same immutable resource value's
+    /// producer facts. The original transport classification remains intact.
+    pub fn UpdateDocumentFrameMetadata(&mut self, frame: &image_resource::DocumentImageFrame) {
+        if let Ok(metadata) = &mut self.compositor_metadata {
+            metadata.animation =
+                image_resource::PaintImageAnimationMetadata::Known(frame.animation_info);
+            metadata.completion_state = frame.completion_state;
+        }
+    }
+    pub fn CompositorMetadata(
+        &self,
+    ) -> Result<&image_resource::PaintImageMetadata, &image_resource::PaintImageMetadataUnavailable>
+    {
+        self.compositor_metadata.as_ref()
+    }
+    // Source: cc/paint/paint_image.cc:344-347.
+    pub fn ShouldAnimate(&self) -> Result<bool, &image_resource::PaintImageMetadataUnavailable> {
+        match &self.CompositorMetadata()?.animation {
+            image_resource::PaintImageAnimationMetadata::Known(info) => Ok(info.should_animate()),
+            image_resource::PaintImageAnimationMetadata::Unavailable(error) => Err(error),
+        }
+    }
+    // Source: cc/paint/paint_image.h:330-332. An actual eager bitmap has neither
+    // generator nor paint record; document content retains its PaintRecord.
+    pub fn IsLazyGenerated(&self) -> bool {
+        matches!(
+            &self.content,
+            image_resource::PaintImageContent::Document(_)
+        )
+    }
+    // Source: cc/paint/paint_image.h:312-313.
+    pub fn IsComplete(&self) -> Result<bool, &image_resource::PaintImageMetadataUnavailable> {
+        Ok(self.CompositorMetadata()?.completion_state
+            == image_resource::PaintImageCompletionState::Done)
+    }
+    pub fn IsMultipart(&self) -> Result<bool, &image_resource::PaintImageMetadataUnavailable> {
+        Ok(self.CompositorMetadata()?.is_multipart)
+    }
     pub fn BitmapPixels(&self) -> Option<&std::sync::Arc<Vec<u8>>> {
         match &self.content {
             image_resource::PaintImageContent::Bitmap(pixels) => Some(pixels),
@@ -2358,6 +2432,8 @@ pub struct ConstraintSpace {
     /// from the host device scale factor even when both happen to be 2.
     pub layout_zoom_factor: f64,
     pub canvas_draw_element_enabled: bool,
+    /// Source: platform/runtime_enabled_features.json5:4756-4759.
+    pub prefer_non_composited_scrolling_enabled: bool,
     pub viewport: Option<ViewportGeometry>,
     pub control_theme: ControlThemeMetrics,
     pub hyphenation: Option<std::sync::Arc<dyn HyphenationProvider>>,
@@ -2385,6 +2461,7 @@ impl Default for ConstraintSpace {
             document_image_container: None,
             layout_zoom_factor: 1.0,
             canvas_draw_element_enabled: false,
+            prefer_non_composited_scrolling_enabled: false,
             viewport: None,
             control_theme: ControlThemeMetrics::default(),
             hyphenation: None,

@@ -898,6 +898,8 @@ pub extern "Rust" fn DispatchLayoutObjectGetName(object: *const LayoutObject) ->
         LayoutObjectClass::SvgTextPath => "LayoutSVGTextPath",
         LayoutObjectClass::SvgText => "LayoutSVGText",
         LayoutObjectClass::SvgInlineText => "LayoutSVGInlineText",
+        LayoutObjectClass::Inline => "LayoutInline",
+        LayoutObjectClass::Text => "LayoutText",
         LayoutObjectClass::InsideListMarker => "LayoutInsideListMarker",
         LayoutObjectClass::OutsideListMarker => "LayoutOutsideListMarker",
         LayoutObjectClass::TextCombine => "LayoutTextCombine",

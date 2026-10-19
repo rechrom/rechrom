@@ -363,6 +363,7 @@ pub(crate) struct SavedFrame {
     pub(crate) layer_origin: (i32, i32),
     pub(crate) parent_opaque: bool,
     pub(crate) blend_mode: PaintBlendMode,
+    pub(crate) native_blend_mode: Option<crate::BlendMode>,
     // PaintChunksToCcLayer masks restore with SkBlendMode::kDstIn.
     pub(crate) dst_in: bool,
 }
@@ -696,6 +697,7 @@ impl SkCanvas {
             layer_origin: (0, 0),
             parent_opaque: self.known_opaque,
             blend_mode: PaintBlendMode::kNormal,
+            native_blend_mode: None,
             dst_in: false,
         });
     }
@@ -817,6 +819,31 @@ impl SkCanvas {
         self.save_layer_device(&DrawCommand::default(), false, filters);
     }
 
+    /// Injected immutable image-filter values use the same native saveLayer
+    /// allocation, bounds, clip and restore implementation as command replay.
+    pub fn save_layer_with_native_filters(
+        &mut self,
+        item: &DrawCommand,
+        filters: Vec<crate::cpu::layer_filters::RenderSurfaceFilter>,
+        blend: crate::BlendMode,
+    ) {
+        self.save_layer_device(item, false, filters);
+        self.stack
+            .last_mut()
+            .expect("native saveLayer device")
+            .native_blend_mode = Some(blend);
+    }
+    pub fn save_layer_with_filters(
+        &mut self,
+        item: &DrawCommand,
+        filters: Vec<crate::cpu::layer_filters::RenderSurfaceFilter>,
+    ) {
+        self.save_layer_device(item, false, filters);
+        if item.r#type == crate::compat::commands::CommandKind::kSaveLayerDstIn {
+            self.stack.last_mut().expect("native DstIn device").dst_in = true;
+        }
+    }
+
     pub(crate) fn save_layer_svg_filter(
         &mut self,
         graph: crate::cpu::layer_filters::RenderSvgFilterGraph,
@@ -871,6 +898,7 @@ impl SkCanvas {
             matches!(
                 filter,
                 crate::cpu::layer_filters::RenderSurfaceFilter::Blur { .. }
+                    | crate::cpu::layer_filters::RenderSurfaceFilter::Offset { .. }
                     | crate::cpu::layer_filters::RenderSurfaceFilter::DropShadow { .. }
                     | crate::cpu::layer_filters::RenderSurfaceFilter::SvgGraph(_)
                     | crate::cpu::layer_filters::RenderSurfaceFilter::AffineSvgGraph { .. }
@@ -882,7 +910,12 @@ impl SkCanvas {
             // filter expands its input; the extra transparent pixel matches
             // internalSaveLayer's decal-sampling padding.
             let (bx, by) = filters.iter().fold((1, 1), |(x, y), filter| match filter {
-                crate::cpu::layer_filters::RenderSurfaceFilter::ColorMatrix(_) => (x, y),
+                crate::cpu::layer_filters::RenderSurfaceFilter::ColorMatrix(_)
+                | crate::cpu::layer_filters::RenderSurfaceFilter::Luma => (x, y),
+                crate::cpu::layer_filters::RenderSurfaceFilter::AlphaThreshold { .. } => (x, y),
+                crate::cpu::layer_filters::RenderSurfaceFilter::Offset { x: dx, y: dy } => {
+                    (x + dx.abs().ceil() as i32, y + dy.abs().ceil() as i32)
+                }
                 crate::cpu::layer_filters::RenderSurfaceFilter::SvgGraph(_) => (x, y),
                 crate::cpu::layer_filters::RenderSurfaceFilter::AffineSvgGraph { .. } => (x, y),
                 crate::cpu::layer_filters::RenderSurfaceFilter::BoxReflect { .. } => (x, y),
@@ -917,7 +950,14 @@ impl SkCanvas {
         // Translate every graph region by the actual layer origin before the
         // CPU graph executor clips its intermediate surfaces.
         for filter in &mut filters {
-            if let crate::cpu::layer_filters::RenderSurfaceFilter::SvgGraph(graph) = filter {
+            if let crate::cpu::layer_filters::RenderSurfaceFilter::AlphaThreshold {
+                local_to_device,
+                ..
+            } = filter
+            {
+                local_to_device[4] -= left as f32;
+                local_to_device[5] -= top as f32;
+            } else if let crate::cpu::layer_filters::RenderSurfaceFilter::SvgGraph(graph) = filter {
                 graph.region[0] -= left as f32;
                 graph.region[1] -= top as f32;
                 for primitive in &mut graph.primitives {
@@ -956,6 +996,7 @@ impl SkCanvas {
             layer_origin: (left, top),
             parent_opaque: self.known_opaque,
             blend_mode: item.blend_mode,
+            native_blend_mode: None,
             dst_in: false,
         });
         self.known_opaque = false;
@@ -1107,7 +1148,11 @@ impl SkCanvas {
                             [parent_start * 4..(parent_start + right - left) * 4];
                         if previous.is_none() {
                             let source = &src_row[left * 4..right * 4];
-                            if frame.blend_mode != PaintBlendMode::kNormal {
+                            if frame.blend_mode != PaintBlendMode::kNormal
+                                || frame
+                                    .native_blend_mode
+                                    .is_some_and(|mode| mode != crate::BlendMode::kSrcOver)
+                            {
                                 let coverage = frame.state.clip.as_deref().map(|mask| {
                                     mask.row_range(
                                         y as u32,
@@ -1123,11 +1168,15 @@ impl SkCanvas {
                                     .chunks_exact(4)
                                     .map(|pixel| u32::from_ne_bytes(pixel.try_into().unwrap()))
                                     .collect::<Vec<_>>();
-                                crate::cpu::effect_composite::blend_effect_row(
+                                crate::cpu::effect_composite::blend_effect_row_native(
                                     &mut destination,
                                     &source,
                                     format,
-                                    frame.blend_mode,
+                                    frame.native_blend_mode.unwrap_or_else(|| {
+                                        crate::cpu::effect_composite::raster_blend_mode(
+                                            frame.blend_mode,
+                                        )
+                                    }),
                                     opacity,
                                     coverage,
                                 );
@@ -1248,8 +1297,486 @@ impl SkCanvas {
     /// The current local-to-device matrix, in this affine CPU subset.
     /// Source: SkCanvas::getLocalToDevice / setMatrix. Changing the matrix
     /// leaves the already-materialized device-space clip untouched.
+    /// Source: third_party/skia/src/core/SkCanvas.cpp:1608-1629. Native
+    /// conservative local clip bounds, including the one-pixel AA margin.
+    pub fn getLocalClipBounds(&self) -> Option<PaintRect> {
+        let device =
+            crate::raster::IntRect::from_xywh(0, 0, self.pixmap.width(), self.pixmap.height())?;
+        let bounds = match self.state.clip_summary {
+            Some(summary) => summary.getBounds()?.intersect(&device)?,
+            None => device,
+        };
+        let inverse = self.state.transform.invert()?;
+        let rect = Rect::from_ltrb(
+            bounds.left() as f32 - 1.,
+            bounds.top() as f32 - 1.,
+            bounds.right() as f32 + 1.,
+            bounds.bottom() as f32 + 1.,
+        )?
+        .transform(inverse)?;
+        Some(PaintRect {
+            x: rect.left() as f64,
+            y: rect.top() as f64,
+            width: rect.width() as f64,
+            height: rect.height() as f64,
+        })
+    }
+    /// Source SkCanvas::clear is drawColor(color,kSrc): the current native
+    /// raster clip applies, while the local CTM does not transform drawPaint.
+    /// The existing SkRasterPipeline source blender owns coverage/color math.
+    pub fn clear_color_src(&mut self, color: Color) {
+        let rect = Rect::from_xywh(
+            0.,
+            0.,
+            self.pixmap.width() as f32,
+            self.pixmap.height() as f32,
+        )
+        .expect("valid raster device");
+        self.ensure_clip_mask();
+        let mut paint = solid_paint(color, false);
+        paint.blend_mode = crate::raster::BlendMode::Source;
+        self.pixmap.fill_rect(
+            rect,
+            &paint,
+            Transform::identity(),
+            self.state.clip.as_deref(),
+        );
+        self.known_opaque = false;
+    }
+    /// SkCanvas::readPixels copies only the requested intersection from the
+    /// current device into a new native bitmap (used for backdrop filtering).
+    /// No child-pass, compositor or scene state is retained in this value.
+    pub fn read_pixels_intersection(
+        &self,
+        bounds: crate::raster::IntRect,
+    ) -> Option<(crate::raster::IntRect, Pixmap)> {
+        let device =
+            crate::raster::IntRect::from_xywh(0, 0, self.pixmap.width(), self.pixmap.height())?;
+        let bounds = bounds.intersect(&device)?;
+        Some((bounds, self.read_pixels(bounds)?))
+    }
+    pub fn read_pixels(&self, bounds: crate::raster::IntRect) -> Option<Pixmap> {
+        if bounds.left() < 0
+            || bounds.top() < 0
+            || bounds.right() > self.pixmap.width() as i32
+            || bounds.bottom() > self.pixmap.height() as i32
+        {
+            return None;
+        }
+        let mut pixels = Vec::with_capacity(bounds.width() as usize * bounds.height() as usize * 4);
+        for y in bounds.top() as usize..bounds.bottom() as usize {
+            let start = (y * self.pixmap.width() as usize + bounds.left() as usize) * 4;
+            pixels
+                .extend_from_slice(&self.pixmap.data()[start..start + bounds.width() as usize * 4]);
+        }
+        let mut image =
+            Pixmap::from_vec(pixels, IntSize::from_wh(bounds.width(), bounds.height())?)?;
+        image.format = self.pixmap.format;
+        Some(image)
+    }
+
+    /// Borrowed native premultiplied image playback. Unlike the flat Paint
+    /// resource adapter, this is already decoded N32 and must not be copied or
+    /// premultiplied a second time. Shader sampling and clipping stay in Skia.
+    pub fn draw_premultiplied_image(
+        &mut self,
+        image: crate::raster::PixmapRef<'_>,
+        source: PaintRect,
+        destination: PaintRect,
+        quality: FilterQuality,
+        opacity: f32,
+        blend: crate::BlendMode,
+        antialias: bool,
+    ) {
+        if rect(destination).is_none() {
+            return;
+        }
+        if source.width <= 0. || source.height <= 0. {
+            return;
+        }
+        let sx = (destination.width / source.width) as f32;
+        let sy = (destination.height / source.height) as f32;
+        let transform = Transform::from_row(
+            sx,
+            0.,
+            0.,
+            sy,
+            destination.x as f32 - source.x as f32 * sx,
+            destination.y as f32 - source.y as f32 * sy,
+        );
+        self.draw_premultiplied_image_shader(
+            image,
+            transform,
+            destination,
+            SpreadMode::Pad,
+            quality,
+            opacity,
+            blend,
+            antialias,
+        );
+    }
+    /// Native image-shader draw used by the source backdrop mirror crop. The
+    /// caller supplies its actual image mapping; Skia owns tiling/sampling.
+    pub fn draw_premultiplied_image_shader(
+        &mut self,
+        image: crate::raster::PixmapRef<'_>,
+        image_to_local: Transform,
+        bounds: PaintRect,
+        tile_mode: SpreadMode,
+        quality: FilterQuality,
+        opacity: f32,
+        blend: crate::BlendMode,
+        antialias: bool,
+    ) {
+        if self.try_fast_image_blit(
+            image,
+            image_to_local,
+            bounds,
+            opacity,
+            blend,
+            antialias,
+        ) {
+            self.known_opaque = false;
+            return;
+        }
+        let Some(mut bounds) = rect(bounds) else {
+            return;
+        };
+        let paint = Paint {
+            shader: Pattern::new(image, tile_mode, quality, opacity, image_to_local),
+            blend_mode: blend,
+            anti_alias: antialias,
+            ..Paint::default()
+        };
+        let use_mask = match self.intersect_axis_aligned_rect_clip(bounds) {
+            Ok(Some(clipped)) => {
+                bounds = clipped;
+                false
+            }
+            Ok(None) => return,
+            Err(()) => {
+                self.ensure_clip_mask();
+                true
+            }
+        };
+        self.pixmap.fill_rect(
+            bounds,
+            &paint,
+            self.state.transform,
+            if use_mask { self.state.clip.as_deref() } else { None },
+        );
+        self.known_opaque = false;
+    }
+
+    /// SkBlitter's matching-format, unit-scale sprite path. Compositor tiles
+    /// commonly arrive as integer-translated native N32 allocations; routing
+    /// those through an image shader performs redundant coordinate and filter
+    /// work for every pixel.
+    fn try_fast_image_blit(
+        &mut self,
+        image: crate::raster::PixmapRef<'_>,
+        image_to_local: Transform,
+        bounds: PaintRect,
+        opacity: f32,
+        blend: crate::BlendMode,
+        antialias: bool,
+    ) -> bool {
+        if antialias
+            || opacity != 1.
+            || !matches!(blend, crate::BlendMode::kSrc | crate::BlendMode::kSrcOver)
+            || image.format != self.pixmap.format
+            || self.state.clip.is_some()
+        {
+            return false;
+        }
+        let matrix = self.state.transform.pre_concat(image_to_local);
+        if matrix.kx != 0.
+            || matrix.ky != 0.
+            || (matrix.sx - 1.).abs() > 1e-6
+            || (matrix.sy - 1.).abs() > 1e-6
+        {
+            return false;
+        }
+        let Some(local_bounds) = rect(bounds) else {
+            return true;
+        };
+        let Some(mut device) = local_bounds.transform(self.state.transform).and_then(|r| r.round_out()) else {
+            return true;
+        };
+        let Some(canvas) = crate::raster::IntRect::from_xywh(
+            0,
+            0,
+            self.pixmap.width(),
+            self.pixmap.height(),
+        ) else {
+            return true;
+        };
+        let Some(clipped) = device.intersect(&canvas) else {
+            return true;
+        };
+        device = clipped;
+        if let Some(summary) = self.state.clip_summary {
+            let Some(clip) = summary.getBounds().filter(|_| summary.isRect()) else {
+                return false;
+            };
+            let Some(clipped) = device.intersect(&clip) else {
+                return true;
+            };
+            device = clipped;
+        }
+        let origin_x = matrix.tx.round() as i32;
+        let origin_y = matrix.ty.round() as i32;
+        if (matrix.tx - origin_x as f32).abs() > 1e-6
+            || (matrix.ty - origin_y as f32).abs() > 1e-6
+        {
+            return false;
+        }
+        let source_x = device.x().saturating_sub(origin_x);
+        let source_y = device.y().saturating_sub(origin_y);
+        if source_x < 0
+            || source_y < 0
+            || source_x as u32 + device.width() > image.width()
+            || source_y as u32 + device.height() > image.height()
+        {
+            return false;
+        }
+        let source_stride = image.width() as usize * 4;
+        let target_stride = self.pixmap.width() as usize * 4;
+        let row_bytes = device.width() as usize * 4;
+        let target = self.pixmap.data.as_mut_slice();
+        for row in 0..device.height() as usize {
+            let src = (source_y as usize + row) * source_stride + source_x as usize * 4;
+            let dst = (device.y() as usize + row) * target_stride + device.x() as usize * 4;
+            if blend == crate::BlendMode::kSrc {
+                target[dst..dst + row_bytes]
+                    .copy_from_slice(&image.data()[src..src + row_bytes]);
+            } else {
+                // Source and destination have identical native channel order,
+                // so the premultiplied SrcOver kernel operates on raw lanes.
+                crate::raster::blend_premultiplied_rgba_row(
+                    &mut target[dst..dst + row_bytes],
+                    &image.data()[src..src + row_bytes],
+                    crate::raster::PixelFormat::Rgba8888,
+                );
+            }
+        }
+        true
+    }
+
+    /// Call-scoped native PaintRecordShader image, with independent source
+    /// SkTileMode values. Source sampling is wholly owned by SkImageShader.
+    pub fn draw_record_shader_rect(
+        &mut self,
+        image: crate::raster::PixmapRef<'_>,
+        image_to_local: Transform,
+        bounds: PaintRect,
+        tile_x: SpreadMode,
+        tile_y: SpreadMode,
+        quality: FilterQuality,
+        opacity: f32,
+        blend: crate::BlendMode,
+        antialias: bool,
+    ) {
+        let Some(bounds) = rect(bounds) else {
+            return;
+        };
+        let paint = Paint {
+            shader: Pattern::new_native(image, tile_x, tile_y, quality, opacity, image_to_local),
+            blend_mode: blend,
+            anti_alias: antialias,
+            ..Default::default()
+        };
+        self.ensure_clip_mask();
+        self.pixmap.fill_rect(
+            bounds,
+            &paint,
+            self.state.transform,
+            self.state.clip.as_deref(),
+        );
+        self.known_opaque = false;
+    }
+    pub fn draw_native_path(
+        &mut self,
+        path: &crate::include::core::SkPath::SkPath,
+        color: Color,
+        blend: crate::BlendMode,
+        antialias: bool,
+        stroke_width: Option<f32>,
+    ) {
+        let Some(path_value) = crate::compat::geometry::raster_path_from_native(path) else {
+            return;
+        };
+        let mut paint = solid_paint(color, antialias);
+        paint.blend_mode = blend;
+        self.ensure_clip_mask();
+        if let Some(width) = stroke_width {
+            self.pixmap.stroke_path(
+                &path_value,
+                &paint,
+                &crate::raster::Stroke {
+                    width,
+                    ..Default::default()
+                },
+                self.state.transform,
+                self.state.clip.as_deref(),
+            );
+        } else {
+            self.pixmap.fill_path(
+                &path_value,
+                &paint,
+                if path.getFillType() as u8 & 1 != 0 {
+                    FillRule::EvenOdd
+                } else {
+                    FillRule::Winding
+                },
+                self.state.transform,
+                self.state.clip.as_deref(),
+            );
+        }
+        self.known_opaque = false;
+    }
+
+    pub fn draw_native_rrect(
+        &mut self,
+        bounds: PaintRect,
+        radii: PaintCornerRadii,
+        color: Color,
+        blend: crate::BlendMode,
+        antialias: bool,
+    ) {
+        let Some(commands) = rounded_rect_commands(bounds, radii, 0) else {
+            return;
+        };
+        let Some(path) = path_from_commands(&commands) else {
+            return;
+        };
+        let mut paint = solid_paint(color, antialias);
+        paint.blend_mode = blend;
+        self.ensure_clip_mask();
+        self.pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            self.state.transform,
+            self.state.clip.as_deref(),
+        );
+        self.known_opaque = false;
+    }
+    /// SkCanvas::drawColor -> drawPaint, using the current clip in device
+    /// coordinates. Matrix transforms do not affect drawPaint coverage.
+    pub fn draw_native_paint(&mut self, color: Color, blend: crate::BlendMode) {
+        let mut paint = solid_paint(color, false);
+        paint.blend_mode = blend;
+        self.ensure_clip_mask();
+        let rect = Rect::from_xywh(
+            0.,
+            0.,
+            self.pixmap.width() as f32,
+            self.pixmap.height() as f32,
+        )
+        .expect("canvas device bounds");
+        self.pixmap.fill_rect(
+            rect,
+            &paint,
+            Transform::identity(),
+            self.state.clip.as_deref(),
+        );
+        self.known_opaque = false;
+    }
+    pub fn draw_native_rect(
+        &mut self,
+        bounds: PaintRect,
+        color: Color,
+        blend: crate::BlendMode,
+        antialias: bool,
+    ) {
+        let Some(mut bounds) = rect(bounds) else {
+            return;
+        };
+        let mut paint = solid_paint(color, antialias);
+        paint.blend_mode = blend;
+        let use_mask = match self.intersect_axis_aligned_rect_clip(bounds) {
+            Ok(Some(clipped)) => {
+                bounds = clipped;
+                false
+            }
+            Ok(None) => return,
+            Err(()) => {
+                self.ensure_clip_mask();
+                true
+            }
+        };
+        self.pixmap.fill_rect(
+            bounds,
+            &paint,
+            self.state.transform,
+            if use_mask { self.state.clip.as_deref() } else { None },
+        );
+        self.known_opaque = false;
+    }
+    /// SoftwareRenderer::DrawDebugBorderQuad transforms the rectangle path
+    /// before applying a device-space miter stroke width.
+    pub fn draw_native_debug_border(
+        &mut self,
+        bounds: PaintRect,
+        color: Color,
+        width: f32,
+        blend: crate::BlendMode,
+        antialias: bool,
+    ) {
+        let Some(bounds) = rect(bounds) else {
+            return;
+        };
+        let Some(path) = PathBuilder::from_rect(bounds).transform(self.state.transform) else {
+            return;
+        };
+        let mut paint = solid_paint(color, antialias);
+        paint.blend_mode = blend;
+        let stroke = Stroke {
+            width,
+            line_join: LineJoin::Miter,
+            ..Stroke::default()
+        };
+        self.ensure_clip_mask();
+        self.pixmap.stroke_path(
+            &path,
+            &paint,
+            &stroke,
+            Transform::identity(),
+            self.state.clip.as_deref(),
+        );
+        self.known_opaque = false;
+    }
+
     pub fn local_to_device(&self) -> Transform {
         self.state.transform
+    }
+
+    /// SkRasterClip keeps an ordinary BW rectangle as bounds. Skia's blitters
+    /// intersect those bounds before rasterization; allocating an A8 mask for
+    /// every compositor tile turns a constant-time clip into device-sized work.
+    fn intersect_axis_aligned_rect_clip(&self, local: Rect) -> Result<Option<Rect>, ()> {
+        if self.state.clip.is_some() {
+            return Err(());
+        }
+        let Some(summary) = self.state.clip_summary else {
+            return Ok(Some(local));
+        };
+        let Some(device) = summary.getBounds().filter(|_| summary.isRect()) else {
+            return Err(());
+        };
+        let matrix = self.state.transform;
+        if matrix.kx != 0. || matrix.ky != 0. || matrix.sx == 0. || matrix.sy == 0. {
+            return Err(());
+        }
+        let x0 = (device.left() as f32 - matrix.tx) / matrix.sx;
+        let x1 = (device.right() as f32 - matrix.tx) / matrix.sx;
+        let y0 = (device.top() as f32 - matrix.ty) / matrix.sy;
+        let y1 = (device.bottom() as f32 - matrix.ty) / matrix.sy;
+        let Some(clip) = Rect::from_ltrb(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)) else {
+            return Ok(None);
+        };
+        Ok(local.intersect(&clip))
     }
 
     pub fn set_matrix(&mut self, matrix: Transform) {
@@ -2443,7 +2970,8 @@ impl SkCanvas {
         } else {
             image
         };
-        if interpolation_quality != ImageInterpolationQuality::kNone
+        if item.flags_alpha == 1.
+            && interpolation_quality != ImageInterpolationQuality::kNone
             && draw_image_bitmap_opaque(
                 &mut self.pixmap,
                 self.state.clip.as_deref(),
@@ -2495,7 +3023,7 @@ impl SkCanvas {
             } else {
                 FilterQuality::Bilinear
             },
-            1.0,
+            item.flags_alpha,
             transform,
         );
         paint.anti_alias = item.antialias;

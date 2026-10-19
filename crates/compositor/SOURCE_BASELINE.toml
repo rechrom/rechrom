@@ -1,0 +1,31 @@
+chromium_revision = "6c1d401fcca5e1b0030563a90c2f2bba168e0c15"
+source_root = "/Users/zhenghuaiyu/chromium/src"
+source_prefixes = [
+  "cc",
+  "third_party/blink/renderer/platform/graphics/compositing",
+  "third_party/blink/renderer/platform/graphics/paint",
+]
+
+# Same-stem header and implementation files merge into one Rust file.
+mapping = "<source>/<stem>.{h,cc} -> src/<source>/<stem>.rs"
+
+# This crate translates the platform-independent compositor core, including
+# Blink PaintArtifact layerization and cc layer/tile ownership. PaintArtifact
+# production, raster playback/pixels, concrete GPU/software decode caches, Viz
+# aggregation, final rendering, platform surfaces, and OS-thread placement
+# remain package-boundary dependencies connected through typed adapters.
+
+# Direct runnable CPU task closure, approved during production binding audit.
+# task_graph_work_queue.h235+.cc442 + synchronous_task_graph_runner.h46+.cc109.
+# Converted DisplayItemList and its direct RTree, GeometryMapper and
+# RasterInvalidator closure, required by the production concrete PAC family.
+# Direct node cache/FloatClipRect and per-item invalidation/tracking closure.
+# Manifest totals: 317 source files, 177 same-stem Rust targets, 92742 lines.
+
+# Required client-only default pending-tree commit lifecycle owner.
+# ClientLayerTreeHostImpl: header72 + implementation594; no Proxy/platform closure.
+# LayersAsJSON: header72 + implementation187, internal diagnostic owner.
+[expected]
+source_files = 317
+rust_files = 177
+source_lines = 92742

@@ -307,8 +307,14 @@ impl NativeNodeMetadataRelations {
         for &node in &nodes {
             match unsafe { &*node }.InputDocumentRole() {
                 DocumentRole::kNone => {}
-                DocumentRole::kDocumentElement => { document_elements += 1; document_element = node; }
-                DocumentRole::kBody => { bodies += 1; body_element = node; }
+                DocumentRole::kDocumentElement => {
+                    document_elements += 1;
+                    document_element = node;
+                }
+                DocumentRole::kBody => {
+                    bodies += 1;
+                    body_element = node;
+                }
                 DocumentRole::kDocumentElementAndBody => {
                     document_elements += 1;
                     bodies += 1;
@@ -338,8 +344,11 @@ impl NativeNodeMetadataRelations {
         if !document_element.is_null() && !body_element.is_null() {
             let root_object = unsafe { &*document_element }.GetLayoutObject();
             let body_object = unsafe { &*body_element }.GetLayoutObject();
-            if !root_object.is_null() && !body_object.is_null()
-                && unsafe { &*root_object }.StyleRef().IsOverflowVisibleAlongBothAxes()
+            if !root_object.is_null()
+                && !body_object.is_null()
+                && unsafe { &*root_object }
+                    .StyleRef()
+                    .IsOverflowVisibleAlongBothAxes()
                 && !unsafe { &*root_object }.ShouldApplyAnyContainment()
                 && !unsafe { &*body_object }.ShouldApplyAnyContainment()
             {
@@ -354,7 +363,8 @@ impl NativeNodeMetadataRelations {
             // The former and new propagated owners change clipping/area
             // ownership even if their authored styles are unchanged.
             for &node in &nodes {
-                if node == document_element || node == previous_viewport.cast::<Node>()
+                if node == document_element
+                    || node == previous_viewport.cast::<Node>()
                     || node == viewport_defining_element.cast::<Node>()
                 {
                     let object = unsafe { &*node }.GetLayoutObject();
@@ -364,7 +374,8 @@ impl NativeNodeMetadataRelations {
                         let axes = unsafe { &*box_ }.ComputeOverflowClipAxes();
                         unsafe { &mut *box_ }.SetOverflowClipAxes(axes);
                         unsafe { &mut *box_ }.SetNeedsLayoutAndIntrinsicWidthsRecalc(
-                            &raw const crate::internal::layout_invalidation_reason::kStyleChange);
+                            &raw const crate::internal::layout_invalidation_reason::kStyleChange,
+                        );
                     }
                 }
             }

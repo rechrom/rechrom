@@ -26,9 +26,7 @@ impl StyleFontMetricsResolver {
     }
 }
 
-impl style::resolver::production_style_builder::FontMetricsResolver
-    for StyleFontMetricsResolver
-{
+impl style::resolver::production_style_builder::FontMetricsResolver for StyleFontMetricsResolver {
     fn Metrics(
         &self,
         description: &font_engine::FontDescription,

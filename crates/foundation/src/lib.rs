@@ -35,7 +35,9 @@ pub use physical_rect::{SnapSizeToPixel, ToPixelSnappedRect};
 pub const RULE_NONZERO: WindRule = WindRule::RULE_NONZERO;
 
 pub mod gfx {
-    pub use crate::gfx_ext::{OutsetsF, Rect, RectF, ToRoundedVector2d, TransposeSize};
+    pub use crate::gfx_ext::{
+        OutsetsF, Rect, RectF, ToEnclosingRect, ToRoundedVector2d, TransposeSize,
+    };
     pub use crate::gfx_quad_f::QuadF;
     pub use crate::gfx_transform::Transform;
     pub use foundation_base::gfx_geometry::*;

@@ -432,8 +432,7 @@ fn PollParserStyleSheets(
                         } else {
                             response.final_url.clone()
                         };
-                        let mut trace =
-                            browser_tracing::span("loading", "ParseExternalStyleSheet");
+                        let mut trace = browser_tracing::span("loading", "ParseExternalStyleSheet");
                         trace.set("owner_node", owner_node as f64);
                         trace.set("bytes", response.body.len() as f64);
                         let css = DecodeText(&response)?;

@@ -5,10 +5,9 @@ edition = "2021"
 build = "build.rs"
 
 [dependencies]
-executor = { path = "../executor" }
-browser_tracing = { path = "../tracing" }
+compositor_core = { package = "compositor", path = "../compositor" }
+foundation = { package = "layoutng_foundation", path = "../foundation" }
 image_resource = { path = "../image_resource" }
-layer_tile = { path = "../layer_tile" }
 layoutng_assembly = { path = "../layoutng_assembly" }
 paint = { path = "../paint", features = ["translation_in_progress"] }
 skia = { path = "../skia" }

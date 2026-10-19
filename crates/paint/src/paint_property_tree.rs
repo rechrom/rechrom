@@ -5,20 +5,22 @@
 //! not compositor layer trees. Numeric IDs are dump-local labels; reference
 //! equality, as in Blink, determines whether states share property nodes.
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicI32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 
+use crate::paint_clip_path::PaintClipPath;
+use crate::property_filter_operations::PropertyFilterOperations;
 use crate::PaintRect;
 use layoutng_assembly::fragment_tree::StickyPositionPaintData;
-use layoutng_assembly::internal::layout_input::{
-    Offset, PaintClipPathChild, PaintPathCommand, TransformMatrix,
-};
-use layoutng_assembly::internal::paint_input::{
-    PaintBlendMode, PaintCornerRadii, PaintFilterOperation,
-};
+pub use layoutng_assembly::internal::layout_input::OverscrollBehavior as NativeOverscrollBehavior;
+use layoutng_assembly::internal::layout_input::{Offset, TransformMatrix};
+pub use layoutng_assembly::internal::paint_input::PaintBlendMode;
+use layoutng_assembly::internal::paint_input::PaintCornerRadii;
 
 /// Source: paint_property_node.h. Composited-value downgrades are deliberately
 /// absent from the standalone builder: it does not directly update cc nodes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
 pub enum PaintPropertyChangeType {
     #[default]
     Unchanged,
@@ -33,7 +35,70 @@ pub enum PaintPropertyChangeType {
 /// Its allocation, rather than a client hash or dump ID, defines identity.
 #[derive(Debug)]
 pub struct PaintPropertyNodeIdentity {
+    // Chromium: third_party/blink/renderer/platform/graphics/paint/
+    // paint_property_node.h:91-97,228-230. The pair is one mutable cache slot
+    // on the actual Paint property node, keyed by the cc property-tree
+    // sequence. Packing both i32 values makes concurrent readers observe one
+    // complete source state without adding a compositor-owned side table.
+    cc_sequence_and_node_id: AtomicU64,
+    // Chromium: paint_property_node.h:191-230. These are mutable members of
+    // the resident Paint node even when the property state is reached through
+    // a const PaintArtifact. Keeping them on the persistent identity allocation
+    // preserves that ownership across immutable Rust value revisions.
+    changed: AtomicU8,
+    changed_sequence_number: AtomicI32,
     _private: (),
+}
+
+impl PaintPropertyNodeIdentity {
+    const INVALID_CC_NODE_ID: i32 = -1;
+
+    fn pack_cc_mapping(sequence_number: i32, node_id: i32) -> u64 {
+        ((sequence_number as u32 as u64) << 32) | node_id as u32 as u64
+    }
+
+    fn cc_node_id(&self, sequence_number: i32) -> i32 {
+        let mapping = self.cc_sequence_and_node_id.load(Ordering::Relaxed);
+        let mapped_sequence = (mapping >> 32) as u32 as i32;
+        if mapped_sequence == sequence_number {
+            mapping as u32 as i32
+        } else {
+            Self::INVALID_CC_NODE_ID
+        }
+    }
+
+    fn set_cc_node_id(&self, sequence_number: i32, node_id: i32) {
+        self.cc_sequence_and_node_id.store(
+            Self::pack_cc_mapping(sequence_number, node_id),
+            Ordering::Relaxed,
+        );
+    }
+
+    fn node_changed(&self) -> PaintPropertyChangeType {
+        match self.changed.load(Ordering::Relaxed) {
+            0 => PaintPropertyChangeType::Unchanged,
+            1 => PaintPropertyChangeType::ChangedOnlyCompositedValues,
+            2 => PaintPropertyChangeType::ChangedOnlySimpleValues,
+            3 => PaintPropertyChangeType::ChangedOnlyValues,
+            4 => PaintPropertyChangeType::NodeAddedOrRemoved,
+            _ => unreachable!("PaintPropertyChangeType is a bounded enum"),
+        }
+    }
+
+    fn add_changed(&self, changed: PaintPropertyChangeType) {
+        self.changed.fetch_max(changed as u8, Ordering::Relaxed);
+    }
+
+    fn clear_changed(&self, sequence_number: i32) {
+        debug_assert_ne!(
+            self.changed_sequence_number.load(Ordering::Relaxed),
+            sequence_number
+        );
+        self.changed
+            .store(PaintPropertyChangeType::Unchanged as u8, Ordering::Relaxed);
+        self.changed_sequence_number
+            .store(sequence_number, Ordering::Relaxed);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -45,7 +110,17 @@ pub struct PaintPropertyNodeLifecycle {
 impl Default for PaintPropertyNodeLifecycle {
     fn default() -> Self {
         Self {
-            identity: Arc::new(PaintPropertyNodeIdentity { _private: () }),
+            identity: Arc::new(PaintPropertyNodeIdentity {
+                cc_sequence_and_node_id: AtomicU64::new(
+                    PaintPropertyNodeIdentity::pack_cc_mapping(
+                        0,
+                        PaintPropertyNodeIdentity::INVALID_CC_NODE_ID,
+                    ),
+                ),
+                changed: AtomicU8::new(PaintPropertyChangeType::NodeAddedOrRemoved as u8),
+                changed_sequence_number: AtomicI32::new(0),
+                _private: (),
+            }),
             revision: 0,
             changed: PaintPropertyChangeType::NodeAddedOrRemoved,
         }
@@ -60,18 +135,42 @@ impl PaintPropertyNodeLifecycle {
     pub fn same_node(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.identity, &other.identity)
     }
+    pub fn cc_node_id(&self, sequence_number: i32) -> i32 {
+        self.identity.cc_node_id(sequence_number)
+    }
+    pub fn set_cc_node_id(&self, sequence_number: i32, node_id: i32) {
+        self.identity.set_cc_node_id(sequence_number, node_id);
+    }
     fn root() -> Self {
-        Self {
+        let result = Self {
             changed: PaintPropertyChangeType::Unchanged,
             ..Self::default()
-        }
+        };
+        result
+            .identity
+            .changed
+            .store(PaintPropertyChangeType::Unchanged as u8, Ordering::Relaxed);
+        result
     }
     fn updated(&self, changed: PaintPropertyChangeType) -> Self {
+        self.identity.add_changed(changed);
         Self {
             identity: self.identity.clone(),
             revision: self.revision + u64::from(changed != PaintPropertyChangeType::Unchanged),
             changed,
         }
+    }
+
+    pub fn node_changed(&self) -> PaintPropertyChangeType {
+        self.identity.node_changed()
+    }
+    pub fn changed_sequence_number(&self) -> i32 {
+        self.identity
+            .changed_sequence_number
+            .load(Ordering::Relaxed)
+    }
+    pub fn clear_changed(&self, sequence_number: i32) {
+        self.identity.clear_changed(sequence_number);
     }
 }
 
@@ -85,6 +184,12 @@ pub enum PaintBackfaceVisibility {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransformPaintPropertyNode {
+    /// Source: transform_paint_property_node.h:110-134. These remain source
+    /// state fields even when a feature does not populate them on this node.
+    pub compositor: TransformCompositorState,
+    /// Source: transform_paint_property_node.h:472-485. Owns only the lazy
+    /// native cache allocation; cloning a node starts a new empty cache slot.
+    pub geometry_mapper_cache: crate::opaque_paint_cache_slot::OpaquePaintCacheSlot,
     pub lifecycle: PaintPropertyNodeLifecycle,
     pub id: u64,
     pub parent: Option<Arc<Self>>,
@@ -96,6 +201,9 @@ pub struct TransformPaintPropertyNode {
     pub rendering_context_id: u64,
     pub backface_visibility: PaintBackfaceVisibility,
     pub scroll: Option<Arc<ScrollPaintPropertyNode>>,
+    /// Source: transform_paint_property_node.h:221-223. A fixed/overscroll
+    /// paint-offset node can select a non-ancestor native scroll translation.
+    pub scroll_parent_scroll_translation: Option<Arc<TransformPaintPropertyNode>>,
     /// Layout's immutable sticky geometry. The compositor resolves its scroll
     /// and ancestor identities through the property chain when applying an
     /// impl-side scroll delta.
@@ -104,26 +212,154 @@ pub struct TransformPaintPropertyNode {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct TransformCompositorState {
+    pub sticky_constraint: Option<PaintCompositorStickyConstraint>,
+    pub compositor_element_id: foundation::CompositorElementId,
+    pub visible_frame_element_id: foundation::CompositorElementId,
+    pub in_subtree_of_page_scale: bool,
+    pub animation_is_axis_aligned: bool,
+    pub is_frame_paint_offset_translation: bool,
+    pub is_for_svg_child: bool,
+    pub anchor_position_scroll_data: Option<PaintAnchorPositionScrollData>,
+}
+impl Default for TransformCompositorState {
+    fn default() -> Self {
+        Self {
+            sticky_constraint: None,
+            compositor_element_id: Default::default(),
+            visible_frame_element_id: Default::default(),
+            in_subtree_of_page_scale: true,
+            animation_is_axis_aligned: false,
+            is_frame_paint_offset_translation: false,
+            is_for_svg_child: false,
+            anchor_position_scroll_data: None,
+        }
+    }
+}
+/// Source value: cc/trees/sticky_position_constraint.h:23-68. Paint owns the
+/// builder's produced compositor constraint, distinct from Layout constraints.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PaintCompositorStickyConstraint {
+    pub anchored: [bool; 4],
+    pub offsets: [f32; 4],
+    pub constraint_box_rect: PaintRect,
+    pub sticky_box_rect: PaintRect,
+    pub containing_block_rect: PaintRect,
+    pub pixel_snap_offset: [f32; 2],
+    pub x_scroll_ancestor: foundation::CompositorElementId,
+    pub y_scroll_ancestor: foundation::CompositorElementId,
+    pub nearest_shifting_sticky_box: foundation::CompositorElementId,
+    pub nearest_shifting_containing_block: foundation::CompositorElementId,
+}
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PaintAnchorPositionScrollData {
+    pub adjustment_container_ids: Vec<foundation::CompositorElementId>,
+    pub accumulated_scroll_origin: [i32; 2],
+    pub needs_scroll_adjustment_in_x: bool,
+    pub needs_scroll_adjustment_in_y: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ClipPaintPropertyNode {
+    /// Source: clip_paint_property_node.h:249-258.
+    pub geometry_mapper_cache: crate::opaque_paint_cache_slot::OpaquePaintCacheSlot,
+    /// Source: clip_paint_property_node.h:88-125,188-217. Layout and paint
+    /// clips are distinct source values, including compositor animation bounds.
+    pub layout_clip_rects: ClipLayoutRects,
     pub lifecycle: PaintPropertyNodeLifecycle,
     pub id: u64,
     pub parent: Option<Arc<Self>>,
     pub local_transform_space: Arc<TransformPaintPropertyNode>,
     pub rect: Option<PaintRect>,
     pub radii: PaintCornerRadii,
-    pub clip_path: Vec<PaintPathCommand>,
-    /// A valid zero-command path clips everything; absence of a path does not.
-    pub clip_path_is_empty: bool,
-    pub clip_path_children: Vec<PaintClipPathChild>,
-    pub clip_path_even_odd: bool,
+    /// None is no path clip. A present native empty path clips everything.
+    /// SVG children retain their own fill rules in the native shape owner.
+    pub clip_path: Option<Arc<PaintClipPath>>,
     pub clip_path_error: Option<String>,
     /// UpdatePixelMovingFilterClipExpander retains the filter whose input
     /// bounds must be expanded; an infinite rect alone loses this relationship.
     pub pixel_moving_filter: Option<Arc<EffectPaintPropertyNode>>,
 }
 
+impl ClipPaintPropertyNode {
+    /// Source: clip_paint_property_node.h:88-99,110-125. Normal native clip
+    /// creation supplies equal precise/paint input until the builder supplies
+    /// its unsnapped layout value or an explicit animation expansion.
+    pub fn with_layout_clips(mut self) -> Self {
+        self.layout_clip_rects =
+            ClipLayoutRects::new(self.rect, self.radii.HasRadius(), None, None);
+        self
+    }
+    pub fn with_layout_clip_values(
+        mut self,
+        precise: Option<PaintRect>,
+        expanded: Option<PaintRect>,
+        excluding_overlay: Option<PaintRect>,
+    ) -> Self {
+        self.layout_clip_rects =
+            ClipLayoutRects::new(precise, self.radii.HasRadius(), expanded, excluding_overlay);
+        self
+    }
+    pub fn clip_path_child_count(&self) -> usize {
+        self.clip_path
+            .as_ref()
+            .map_or(0, |shape| shape.paths().len())
+    }
+    pub fn single_clip_path(&self) -> Option<&skia::include::core::SkPath::SkPath> {
+        self.clip_path.as_ref()?.single_path().map(Arc::as_ref)
+    }
+    pub fn clip_path_verb_count(&self) -> usize {
+        self.clip_path.as_ref().map_or(0, |shape| {
+            shape.paths().iter().map(|p| p.verbs().len()).sum()
+        })
+    }
+}
+
+/// Source: clip_paint_property_node.h:110-125,188-217. None is the source
+/// infinite FloatClipRect sentinel; each optional overlay rect is unrounded.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ClipLayoutRect {
+    pub rect: Option<PaintRect>,
+    pub has_radius: bool,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ClipLayoutRects {
+    pub precise: ClipLayoutRect,
+    pub expanded: ClipLayoutRect,
+    pub excluding_overlay: Option<ClipLayoutRect>,
+}
+impl ClipLayoutRects {
+    pub fn new(
+        precise: Option<PaintRect>,
+        rounded: bool,
+        expanded: Option<PaintRect>,
+        excluding_overlay: Option<PaintRect>,
+    ) -> Self {
+        Self {
+            precise: ClipLayoutRect {
+                rect: precise,
+                has_radius: rounded,
+            },
+            expanded: ClipLayoutRect {
+                rect: expanded.or(precise),
+                has_radius: rounded && expanded.is_none(),
+            },
+            excluding_overlay: excluding_overlay.map(|rect| ClipLayoutRect {
+                rect: Some(rect),
+                has_radius: false,
+            }),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectPaintPropertyNode {
+    pub compositor: EffectCompositorState,
+    /// Source: effect_paint_property_node.h:78-95,261-264.
+    pub backdrop_filter_bounds: Option<Arc<skia::include::core::SkPath::SkPath>>,
+    /// Source: effect_paint_property_node.h:427-429; builder.cc:2263-2264,
+    /// 2493-2498,2690-2691. The producer publishes inherited participation.
+    pub self_or_ancestor_participates_in_view_transition: bool,
     pub lifecycle: PaintPropertyNodeLifecycle,
     pub id: u64,
     pub parent: Option<Arc<Self>>,
@@ -140,10 +376,10 @@ pub struct EffectPaintPropertyNode {
     pub filter_reference_scale: f64,
     pub opacity: f32,
     pub blend_mode: PaintBlendMode,
-    pub filters: Vec<PaintFilterOperation>,
+    pub filters: PropertyFilterOperations,
     /// Filters applied to pixels already present in the parent render target.
     /// They are never folded into the foreground `filters` chain.
-    pub backdrop_filters: Vec<PaintFilterOperation>,
+    pub backdrop_filters: PropertyFilterOperations,
     pub backdrop_filter_has_reference: bool,
     /// Border-box backdrop output clip. It is separate from `output_clip` so
     /// foreground descendants keep their ordinary overflow semantics.
@@ -157,8 +393,56 @@ pub struct EffectPaintPropertyNode {
     pub direct_compositing_reasons: Vec<&'static str>,
 }
 
+/// Source: effect_paint_property_node.h:150-178. Value fields belong to the
+/// published node, not a compositor-side registry or inferred feature flags.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EffectCompositorState {
+    /// Source: effect_paint_property_node.h:66-75. The producer's reference
+    /// filter output rectangle; absent when this state owns no FilterInfo.
+    pub filter_output_bounds: Option<PaintRect>,
+    pub has_filter_info: bool,
+    pub has_backdrop_filter_info: bool,
+    pub compositor_element_id: foundation::CompositorElementId,
+    pub backdrop_mask_element_id: foundation::CompositorElementId,
+    pub view_transition_element_resource_id: Option<([u64; 2], u32, bool)>,
+    pub restriction_target_id: [u64; 2],
+    pub needs_effect_for_2d_scale_transform: bool,
+    pub is_in_drawable_canvas_subtree: bool,
+    pub canvas_child_state: Option<Arc<PaintCanvasChildState>>,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaintCanvasChildState {
+    pub id: i32,
+    pub reference_box_offset: Offset,
+    pub content_state: PropertyTreeState,
+}
+
+impl EffectPaintPropertyNode {
+    /// Current producer publishes FilterInfo only at its actual nonempty filter
+    /// construction sites; retain this ownership fact on the published node.
+    pub fn with_filter_presence(mut self) -> Self {
+        self.compositor.has_filter_info = !self.filters.is_empty();
+        self.compositor.has_backdrop_filter_info = !self.backdrop_filters.is_empty();
+        self
+    }
+    pub fn with_inherited_view_transition(mut self) -> Self {
+        self.self_or_ancestor_participates_in_view_transition |= self
+            .parent
+            .as_ref()
+            .is_some_and(|parent| parent.self_or_ancestor_participates_in_view_transition);
+        self
+    }
+    /// Used by the producer creating a participating view-transition effect;
+    /// descendants subsequently inherit this same source-owned value.
+    pub fn with_view_transition_participation(mut self, participates: bool) -> Self {
+        self.self_or_ancestor_participates_in_view_transition = participates;
+        self.with_inherited_view_transition()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScrollPaintPropertyNode {
+    pub compositor: ScrollCompositorState,
     pub lifecycle: PaintPropertyNodeLifecycle,
     pub id: u64,
     /// Stable native owner identity used to connect Layout's sticky scroll
@@ -172,6 +456,51 @@ pub struct ScrollPaintPropertyNode {
     pub maximum_scroll_offset: Offset,
     pub user_scrollable_horizontal: bool,
     pub user_scrollable_vertical: bool,
+}
+// Source: scroll_paint_property_node.h:52-83. Native optional/feature fields
+// stay on the producer node and retain their constructor defaults until set.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScrollCompositorState {
+    pub compositor_element_id: foundation::CompositorElementId,
+    pub prevent_scroll_axis_locking: bool,
+    pub prevent_viewport_scrolling_from_inner: bool,
+    pub max_scroll_offset_affected_by_page_scale: bool,
+    pub composited_scrolling_preference: PaintCompositedScrollingPreference,
+    pub main_thread_repaint_reasons: u8,
+    pub overscroll_behavior: [layoutng_assembly::internal::layout_input::OverscrollBehavior; 2],
+    pub scrolling_contents_cull_rect: PaintRect,
+    /// The producer queried scroll-snap state and proved that no native
+    /// SnapContainerData exists. False means a non-none snap payload is still
+    /// required before this node can enter cc.
+    pub snap_container_data_absent: bool,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaintCompositedScrollingPreference {
+    #[default]
+    Default,
+    Preferred,
+    NotPreferred,
+}
+impl Default for ScrollCompositorState {
+    fn default() -> Self {
+        let r = foundation::infinite_int_rect::InfiniteIntRect();
+        Self {
+            compositor_element_id: Default::default(),
+            prevent_scroll_axis_locking: false,
+            prevent_viewport_scrolling_from_inner: false,
+            max_scroll_offset_affected_by_page_scale: false,
+            composited_scrolling_preference: Default::default(),
+            main_thread_repaint_reasons: 0,
+            overscroll_behavior: [Default::default(); 2],
+            scrolling_contents_cull_rect: PaintRect {
+                x: r.x() as f64,
+                y: r.y() as f64,
+                width: r.width() as f64,
+                height: r.height() as f64,
+            },
+            snap_container_data_absent: false,
+        }
+    }
 }
 
 /// Complete inherited state. Scroll is reached through transform.scroll,
@@ -210,6 +539,7 @@ impl Default for PropertyTreeState {
             // ScrollRoot is a sentinel, not a real scroll. Its nullable overflow
             // clip also avoids manufacturing a cyclic root clip relationship.
             let scroll = Arc::new(ScrollPaintPropertyNode {
+                compositor: Default::default(),
                 lifecycle: PaintPropertyNodeLifecycle::root(),
                 id: 0,
                 owner_client_id: 0,
@@ -223,6 +553,12 @@ impl Default for PropertyTreeState {
                 user_scrollable_vertical: false,
             });
             let transform = Arc::new(TransformPaintPropertyNode {
+                compositor: TransformCompositorState {
+                    in_subtree_of_page_scale: false,
+                    ..Default::default()
+                },
+                geometry_mapper_cache: Default::default(),
+                scroll_parent_scroll_translation: None,
                 lifecycle: PaintPropertyNodeLifecycle::root(),
                 id: 0,
                 parent: None,
@@ -235,39 +571,47 @@ impl Default for PropertyTreeState {
                 sticky_constraint: None,
                 direct_compositing_reasons: Vec::new(),
             });
-            let clip = Arc::new(ClipPaintPropertyNode {
-                lifecycle: PaintPropertyNodeLifecycle::root(),
-                id: 0,
-                parent: None,
-                local_transform_space: transform.clone(),
-                rect: None,
-                radii: PaintCornerRadii::default(),
-                clip_path: Vec::new(),
-                clip_path_children: Vec::new(),
-                clip_path_is_empty: false,
-                clip_path_even_odd: false,
-                clip_path_error: None,
-                pixel_moving_filter: None,
-            });
-            let effect = Arc::new(EffectPaintPropertyNode {
-                lifecycle: PaintPropertyNodeLifecycle::root(),
-                id: 0,
-                parent: None,
-                local_transform_space: transform.clone(),
-                output_clip: None,
-                filter_reference_box: None,
-                filter_reference_scale: 1.0,
-                opacity: 1.0,
-                blend_mode: PaintBlendMode::kNormal,
-                filters: Vec::new(),
-                backdrop_filters: Vec::new(),
-                backdrop_filter_has_reference: false,
-                backdrop_filter_clip: None,
-                isolates_blending: false,
-                has_mask: false,
-                is_mask: false,
-                direct_compositing_reasons: Vec::new(),
-            });
+            let clip = Arc::new(
+                ClipPaintPropertyNode {
+                    geometry_mapper_cache: Default::default(),
+                    layout_clip_rects: Default::default(),
+                    lifecycle: PaintPropertyNodeLifecycle::root(),
+                    id: 0,
+                    parent: None,
+                    local_transform_space: transform.clone(),
+                    rect: None,
+                    radii: PaintCornerRadii::default(),
+                    clip_path: None,
+                    clip_path_error: None,
+                    pixel_moving_filter: None,
+                }
+                .with_layout_clips(),
+            );
+            let effect = Arc::new(
+                EffectPaintPropertyNode {
+                    compositor: Default::default(),
+                    backdrop_filter_bounds: None,
+                    self_or_ancestor_participates_in_view_transition: false,
+                    lifecycle: PaintPropertyNodeLifecycle::root(),
+                    id: 0,
+                    parent: None,
+                    local_transform_space: transform.clone(),
+                    output_clip: None,
+                    filter_reference_box: None,
+                    filter_reference_scale: 1.0,
+                    opacity: 1.0,
+                    blend_mode: PaintBlendMode::kNormal,
+                    filters: Default::default(),
+                    backdrop_filters: Default::default(),
+                    backdrop_filter_has_reference: false,
+                    backdrop_filter_clip: None,
+                    isolates_blending: false,
+                    has_mask: false,
+                    is_mask: false,
+                    direct_compositing_reasons: Vec::new(),
+                }
+                .with_inherited_view_transition(),
+            );
             PropertyTreeState {
                 transform,
                 clip,
@@ -378,9 +722,7 @@ impl PaintPropertyTrees {
         self.scrolls_by_identity
             .get(&Self::identity(&node.lifecycle))
     }
-    pub fn transform_snapshots(
-        &self,
-    ) -> impl Iterator<Item = &Arc<TransformPaintPropertyNode>> {
+    pub fn transform_snapshots(&self) -> impl Iterator<Item = &Arc<TransformPaintPropertyNode>> {
         self.transforms_by_identity.values()
     }
     pub fn clip_snapshots(&self) -> impl Iterator<Item = &Arc<ClipPaintPropertyNode>> {
@@ -446,6 +788,9 @@ impl PaintPropertyTrees {
         }
         if let Some(scroll) = &node.scroll {
             self.add_scroll(scroll);
+        }
+        if let Some(parent) = &node.scroll_parent_scroll_translation {
+            self.add_transform(parent);
         }
     }
     fn add_clip(&mut self, node: &Arc<ClipPaintPropertyNode>) {
@@ -559,6 +904,23 @@ impl Default for PaintPropertyNodeStore {
     }
 }
 impl PaintPropertyNodeStore {
+    pub(crate) fn compositor_scroll_translations(
+        &self,
+    ) -> impl Iterator<Item = &Arc<TransformPaintPropertyNode>> {
+        self.transforms.iter().filter_map(|(key, node)| {
+            (key.role == PaintPropertyRole::ScrollTranslation).then_some(node)
+        })
+    }
+    pub(crate) fn layout_view_scroll_translation(
+        &self,
+        client: u64,
+        fragment: u32,
+    ) -> Option<&Arc<TransformPaintPropertyNode>> {
+        self.transforms.get(&PaintPropertyKey {
+            owner: PaintPropertyOwner::NativeFragment { client, fragment },
+            role: PaintPropertyRole::ScrollTranslation,
+        })
+    }
     /// The real recording coordinate anchors, indexed by the same native
     /// owner/role slots used by the property builder. No new layer identity.
     pub(crate) fn scroll_offsets(&self) -> BTreeMap<PaintPropertyOwner, Offset> {
@@ -929,6 +1291,10 @@ impl RetainedScrollSnapshotRebinder {
         }
         let parent = input.parent.as_ref().map(|parent| self.transform(parent));
         let scroll = input.scroll.as_ref().map(|scroll| self.scroll(scroll));
+        let scroll_parent = input
+            .scroll_parent_scroll_translation
+            .as_ref()
+            .map(|parent| self.transform(parent));
         let (matrix, sticky_constraint) = self
             .translations
             .get(&PaintPropertyTrees::identity(&input.lifecycle))
@@ -938,6 +1304,7 @@ impl RetainedScrollSnapshotRebinder {
             && sticky_constraint == input.sticky_constraint
             && same_snapshot_option(&parent, &input.parent)
             && same_snapshot_option(&scroll, &input.scroll)
+            && same_snapshot_option(&scroll_parent, &input.scroll_parent_scroll_translation)
             && input.lifecycle.changed == PaintPropertyChangeType::Unchanged
         {
             input.clone()
@@ -953,6 +1320,9 @@ impl RetainedScrollSnapshotRebinder {
             // Clone only retained payloads. The old parent/cross-tree/lifecycle
             // references would otherwise be cloned and immediately overwritten.
             Arc::new(TransformPaintPropertyNode {
+                compositor: input.compositor.clone(),
+                geometry_mapper_cache: Default::default(),
+                scroll_parent_scroll_translation: scroll_parent,
                 lifecycle: input.lifecycle.updated(change),
                 id: input.id,
                 parent,
@@ -987,6 +1357,8 @@ impl RetainedScrollSnapshotRebinder {
             input.clone()
         } else {
             Arc::new(ClipPaintPropertyNode {
+                geometry_mapper_cache: Default::default(),
+                layout_clip_rects: input.layout_clip_rects,
                 lifecycle: input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
                 id: input.id,
                 parent,
@@ -994,9 +1366,6 @@ impl RetainedScrollSnapshotRebinder {
                 rect: input.rect,
                 radii: input.radii,
                 clip_path: input.clip_path.clone(),
-                clip_path_children: input.clip_path_children.clone(),
-                clip_path_is_empty: input.clip_path_is_empty,
-                clip_path_even_odd: input.clip_path_even_odd,
                 clip_path_error: input.clip_path_error.clone(),
                 pixel_moving_filter: filter,
             })
@@ -1024,6 +1393,10 @@ impl RetainedScrollSnapshotRebinder {
             input.clone()
         } else {
             Arc::new(EffectPaintPropertyNode {
+                compositor: input.compositor.clone(),
+                backdrop_filter_bounds: input.backdrop_filter_bounds.clone(),
+                self_or_ancestor_participates_in_view_transition: input
+                    .self_or_ancestor_participates_in_view_transition,
                 lifecycle: input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
                 id: input.id,
                 parent,
@@ -1059,6 +1432,7 @@ impl RetainedScrollSnapshotRebinder {
             input.clone()
         } else {
             Arc::new(ScrollPaintPropertyNode {
+                compositor: input.compositor.clone(),
                 lifecycle: input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
                 id: input.id,
                 owner_client_id: input.owner_client_id,
@@ -1109,6 +1483,10 @@ impl TransformPaintPropertyNode {
     fn same_snapshot_references(&self, other: &Self) -> bool {
         same_snapshot_option(&self.parent, &other.parent)
             && same_snapshot_option(&self.scroll, &other.scroll)
+            && same_snapshot_option(
+                &self.scroll_parent_scroll_translation,
+                &other.scroll_parent_scroll_translation,
+            )
     }
 }
 impl ClipPaintPropertyNode {
@@ -1153,6 +1531,11 @@ fn transform_state_change(
     use PaintPropertyChangeType::*;
     if !same_optional(&a.parent, &b.parent, |n| &n.lifecycle)
         || !same_optional(&a.scroll, &b.scroll, |n| &n.lifecycle)
+        || !same_optional(
+            &a.scroll_parent_scroll_translation,
+            &b.scroll_parent_scroll_translation,
+            |n| &n.lifecycle,
+        )
         || a.flattens_inherited_transform != b.flattens_inherited_transform
         || a.rendering_context_id != b.rendering_context_id
         || a.backface_visibility != b.backface_visibility
@@ -1188,10 +1571,8 @@ fn clip_state_change(
             .same_node(&b.local_transform_space.lifecycle)
         && a.rect == b.rect
         && a.radii == b.radii
+        && a.layout_clip_rects == b.layout_clip_rects
         && a.clip_path == b.clip_path
-        && a.clip_path_is_empty == b.clip_path_is_empty
-        && a.clip_path_children == b.clip_path_children
-        && a.clip_path_even_odd == b.clip_path_even_odd
         && a.clip_path_error == b.clip_path_error
         && same_optional(&a.pixel_moving_filter, &b.pixel_moving_filter, |n| {
             &n.lifecycle
@@ -1219,12 +1600,16 @@ fn effect_state_change(
         || a.filter_reference_scale != b.filter_reference_scale
         || a.backdrop_filters != b.backdrop_filters
         || a.backdrop_filter_has_reference != b.backdrop_filter_has_reference
+        || a.backdrop_filter_bounds != b.backdrop_filter_bounds
+        || a.compositor != b.compositor
         || !same_optional(&a.backdrop_filter_clip, &b.backdrop_filter_clip, |n| {
             &n.lifecycle
         })
         || a.isolates_blending != b.isolates_blending
         || a.has_mask != b.has_mask
         || a.is_mask != b.is_mask
+        || a.self_or_ancestor_participates_in_view_transition
+            != b.self_or_ancestor_participates_in_view_transition
         || a.direct_compositing_reasons != b.direct_compositing_reasons
     {
         return ChangedOnlyValues;
@@ -1325,6 +1710,10 @@ impl PropertyNodeUpdater<'_> {
         let mut node = (**input).clone();
         node.parent = node.parent.as_ref().map(|p| self.transform(p));
         node.scroll = node.scroll.as_ref().map(|s| self.scroll(s));
+        node.scroll_parent_scroll_translation = node
+            .scroll_parent_scroll_translation
+            .as_ref()
+            .map(|s| self.transform(s));
         let node = update_snapshot!(self, node, old, transform_state_change, transforms);
         self.transforms.insert(input.id, node.clone());
         node
@@ -1404,25 +1793,27 @@ mod retained_scroll_update_tests {
     #[test]
     fn clearing_resident_states_includes_nodes_without_native_owner_slots() {
         let root = PropertyTreeState::default();
-        let clip = Arc::new(ClipPaintPropertyNode {
-            lifecycle: Default::default(),
-            id: 17,
-            parent: Some(root.clip.clone()),
-            local_transform_space: root.transform.clone(),
-            rect: Some(PaintRect {
-                x: 2.0,
-                y: 3.0,
-                width: 40.0,
-                height: 50.0,
-            }),
-            radii: Default::default(),
-            clip_path: Vec::new(),
-            clip_path_children: Vec::new(),
-            clip_path_is_empty: false,
-            clip_path_even_odd: false,
-            clip_path_error: None,
-            pixel_moving_filter: None,
-        });
+        let clip = Arc::new(
+            ClipPaintPropertyNode {
+                geometry_mapper_cache: Default::default(),
+                layout_clip_rects: Default::default(),
+                lifecycle: Default::default(),
+                id: 17,
+                parent: Some(root.clip.clone()),
+                local_transform_space: root.transform.clone(),
+                rect: Some(PaintRect {
+                    x: 2.0,
+                    y: 3.0,
+                    width: 40.0,
+                    height: 50.0,
+                }),
+                radii: Default::default(),
+                clip_path: None,
+                clip_path_error: None,
+                pixel_moving_filter: None,
+            }
+            .with_layout_clips(),
+        );
         let mut state = PropertyTreeState { clip, ..root };
         let mut store = PaintPropertyNodeStore::default();
         let keys = BTreeMap::new();
@@ -1465,6 +1856,7 @@ mod retained_scroll_update_tests {
         let clean =
             || PaintPropertyNodeLifecycle::default().updated(PaintPropertyChangeType::Unchanged);
         let scroll = Arc::new(ScrollPaintPropertyNode {
+            compositor: Default::default(),
             id: 1,
             owner_client_id: 42,
             lifecycle: clean(),
@@ -1478,6 +1870,9 @@ mod retained_scroll_update_tests {
             user_scrollable_vertical: true,
         });
         let translation = Arc::new(TransformPaintPropertyNode {
+            compositor: Default::default(),
+            geometry_mapper_cache: Default::default(),
+            scroll_parent_scroll_translation: None,
             id: 2,
             lifecycle: clean(),
             parent: Some(root.transform.clone()),
@@ -1491,6 +1886,9 @@ mod retained_scroll_update_tests {
             direct_compositing_reasons: Vec::new(),
         });
         let child = Arc::new(TransformPaintPropertyNode {
+            compositor: Default::default(),
+            geometry_mapper_cache: Default::default(),
+            scroll_parent_scroll_translation: None,
             id: 3,
             lifecycle: clean(),
             parent: Some(translation.clone()),
@@ -1503,40 +1901,48 @@ mod retained_scroll_update_tests {
             sticky_constraint: None,
             direct_compositing_reasons: Vec::new(),
         });
-        let clip = Arc::new(ClipPaintPropertyNode {
-            id: 4,
-            lifecycle: clean().updated(PaintPropertyChangeType::ChangedOnlyValues),
-            parent: Some(root.clip.clone()),
-            local_transform_space: child.clone(),
-            rect: None,
-            radii: PaintCornerRadii::default(),
-            clip_path: Vec::new(),
-            clip_path_children: Vec::new(),
-            clip_path_is_empty: false,
-            clip_path_even_odd: false,
-            clip_path_error: None,
-            pixel_moving_filter: None,
-        });
-        let effect = Arc::new(EffectPaintPropertyNode {
-            id: 5,
-            lifecycle: clean(),
-            parent: Some(root.effect.clone()),
-            local_transform_space: child.clone(),
-            output_clip: Some(clip.clone()),
-            filter_reference_box: None,
-            filter_reference_scale: 1.0,
-            opacity: 0.5,
-            blend_mode: PaintBlendMode::kNormal,
-            filters: Vec::new(),
-            backdrop_filters: Vec::new(),
-            backdrop_filter_has_reference: false,
-            backdrop_filter_clip: None,
-            isolates_blending: false,
-            has_mask: false,
-            is_mask: false,
-            direct_compositing_reasons: Vec::new(),
-        });
+        let clip = Arc::new(
+            ClipPaintPropertyNode {
+                geometry_mapper_cache: Default::default(),
+                layout_clip_rects: Default::default(),
+                id: 4,
+                lifecycle: clean().updated(PaintPropertyChangeType::ChangedOnlyValues),
+                parent: Some(root.clip.clone()),
+                local_transform_space: child.clone(),
+                rect: None,
+                radii: PaintCornerRadii::default(),
+                clip_path: None,
+                clip_path_error: None,
+                pixel_moving_filter: None,
+            }
+            .with_layout_clips(),
+        );
+        let effect = Arc::new(
+            EffectPaintPropertyNode {
+                compositor: Default::default(),
+                self_or_ancestor_participates_in_view_transition: false,
+                id: 5,
+                lifecycle: clean(),
+                parent: Some(root.effect.clone()),
+                local_transform_space: child.clone(),
+                output_clip: Some(clip.clone()),
+                filter_reference_box: None,
+                filter_reference_scale: 1.0,
+                opacity: 0.5,
+                blend_mode: PaintBlendMode::kNormal,
+                filters: Default::default(),
+                backdrop_filters: Default::default(),
+                backdrop_filter_has_reference: false,
+                backdrop_filter_clip: None,
+                isolates_blending: false,
+                has_mask: false,
+                is_mask: false,
+                direct_compositing_reasons: Vec::new(),
+            }
+            .with_inherited_view_transition(),
+        );
         let secondary_scroll = Arc::new(ScrollPaintPropertyNode {
+            compositor: Default::default(),
             id: 6,
             owner_client_id: 43,
             lifecycle: clean(),
@@ -1706,6 +2112,9 @@ mod retained_scroll_update_tests {
             ..Default::default()
         };
         let sticky_node = Arc::new(TransformPaintPropertyNode {
+            compositor: Default::default(),
+            geometry_mapper_cache: Default::default(),
+            scroll_parent_scroll_translation: None,
             id: 7,
             parent: Some(child.clone()),
             sticky_constraint: Some(constraint),

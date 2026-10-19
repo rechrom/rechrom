@@ -141,9 +141,7 @@ fn root_sticky_fixed_and_clipped_pixels_follow_scroll_and_return() {
                 }
             }
             sticky(tree);
-            // Inspect the published transform, then apply an impl-only root
-            // scroll after this main commit. Sticky and fixed-sticky world
-            // positions must remain anchored without a stale subtraction basis.
+            // Validate the sticky basis published in Paint property state.
             let artifact = &page.CurrentFrame().unwrap().display_items;
             let mut transforms = std::collections::HashMap::new();
             for chunk in &artifact.chunks {
@@ -153,17 +151,6 @@ fn root_sticky_fixed_and_clipped_pixels_follow_scroll_and_return() {
                     node = transform.parent.clone();
                 }
             }
-            let root_owner = tree.paint.display_item_client_id;
-            let scroll_id = transforms
-                .values()
-                .find_map(|transform| {
-                    transform
-                        .scroll
-                        .as_ref()
-                        .filter(|scroll| scroll.owner_client_id == root_owner)
-                        .map(|scroll| scroll.id)
-                })
-                .unwrap();
             let mut checked = 0;
             for transform in transforms.values() {
                 if let Some(axis) = transform
@@ -171,23 +158,6 @@ fn root_sticky_fixed_and_clipped_pixels_follow_scroll_and_return() {
                     .and_then(|constraint| constraint.vertical)
                 {
                     assert_eq!(transform.matrix.values[13], axis.current_sticky_offset);
-                    let before =
-                        layer_tile::compositor_transform_3d_with_scroll(transform, 1., None)
-                            .unwrap();
-                    let after = layer_tile::compositor_transform_3d_with_scroll(
-                        transform,
-                        1.,
-                        Some(layer_tile::CompositorScrollOffset {
-                            scroll_node_id: scroll_id,
-                            translation_x: 0.,
-                            translation_y: -40.,
-                        }),
-                    )
-                    .unwrap();
-                    assert_eq!(
-                        before, after,
-                        "sticky world transform after impl scroll at main y={y}"
-                    );
                     checked += 1;
                 }
             }

@@ -130,6 +130,66 @@ impl PaintLayerScrollableArea {
         self.box_.Get()
     }
 
+    // Source: third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc:588-618.
+    pub fn BackgroundNeedsRepaintOnScroll(&self) -> bool {
+        let box_ = unsafe { &*self.GetLayoutBox() };
+        let location = box_.GetBackgroundPaintLocation();
+        let in_border_box = location & super::layout_object::kBackgroundPaintInBorderBoxSpace != 0;
+        let in_contents = location & super::layout_object::kBackgroundPaintInContentsSpace != 0;
+        let layers = box_.StyleRef().BackgroundLayers();
+        if layers.AnyLayerHasLocalAttachmentImage() && in_border_box {
+            return true;
+        }
+        if layers.AnyLayerHasDefaultAttachmentImage() && in_contents {
+            return true;
+        }
+        if layers.AnyLayerHasLocalAttachment()
+            && layers.AnyLayerUsesContentBox()
+            && in_border_box
+            && !box_.PaddingOutsets().IsZero()
+        {
+            return true;
+        }
+        false
+    }
+
+    // Source: third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc:2776-2797.
+    pub fn PrefersNonCompositedScrolling(&self) -> bool {
+        let box_ = unsafe { &*self.GetLayoutBox() };
+        if box_
+            .InputOwnerForLayout()
+            .InputPreferNonCompositedScrollingEnabled()
+        {
+            return true;
+        }
+        let node = box_.GetNode();
+        if !node.is_null() {
+            let node = unsafe { &*node };
+            if node.IsElementNode() {
+                let element = unsafe { &*(node as *const Node as *const Element) };
+                if element.GetElementType()
+                    == super::layout_node_metadata::ElementType::kHTMLSelectElement
+                {
+                    return true;
+                }
+            }
+            // Source: core/html/forms/text_control_element.cc:1271-1279.
+            // Native metadata preserves the actual UA shadow host allocation.
+            let host = node.OwnerShadowHost();
+            if !host.is_null()
+                && node.IsInUserAgentShadowRoot()
+                && unsafe { &*host }.GetElementType()
+                    == super::layout_node_metadata::ElementType::kHTMLInputElement
+            {
+                return true;
+            }
+        }
+        if box_.CanvasDrawElementEnabledForLayout() && box_.IsInCanvasSubtree() {
+            return true;
+        }
+        false
+    }
+
     // cpp: layoutng/internal/layout_scrollable_area.h:75-75
     // cpp: layoutng/internal/layout_scrollable_area.cc:285-287
     pub fn GetScrollOffset(&self) -> ScrollOffset {

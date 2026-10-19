@@ -290,3 +290,110 @@ mod tests {
         );
     }
 }
+
+// Source: ui/gfx/geometry/rect.cc:39-81,105-117;
+//         ui/gfx/geometry/rect.h:129-145.
+fn saturated_clamp_range(min: i32, max: i32) -> (i32, i32) {
+    if max < min {
+        return (min, 0);
+    }
+    let span = max.saturating_sub(min);
+    let loss = max.saturating_sub(min + span);
+    if loss == 0 {
+        return (min, span);
+    }
+    const LIMIT: u32 = i32::MAX as u32 / 2;
+    if max.unsigned_abs() < LIMIT {
+        (max - span, span)
+    } else if min.unsigned_abs() < LIMIT {
+        (min, span)
+    } else {
+        (min + loss / 2, span)
+    }
+}
+impl Rect {
+    pub fn SetByBounds(&mut self, left: i32, top: i32, right: i32, bottom: i32) {
+        let (x, w) = saturated_clamp_range(left, right);
+        let (y, h) = saturated_clamp_range(top, bottom);
+        self.origin = Point::new(x, y);
+        self.size = Size::new(w, h);
+    }
+}
+// Source: ui/gfx/geometry/rect_conversions.cc:32-42.
+pub fn ToEnclosingRect(r: RectF) -> Rect {
+    let left = r.x().floor() as i32;
+    let right = if r.width() != 0. {
+        r.right().ceil() as i32
+    } else {
+        left
+    };
+    let top = r.y().floor() as i32;
+    let bottom = if r.height() != 0. {
+        r.bottom().ceil() as i32
+    } else {
+        top
+    };
+    let mut result = Rect::default();
+    result.SetByBounds(left, top, right, bottom);
+    result
+}
+// Source: ui/gfx/geometry/rect_f.h:35-37; rect_f.cc:49-58;
+//         ui/gfx/geometry/insets_f.h and outsets_f.h symmetric value conversion.
+impl From<Rect> for RectF {
+    fn from(r: Rect) -> Self {
+        Self::new(
+            PointF::new(r.x() as f32, r.y() as f32),
+            SizeF::new(r.width() as f32, r.height() as f32),
+        )
+    }
+}
+impl RectF {
+    pub fn OutsetEdges(&mut self, outsets: OutsetsF) {
+        self.origin = PointF::new(self.x() - outsets.left(), self.y() - outsets.top());
+        self.size = SizeF::new(
+            self.width() - (-outsets.left() + -outsets.right()),
+            self.height() - (-outsets.top() + -outsets.bottom()),
+        );
+    }
+}
+
+impl Rect {
+    // Source: ui/gfx/geometry/rect.cc:119-123; Insets::TLBR scalar spelling.
+    pub fn InsetTLBR(&mut self, top: i32, left: i32, bottom: i32, right: i32) {
+        let (width, height) = (self.width(), self.height());
+        self.origin = Point::new(self.x().saturating_add(left), self.y().saturating_add(top));
+        self.set_width(width.saturating_sub(left.saturating_add(right)));
+        self.set_height(height.saturating_sub(top.saturating_add(bottom)));
+    }
+    // Source: ui/gfx/geometry/rect.cc:154-162.
+    pub fn Contains(&self, rect: Self) -> bool {
+        rect.x() >= self.x()
+            && rect.right() <= self.right()
+            && rect.y() >= self.y()
+            && rect.bottom() <= self.bottom()
+    }
+    pub fn Intersects(&self, rect: Self) -> bool {
+        !(self.IsEmpty()
+            || rect.IsEmpty()
+            || rect.x() >= self.right()
+            || rect.right() <= self.x()
+            || rect.y() >= self.bottom()
+            || rect.bottom() <= self.y())
+    }
+    // Source: ui/gfx/geometry/rect.cc:164-182.
+    pub fn Intersect(&mut self, rect: Self) {
+        if self.IsEmpty() || rect.IsEmpty() {
+            *self = Self::default();
+            return;
+        }
+        let left = self.x().max(rect.x());
+        let top = self.y().max(rect.y());
+        let right = self.right().min(rect.right());
+        let bottom = self.bottom().min(rect.bottom());
+        if left >= right || top >= bottom {
+            *self = Self::default();
+            return;
+        }
+        self.SetByBounds(left, top, right, bottom);
+    }
+}

@@ -294,7 +294,7 @@ fn clip_output(
                     .map_or(rect, |parent| intersection(parent, rect)),
             );
         }
-    } else if (clip.clip_path_is_empty || !clip.clip_path.is_empty()) {
+    } else if clip.clip_path.is_some() {
         return None;
     }
     cache.insert(clip.id, output);
@@ -353,8 +353,9 @@ impl RetainedScrollPaintState {
         let mut coverage_groups = Vec::<CoverageGroup>::new();
         let mut coverage_group_indices: HashMap<((usize, usize, usize), [u64; 16]), usize> =
             HashMap::new();
-        let has_scroll_dependent_background =
-            nodes.iter().any(|node| has_scroll_dependent_background(node));
+        let has_scroll_dependent_background = nodes
+            .iter()
+            .any(|node| has_scroll_dependent_background(node));
         for node in &nodes {
             if !node.applies_mask {
                 continue;
@@ -395,34 +396,34 @@ impl RetainedScrollPaintState {
                 return None;
             }
             if let (Some(world), Some(recorded_visible)) = (world, recorded_visible) {
-              if f.paint.has_source && f.paint.style.visible && !f.paint.hidden {
-                if let Some(recorded_cull) = node.self_cull_rect {
-                    let key = (
-                        state_cache_key(&node.properties.nodes),
-                        world.values.map(f64::to_bits),
-                    );
-                    if let Some(&index) = coverage_group_indices.get(&key) {
-                        let group = &mut coverage_groups[index];
-                        group.recorded_cull_intersection =
-                            intersection(group.recorded_cull_intersection, recorded_cull);
-                        group.recorded_visible_intersection =
-                            match (group.recorded_visible_intersection, recorded_visible) {
-                                (Some(a), Some(b)) => Some(intersection(a, b)),
-                                _ => None,
-                            };
-                        group.members.push((recorded_cull, recorded_visible));
-                    } else {
-                        coverage_group_indices.insert(key, coverage_groups.len());
-                        coverage_groups.push(CoverageGroup {
-                            properties: node.properties.nodes.clone(),
-                            recorded_world: world,
-                            recorded_visible_intersection: recorded_visible,
-                            recorded_cull_intersection: recorded_cull,
-                            members: vec![(recorded_cull, recorded_visible)],
-                        });
+                if f.paint.has_source && f.paint.style.visible && !f.paint.hidden {
+                    if let Some(recorded_cull) = node.self_cull_rect {
+                        let key = (
+                            state_cache_key(&node.properties.nodes),
+                            world.values.map(f64::to_bits),
+                        );
+                        if let Some(&index) = coverage_group_indices.get(&key) {
+                            let group = &mut coverage_groups[index];
+                            group.recorded_cull_intersection =
+                                intersection(group.recorded_cull_intersection, recorded_cull);
+                            group.recorded_visible_intersection =
+                                match (group.recorded_visible_intersection, recorded_visible) {
+                                    (Some(a), Some(b)) => Some(intersection(a, b)),
+                                    _ => None,
+                                };
+                            group.members.push((recorded_cull, recorded_visible));
+                        } else {
+                            coverage_group_indices.insert(key, coverage_groups.len());
+                            coverage_groups.push(CoverageGroup {
+                                properties: node.properties.nodes.clone(),
+                                recorded_world: world,
+                                recorded_visible_intersection: recorded_visible,
+                                recorded_cull_intersection: recorded_cull,
+                                members: vec![(recorded_cull, recorded_visible)],
+                            });
+                        }
                     }
                 }
-              }
             }
             fragments.push(FragmentCoverage {
                 offset: f.offset,
@@ -555,18 +556,24 @@ fn has_scroll_dependent_background(node: &PaintTreeNode<'_>) -> bool {
     if !fragment.paint.has_source || fragment.paint.background_transfers_to_view {
         return false;
     }
-    fragment.paint.style.background_images.iter().any(|layer| match layer.attachment {
-        BackgroundAttachment::kScroll => false,
-        BackgroundAttachment::kLocal => fragment.paint.scroll_container.is_some(),
-        BackgroundAttachment::kFixed => {
-            let independently_recorded = fragment.paint.can_composite_background_attachment_fixed
-                && !node.fixed_background_acts_as_scroll
-                && fragment.paint.background_paint_location.PaintsBorderBox()
-                && fragment.paint.style.background_images.len() == 1
-                && (layer.shader.is_some() || layer.resource_id != 0);
-            !node.fixed_background_acts_as_scroll && !independently_recorded
-        }
-    })
+    fragment
+        .paint
+        .style
+        .background_images
+        .iter()
+        .any(|layer| match layer.attachment {
+            BackgroundAttachment::kScroll => false,
+            BackgroundAttachment::kLocal => fragment.paint.scroll_container.is_some(),
+            BackgroundAttachment::kFixed => {
+                let independently_recorded =
+                    fragment.paint.can_composite_background_attachment_fixed
+                        && !node.fixed_background_acts_as_scroll
+                        && fragment.paint.background_paint_location.PaintsBorderBox()
+                        && fragment.paint.style.background_images.len() == 1
+                        && (layer.shader.is_some() || layer.resource_id != 0);
+                !node.fixed_background_acts_as_scroll && !independently_recorded
+            }
+        })
 }
 
 fn contains(outer: PaintRect, inner: PaintRect, roundoff: Offset) -> bool {
@@ -626,22 +633,13 @@ fn state_cache_key(state: &PropertyTreeState) -> (usize, usize, usize) {
     )
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ScrollRecordingUpdate {
-    Retained,
-    Fresh,
-}
-
-/// Retained records require the native unchanged-layout proof. Fresh records
-/// were just painted from current certified inputs in an admitted coordinate
-/// basis and recaptured their exact geometry/cull state. Both modes prove
+/// Retained records require the native unchanged-layout proof and prove
 /// current coverage and real property/scrollbar semantics before publication.
 /// Rejection leaves the artifact untouched and requests ordinary paint.
 pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
     fragments: &FragmentNode,
     artifact: &mut PaintArtifact,
     prepaint: &mut PrePaintTreeWalk,
-    recording: ScrollRecordingUpdate,
 ) -> Result<ScrollPropertyUpdate, ScrollPaintInvalidation> {
     use ScrollPaintInvalidation::*;
     let started = std::env::var_os("BROWSER_PROFILE_INPUT").map(|_| std::time::Instant::now());
@@ -655,9 +653,12 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
     if artifact.recorded_properties.len() != artifact.chunks.len() {
         return Err(MissingCoverage);
     }
-    if let Some((index, chunk)) = artifact.chunks.iter().enumerate().find(|(_, chunk)| {
-        recording == ScrollRecordingUpdate::Retained && !chunk.can_match_old_chunk()
-    }) {
+    if let Some((index, chunk)) = artifact
+        .chunks
+        .iter()
+        .enumerate()
+        .find(|(_, chunk)| !chunk.can_match_old_chunk())
+    {
         if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
             eprintln!("scroll-paint-reject stage=chunk-cache index={} id={:?} cacheable={} just_created={}",
                 index, chunk.id, chunk.is_cacheable, chunk.client_is_just_created);
@@ -720,7 +721,9 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
     let mut worlds = BTreeMap::new();
     let mut masks = BTreeMap::new();
     for mask in &retained.masks {
-        let transform = trees.transform_for(&mask.transform).ok_or(PropertyChanged)?;
+        let transform = trees
+            .transform_for(&mask.transform)
+            .ok_or(PropertyChanged)?;
         if !transform.lifecycle.same_node(&mask.transform.lifecycle) {
             return Err(PropertyChanged);
         }
@@ -931,7 +934,7 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
             result.updated_chunks += 1;
         }
         chunk.properties = properties;
-        chunk.is_moved_from_cached_subsequence = recording == ScrollRecordingUpdate::Retained;
+        chunk.is_moved_from_cached_subsequence = true;
     }
     for record in &mut artifact.display_items {
         if let Some(old) = record.scroll_translation.as_ref() {
@@ -949,6 +952,24 @@ pub(crate) fn TryUpdateScrollPropertiesWithPrePaint(
     }
     if result.updated_scrollbar_records != 0 {
         artifact.recording_revision = foundation::NewUniqueObjectId();
+    }
+    if let Some(viewport) = artifact.compositor_viewport.as_mut() {
+        viewport.viewport_clip = updated_store
+            .viewport_clip()
+            .expect("source retained viewport clip")
+            .clone();
+        if let Some(old) = &viewport.layout_scroll_translation {
+            viewport.layout_scroll_translation = Some(
+                trees
+                    .transform_for(old)
+                    .expect("source retained layout scroll slot")
+                    .clone(),
+            );
+        }
+        viewport.scroll_translation_nodes = updated_store
+            .compositor_scroll_translations()
+            .cloned()
+            .collect();
     }
     prepaint.property_node_store = updated_store;
     drop(publish_trace);

@@ -1,12 +1,16 @@
 //! Chunk identity/state algorithm translated from Blink paint_chunker.cc.
 //! Chunk ranges address semantic DisplayItems, independent of replay op counts.
 use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
-use crate::paint_engine::{PaintChunk, PaintRect, RasterEffectOutset};
+use crate::paint_engine::{
+    PaintChunk, PaintHitTestData, PaintHitTestOpaqueness, PaintRect, RasterEffectOutset,
+};
 use crate::paint_property_tree::PropertyTreeState;
 use layoutng_assembly::fragment_tree::FragmentNode;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DisplayItemClientInfo {
+    pub invalidation_reason: Option<foundation::PaintInvalidationReason>,
+    pub scrollbar_needs_update_display: Option<bool>,
     pub is_cacheable: bool,
     pub is_just_created: bool,
 }
@@ -14,6 +18,8 @@ pub struct DisplayItemClientInfo {
 impl DisplayItemClientInfo {
     pub(crate) fn from_fragment(fragment: &FragmentNode) -> Self {
         Self {
+            invalidation_reason: fragment.paint.display_item_client_invalidation_reason,
+            scrollbar_needs_update_display: None,
             is_cacheable: fragment.paint.display_item_client_is_cacheable,
             is_just_created: fragment.paint.display_item_client_is_just_created,
         }
@@ -90,8 +96,12 @@ impl PaintChunker {
             return false;
         }
         let (id, client) = self.next_chunk_id.take().unwrap_or((fallback_id, client));
+        self.FinalizeLastChunkProperties(chunks);
         let begin = chunks.last().map_or(0, |chunk| chunk.end_index);
         chunks.push(PaintChunk {
+            compositor: Some(Box::new(
+                crate::paint_engine::PaintChunkCompositorData::new(),
+            )),
             id,
             begin_index: begin,
             end_index: begin,
@@ -168,6 +178,131 @@ impl PaintChunker {
         }
         created
     }
+
+    // Source: paint_chunker.cc:305-348. Scroll hit-test data is a metadata-only
+    // paint chunk in the scroller's border-box property state. It deliberately
+    // owns no DisplayItem; PAC consumes the typed hit-test payload directly.
+    pub fn RecordScrollHitTestData(
+        &mut self,
+        chunks: &mut Vec<PaintChunk>,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        rect: PaintRect,
+        opaqueness: PaintHitTestOpaqueness,
+        data: PaintHitTestData,
+    ) {
+        self.force_new_chunk();
+        let created = self.ensure_current_chunk(chunks, id, client);
+        debug_assert!(created);
+        let chunk = chunks.last_mut().expect("scroll hit-test chunk");
+        chunk.bounds.union(rect);
+        let compositor = chunk
+            .compositor
+            .as_deref_mut()
+            .expect("scroll hit-test compositor metadata");
+        compositor.hit_test_opaqueness = opaqueness;
+        compositor.hit_test_data = Some(Box::new(data));
+        self.force_new_chunk();
+    }
+
+    // Source: paint_chunker.cc:350-393. The record analysis result comes from
+    // its actual producer; the canonical chunk retains its own derived fields.
+    pub fn UpdateDrawingDerivedData(
+        &mut self,
+        chunks: &mut [PaintChunk],
+        candidate: crate::paint_engine::PaintChunkBackgroundColorInfo,
+        has_text: bool,
+        visual_rect: PaintRect,
+    ) {
+        let chunk = chunks.last_mut().expect("source current chunk");
+        let m = chunk
+            .compositor
+            .as_deref_mut()
+            .expect("source native metadata");
+        let min_area = 0.5 * chunk.bounds.width as f32 * chunk.bounds.height as f32;
+        if candidate.background_area >= m.background_area || candidate.background_area >= min_area {
+            if m.background_area >= min_area && candidate.background_color.alpha != 1. {
+                m.background_area = candidate.background_area;
+                m.background_color =
+                    ResultingPaintColor(candidate.background_color, m.background_color);
+            } else {
+                m.background_color = candidate.background_color;
+                m.background_area = candidate.background_area;
+                m.background_is_solid_color = candidate.background_is_solid_color;
+            }
+        }
+        if m.text_known_to_be_on_opaque_background {
+            if has_text {
+                m.has_text = true;
+                let r = chunk.rect_known_to_be_opaque;
+                m.text_known_to_be_on_opaque_background = r.x <= visual_rect.x
+                    && r.y <= visual_rect.y
+                    && r.x + r.width >= visual_rect.x + visual_rect.width
+                    && r.y + r.height >= visual_rect.y + visual_rect.height;
+            }
+        } else {
+            debug_assert!(m.has_text);
+        }
+    }
+    pub fn FinalizeLastChunkProperties(&mut self, chunks: &mut [PaintChunk]) {
+        let Some(chunk) = chunks.last_mut() else {
+            return;
+        };
+        if chunk.is_moved_from_cached_subsequence {
+            return;
+        }
+        let m = chunk
+            .compositor
+            .as_deref_mut()
+            .expect("source native metadata");
+        if chunk.end_index - chunk.begin_index > 1
+            || m.background_area != chunk.bounds.width as f32 * chunk.bounds.height as f32
+        {
+            m.background_is_solid_color = false;
+        }
+    }
+    // Source: paint_chunker.cc:15-20.
+    pub fn Finish(&mut self, chunks: &mut [PaintChunk]) {
+        self.FinalizeLastChunkProperties(chunks);
+    }
+}
+
+// Source primitive: ui/gfx/color_utils.cc:577-614. Quantize to native SkColor,
+// source alpha normalization, ClampRound and conversion back to SkColor4f.
+fn ResultingPaintColor(
+    f: layoutng_assembly::internal::layout_input_types::Color,
+    b: layoutng_assembly::internal::layout_input_types::Color,
+) -> layoutng_assembly::internal::layout_input_types::Color {
+    use layoutng_assembly::internal::layout_input_types::Color;
+    let q = |v: f32| (v * 255.).round().clamp(0., 255.);
+    let a = q(f.alpha) / 255.;
+    let fa = [q(f.red), q(f.green), q(f.blue), 255.];
+    let ba = [q(b.red), q(b.green), q(b.blue), q(b.alpha)];
+    let v = if a == 0. {
+        ba
+    } else if a == 1. {
+        fa
+    } else {
+        let n = 255. * a + ba[3] * (1. - a);
+        if n == 0. {
+            [0.; 4]
+        } else {
+            let fw = 255. * a / n;
+            let bw = ba[3] * (1. - a) / n;
+            [
+                (fa[0] * fw + ba[0] * bw).round(),
+                (fa[1] * fw + ba[1] * bw).round(),
+                (fa[2] * fw + ba[2] * bw).round(),
+                n.round(),
+            ]
+        }
+    };
+    Color {
+        red: v[0] / 255.,
+        green: v[1] / 255.,
+        blue: v[2] / 255.,
+        alpha: v[3] / 255.,
+    }
 }
 
 #[cfg(test)]
@@ -189,11 +324,16 @@ mod tests {
     fn translated_chunk_identity_scope_fallback_and_matching() {
         let client = DisplayItemClientInfo {
             is_cacheable: true,
+            invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
+            scrollbar_needs_update_display: None,
             is_just_created: false,
         };
         let root = PropertyTreeState::default();
         let mut child = root.clone();
         child.transform = Arc::new(TransformPaintPropertyNode {
+            compositor: Default::default(),
+            geometry_mapper_cache: Default::default(),
+            scroll_parent_scroll_translation: None,
             lifecycle: Default::default(),
             id: 1,
             parent: Some(root.transform.clone()),

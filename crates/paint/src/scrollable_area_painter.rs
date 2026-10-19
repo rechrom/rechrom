@@ -62,6 +62,8 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 },
                 DisplayItemClientInfo {
                     is_cacheable: axis.display_item_client_is_cacheable,
+                    invalidation_reason: axis.display_item_client_invalidation_reason,
+                    scrollbar_needs_update_display: axis.needs_update_display,
                     is_just_created: axis.display_item_client_is_just_created,
                 },
                 AbsoluteRect(self.node, axis.track_offset, axis.track_size),
@@ -162,6 +164,8 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 },
                 DisplayItemClientInfo {
                     is_cacheable: data.corner_client_is_cacheable,
+                    invalidation_reason: data.corner_client_invalidation_reason,
+                    scrollbar_needs_update_display: None,
                     is_just_created: data.corner_client_is_just_created,
                 },
                 AbsoluteRect(self.node, data.corner_offset, data.corner_size),

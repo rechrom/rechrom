@@ -49,7 +49,11 @@ fn aom_format(image: &Image, category: Category) -> AvifResult<aom_img_fmt_t> {
             _ => return AvifError::invalid_argument(),
         },
     };
-    Ok(if image.depth > 8 { format | AOM_IMG_FMT_HIGHBITDEPTH } else { format })
+    Ok(if image.depth > 8 {
+        format | AOM_IMG_FMT_HIGHBITDEPTH
+    } else {
+        format
+    })
 }
 
 fn aom_bps(format: aom_img_fmt_t) -> i32 {
@@ -383,7 +387,11 @@ impl Encoder for Aom {
                     encoder_uninit.as_mut_ptr(),
                     encoder_iface,
                     &aom_config as *const _,
-                    if image.depth > 8 { AOM_CODEC_USE_HIGHBITDEPTH } else { 0 } as _,
+                    if image.depth > 8 {
+                        AOM_CODEC_USE_HIGHBITDEPTH
+                    } else {
+                        0
+                    } as _,
                     AOM_ENCODER_ABI_VERSION as _,
                 )
             };

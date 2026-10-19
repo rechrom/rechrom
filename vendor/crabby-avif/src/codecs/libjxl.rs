@@ -94,7 +94,11 @@ fn rgb_image_to_jxl_pixel_format(
             num_channels: rgb.channel_count(),
             data_type,
             endianness: JxlEndianness_JXL_NATIVE_ENDIAN,
-            align: if rgb.row_bytes == min_row_bytes { 0 } else { rgb.row_bytes as usize },
+            align: if rgb.row_bytes == min_row_bytes {
+                0
+            } else {
+                rgb.row_bytes as usize
+            },
         },
         size,
     ))
@@ -367,7 +371,11 @@ impl Decoder for Libjxl {
         _signal_eos: bool,
     ) -> AvifResult<()> {
         // TODO: b/456440247 - Support tracks
-        let item = if let Some(item) = item { item } else { return AvifError::not_implemented() };
+        let item = if let Some(item) = item {
+            item
+        } else {
+            return AvifError::not_implemented();
+        };
 
         if spatial_id != 0xff {
             return AvifError::unknown_error(format!(

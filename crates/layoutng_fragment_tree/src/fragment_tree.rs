@@ -373,6 +373,9 @@ pub struct TablePaintData {
 // cpp: layoutng_fragment_tree/fragment_tree.h:231-238
 #[derive(Clone, Default, PartialEq)]
 pub struct ScrollbarPaintAxis {
+    /// Source DisplayItemClient::GetPaintInvalidationReason(), exported live.
+    pub display_item_client_invalidation_reason: Option<foundation::PaintInvalidationReason>,
+    pub needs_update_display: Option<bool>,
     pub display_item_client_id: u64,
     pub display_item_client_is_cacheable: bool,
     pub display_item_client_is_just_created: bool,
@@ -387,6 +390,7 @@ pub struct ScrollbarPaintAxis {
 // cpp: layoutng_fragment_tree/fragment_tree.h:230-248
 #[derive(Clone, Default, PartialEq)]
 pub struct ScrollbarPaintData {
+    pub corner_client_invalidation_reason: Option<foundation::PaintInvalidationReason>,
     pub corner_client_id: u64,
     pub corner_client_is_cacheable: bool,
     pub corner_client_is_just_created: bool,
@@ -507,6 +511,17 @@ pub struct TextCombinePaintData {
 // cpp: layoutng_fragment_tree/fragment_tree.h:281-301
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollContainerPaintData {
+    pub compositor_element_id: foundation::CompositorElementId,
+    /// Source: core/paint/paint_layer_scrollable_area.cc:2515-2538.
+    /// Scrollable axes are distinct from the user-input-scrollable axes.
+    pub scrollable_axes: [bool; 2],
+    /// Source: core/paint/paint_layer_scrollable_area.cc:588-618. None means
+    /// this fragment has no original scrollable-area owner to query.
+    pub background_needs_repaint_on_scroll: Option<bool>,
+    pub prefers_non_composited_scrolling: Option<bool>,
+    /// An explicit absence proof from the actual computed scroll-snap type.
+    /// Non-none snap requires the native computed SnapContainerData owner.
+    pub scroll_snap_type_is_none: Option<bool>,
     pub container_rect: FragmentPaintRect,
     /// Native ScrollableArea bounds in LayoutZoomFactor coordinates.  The
     /// minimum is not necessarily zero (for example RTL and vertical writing
@@ -556,9 +571,18 @@ impl StickyPositionPaintData {
     pub fn same_geometry(&self, other: &Self) -> bool {
         let (mut before, mut after) = (*self, *other);
         for data in [&mut before, &mut after] {
-            for axis in [&mut data.horizontal, &mut data.vertical].into_iter().flatten() {
-                if ![axis.current_sticky_offset, axis.current_total_sticky_box_offset,
-                    axis.current_total_containing_block_offset].into_iter().all(f64::is_finite) {
+            for axis in [&mut data.horizontal, &mut data.vertical]
+                .into_iter()
+                .flatten()
+            {
+                if ![
+                    axis.current_sticky_offset,
+                    axis.current_total_sticky_box_offset,
+                    axis.current_total_containing_block_offset,
+                ]
+                .into_iter()
+                .all(f64::is_finite)
+                {
                     return false;
                 }
                 axis.current_sticky_offset = 0.0;
@@ -617,6 +641,16 @@ pub struct SvgViewportGeometry {
 
 #[derive(Clone, PartialEq)]
 pub struct PaintProperties {
+    pub property_fragment_unique_id: u64,
+    pub is_layout_view: bool,
+    /// Source: core/frame/local_frame_view.cc:1504-1527. Published only by the
+    /// actual LayoutView after querying native fixed-background membership.
+    pub requires_main_thread_scrolling_for_background_attachment_fixed: Option<bool>,
+    /// PaintController snapshots the client's actual reason when appending an
+    /// item (paint_controller.cc:531-545). None is an unexported external input.
+    pub display_item_client_invalidation_reason: Option<foundation::PaintInvalidationReason>,
+    pub display_item_client_debug_name: std::sync::Arc<str>,
+    pub paint_layer_client_invalidation_reason: Option<foundation::PaintInvalidationReason>,
     // None means native ink overflow has not been computed. Never substitute
     // a frame rect here: text glyphs and decorations can extend outside it.
     pub self_ink_overflow: Option<FragmentPaintRect>,
@@ -634,6 +668,9 @@ pub struct PaintProperties {
     // node ids and preorder-only exported fragment_instance_id.
     // cpp: platform/graphics/paint/display_item_client.h:33-35,71-82
     pub display_item_client_id: u64,
+    /// Chromium DisplayItemClient::OwnerNodeId(), kept distinct from the
+    /// layout/export node identity above. DOMNodeId is a signed 32-bit type.
+    pub display_item_client_owner_node_id: i32,
     // A distinct persistent native PaintLayer DisplayItemClient, when present.
     // cpp: core/paint/paint_layer.h:168-171
     /// Native layer ownership was queried, including the authoritative no-layer result.
@@ -698,6 +735,8 @@ pub struct PaintProperties {
     pub overflow_y: Overflow,
     pub overscroll_behavior_x: OverscrollBehavior,
     pub overscroll_behavior_y: OverscrollBehavior,
+    /// Source: core/paint/paint_property_tree_builder.cc:3634-3635.
+    pub prevent_scroll_axis_locking: bool,
     /// CSS 2.1 `clip: rect(...)` in the box's local stitched coordinate space.
     /// This is distinct from overflow clipping: it clips the box's own paint
     /// as well as descendants and is ordered between Effect and Filter.
@@ -748,6 +787,12 @@ pub struct PaintProperties {
 impl Default for PaintProperties {
     fn default() -> Self {
         Self {
+            property_fragment_unique_id: 0,
+            is_layout_view: false,
+            requires_main_thread_scrolling_for_background_attachment_fixed: None,
+            display_item_client_invalidation_reason: None,
+            display_item_client_debug_name: std::sync::Arc::from(""),
+            paint_layer_client_invalidation_reason: None,
             self_ink_overflow: None,
             contents_ink_overflow: None,
             ink_overflow: None,
@@ -756,6 +801,7 @@ impl Default for PaintProperties {
             box_fragment_is_inline_box: false,
             display_item_raster_effect_outset: RasterEffectOutset::kNone,
             display_item_client_id: 0,
+            display_item_client_owner_node_id: 0,
             paint_layer_state_is_native: false,
             paint_layer_client_id: 0,
             paint_layer_client_is_cacheable: false,
@@ -799,6 +845,7 @@ impl Default for PaintProperties {
             overflow_y: Overflow::kVisible,
             overscroll_behavior_x: Default::default(),
             overscroll_behavior_y: Default::default(),
+            prevent_scroll_axis_locking: false,
             css_clip: None,
             overflow_clip_margin_outsets: None,
             scroll_offset: Offset::default(),

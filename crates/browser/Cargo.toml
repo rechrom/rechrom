@@ -44,7 +44,6 @@ raster = { path = "../raster" }
 foundation = { package = "layoutng_foundation", path = "../foundation" }
 web_font = { path = "../web_font" }
 font_engine = { path = "../font_engine" }
-layer_tile = { path = "../layer_tile" }
 compositor = { path = "../compositor" }
 viz = { path = "../viz" }
 
@@ -58,5 +57,5 @@ inline_layout = ["layoutng_assembly/translation_in_progress", "layoutng_block/in
 native_text = ["raster/text"]
 source_paint = ["paint/translation_in_progress"]
 source_png = ["source_paint", "raster/source_replay"]
-pure_source_png = ["source_paint", "raster/pure_replay"]
+pure_source_png = ["source_paint", "raster/pure_replay", "renderer/pure_replay"]
 raster_profile = ["raster/profiling"]

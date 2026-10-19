@@ -394,8 +394,11 @@ mod tests {
             });
             yuv.row_bytes[plane.as_usize()] = 2;
         }
-        let categories: &[Category] =
-            if use_alpha { &[Category::Color, Category::Alpha] } else { &[Category::Color] };
+        let categories: &[Category] = if use_alpha {
+            &[Category::Color, Category::Alpha]
+        } else {
+            &[Category::Color]
+        };
         for category in categories {
             // Scale will update the width and height when scaling YUV planes. Reset it back before
             // calling it again.

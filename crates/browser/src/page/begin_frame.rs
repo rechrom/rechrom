@@ -15,6 +15,22 @@ pub(super) struct PageBeginFrame {
     last_frame: Option<(u64, u64)>,
 }
 impl Page {
+    #[cfg(feature = "pure_source_png")]
+    fn AdvanceCompositorBeginFrame(&mut self, args: BeginFrameArgs) -> io::Result<()> {
+        let output = {
+            let mut rendering = self.state.rendering.borrow_mut();
+            if !rendering.NeedsBeginFrames() {
+                return Ok(());
+            }
+            rendering.BeginPhysicalFrame(args)?
+        };
+        self.ApplyCompositorWheelEffects(output.effects)?;
+        if output.submitted {
+            self.PresentCompositorOnlyFrame();
+        }
+        Ok(())
+    }
+
     pub fn SetBeginFrameSource(&mut self, source: Option<Arc<dyn BeginFrameSource>>) {
         if let Some(scripts) = &self.scripts {
             scripts.SetBeginFrameSource(source.clone());
@@ -59,7 +75,12 @@ impl Page {
         // loading tasks. Re-requesting an unrenderable dirty page each tick
         // cannot advance that work and must not compete with its task queue.
         // Once readiness changes, the next task reaches UpdateFrameIfNeeded.
-        let demand = (self.IsRenderingReady()
+        #[cfg(feature = "pure_source_png")]
+        let compositor_demand = self.state.rendering.borrow().NeedsBeginFrames();
+        #[cfg(not(feature = "pure_source_png"))]
+        let compositor_demand = false;
+        let demand = compositor_demand
+            || (self.IsRenderingReady()
             && (self.HasPendingFrameInput()
                 || self.state.dirty.get()
                 || self.hover_state_dirty
@@ -157,6 +178,8 @@ impl Page {
             }
             let initial_done = profile.map(|start| start.elapsed());
             self.DrainFrameInputs()?;
+            #[cfg(feature = "pure_source_png")]
+            self.AdvanceCompositorBeginFrame(args)?;
             // The scroll event observes the new visual scroll offset. Commit
             // the retained scroll properties before script geometry queries;
             // otherwise getBoundingClientRect() would rebuild layout merely to
@@ -327,14 +350,8 @@ impl Page {
                 input_trace.set("delta_y", wheel.delta.y);
             }
             let result = self.DispatchInputWithoutLifecycle(&entry.input);
-            let result = result.and_then(|result| {
+            let result = result.map(|result| {
                 input_trace.set("default_prevented", result.default_prevented as u8 as f64);
-                if !result.default_prevented {
-                    if let InputEvent::Wheel(wheel) = &entry.input {
-                        self.ApplyWheelDefaultWithoutLifecycle(wheel, result.target_node_id)?;
-                    }
-                }
-                Ok(())
             });
             self.begin_frame.dispatched.push(DispatchedFrameInput {
                 input: entry.input,

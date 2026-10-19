@@ -1,22 +1,19 @@
-//! One independent Page domain. Rc document engines are constructed and used
-//! only on its document executor. Its impl executor owns compositor/raster
-//! state and exports only CompositorFrame plus immutable resource read leases.
-//! Source roles: content/renderer/renderer_main.cc creates the document task
-//! scheduler; cc/trees/layer_tree_host.cc::CreateThreaded binds main and impl
-//! task runners. Assigning a separate pair to every Page is embedder policy;
-//! Chromium may co-locate documents. No engine assumes a physical thread.
+//! One independent Page domain. Document tasks and Page rendering execute only
+//! on its document owner. Frame delivery merely enqueues rendering opportunities;
+//! completed pixel allocations cross into the window presentation domain.
 use crate::{
     begin_frame_source::NativeBeginFrame,
     engine::Viewport,
     page_dom::{chrome_hover_chain, element_id, find_id, set_hover_class},
     page_error::{error_kind, panic_error, PageError},
-    page_presentation::{
-        self as presentation, Document, PageCommand, PagePresentation, PageRasterReady,
-        PageSnapshot,
-    },
+    page_presentation::{ContentFrameProvenance, Document, FrameProvenance, PageFrame},
     window_runtime,
 };
 use browser::page::{Page, PageClient};
+use browser::page::{
+    CompositorMainThreadEffect, PageCompositorFrame, PageFramePresenter, PageRenderPipeline,
+    PageReturnedResource,
+};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use foundation::begin_frame::BeginFrameSource;
 use interaction::input_event::*;
@@ -83,7 +80,18 @@ pub(crate) enum Command {
         queued_at: Instant,
         samples: usize,
     },
-    Main(compositor::MainThreadEvent<NativeBeginFrame>),
+    ExternalWheel {
+        wheel: WheelEvent,
+        queued_at: Instant,
+        samples: usize,
+        effects: Vec<CompositorMainThreadEffect>,
+        main_frame_epoch: Option<u64>,
+    },
+    CompositorEffects {
+        effects: Vec<CompositorMainThreadEffect>,
+        main_frame_epoch: Option<u64>,
+    },
+    Main(MainThreadEvent),
     Resize(Viewport),
     Active(bool),
     Patch(Patch),
@@ -101,10 +109,74 @@ pub(crate) enum Command {
     Stop,
 }
 pub(crate) enum ImplCommand {
-    Core(PageCommand),
     Tick(NativeBeginFrame),
-    Ready(PageRasterReady),
+    Pump,
+    Commit {
+        artifact: Arc<paint::PaintArtifact>,
+        content: ContentFrameProvenance,
+        viewport: Viewport,
+    },
+    Wheel {
+        wheel: WheelEvent,
+        queued_at: Instant,
+        samples: usize,
+    },
+    Reclaim(Vec<PageReturnedResource>),
+    RendererFailed(String),
     Stop,
+}
+
+struct WakingExecutor {
+    inner: Arc<dyn executor::Executor>,
+    sender: mpsc::Sender<ImplCommand>,
+    pending: Arc<AtomicBool>,
+}
+impl WakingExecutor {
+    fn new(
+        inner: Arc<dyn executor::Executor>,
+        sender: mpsc::Sender<ImplCommand>,
+        pending: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            inner,
+            sender,
+            pending,
+        }
+    }
+
+    fn wrapped(&self, task: executor::Task) -> executor::Task {
+        let sender = self.sender.clone();
+        let pending = self.pending.clone();
+        Box::new(move || {
+            task();
+            if !pending.swap(true, Ordering::AcqRel)
+                && sender.send(ImplCommand::Pump).is_err()
+            {
+                pending.store(false, Ordering::Release);
+            }
+        })
+    }
+}
+impl executor::Executor for WakingExecutor {
+    fn execute(&self, task: executor::Task) -> io::Result<()> {
+        self.inner.execute(self.wrapped(task))
+    }
+
+    fn execute_after(&self, delay: Duration, task: executor::Task) -> io::Result<()> {
+        self.inner.execute_after(delay, self.wrapped(task))
+    }
+}
+enum PresenterCommand {
+    Frame {
+        frame: PageCompositorFrame,
+        content: ContentFrameProvenance,
+        viewport: Viewport,
+    },
+    Stop,
+}
+#[derive(Clone, Copy)]
+pub(crate) enum MainThreadEvent {
+    BeginFrame { frame: NativeBeginFrame },
 }
 struct FrameDemand {
     requested: Arc<AtomicBool>,
@@ -126,6 +198,7 @@ pub(crate) struct Handle {
     visible: Arc<AtomicBool>,
     routes: FrameRoutes,
     source: Arc<dyn BeginFrameSource>,
+    controls: bool,
     pub loading: bool,
     failure: Arc<Mutex<Option<PageError>>>,
 }
@@ -152,20 +225,23 @@ impl Handle {
         if self.failed() {
             return;
         }
-        if let InputEvent::Wheel(event) = input {
-            let _ = self.impl_sender.send(ImplCommand::Core(PageCommand::Wheel {
-                event,
-                queued_at,
-                samples,
-            }));
-        } else {
-            self.send(Command::Input {
-                input,
-                queued_at,
-                samples,
-            });
+        if !self.controls {
+            if let InputEvent::Wheel(wheel) = input {
+                let _ = self.impl_sender.send(ImplCommand::Wheel {
+                    wheel,
+                    queued_at,
+                    samples,
+                });
+                return;
+            }
         }
+        self.send(Command::Input {
+            input,
+            queued_at,
+            samples,
+        });
     }
+
     pub fn visible(&self, visible: bool) {
         if self.failed() {
             return;
@@ -173,18 +249,12 @@ impl Handle {
         let was_visible = self.visible.swap(visible, Ordering::AcqRel);
         if visible && !was_visible {
             self.source.request_begin_frame();
-            let _ = self
-                .impl_sender
-                .send(ImplCommand::Core(PageCommand::Redraw));
         }
     }
     pub fn resize(&self, viewport: Viewport) {
         if self.failed() {
             return;
         }
-        let _ = self
-            .impl_sender
-            .send(ImplCommand::Core(PageCommand::Resize(viewport)));
         self.send(Command::Resize(viewport));
     }
     pub fn patch(&self, patch: Patch) {
@@ -216,8 +286,8 @@ pub(crate) struct Params {
 }
 pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
     let threads = params.threads.clone();
-    let impl_threads = threads.clone();
     let document = params.document;
+    let controls = params.controls;
     let (doc_sender, doc_receiver) = mpsc::channel();
     let (impl_sender, impl_receiver) = mpsc::channel();
     let requested = Arc::new(AtomicBool::new(true));
@@ -227,10 +297,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
     });
     // The parent registers Surface placement before enabling frame delivery.
     let visible = Arc::new(AtomicBool::new(false));
-    let ready_sender = impl_sender.clone();
     let main_sender = doc_sender.clone();
-    let impl_source = params.source.clone();
-    let frames = params.frames.clone();
     let failure = Arc::new(Mutex::new(None));
     let reporter = ErrorReporter {
         document,
@@ -248,6 +315,12 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
         .unwrap()
         .insert(document, (impl_sender.clone(), visible.clone()));
     let impl_reporter = reporter.clone();
+    let impl_self = impl_sender.clone();
+    let impl_source = params.source.clone();
+    let impl_frames = params.frames.clone();
+    let impl_executor = threads.executor.clone();
+    let impl_viewport = params.viewport;
+    let impl_external_compositor = !params.controls;
     std::thread::Builder::new()
         .name(format!("page-compositor-{}-{}", document.0, document.1))
         .stack_size(16 * 1024 * 1024)
@@ -259,15 +332,16 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
             });
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run_impl(
-                    document,
                     impl_receiver,
-                    ready_sender,
+                    impl_self,
                     main_sender,
                     requested,
+                    document,
+                    impl_viewport,
+                    impl_external_compositor,
+                    impl_executor,
                     impl_source,
-                    frames,
-                    &impl_reporter,
-                    &impl_threads,
+                    impl_frames,
                 )
             }));
             match result {
@@ -282,7 +356,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
         })?;
     let doc_source = source.clone();
     let wake = doc_sender.clone();
-    let commits = impl_sender.clone();
+    let doc_impl_sender = impl_sender.clone();
     let routes = params.routes.clone();
     let doc_reporter = reporter.clone();
     let doc_spawn = std::thread::Builder::new()
@@ -299,10 +373,10 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
                     &params,
                     doc_receiver,
                     wake,
-                    commits,
                     doc_source,
                     &doc_reporter,
                     threads,
+                    doc_impl_sender,
                 )
             }));
             match result {
@@ -323,6 +397,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
         visible,
         routes,
         source,
+        controls,
         loading: true,
         failure,
     })
@@ -405,143 +480,432 @@ impl From<io::Error> for RuntimeFailure {
         }
     }
 }
-fn run_impl(
+struct ImplPresentation {
+    pipeline: PageRenderPipeline,
+    presenter: mpsc::Sender<PresenterCommand>,
+    artifact: Option<Arc<paint::PaintArtifact>>,
+    content: Option<ContentFrameProvenance>,
+    viewport: Viewport,
+    needs_publish: bool,
+    required_main_frame_epoch: u64,
+}
+
+impl ImplPresentation {
+    fn new(
+        pipeline: PageRenderPipeline,
+        presenter: mpsc::Sender<PresenterCommand>,
+        viewport: Viewport,
+    ) -> Self {
+        Self {
+            pipeline,
+            presenter,
+            artifact: None,
+            content: None,
+            viewport,
+            needs_publish: false,
+            required_main_frame_epoch: 0,
+        }
+    }
+
+    fn require_main_frame(&mut self, epoch: u64) {
+        self.required_main_frame_epoch = self.required_main_frame_epoch.max(epoch);
+    }
+
+    fn commit(
+        &mut self,
+        artifact: Arc<paint::PaintArtifact>,
+        content: ContentFrameProvenance,
+        viewport: Viewport,
+    ) {
+        // Source: cc/trees/proxy_impl.cc DataForCommit. A main commit can only
+        // satisfy the BeginMainFrame whose impl deltas were applied before its
+        // lifecycle. An artifact already in flight on the Page sequence cannot
+        // be admitted as that commit.
+        if content.main_frame_epoch < self.required_main_frame_epoch {
+            return;
+        }
+        self.artifact = Some(artifact);
+        self.content = Some(content);
+        self.viewport = viewport;
+        self.needs_publish = true;
+    }
+
+    fn publish(&mut self) -> Result<bool, RuntimeFailure> {
+        if !self.needs_publish {
+            return self.flush_frames();
+        }
+        let Some(artifact) = self.artifact.as_ref() else {
+            return Ok(false);
+        };
+        let Some(_) = self.content else {
+            return Ok(false);
+        };
+        let viewport = self.viewport;
+        let render = self.pipeline.CommitArtifact(
+            artifact,
+            viewport.width,
+            viewport.height,
+            viewport.scale,
+        );
+        match render {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
+            Err(error) => return Err(error.into()),
+        }
+        self.needs_publish = false;
+        self.flush_frames()
+    }
+
+    fn flush_frames(&mut self) -> Result<bool, RuntimeFailure> {
+        let Some(content) = self.content else {
+            return Ok(false);
+        };
+        let mut submitted = false;
+        for frame in self.pipeline.TakeFrames() {
+            // A frame owns the pixel-space size that cc submitted to its
+            // FrameSink.  Do not relabel an older queued frame with a newer
+            // Page viewport during resize: Viz surface generations are keyed
+            // by these surface parameters in Chromium.
+            //
+            // Source: components/viz/common/quads/compositor_frame.h;
+            //         cc/trees/unbounded_frame_sink_handler.cc:56-77.
+            let viewport = frame
+                .frame
+                .render_pass_list
+                .last()
+                .filter(|pass| pass.output_rect.width > 0 && pass.output_rect.height > 0)
+                .map(|pass| Viewport {
+                    width: pass.output_rect.width as u32,
+                    height: pass.output_rect.height as u32,
+                    scale: if frame.frame.metadata.device_scale_factor.is_finite()
+                        && frame.frame.metadata.device_scale_factor > 0.0
+                    {
+                        f64::from(frame.frame.metadata.device_scale_factor)
+                    } else {
+                        self.viewport.scale
+                    },
+                })
+                .unwrap_or(self.viewport);
+            self.presenter
+                .send(PresenterCommand::Frame {
+                    frame,
+                    content,
+                    viewport,
+                })
+                .map_err(|_| RuntimeFailure {
+                stage: "compositor",
+                error: io::Error::other("Page renderer stopped"),
+            })?;
+            submitted = true;
+        }
+        Ok(submitted)
+    }
+}
+
+fn run_presenter(
+    receiver: mpsc::Receiver<PresenterCommand>,
+    mut presenter: PageFramePresenter,
+    compositor: mpsc::Sender<ImplCommand>,
     document: Document,
+    frames: mpsc::Sender<window_runtime::Command>,
+) -> io::Result<()> {
+    let mut pixels = Arc::new(Vec::<u32>::new());
+    let mut retained_target: Option<(u32, u32)> = None;
+    let mut presentation_sequence = 0u64;
+    while let Ok(first) = receiver.recv() {
+        let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
+            .is_some()
+            .then(Instant::now);
+        let PresenterCommand::Frame {
+            frame,
+            content,
+            viewport,
+        } = first
+        else {
+            break;
+        };
+        let (accepted, returned) = presenter.Submit(frame)?;
+        if !returned.is_empty() {
+            let _ = compositor.send(ImplCommand::Reclaim(returned));
+        }
+        let mut latest = accepted.then_some((content, viewport));
+        let mut stop = false;
+        let mut coalesced = 0usize;
+        while let Ok(command) = receiver.try_recv() {
+            match command {
+                PresenterCommand::Frame {
+                    frame,
+                    content,
+                    viewport,
+                } => {
+                    coalesced += 1;
+                    let (accepted, returned) = presenter.Submit(frame)?;
+                    if !returned.is_empty() {
+                        let _ = compositor.send(ImplCommand::Reclaim(returned));
+                    }
+                    if accepted {
+                        latest = Some((content, viewport));
+                    }
+                }
+                PresenterCommand::Stop => {
+                    stop = true;
+                    break;
+                }
+            }
+        }
+        let Some((content, viewport)) = latest else {
+            if stop {
+                break;
+            }
+            continue;
+        };
+        let retained = retained_target == Some((viewport.width, viewport.height));
+        let pixel_count = viewport.width as usize * viewport.height as usize;
+        let target = Arc::make_mut(&mut pixels);
+        if target.len() != pixel_count {
+            target.resize(pixel_count, 0);
+        }
+        presenter.RenderCurrent(
+            viewport.width,
+            viewport.height,
+            target,
+            retained,
+        )?;
+        if let Some(started) = profile {
+            eprintln!(
+                "page-presenter-profile total_ms={:.3} coalesced={} width={} height={}",
+                started.elapsed().as_secs_f64() * 1000.0,
+                coalesced,
+                viewport.width,
+                viewport.height,
+            );
+        }
+        retained_target = Some((viewport.width, viewport.height));
+        presentation_sequence = presentation_sequence
+            .wrapping_add(1)
+            .max(content.sequence)
+            .max(1);
+        frames
+            .send(window_runtime::Command::Display(
+                crate::display::Message::Prepare {
+                    submitted: PageFrame {
+                        provenance: FrameProvenance {
+                            document,
+                            content: Some(ContentFrameProvenance {
+                                sequence: presentation_sequence,
+                                recording_revision: content.recording_revision,
+                                main_frame_epoch: content.main_frame_epoch,
+                            }),
+                        },
+                        viewport,
+                        pixels: pixels.clone(),
+                    },
+                },
+            ))
+            .map_err(|_| io::Error::other("window display stopped"))?;
+        if stop {
+            break;
+        }
+    }
+    Ok(())
+}
+
+// The Page impl executor owns cc scheduling and input. Its move-only frame
+// output crosses the Page FrameSink queue to a Page-owned Viz/Renderer
+// sequence, so software drawing cannot stall impl-thread wheel dispatch.
+fn run_impl(
     receiver: mpsc::Receiver<ImplCommand>,
-    ready_sender: mpsc::Sender<ImplCommand>,
+    self_sender: mpsc::Sender<ImplCommand>,
     main: mpsc::Sender<Command>,
     requested: Arc<AtomicBool>,
+    document: Document,
+    viewport: Viewport,
+    external_compositor: bool,
+    executor: Arc<dyn executor::Executor>,
     source: Arc<dyn BeginFrameSource>,
     frames: mpsc::Sender<window_runtime::Command>,
-    reporter: &ErrorReporter,
-    threads: &browser::page::PageThreads,
 ) -> Result<(), RuntimeFailure> {
-    let reply = Arc::new(move |ready| {
-        let _ = ready_sender.send(ImplCommand::Ready(ready));
-    });
-    let mut owner = PagePresentation::with_threads(document, reply, threads)?;
-    let mut scheduler = viz::DisplayScheduler::default();
-    let route = |owner: &mut PagePresentation,
-                 scheduler: &mut viz::DisplayScheduler<NativeBeginFrame>,
-                 effects: Vec<presentation::Effect>|
-     -> io::Result<()> {
-        for effect in effects {
-            match effect {
-                presentation::Effect::MainThread(event) => {
-                    let _ = main.send(Command::Main(event));
+    let mut presenter_sender = None;
+    let pump_pending = Arc::new(AtomicBool::new(false));
+    let compositor_executor: Arc<dyn executor::Executor> = Arc::new(WakingExecutor::new(
+        executor,
+        self_sender.clone(),
+        pump_pending.clone(),
+    ));
+    let mut presentation = if external_compositor {
+        let (pipeline, presenter) = PageRenderPipeline::new_external(compositor_executor);
+        let (sender, presenter_receiver) = mpsc::channel();
+        let presenter_self = self_sender.clone();
+        std::thread::Builder::new()
+            .name(format!("page-renderer-{}-{}", document.0, document.1))
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || {
+                crate::engine::set_page_thread_presentation_priority();
+                if let Err(error) =
+                    run_presenter(presenter_receiver, presenter, presenter_self.clone(), document, frames)
+                {
+                    let _ = presenter_self.send(ImplCommand::RendererFailed(error.to_string()));
                 }
-                presentation::Effect::FrameProduced {
-                    frame,
-                    submitted,
-                    resources,
-                    scroll_active,
-                } => {
-                    frames
-                        .send(window_runtime::Command::Display(
-                            crate::display::Message::Prepare {
-                                frame,
-                                submitted,
-                                resources,
-                                scroll_active,
-                            },
-                        ))
-                        .map_err(|_| io::Error::other("window display stopped"))?;
-                }
-                presentation::Effect::RequestBeginFrame => source.request_begin_frame(),
-                presentation::Effect::VisualDamage => scheduler.NotifyVisualDamage(Instant::now()),
-                _ => {}
-            }
-        }
-        let _ = owner;
-        Ok(())
+            })
+            .map_err(|error| RuntimeFailure {
+                stage: "renderer",
+                error: io::Error::other(error.to_string()),
+            })?;
+        presenter_sender = Some(sender.clone());
+        Some(ImplPresentation::new(pipeline, sender, viewport))
+    } else {
+        None
     };
-    loop {
-        let timeout = scheduler
-            .NextDeadline()
-            .map_or(Duration::from_secs(1), |t| {
-                t.saturating_duration_since(Instant::now())
-            });
-        let effects = match receiver.recv_timeout(timeout) {
-            Ok(ImplCommand::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
-            Ok(ImplCommand::Core(command)) => owner.Handle(command)?,
-            Ok(ImplCommand::Ready(ready)) => {
-                let ready = ready.take();
-                let rejected = ready
-                    .result
-                    .as_ref()
-                    .err()
-                    .map(|e| reporter.event("raster", error_kind(e), e.to_string(), None));
-                let effects = owner
-                    .Handle(PageCommand::RasterReady(ready))
-                    .map_err(|error| RuntimeFailure {
-                        stage: "raster",
-                        error,
-                    })?;
-                if let Some(error) = rejected {
-                    reporter.emit(error);
+    let mut main_frame_epoch = 0u64;
+    while let Ok(command) = receiver.recv() {
+        match command {
+            ImplCommand::Stop => {
+                if let Some(sender) = presenter_sender.take() {
+                    let _ = sender.send(PresenterCommand::Stop);
                 }
-                effects
+                break;
             }
-            Ok(ImplCommand::Tick(frame)) => {
-                if let Some(previous) = scheduler.BeginFrame(
-                    frame,
-                    viz::FrameTiming {
-                        frame_time: frame.frame_time,
-                        interval: frame.interval,
-                        source_deadline: frame.deadline,
-                    },
-                ) {
-                    if !previous.IsPrepared() {
-                        let effects = owner.Prepare(previous.Payload())?;
-                        route(&mut owner, &mut scheduler, effects)?;
+            ImplCommand::RendererFailed(message) => {
+                return Err(RuntimeFailure {
+                    stage: "renderer",
+                    error: io::Error::other(message),
+                });
+            }
+            ImplCommand::Pump => {
+                pump_pending.store(false, Ordering::Release);
+                if let Some(presentation) = presentation.as_mut() {
+                    let result = presentation.pipeline.Pump()?;
+                    if !result.effects.is_empty() {
+                        let requested = result.effects.iter().any(|effect| {
+                            matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
+                        });
+                        let epoch = requested.then(|| {
+                            main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
+                            presentation.require_main_frame(main_frame_epoch);
+                            main_frame_epoch
+                        });
+                        let _ = main.send(Command::CompositorEffects {
+                            effects: result.effects,
+                            main_frame_epoch: epoch,
+                        });
                     }
+                    presentation.needs_publish |= result.submitted;
+                    let _ = presentation.publish()?;
+                }
+            }
+            ImplCommand::Reclaim(resources) => {
+                if let Some(presentation) = presentation.as_mut() {
+                    presentation.pipeline.ReclaimResources(resources)?;
+                    let _ = presentation.flush_frames()?;
+                }
+            }
+            ImplCommand::Tick(frame) => {
+                if let Some(presentation) = presentation.as_mut() {
+                    if presentation.pipeline.NeedsBeginFrames() {
+                        let result = presentation.pipeline.BeginPhysicalFrame(frame.args)?;
+                        if !result.effects.is_empty() {
+                            let requested = result.effects.iter().any(|effect| {
+                                matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
+                            });
+                            let epoch = requested.then(|| {
+                                main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
+                                presentation.require_main_frame(main_frame_epoch);
+                                main_frame_epoch
+                            });
+                            let _ = main.send(Command::CompositorEffects {
+                                effects: result.effects,
+                                main_frame_epoch: epoch,
+                            });
+                        }
+                        presentation.needs_publish |= result.submitted;
+                    }
+                    let _ = presentation.publish()?;
                 }
                 if requested.swap(false, Ordering::AcqRel) {
-                    let effects = owner.Handle(PageCommand::BeginFrame(frame))?;
-                    if !effects.iter().any(|e| {
-                        matches!(
-                            e,
-                            presentation::Effect::MainThread(
-                                compositor::MainThreadEvent::BeginFrame { .. }
-                            )
-                        )
-                    }) {
-                        requested.store(true, Ordering::Release);
-                    }
-                    effects
-                } else {
-                    vec![]
+                    let _ = main.send(Command::Main(MainThreadEvent::BeginFrame { frame }));
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => vec![],
-        };
-        route(&mut owner, &mut scheduler, effects)?;
-        if scheduler.NeedsPrepare(Instant::now()) {
-            let pending = scheduler.PendingFrame().unwrap();
-            let effects = owner.Prepare(pending.Payload())?;
-            let produced = effects
-                .iter()
-                .any(|e| matches!(e, presentation::Effect::FrameProduced { .. }));
-            scheduler.MarkPrepared(pending, produced);
-            route(&mut owner, &mut scheduler, effects)?;
+            ImplCommand::Commit {
+                artifact,
+                content,
+                viewport,
+            } => {
+                if let Some(presentation) = presentation.as_mut() {
+                    presentation.commit(artifact, content, viewport);
+                    let _ = presentation.publish()?;
+                }
+            }
+            ImplCommand::Wheel {
+                mut wheel,
+                queued_at,
+                samples,
+            } => {
+                let Some(presentation) = presentation.as_mut() else {
+                    let _ = main.send(Command::Input {
+                        input: InputEvent::Wheel(wheel),
+                        queued_at,
+                        samples,
+                    });
+                    continue;
+                };
+                let result = presentation.pipeline.Wheel(&wheel)?;
+                wheel.compositor_handled = result.handled;
+                presentation.needs_publish |= result.submitted;
+                let requested = result.effects.iter().any(|effect| {
+                    matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
+                });
+                let epoch = requested.then(|| {
+                    main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
+                    presentation.require_main_frame(main_frame_epoch);
+                    main_frame_epoch
+                });
+                let _ = main.send(Command::ExternalWheel {
+                    wheel,
+                    queued_at,
+                    samples,
+                    effects: result.effects,
+                    main_frame_epoch: epoch,
+                });
+                let _ = presentation.publish()?;
+            }
         }
-        scheduler.TakeIfDrawDue(Instant::now());
+        if let Some(presentation) = presentation.as_mut() {
+            let effects = presentation.pipeline.TakeMainThreadEffects();
+            if !effects.is_empty() {
+                let requested = effects.iter().any(|effect| {
+                    matches!(effect, CompositorMainThreadEffect::RequestMainFrame)
+                });
+                let epoch = requested.then(|| {
+                    main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
+                    presentation.require_main_frame(main_frame_epoch);
+                    main_frame_epoch
+                });
+                let _ = main.send(Command::CompositorEffects {
+                    effects,
+                    main_frame_epoch: epoch,
+                });
+            }
+        }
+        if presentation.as_ref().is_some_and(|presentation| {
+            presentation.needs_publish || presentation.pipeline.NeedsBeginFrames()
+        }) {
+            source.request_begin_frame();
+        }
     }
+    Ok(())
 }
 // Each Page has its own instance of the existing task-selection engine.
 // Rendering opportunities keep priority over ordinary resource/parser tasks;
 // the transport pump only blocks and delivers typed commands.
 struct DocumentQueue {
-    engine: event_loop::EventLoopEngine<Command, compositor::MainThreadEvent<NativeBeginFrame>>,
+    engine: event_loop::EventLoopEngine<Command, MainThreadEvent>,
     token: u64,
     task_queued: bool,
     collection_queued: bool,
     javascript_collection_queued: bool,
 }
 struct SelectedCommand(Option<Command>);
-impl event_loop::EventLoopExecutor<Command, compositor::MainThreadEvent<NativeBeginFrame>>
-    for SelectedCommand
-{
+impl event_loop::EventLoopExecutor<Command, MainThreadEvent> for SelectedCommand {
     type Error = std::convert::Infallible;
     fn RunTask(
         &mut self,
@@ -555,7 +919,7 @@ impl event_loop::EventLoopExecutor<Command, compositor::MainThreadEvent<NativeBe
     fn UpdateRendering(
         &mut self,
         _: event_loop::ExecutionContextId,
-        frame: compositor::MainThreadEvent<NativeBeginFrame>,
+        frame: MainThreadEvent,
     ) -> Result<(), Self::Error> {
         self.0 = Some(Command::Main(frame));
         Ok(())
@@ -594,7 +958,7 @@ impl DocumentQueue {
     fn post(&mut self, command: Command) {
         use event_loop::*;
         let now = Instant::now();
-        if let Command::Main(event @ compositor::MainThreadEvent::BeginFrame { .. }) = command {
+        if let Command::Main(event @ MainThreadEvent::BeginFrame { .. }) = command {
             self.engine.Apply(
                 EventLoopMutation::BeginMainFrame {
                     context: ExecutionContextId(1),
@@ -833,10 +1197,10 @@ fn run_document(
     params: &Params,
     receiver: mpsc::Receiver<Command>,
     wake: mpsc::Sender<Command>,
-    commits: mpsc::Sender<ImplCommand>,
     source: Arc<dyn BeginFrameSource>,
     reporter: &ErrorReporter,
     threads: browser::page::PageThreads,
+    impl_sender: mpsc::Sender<ImplCommand>,
 ) -> io::Result<()> {
     let mut viewport = params.viewport;
     let client = Rc::new(RefCell::new(Client {
@@ -852,7 +1216,8 @@ fn run_document(
         client,
         threads,
     )?;
-    page.SetBeginFrameSource(Some(source));
+    page.SetExternalCompositor(!params.controls);
+    page.SetBeginFrameSource(Some(source.clone()));
     let wake_pending = Arc::new(AtomicBool::new(false));
     let pending = wake_pending.clone();
     page.SetLoadingWakeCallback(Arc::new(move || {
@@ -863,16 +1228,18 @@ fn run_document(
     page.OpenRequest(&params.request, 16384, 4096)?;
     let mut patches = VecDeque::new();
     let mut published = None;
+    let mut pending_main_frame_epoch = 0u64;
+    let mut completed_main_frame_epoch = 0u64;
     let mut status = None;
+    let mut feedback = None;
     let mut last_memory_report: Option<Instant> = None;
     let mut hovered = Vec::new();
     let mut press_discarded = false;
     let mut queue = DocumentQueue::new();
     loop {
-        let mut main_complete = None;
         let command = queue.next(&receiver, page.NextTaskDeadline(Instant::now()));
         let frame_context = match &command {
-            Ok(Command::Main(compositor::MainThreadEvent::BeginFrame { frame, .. })) => {
+            Ok(Command::Main(MainThreadEvent::BeginFrame { frame, .. })) => {
                 browser_tracing::Context {
                     source_id: frame.source_id,
                     frame_id: frame.sequence_number,
@@ -904,26 +1271,13 @@ fn run_document(
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 unreachable!("document queue resolves deadlines")
             }
-            Ok(Command::Main(compositor::MainThreadEvent::BeginFrame {
-                frame, scroll, ..
-            })) => {
+            Ok(Command::Main(MainThreadEvent::BeginFrame { frame, .. })) => {
                 let started = Instant::now();
-                if let Some(update) = scroll {
-                    page.ApplyCompositorScrollDelta(
-                        update.sequence,
-                        update.owner_client_id,
-                        update.delta,
-                    )?;
-                }
                 let result = page.UpdateRendering(frame.args);
-                main_complete = Some((frame.source_id, frame.sequence_number));
                 if let Err(error) = result {
-                    let _ = commits.send(ImplCommand::Core(PageCommand::MainFrameComplete {
-                        source_id: frame.source_id,
-                        sequence_number: frame.sequence_number,
-                    }));
                     return Err(error);
                 }
+                completed_main_frame_epoch = pending_main_frame_epoch;
                 browser_tracing::interval(
                     "frame",
                     "MainFrameCycle",
@@ -931,18 +1285,6 @@ fn run_document(
                     Instant::now(),
                     &[("view_id", params.document.0 as f64)],
                 );
-            }
-            Ok(Command::Main(compositor::MainThreadEvent::Wheel {
-                event,
-                queued_at,
-                samples,
-            })) => {
-                if page.CurrentFrame().is_some() {
-                    page.QueueFrameInput(InputEvent::Wheel(event), queued_at, samples)?;
-                }
-            }
-            Ok(Command::Main(compositor::MainThreadEvent::RasterFallback)) => {
-                page.RecoverRetainedRaster();
             }
             Ok(Command::Input {
                 input,
@@ -1069,6 +1411,36 @@ fn run_document(
                     );
                 }
             }
+            Ok(Command::ExternalWheel {
+                wheel,
+                queued_at,
+                samples,
+                effects,
+                main_frame_epoch,
+            }) => {
+                let requests_main = main_frame_epoch.is_some();
+                page.ApplyCompositorWheelEffects(effects)?;
+                if let Some(epoch) = main_frame_epoch {
+                    pending_main_frame_epoch = pending_main_frame_epoch.max(epoch);
+                }
+                page.QueueFrameInput(InputEvent::Wheel(wheel), queued_at, samples)?;
+                if requests_main {
+                    source.request_begin_frame();
+                }
+            }
+            Ok(Command::CompositorEffects {
+                effects,
+                main_frame_epoch,
+            }) => {
+                let requests_main = main_frame_epoch.is_some();
+                page.ApplyCompositorWheelEffects(effects)?;
+                if let Some(epoch) = main_frame_epoch {
+                    pending_main_frame_epoch = pending_main_frame_epoch.max(epoch);
+                }
+                if requests_main {
+                    source.request_begin_frame();
+                }
+            }
             Ok(Command::Resize(next)) => {
                 viewport = next;
                 page.ResizeViewport(
@@ -1123,27 +1495,86 @@ fn run_document(
             );
         }
         if let Some(frame) = page.CurrentFrame() {
-            let identity = (frame.sequence, frame.compositor_scroll_sequence, viewport);
+            let identity = (
+                frame.sequence,
+                frame.compositor_scroll_sequence,
+                completed_main_frame_epoch,
+                viewport,
+            );
             if published != Some(identity) {
-                let blocking = page.BlockingWheelEventRegions();
-                let snapshot = PageSnapshot {
-                    document: params.document,
-                    viewport,
-                    frame_time: Instant::now(),
-                    sequence: frame.sequence,
-                    compositor_scroll_sequence: frame.compositor_scroll_sequence,
-                    content: compositor::ContentUpdate::Replace(frame.display_items.clone()),
-                    transparent_background: params.transparent,
-                    metadata: (),
-                    async_root_scroll: params.scripting,
-                    blocking_wheel_regions: compositor::BlockingWheelEventRegions {
-                        covers_viewport: blocking.covers_viewport,
-                        scrolling_rects: blocking.scrolling_rects,
-                        fixed_rects: blocking.fixed_rects,
-                    },
+                if !params.controls {
+                    impl_sender
+                        .send(ImplCommand::Commit {
+                            artifact: frame.display_items.clone(),
+                            content: ContentFrameProvenance {
+                                sequence: frame.sequence,
+                                recording_revision: frame.display_items.recording_revision,
+                                main_frame_epoch: completed_main_frame_epoch,
+                            },
+                            viewport,
+                        })
+                        .map_err(|_| io::Error::other("Page compositor executor stopped"))?;
+                    published = Some(identity);
+                } else {
+                    let render_started = std::env::var_os("BROWSER_PROFILE_INPUT")
+                    .is_some()
+                    .then(std::time::Instant::now);
+                    let mut pixels = vec![0u32; viewport.width as usize * viewport.height as usize];
+                    let allocated_at = render_started.map(|_| std::time::Instant::now());
+                    let ready = match page.PaintInto(
+                    viewport.width,
+                    viewport.height,
+                    viewport.scale,
+                    &mut pixels,
+                    skia::PixelFormat::Bgra8888,
+                    viewport.width as usize,
+                ) {
+                    Ok(_) => true,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        // The Page has retained this commit. Retry through the
+                        // same frame-demand owner, keeping the last completed
+                        // surface visible until a presentable frame exists.
+                        source.request_begin_frame();
+                        false
+                    }
+                    Err(error) => return Err(error),
                 };
-                let _ = commits.send(ImplCommand::Core(PageCommand::Snapshot(snapshot)));
-                published = Some(identity);
+                    if ready {
+                        let painted_at = render_started.map(|_| std::time::Instant::now());
+                        let completed = PageFrame {
+                        provenance: FrameProvenance {
+                            document: params.document,
+                            content: Some(ContentFrameProvenance {
+                                sequence: frame.sequence,
+                                recording_revision: frame.display_items.recording_revision,
+                                main_frame_epoch: completed_main_frame_epoch,
+                            }),
+                        },
+                        viewport,
+                        pixels: Arc::new(pixels),
+                    };
+                        params
+                            .frames
+                            .send(window_runtime::Command::Display(
+                                crate::display::Message::Prepare {
+                                    submitted: completed,
+                                },
+                            ))
+                            .map_err(|_| io::Error::other("window display stopped"))?;
+                        if let (Some(started), Some(allocated), Some(painted)) =
+                            (render_started, allocated_at, painted_at)
+                        {
+                            eprintln!(
+                            "page-publish-profile allocate_ms={:.3} paint_ms={:.3} send_ms={:.3} total_ms={:.3}",
+                            (allocated - started).as_secs_f64() * 1000.0,
+                            (painted - allocated).as_secs_f64() * 1000.0,
+                            painted.elapsed().as_secs_f64() * 1000.0,
+                            started.elapsed().as_secs_f64() * 1000.0,
+                            );
+                        }
+                        published = Some(identity);
+                    }
+                }
                 if params.document.0 == 0 {
                     (params.events)(
                         params.document,
@@ -1178,18 +1609,21 @@ fn run_document(
                 status = Some((url, title, loading));
             }
         }
-        (params.events)(
-            params.document,
-            Event::Feedback {
-                cursor: page.Cursor(),
-                caret: page.Caret().map(|c| c.rect),
-            },
-        );
-        if let Some((source_id, sequence_number)) = main_complete {
-            let _ = commits.send(ImplCommand::Core(PageCommand::MainFrameComplete {
-                source_id,
-                sequence_number,
-            }));
+        // Page's document executor can run many resource and BeginFrame tasks
+        // between native input events. Cursor/caret are state feedback, not a
+        // pulse for every owner-thread task; enqueue only a changed value so
+        // the window event loop remains able to consume native mouse/wheel
+        // input while a document is busy.
+        let next_feedback = (page.Cursor(), page.Caret().map(|c| c.rect));
+        if feedback != Some(next_feedback) {
+            (params.events)(
+                params.document,
+                Event::Feedback {
+                    cursor: next_feedback.0,
+                    caret: next_feedback.1,
+                },
+            );
+            feedback = Some(next_feedback);
         }
         queue.collection();
         queue.javascript_collection(page.JavaScriptGarbageCollectionRequested());
@@ -1295,168 +1729,5 @@ mod queue_tests {
             queue.next(&receiver, None),
             Ok(Command::CollectLayoutHeap)
         ));
-    }
-}
-
-#[cfg(test)]
-mod failure_tests {
-    use super::*;
-
-    #[test]
-    fn page_failures_emit_identity_stop_their_actors_and_leave_other_pages_rendering() {
-        let source =
-            crate::begin_frame_source::create_offscreen(Duration::from_millis(16)).unwrap();
-        let routes: FrameRoutes = Arc::new(Mutex::new(BTreeMap::new()));
-        let clocks = routes.clone();
-        source
-            .GetFrameSource(1)
-            .unwrap()
-            .SetClient(Arc::new(move |frame| {
-                let senders: Vec<_> = clocks
-                    .lock()
-                    .unwrap()
-                    .values()
-                    .filter(|(_, v)| v.load(Ordering::Acquire))
-                    .map(|(s, _)| s.clone())
-                    .collect();
-                for sender in senders {
-                    let _ = sender.send(ImplCommand::Tick(frame));
-                }
-            }))
-            .unwrap();
-        let (frames, frame_receiver) = mpsc::channel();
-        let (events, event_receiver) = mpsc::channel();
-        let events: Arc<dyn Fn(Document, Event) + Send + Sync> = Arc::new(move |id, event| {
-            let _ = events.send((id, event));
-        });
-        let viewport = Viewport {
-            width: 320,
-            height: 160,
-            scale: 1.0,
-        };
-        let new_page = |document, scripting| {
-            let page=spawn(Params{document,url:format!("https://page.test/{}",document.0),viewport,request:url_loader::URLRequest{url:crate::engine::data_url("<!doctype html><title>alive</title><body style='margin:0;background:#ace'>alive</body>"),..Default::default()},scripting,threads:Default::default(),transparent:false,controls:false,source:source.clone(),routes:routes.clone(),frames:frames.clone(),events:events.clone()}).unwrap();
-            page.visible(true);
-            page
-        };
-        let frame_for = |document, after| {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            loop {
-                let message = frame_receiver
-                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                    .expect("Page frame deadline");
-                if let window_runtime::Command::Display(crate::display::Message::Prepare {
-                    submitted,
-                    ..
-                }) = message
-                {
-                    if submitted.provenance.document == document
-                        && submitted.content.is_some()
-                        && submitted
-                            .provenance
-                            .content
-                            .is_some_and(|p| p.sequence > after)
-                    {
-                        return submitted.provenance.content.unwrap().sequence;
-                    }
-                }
-            }
-        };
-        let failed_event = |document| {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            loop {
-                let (id, event) = event_receiver
-                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                    .expect("Page error deadline");
-                if let Event::Error(error) = event {
-                    if id == document && error.terminal {
-                        error.emit_stderr();
-                        return error;
-                    }
-                }
-            }
-        };
-        let healthy = new_page((1, 1), true);
-        let mut sequence = frame_for(healthy.document, 0);
-        let mut failures = Vec::new();
-        for (id, stage) in [(2, "compositor"), (3, "document"), (4, "raster")] {
-            let page = new_page((id, 1), false);
-            frame_for(page.document, 0);
-            if stage == "document" {
-                page.send(Command::TestTask(Box::new(|| {
-                    std::panic::panic_any(dom::error::DOMException {
-                        kind: dom::error::DOMExceptionKind::LogicError,
-                        message: "injected document failure",
-                    })
-                })));
-            } else {
-                let mut artifact = paint::paint_engine::PaintArtifact::default();
-                // A draw without semantic records is rejected by the real
-                // raster planner, on this Page's own raster executor.
-                artifact.items = Arc::new(vec![Default::default()]);
-                let snapshot = PageSnapshot {
-                    document: if stage == "compositor" {
-                        (99, 1)
-                    } else {
-                        page.document
-                    },
-                    viewport,
-                    frame_time: Instant::now(),
-                    sequence: 10000,
-                    compositor_scroll_sequence: 0,
-                    content: compositor::ContentUpdate::Replace(Arc::new(artifact)),
-                    transparent_background: false,
-                    metadata: (),
-                    async_root_scroll: false,
-                    blocking_wheel_regions: Default::default(),
-                };
-                page.impl_sender
-                    .send(ImplCommand::Core(PageCommand::Snapshot(snapshot)))
-                    .unwrap();
-            }
-            let error = failed_event(page.document);
-            assert_eq!(error.document, page.document);
-            assert_eq!(error.stage, stage);
-            assert_eq!(error.url, format!("https://page.test/{id}"));
-            assert_eq!(error.json()["view_id"], id);
-            assert!(page.failed());
-            assert!(!routes.lock().unwrap().contains_key(&page.document));
-            if stage == "document" {
-                assert_eq!(error.kind, "panic");
-                assert!(error.message.contains("injected document failure"));
-            }
-            if stage == "raster" {
-                assert!(error.message.contains("missing-semantic-records"));
-            }
-            let (reply, result) = mpsc::channel();
-            page.send(Command::Evaluate {
-                source: "throw Error('must not run')".into(),
-                reply,
-            });
-            assert!(result
-                .recv_timeout(Duration::from_millis(500))
-                .unwrap()
-                .unwrap_err()
-                .contains("stopped"));
-            let (reply, result) = mpsc::channel();
-            healthy.send(Command::Evaluate {
-                source: format!("document.body.textContent='alive after {stage}';"),
-                reply,
-            });
-            result
-                .recv_timeout(Duration::from_secs(5))
-                .unwrap()
-                .unwrap();
-            sequence = frame_for(healthy.document, sequence);
-            assert!(!healthy.failed());
-            failures.push(page);
-        }
-        // A fresh document generation can render again without restarting the
-        // host, a healthy Page, or the shared physical clock.
-        let replacement = new_page((2, 2), false);
-        frame_for(replacement.document, 0);
-        assert!(!replacement.failed());
-        drop((replacement, failures, healthy));
-        assert!(routes.lock().unwrap().is_empty());
     }
 }

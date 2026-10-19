@@ -8,7 +8,9 @@ pub mod SkRasterPipelineContexts {
     use alloc::vec::Vec;
     #[derive(Copy, Clone, Default, Debug)]
     pub struct SamplerCtx {
-        pub spread_mode: SpreadMode,
+        pub tile_mode_x: SpreadMode,
+        pub tile_mode_y: SpreadMode,
+        pub round_down_at_integer: bool,
         pub inv_width: f32,
         pub inv_height: f32,
     }

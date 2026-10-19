@@ -269,7 +269,6 @@ dependencies = [
  "image_resource",
  "interaction",
  "javascript",
- "layer_tile",
  "layoutng_assembly",
  "layoutng_block",
  "layoutng_flex",
@@ -467,13 +466,11 @@ dependencies = [
 name = "compositor"
 version = "0.0.1"
 dependencies = [
- "browser_tracing",
- "interaction",
- "layer_tile",
- "layoutng_assembly",
+ "getrandom 0.4.3",
  "layoutng_foundation",
  "paint",
- "raster",
+ "serde_json",
+ "skia",
 ]
 
 [[package]]
@@ -1893,16 +1890,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "layer_tile"
-version = "0.0.1"
-dependencies = [
- "browser_tracing",
- "layoutng_assembly",
- "paint",
- "skia",
-]
-
-[[package]]
 name = "layoutng"
 version = "0.0.1"
 dependencies = [
@@ -2730,6 +2717,8 @@ dependencies = [
  "layoutng_assembly",
  "layoutng_foundation",
  "layoutng_style",
+ "serde_json",
+ "skia",
 ]
 
 [[package]]
@@ -3065,12 +3054,11 @@ dependencies = [
 name = "raster"
 version = "0.0.1"
 dependencies = [
- "browser_tracing",
- "executor",
+ "compositor",
  "font_engine",
  "image_resource",
- "layer_tile",
  "layoutng_assembly",
+ "layoutng_foundation",
  "paint",
  "skia",
 ]
@@ -3121,8 +3109,8 @@ version = "0.0.1"
 dependencies = [
  "browser",
  "browser_tracing",
+ "bytemuck",
  "cc",
- "compositor",
  "devtools",
  "document_image",
  "dom",
@@ -3132,7 +3120,6 @@ dependencies = [
  "image_resource",
  "interaction",
  "javascript",
- "layer_tile",
  "layoutng_assembly",
  "layoutng_foundation",
  "page_mutation",
@@ -3182,10 +3169,10 @@ dependencies = [
 name = "renderer"
 version = "0.0.1"
 dependencies = [
- "browser_tracing",
+ "bytemuck",
  "compositor",
- "layer_tile",
  "layoutng_assembly",
+ "layoutng_foundation",
  "paint",
  "raster",
  "skia",
@@ -4024,7 +4011,6 @@ name = "viz"
 version = "0.0.1"
 dependencies = [
  "compositor",
- "paint",
 ]
 
 [[package]]

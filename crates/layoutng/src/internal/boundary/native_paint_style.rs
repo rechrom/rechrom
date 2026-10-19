@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use foundation::{
     BlendMode, EBackfaceVisibility, EBorderStyle, EImageRendering, EIsolation, EObjectFit,
-    EPointerEvents, EShapeRendering, ETransformBox, EUserSelect, EVectorEffect, EVisibility, Length,
-    LineCap, LineJoin, TransformOperationType, TranslateTransformOperation, WindRule,
+    EPointerEvents, EShapeRendering, ETransformBox, EUserSelect, EVectorEffect, EVisibility,
+    Length, LineCap, LineJoin, TransformOperationType, TranslateTransformOperation, WindRule,
 };
 use layoutng_style::style::{
     border_image_length::BorderImageLength,
@@ -558,7 +558,8 @@ pub fn ExportGeneratedImageShader(
 fn BackgroundLayer(style: &ComputedStyle, layer: &FillLayer) -> Option<BackgroundImageLayer> {
     let image = unsafe { layer.GetImage().as_ref() }?;
     let image = layoutng_style::style::style_mask_source_image::MaskSourceImage(image)
-        .and_then(|mask| mask.FetchedImage()).unwrap_or(image);
+        .and_then(|mask| mask.FetchedImage())
+        .unwrap_or(image);
     let mut output = BackgroundImageLayer::default();
     if let Some(shader) = ExportGeneratedImageShader(style, image) {
         output.shader = Some(shader);
@@ -685,27 +686,36 @@ fn Masks(style: &ComputedStyle) -> Vec<PaintMaskLayer> {
             Some(image) if image.CanRender() => PaintMaskImageState::kReady,
             _ => PaintMaskImageState::kInvalid,
         };
-        let local = native_image.and_then(layoutng_style::style::style_mask_source_image::MaskSourceImage)
+        let local = native_image
+            .and_then(layoutng_style::style::style_mask_source_image::MaskSourceImage)
             .filter(|mask| mask.IsLocal());
-        let image = local.map(|_| BackgroundImageLayer::default()).or_else(|| BackgroundLayer(style, current)).or_else(|| {
-            native_image.is_none().then(|| {
-                let mut image = BackgroundImageLayer::default();
-                BackgroundLayerGeometry(current, &mut image);
-                image
-            })
-        });
+        let image = local
+            .map(|_| BackgroundImageLayer::default())
+            .or_else(|| BackgroundLayer(style, current))
+            .or_else(|| {
+                native_image.is_none().then(|| {
+                    let mut image = BackgroundImageLayer::default();
+                    BackgroundLayerGeometry(current, &mut image);
+                    image
+                })
+            });
         let composite = MaskComposite(current.CompositingOperator());
         if let (Some(image), Some(composite)) = (image, composite) {
             output.push(PaintMaskLayer {
                 svg_reference: local.map(|mask| crate::internal::paint_input::SvgMaskReference {
-                    id: mask.NormalizedFragment(), scope: mask.ResourceScope().unwrap(),
-                    graph: None, target_id: None, viewport: None,
+                    id: mask.NormalizedFragment(),
+                    scope: mask.ResourceScope().unwrap(),
+                    graph: None,
+                    target_id: None,
+                    viewport: None,
                 }),
                 match_source: current.MaskMode() == EFillMaskMode::kMatchSource,
-                source_error: native_image.and_then(layoutng_style::style::style_mask_source_image::MaskSourceImage)
+                source_error: native_image
+                    .and_then(layoutng_style::style::style_mask_source_image::MaskSourceImage)
                     .filter(|mask| !mask.IsLocal() && !mask.NormalizedFragment().is_empty())
-                    .and_then(|mask|mask.FetchedImage()).and_then(FetchedImage)
-                    .filter(|image|image.IsDocumentImage())
+                    .and_then(|mask| mask.FetchedImage())
+                    .and_then(FetchedImage)
+                    .filter(|image| image.IsDocumentImage())
                     .map(|_| "external SVG mask target selection".to_owned()),
                 image,
                 image_state,
@@ -1216,16 +1226,26 @@ pub(crate) fn ExportStyleWithProjectedSvg(
     let mut output = ExportStyle(style, image_resource_id);
     output.svg_mask_resource = projected.svg_mask_resource.clone();
     for layer in &mut output.mask_images {
-        let Some(reference) = layer.svg_reference.as_mut() else { continue; };
+        let Some(reference) = layer.svg_reference.as_mut() else {
+            continue;
+        };
         let entry = (reference.scope.document_id == clip_resources.snapshot.version.document_id)
-            .then(|| clip_resources.snapshot.entries.iter().find(|entry|
-                entry.scope_id == reference.scope.tree_scope_id && entry.id == reference.id)).flatten();
+            .then(|| {
+                clip_resources.snapshot.entries.iter().find(|entry| {
+                    entry.scope_id == reference.scope.tree_scope_id && entry.id == reference.id
+                })
+            })
+            .flatten();
         if let Some(graph) = entry.and_then(|entry| entry.mask_graph.as_ref()) {
             reference.graph = Some(Arc::clone(graph));
             reference.target_id = entry.map(|entry| entry.target_node_id);
             layer.source_error = graph.unsupported.clone();
-            if layer.match_source { layer.mode = graph.mode; }
-        } else { layer.image_state = PaintMaskImageState::kInvalid; }
+            if layer.match_source {
+                layer.mode = graph.mode;
+            }
+        } else {
+            layer.image_state = PaintMaskImageState::kInvalid;
+        }
     }
     output.svg_fill_server = projected.svg_fill_server.clone();
     output.svg_stroke_server = projected.svg_stroke_server.clone();

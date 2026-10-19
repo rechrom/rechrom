@@ -15,6 +15,9 @@ pub enum SkTileMode {
 
     /// Repeat the shader's image horizontally and vertically.
     kRepeat,
+
+    /// Transparent outside the original shader domain (SkTileMode.h:32-35).
+    kDecal,
 }
 
 #[allow(non_upper_case_globals)]

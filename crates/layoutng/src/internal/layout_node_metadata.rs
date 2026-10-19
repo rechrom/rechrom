@@ -85,6 +85,7 @@ pub struct StandaloneNodeData {
     pub vertical_scroll_enforced: bool,
     pub device_pixel_ratio: f64,
     pub canvas_draw_element_enabled: bool,
+    pub prefer_non_composited_scrolling_enabled: bool,
     pub viewport: Option<ViewportGeometry>,
     pub minimum_font_physical_size: Option<f32>,
     pub scrollbar_theme: Option<ScrollbarThemeMetrics>,
@@ -112,6 +113,7 @@ impl StandaloneNodeData {
             vertical_scroll_enforced: false,
             device_pixel_ratio: 1.0,
             canvas_draw_element_enabled: false,
+            prefer_non_composited_scrolling_enabled: false,
             viewport: None,
             minimum_font_physical_size: None,
             scrollbar_theme: None,
@@ -277,6 +279,9 @@ impl Node {
     pub fn InputCanvasDrawElementEnabled(&self) -> bool {
         self.input_data_.canvas_draw_element_enabled
     }
+    pub fn InputPreferNonCompositedScrollingEnabled(&self) -> bool {
+        self.input_data_.prefer_non_composited_scrolling_enabled
+    }
     pub fn InputViewport(&self) -> &Option<ViewportGeometry> {
         &self.input_data_.viewport
     }
@@ -426,6 +431,8 @@ impl Node {
         self.input_data_.vertical_scroll_enforced = input.vertical_scroll_enforced;
         self.input_data_.device_pixel_ratio = input.device_pixel_ratio;
         self.input_data_.canvas_draw_element_enabled = input.canvas_draw_element_enabled;
+        self.input_data_.prefer_non_composited_scrolling_enabled =
+            input.prefer_non_composited_scrolling_enabled;
         // Host viewport inputs are CSS pixels. Native constraints and layout
         // objects use layout-zoom coordinates; convert once at this boundary,
         // independently of device scale, just like PrepareNativeConstraints.
@@ -513,7 +520,9 @@ impl Node {
         visitor.Trace(&self.input_data_.bound_font);
         // Input descriptors retain canonical styles independently of the
         // font-bound style_ and first_line_style_ used by the LayoutObject.
-        visitor.Trace(&Member::from_ptr(self.input_data_.input_style.native_style.cast_mut()));
+        visitor.Trace(&Member::from_ptr(
+            self.input_data_.input_style.native_style.cast_mut(),
+        ));
         if let Some(style) = &self.input_data_.input_first_line_style_data {
             visitor.Trace(&Member::from_ptr(style.native_style.cast_mut()));
         }
@@ -881,7 +890,10 @@ impl Element {
             self as *mut Element,
         );
         if !textarea.is_null() {
-            let sizing = input.element.as_ref().and_then(|data| data.text_area_sizing.as_ref());
+            let sizing = input
+                .element
+                .as_ref()
+                .and_then(|data| data.text_area_sizing.as_ref());
             unsafe { &mut *textarea }.UpdateSizing(
                 sizing.map_or(2, |sizing| sizing.rows),
                 sizing.map_or(20, |sizing| sizing.columns),

@@ -82,7 +82,11 @@ impl TilingMode {
                 let image_area = width * height;
                 let tiles_log2 =
                     floor_log2(std::cmp::min(image_area.div_ceil(512 * 512), 8)) as i32;
-                let (dim1, dim2) = if width >= height { (width, height) } else { (height, width) };
+                let (dim1, dim2) = if width >= height {
+                    (width, height)
+                } else {
+                    (height, width)
+                };
                 let diff_log2 = floor_log2(dim1 / dim2) as i32;
                 let diff = std::cmp::max(0, tiles_log2 - diff_log2);
                 let dim2_log2 = diff / 2;
@@ -382,7 +386,11 @@ impl Encoder {
                 infe_name: category.infe_name(),
                 cell_index,
                 category,
-                dimg_from_id: if cell_count > 1 { Some(top_level_item_id) } else { None },
+                dimg_from_id: if cell_count > 1 {
+                    Some(top_level_item_id)
+                } else {
+                    None
+                },
                 hidden_image: hidden || cell_count > 1,
                 extra_layer_count: self.settings.extra_layer_count,
                 codec: Some(codec),

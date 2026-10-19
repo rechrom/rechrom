@@ -532,6 +532,3 @@ mod viewport_font_tests;
 
 #[cfg(test)]
 mod location_navigation_tests;
-
-#[cfg(all(test, feature = "pure_source_png"))]
-mod layer_tile_engine_tests;

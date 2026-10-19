@@ -222,7 +222,7 @@ impl Host {
     }
     fn scene(&self) {
         let toolbar_height = self.viewport.toolbar_pixels();
-        let content = compositor::DeviceRect::new(
+        let content = crate::page_presentation::DeviceRect::new(
             0,
             toolbar_height as i32,
             self.viewport.width,
@@ -230,7 +230,12 @@ impl Host {
         );
         let mut placements = vec![Placement {
             document: self.toolbar.document,
-            destination: compositor::DeviceRect::new(0, 0, self.viewport.width, toolbar_height),
+            destination: crate::page_presentation::DeviceRect::new(
+                0,
+                0,
+                self.viewport.width,
+                toolbar_height,
+            ),
         }];
         let mut live_documents = vec![self.toolbar.document];
         for tab in self.tabs.ordered() {
@@ -657,7 +662,7 @@ impl Host {
                 }
                 Ok(())
             }
-            Command::Wake(_) | Command::CompositorScroll { .. } | Command::Stop => Ok(()),
+            Command::Wake(_) | Command::Stop => Ok(()),
         }
     }
     fn input(

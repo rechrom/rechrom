@@ -959,38 +959,54 @@ pub fn Pixels(
         UnitType::kPixels | UnitType::kUserUnits => 1.0,
         UnitType::kEms | UnitType::kQuirkyEms => font as f64,
         UnitType::kRems => root as f64,
-        UnitType::kExs => media
-            .style_font_metrics
-            .ok_or(LonghandApplicationError::Unsupported(id))?
-            .ex as f64,
-        UnitType::kChs => media
-            .style_font_metrics
-            .ok_or(LonghandApplicationError::Unsupported(id))?
-            .ch as f64,
-        UnitType::kIcs => media
-            .style_font_metrics
-            .ok_or(LonghandApplicationError::Unsupported(id))?
-            .ic as f64,
-        UnitType::kCaps => media
-            .style_font_metrics
-            .ok_or(LonghandApplicationError::Unsupported(id))?
-            .cap as f64,
-        UnitType::kRexs => media
-            .style_root_font_metrics
-            .ok_or(LonghandApplicationError::Unsupported(id))?
-            .ex as f64,
-        UnitType::kRchs => media
-            .style_root_font_metrics
-            .ok_or(LonghandApplicationError::Unsupported(id))?
-            .ch as f64,
-        UnitType::kRics => media
-            .style_root_font_metrics
-            .ok_or(LonghandApplicationError::Unsupported(id))?
-            .ic as f64,
-        UnitType::kRcaps => media
-            .style_root_font_metrics
-            .ok_or(LonghandApplicationError::Unsupported(id))?
-            .cap as f64,
+        UnitType::kExs => {
+            media
+                .style_font_metrics
+                .ok_or(LonghandApplicationError::Unsupported(id))?
+                .ex as f64
+        }
+        UnitType::kChs => {
+            media
+                .style_font_metrics
+                .ok_or(LonghandApplicationError::Unsupported(id))?
+                .ch as f64
+        }
+        UnitType::kIcs => {
+            media
+                .style_font_metrics
+                .ok_or(LonghandApplicationError::Unsupported(id))?
+                .ic as f64
+        }
+        UnitType::kCaps => {
+            media
+                .style_font_metrics
+                .ok_or(LonghandApplicationError::Unsupported(id))?
+                .cap as f64
+        }
+        UnitType::kRexs => {
+            media
+                .style_root_font_metrics
+                .ok_or(LonghandApplicationError::Unsupported(id))?
+                .ex as f64
+        }
+        UnitType::kRchs => {
+            media
+                .style_root_font_metrics
+                .ok_or(LonghandApplicationError::Unsupported(id))?
+                .ch as f64
+        }
+        UnitType::kRics => {
+            media
+                .style_root_font_metrics
+                .ok_or(LonghandApplicationError::Unsupported(id))?
+                .ic as f64
+        }
+        UnitType::kRcaps => {
+            media
+                .style_root_font_metrics
+                .ok_or(LonghandApplicationError::Unsupported(id))?
+                .cap as f64
+        }
         UnitType::kCentimeters => 96.0 / 2.54,
         UnitType::kMillimeters => 96.0 / 25.4,
         UnitType::kQuarterMillimeters => 96.0 / 101.6,
@@ -1042,26 +1058,47 @@ fn PixelsForStyle(
     let factor = match unit {
         UnitType::kExs => current_metrics()
             .filter(font_engine::FontMetrics::HasXHeight)
-            .map_or(builder.GetFontDescription().ComputedSize() / 2.0, |m| m.XHeight()),
+            .map_or(builder.GetFontDescription().ComputedSize() / 2.0, |m| {
+                m.XHeight()
+            }),
         UnitType::kChs => current_metrics().map_or(0.0, |m| m.ZeroWidth()),
         UnitType::kIcs => builder.GetFontDescription().ComputedSize(),
-        UnitType::kCaps => current_metrics().map_or(
-            builder.GetFontDescription().ComputedSize(),
-            |m| m.CapHeight(),
-        ),
+        UnitType::kCaps => current_metrics()
+            .map_or(builder.GetFontDescription().ComputedSize(), |m| {
+                m.CapHeight()
+            }),
         UnitType::kRexs => context.root_style.and_then(glyph).map_or(root / 2.0, |m| {
-            if m.HasXHeight() { m.XHeight() } else { root / 2.0 }
+            if m.HasXHeight() {
+                m.XHeight()
+            } else {
+                root / 2.0
+            }
         }),
-        UnitType::kRchs => context.root_style.and_then(glyph).map_or(0.0, |m| m.ZeroWidth()),
+        UnitType::kRchs => context
+            .root_style
+            .and_then(glyph)
+            .map_or(0.0, |m| m.ZeroWidth()),
         UnitType::kRics => root,
         UnitType::kRcaps => context
             .root_style
             .and_then(glyph)
             .map_or(root, |m| m.CapHeight()),
-        _ => return Pixels(id, value, unit, builder.GetFontDescription().ComputedSize(), root, media),
+        _ => {
+            return Pixels(
+                id,
+                value,
+                unit,
+                builder.GetFontDescription().ComputedSize(),
+                root,
+                media,
+            )
+        }
     };
     builder.SetHasGlyphRelativeUnits();
-    if matches!(unit, UnitType::kRexs | UnitType::kRchs | UnitType::kRics | UnitType::kRcaps) {
+    if matches!(
+        unit,
+        UnitType::kRexs | UnitType::kRchs | UnitType::kRics | UnitType::kRcaps
+    ) {
         builder.SetHasRootRelativeUnits();
     }
     Ok(value * f64::from(factor))
@@ -1591,23 +1628,25 @@ pub(super) fn MathLengthResolver<'a>(
         }
         let pixels = Pixels(id, value, unit, font, root, media)
             .map_err(|_| crate::css_math_expression_node::MathError::MissingLengthContext)?;
-        Ok(if matches!(
-            unit,
-            UnitType::kEms
-                | UnitType::kQuirkyEms
-                | UnitType::kExs
-                | UnitType::kChs
-                | UnitType::kIcs
-                | UnitType::kCaps
-                | UnitType::kRexs
-                | UnitType::kRchs
-                | UnitType::kRics
-                | UnitType::kRcaps
-        ) {
-            pixels
-        } else {
-            pixels * zoom as f64
-        })
+        Ok(
+            if matches!(
+                unit,
+                UnitType::kEms
+                    | UnitType::kQuirkyEms
+                    | UnitType::kExs
+                    | UnitType::kChs
+                    | UnitType::kIcs
+                    | UnitType::kCaps
+                    | UnitType::kRexs
+                    | UnitType::kRchs
+                    | UnitType::kRics
+                    | UnitType::kRcaps
+            ) {
+                pixels
+            } else {
+                pixels * zoom as f64
+            },
+        )
     }
 }
 
@@ -1745,9 +1784,14 @@ fn ApplyWithPropertyContext(
 ) -> Result {
     let uses_lh = UsesLineHeightUnit(v, UnitType::kLhs);
     let uses_rlh = UsesLineHeightUnit(v, UnitType::kRlhs);
-    let uses_glyph_units = [UnitType::kExs, UnitType::kChs, UnitType::kIcs, UnitType::kCaps]
-        .into_iter()
-        .any(|unit| UsesLineHeightUnit(v, unit));
+    let uses_glyph_units = [
+        UnitType::kExs,
+        UnitType::kChs,
+        UnitType::kIcs,
+        UnitType::kCaps,
+    ]
+    .into_iter()
+    .any(|unit| UsesLineHeightUnit(v, unit));
     let uses_root_glyph_units = [
         UnitType::kRexs,
         UnitType::kRchs,
@@ -1757,38 +1801,38 @@ fn ApplyWithPropertyContext(
     .into_iter()
     .any(|unit| UsesLineHeightUnit(v, unit));
     let scoped_media;
-    let media = if length_context.root_line_height.is_some()
-        || length_context.font_metrics.is_some()
-    {
-        scoped_media = {
-            let mut media = media.clone();
-            media.style_root_line_height = length_context.root_line_height;
-            if let Some(resolver) = length_context.font_metrics {
-                media.style_font_metrics = Some(FontRelativeMetrics(
-                    b.GetFontDescription(),
-                    resolver.Metrics(b.GetFontDescription()),
-                    1.0,
-                ));
-                media.style_root_font_metrics = Some(if let Some(style) = length_context.root_style {
-                    FontRelativeMetrics(
-                        style.GetFontDescription(),
-                        resolver.Metrics(style.GetFontDescription()),
-                        b.EffectiveZoom() / style.EffectiveZoom(),
-                    )
-                } else {
-                    FontRelativeMetrics(
+    let media =
+        if length_context.root_line_height.is_some() || length_context.font_metrics.is_some() {
+            scoped_media = {
+                let mut media = media.clone();
+                media.style_root_line_height = length_context.root_line_height;
+                if let Some(resolver) = length_context.font_metrics {
+                    media.style_font_metrics = Some(FontRelativeMetrics(
                         b.GetFontDescription(),
                         resolver.Metrics(b.GetFontDescription()),
                         1.0,
-                    )
-                });
-            }
+                    ));
+                    media.style_root_font_metrics =
+                        Some(if let Some(style) = length_context.root_style {
+                            FontRelativeMetrics(
+                                style.GetFontDescription(),
+                                resolver.Metrics(style.GetFontDescription()),
+                                b.EffectiveZoom() / style.EffectiveZoom(),
+                            )
+                        } else {
+                            FontRelativeMetrics(
+                                b.GetFontDescription(),
+                                resolver.Metrics(b.GetFontDescription()),
+                                1.0,
+                            )
+                        });
+                }
+                media
+            };
+            &scoped_media
+        } else {
             media
         };
-        &scoped_media
-    } else {
-        media
-    };
     let resolved_line_height_value = match v.Payload() {
         CSSValuePayload::kNumericLiteralClass(value) if value.GetType() == UnitType::kLhs => {
             Some(crate::production_css_value::numeric(

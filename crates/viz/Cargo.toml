@@ -4,7 +4,4 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-compositor = { path = "../compositor" }
-
-[dev-dependencies]
-paint = { path = "../paint", features = ["translation_in_progress"] }
+compositor_core = { package = "compositor", path = "../compositor" }

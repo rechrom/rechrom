@@ -121,6 +121,26 @@ pub enum LineJoin {
     Bevel,
 }
 
+/// Pure native conservative stroke bound primitive. A negative width is the
+/// source fill discriminator; zero is its device-space hairline convention.
+/// Source: third_party/skia/src/core/SkStrokeRec.cpp:151-176.
+pub fn native_inflation_radius(join: LineJoin, miter_limit: f32, cap: LineCap, width: f32) -> f32 {
+    if width < 0. {
+        return 0.;
+    }
+    if width == 0. {
+        return 1.;
+    }
+    let mut multiplier = 1.0f32;
+    if join == LineJoin::Miter && multiplier < miter_limit {
+        multiplier = miter_limit;
+    }
+    if cap == LineCap::Square && multiplier < std::f32::consts::SQRT_2 {
+        multiplier = std::f32::consts::SQRT_2;
+    }
+    width / 2. * multiplier
+}
+
 const QUAD_RECURSIVE_LIMIT: usize = 3;
 
 // quads with extreme widths (e.g. (0,1) (1,6) (0,3) width=5e7) recurse to point of failure

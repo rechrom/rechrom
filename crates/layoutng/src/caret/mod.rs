@@ -18,6 +18,7 @@ pub struct TextCaret {
 /// Current presentation state consumed by paint without DOM or window dependencies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CaretPaintState {
+    pub display_item_client_invalidation_reason: foundation::PaintInvalidationReason,
     pub node_id: u64,
     pub offset: u32,
     pub empty: bool,
@@ -75,6 +76,9 @@ impl FrameCaret {
     }
     pub fn paint_state(&self) -> Option<CaretPaintState> {
         self.position.map(|position| CaretPaintState {
+            display_item_client_invalidation_reason: self
+                .display_item_client
+                .GetPaintInvalidationReason(),
             node_id: position.node_id,
             offset: position.utf16_offset,
             empty: position.empty,

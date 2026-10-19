@@ -33,7 +33,8 @@ use crate::mathml_painter::MathMLPainter;
 use crate::nine_piece_image_painter::NinePieceImagePainter;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{
-    DisplayItem, DisplayItemType, PaintPhase, ResolveDocumentImageContainerKey,
+    DisplayItem, DisplayItemType, PaintHitTestOpaqueness, PaintPhase,
+    ResolveDocumentImageContainerKey,
 };
 use crate::paint_info::PaintInfo;
 use crate::paint_property_tree::{
@@ -303,6 +304,39 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             if !theme_owns_decoration {
                 self.PaintColumnRules(phase);
+            }
+        }
+        // Source: box_fragment_painter.cc:1447-1451 and box_painter.cc:37-122.
+        // Record this after the non-scrolling background so background layer
+        // squashing is unchanged. The current scoped properties are the local
+        // border box; the payload points at the real contents ScrollTranslation.
+        if IsBackgroundPhase(phase)
+            && fragment.kind == FragmentKind::kBox
+            && fragment.paint.scroll_container.is_some()
+        {
+            let translation = self.node.contents_properties.nodes.transform.clone();
+            if translation.scroll.is_some() {
+                let style = &*fragment.paint.style;
+                let opaqueness = if style.pointer_events_none {
+                    PaintHitTestOpaqueness::Transparent
+                } else if style.border_radius > 0.0
+                    || style.border_radii.is_some()
+                    || matches!(
+                        fragment.paint.source_kind,
+                        NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
+                    )
+                {
+                    PaintHitTestOpaqueness::Mixed
+                } else {
+                    PaintHitTestOpaqueness::Opaque
+                };
+                self.context.borrow_mut().RecordScrollHitTestData(
+                    self.node,
+                    DecorationVisualRect(self.node),
+                    opaqueness,
+                    translation,
+                    PaintRect::default(),
+                );
             }
         }
         let _contents_properties =
@@ -4847,6 +4881,9 @@ fn CanvasBackgroundEffect(
     isolates_blending: bool,
 ) -> EffectPaintPropertyNode {
     EffectPaintPropertyNode {
+        compositor: Default::default(),
+        backdrop_filter_bounds: None,
+        self_or_ancestor_participates_in_view_transition: false,
         lifecycle: PaintPropertyNodeLifecycle::default(),
         id,
         parent: Some(parent),
@@ -4856,8 +4893,8 @@ fn CanvasBackgroundEffect(
         filter_reference_scale: 1.0,
         opacity: 1.0,
         blend_mode,
-        filters: Vec::new(),
-        backdrop_filters: Vec::new(),
+        filters: Default::default(),
+        backdrop_filters: Default::default(),
         backdrop_filter_has_reference: false,
         backdrop_filter_clip: None,
         isolates_blending,
@@ -4865,6 +4902,8 @@ fn CanvasBackgroundEffect(
         is_mask: false,
         direct_compositing_reasons: Vec::new(),
     }
+    .with_filter_presence()
+    .with_inherited_view_transition()
 }
 
 fn CanvasBackgroundDisplayItemId(
@@ -6103,6 +6142,11 @@ mod background_attachment_tests {
         local_fragment.paint.padding.top = 8.0;
         local_fragment.paint.padding.bottom = 9.0;
         local_fragment.paint.scroll_container = Some(ScrollContainerPaintData {
+            compositor_element_id: Default::default(),
+            scrollable_axes: [true, true],
+            background_needs_repaint_on_scroll: None,
+            prefers_non_composited_scrolling: None,
+            scroll_snap_type_is_none: None,
             container_rect: FragmentPaintRect::default(),
             minimum_scroll_offset: Offset::default(),
             maximum_scroll_offset: Offset::default(),

@@ -674,8 +674,11 @@ mod tests {
                 assert_eq!(rgb_row.len(), (width * 4) as usize);
                 for x in 0..width as usize {
                     for idx in 0..4usize {
-                        let expected_value =
-                            if idx == alpha_offset { expected_values.next().unwrap() } else { 0 };
+                        let expected_value = if idx == alpha_offset {
+                            expected_values.next().unwrap()
+                        } else {
+                            0
+                        };
                         assert_eq!(rgb_row[x * 4 + idx], expected_value as u8);
                     }
                 }
@@ -686,8 +689,11 @@ mod tests {
                 assert_eq!(rgb_row.len(), (width * 4) as usize);
                 for x in 0..width as usize {
                     for idx in 0..4usize {
-                        let expected_value =
-                            if idx == alpha_offset { expected_values.next().unwrap() } else { 0 };
+                        let expected_value = if idx == alpha_offset {
+                            expected_values.next().unwrap()
+                        } else {
+                            0
+                        };
                         assert_eq!(rgb_row[x * 4 + idx], expected_value);
                     }
                 }

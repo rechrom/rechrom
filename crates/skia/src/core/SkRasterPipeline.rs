@@ -171,6 +171,7 @@ impl MaskCtx<'_> {
 #[derive(Default)]
 pub struct Context {
     pub current_coverage: f32,
+    pub decal_mask: u32x8,
     pub sampler: SamplerCtx,
     pub uniform_color: UniformColorCtx,
     pub evenly_spaced_2_stop_gradient: EvenlySpaced2StopGradientCtx,

@@ -16,6 +16,71 @@ use crate::pre_paint_tree_walk::{
 use crate::PaintRect;
 use layoutng_assembly::internal::layout_input::Offset;
 
+// Source: drawing_display_item.cc:64-81,116-157. This is calculated once at
+// the real record producer, retaining the native flags/color/visual bounds.
+fn DrawingBackgroundColor(
+    id: DisplayItemId,
+    visual: PaintRect,
+    record: &[DisplayItem],
+) -> crate::paint_engine::PaintChunkBackgroundColorInfo {
+    use crate::paint_engine::PaintChunkBackgroundColorInfo;
+    let empty = PaintChunkBackgroundColorInfo::default();
+    if record.is_empty() {
+        return empty;
+    }
+    let mut solid = record.len() == 1;
+    for op in record {
+        let is_flags = (op.r#type as u8) >= DisplayItemType::kDrawRect as u8;
+        let fill = !matches!(
+            op.r#type,
+            DisplayItemType::kStrokeEllipse
+                | DisplayItemType::kStrokePath
+                | DisplayItemType::kStrokeRect
+                | DisplayItemType::kStrokeLine
+                | DisplayItemType::kStrokeWavyLine
+        );
+        if !is_flags
+            || !fill
+            || op.is_shadow
+            || op.blur_radius != 0.
+            || !op.filters.is_empty()
+            || op.paint_shader.is_some()
+            || op.blend_mode != PaintBlendMode::kNormal
+        {
+            if ![
+                DisplayItemIdType::kBoxDecorationBackground,
+                DisplayItemIdType::kDocumentBackground,
+                DisplayItemIdType::kDocumentRootBackdrop,
+                DisplayItemIdType::kScrollCorner,
+            ]
+            .contains(&id.r#type)
+            {
+                return empty;
+            }
+            continue;
+        }
+        let r = match op.r#type {
+            DisplayItemType::kDrawRect => op.rect,
+            DisplayItemType::kDrawRoundedRect => {
+                solid = false;
+                op.rect
+            }
+            _ => return empty,
+        };
+        let mut value = PaintChunkBackgroundColorInfo::default();
+        value.background_color = op.color;
+        value.background_color.alpha *= op.opacity;
+        value.background_area = r.width as f32 * r.height as f32;
+        value.background_is_solid_color = solid
+            && r.x <= visual.x
+            && r.y <= visual.y
+            && r.x + r.width >= visual.x + visual.width
+            && r.y + r.height >= visual.y + visual.height;
+        return value;
+    }
+    empty
+}
+
 // drawing_display_item.h:70-98 and drawing_display_item.cc:64-81,285-320.
 // Only one fill rect/rrect op without a shader or pixel-moving paint flags
 // qualifies. Images, text, strokes and multi-op records retain painter ink bounds.
@@ -141,8 +206,7 @@ pub fn CalculateRectKnownToBeOpaqueForRecord(
 pub struct PaintContext<'o> {
     output: &'o mut PaintArtifact,
     pub(crate) caret: Option<crate::paint_engine::CaretPosition>,
-    pub(crate) document_selection:
-        Option<layoutng_assembly::editing_state::DocumentSelection>,
+    pub(crate) document_selection: Option<layoutng_assembly::editing_state::DocumentSelection>,
     pub(crate) caret_local_rect: Option<layoutng_assembly::caret::geometry::LocalCaretRect>,
     chunker: PaintChunker,
     drawing_recorder: Option<(
@@ -161,6 +225,9 @@ pub struct PaintContext<'o> {
 }
 
 impl<'o> PaintContext<'o> {
+    pub(crate) fn Finish(&mut self) {
+        self.chunker.Finish(&mut self.output.chunks);
+    }
     // cpp: paint/paint_context.h:10
     pub fn new(output: &'o mut PaintArtifact) -> Self {
         Self {
@@ -230,6 +297,14 @@ impl<'o> PaintContext<'o> {
             fragment: fragment.paint.display_item_fragment,
         };
         let client = DisplayItemClientInfo::from_fragment(fragment);
+        self.output.client_owner_node_ids.insert(
+            id.client_id as usize,
+            fragment.paint.display_item_client_owner_node_id,
+        );
+        self.output.client_debug_names.insert(
+            id.client_id as usize,
+            fragment.paint.display_item_client_debug_name.clone(),
+        );
         let (visual_rect, visual_rect_is_accurate) = TightenDrawingVisualRect(
             item.rect,
             std::slice::from_ref(&item),
@@ -248,7 +323,17 @@ impl<'o> PaintContext<'o> {
             visual_rect_is_accurate,
             rect_known_to_be_opaque,
         );
+        self.chunker.UpdateDrawingDerivedData(
+            &mut self.output.chunks,
+            DrawingBackgroundColor(id, visual_rect, std::slice::from_ref(&item)),
+            item.r#type == DisplayItemType::kDrawGlyphRun,
+            visual_rect,
+        );
         self.output.display_items.push(RecordedDisplayItem {
+            is_cacheable: client.is_cacheable,
+            is_tombstone: false,
+            paint_invalidation_reason: client.invalidation_reason,
+            scrollbar_needs_update_display: client.scrollbar_needs_update_display,
             kind: RecordedDisplayItemKind::Drawing,
             scroll_translation: None,
             id,
@@ -276,6 +361,14 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
+        self.output.client_owner_node_ids.insert(
+            fragment.paint.display_item_client_id as usize,
+            fragment.paint.display_item_client_owner_node_id,
+        );
+        self.output.client_debug_names.insert(
+            fragment.paint.display_item_client_id as usize,
+            fragment.paint.display_item_client_debug_name.clone(),
+        );
         self.BeginDrawingRecorderWithClient(
             DisplayItemId {
                 client_id: fragment.paint.display_item_client_id,
@@ -391,7 +484,24 @@ impl<'o> PaintContext<'o> {
             visual_rect_is_accurate,
             rect_known_to_be_opaque,
         );
+        if kind == RecordedDisplayItemKind::Drawing {
+            let record = &self.output.items[record_begin..record_end];
+            if draws_content {
+                self.chunker.UpdateDrawingDerivedData(
+                    &mut self.output.chunks,
+                    DrawingBackgroundColor(id, visual_rect, record),
+                    record
+                        .iter()
+                        .any(|op| op.r#type == DisplayItemType::kDrawGlyphRun),
+                    visual_rect,
+                );
+            }
+        }
         self.output.display_items.push(RecordedDisplayItem {
+            is_cacheable: client.is_cacheable,
+            is_tombstone: false,
+            paint_invalidation_reason: client.invalidation_reason,
+            scrollbar_needs_update_display: client.scrollbar_needs_update_display,
             kind,
             scroll_translation,
             id,
@@ -402,6 +512,51 @@ impl<'o> PaintContext<'o> {
             record_begin,
             record_end,
         });
+    }
+
+    // Source: paint_controller.cc:RecordScrollHitTestData and
+    // paint_chunker.cc:RecordScrollHitTestData. The caller supplies the actual
+    // border-box state and ScrollTranslation node from PrePaint.
+    pub(crate) fn RecordScrollHitTestData(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        rect: PaintRect,
+        opaqueness: crate::paint_engine::PaintHitTestOpaqueness,
+        scroll_translation: std::sync::Arc<
+            crate::paint_property_tree::TransformPaintPropertyNode,
+        >,
+        scrolling_contents_cull_rect: PaintRect,
+    ) {
+        let fragment = node.fragment.as_deref().expect("scroll hit-test fragment");
+        let id = DisplayItemId {
+            client_id: fragment.paint.display_item_client_id,
+            r#type: DisplayItemIdType::kScrollHitTest,
+            fragment: fragment.paint.display_item_fragment,
+        };
+        let client = DisplayItemClientInfo::from_fragment(fragment);
+        self.output.client_owner_node_ids.insert(
+            id.client_id as usize,
+            fragment.paint.display_item_client_owner_node_id,
+        );
+        self.output.client_debug_names.insert(
+            id.client_id as usize,
+            fragment.paint.display_item_client_debug_name.clone(),
+        );
+        self.chunker.RecordScrollHitTestData(
+            &mut self.output.chunks,
+            id,
+            client,
+            rect,
+            opaqueness,
+            crate::paint_engine::PaintHitTestData {
+                touch_action_rects: Vec::new(),
+                wheel_event_rects: Vec::new(),
+                xr_regions: Vec::new(),
+                scroll_hit_test_rect: rect,
+                scroll_translation: Some(scroll_translation),
+                scrolling_contents_cull_rect,
+            },
+        );
     }
 
     pub(crate) fn SetNextPropertyId(&mut self, next: u64) {
@@ -716,7 +871,7 @@ impl<'o> PaintContext<'o> {
             // physical box-reflection offset and fetched filter resources).
             // Recording the raw style chain here would feed percentages to
             // Raster a second time and bypass that typed boundary.
-            item.filters = node.properties.nodes.effect.filters.clone();
+            item.filters = node.recording_filters.clone();
             self.Append(item, node);
         }
     }
@@ -1012,25 +1167,32 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         let id = borrowed.next_property_id;
         borrowed.next_property_id += 1;
         // FrameCaret::PaintCaret + CaretEffectNodeState, frame_caret.cc:86,282.
-        properties.effect = std::sync::Arc::new(EffectPaintPropertyNode {
-            lifecycle: Default::default(),
-            id,
-            parent: Some(previous.effect.clone()),
-            local_transform_space: previous.transform.clone(),
-            output_clip: None,
-            filter_reference_box: None,
-            filter_reference_scale: 1.0,
-            opacity: if caret.visible { 1.0 } else { 0.001 },
-            blend_mode: layoutng_assembly::internal::paint_input::PaintBlendMode::kNormal,
-            filters: Vec::new(),
-            backdrop_filters: Vec::new(),
-            backdrop_filter_has_reference: false,
-            backdrop_filter_clip: None,
-            isolates_blending: false,
-            has_mask: false,
-            is_mask: false,
-            direct_compositing_reasons: vec!["ActiveOpacityAnimation"],
-        });
+        properties.effect = std::sync::Arc::new(
+            EffectPaintPropertyNode {
+                compositor: Default::default(),
+                backdrop_filter_bounds: None,
+                self_or_ancestor_participates_in_view_transition: false,
+                lifecycle: Default::default(),
+                id,
+                parent: Some(previous.effect.clone()),
+                local_transform_space: previous.transform.clone(),
+                output_clip: None,
+                filter_reference_box: None,
+                filter_reference_scale: 1.0,
+                opacity: if caret.visible { 1.0 } else { 0.001 },
+                blend_mode: layoutng_assembly::internal::paint_input::PaintBlendMode::kNormal,
+                filters: Default::default(),
+                backdrop_filters: Default::default(),
+                backdrop_filter_has_reference: false,
+                backdrop_filter_clip: None,
+                isolates_blending: false,
+                has_mask: false,
+                is_mask: false,
+                direct_compositing_reasons: vec!["ActiveOpacityAnimation"],
+            }
+            .with_filter_presence()
+            .with_inherited_view_transition(),
+        );
         borrowed.chunker.update_id_and_properties(
             DisplayItemId {
                 client_id: caret.display_item_client_id,
@@ -1039,6 +1201,8 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             },
             DisplayItemClientInfo {
                 is_cacheable: caret.display_item_client_is_cacheable,
+                invalidation_reason: Some(caret.display_item_client_invalidation_reason),
+                scrollbar_needs_update_display: None,
                 is_just_created: caret.display_item_client_is_just_created,
             },
             properties,
@@ -1063,6 +1227,8 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
                 },
                 DisplayItemClientInfo {
                     is_cacheable: fragment.paint.paint_layer_client_is_cacheable,
+                    invalidation_reason: fragment.paint.paint_layer_client_invalidation_reason,
+                    scrollbar_needs_update_display: None,
                     is_just_created: fragment.paint.paint_layer_client_is_just_created,
                 },
                 node.properties.nodes.clone(),
@@ -1091,6 +1257,8 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
                 layer_client,
                 DisplayItemClientInfo {
                     is_cacheable: fragment.paint.paint_layer_client_is_cacheable,
+                    invalidation_reason: fragment.paint.paint_layer_client_invalidation_reason,
+                    scrollbar_needs_update_display: None,
                     is_just_created: fragment.paint.paint_layer_client_is_just_created,
                 },
             )
@@ -1317,6 +1485,8 @@ mod opaque_record_tests {
         assert_eq!(PaintRect::maximum_covered_rect(left, separate), left);
         let client = DisplayItemClientInfo {
             is_cacheable: true,
+            invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
+            scrollbar_needs_update_display: None,
             is_just_created: false,
         };
         let mut chunker = PaintChunker::default();

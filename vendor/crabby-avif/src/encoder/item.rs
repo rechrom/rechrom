@@ -205,7 +205,11 @@ impl Item {
         image_metadata: &Image,
     ) -> AvifResult<()> {
         let version = 0;
-        let flags = if image_metadata.alpha_premultiplied { 0x01 } else { 0x00 };
+        let flags = if image_metadata.alpha_premultiplied {
+            0x01
+        } else {
+            0x00
+        };
         stream.start_full_box("alpi", (version, flags))?;
         stream.write_u16(image_metadata.max_channel())?; // unsigned int (16) opaque_value;
         stream.write_u16(0)?; // unsigned int (16) transparent_value;
@@ -354,7 +358,11 @@ impl Item {
         stream.write_u16(image_metadata.matrix_coefficients as u16)?;
         // unsigned int(1) full_range_flag;
         stream.write_bits(
-            if image_metadata.yuv_range == YuvRange::Full { 1 } else { 0 },
+            if image_metadata.yuv_range == YuvRange::Full {
+                1
+            } else {
+                0
+            },
             1,
         )?;
         // unsigned int(7) reserved = 0;

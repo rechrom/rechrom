@@ -62,7 +62,7 @@ impl SkLinearGradient {
     pub(crate) fn new_with_interpolation(
         start: Point,
         end: Point,
-        stops: Vec<GradientStop>,
+        mut stops: Vec<GradientStop>,
         mode: SpreadMode,
         transform: Transform,
         interpolation_space: GradientInterpolationSpace,
@@ -74,7 +74,11 @@ impl SkLinearGradient {
         }
 
         if stops.len() == 1 {
-            return Some(Shader::SolidColor(stops[0].color));
+            if mode != SpreadMode::kDecal {
+                return Some(Shader::SolidColor(stops[0].color));
+            }
+            let c = stops[0].color;
+            stops = alloc::vec![GradientStop::new(0., c), GradientStop::new(1., c)];
         }
 
         let length = (end - start).length();
@@ -94,6 +98,9 @@ impl SkLinearGradient {
             // The specific shape factories must account for special clamped conditions separately,
             // this will always return the last color for clamped gradients.
             match mode {
+                SpreadMode::kDecal => {
+                    return Some(Shader::SolidColor(crate::raster::Color::TRANSPARENT))
+                }
                 SpreadMode::Pad => {
                     // Depending on how the gradient shape degenerates,
                     // there may be a more specialized fallback representation
@@ -123,7 +130,7 @@ impl SkLinearGradient {
     }
 
     pub(crate) fn is_opaque(&self) -> bool {
-        self.base.colors_are_opaque
+        self.base.is_opaque()
     }
 
     pub(crate) fn appendStages(&self, cs: ColorSpace, p: &mut RasterPipelineBuilder) -> bool {

@@ -153,38 +153,6 @@ fn dump_artifact(a: &std::sync::Arc<PaintArtifact>, path: &std::path::Path) {
     for (i, item) in a.items.iter().enumerate() {
         writeln!(dump, "item {i}: {}", describe(item)).unwrap();
     }
-    let mut engine = layer_tile::LayerTileEngine::default();
-    let update = engine
-        .UpdatePending(
-            a,
-            layer_tile::FrameConfig {
-                viewport: paint::paint_engine::PaintRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 320.0,
-                    height: 200.0,
-                },
-                raster_scale: 1.0,
-                device_scale_factor: 1.0,
-                layout_zoom_factor: 1.0,
-                activation_scroll: None,
-                frame_time: None,
-            },
-        )
-        .unwrap();
-    for layer in &update.frame_plan.layers {
-        writeln!(dump,"layer id={:?} first={} transparent={} chunks={:?} records={:?} bounds={:?} raster_origin={:?} root_translation={:?} tiles={:?}",layer.id,layer.is_first_layer,layer.requires_transparent_backing,layer.chunk_indices,layer.record_indices,layer.bounds,layer.raster_origin,layer.root_translation,layer.tiles).unwrap();
-    }
-    for record in update.frame_plan.GetRasterRecords() {
-        writeln!(
-            dump,
-            "raster record {} bounds={:?} ops={:?}",
-            record.record_index,
-            record.visual_rect,
-            record.items.iter().map(describe).collect::<Vec<_>>()
-        )
-        .unwrap();
-    }
     std::fs::write(path, dump).unwrap();
 }
 #[test]

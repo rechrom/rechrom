@@ -405,6 +405,8 @@ mod tests {
             Ok(vec![
                 DocumentImageEffect::FrameChanged {
                     frame: Arc::new(DocumentImageFrame {
+                        animation_info: image_resource::PaintImageAnimationInfo::confirmed_static(),
+                        completion_state: image_resource::PaintImageCompletionState::Done,
                         resource_id: self.id,
                         revision: 2,
                         intrinsic_size: IntrinsicSize {
@@ -442,6 +444,8 @@ mod tests {
         ) -> io::Result<image_resource::CreatedDocumentImage> {
             Ok(CreatedDocumentImage {
                 initial_frame: Arc::new(DocumentImageFrame {
+                    animation_info: image_resource::PaintImageAnimationInfo::confirmed_static(),
+                    completion_state: image_resource::PaintImageCompletionState::Done,
                     resource_id,
                     revision: 1,
                     intrinsic_size: IntrinsicSize {

@@ -219,8 +219,11 @@ impl Encoder {
         let has_icc = !image.icc.is_empty();
         let chroma_subsampling = pixel_format_to_chroma_subsampling(image.yuv_format);
 
-        let default_color_primaries =
-            if has_icc { ColorPrimaries::Unspecified } else { ColorPrimaries::Bt709 };
+        let default_color_primaries = if has_icc {
+            ColorPrimaries::Unspecified
+        } else {
+            ColorPrimaries::Bt709
+        };
         let default_transfer_characteristics = if has_icc {
             TransferCharacteristics::Unspecified
         } else {
@@ -602,8 +605,16 @@ impl Encoder {
             + image.icc.len()
             + tmap_icc_size
             + gainmap_metadata_size
-            + if has_alpha { alpha_data.unwrap().len() } else { 0 }
-            + if has_gainmap { gainmap_data.unwrap().len() } else { 0 }
+            + if has_alpha {
+                alpha_data.unwrap().len()
+            } else {
+                0
+            }
+            + if has_gainmap {
+                gainmap_data.unwrap().len()
+            } else {
+                0
+            }
             + color_data.len()
             + image.exif.len()
             + image.xmp.len();

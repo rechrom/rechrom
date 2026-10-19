@@ -114,7 +114,11 @@ impl Writer for Y4MWriter {
             file.write_all(frame_marker.as_bytes())
                 .map_err(AvifError::map_io_error)?;
         }
-        let planes: &[Plane] = if self.write_alpha { &ALL_PLANES } else { &YUV_PLANES };
+        let planes: &[Plane] = if self.write_alpha {
+            &ALL_PLANES
+        } else {
+            &YUV_PLANES
+        };
         for plane in planes {
             let plane = *plane;
             if !image.has_plane(plane) {

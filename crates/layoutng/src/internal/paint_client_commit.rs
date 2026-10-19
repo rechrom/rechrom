@@ -41,11 +41,12 @@ impl LayoutObjectTree {
         // the same persistent factory set while traversing all native clients.
         self.WithObjectFactoryScope(|| {
             let root = self.Root() as *const LayoutObject;
-            let mut object = root;
+            let mut object = root.cast_mut();
             while !object.is_null() {
                 // The tree roots each live object. LayoutObject is repr(C), with
                 // DisplayItemClient first, matching the native base subobject.
                 let current = unsafe { &*object };
+                let next = current.NextInPreOrder(root);
                 commit(unsafe { &*(object.cast::<DisplayItemClient>()) });
                 let box_model = foundation::DynamicTo::<LayoutBoxModelObject>(object);
                 if !box_model.is_null() {
@@ -67,7 +68,14 @@ impl LayoutObjectTree {
                         }
                     }
                 }
-                object = current.NextInPreOrder(root) as *const LayoutObject;
+                // Chromium clears LayoutObject paint-invalidation flags at
+                // the end of PrePaintTreeWalk.  Our immutable fragment crosses
+                // the Layout/Paint engine boundary, so clear them only after
+                // the corresponding artifact has committed and its clients
+                // have been validated.
+                // cpp: core/paint/pre_paint_tree_walk.cc:327-330
+                unsafe { &mut *object }.ClearPaintInvalidationFlags();
+                object = next;
             }
         });
 

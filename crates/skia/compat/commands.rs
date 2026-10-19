@@ -390,6 +390,8 @@ pub struct SvgPatternData {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintShader {
+    /// ScopedRasterFlags alpha; independent of the immutable pattern owner.
+    pub flags_alpha: f32,
     pub kind: PaintShaderKind,
     pub spread: PaintSpreadMethod,
     pub stops: Vec<PaintColorStop>,
@@ -429,6 +431,7 @@ pub struct PaintShader {
 impl Default for PaintShader {
     fn default() -> Self {
         Self {
+            flags_alpha: 1.,
             kind: PaintShaderKind::kLinearGradient,
             spread: PaintSpreadMethod::kPad,
             stops: Vec::new(),
@@ -619,6 +622,8 @@ impl Default for MaskLayer {
 
 #[derive(Clone, PartialEq)]
 pub struct DrawCommand {
+    /// Per-draw PaintFlags alpha after playback folding, not layer opacity.
+    pub flags_alpha: f32,
     pub r#type: CommandKind,
     pub rect: PaintRect,
     pub source_rect: PaintRect,
@@ -677,6 +682,7 @@ pub struct DrawCommand {
 impl Default for DrawCommand {
     fn default() -> Self {
         Self {
+            flags_alpha: 1.,
             r#type: CommandKind::kDrawRect,
             rect: PaintRect::default(),
             source_rect: PaintRect::default(),

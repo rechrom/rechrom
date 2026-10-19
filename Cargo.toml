@@ -32,7 +32,6 @@ members = [
     "crates/style",
     "crates/layoutng_custom",
     "crates/paint",
-    "crates/layer_tile",
     "crates/raster",
     "crates/compositor",
     "crates/viz",

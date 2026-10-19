@@ -1,9 +1,114 @@
 //! Renderer-neutral image identities and immutable content snapshots.
 //! This crate owns no DOM, layout, paint engine, raster backend or scheduler.
 
-use std::{any::Any, fmt, io, sync::Arc, time::Duration};
+use std::{
+    any::Any,
+    fmt, io,
+    sync::{
+        atomic::{AtomicI32, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 pub type ImageId = u64;
+
+/// Stable identity of the immutable image value used by Paint and compositor
+/// image-animation state. Resource identity remains a separate concern: one
+/// resource keeps this value while its decoded frame/content revision changes.
+///
+/// Source: cc/paint/paint_image.h:153,186,238;
+/// cc/paint/paint_image.cc:38,46,105-107.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PaintImageId(pub i32);
+
+impl PaintImageId {
+    pub const INVALID: Self = Self(-2);
+
+    pub fn allocate() -> Self {
+        static NEXT: AtomicI32 = AtomicI32::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for PaintImageId {
+    fn default() -> Self {
+        Self::INVALID
+    }
+}
+
+/// Source: cc/paint/paint_image.h:217-218,471-476;
+/// cc/paint/image_animation_count.h:29. Facts originate in the image producer,
+/// not in a compositor registry or resource-id conversion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaintImageAnimationType {
+    Animated,
+    Video,
+    Static,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaintImageCompletionState {
+    Done,
+    PartiallyDone,
+}
+pub const ANIMATION_NONE: i32 = -2;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaintImageAnimationInfo {
+    pub animation_type: PaintImageAnimationType,
+    pub repetition_count: i32,
+    pub frame_count: usize,
+}
+impl PaintImageAnimationInfo {
+    /// Called only when the real codec has proved that its input is a still
+    /// image. Unknown encoded animation must never use this constructor.
+    pub const fn confirmed_static() -> Self {
+        Self {
+            animation_type: PaintImageAnimationType::Static,
+            repetition_count: ANIMATION_NONE,
+            frame_count: 1,
+        }
+    }
+    // Source: cc/paint/paint_image.cc:344-347.
+    pub fn should_animate(&self) -> bool {
+        self.animation_type == PaintImageAnimationType::Animated
+            && self.repetition_count != ANIMATION_NONE
+            && self.frame_count > 1
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaintImageMetadataUnavailable {
+    ProducerFactsNotPublished,
+    EncodedAnimationTimeline { format: &'static str },
+}
+impl fmt::Display for PaintImageMetadataUnavailable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ProducerFactsNotPublished => {
+                write!(f, "image producer did not publish native animation facts")
+            }
+            Self::EncodedAnimationTimeline { format } => {
+                write!(f, "{format} image has no native multi-frame/timeline owner")
+            }
+        }
+    }
+}
+impl std::error::Error for PaintImageMetadataUnavailable {}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaintImageAnimationMetadata {
+    Known(PaintImageAnimationInfo),
+    Unavailable(PaintImageMetadataUnavailable),
+}
+impl Default for PaintImageAnimationMetadata {
+    fn default() -> Self {
+        Self::Unavailable(PaintImageMetadataUnavailable::ProducerFactsNotPublished)
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaintImageMetadata {
+    pub animation: PaintImageAnimationMetadata,
+    pub completion_state: PaintImageCompletionState,
+    pub is_multipart: bool,
+}
 
 /// The encoded image's EXIF orientation. Bitmap pixels remain in encoded
 /// storage order so CSS `image-orientation: none` and `from-image` can select
@@ -230,6 +335,10 @@ impl PartialEq for PaintImageContent {
 pub struct DocumentImageFrame {
     pub resource_id: ImageId,
     pub revision: u64,
+    /// Source: SVGImage::PopulatePaintRecordForCurrentFrameForContainer and
+    /// Image::CreatePaintImageBuilder publish these from the document owner.
+    pub animation_info: PaintImageAnimationInfo,
+    pub completion_state: PaintImageCompletionState,
     pub intrinsic_size: IntrinsicSize,
     pub container_key: ContainerKey,
     pub record: Arc<dyn DocumentPaintRecord>,

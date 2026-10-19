@@ -16,6 +16,17 @@
 //! This API does not implement SkImageInfo, row strides, color-space conversion,
 //! BGRA swizzling, or the other upstream pixel formats.
 
+/// Source: SkConvertPixels.cpp:28-45, rect_memcpy for matching color type,
+/// alpha type and color space. The caller has established equal native infos;
+/// no channel interpretation or conversion takes place (RGBA and BGRA valid).
+pub fn copy_same_info_pixels(dst: &mut [u8], src: &[u8]) -> bool {
+    if dst.len() != src.len() {
+        return false;
+    }
+    dst.copy_from_slice(src);
+    true
+}
+
 /// Restricted alpha metadata for this RGBA8888 conversion adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rgba8888AlphaType {
@@ -43,8 +54,7 @@ pub fn SkConvertPixels(
         || src_alpha == Rgba8888AlphaType::Opaque
         || dst_alpha == Rgba8888AlphaType::Opaque
     {
-        dst.copy_from_slice(src);
-        return true;
+        return copy_same_info_pixels(dst, src);
     }
     match (src_alpha, dst_alpha) {
         (Rgba8888AlphaType::Unpremul, Rgba8888AlphaType::Premul) => {

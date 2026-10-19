@@ -500,6 +500,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintShader {
     type Output = target::PaintShader;
     fn to_skia(&self) -> Self::Output {
         target::PaintShader {
+            flags_alpha: 1.,
             kind: self.kind.to_skia(),
             spread: self.spread.to_skia(),
             stops: self.stops.to_skia(),
@@ -654,7 +655,11 @@ impl ToSkia for image_resource::ImageOrientation {
 impl ToSkia for paint::paint_engine::DisplayMaskLayer {
     type Output = target::MaskLayer;
     fn to_skia(&self) -> Self::Output {
-        assert!(self.source_error.is_none(), "unsupported SVG mask resource: {:?}", self.source_error);
+        assert!(
+            self.source_error.is_none(),
+            "unsupported SVG mask resource: {:?}",
+            self.source_error
+        );
         target::MaskLayer {
             resource_id: self.resource_id.to_skia(),
             image_interpolation_quality: self.image_interpolation_quality.to_skia(),
@@ -678,6 +683,7 @@ impl ToSkia for paint::paint_engine::DisplayItem {
     type Output = target::DrawCommand;
     fn to_skia(&self) -> Self::Output {
         target::DrawCommand {
+            flags_alpha: 1.,
             r#type: self.r#type.to_skia(),
             rect: self.rect.to_skia(),
             source_rect: self.source_rect.to_skia(),
@@ -845,7 +851,7 @@ mod font_identity_tests {
                 fonts: vec![FontFace {
                     family: "same family".into(),
                     bytes: Vec::from(b"old font data".as_slice()).into(),
-                            ..Default::default()
+                    ..Default::default()
                 }],
                 ..Default::default()
             })),
@@ -894,7 +900,7 @@ mod font_identity_tests {
                     family: "CSS alias".into(),
                     native_family: "a nonexistent platform font family 314159".into(),
                     bytes,
-                            face_index,
+                    face_index,
                     ..Default::default()
                 }],
                 ..Default::default()

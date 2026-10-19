@@ -218,15 +218,18 @@ impl PrePaintRevisionTracker {
                 && self_equal(&old.fragment, node)
                 && resources_equal(&old.resources, &node.paint.resources, resource_matches)
         });
-        let children_same = old.as_ref().is_some_and(|old| old.children.iter().copied().eq(
-            node.children.iter().map(|child| (child.pre_paint_revision, child.pre_paint_subtree_revision))));
+        let children_same = old.as_ref().is_some_and(|old| {
+            old.children.iter().copied().eq(node
+                .children
+                .iter()
+                .map(|child| (child.pre_paint_revision, child.pre_paint_subtree_revision)))
+        });
         node.pre_paint_revision = if self_same {
             old.as_ref().unwrap().fragment.pre_paint_revision
         } else {
             generation
         };
-        node.pre_paint_subtree_revision = if self_same && children_same
-        {
+        node.pre_paint_subtree_revision = if self_same && children_same {
             old.as_ref().unwrap().fragment.pre_paint_subtree_revision
         } else {
             generation
@@ -245,8 +248,11 @@ impl PrePaintRevisionTracker {
         };
         if !children_same {
             current.children.clear();
-            current.children.extend(node.children.iter().map(|child|
-                (child.pre_paint_revision, child.pre_paint_subtree_revision)));
+            current.children.extend(
+                node.children
+                    .iter()
+                    .map(|child| (child.pre_paint_revision, child.pre_paint_subtree_revision)),
+            );
         }
         current.fragment.pre_paint_revision = node.pre_paint_revision;
         current.fragment.pre_paint_subtree_revision = node.pre_paint_subtree_revision;
@@ -394,6 +400,14 @@ fn retain_owner(
 fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
     // Exhaustive field binding prevents a new paint output from being omitted.
     let PaintProperties {
+        property_fragment_unique_id,
+        is_layout_view,
+        requires_main_thread_scrolling_for_background_attachment_fixed,
+        display_item_client_invalidation_reason,
+        // Source PaintArtifact records debug names only when actually painted;
+        // changing this diagnostic name alone does not invalidate painting.
+        display_item_client_debug_name: _,
+        paint_layer_client_invalidation_reason,
         self_ink_overflow,
         contents_ink_overflow,
         ink_overflow,
@@ -402,6 +416,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         box_fragment_is_inline_box,
         display_item_raster_effect_outset,
         display_item_client_id,
+        display_item_client_owner_node_id,
         paint_layer_state_is_native,
         paint_layer_client_id,
         paint_layer_client_is_cacheable,
@@ -440,6 +455,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         overflow_y,
         overscroll_behavior_x,
         overscroll_behavior_y,
+        prevent_scroll_axis_locking,
         css_clip,
         overflow_clip_margin_outsets,
         scroll_offset,
@@ -483,7 +499,13 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         background_paint_location,
         can_composite_background_attachment_fixed,
     } = a;
-    self_ink_overflow == &b.self_ink_overflow
+    property_fragment_unique_id == &b.property_fragment_unique_id
+        && is_layout_view == &b.is_layout_view
+        && requires_main_thread_scrolling_for_background_attachment_fixed
+            == &b.requires_main_thread_scrolling_for_background_attachment_fixed
+        && display_item_client_invalidation_reason == &b.display_item_client_invalidation_reason
+        && paint_layer_client_invalidation_reason == &b.paint_layer_client_invalidation_reason
+        && self_ink_overflow == &b.self_ink_overflow
         && contents_ink_overflow == &b.contents_ink_overflow
         && ink_overflow == &b.ink_overflow
         && text_glyph_ink == &b.text_glyph_ink
@@ -491,6 +513,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && box_fragment_is_inline_box == &b.box_fragment_is_inline_box
         && display_item_raster_effect_outset == &b.display_item_raster_effect_outset
         && display_item_client_id == &b.display_item_client_id
+        && display_item_client_owner_node_id == &b.display_item_client_owner_node_id
         && paint_layer_state_is_native == &b.paint_layer_state_is_native
         && paint_layer_client_id == &b.paint_layer_client_id
         && paint_layer_client_is_cacheable == &b.paint_layer_client_is_cacheable
@@ -529,6 +552,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && overflow_y == &b.overflow_y
         && overscroll_behavior_x == &b.overscroll_behavior_x
         && overscroll_behavior_y == &b.overscroll_behavior_y
+        && prevent_scroll_axis_locking == &b.prevent_scroll_axis_locking
         && css_clip == &b.css_clip
         && overflow_clip_margin_outsets == &b.overflow_clip_margin_outsets
         && scroll_offset == &b.scroll_offset

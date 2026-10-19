@@ -1,0 +1,32 @@
+// Translation status: complete
+// Copyright 2014 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+use crate::adapter::{
+    geometry::Point,
+    layer_tree_impl::{Selection, SelectionBoundType},
+};
+// Source: cc/input/layer_selection_bound.h:1-41;
+//         cc/input/layer_selection_bound.cc:1-24,31.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LayerSelectionBound {
+    pub r#type: SelectionBoundType,
+    pub edge_start: Point,
+    pub edge_end: Point,
+    pub layer_id: i32,
+    pub hidden: bool,
+}
+impl LayerSelectionBound {
+    // Source: cc/input/layer_selection_bound.cc:25-29.
+    pub fn ToString(&self) -> String {
+        format!(
+            "LayerSelectionBound({},{}, {},{}, {})",
+            self.edge_start.x(),
+            self.edge_start.y(),
+            self.edge_end.x(),
+            self.edge_end.y(),
+            i32::from(self.hidden)
+        )
+    }
+}
+pub type LayerSelection = Selection<LayerSelectionBound>;

@@ -59,30 +59,6 @@ impl Viewport {
     }
 }
 
-impl ::compositor::CompositorViewport for Viewport {
-    fn Width(self) -> u32 {
-        self.width
-    }
-
-    fn Height(self) -> u32 {
-        self.height
-    }
-
-    fn Scale(self) -> f64 {
-        self.scale
-    }
-
-    fn RasterTileSize(self) -> u32 {
-        // cpp: blink/renderer/platform/widget/compositing/
-        // layer_tree_settings.cc:245-274. macOS uses 512px tiles on high-DPI
-        // displays; the platform-neutral compositor receives only the result.
-        if cfg!(target_os = "macos") && self.scale >= 2.0 {
-            512
-        } else {
-            256
-        }
-    }
-}
 pub(crate) fn memory_diagnostics_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("RECHROM_MEMORY_DIAGNOSTICS").is_some())
@@ -93,7 +69,7 @@ pub(crate) fn diagnostic_time_ns() -> u128 {
         .map_or(0, |d| d.as_nanos())
 }
 pub struct WindowFrame {
-    pub provenance: Option<compositor::FrameProvenance>,
+    pub provenance: Option<crate::page_presentation::FrameProvenance>,
     pub viewport: Viewport,
     pub toolbar: RasterSurface,
     pub content: RasterSurface,
@@ -165,10 +141,6 @@ pub enum Command {
     Stop,
     Wake(EngineWakeToken),
     BeginFrame(NativeBeginFrame),
-    CompositorScroll {
-        document: (u64, u64),
-        update: ::compositor::MainThreadScrollDelta,
-    },
 }
 #[cfg(test)]
 impl Command {
@@ -191,7 +163,6 @@ impl Command {
             Self::Stop => "Host.Stop",
             Self::Wake(_) => "Host.Wake",
             Self::BeginFrame(_) => "Host.BeginFrame",
-            Self::CompositorScroll { .. } => "Host.CompositorScroll",
         }
     }
     fn input(&self) -> Option<&InputEvent> {
@@ -427,7 +398,3 @@ input:focus{border-color:#15919d}
 .google svg{width:22px;height:22px}
 .label{font-size:13px}
 </style></head><body><main><header class="brand"><svg viewBox="0 0 220 190" aria-hidden="true"><g transform="translate(-111.5 -66.5) scale(.35)"><path fill='#15919d' d="M519 324V282C519 244 551 211 590 216L849 259C883 265 910 290 910 326V545C910 584 880 609 844 602L790 594V538L830 545C849 549 861 538 861 521V354C861 337 850 327 834 325L597 283C580 280 568 290 568 306V331Z"/><path fill='#062142' d="M355 388C355 347 386 320 427 327L728 376C757 381 775 403 775 432V476C760 454 745 446 717 441L441 392C422 388 409 399 409 419V575C409 591 418 602 434 605L701 648C714 651 722 645 722 631V461C750 467 775 486 775 512V651C775 692 747 716 710 709L410 660C377 654 355 630 355 595Z"/></g></svg><h1>Rechrom</h1></header><form action="https://www.google.com/search" method="get"><svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12.5 12.5L17 17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><input name="q" placeholder="Search the web" autofocus></form><section class="favorites"><h2>Favorites</h2><nav class="sites"><a class="site" href="https://rechrom.dev"><span class="icon"><svg viewBox="0 0 220 190" aria-hidden="true"><g transform="translate(-111.5 -66.5) scale(.35)"><path fill='#15919d' d="M519 324V282C519 244 551 211 590 216L849 259C883 265 910 290 910 326V545C910 584 880 609 844 602L790 594V538L830 545C849 549 861 538 861 521V354C861 337 850 327 834 325L597 283C580 280 568 290 568 306V331Z"/><path fill='#062142' d="M355 388C355 347 386 320 427 327L728 376C757 381 775 403 775 432V476C760 454 745 446 717 441L441 392C422 388 409 399 409 419V575C409 591 418 602 434 605L701 648C714 651 722 645 722 631V461C750 467 775 486 775 512V651C775 692 747 716 710 709L410 660C377 654 355 630 355 595Z"/></g></svg></span><span class="label">Rechrom</span></a><a class="site" href="https://www.google.com"><span class="icon google"><svg viewBox="0 0 48 48" aria-hidden="true"><path fill='#ffc107' d="M43.6 20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.1 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.7-.4-4Z"/><path fill='#ff3d00' d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.1 6.1 29.3 4 24 4c-7.7 0-14.3 4.3-17.7 10.7Z"/><path fill='#4caf50' d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.1 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.6 39.5 16.3 44 24 44Z"/><path fill='#1976d2' d="M43.6 20H24v8h11.3c-.8 2.3-2.3 4.2-4.2 5.6l6.2 5.2C41 35.5 44 30.2 44 24c0-1.3-.1-2.7-.4-4Z"/></svg></span><span class="label">Google</span></a><a class="site" href="https://github.com/rechrom/rechrom"><span class="icon github"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .7C5.6.7.4 5.9.4 12.3c0 5.1 3.3 9.4 7.8 10.9.6.1.8-.3.8-.6v-2.2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.4-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.5-.3-5.2-1.3-5.2-5.7 0-1.3.4-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2.9-.3 1.9-.4 2.9-.4s2 .1 2.9.4c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.9 1.2 1.9 1.2 3.1 0 4.4-2.7 5.4-5.2 5.7.4.3.8 1 .8 2v3c0 .4.2.7.8.6 4.5-1.5 7.8-5.8 7.8-10.9C23.6 5.9 18.4.7 12 .7Z"/></svg></span><span class="label">GitHub</span></a></nav></section></main></body></html>"#;
-
-#[cfg(test)]
-#[path = "engine_legacy.rs"]
-mod legacy;

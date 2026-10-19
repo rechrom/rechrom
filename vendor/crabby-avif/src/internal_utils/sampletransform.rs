@@ -293,8 +293,11 @@ impl SampleTransform {
     pub(crate) fn apply(&self, extra_inputs: &[&Image], output: &mut Image) -> AvifResult<()> {
         let max_stack_size = self.tokens.len().div_ceil(2);
         let mut stack: Vec<StackItem> = create_vec_exact(max_stack_size)?;
-        for plane in if output.has_alpha() { ALL_PLANES.as_slice() } else { YUV_PLANES.as_slice() }
-        {
+        for plane in if output.has_alpha() {
+            ALL_PLANES.as_slice()
+        } else {
+            YUV_PLANES.as_slice()
+        } {
             self.apply_internal(*plane, extra_inputs, output, &mut stack)?;
         }
         Ok(())

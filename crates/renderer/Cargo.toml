@@ -4,12 +4,15 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-browser_tracing = { path = "../tracing" }
+bytemuck = "1.24"
+compositor_core = { package = "compositor", path = "../compositor" }
+foundation = { package = "layoutng_foundation", path = "../foundation" }
 skia = { path = "../skia" }
 paint = { path = "../paint" }
-layer_tile = { path = "../layer_tile" }
 viz = { path = "../viz" }
 raster = { path = "../raster" }
+
+[dev-dependencies]
 layoutng_assembly = { path = "../layoutng_assembly" }
 
 [features]
@@ -19,6 +22,3 @@ source_replay = ["raster/source_replay"]
 pure_replay = ["raster/pure_replay"]
 compose_work_profile = []
 profiling = ["raster/profiling", "skia/profiling"]
-
-[dev-dependencies]
-compositor = { path = "../compositor" }

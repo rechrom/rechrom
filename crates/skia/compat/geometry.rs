@@ -429,3 +429,59 @@ impl OutlineBuilder for GlyphPathBuilder {
         self.path.close();
     }
 }
+
+/// Borrow the native immutable SkPath verbs and construct the CPU stroker's
+/// path value. This is geometry conversion, not a retained Paint record.
+pub(crate) fn raster_path_from_native(path: &crate::include::core::SkPath::SkPath) -> Option<Path> {
+    use crate::include::core::SkPath::SkPathVerb as V;
+    let mut b = PathBuilder::new();
+    let mut points = path.points().iter();
+    let mut weights = path.conicWeights().iter();
+    let mut current = (0., 0.);
+    let mut start = current;
+    for verb in path.verbs() {
+        match verb {
+            V::kMove => {
+                let p = points.next()?;
+                b.move_to(p.x, p.y);
+                current = (p.x, p.y);
+                start = current;
+            }
+            V::kLine => {
+                let p = points.next()?;
+                b.line_to(p.x, p.y);
+                current = (p.x, p.y);
+            }
+            V::kQuad => {
+                let a = points.next()?;
+                let p = points.next()?;
+                b.quad_to(a.x, a.y, p.x, p.y);
+                current = (p.x, p.y);
+            }
+            V::kConic => {
+                let a = points.next()?;
+                let p = points.next()?;
+                let w = *weights.next()?;
+                for q in crate::src::core::SkGeometry::conic_to_quads(
+                    [current, (a.x, a.y), (p.x, p.y)],
+                    w,
+                ) {
+                    b.quad_to(q[1].0, q[1].1, q[2].0, q[2].1);
+                }
+                current = (p.x, p.y);
+            }
+            V::kCubic => {
+                let a = points.next()?;
+                let c = points.next()?;
+                let p = points.next()?;
+                b.cubic_to(a.x, a.y, c.x, c.y, p.x, p.y);
+                current = (p.x, p.y);
+            }
+            V::kClose => {
+                b.close();
+                current = start;
+            }
+        }
+    }
+    b.finish()
+}

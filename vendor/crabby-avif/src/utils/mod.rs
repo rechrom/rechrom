@@ -61,7 +61,11 @@ impl UFraction {
         if v.is_nan() || v < 0.0 || v > max_n as f64 {
             return None;
         }
-        let max_d = if v <= 1.0 { u32::MAX } else { (max_n as f64 / v).floor() as u32 };
+        let max_d = if v <= 1.0 {
+            u32::MAX
+        } else {
+            (max_n as f64 / v).floor() as u32
+        };
 
         // Find the best approximation of v as a fraction using continued fractions:
         // https://en.wikipedia.org/wiki/Continued_fraction

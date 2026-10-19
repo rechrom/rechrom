@@ -123,8 +123,11 @@ impl Av1SequenceHeader {
         let max_frame_height_minus_1 = stream.read_bits(frame_height_bits_minus_1 as usize + 1)?;
         self.max_width = checked_add!(max_frame_width_minus_1, 1)?;
         self.max_height = checked_add!(max_frame_height_minus_1, 1)?;
-        let frame_id_numbers_present_flag =
-            if self.reduced_still_picture_header { false } else { stream.read_bool()? };
+        let frame_id_numbers_present_flag = if self.reduced_still_picture_header {
+            false
+        } else {
+            stream.read_bool()?
+        };
         if frame_id_numbers_present_flag {
             // delta_frame_id_length_minus_2
             stream.skip_bits(4)?;
@@ -202,7 +205,11 @@ impl Av1SequenceHeader {
         }
         if self.config.monochrome {
             let color_range = stream.read_bool()?;
-            self.yuv_range = if color_range { YuvRange::Full } else { YuvRange::Limited };
+            self.yuv_range = if color_range {
+                YuvRange::Full
+            } else {
+                YuvRange::Limited
+            };
             self.config.chroma_subsampling_x = 1;
             self.config.chroma_subsampling_y = 1;
             self.yuv_format = PixelFormat::Yuv400;
@@ -215,7 +222,11 @@ impl Av1SequenceHeader {
             self.yuv_format = PixelFormat::Yuv444;
         } else {
             let color_range = stream.read_bool()?;
-            self.yuv_range = if color_range { YuvRange::Full } else { YuvRange::Limited };
+            self.yuv_range = if color_range {
+                YuvRange::Full
+            } else {
+                YuvRange::Limited
+            };
             match self.config.seq_profile {
                 0 => {
                     self.config.chroma_subsampling_x = 1;
@@ -473,7 +484,11 @@ impl Av2SequenceHeader {
                     MatrixCoefficients::Unspecified,      // 2
                 ),
             };
-            self.yuv_range = if stream.read_bool()? { YuvRange::Full } else { YuvRange::Limited };
+            self.yuv_range = if stream.read_bool()? {
+                YuvRange::Full
+            } else {
+                YuvRange::Limited
+            };
         // color_range
         } else {
             // Keep the default CICP values.

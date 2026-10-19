@@ -70,9 +70,9 @@ pub fn popup_document(rows: &[(String, String, String)], width: f64, x: f64) -> 
 }
 /// Compose independent Page recordings for the explicit readback host.
 pub fn content_with_popup(
-    content: Option<&raster::surface::PaintArtifact>,
-    popup: &raster::surface::PaintArtifact,
-) -> std::io::Result<raster::surface::PaintArtifact> {
+    content: Option<&paint::PaintArtifact>,
+    popup: &paint::PaintArtifact,
+) -> std::io::Result<paint::PaintArtifact> {
     paint::paint_engine::PaintArtifact::WithFontOnlyOverlay(content, popup)
 }
 

@@ -416,15 +416,16 @@ fn TextPositionAtPoint(
             let dy = (absolute.y - point.y)
                 .max(0.0)
                 .max(point.y - absolute.y - fragment.size.height);
-            if let Some(&(offset, x)) = fragment
-                .paint
-                .text_caret_positions
-                .iter()
-                .min_by(|(_, a), (_, b)| {
-                    (absolute.x + *a - point.x)
-                        .abs()
-                        .total_cmp(&(absolute.x + *b - point.x).abs())
-                })
+            if let Some(&(offset, x)) =
+                fragment
+                    .paint
+                    .text_caret_positions
+                    .iter()
+                    .min_by(|(_, a), (_, b)| {
+                        (absolute.x + *a - point.x)
+                            .abs()
+                            .total_cmp(&(absolute.x + *b - point.x).abs())
+                    })
             {
                 let dx = (absolute.x + x - point.x).abs();
                 let candidate = DocumentSelectionPosition {
@@ -977,10 +978,8 @@ impl<'a> Interaction<'a> {
                             LayoutPoint(fragments, v.position),
                             false,
                         ) {
-                            self.selections.SetDocument(Some(DocumentSelection {
-                                anchor,
-                                focus,
-                            }));
+                            self.selections
+                                .SetDocument(Some(DocumentSelection { anchor, focus }));
                         }
                     }
                     _ => {}

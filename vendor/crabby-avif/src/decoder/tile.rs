@@ -202,7 +202,11 @@ impl Tile {
         // Progressive images offer layers via the a1lxProp, but don't specify a layer selection with
         // lsel.
         item.progressive = has_a1lx && (!has_lsel || lsel == 0xFFFF);
-        let base_item_offset = if item.extents.len() == 1 { item.extents[0].offset } else { 0 };
+        let base_item_offset = if item.extents.len() == 1 {
+            item.extents[0].offset
+        } else {
+            0
+        };
         if has_lsel && lsel != 0xFFFF {
             // Layer selection. This requires that the underlying AV1 codec decodes all layers, and
             // then only returns the requested layer as a single frame. To the user of libavif,

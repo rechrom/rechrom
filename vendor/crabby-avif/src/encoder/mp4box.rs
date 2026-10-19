@@ -64,7 +64,11 @@ pub(crate) fn write_grid(stream: &mut OStream, grid: &Grid) -> AvifResult<()> {
     //     unsigned int(FieldLength) output_width;
     //     unsigned int(FieldLength) output_height;
     // }
-    let flags = if grid.width > 65535 || grid.height > 65535 { 1 } else { 0 };
+    let flags = if grid.width > 65535 || grid.height > 65535 {
+        1
+    } else {
+        0
+    };
     // unsigned int(8) version = 0;
     stream.write_u8(0)?;
     // unsigned int(8) flags;
@@ -661,7 +665,11 @@ impl Encoder {
                 }
                 write_hdlr(
                     stream,
-                    if item.category == Category::Alpha { "auxv" } else { "pict" },
+                    if item.category == Category::Alpha {
+                        "auxv"
+                    } else {
+                        "pict"
+                    },
                 )?;
                 // minf
                 {

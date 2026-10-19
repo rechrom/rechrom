@@ -28,7 +28,7 @@ mod layout_tree_update;
 pub use layout_tree_update::LayoutTreeUpdate;
 #[path = "layout_output.rs"]
 mod layout_output;
-pub use layout_output::{LayoutOutput, LayoutNode, LayoutRect, LayoutScrollRange, LayoutMetric};
+pub use layout_output::{LayoutMetric, LayoutNode, LayoutOutput, LayoutRect, LayoutScrollRange};
 
 // Rust panic payloads retain the two standard C++ failure categories emitted
 // by this entry point; unsupported modules use foundation::UnsupportedLayout.
@@ -108,7 +108,10 @@ pub enum LayoutMutation<'a> {
     SubtreeUpdate {
         node_id: u64,
         parent_id: u64,
-        update: &'a mut dyn FnMut(&mut LayoutTreeUpdate<'_>, &mut super::internal::layout_object::LayoutObject),
+        update: &'a mut dyn FnMut(
+            &mut LayoutTreeUpdate<'_>,
+            &mut super::internal::layout_object::LayoutObject,
+        ),
     },
     NodeInput {
         node_id: u64,
@@ -133,6 +136,10 @@ pub enum LayoutMutation<'a> {
         offset: crate::internal::layout_input::Offset,
     },
     Editing {
+        node_id: u64,
+    },
+    /// Selection/caret range paint changed while layout geometry stayed valid.
+    SelectionPaint {
         node_id: u64,
     },
     EditingState(Rc<LayoutEditingState>),
@@ -195,11 +202,14 @@ impl LayoutEngine {
     /// Uses the same canonical style and metadata admission as paint updates,
     /// without changing native objects or exported paint/resource bindings.
     pub fn GeometryInputMatches(
-        &self, id: u64, style: &crate::internal::layout_input::ComputedStyle,
+        &self,
+        id: u64,
+        style: &crate::internal::layout_input::ComputedStyle,
         element: &Option<crate::internal::layout_input::ElementData>,
     ) -> bool {
-        self.tree_.as_ref().is_some_and(|tree|
-            !tree.Root().NeedsLayout() && tree.GeometryInputMatches(id, style, element))
+        self.tree_.as_ref().is_some_and(|tree| {
+            !tree.Root().NeedsLayout() && tree.GeometryInputMatches(id, style, element)
+        })
     }
 
     /// Apply input changes without running layout. Native synchronization
@@ -214,7 +224,8 @@ impl LayoutEngine {
         }
         if !matches!(
             &mutation,
-            LayoutMutation::ScrollOffset { .. } | LayoutMutation::PaintStyle { .. }
+            LayoutMutation::ScrollOffset { .. }
+                | LayoutMutation::PaintStyle { .. }
                 | LayoutMutation::PaintInput { .. }
         ) {
             self.scroll_paint_index_ = None;
@@ -255,7 +266,11 @@ impl LayoutEngine {
                 trace.set("retained", retained as u8 as f64);
                 retained
             }
-            LayoutMutation::SubtreeUpdate { node_id, parent_id, update } => {
+            LayoutMutation::SubtreeUpdate {
+                node_id,
+                parent_id,
+                update,
+            } => {
                 let mut trace = browser_tracing::span("layout", "LayoutEngine.SubtreeUpdate");
                 trace.set("node_id", node_id as f64);
                 let applied = self.tree_.as_mut().is_some_and(|tree| {
@@ -274,11 +289,20 @@ impl LayoutEngine {
                 trace.set("applied", applied as u8 as f64);
                 applied
             }
-            LayoutMutation::NodeInput { node_id, style, element } => {
+            LayoutMutation::NodeInput {
+                node_id,
+                style,
+                element,
+            } => {
                 let mut trace = browser_tracing::span("layout", "LayoutEngine.NodeInput");
                 trace.set("node_id", node_id as f64);
-                let applied = self.tree_.as_mut().is_some_and(|tree| tree.UpdateNodeInput(node_id, style, element));
-                if applied { self.fragments = None; }
+                let applied = self
+                    .tree_
+                    .as_mut()
+                    .is_some_and(|tree| tree.UpdateNodeInput(node_id, style, element));
+                if applied {
+                    self.fragments = None;
+                }
                 trace.set("applied", applied as u8 as f64);
                 applied
             }
@@ -315,15 +339,26 @@ impl LayoutEngine {
                 }
                 binding.is_some()
             }
-            LayoutMutation::PaintInput { node_id, style, element } => {
-                if self.fragments.is_none() { return false; }
-                let update = self.tree_.as_mut()
+            LayoutMutation::PaintInput {
+                node_id,
+                style,
+                element,
+            } => {
+                if self.fragments.is_none() {
+                    return false;
+                }
+                let update = self
+                    .tree_
+                    .as_mut()
                     .and_then(|tree| tree.UpdatePaintInput(node_id, style, element));
                 if let Some(update) = update {
                     self.pending_paint_ids_.extend(update.sources);
-                    self.pending_inline_ink_ids_.extend(update.inline_ink_changes);
+                    self.pending_inline_ink_ids_
+                        .extend(update.inline_ink_changes);
                     true
-                } else { false }
+                } else {
+                    false
+                }
             }
             LayoutMutation::ReplaceTree(tree) => {
                 self.fragments = None;
@@ -348,6 +383,10 @@ impl LayoutEngine {
                     .as_mut()
                     .is_some_and(|tree| tree.InvalidateEditing(node_id))
             }
+            LayoutMutation::SelectionPaint { node_id } => self
+                .tree_
+                .as_mut()
+                .is_some_and(|tree| tree.InvalidateSelectionPaint(node_id)),
             LayoutMutation::EditingState(state) => {
                 if let Some(tree) = &mut self.tree_ {
                     tree.SetEditingState(state);
@@ -430,7 +469,9 @@ impl LayoutEngine {
     pub fn Output(&self) -> Option<LayoutOutput<'_>> {
         let tree = self.tree_.as_ref()?;
         let root = tree.Root();
-        if root.NeedsLayout() { return None; }
+        if root.NeedsLayout() {
+            return None;
+        }
         let box_ = DynamicTo::<LayoutBox>(root as *const _);
         let box_ = unsafe { box_.as_ref() }?;
         (!box_.GetLayoutResults().is_empty()).then_some(LayoutOutput { engine: self })
@@ -451,9 +492,12 @@ impl LayoutEngine {
         // Unwinding leaves it empty; a subsequent success receives fresh
         // globally unique revisions instead of reusing a failed pass's basis.
         let mut inputs = std::mem::take(&mut self.pre_paint_inputs_);
-        if let Some(mut fragments) =
-            self.RunLayout(unsafe { &mut *root }, &self.constraints_, purpose == LayoutUpdateKind::Paint, purpose)
-        {
+        if let Some(mut fragments) = self.RunLayout(
+            unsafe { &mut *root },
+            &self.constraints_,
+            purpose == LayoutUpdateKind::Paint,
+            purpose,
+        ) {
             if purpose == LayoutUpdateKind::Paint {
                 let _trace = browser_tracing::span("prepaint", "LayoutEngine.CertifyPaintInputs");
                 inputs.update(&mut fragments);
@@ -525,7 +569,9 @@ impl LayoutEngine {
     /// this immutable Rust boundary uses copy-on-write once per frame, then
     /// refreshes the same subtree revision proof consumed by PrePaint.
     pub fn ExportTargetedPaintOnly(&mut self) -> bool {
-        if self.output_kind != LayoutUpdateKind::Paint { return false; }
+        if self.output_kind != LayoutUpdateKind::Paint {
+            return false;
+        }
         let mut trace = browser_tracing::span("layout", "LayoutEngine.ExportTargetedPaintOnly");
         let Some(fragments) = &mut self.fragments else {
             trace.set("rejected", 1.0);
@@ -554,17 +600,26 @@ impl LayoutEngine {
     /// boundary refreshes paint inputs only; shaped runs and fragment IDs stay
     /// owned by the last layout, like Blink's FragmentData/ObjectPaintProperties.
     pub fn ExportTargetedPaintInputs(&mut self) -> bool {
-        if self.output_kind != LayoutUpdateKind::Paint { return false; }
+        if self.output_kind != LayoutUpdateKind::Paint {
+            return false;
+        }
         let mut trace = browser_tracing::span("layout", "LayoutEngine.ExportTargetedPaintInputs");
-        if self.tree_.is_none() { return false; }
+        if self.tree_.is_none() {
+            return false;
+        }
         let root = self.RootPointer();
         if unsafe { &*root }.NeedsLayout() {
             return false;
         }
-        let Some(fragments) = &mut self.fragments else { return false; };
+        let Some(fragments) = &mut self.fragments else {
+            return false;
+        };
         let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
         if !crate::internal::boundary::layout_boundary::RefreshRetainedPaintInputs(
-            unsafe { &mut *root }, Rc::make_mut(fragments), &self.pending_paint_ids_, &self.pending_inline_ink_ids_,
+            unsafe { &mut *root },
+            Rc::make_mut(fragments),
+            &self.pending_paint_ids_,
+            &self.pending_inline_ink_ids_,
         ) {
             trace.set("rejected", 1.0);
             return false;
@@ -631,7 +686,12 @@ impl LayoutEngine {
         // Retained scroll refresh is owned by the caller and can mutate inputs
         // without exporting. Its next ordinary layout must establish a basis.
         self.pre_paint_inputs_.invalidate();
-        let _ = self.RunLayout(unsafe { &mut *root }, &self.constraints_, false, LayoutUpdateKind::Paint);
+        let _ = self.RunLayout(
+            unsafe { &mut *root },
+            &self.constraints_,
+            false,
+            LayoutUpdateKind::Paint,
+        );
     }
 
     /// The caller admits only unchanged styles and known scroll owners. Keep

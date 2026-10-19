@@ -31,7 +31,9 @@ pub(crate) mod mathml_painter;
 pub(crate) mod nine_piece_image_grid;
 #[cfg(feature = "translation_in_progress")]
 pub(crate) mod nine_piece_image_painter;
+pub mod opaque_paint_cache_slot;
 pub mod paint_chunker;
+pub mod paint_clip_path;
 pub(crate) mod paint_context;
 pub mod paint_engine;
 pub(crate) mod paint_info;
@@ -41,6 +43,7 @@ pub mod paint_order;
 pub mod paint_property_tree;
 pub(crate) mod paint_shader_resolver;
 pub(crate) mod pre_paint_tree_walk;
+pub mod property_filter_operations;
 #[cfg(feature = "translation_in_progress")]
 pub mod scroll_paint_update;
 #[cfg(feature = "translation_in_progress")]
@@ -280,3 +283,25 @@ pub fn Paint(root: &FragmentNode) -> DisplayItemList {
     walk(root, Offset::default(), &mut result.items);
     result
 }
+
+pub mod cc {
+    pub mod paint {
+        pub mod clear_for_opaque_raster;
+        pub mod color_filter;
+        pub mod discardable_image_map;
+        pub mod draw_looper;
+        pub mod filter_operation;
+        pub mod filter_operations;
+        pub mod paint_flags;
+        pub mod paint_op;
+        pub mod paint_op_buffer;
+        pub mod paint_op_buffer_iterator;
+        pub mod path_effect;
+        pub mod solid_color_analyzer;
+    }
+}
+
+pub mod property_node_geometry;
+
+/// Selected DecorationLinePainter pure native value dependency.
+pub mod wavy_geometry;

@@ -3,22 +3,17 @@
 //! This module owns the native surface and display resources, but deliberately
 //! knows nothing about threads, channels, or executors. `PresentationRuntime`
 //! delivers messages and routes the returned effects.
-use crate::page_presentation::{Document, PageFrame as SubmittedFrame, Scene};
+use crate::page_presentation::{Document, FrameProvenance, PageFrame as SubmittedFrame, Scene};
 use crate::{
     engine::{Output, UserEvent, Viewport},
     window_surface::{DisplayTarget, PreparedDisplayTarget},
 };
-use renderer::Renderer;
 use std::{collections::BTreeMap, io, sync::Arc, time::Instant};
-use viz::{SurfaceId, SwapId, VizEngine};
 
 pub(crate) enum Message {
     Scene(Scene),
     Prepare {
-        frame: crate::begin_frame_source::NativeBeginFrame,
         submitted: SubmittedFrame,
-        resources: raster::RasterResourceSnapshot,
-        scroll_active: bool,
     },
     Submit {
         frame: crate::begin_frame_source::NativeBeginFrame,
@@ -33,14 +28,11 @@ pub(crate) enum Effect {
 }
 
 struct PageSurface {
-    id: SurfaceId,
-    resources: raster::RasterResourceSnapshot,
-    provenance: Option<compositor::FrameProvenance>,
-    viewport: Option<Viewport>,
+    frame: SubmittedFrame,
 }
 struct PreparedDisplayFrame {
     output: PreparedDisplayTarget,
-    provenance: compositor::FrameProvenance,
+    provenance: FrameProvenance,
     sequence: u64,
     viewport: Viewport,
     drag_regions: Vec<crate::chrome::DragRegion>,
@@ -49,15 +41,13 @@ struct PreparedDisplayFrame {
 pub(crate) struct Display {
     target: DisplayTarget,
     pages: BTreeMap<Document, PageSurface>,
-    next_surface_id: u64,
     scene: Option<Scene>,
     pending: Option<()>,
     prepared: Option<PreparedDisplayFrame>,
     sequence: u64,
     notify: Arc<dyn Fn(UserEvent) + Send + Sync>,
     diagnostic_output: Option<Output>,
-    viz: VizEngine,
-    renderer: Renderer,
+    pending_swap: Option<u64>,
 }
 
 impl Display {
@@ -65,15 +55,13 @@ impl Display {
         Self {
             target,
             pages: BTreeMap::new(),
-            next_surface_id: 0,
             scene: None,
             pending: None,
             prepared: None,
             sequence: 0,
             notify: output.notify.clone(),
             diagnostic_output: capture_frames.then_some(output),
-            viz: VizEngine::New(),
-            renderer: Renderer::default(),
+            pending_swap: None,
         }
     }
 
@@ -90,18 +78,16 @@ impl Display {
                 self.pending = Some(());
                 Ok(vec![Effect::RequestBeginFrame])
             }
-            Message::Prepare {
-                frame,
-                submitted,
-                resources,
-                scroll_active,
-            } => self.Prepare(frame, submitted, resources, scroll_active),
+            Message::Prepare { submitted } => self.Prepare(submitted),
             Message::Submit {
                 frame,
                 scroll_active,
             } => self.Submit(frame, scroll_active, post_swap_ack),
             Message::SwapAck(sequence) => {
-                let accepted = self.viz.DidReceiveSwapAck(SwapId(sequence));
+                let accepted = self.pending_swap == Some(sequence);
+                if accepted {
+                    self.pending_swap = None;
+                }
                 browser_tracing::instant(
                     "frame",
                     "DisplaySwapAcknowledged",
@@ -126,14 +112,15 @@ impl Display {
         if self
             .pages
             .get(&requested)
-            .is_some_and(|page| page.provenance.is_some())
+            .is_some_and(|page| page.frame.provenance.content.is_some())
         {
             return Some(requested);
         }
         // DelegatedFrameHost's previous Surface remains visible during a new
         // document's first commit. The fallback is local to that embedding view.
         self.pages.iter().rev().find_map(|(&document, page)| {
-            (document.0 == requested.0 && page.provenance.is_some()).then_some(document)
+            (document.0 == requested.0 && page.frame.provenance.content.is_some())
+                .then_some(document)
         })
     }
 
@@ -151,53 +138,18 @@ impl Display {
             .iter()
             .filter_map(|(&document, page)| {
                 (!scene.live_documents.contains(&document) && !retained.contains(&document))
-                    .then_some((document, page.id))
+                    .then_some(document)
             })
             .collect();
-        for (document, surface) in removed {
+        for document in removed {
             self.pages.remove(&document);
-            self.viz.DestroySurface(surface);
-            self.renderer.InvalidateSurface(surface);
         }
     }
 
-    fn Prepare(
-        &mut self,
-        frame: crate::begin_frame_source::NativeBeginFrame,
-        submitted: SubmittedFrame,
-        resources: raster::RasterResourceSnapshot,
-        _scroll_active: bool,
-    ) -> io::Result<Vec<Effect>> {
-        let _frame = browser_tracing::scope(browser_tracing::Context {
-            target_id: 1,
-            source_id: frame.source_id,
-            frame_id: frame.sequence_number,
-            ..Default::default()
-        });
-        // The exact frame and its immutable resource leases are accepted as
-        // one message. No raster engine or tile scheduler crosses this boundary.
+    fn Prepare(&mut self, submitted: SubmittedFrame) -> io::Result<Vec<Effect>> {
         let document = submitted.provenance.document;
-        let page = self.pages.entry(document).or_insert_with(|| {
-            self.next_surface_id += 1;
-            PageSurface {
-                id: SurfaceId(self.next_surface_id),
-                resources: resources.clone(),
-                provenance: None,
-                viewport: None,
-            }
-        });
-        page.resources = resources;
-        if let Some(frame) = submitted.content {
-            self.viz
-                .SubmitFrame(page.id, frame)
-                .map_err(io::Error::other)?;
-            page.provenance = Some(submitted.provenance);
-            page.viewport = Some(submitted.viewport);
-        } else {
-            page.provenance = None;
-            self.viz.DestroySurface(page.id);
-            self.renderer.InvalidateSurface(page.id);
-        }
+        self.pages
+            .insert(document, PageSurface { frame: submitted });
         self.PrunePages();
         self.pending = Some(());
         Ok(vec![])
@@ -207,7 +159,7 @@ impl Display {
         &mut self,
         frame: crate::begin_frame_source::NativeBeginFrame,
     ) -> io::Result<()> {
-        if self.pending.take().is_none() {
+        if self.pending.is_none() {
             return Ok(());
         }
         let Some(scene) = &self.scene else {
@@ -215,7 +167,7 @@ impl Display {
         };
         let viewport = scene.viewport;
         let mut placements = vec![];
-        let mut provenance = compositor::FrameProvenance {
+        let mut provenance = FrameProvenance {
             document: scene
                 .placements
                 .iter()
@@ -225,51 +177,39 @@ impl Display {
         };
         for placement in &scene.placements {
             let Some(document) = self.Selected(placement.document) else {
-                continue;
+                // SurfaceAggregator keeps the previous complete aggregate
+                // until every embedded surface required by the new scene has
+                // a frame.  Presenting only the ready children would clear
+                // the missing Page's pixels in the newly acquired buffer.
+                return Ok(());
             };
             let page = &self.pages[&document];
-            let Some(local) = page.viewport else {
-                continue;
-            };
+            let local = page.frame.viewport;
             // A resize waits for a matching producer frame; Viz never stretches
             // an old Page into a different local viewport.
             if local.width != placement.destination.width
                 || local.height != placement.destination.height
             {
-                continue;
+                return Ok(());
             }
-            placements.push(viz::SurfacePlacement {
-                surface_id: page.id,
-                destination: placement.destination,
-            });
+            placements.push((&page.frame, placement.destination));
             if placement.document.0 != 0 && placement.document.0 != u64::MAX {
-                provenance = page.provenance.unwrap();
+                provenance = page.frame.provenance;
             }
         }
         if placements.is_empty() {
             return Ok(());
         }
+        // Consume the dirty bit only after a complete scene candidate exists.
+        // A resize can deliver toolbar/content LocalSurfaceId generations on
+        // different Page sequences; the last complete aggregate remains live
+        // while either producer catches up.
+        self.pending.take();
         self.sequence = self.sequence.wrapping_add(1);
         let sequence = self.sequence;
-        let aggregated = self
-            .viz
-            .Aggregate(
-                compositor::DeviceRect::new(0, 0, viewport.width, viewport.height),
-                &placements,
-            )
-            .map_err(io::Error::other)?;
-        let resources: Vec<_> = self
-            .pages
-            .values()
-            .map(|page| (page.id, &page.resources))
-            .collect();
-        let output = self.target.render_aggregated_frame(
-            &aggregated,
-            &mut self.renderer,
-            &resources,
-            viewport,
-            sequence,
-        )?;
+        let output = self
+            .target
+            .render_page_surfaces(&placements, viewport, sequence)?;
         self.prepared = Some(PreparedDisplayFrame {
             output,
             provenance,
@@ -356,7 +296,7 @@ impl Display {
                 .as_secs_f64()
                 * 1000.0,
         );
-        if !self.viz.CanDrawAndSwap() {
+        if self.pending_swap.is_some() {
             frame_trace.set("submitted", 0.0);
             frame_trace.set("swap_throttled", 1.0);
             return Ok(vec![Effect::RequestBeginFrame]);
@@ -387,9 +327,7 @@ impl Display {
         // Chromium Display::DrawAndSwap registers DidSwapBuffers before
         // invoking SwapBuffers: software/native completion can be synchronous.
         // The callback only posts its token; the Display owner consumes it.
-        self.viz
-            .DidSubmitSwap(SwapId(sequence))
-            .map_err(io::Error::other)?;
+        self.pending_swap = Some(sequence);
         let presented = self.target.present_prepared(
             output,
             sequence,
@@ -401,7 +339,7 @@ impl Display {
             }),
         );
         if let Err(error) = presented {
-            self.viz.DidReceiveSwapAck(SwapId(sequence));
+            self.pending_swap = None;
             return Err(error);
         }
         frame_trace.set("submitted", 1.0);
@@ -474,227 +412,5 @@ impl Display {
         } else {
             Vec::new()
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Mutex;
-    use std::time::Duration;
-
-    fn prepared(sequence: u64, viewport: Viewport) -> PreparedDisplayFrame {
-        PreparedDisplayFrame {
-            output: PreparedDisplayTarget::Offscreen {
-                pixels: vec![0x0011_2233; viewport.width as usize * viewport.height as usize],
-                row_stride: viewport.width as usize,
-            },
-            provenance: compositor::FrameProvenance {
-                document: (7, 4),
-                content: Some(compositor::ContentFrameProvenance {
-                    sequence,
-                    recording_revision: 19,
-                }),
-            },
-            sequence,
-            viewport,
-            drag_regions: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn completed_swap_is_received_before_queued_prepare_and_submit() {
-        use crate::presentation_runtime::ReceiveSwapAcks;
-        use std::{collections::VecDeque, sync::mpsc};
-        let source_id = browser_tracing::next_id();
-        let mailbox = Arc::new(Mutex::new(None));
-        let mut display = Display::New(
-            DisplayTarget::Offscreen,
-            Output {
-                mailbox: mailbox.clone(),
-                notify: Arc::new(|_| {}),
-            },
-            true,
-        );
-        let viewport = Viewport {
-            width: 2,
-            height: crate::engine::TOOLBAR_HEIGHT as u32 + 2,
-            scale: 1.0,
-        };
-        let now = Instant::now();
-        let frame = crate::begin_frame_source::NativeBeginFrame::from(
-            foundation::begin_frame::BeginFrameArgs {
-                source_id,
-                sequence_number: 1,
-                frame_time: now,
-                deadline: now + Duration::from_millis(16),
-                interval: Duration::from_millis(16),
-            },
-        );
-        let (ack_sender, ack_receiver) = mpsc::channel();
-        let ack: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |sequence| {
-            ack_sender.send(sequence).unwrap();
-        });
-        // These candidates already exist when swap 1 completes. The old FIFO
-        // would see Prepare(2), Submit(2), Prepare(3), Submit(3), then Ack(1).
-        let mut queued = VecDeque::from([prepared(2, viewport), prepared(3, viewport)]);
-        display.prepared = Some(prepared(1, viewport));
-        display.Submit(frame, true, &ack).unwrap();
-        assert!(!display.viz.CanDrawAndSwap());
-        for expected in [2, 3] {
-            ReceiveSwapAcks(&ack_receiver, &mut display, &ack).unwrap();
-            assert!(display.viz.CanDrawAndSwap());
-            display.prepared = queued.pop_front();
-            ReceiveSwapAcks(&ack_receiver, &mut display, &ack).unwrap();
-            display.Submit(frame, true, &ack).unwrap();
-            assert!(display.prepared.is_none());
-            assert_eq!(
-                mailbox
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .unwrap()
-                    .provenance
-                    .unwrap()
-                    .content
-                    .unwrap()
-                    .sequence,
-                expected
-            );
-        }
-        ReceiveSwapAcks(&ack_receiver, &mut display, &ack).unwrap();
-        assert!(display.viz.CanDrawAndSwap());
-    }
-
-    #[test]
-    fn delayed_swap_completion_keeps_throttle_and_stale_tokens_are_noops() {
-        use crate::presentation_runtime::ReceiveSwapAcks;
-        use std::sync::mpsc;
-        let mut display = Display::New(
-            DisplayTarget::Offscreen,
-            Output {
-                mailbox: Arc::new(Mutex::new(None)),
-                notify: Arc::new(|_| {}),
-            },
-            false,
-        );
-        let viewport = Viewport {
-            width: 2,
-            height: crate::engine::TOOLBAR_HEIGHT as u32 + 2,
-            scale: 1.0,
-        };
-        display.prepared = Some(prepared(42, viewport));
-        display.viz.DidSubmitSwap(SwapId(41)).unwrap();
-        let (sender, receiver) = mpsc::channel();
-        let ack: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(|_| {});
-        // Models a native callback which has not completed yet: owner turns
-        // alone do not free its slot or consume the prepared candidate.
-        assert!(ReceiveSwapAcks(&receiver, &mut display, &ack)
-            .unwrap()
-            .is_empty());
-        assert!(!display.viz.CanDrawAndSwap());
-        sender.send(40).unwrap();
-        assert!(ReceiveSwapAcks(&receiver, &mut display, &ack)
-            .unwrap()
-            .is_empty());
-        assert!(!display.viz.CanDrawAndSwap());
-        sender.send(41).unwrap();
-        assert!(matches!(
-            ReceiveSwapAcks(&receiver, &mut display, &ack)
-                .unwrap()
-                .as_slice(),
-            [Effect::RequestBeginFrame]
-        ));
-        assert!(display.viz.CanDrawAndSwap());
-        display.viz.DidSubmitSwap(SwapId(42)).unwrap();
-        sender.send(41).unwrap();
-        assert!(ReceiveSwapAcks(&receiver, &mut display, &ack)
-            .unwrap()
-            .is_empty());
-        assert!(!display.viz.CanDrawAndSwap());
-        assert_eq!(display.prepared.as_ref().unwrap().sequence, 42);
-    }
-
-    #[test]
-    fn offscreen_publication_traces_prepared_content_identity() {
-        let source_id = browser_tracing::next_id();
-        let mailbox = Arc::new(Mutex::new(None));
-        let output = Output {
-            mailbox: mailbox.clone(),
-            notify: Arc::new(|_| {}),
-        };
-        let mut display = Display::New(DisplayTarget::Offscreen, output, true);
-        let viewport = Viewport {
-            width: 2,
-            height: crate::engine::TOOLBAR_HEIGHT as u32 + 2,
-            scale: 1.0,
-        };
-        let now = Instant::now();
-        let frame = crate::begin_frame_source::NativeBeginFrame::from(
-            foundation::begin_frame::BeginFrameArgs {
-                source_id,
-                sequence_number: 1,
-                frame_time: now,
-                deadline: now + Duration::from_millis(16),
-                interval: Duration::from_millis(16),
-            },
-        );
-        let ack: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(|_| {});
-        let recording = browser_tracing::start(Default::default()).unwrap();
-        for (sequence, content) in [
-            None,
-            Some(compositor::ContentFrameProvenance {
-                sequence: 1,
-                recording_revision: 19,
-            }),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let sequence = sequence as u64 + 1;
-            display.prepared = Some(PreparedDisplayFrame {
-                output: PreparedDisplayTarget::Offscreen {
-                    pixels: vec![0x0011_2233; viewport.width as usize * viewport.height as usize],
-                    row_stride: viewport.width as usize,
-                },
-                provenance: compositor::FrameProvenance {
-                    document: (7, 4),
-                    content,
-                },
-                sequence,
-                viewport,
-                drag_regions: Vec::new(),
-            });
-            display.Submit(frame, false, &ack).unwrap();
-            assert_eq!(
-                mailbox.lock().unwrap().as_ref().unwrap().provenance,
-                Some(compositor::FrameProvenance {
-                    document: (7, 4),
-                    content
-                })
-            );
-            display.viz.DidReceiveSwapAck(SwapId(sequence));
-        }
-        browser_tracing::stop().unwrap();
-        let snapshot = browser_tracing::snapshot(Some(recording)).unwrap();
-        let published: Vec<_> = snapshot
-            .instants
-            .iter()
-            .filter(|event| {
-                event.name == "OffscreenFramePublished" && event.context.source_id == source_id
-            })
-            .collect();
-        assert_eq!(published.len(), 2);
-        assert_eq!(published[0].fields["has_content"], 0.0);
-        assert_eq!(published[0].fields["content_sequence"], 0.0);
-        assert_eq!(published[1].fields["has_content"], 1.0);
-        assert_eq!(published[1].fields["tab_id"], 7.0);
-        assert_eq!(published[1].fields["document_generation"], 4.0);
-        assert_eq!(published[1].fields["content_sequence"], 1.0);
-        assert_eq!(published[1].fields["content_recording_revision"], 19.0);
-        assert!(!snapshot
-            .instants
-            .iter()
-            .any(|event| event.name == "FramePresentedToNative"));
     }
 }

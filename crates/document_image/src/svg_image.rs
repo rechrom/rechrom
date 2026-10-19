@@ -78,6 +78,37 @@ struct SVGDocumentAnimation {
     revision: u64,
     animations: Vec<CSSImageAnimation>,
     last_sample: Option<AnimationSampleBatch>,
+    load_state: IsolatedSVGLoadState,
+}
+
+// Source: core/svg/graphics/isolated_svg_document_host.h:93-102;
+// .cc:101-102,212-238. This owner currently uses the synchronous complete-byte
+// secure-document path; async subresource completion is not synthesized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IsolatedSVGLoadState {
+    NotStarted,
+    Pending,
+    WaitingForAsyncLoadCompletion,
+    Completed,
+}
+impl IsolatedSVGLoadState {
+    fn Begin(&mut self) {
+        assert_eq!(*self, Self::NotStarted);
+        *self = Self::Pending;
+    }
+    // Source: isolated_svg_document_host.cc:213-216 (synchronous load branch).
+    fn LoadCompletedSynchronously(&mut self) {
+        assert_eq!(*self, Self::Pending);
+        *self = Self::Completed;
+    }
+    // Source: isolated_svg_document_host.h:76; svg_image.cc:375-378.
+    fn CompletionState(self) -> image_resource::PaintImageCompletionState {
+        if self == Self::Completed {
+            image_resource::PaintImageCompletionState::Done
+        } else {
+            image_resource::PaintImageCompletionState::PartiallyDone
+        }
+    }
 }
 
 // cpp: core/layout/natural_sizing_info.h NaturalSizingInfo and
@@ -639,6 +670,8 @@ impl SVGImageDecoder {
         use layoutng_assembly::internal::layout_input::{Size, ViewportGeometry};
         use layoutng_assembly::internal::layout_input_types::IntSize;
 
+        let mut load_state = IsolatedSVGLoadState::NotStarted;
+        load_state.Begin();
         let (mut document, intrinsic_sizing) = self.PrepareDocument(bytes, mime_type)?;
         let mut container = container.clone();
         ApplySVGImageViewInfo(&mut document, &container.view_specification)?;
@@ -660,6 +693,10 @@ impl SVGImageDecoder {
             .Update(&mut document, &media, &self.user_agent_sheets_)
             .map_err(|error| io::Error::other(error.to_string()))?;
         document.UpdateSVGResources();
+        // The isolated pipeline has completed parsing and all of its inline
+        // sheets/resources here. It owns no pending asynchronous load requests.
+        // Source: isolated_svg_document_host.cc:213-216.
+        load_state.LoadCompletedSynchronously();
         let environment = MediaValuesCached::new(&media);
         let animations = CollectAnimations(document.GetDocument(), &environment)?;
         let mut constraints = self.host_constraints_.clone();
@@ -703,6 +740,7 @@ impl SVGImageDecoder {
             revision: 0,
             animations,
             last_sample: None,
+            load_state,
         })
     }
 }
@@ -816,6 +854,19 @@ impl SVGDocumentAnimation {
         Ok(Arc::new(DocumentImageFrame {
             resource_id: self.resource_id,
             revision: self.revision,
+            // Source: image.cc:351-358; cc/paint/paint_image.cc:444-449.
+            // SVG timeline animation mutates this record in its document
+            // owner; a PaintRecord has one compositor image frame.
+            animation_info: image_resource::PaintImageAnimationInfo {
+                animation_type: if self.has_active_animation() {
+                    image_resource::PaintImageAnimationType::Animated
+                } else {
+                    image_resource::PaintImageAnimationType::Static
+                },
+                repetition_count: image_resource::ANIMATION_NONE,
+                frame_count: 1,
+            },
+            completion_state: self.load_state.CompletionState(),
             intrinsic_size,
             container_key: self.container.clone(),
             record,

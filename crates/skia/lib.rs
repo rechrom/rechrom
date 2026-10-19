@@ -14,10 +14,14 @@ pub mod include {
         pub mod SkColor;
         pub mod SkColorType;
         pub mod SkPaint;
+        pub mod SkPath;
         pub mod SkPathTypes;
         pub mod SkPixmap;
         pub mod SkPoint;
+        pub mod SkRRect;
         pub mod SkRect;
+        pub mod SkRegion;
+        pub mod SkSamplingOptions;
         pub mod SkScalar;
         pub mod SkShader;
         pub mod SkSize;
@@ -52,6 +56,7 @@ pub mod src {
         pub mod SkFDot6;
         pub mod SkGeometry;
         pub mod SkLineClipper;
+        pub mod SkM44;
         pub mod SkMask;
         pub mod SkMaskBlurFilter;
         pub mod SkMaskBuilder;
@@ -79,6 +84,7 @@ pub mod src {
         pub mod SkStrikeCache;
         pub mod SkStroke;
         pub mod SkStrokerPriv;
+        pub mod SkSurface_Raster;
         pub mod SkTSort;
         pub mod SkVx;
     }
@@ -101,6 +107,7 @@ pub mod src {
     }
     pub mod shaders {
         pub mod SkImageShader;
+        pub mod SkPictureShader;
         pub mod gradients {
             pub mod SkConicalGradient;
             pub mod SkGradientBaseShader;
@@ -111,6 +118,7 @@ pub mod src {
     }
     pub mod utils {
         pub mod SkDashPath;
+        pub mod SkNoDrawCanvas;
     }
 }
 pub mod compat {
