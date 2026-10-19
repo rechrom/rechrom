@@ -48,6 +48,21 @@ fn GeometryMetadataEqual(new: &Option<ElementData>, old: &Option<ElementData>) -
     }
 }
 
+// Native form-control interaction state changes theme painting without changing
+// box geometry. LayoutObject::SetStyle normally turns the corresponding visual
+// diff into a full paint invalidation; the paint-only metadata path must make
+// the same DisplayItemClient transition before replacing its retained input.
+fn ControlPaintStateChanged(new: &Option<ElementData>, old: &Option<ElementData>) -> bool {
+    match (new, old) {
+        (Some(new), Some(old)) => {
+            new.control_hovered != old.control_hovered
+                || new.control_active != old.control_active
+                || new.control_focused != old.control_focused
+        }
+        _ => false,
+    }
+}
+
 // Compare attachment metadata without constructing another owned style. Native
 // ComputedStyle differences are checked independently by the caller, as in
 // LayoutObject::SetStyle. Keep this destructuring exhaustive when inputs grow.
@@ -1735,6 +1750,8 @@ impl LayoutObjectTree {
         for key in keys {
             let record = storage.managed.get_mut(&key).unwrap();
             let previous = unsafe { &*record.object }.StyleRef();
+            let control_paint_state_changed =
+                ControlPaintStateChanged(&element, &record.input.element);
             let native_style = PreservePaintOnlyFontBinding(style.native_style, previous);
             let mut projected = style.clone();
             projected.svg_clip_resources = record.effective_style.svg_clip_resources.clone();
@@ -1751,7 +1768,10 @@ impl LayoutObjectTree {
                     previous,
                     unsafe { &*native_style },
                 );
-            if native_fields != 0 || record.effective_style.paint != projected.paint {
+            if native_fields != 0
+                || record.effective_style.paint != projected.paint
+                || control_paint_state_changed
+            {
                 unsafe { &mut *record.object }
                     .SetShouldDoFullPaintInvalidationWithoutLayoutChange(
                         foundation::PaintInvalidationReason::kStyle,
