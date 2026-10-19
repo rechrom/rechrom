@@ -8,8 +8,8 @@ use layoutng_fragment_tree::fragment_tree::FragmentNode;
 use layoutng_fragment_tree::layout_result::EStatus;
 use std::{collections::HashSet, rc::Rc};
 
-use crate::editing_state::LayoutEditingState;
 use crate::internal::layout_object_builder::LayoutObjectTree;
+use crate::{caret::FrameCaret, editing_state::LayoutEditingState};
 use layoutng_style::style::computed_style::ComputedStyle as NativeComputedStyle;
 
 use crate::internal::block_node::BlockNode;
@@ -158,6 +158,45 @@ pub struct ContainerQuerySizeSnapshot {
     pub node_id: u64,
     pub width: f64,
     pub height: f64,
+}
+
+/// Move-only access to Layout's resident fragment result for one Paint pass.
+/// Moving this value transfers only an `Rc`; it never clones the fragment tree.
+pub struct LayoutPaintOutput {
+    fragments: Rc<FragmentNode>,
+}
+
+impl LayoutPaintOutput {
+    pub fn Fragments(&self) -> &FragmentNode {
+        &self.fragments
+    }
+
+    /// Page-level resource preparation may update the resident fragment value
+    /// before Paint consumes it. Copy-on-write occurs only when a genuinely
+    /// older published frame still retains the same tree.
+    pub fn FragmentsMut(&mut self) -> &mut Rc<FragmentNode> {
+        &mut self.fragments
+    }
+}
+
+/// Opaque client set produced by Paint after its artifact is complete.
+/// Layout consumes it to advance native DisplayItemClient state.
+pub struct PaintClientCommit {
+    used_clients: HashSet<u64>,
+}
+
+impl PaintClientCommit {
+    pub fn FromClientSet(used_clients: HashSet<u64>) -> Self {
+        Self { used_clients }
+    }
+}
+
+/// Interface implemented by a Paint engine output. It lets Layout consume the
+/// opaque commit receipt without depending on the Paint crate or its artifact.
+pub trait PaintCommitOutput {
+    type Artifact;
+
+    fn IntoLayoutCommit(self) -> (Self::Artifact, PaintClientCommit);
 }
 
 /// Owns the resident native input tree, its constraints and exported result.
@@ -644,6 +683,60 @@ impl LayoutEngine {
         self.fragments.take()
     }
 
+    /// Transfer the resident result into the zero-copy Layout -> Paint path.
+    pub fn TakePaintOutput(&mut self) -> Option<LayoutPaintOutput> {
+        self.fragments
+            .take()
+            .map(|fragments| LayoutPaintOutput { fragments })
+    }
+
+    /// Transfer Page's currently published frame back into the Layout -> Paint
+    /// path. The engine's matching retained `Rc` is dropped before mutation so
+    /// it cannot itself trigger fragment-tree copy-on-write.
+    pub fn TakePublishedPaintOutput(&mut self, fragments: Rc<FragmentNode>) -> LayoutPaintOutput {
+        if let Some(resident) = self.fragments.take() {
+            debug_assert!(
+                Rc::ptr_eq(&resident, &fragments),
+                "published Page frame must match LayoutEngine output"
+            );
+        }
+        LayoutPaintOutput { fragments }
+    }
+
+    /// Commit one completed Paint output and republish the same fragment owner.
+    /// No fragment or artifact snapshot is created here; only `Rc`/`Arc`
+    /// handles cross the interface.
+    pub fn CommitPaint<P: PaintCommitOutput>(
+        &mut self,
+        mut layout: LayoutPaintOutput,
+        paint: P,
+        caret: Option<&FrameCaret>,
+    ) -> (Rc<FragmentNode>, P::Artifact) {
+        let (artifact, commit) = paint.IntoLayoutCommit();
+        if let Some(caret) = caret {
+            let caret_id = caret.display_item_client().Id();
+            if commit.used_clients.contains(&caret_id) {
+                caret.ValidateForCommittedPaint(caret_id);
+            }
+        }
+        if let Some(tree) = &self.tree_ {
+            tree.CommitPaintClientState(&commit.used_clients, &mut layout.fragments);
+        }
+        self.pre_paint_inputs_
+            .CommitClients(commit.used_clients.iter().copied());
+        self.output_kind = LayoutUpdateKind::Paint;
+        self.fragments = Some(layout.fragments.clone());
+        (layout.fragments, artifact)
+    }
+
+    /// Republish a zero-copy Layout output after Paint proved that its existing
+    /// display-item recording remains valid.
+    pub fn CommitRetainedPaint(&mut self, layout: LayoutPaintOutput) -> Rc<FragmentNode> {
+        self.output_kind = LayoutUpdateKind::Paint;
+        self.fragments = Some(layout.fragments.clone());
+        layout.fragments
+    }
+
     /// Release the published result when its input/lifecycle has been replaced.
     pub fn ReleaseLayoutResult(&mut self) {
         self.fragments = None;
@@ -654,21 +747,6 @@ impl LayoutEngine {
     pub fn PublishLayoutResult(&mut self, fragments: Rc<FragmentNode>) {
         self.output_kind = LayoutUpdateKind::Paint;
         self.fragments = Some(fragments);
-    }
-
-    /// Validate only used clients rooted by this engine, then synchronize
-    /// exported lifecycle bits and the input observer after a successful Paint.
-    #[doc(hidden)]
-    pub fn CommitPaintClients(
-        &mut self,
-        clients: impl IntoIterator<Item = u64>,
-        fragments: &mut Rc<FragmentNode>,
-    ) {
-        let used: HashSet<_> = clients.into_iter().collect();
-        if let Some(tree) = &self.tree_ {
-            tree.CommitPaintClientState(&used, fragments);
-        }
-        self.pre_paint_inputs_.CommitClients(used);
     }
 
     /// Internal retained-scroll path. The caller must already own fragments and

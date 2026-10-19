@@ -822,16 +822,14 @@ impl SVGDocumentAnimation {
                 self.engine.ApplyMutation(mutation)
             });
         self.engine.Layout();
-        let fragments = self
+        let layout_output = self
             .engine
-            .TakeLayoutResult()
+            .TakePaintOutput()
             .ok_or_else(|| io::Error::other("animated SVG layout produced no fragments"))?;
-        self.paint_engine.Paint(&fragments, Default::default());
-        let artifact = self
-            .paint_engine
-            .GetPaintResult()
-            .ok_or_else(|| io::Error::other("animated SVG paint produced no artifact"))?
-            .clone();
+        self.paint_engine
+            .Paint(layout_output.Fragments(), Default::default());
+        let paint_output = self.paint_engine.CommitPaintResult();
+        let (_fragments, artifact) = self.engine.CommitPaint(layout_output, paint_output, None);
         let intrinsic_size = EffectiveIntrinsicSize(
             self.document.GetDocument(),
             &self.container.view_specification,

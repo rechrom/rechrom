@@ -2,8 +2,7 @@
 
 This crate translates the platform-independent management and algorithmic core
 of Chromium Viz while preserving Rechrom's existing `VizEngine` command/value
-boundary. The former implementation lives in `crates/viz_old` during migration
-and is not a dependency of this crate.
+boundary. This is the sole Viz implementation in the workspace.
 
 Each selected Chromium `.h`/`.cc` pair maps to one Rust file with the same
 relative directory and stem. Translation blocks record source-relative paths
@@ -17,6 +16,7 @@ tracking, surface aggregation, display deadlines and swap scheduling. GPU,
 Skia drawing, overlays, output devices, IPC and OS threads remain injected or
 outside this package.
 
-`VizEngine::Aggregate` returns the translated `SurfaceAggregator`'s owned,
-globally remapped render passes. Renderer borrows resource leases from the
-active Surface frame and does not read producer render-pass storage.
+`VizEngine::Aggregate` returns one opaque `VizOutput`, the sole Viz-to-Renderer
+interface. It owns the source-shaped `AggregatedFrame`, globally remapped CPU
+resource leases, root presentation data and draw receipt. Renderer cannot
+address producer Surfaces, submissions, metadata or resource lists.

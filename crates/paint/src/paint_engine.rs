@@ -790,6 +790,27 @@ pub struct PaintMutationResult {
     pub damaged_records: Vec<ImagePaintDependency>,
 }
 
+/// One completed PaintEngine publication. The artifact is immutable; the
+/// client receipt is opaque and can only be consumed through Layout's commit
+/// interface. Neither value contains a copied fragment tree.
+pub struct PaintOutput {
+    artifact: Arc<PaintArtifact>,
+    layout_commit: layoutng_assembly::layout_engine::PaintClientCommit,
+}
+
+impl layoutng_assembly::layout_engine::PaintCommitOutput for PaintOutput {
+    type Artifact = Arc<PaintArtifact>;
+
+    fn IntoLayoutCommit(
+        self,
+    ) -> (
+        Self::Artifact,
+        layoutng_assembly::layout_engine::PaintClientCommit,
+    ) {
+        (self.artifact, self.layout_commit)
+    }
+}
+
 // cpp: paint/paint_engine.h:227-239
 #[derive(Clone, Default)]
 pub struct PaintArtifact {
@@ -1628,23 +1649,37 @@ impl PaintEngine {
         self.paint_result.clone()
     }
 
-    /// Complete native client validation before publishing this artifact to
-    /// the renderer. Existing external snapshots remain immutable.
-    pub fn CommitPaintResult(&mut self, commit: impl FnOnce(&mut PaintArtifact)) {
+    /// Complete Paint-owned client validation and publish an immutable output.
+    /// Layout consumes the opaque client receipt at its own boundary; Page
+    /// never receives mutable access to the artifact or the client set.
+    pub fn CommitPaintResult(&mut self) -> PaintOutput {
         let _trace = browser_tracing::span("paint", "PaintEngine.CommitPaintResult");
         let artifact = Arc::make_mut(
             self.paint_result
                 .as_mut()
                 .expect("Paint must complete before commit"),
         );
-        commit(artifact);
-        self.pre_paint.CommitClients(
-            artifact
-                .display_items
-                .iter()
-                .map(|item| item.id.client_id)
-                .chain(artifact.chunks.iter().map(|chunk| chunk.id.client_id)),
-        );
+        let clients = artifact
+            .display_items
+            .iter()
+            .map(|item| item.id.client_id)
+            .chain(artifact.chunks.iter().map(|chunk| chunk.id.client_id))
+            .collect::<HashSet<_>>();
+        // cpp: platform/graphics/paint/paint_controller.cc:141-143
+        for chunk in &mut artifact.chunks {
+            chunk.client_is_just_created = false;
+        }
+        self.pre_paint.CommitClients(clients.iter().copied());
+        PaintOutput {
+            artifact: self
+                .paint_result
+                .as_ref()
+                .expect("committed Paint result")
+                .clone(),
+            layout_commit: layoutng_assembly::layout_engine::PaintClientCommit::FromClientSet(
+                clients,
+            ),
+        }
     }
 
     /// Move Page's current frame reference back before updating the artifact.

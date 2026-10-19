@@ -4,18 +4,15 @@
 // payloads remain Renderer capabilities; pass/quads and copy algorithms live here.
 #![allow(non_snake_case)]
 
-use crate::native::SurfaceId;
 use compositor_core::adapter::{geometry::Rect, layer_tree_host_impl::ContentColorUsage};
 use compositor_core::runtime::{
     frame::{DrawQuad, FrameValueTypes, QuadMaterial, RenderPassId},
-    metadata::CompositorFrameMetadata,
     skia::SkRegion,
 };
-use compositor_core::{NativeCompositorTypes, NativeTransferableResource};
+use compositor_core::NativeCompositorTypes;
 
 pub type NativeTransform = compositor_core::runtime::geometry::Transform<SkRegion>;
 pub type NativeSharedQuadState = compositor_core::runtime::frame::SharedQuadState<NativeTransform>;
-pub type NativeMetadata = CompositorFrameMetadata<NativeCompositorTypes>;
 pub type NativeDrawQuad =
     DrawQuad<<NativeCompositorTypes as FrameValueTypes>::PictureDisplayItemList>;
 pub type NativeFilters = <NativeCompositorTypes as FrameValueTypes>::FrameFilters;
@@ -180,6 +177,36 @@ impl AggregatedRenderPass {
     pub fn HasCapture(&self) -> bool {
         self.video_capture_enabled
     }
+    pub fn RenderPassId(&self) -> RenderPassId {
+        RenderPassId::from(self.id)
+    }
+    pub fn OutputRect(&self) -> Rect {
+        self.output_rect
+    }
+    pub fn SharedQuadStates(&self) -> &[NativeSharedQuadState] {
+        &self.shared_quad_state_list
+    }
+    pub fn TrySharedQuadState(
+        &self,
+        handle: compositor_core::runtime::frame::SharedQuadStateHandle,
+    ) -> Option<&NativeSharedQuadState> {
+        self.shared_quad_state_list.get(handle.Index())
+    }
+    pub fn Quads(&self) -> &[NativeDrawQuad] {
+        &self.quad_list
+    }
+    pub fn DamageRect(&self) -> Rect {
+        self.damage_rect
+    }
+    pub fn Filters(&self) -> &NativeFilters {
+        &self.filters
+    }
+    pub fn BackdropFilters(&self) -> &NativeFilters {
+        &self.backdrop_filters
+    }
+    pub fn BackdropFilterBounds(&self) -> Option<&NativePath> {
+        self.backdrop_filter_bounds.as_ref()
+    }
 }
 
 // Source: components/viz/common/quads/aggregated_render_pass.h:97-136
@@ -190,74 +217,3 @@ impl AggregatedRenderPass {
 // Source: components/viz/common/quads/aggregated_render_pass.h:137-152
 // Source: components/viz/common/quads/aggregated_render_pass.cc:241
 pub type AggregatedRenderPassList = Vec<AggregatedRenderPass>;
-
-/// Render-ready aggregate. Viz owns the copied pass graph while the submitted
-/// Surface frame remains the immutable owner of metadata and resource leases.
-#[derive(Clone)]
-pub struct AggregatedRenderPassOutput<'a> {
-    pub(crate) surface_id: SurfaceId,
-    pub(crate) submission: u64,
-    pub(crate) destination: Rect,
-    pub(crate) is_root: bool,
-    pub(crate) metadata: &'a NativeMetadata,
-    pub(crate) pass: AggregatedRenderPass,
-    pub(crate) resources: &'a [NativeTransferableResource],
-    pub(crate) damage_start_token: Option<u32>,
-    pub(crate) damage_continuous: bool,
-}
-impl<'a> AggregatedRenderPassOutput<'a> {
-    pub fn Surface(&self) -> SurfaceId {
-        self.surface_id
-    }
-    pub fn Submission(&self) -> u64 {
-        self.submission
-    }
-    pub fn Destination(&self) -> Rect {
-        self.destination
-    }
-    pub fn IsRoot(&self) -> bool {
-        self.is_root
-    }
-    pub fn Metadata(&self) -> &'a NativeMetadata {
-        self.metadata
-    }
-    pub fn RenderPassId(&self) -> RenderPassId {
-        RenderPassId::from(self.pass.id)
-    }
-    pub fn OutputRect(&self) -> Rect {
-        self.pass.output_rect
-    }
-    pub fn SharedQuadStates(&self) -> &[NativeSharedQuadState] {
-        &self.pass.shared_quad_state_list
-    }
-    pub fn TrySharedQuadState(
-        &self,
-        handle: compositor_core::runtime::frame::SharedQuadStateHandle,
-    ) -> Option<&NativeSharedQuadState> {
-        self.pass.shared_quad_state_list.get(handle.Index())
-    }
-    pub fn Quads(&self) -> &[NativeDrawQuad] {
-        &self.pass.quad_list
-    }
-    pub fn Resources(&self) -> &'a [NativeTransferableResource] {
-        self.resources
-    }
-    pub fn DamageRect(&self) -> Rect {
-        self.pass.damage_rect
-    }
-    pub fn DamageStartToken(&self) -> Option<u32> {
-        self.damage_start_token
-    }
-    pub fn DamageIsContinuous(&self) -> bool {
-        self.damage_continuous
-    }
-    pub fn Filters(&self) -> &NativeFilters {
-        &self.pass.filters
-    }
-    pub fn BackdropFilters(&self) -> &NativeFilters {
-        &self.pass.backdrop_filters
-    }
-    pub fn BackdropFilterBounds(&self) -> Option<&NativePath> {
-        self.pass.backdrop_filter_bounds.as_ref()
-    }
-}

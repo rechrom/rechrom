@@ -22,19 +22,22 @@ use crate::{
     },
 };
 use compositor_core::runtime::resources::CpuReturnedResource;
-use compositor_core::NativeCompositorFrame;
+use compositor_core::{
+    adapter::layer_tree_impl::ResourceId, runtime::frame::RenderPassId, NativeCompositorFrame,
+    NativeCpuResourceLease,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt,
+    sync::Arc,
 };
 
 pub type DeviceRect = compositor_core::adapter::geometry::Rect;
-pub use crate::common::quads::aggregated_render_pass::AggregatedRenderPassOutput as AggregatedRenderPass;
 pub use crate::common::quads::aggregated_render_pass::{
-    NativeMetadata, NativeSharedQuadState, NativeTransform,
+    AggregatedRenderPass, NativeSharedQuadState, NativeTransform,
 };
-pub use crate::service::display::aggregated_frame::{AggregatedFrame, DrawReceipt};
+pub use crate::service::display::aggregated_frame::AggregatedFrame;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SurfaceId(pub u64);
@@ -67,6 +70,53 @@ impl Error for VizError {}
 pub struct FrameSubmission {
     pub submission: u64,
     pub returned_resources: Vec<CpuReturnedResource>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DrawReceipt(pub(crate) Vec<(SurfaceId, u64)>);
+
+#[derive(Clone, Copy)]
+pub(crate) struct RootPresentation {
+    pub(crate) pass_id: u64,
+    pub(crate) destination: DeviceRect,
+}
+
+/// The sole Viz-to-Renderer interface. Chromium's AggregatedFrame remains a
+/// pure display value; resource resolution and draw acknowledgement stay
+/// opaque capabilities owned by this Engine output transaction.
+pub struct VizOutput {
+    pub(crate) frame: AggregatedFrame,
+    pub(crate) resources: BTreeMap<u32, Arc<NativeCpuResourceLease>>,
+    pub(crate) receipt: DrawReceipt,
+    pub(crate) roots: Vec<RootPresentation>,
+    pub(crate) output_rect: DeviceRect,
+}
+impl VizOutput {
+    pub fn Frame(&self) -> &AggregatedFrame {
+        &self.frame
+    }
+    pub fn Resource(&self, id: ResourceId) -> Option<Arc<NativeCpuResourceLease>> {
+        self.resources.get(&id.0).cloned()
+    }
+    pub fn RootDestination(&self, id: RenderPassId) -> Option<DeviceRect> {
+        self.roots
+            .iter()
+            .find(|root| root.pass_id == id.0)
+            .map(|root| root.destination)
+    }
+    pub fn OutputRect(&self) -> DeviceRect {
+        self.output_rect
+    }
+    pub fn DamagePixels(&self) -> usize {
+        self.frame
+            .RenderPasses()
+            .iter()
+            .map(|pass| {
+                let damage = pass.DamageRect();
+                damage.width.max(0) as usize * damage.height.max(0) as usize
+            })
+            .sum()
+    }
 }
 
 pub struct VizEngine {
@@ -232,16 +282,16 @@ impl VizEngine {
             returned_resources,
         })
     }
-    pub fn Aggregate<'a>(
-        &'a mut self,
+    pub fn Aggregate(
+        &mut self,
         output: DeviceRect,
         placements: &[SurfacePlacement],
-    ) -> Result<AggregatedFrame<'a>, VizError> {
+    ) -> Result<VizOutput, VizError> {
         self.aggregator
             .Aggregate(&self.manager, &self.damage, &self.ids, output, placements)
     }
-    pub fn AcknowledgeDraw(&mut self, receipt: DrawReceipt) {
-        for (id, submission) in receipt.0 {
+    pub fn DidDraw(&mut self, output: VizOutput) {
+        for (id, submission) in output.receipt.0 {
             let Some(core) = self.ids.get(&id).copied() else {
                 continue;
             };

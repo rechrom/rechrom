@@ -1,6 +1,6 @@
-//! Native Viz pass execution through the existing Skia CPU Canvas.
-//! Frame resources and completed child passes remain actual borrowed owners;
-//! no layer graph, scene snapshot or private blend/clip/sampling engine lives here.
+//! Native VizOutput execution through the existing Skia CPU Canvas.
+//! The Renderer sees only Viz's immutable aggregate interface; no producer
+//! Surface, CompositorFrame, submission generation or resource table enters it.
 use compositor_core::{
     adapter::{
         geometry::{Rect, RectF},
@@ -18,7 +18,7 @@ use skia::{
     },
 };
 use std::{collections::BTreeMap, io};
-use viz::native::{AggregatedFrame, AggregatedRenderPass, SurfaceId};
+use viz::native::{AggregatedRenderPass, VizOutput};
 type PassId = compositor_core::runtime::frame::RenderPassId;
 /// The actual immutable display-list owner carried by the producer's frame.
 pub type PictureDisplayItemList=<compositor_core::NativeCompositorTypes as compositor_core::runtime::frame::FrameValueTypes>::PictureDisplayItemList;
@@ -125,7 +125,7 @@ impl PassBacking {
 }
 #[derive(Default)]
 pub struct Renderer {
-    passes: BTreeMap<(SurfaceId, PassId), PassBacking>,
+    passes: BTreeMap<PassId, PassBacking>,
     picture_rasterizer: Option<Box<dyn PictureRasterizer>>,
 }
 impl Renderer {
@@ -135,36 +135,33 @@ impl Renderer {
             picture_rasterizer: Some(rasterizer),
         }
     }
-    pub fn InvalidateSurface(&mut self, surface: SurfaceId) {
-        self.passes.retain(|(id, _), _| *id != surface);
-    }
     pub fn Render(
         &mut self,
-        frame: &AggregatedFrame<'_>,
+        input: &VizOutput,
         target: RenderTarget<'_>,
     ) -> io::Result<RenderUpdate> {
         let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
             .is_some()
             .then(std::time::Instant::now);
-        validate_target(frame, &target)?;
+        validate_target(input, &target)?;
+        let frame = input.Frame();
         let mut update = RenderUpdate::default();
-        self.passes.retain(|(surface, id), _| {
+        self.passes.retain(|id, _| {
             frame
                 .RenderPasses()
                 .iter()
-                .any(|pass| pass.Surface() == *surface && pass.RenderPassId() == *id)
+                .any(|pass| pass.RenderPassId() == *id)
         });
         for pass in frame.RenderPasses() {
             let pass_rect = pass.OutputRect();
             if pass_rect.IsEmpty() {
                 continue;
             }
-            let key = (pass.Surface(), pass.RenderPassId());
+            let key = pass.RenderPassId();
             let previous = self.passes.remove(&key);
             let retained = previous
                 .as_ref()
-                .is_some_and(|backing| backing.rect == pass_rect)
-                && pass.DamageIsContinuous();
+                .is_some_and(|backing| backing.rect == pass_rect);
             let mut backing = match previous {
                 Some(backing) if backing.rect == pass_rect => backing,
                 _ => PassBacking::new(pass_rect)?,
@@ -210,6 +207,7 @@ impl Renderer {
                 &mut canvas,
                 pass,
                 frame.RenderPasses(),
+                input,
                 &self.passes,
                 &mut self.picture_rasterizer,
                 &mut update,
@@ -240,13 +238,16 @@ impl Renderer {
                     .expect("validated output bounds");
             output.fill_rect(bounds, &background, SkTransform::identity(), None);
         }
-        for pass in frame.RenderPasses().iter().filter(|pass| pass.IsRoot()) {
+        for (pass, d) in frame.RenderPasses().iter().filter_map(|pass| {
+            input
+                .RootDestination(pass.RenderPassId())
+                .map(|destination| (pass, destination))
+        }) {
             let backing = self
                 .passes
-                .get(&(pass.Surface(), pass.RenderPassId()))
+                .get(&pass.RenderPassId())
                 .ok_or_else(|| io::Error::other("completed root pass is unavailable"))?;
-            let d = pass.Destination();
-            let mut damage = if target.retained && pass.DamageIsContinuous() {
+            let mut damage = if target.retained {
                 let source = pass.OutputRect();
                 let damage = pass.DamageRect();
                 if source.width == d.width && source.height == d.height {
@@ -400,14 +401,11 @@ fn native_transform(
     ))
 }
 fn resource<'a>(
-    pass: &'a AggregatedRenderPass<'_>,
+    input: &'a VizOutput,
     id: ResourceId,
 ) -> io::Result<std::sync::Arc<dyn CpuRasterResourceLease<PixelFormat = skia::PixelFormat>>> {
-    pass.Resources()
-        .iter()
-        .find(|r| r.id == id)
-        .ok_or_else(|| io::Error::other("native frame resource is absent"))?
-        .CpuReadLease()
+    input
+        .Resource(id)
         .ok_or_else(|| io::Error::other("native frame resource has no CPU lease"))
 }
 fn image_view(
@@ -429,9 +427,10 @@ fn image_view(
 }
 fn draw_pass(
     canvas: &mut Canvas,
-    pass: &AggregatedRenderPass<'_>,
-    passes: &[AggregatedRenderPass<'_>],
-    completed: &BTreeMap<(SurfaceId, PassId), PassBacking>,
+    pass: &AggregatedRenderPass,
+    passes: &[AggregatedRenderPass],
+    input: &VizOutput,
+    completed: &BTreeMap<PassId, PassBacking>,
     rasterizer: &mut Option<Box<dyn PictureRasterizer>>,
     update: &mut RenderUpdate,
 ) -> io::Result<()> {
@@ -523,7 +522,7 @@ fn draw_pass(
                 nearest_neighbor,
                 ..
             } => {
-                let lease = resource(pass, *resource_id)?;
+                let lease = resource(input, *resource_id)?;
                 // Source: components/viz/service/display/software_renderer.cc:494-512.
                 // TileDrawQuad's texture rectangle describes the whole quad.
                 // When occlusion or the viewport exposes only `visible_rect`,
@@ -615,13 +614,13 @@ fn draw_pass(
                 ..
             } => {
                 let child = completed
-                    .get(&(pass.Surface(), *render_pass_id))
+                    .get(render_pass_id)
                     .ok_or_else(|| {
                         io::Error::other("native child render-pass backing is unavailable")
                     })?;
                 let child_pass = passes
                     .iter()
-                    .find(|p| p.Surface() == pass.Surface() && p.RenderPassId() == *render_pass_id)
+                    .find(|p| p.RenderPassId() == *render_pass_id)
                     .ok_or_else(|| {
                         io::Error::other("native child render-pass value is unavailable")
                     })?;
@@ -674,7 +673,7 @@ fn draw_pass(
                     },
                 );
                 let mask = if mask_resource_id.0 != 0 {
-                    Some(resource(pass, *mask_resource_id)?)
+                    Some(resource(input, *mask_resource_id)?)
                 } else {
                     None
                 };
@@ -965,8 +964,8 @@ fn draw_backdrop(
 fn skia_blend_mode(mode: BlendMode) -> skia::BlendMode {
     raster::native_filters::NativeBlendMode(mode)
 }
-fn validate_target(frame: &AggregatedFrame<'_>, target: &RenderTarget<'_>) -> io::Result<()> {
-    let output = frame.OutputRect();
+fn validate_target(input: &VizOutput, target: &RenderTarget<'_>) -> io::Result<()> {
+    let output = input.OutputRect();
     let length = target
         .row_stride
         .checked_mul(target.height as usize)
