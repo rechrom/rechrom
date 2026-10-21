@@ -42,7 +42,6 @@ use foundation::{CSSValueID, LayoutUnit};
 // lines consisting only of braces/parentheses/semicolons.
 // media_query_evaluator.cc: 1964 / 1257 / 1211 / 46 / 0 (complete).
 // media_query_evaluator.h: 154 / 61 / 43 / 18 / 0.
-// Exact contiguous source ranges are in media_query_evaluator_ledger.tsv.
 // Production document/ancestor owners, computed variable reads, unparsed typed
 // downcasts, native font/line-height conversion contexts, position-area and
 // fallback conversion/matching adapters live in production_container_query.rs

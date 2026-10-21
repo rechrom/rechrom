@@ -30,10 +30,9 @@ The default raster execution adapter is `raster::RasterEngine`.
 Its immutable read leases travel with actual transferable frame resources;
 Page/Viz do not consume raster jobs, provider state or a pixel lookup map.
 Paint supplies the source-aligned `clear_for_opaque_raster` helper outside this
-crate's core source manifest; see `TRANSLATION_SCOPE.md` for dependency evidence.
+crate's core source set.
 
 Paint's canonical playback folding, solid-color analysis, discardable-image map,
-and selected PaintOpBuffer metadata are external value dependencies. Their exact
-source scopes are recorded in `TRANSLATION_SCOPE.md`; they do not inflate the
-compositor core manifest. Paint analysis uses a real no-pixels Skia canvas for
-analysis and retains per-op alpha and the actual nested record resource owner.
+and selected PaintOpBuffer metadata are external value dependencies. Paint
+analysis uses a real no-pixels Skia canvas for analysis and retains per-op alpha
+and the actual nested record resource owner.

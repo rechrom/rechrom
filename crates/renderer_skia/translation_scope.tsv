@@ -1,3 +1,0 @@
-source_base	commit	h_lines	cc_lines	rust_file	owner
-components/viz/service/display/software_renderer	6c1d401fcca5e1b0030563a90c2f2bba168e0c15	140	1119	src/components/viz/service/display/software_renderer.rs	renderer_software
-components/viz/service/display/renderer_utils	6c1d401fcca5e1b0030563a90c2f2bba168e0c15	17	26	src/components/viz/service/display/renderer_utils.rs	renderer_software

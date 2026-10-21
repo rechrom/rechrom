@@ -1,3 +1,0 @@
-source	start	end	consumer	reason
-skia/ext/opacity_filter_canvas.cc	9	65	raster/src/native/canvas.rs	Picture active-canvas per-primitive opacity and image sampling adapter
-third_party/skia/src/core/SkBitmapDevice.cpp	419	543	skia/src/core/SkCanvas.rs	strict source sampling without copying the borrowed image

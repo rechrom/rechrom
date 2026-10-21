@@ -1,3 +1,0 @@
-source	start	end	consumer	reason
-components/viz/common/viz_utils.cc	136	159	direct_renderer.rs	precise rounded-corner intersection predicate
-ui/gfx/geometry/rrect_f.cc	130	149	viz_utils.rs	corner bounding rectangle typed geometry adapter

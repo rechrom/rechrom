@@ -5,8 +5,7 @@
 //! branches consume actual numeric/CSSMathFunctionValue payloads and preserve
 //! them as typed production CSSValue objects for container queries.
 //! Runtime gates follow runtime_enabled_features.json5 stable-status defaults.
-//! Evaluation source ranges/counts are in media_query_evaluator.rs and the
-//! exact media_query_evaluator_ledger.tsv. Typed enum dispatch replaces the
+//! Evaluation source ranges/counts are in media_query_evaluator.rs. Typed enum dispatch replaces the
 //! global function map; new container axes/state/video/custom-media branches
 //! use required MediaValues reads and real StyleRuleCustomMedia ownership.
 //! Container style/fallback control flow and concrete owner adapters live in

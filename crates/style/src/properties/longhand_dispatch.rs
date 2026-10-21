@@ -2,7 +2,7 @@
 // Source is Chromium's generated longhands.cc and generated identifier mappings.
 // Initial/inherit simple bodies and identifier/numeric scalar branches are mapped.
 // Converted* entries map final setters only, after a separately translated converter.
-// Complex/custom branches stay explicit Unsupported; see longhand_dispatch_ledger.tsv.
+// Complex/custom branches stay explicit Unsupported.
 #![allow(unused_imports)]
 use foundation::*;
 use layoutng_style::css::style_color::StyleColor;

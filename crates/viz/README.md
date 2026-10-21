@@ -6,9 +6,7 @@ boundary. This is the sole Viz implementation in the workspace.
 
 Each selected Chromium `.h`/`.cc` pair maps to one Rust file with the same
 relative directory and stem. Translation blocks record source-relative paths
-and physical line intervals. `SOURCE_FILES.txt` is authoritative and
-`tools/translation_progress.py` reports physical-line coverage against the
-pinned Chromium checkout.
+and physical line intervals.
 
 The selected core owns surface identity, surface lifetime and activation,
 references and dependency deadlines, frame validation/resolution, damage

@@ -78,7 +78,7 @@ struct ParserResources {
     // Rechrom currently keeps parser sheets in the initial rendering barrier.
     // Chromium separately tracks pre-body render blockers and post-body parser
     // blockers. Do not change this flag alone without translating that parser
-    // pause; see docs/baidu-render-blocking-timeline.md for the source review.
+    // pause.
     rendering_has_begun: bool,
     styles: VecDeque<PendingStyle>,
     // StyleSheetResource owns parsed StyleSheetContents in Blink. ResourceEngine

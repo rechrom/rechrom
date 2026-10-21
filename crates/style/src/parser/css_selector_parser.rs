@@ -6,7 +6,6 @@
 // css_selector_parser.h: 377 / 186 / 186 / 0.
 // css_selector_parser.cc: 2809 / 1855 / 1855 / 0.
 // Combined pending effective source lines: 0.
-// Exact credited body ranges are in crates/style/css_selector_parser_ledger.tsv.
 // Effective excludes comments, blank/preprocessor/namespace lines and lines
 // consisting only of braces, parentheses and semicolons. No omitted credit.
 // Token-only logical/compound/shadow/argument/CSSOM paths and typed observer,
