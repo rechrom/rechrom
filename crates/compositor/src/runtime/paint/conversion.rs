@@ -42,7 +42,7 @@ impl<R: crate::runtime::types::CpuSkiaBackend> CpuPaintOp<R> {
                 difference,
                 antialias,
             } => Self::ClipPath {
-                path,
+                path: std::sync::Arc::new(CpuClipPath::<R>::FromPaintPath(&path)),
                 difference,
                 antialias,
             },

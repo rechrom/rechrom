@@ -1,14 +1,18 @@
 //! Paint replay ABI -> actual cc primitive ownership. Original authored payloads
 //! remain in their immutable PaintRecord allocation. Only new cc operations and
 //! scalar shader/shape values are allocated; no PaintArtifact is copied.
-use super::{CpuPaintFlags, CpuPaintOp, PaintOp, PaintRecord};
+use super::{
+    CpuClipPath, CpuPaintFlags, CpuPaintImage, CpuPaintOp, CpuPaintRecord, PaintOp, PaintRecord,
+};
 use crate::adapter::display_item_list::DisplayPaintOpBuffer;
 use crate::{
     adapter::geometry::{RRectF, RectF, Vector2dF},
     runtime::types::CpuSkiaBackend,
 };
-use paint::paint_engine::{DisplayItemType as N, PaintRect};
-use skia::{include::core::SkColor::SkColor4f, BlendMode};
+use paint::{
+    cc::paint::{blend_mode::BlendMode, color::Color4f, tile_mode::TileMode},
+    paint_engine::{DisplayItemType as N, PaintRect},
+};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -45,8 +49,8 @@ pub enum CpuPaintShader<R: CpuSkiaBackend = crate::runtime::skia::SkRegion> {
     PaintRecord {
         record: super::CpuPaintRecord<R>,
         tile_rect: RectF,
-        tile_mode_x: skia::raster::SpreadMode,
-        tile_mode_y: skia::raster::SpreadMode,
+        tile_mode_x: TileMode,
+        tile_mode_y: TileMode,
         local_matrix: Option<crate::runtime::geometry::Transform<R>>,
     },
 }
@@ -78,9 +82,15 @@ fn rrect(r: PaintRect, radii: paint::paint_engine::PaintCornerRadii) -> RRectF {
         .map(|r| Vector2dF::new(r.x as f32, r.y as f32)),
     }
 }
+fn clip_path<R: CpuSkiaBackend>(
+    path: Arc<paint::paint_clip_path::PaintPath>,
+) -> Arc<CpuClipPath<R>> {
+    let authored = paint::paint_clip_path::PaintClipPath::from_path(path);
+    Arc::new(CpuClipPath::<R>::FromPaintPath(&authored))
+}
 fn flags<R: CpuSkiaBackend>(op: &PaintOp) -> CpuPaintFlags<R> {
     let mut f = CpuPaintFlags::default();
-    f.setColor(SkColor4f::new(
+    f.setColor(Color4f::new(
         op.color.red,
         op.color.green,
         op.color.blue,
@@ -109,17 +119,52 @@ pub fn LowerPaintRecord<R: CpuSkiaBackend>(
             // not DrawImageRect. Sampling/tiling remain in the shader value.
             N::kDrawTiledImage => {
                 let mut f = flags(op);
-                f.setColor(SkColor4f::new(0., 0., 0., 1.));
-                f.shader = Some(Arc::new(CpuPaintShader::ImagePattern {
+                f.setColor(Color4f::new(0., 0., 0., 1.));
+                f.shader = Some(Arc::new(
+                    DocumentImagePattern(
+                        &source,
+                        op.resource_id,
+                        op.document_image_container_key.as_ref(),
+                        op.source_rect,
+                        op.tile_rect,
+                        op.repeat_x,
+                        op.repeat_y,
+                        op.tile_spacing.width,
+                        op.tile_spacing.height,
+                        values.clone(),
+                    )
+                    .unwrap_or(CpuPaintShader::ImagePattern {
                     source,
                     mask_layer: None,
-                }));
+                    }),
+                ));
                 output.push(CpuPaintOp::DrawRect(rect(op.rect), f));
+            }
+            N::kDrawImageRect => {
+                if let Some(shader) = DocumentImagePattern(
+                    &source,
+                    op.resource_id,
+                    op.document_image_container_key.as_ref(),
+                    op.source_rect,
+                    op.rect,
+                    false,
+                    false,
+                    0.,
+                    0.,
+                    values.clone(),
+                ) {
+                    let mut f = flags(op);
+                    f.setColor(Color4f::new(0., 0., 0., 1.));
+                    f.shader = Some(Arc::new(shader));
+                    output.push(CpuPaintOp::DrawRect(rect(op.rect), f));
+                } else {
+                    output.push(CpuPaintOp::NativeAtom(source));
+                }
             }
             // Source: third_party/blink/renderer/platform/graphics/generated_image.cc:43-94.
             N::kDrawGradientRect | N::kDrawTiledGradient => {
                 let mut f = flags(op);
-                f.setColor(SkColor4f::new(0., 0., 0., 1.));
+                f.setColor(Color4f::new(0., 0., 0., 1.));
                 f.shader = Some(Arc::new(CpuPaintShader::GeneratedPattern {
                     source,
                     mask_layer: None,
@@ -127,7 +172,7 @@ pub fn LowerPaintRecord<R: CpuSkiaBackend>(
                 output.push(CpuPaintOp::DrawRect(rect(op.rect), f));
             }
             N::kStrokeWavyLine => LowerWavy(source, values.clone(), &mut output),
-            N::kDrawMask => LowerMask(source, &mut output),
+            N::kDrawMask => LowerMask(source, values.clone(), &mut output),
             N::kDrawBoxShadow => LowerBoxShadow(source, &mut output),
             _ => output.push(CpuPaintOp::NativeAtom(source)),
         }
@@ -145,11 +190,20 @@ fn LowerWavy<R: CpuSkiaBackend>(
     let op = source.op();
     let thickness = op.stroke_width as f32;
     let wave = paint::wavy_geometry::MakeWave(thickness);
-    let path = Arc::new(paint::wavy_geometry::WavyPath(&wave));
-    let Some(bounds) = paint::wavy_geometry::ComputeWavyPatternRect(thickness, &wave, &path) else {
+    let paint_path = paint::wavy_geometry::WavyPath(&wave);
+    let Some(stroke_bounds) = R::StrokeBounds(&paint_path, thickness, 0.3) else {
         // Native Skia rejects non-finite/empty stroke geometry as no drawing.
         return;
     };
+    let bounds = paint::wavy_geometry::WavyPatternRect(
+        &wave,
+        [
+            stroke_bounds.x(),
+            stroke_bounds.y(),
+            stroke_bounds.right(),
+            stroke_bounds.bottom(),
+        ],
+    );
     let [left, top, right, bottom] = bounds;
     let mut tile = super::CpuPaintOpBuffer::<R>::new(values);
     tile.push(CpuPaintOp::Translate(-left, -top));
@@ -158,7 +212,7 @@ fn LowerWavy<R: CpuSkiaBackend>(
     stroke.setStyle(paint::cc::paint::paint_flags::Style::kStroke_Style);
     stroke.setStrokeWidth(thickness);
     tile.push(CpuPaintOp::DrawPath {
-        path,
+        path: Arc::new(R::FromPaintPath(&paint_path)),
         flags: stroke,
     });
     let record = super::CpuPaintRecord::Buffer(Arc::new(tile));
@@ -167,8 +221,8 @@ fn LowerWavy<R: CpuSkiaBackend>(
     f.shader = Some(Arc::new(CpuPaintShader::PaintRecord {
         record,
         tile_rect: RectF::new(0., 0., right - left, bottom - top),
-        tile_mode_x: skia::raster::SpreadMode::Repeat,
-        tile_mode_y: skia::raster::SpreadMode::kDecal,
+        tile_mode_x: TileMode::kRepeat,
+        tile_mode_y: TileMode::kDecal,
         local_matrix: None,
     }));
     out.push(CpuPaintOp::Save);
@@ -234,7 +288,86 @@ fn LowerWavy<R: CpuSkiaBackend>(
     }
     out.push(CpuPaintOp::Restore);
 }
-fn LowerMask<R: CpuSkiaBackend>(source: NativePaintSource, out: &mut Vec<CpuPaintOp<R>>) {
+fn DocumentImagePattern<R: CpuSkiaBackend>(
+    source: &NativePaintSource,
+    resource_id: u64,
+    container: Option<&paint::paint_engine::DocumentImageContainerKey>,
+    source_rect: PaintRect,
+    tile_rect: PaintRect,
+    repeat_x: bool,
+    repeat_y: bool,
+    spacing_width: f64,
+    spacing_height: f64,
+    values: Arc<dyn super::CpuPaintValueServices<R>>,
+) -> Option<CpuPaintShader<R>> {
+    let image =
+        CpuPaintImage::FromPaintResourceForContainer(source.record(), resource_id, container)
+            .expect("PaintInput validates the document image and exact container record");
+    let record_image = image.0.GetPaintRecord()?;
+    if source_rect.width <= 0.
+        || source_rect.height <= 0.
+        || tile_rect.width <= 0.
+        || tile_rect.height <= 0.
+        || record_image.intrinsic_size.width() <= 0.
+        || record_image.intrinsic_size.height() <= 0.
+        || record_image.record_size.width() <= 0.
+        || record_image.record_size.height() <= 0.
+    {
+        return None;
+    }
+    let record_per_source_x =
+        f64::from(record_image.record_size.width() / record_image.intrinsic_size.width());
+    let record_per_source_y =
+        f64::from(record_image.record_size.height() / record_image.intrinsic_size.height());
+    let record_source_x = source_rect.x * record_per_source_x;
+    let record_source_y = source_rect.y * record_per_source_y;
+    let record_source_width = source_rect.width * record_per_source_x;
+    let record_source_height = source_rect.height * record_per_source_y;
+    let scale_x = tile_rect.width / record_source_width;
+    let scale_y = tile_rect.height / record_source_height;
+    if !scale_x.is_finite() || !scale_y.is_finite() || scale_x == 0. || scale_y == 0. {
+        return None;
+    }
+    // Image::DrawPattern maps source coordinates into the first destination
+    // tile, then applies repeat/decal independently. Include authored spacing in
+    // the picture-shader tile bounds; the document record leaves that tail
+    // transparent, matching the bitmap pattern path.
+    let mut matrix = [0.; 16];
+    matrix[0] = scale_x;
+    matrix[5] = scale_y;
+    matrix[10] = 1.;
+    matrix[15] = 1.;
+    matrix[12] = tile_rect.x - record_source_x * scale_x;
+    matrix[13] = tile_rect.y - record_source_y * scale_y;
+    let tile_width = record_source_width + spacing_width / scale_x;
+    let tile_height = record_source_height + spacing_height / scale_y;
+    Some(CpuPaintShader::PaintRecord {
+        record: CpuPaintRecord::from_native(record_image.record, values),
+        tile_rect: RectF::new(
+            record_source_x as f32,
+            record_source_y as f32,
+            tile_width.max(record_source_width) as f32,
+            tile_height.max(record_source_height) as f32,
+        ),
+        tile_mode_x: if repeat_x {
+            TileMode::kRepeat
+        } else {
+            TileMode::kDecal
+        },
+        tile_mode_y: if repeat_y {
+            TileMode::kRepeat
+        } else {
+            TileMode::kDecal
+        },
+        local_matrix: Some(crate::runtime::geometry::Transform::FromColMajor(&matrix)),
+    })
+}
+
+fn LowerMask<R: CpuSkiaBackend>(
+    source: NativePaintSource,
+    values: Arc<dyn super::CpuPaintValueServices<R>>,
+    out: &mut Vec<CpuPaintOp<R>>,
+) {
     use paint::paint_engine::{PaintMaskComposite as Composite, PaintMaskMode as Mode};
     let op = source.op();
     // Source: third_party/blink/renderer/core/paint/box_painter_base.cc:1335-1425,1777-1795.
@@ -266,19 +399,44 @@ fn LowerMask<R: CpuSkiaBackend>(source: NativePaintSource, out: &mut Vec<CpuPain
             bounds: None,
             flags: f,
         });
+        if layer.clip_radii.HasRadius() {
         out.push(CpuPaintOp::ClipPath {
-            path: Arc::new(paint::paint_clip_path::PaintClipPath::from_path(
-                paint::paint_clip_path::rounded_bounds(layer.clip_rect, layer.clip_radii),
+                path: clip_path::<R>(paint::paint_clip_path::rounded_bounds(
+                    layer.clip_rect,
+                    layer.clip_radii,
             )),
             difference: false,
             antialias: true,
         });
+        } else {
+            // Source clips rectangular mask layers with clipRect. Building an
+            // equivalent zero-radius path changes the translated replay route
+            // and may collapse the mask clip before its save-layer is restored.
+            out.push(CpuPaintOp::ClipRect {
+                rect: rect(layer.clip_rect),
+                difference: false,
+                antialias: false,
+            });
+        }
         let mut f = CpuPaintFlags::default();
         f.shader = Some(Arc::new(if layer.paint_shader.is_some() {
             CpuPaintShader::GeneratedPattern {
                 source: source.clone(),
                 mask_layer: Some(index),
             }
+        } else if let Some(shader) = DocumentImagePattern(
+            &source,
+            layer.resource_id,
+            layer.document_image_container_key.as_ref(),
+            layer.source_rect,
+            layer.tile_rect,
+            layer.repeat_x,
+            layer.repeat_y,
+            layer.tile_spacing.width,
+            layer.tile_spacing.height,
+            values.clone(),
+        ) {
+            shader
         } else {
             CpuPaintShader::ImagePattern {
                 source: source.clone(),
@@ -301,7 +459,7 @@ fn LowerBoxShadow<R: CpuSkiaBackend>(source: NativePaintSource, out: &mut Vec<Cp
             y: op.shadow_offset.y as f32,
         },
         (op.blur_radius * 0.5) as f32,
-        SkColor4f::new(op.color.red, op.color.green, op.color.blue, op.color.alpha),
+        Color4f::new(op.color.red, op.color.green, op.color.blue, op.color.alpha),
         kOverrideAlphaFlag,
         false,
     );
@@ -315,7 +473,7 @@ fn LowerBoxShadow<R: CpuSkiaBackend>(source: NativePaintSource, out: &mut Vec<Cp
         OutsetWithCornerCorrection(&mut hole, -(op.spread as f32));
         if hole.rect.width() <= 0. || hole.rect.height() <= 0. {
             f.looper = None;
-            f.setColor(SkColor4f::new(
+            f.setColor(Color4f::new(
                 op.color.red,
                 op.color.green,
                 op.color.blue,
@@ -324,8 +482,9 @@ fn LowerBoxShadow<R: CpuSkiaBackend>(source: NativePaintSource, out: &mut Vec<Cp
             out.push(CpuPaintOp::DrawRRect(inner, f));
         } else {
             out.push(CpuPaintOp::ClipPath {
-                path: Arc::new(paint::paint_clip_path::PaintClipPath::from_path(
-                    paint::paint_clip_path::rounded_bounds(op.rect, op.corner_radii),
+                path: clip_path::<R>(paint::paint_clip_path::rounded_bounds(
+                    op.rect,
+                    op.corner_radii,
                 )),
                 difference: false,
                 antialias: true,
@@ -349,7 +508,7 @@ fn LowerBoxShadow<R: CpuSkiaBackend>(source: NativePaintSource, out: &mut Vec<Cp
                 rect: RectF::new(left, top, right - left, bottom - top),
                 corner_radii: [Vector2dF::default(); 4],
             };
-            f.setColor(SkColor4f::new(
+            f.setColor(Color4f::new(
                 op.color.red,
                 op.color.green,
                 op.color.blue,
@@ -381,9 +540,7 @@ fn LowerBoxShadow<R: CpuSkiaBackend>(source: NativePaintSource, out: &mut Vec<Cp
         }
         if hole.width > 0. && hole.height > 0. {
             out.push(CpuPaintOp::ClipPath {
-                path: Arc::new(paint::paint_clip_path::PaintClipPath::from_path(
-                    paint::paint_clip_path::rounded_bounds(hole, radii),
-                )),
+                path: clip_path::<R>(paint::paint_clip_path::rounded_bounds(hole, radii)),
                 difference: true,
                 antialias: true,
             });

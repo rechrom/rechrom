@@ -1,436 +1,268 @@
-// Copyright 2008 The Android Open Source Project
-// Copyright 2020 Yevhenii Reizner
-// BSD-3-Clause; see LICENSE and provenance in translation_map.json.
-//! Cap and join construction from src/core/SkStrokerPriv.{h,cpp}.
-//! MiterClip is retained as a Rust compatibility extension to the upstream joins.
-use super::SkStroke::{CapProc, JoinProc, LineCap, LineJoin, SwappableBuilders};
-use crate::path::path_builder::{PathBuilder, PathDirection};
-use crate::path::path_geometry;
-use crate::path::scalar::{Scalar, SCALAR_NEARLY_ZERO, SCALAR_ROOT_2_OVER_2};
-#[cfg(all(not(feature = "std"), feature = "no-std-float"))]
-use crate::path::NoStdFloat;
-use crate::path::{Point, Transform};
-pub(crate) fn CapFactory(cap: LineCap) -> CapProc {
-    match cap {
-        LineCap::Butt => butt_capper,
-        LineCap::Round => round_capper,
-        LineCap::Square => square_capper,
-    }
+use crate::include::core::SkScalar::{SK_ScalarNearlyZero, SkScalarNearlyZero};
+use crate::src::core::SkPaint::Cap;
+use crate::src::core::SkPathBuilder::SkPathBuilder;
+use crate::src::core::SkPoint::{SkPoint, SkVector};
+use crate::src::core::SkPointPriv::SkPointPriv;
+// Source: src/core/SkStrokerPriv.h:18-21
+// Function substitutions for C preprocessor coordinate expressions; each operand evaluated once.
+pub(crate) fn CWX(_x: f32, y: f32) -> f32 {
+    -y
 }
-
-pub(crate) fn butt_capper(
-    _: Point,
-    _: Point,
-    stop: Point,
-    _: Option<&PathBuilder>,
-    path: &mut PathBuilder,
+pub(crate) fn CWY(x: f32, _y: f32) -> f32 {
+    x
+}
+pub(crate) fn CCWX(_x: f32, y: f32) -> f32 {
+    y
+}
+pub(crate) fn CCWY(x: f32, _y: f32) -> f32 {
+    -x
+}
+// Source: src/core/SkStrokerPriv.h:23-23
+pub(crate) const CUBIC_ARC_FACTOR: f32 = (std::f32::consts::SQRT_2 - 1.0) * 4.0 / 3.0;
+// Source: src/core/SkStrokerPriv.h:26-26
+pub(crate) const QUAD_STROKE_APPROX_EXTENDED_DEBUGGING: bool = false;
+// Source: src/core/SkStrokerPriv.h:30-34
+pub type CapProc = fn(&mut SkPathBuilder, SkPoint, SkVector, SkPoint, bool);
+// Source: src/core/SkStrokerPriv.h:36-41
+pub type JoinProc = for<'a> fn(
+    &'a mut SkPathBuilder,
+    &'a mut SkPathBuilder,
+    SkVector,
+    SkPoint,
+    SkVector,
+    f32,
+    f32,
+    bool,
+    bool,
+);
+// Source: src/core/SkStrokerPriv.cpp:17-20
+pub(crate) fn ButtCapper(
+    sink: &mut SkPathBuilder,
+    _pivot: SkPoint,
+    _normal: SkVector,
+    stop: SkPoint,
+    _: bool,
 ) {
-    path.line_to(stop.x, stop.y);
+    sink.lineTo(stop);
 }
-
-fn round_capper(
-    pivot: Point,
-    normal: Point,
-    stop: Point,
-    _: Option<&PathBuilder>,
-    path: &mut PathBuilder,
+// Source: src/core/SkStrokerPriv.cpp:22-31
+pub(crate) fn RoundCapper(
+    sink: &mut SkPathBuilder,
+    pivot: SkPoint,
+    normal: SkVector,
+    stop: SkPoint,
+    _: bool,
 ) {
     let mut parallel = normal;
-    parallel.rotate_cw();
-
-    let projected_center = pivot + parallel;
-
-    path.conic_points_to(
-        projected_center + normal,
-        projected_center,
-        SCALAR_ROOT_2_OVER_2,
+    SkPointPriv::RotateCW(&mut parallel);
+    let projectedCenter = pivot + parallel;
+    sink.conicTo(
+        projectedCenter + normal,
+        projectedCenter,
+        std::f32::consts::FRAC_1_SQRT_2,
     );
-    path.conic_points_to(projected_center - normal, stop, SCALAR_ROOT_2_OVER_2);
+    sink.conicTo(
+        projectedCenter - normal,
+        stop,
+        std::f32::consts::FRAC_1_SQRT_2,
+    );
 }
-
-fn square_capper(
-    pivot: Point,
-    normal: Point,
-    stop: Point,
-    other_path: Option<&PathBuilder>,
-    path: &mut PathBuilder,
+// Source: src/core/SkStrokerPriv.cpp:33-46
+pub(crate) fn SquareCapper(
+    sink: &mut SkPathBuilder,
+    pivot: SkPoint,
+    normal: SkVector,
+    stop: SkPoint,
+    extendLastPt: bool,
 ) {
     let mut parallel = normal;
-    parallel.rotate_cw();
-
-    if other_path.is_some() {
-        path.set_last_point(Point::from_xy(
-            pivot.x + normal.x + parallel.x,
-            pivot.y + normal.y + parallel.y,
-        ));
-        path.line_to(
-            pivot.x - normal.x + parallel.x,
-            pivot.y - normal.y + parallel.y,
+    SkPointPriv::RotateCW(&mut parallel);
+    if extendLastPt {
+        // SkPathBuilder.h:954-956 inlines setLastPoint as setPoint(points().size()-1,p).
+        sink.setPoint(
+            sink.points().len().wrapping_sub(1),
+            pivot + normal + parallel,
         );
+        sink.lineTo(pivot - normal + parallel);
     } else {
-        path.line_to(
-            pivot.x + normal.x + parallel.x,
-            pivot.y + normal.y + parallel.y,
-        );
-        path.line_to(
-            pivot.x - normal.x + parallel.x,
-            pivot.y - normal.y + parallel.y,
-        );
-        path.line_to(stop.x, stop.y);
+        sink.lineTo(pivot + normal + parallel);
+        sink.lineTo(pivot - normal + parallel);
+        sink.lineTo(stop);
     }
 }
-
-pub(crate) fn JoinFactory(join: LineJoin) -> JoinProc {
-    match join {
-        LineJoin::Miter => miter_joiner,
-        LineJoin::MiterClip => miter_clip_joiner,
-        LineJoin::Round => round_joiner,
-        LineJoin::Bevel => bevel_joiner,
-    }
+// Source: src/core/SkStrokerPriv.cpp:50-52
+pub(crate) fn is_clockwise(before: SkVector, after: SkVector) -> bool {
+    before.fX * after.fY > before.fY * after.fX
 }
-
-fn is_clockwise(before: Point, after: Point) -> bool {
-    before.x * after.y > before.y * after.x
+// Source: src/core/SkStrokerPriv.cpp:54-59
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AngleType {
+    kNearly180_AngleType,
+    kSharp_AngleType,
+    kShallow_AngleType,
+    kNearlyLine_AngleType,
 }
-
-#[derive(Copy, Clone, PartialEq, Debug)]
-enum AngleType {
-    Nearly180,
-    Sharp,
-    Shallow,
-    NearlyLine,
-}
-
-fn dot_to_angle_type(dot: f32) -> AngleType {
+// Source: src/core/SkStrokerPriv.cpp:61-70
+pub(crate) fn Dot2AngleType(dot: f32) -> AngleType {
     if dot >= 0.0 {
-        // shallow or line
-        if (1.0 - dot).is_nearly_zero() {
-            AngleType::NearlyLine
+        if SkScalarNearlyZero(1.0 - dot, SK_ScalarNearlyZero) {
+            AngleType::kNearlyLine_AngleType
         } else {
-            AngleType::Shallow
+            AngleType::kShallow_AngleType
         }
     } else {
-        // sharp or 180
-        if (1.0 + dot).is_nearly_zero() {
-            AngleType::Nearly180
+        if SkScalarNearlyZero(1.0 + dot, SK_ScalarNearlyZero) {
+            AngleType::kNearly180_AngleType
         } else {
-            AngleType::Sharp
+            AngleType::kSharp_AngleType
         }
     }
 }
-
-fn handle_inner_join(pivot: Point, after: Point, inner: &mut PathBuilder) {
-    // In the degenerate case that the stroke radius is larger than our segments
-    // just connecting the two inner segments may "show through" as a funny
-    // diagonal. To pseudo-fix this, we go through the pivot point. This adds
-    // an extra point/edge, but I can't see a cheap way to know when this is
-    // not needed :(
-    inner.line_to(pivot.x, pivot.y);
-
-    inner.line_to(pivot.x - after.x, pivot.y - after.y);
+// Source: src/core/SkStrokerPriv.cpp:72-84
+fn HandleInnerJoin(inner: &mut SkPathBuilder, pivot: SkPoint, after: SkVector) {
+    inner.lineTo(pivot);
+    inner.lineTo(SkPoint::make(pivot.fX - after.fX, pivot.fY - after.fY));
 }
-
-fn bevel_joiner(
-    before_unit_normal: Point,
-    pivot: Point,
-    after_unit_normal: Point,
+// Source: src/core/SkStrokerPriv.cpp:86-101
+pub(crate) fn BluntJoiner<'a>(
+    mut outer: &'a mut SkPathBuilder,
+    mut inner: &'a mut SkPathBuilder,
+    beforeUnitNormal: SkVector,
+    pivot: SkPoint,
+    afterUnitNormal: SkVector,
     radius: f32,
-    _: f32,
+    _invMiterLimit: f32,
     _: bool,
     _: bool,
-    mut builders: SwappableBuilders,
 ) {
-    let mut after = after_unit_normal.scaled(radius);
-
-    if !is_clockwise(before_unit_normal, after_unit_normal) {
-        builders.swap();
-        after = -after;
+    let mut after = afterUnitNormal * radius;
+    if !is_clockwise(beforeUnitNormal, afterUnitNormal) {
+        std::mem::swap(&mut outer, &mut inner);
+        after.negate();
     }
-
-    builders.outer.line_to(pivot.x + after.x, pivot.y + after.y);
-    handle_inner_join(pivot, after, builders.inner);
+    outer.lineTo(SkPoint::make(pivot.fX + after.fX, pivot.fY + after.fY));
+    HandleInnerJoin(inner, pivot, after);
 }
-
-pub(crate) fn round_joiner(
-    before_unit_normal: Point,
-    pivot: Point,
-    after_unit_normal: Point,
+// Source: src/core/SkStrokerPriv.cpp:103-137
+pub(crate) fn RoundJoiner<'a>(
+    mut outer: &'a mut SkPathBuilder,
+    mut inner: &'a mut SkPathBuilder,
+    beforeUnitNormal: SkVector,
+    pivot: SkPoint,
+    afterUnitNormal: SkVector,
     radius: f32,
-    _: f32,
+    _invMiterLimit: f32,
     _: bool,
     _: bool,
-    mut builders: SwappableBuilders,
 ) {
-    let dot_prod = before_unit_normal.dot(after_unit_normal);
-    let angle_type = dot_to_angle_type(dot_prod);
-
-    if angle_type == AngleType::NearlyLine {
+    use crate::include::core::SkPathTypes::SkPathDirection;
+    use crate::src::core::SkGeometry::SkConic;
+    use crate::src::core::SkMatrix::SkMatrix;
+    let dotProd = SkPoint::dot_product(beforeUnitNormal, afterUnitNormal);
+    let angleType = Dot2AngleType(dotProd);
+    if angleType == AngleType::kNearlyLine_AngleType {
         return;
     }
-
-    let mut before = before_unit_normal;
-    let mut after = after_unit_normal;
-    let mut dir = PathDirection::CW;
-
+    let mut before = beforeUnitNormal;
+    let mut after = afterUnitNormal;
+    let mut dir = SkPathDirection::kCW;
     if !is_clockwise(before, after) {
-        builders.swap();
-        before = -before;
-        after = -after;
-        dir = PathDirection::CCW;
+        std::mem::swap(&mut outer, &mut inner);
+        before.negate();
+        after.negate();
+        dir = SkPathDirection::kCCW;
     }
-
-    let ts = Transform::from_row(radius, 0.0, 0.0, radius, pivot.x, pivot.y);
-
-    let mut conics = [path_geometry::Conic::default(); 5];
-    let conics = path_geometry::Conic::build_unit_arc(before, after, dir, ts, &mut conics);
-    if let Some(conics) = conics {
-        for conic in conics {
-            builders
-                .outer
-                .conic_points_to(conic.points[1], conic.points[2], conic.weight);
+    let mut matrix = SkMatrix::default();
+    matrix.setScale(radius, radius);
+    matrix.postTranslate(pivot.fX, pivot.fY);
+    let mut conics = [SkConic::default(); SkConic::kMaxConicsForArc];
+    let count = SkConic::BuildUnitArc(&before, &after, dir, Some(&matrix), &mut conics);
+    if count > 0 {
+        for i in 0..count as usize {
+            outer.conicTo(conics[i].fPts[1], conics[i].fPts[2], conics[i].fW);
         }
-
         after.scale(radius);
-        handle_inner_join(pivot, after, builders.inner);
+        HandleInnerJoin(inner, pivot, after);
     }
 }
+// Source: src/core/SkStrokerPriv.cpp:139-139
+pub(crate) const kOneOverSqrt2: f32 = 0.707106781;
 
-#[inline]
-pub(crate) fn miter_joiner(
-    before_unit_normal: Point,
-    pivot: Point,
-    after_unit_normal: Point,
+// Source: src/core/SkStrokerPriv.cpp:141-220
+// Option<mid> expresses the forward DO_MITER/DO_BLUNT jumps without changing arithmetic order.
+pub(crate) fn MiterJoiner<'a>(
+    mut outer: &'a mut SkPathBuilder,
+    mut inner: &'a mut SkPathBuilder,
+    beforeUnitNormal: SkVector,
+    pivot: SkPoint,
+    afterUnitNormal: SkVector,
     radius: f32,
-    inv_miter_limit: f32,
-    prev_is_line: bool,
-    curr_is_line: bool,
-    builders: SwappableBuilders,
+    invMiterLimit: f32,
+    prevIsLine: bool,
+    mut currIsLine: bool,
 ) {
-    miter_joiner_inner(
-        before_unit_normal,
-        pivot,
-        after_unit_normal,
-        radius,
-        inv_miter_limit,
-        false,
-        prev_is_line,
-        curr_is_line,
-        builders,
-    );
-}
-
-#[inline]
-fn miter_clip_joiner(
-    before_unit_normal: Point,
-    pivot: Point,
-    after_unit_normal: Point,
-    radius: f32,
-    inv_miter_limit: f32,
-    prev_is_line: bool,
-    curr_is_line: bool,
-    builders: SwappableBuilders,
-) {
-    miter_joiner_inner(
-        before_unit_normal,
-        pivot,
-        after_unit_normal,
-        radius,
-        inv_miter_limit,
-        true,
-        prev_is_line,
-        curr_is_line,
-        builders,
-    );
-}
-
-fn miter_joiner_inner(
-    before_unit_normal: Point,
-    pivot: Point,
-    after_unit_normal: Point,
-    radius: f32,
-    inv_miter_limit: f32,
-    miter_clip: bool,
-    prev_is_line: bool,
-    mut curr_is_line: bool,
-    mut builders: SwappableBuilders,
-) {
-    fn do_blunt_or_clipped(
-        builders: SwappableBuilders,
-        pivot: Point,
-        radius: f32,
-        prev_is_line: bool,
-        curr_is_line: bool,
-        mut before: Point,
-        mut mid: Point,
-        mut after: Point,
-        inv_miter_limit: f32,
-        miter_clip: bool,
-    ) {
-        after.scale(radius);
-
-        if miter_clip {
-            mid.normalize();
-
-            let cos_beta = before.dot(mid);
-            let sin_beta = before.cross(mid);
-
-            let x = if sin_beta.abs() <= SCALAR_NEARLY_ZERO {
-                1.0 / inv_miter_limit
-            } else {
-                ((1.0 / inv_miter_limit) - cos_beta) / sin_beta
-            };
-
-            before.scale(radius);
-
-            let mut before_tangent = before;
-            before_tangent.rotate_cw();
-
-            let mut after_tangent = after;
-            after_tangent.rotate_ccw();
-
-            let c1 = pivot + before + before_tangent.scaled(x);
-            let c2 = pivot + after + after_tangent.scaled(x);
-
-            if prev_is_line {
-                builders.outer.set_last_point(c1);
-            } else {
-                builders.outer.line_to(c1.x, c1.y);
-            }
-
-            builders.outer.line_to(c2.x, c2.y);
-        }
-
-        if !curr_is_line {
-            builders.outer.line_to(pivot.x + after.x, pivot.y + after.y);
-        }
-
-        handle_inner_join(pivot, after, builders.inner);
-    }
-
-    fn do_miter(
-        builders: SwappableBuilders,
-        pivot: Point,
-        radius: f32,
-        prev_is_line: bool,
-        curr_is_line: bool,
-        mid: Point,
-        mut after: Point,
-    ) {
-        after.scale(radius);
-
-        if prev_is_line {
-            builders
-                .outer
-                .set_last_point(Point::from_xy(pivot.x + mid.x, pivot.y + mid.y));
-        } else {
-            builders.outer.line_to(pivot.x + mid.x, pivot.y + mid.y);
-        }
-
-        if !curr_is_line {
-            builders.outer.line_to(pivot.x + after.x, pivot.y + after.y);
-        }
-
-        handle_inner_join(pivot, after, builders.inner);
-    }
-
-    // negate the dot since we're using normals instead of tangents
-    let dot_prod = before_unit_normal.dot(after_unit_normal);
-    let angle_type = dot_to_angle_type(dot_prod);
-    let mut before = before_unit_normal;
-    let mut after = after_unit_normal;
-    let mut mid;
-
-    if angle_type == AngleType::NearlyLine {
+    let dotProd = SkPoint::dot_product(beforeUnitNormal, afterUnitNormal);
+    let angleType = Dot2AngleType(dotProd);
+    let mut before = beforeUnitNormal;
+    let mut after = afterUnitNormal;
+    if angleType == AngleType::kNearlyLine_AngleType {
         return;
     }
-
-    if angle_type == AngleType::Nearly180 {
-        curr_is_line = false;
-        mid = (after - before).scaled(radius / 2.0);
-        do_blunt_or_clipped(
-            builders,
-            pivot,
-            radius,
-            prev_is_line,
-            curr_is_line,
-            before,
-            mid,
-            after,
-            inv_miter_limit,
-            miter_clip,
-        );
-        return;
-    }
-
-    let ccw = !is_clockwise(before, after);
-    if ccw {
-        builders.swap();
-        before = -before;
-        after = -after;
-    }
-
-    // Before we enter the world of square-roots and divides,
-    // check if we're trying to join an upright right angle
-    // (common case for stroking rectangles). If so, special case
-    // that (for speed an accuracy).
-    // Note: we only need to check one normal if dot==0
-    if dot_prod == 0.0 && inv_miter_limit <= SCALAR_ROOT_2_OVER_2 {
-        mid = (before + after).scaled(radius);
-        do_miter(
-            builders,
-            pivot,
-            radius,
-            prev_is_line,
-            curr_is_line,
-            mid,
-            after,
-        );
-        return;
-    }
-
-    // choose the most accurate way to form the initial mid-vector
-    if angle_type == AngleType::Sharp {
-        mid = Point::from_xy(after.y - before.y, before.x - after.x);
-        if ccw {
-            mid = -mid;
-        }
+    let mid = if angleType == AngleType::kNearly180_AngleType {
+        currIsLine = false;
+        None
     } else {
-        mid = Point::from_xy(before.x + after.x, before.y + after.y);
+        let ccw = !is_clockwise(before, after);
+        if ccw {
+            std::mem::swap(&mut outer, &mut inner);
+            before.negate();
+            after.negate();
+        }
+        if dotProd == 0.0 && invMiterLimit <= kOneOverSqrt2 {
+            Some((before + after) * radius)
+        } else {
+            let sinHalfAngle = ((1.0 + dotProd) / 2.0_f32).sqrt();
+            if sinHalfAngle < invMiterLimit {
+                currIsLine = false;
+                None
+            } else {
+                let mut mid = if angleType == AngleType::kSharp_AngleType {
+                    let mut v = SkPoint::make(after.fY - before.fY, before.fX - after.fX);
+                    if ccw {
+                        v.negate();
+                    }
+                    v
+                } else {
+                    before + after
+                };
+                mid.set_length(radius / sinHalfAngle);
+                Some(mid)
+            }
+        }
+    };
+    if let Some(mid) = mid {
+        if prevIsLine {
+            outer.setPoint(outer.points().len().wrapping_sub(1), pivot + mid);
+        } else {
+            outer.lineTo(pivot + mid);
+        }
     }
-
-    // midLength = radius / sinHalfAngle
-    // if (midLength > miterLimit * radius) abort
-    // if (radius / sinHalf > miterLimit * radius) abort
-    // if (1 / sinHalf > miterLimit) abort
-    // if (1 / miterLimit > sinHalf) abort
-    // My dotProd is opposite sign, since it is built from normals and not tangents
-    // hence 1 + dot instead of 1 - dot in the formula
-    let sin_half_angle = (1.0 + dot_prod).half().sqrt();
-    if sin_half_angle < inv_miter_limit {
-        curr_is_line = false;
-        do_blunt_or_clipped(
-            builders,
-            pivot,
-            radius,
-            prev_is_line,
-            curr_is_line,
-            before,
-            mid,
-            after,
-            inv_miter_limit,
-            miter_clip,
-        );
-        return;
+    after.scale(radius);
+    if !currIsLine {
+        outer.lineTo(SkPoint::make(pivot.fX + after.fX, pivot.fY + after.fY));
     }
+    HandleInnerJoin(inner, pivot, after);
+}
+// Source: src/core/SkStrokerPriv.cpp:224-231
+pub fn CapFactory(cap: Cap) -> CapProc {
+    const gCappers: [CapProc; 3] = [ButtCapper, RoundCapper, SquareCapper];
+    debug_assert!((cap as u32) < crate::src::core::SkPaint::kCapCount as u32);
+    gCappers[cap as usize]
+}
 
-    mid.set_length(radius / sin_half_angle);
-    do_miter(
-        builders,
-        pivot,
-        radius,
-        prev_is_line,
-        curr_is_line,
-        mid,
-        after,
-    );
+// Source: src/core/SkStrokerPriv.cpp:233-240
+pub fn JoinFactory(join: crate::src::core::SkPaint::Join) -> JoinProc {
+    const gJoiners: [JoinProc; 3] = [MiterJoiner, RoundJoiner, BluntJoiner];
+    debug_assert!((join as u32) < crate::src::core::SkPaint::kJoinCount as u32);
+    gJoiners[join as usize]
 }

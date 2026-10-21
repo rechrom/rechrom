@@ -107,7 +107,7 @@ impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
     type ScrollbarLayer = ScrollbarLayerImplBase<Self>;
     type BeginMainFrameReason = super::input::BeginMainFrameReason;
     type LayerList = OwnedLayerImplList<CompositorLayer<Self>>;
-    type DisplayColorSpaces = super::resources::CpuDisplayColorSpaces;
+    type DisplayColorSpaces = super::resources::RasterDisplayColorSpaces;
     type LocalSurfaceId = super::types::LocalSurfaceId;
     type SurfaceRange = super::types::SurfaceRange;
     type SwapPromise = super::host_owners::SwapPromise<R>;
@@ -149,7 +149,7 @@ impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
     type DisplayItemList = super::paint::ContentDisplayItemList<R>;
     type ContentColorUsage = crate::adapter::layer_tree_host_impl::ContentColorUsage;
     type TargetColorParams = crate::adapter::layer_tree_host_impl::HostTargetColorParams<
-        super::resources::CpuColorSpace,
+        super::resources::RasterColorSpace,
     >;
 }
 impl<R: CpuSkiaBackend> MainLayerTypes for CpuCompositorTypes<R> {
@@ -218,7 +218,7 @@ impl<R: CpuSkiaBackend> crate::adapter::tree_sync::SyncTypes for CpuCompositorTy
 // live factory or external value capability is still absent at registration.
 const _: fn() = || {
     fn require<B: LayerTreeTypes + MainLayerTypes + LayerImplTypes>() {}
-    require::<CpuCompositorTypes<skia::include::core::SkRegion::SkRegion>>();
+    require::<CpuCompositorTypes<crate::runtime::skia::SkRegion>>();
 };
 
 impl<R: CpuSkiaBackend> crate::adapter::commit_state::CommitStateTypes for CpuCompositorTypes<R> {

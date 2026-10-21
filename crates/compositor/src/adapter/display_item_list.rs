@@ -84,9 +84,9 @@ pub trait DisplayPaintOpBuffer<B: DisplayItemListTypes> {
     fn next_op_offset(&self) -> usize;
     fn push(&mut self, op: B::PaintOp) -> usize;
     fn UpdateSaveLayerBounds(&mut self, id: usize, bounds: B::SaveLayerBounds);
-    fn Playback(
+    fn Playback<'canvas>(
         &self,
-        canvas: &mut B::Canvas,
+        canvas: &mut B::Canvas<'canvas>,
         params: &mut B::PlaybackParams<'_>,
         local_ctm: bool,
         offsets: Option<&[usize]>,
@@ -146,7 +146,13 @@ pub trait DisplayPaintOpBuffer<B: DisplayItemListTypes> {
 pub trait DisplayItemListTypes: Sized + 'static {
     type PaintOp: DisplayPaintOp<Self>;
     type PaintOpBuffer: DisplayPaintOpBuffer<Self>;
-    type Canvas: DisplayCanvas + ?Sized;
+    /// The concrete raster receiver is borrowed for one playback invocation.
+    /// This matches SkCanvas' non-owning raster-direct pixel contract: the
+    /// receiver may borrow the RasterBufferProvider's exclusive write mapping
+    /// and must not be forced to fabricate a `'static` pixel lifetime.
+    type Canvas<'canvas>: DisplayCanvas + ?Sized
+    where
+        Self: 'canvas;
     type PlaybackParams<'a>;
     type PaintRecord;
     type SaveLayerBounds;

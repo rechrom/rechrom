@@ -5,22 +5,25 @@ use super::*;
 use crate::adapter::image_animation::AnimatedImageMetadata as CpuAnimatedImageMetadata;
 use crate::{
     adapter::{
-        geometry::{Rect, RectF, ToEnclosingRect, Vector2dF},
+        geometry::{Path as _, Rect, RectF, ToEnclosingRect, Vector2dF},
         image_animation::*,
         prioritized_tile::ScrollOffsetMap,
     },
     cc::base::rtree::RTree,
+    runtime::skia::SkRegion,
 };
 use paint::cc::paint::{
     discardable_image_map::*,
     paint_op_buffer_iterator::{PaintOpType, PaintOpView},
 };
 use skia::{
-    include::core::{
-        SkRRect::SkRRectBounds,
-        SkRegion::{SkRegion, SkRegionIRect},
+    include::{core::SkClipOp::SkClipOp, utils::SkNoDrawCanvas::SkNoDrawCanvas},
+    src::core::{
+        SkCanvas::SkCanvas,
+        SkM44::SkM44,
+        SkRRect::SkRRect,
+        SkRect::{SkIRect as SkRegionIRect, SkRect as SkRRectBounds},
     },
-    src::{core::SkM44::SkM44, utils::SkNoDrawCanvas::SkNoDrawCanvas},
 };
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -46,11 +49,72 @@ impl ImageFloatRect for RectF {
 }
 #[derive(Clone)]
 pub(crate) struct ImageMapMatrix(SkM44);
+fn matrix_col_major(values: [f32; 16]) -> SkM44 {
+    SkM44::ColMajor(&values)
+}
 fn skrect(r: RectF) -> SkRRectBounds {
-    SkRRectBounds::MakeLTRB(r.x(), r.y(), r.right(), r.bottom())
+    {
+        SkRRectBounds::MakeLTRB(r.x(), r.y(), r.right(), r.bottom())
+    }
 }
 fn frect(r: SkRRectBounds) -> RectF {
-    RectF::new(r.left, r.top, r.right - r.left, r.bottom - r.top)
+    {
+        RectF::new(r.fLeft, r.fTop, r.fRight - r.fLeft, r.fBottom - r.fTop)
+    }
+}
+fn matrix_map_rect(matrix: &SkM44, rect: SkRRectBounds) -> SkRRectBounds {
+    {
+        matrix.asM33().mapRect_value(&rect)
+    }
+}
+fn scalar_length(x: f32, y: f32) -> f32 {
+    {
+        skia::src::core::SkPoint::SkPoint::Length(x, y)
+    }
+}
+fn matrix_pre_scale(matrix: &mut SkM44, x: f32, y: f32) {
+    {
+        matrix.preScale(x, y);
+    }
+}
+fn toggle_path_inverse(path: &mut skia::src::core::SkPath::SkPath) {
+    path.toggleInverseFillType();
+}
+#[derive(Clone, Copy)]
+enum StrokeBoundsCap {
+    Butt,
+    Round,
+    Square,
+}
+#[derive(Clone, Copy)]
+enum StrokeBoundsJoin {
+    Miter,
+    Round,
+    Bevel,
+}
+fn stroke_inflation_radius(
+    join: StrokeBoundsJoin,
+    miter: f32,
+    cap: StrokeBoundsCap,
+    width: f32,
+) -> f32 {
+    {
+        use skia::src::core::{
+            SkPaint::{Cap, Join},
+            SkStrokeRec::SkStrokeRec,
+        };
+        let join = match join {
+            StrokeBoundsJoin::Miter => Join::kMiter_Join,
+            StrokeBoundsJoin::Round => Join::kRound_Join,
+            StrokeBoundsJoin::Bevel => Join::kBevel_Join,
+        };
+        let cap = match cap {
+            StrokeBoundsCap::Butt => Cap::kButt_Cap,
+            StrokeBoundsCap::Round => Cap::kRound_Cap,
+            StrokeBoundsCap::Square => Cap::kSquare_Cap,
+        };
+        SkStrokeRec::GetInflationRadius(join, miter, cap, width)
+    }
 }
 impl ImageMatrix<RectF> for ImageMapMatrix {
     fn Identity() -> Self {
@@ -87,7 +151,7 @@ impl ImageMatrix<RectF> for ImageMapMatrix {
                 ty += diff;
             }
         }
-        Self(SkM44::ColMajor([
+        Self(matrix_col_major([
             sx, 0., 0., 0., 0., sy, 0., 0., 0., 0., 1., 0., tx, ty, 0., 1.,
         ]))
     }
@@ -159,10 +223,8 @@ impl DiscardableImageTypes for NativeDiscardableBackend {
         {
             // Source external primitive: SkMatrix.cpp:1479-1499 and
             // SkScalar.h:98-104. No projection/approximate decomposition.
-            let sx =
-                skia::include::core::SkPoint::SkPoint::native_length(m.0.rc(0, 0), m.0.rc(1, 0));
-            let sy =
-                skia::include::core::SkPoint::SkPoint::native_length(m.0.rc(0, 1), m.0.rc(1, 1));
+            let sx = scalar_length(m.0.rc(0, 0), m.0.rc(1, 0));
+            let sy = scalar_length(m.0.rc(0, 1), m.0.rc(1, 1));
             if m.0.rc(3, 0) != 0.
                 || m.0.rc(3, 1) != 0.
                 || m.0.rc(3, 3) != 1.
@@ -273,43 +335,134 @@ impl DiscardablePaintImage<NativeDiscardableBackend> for CpuPaintImage {
             .sync_animation_sequence_id
     }
 }
-pub(crate) struct MapCanvas(SkNoDrawCanvas);
+pub(crate) struct MapCanvas(core::pin::Pin<Box<SkNoDrawCanvas<'static>>>);
 pub(crate) fn make_canvas(r: Rect) -> MapCanvas {
-    MapCanvas(SkNoDrawCanvas::from_bounds(SkRegionIRect::MakeLTRB(
-        r.x,
-        r.y,
-        r.right(),
-        r.bottom(),
-    )))
+    {
+        MapCanvas(SkNoDrawCanvas::with_bounds(&SkRegionIRect::make_ltrb(
+            r.x,
+            r.y,
+            r.right(),
+            r.bottom(),
+        )))
+    }
 }
 impl MapCanvas {
     pub(crate) fn LocalClipBounds(&self) -> Option<Rect> {
-        self.0
-            .getLocalClipBounds()
-            .map(|r| ToEnclosingRect(frect(r)))
+        {
+            let r = self.0.as_ref().canvas_ref().getLocalClipBounds();
+            (!r.isEmpty()).then(|| ToEnclosingRect(frect(r)))
+        }
+    }
+    fn save(&mut self) {
+        unsafe {
+            self.0.as_mut().canvas().save();
+        }
+    }
+    fn restore(&mut self) {
+        unsafe {
+            let mut canvas = self.0.as_mut().canvas();
+            let canvas = core::ptr::NonNull::from(canvas.as_mut().get_unchecked_mut());
+            SkCanvas::restore_raw(canvas)
+                .expect("SkNoDrawCanvas restore cannot execute raster stages");
+        }
+    }
+    fn restore_to_count(&mut self, count: i32) {
+        unsafe {
+            let mut canvas = self.0.as_mut().canvas();
+            let canvas = core::ptr::NonNull::from(canvas.as_mut().get_unchecked_mut());
+            SkCanvas::restoreToCount_raw(canvas, count)
+                .expect("SkNoDrawCanvas restore cannot execute raster stages");
+        }
+    }
+    fn translate(&mut self, x: f32, y: f32) {
+        unsafe {
+            self.0.as_mut().canvas().translate(x, y);
+        }
+    }
+    fn concat(&mut self, matrix: &ImageMapMatrix) {
+        unsafe {
+            self.0.as_mut().canvas().concat44(&matrix.0);
+        }
+    }
+    fn clip_rect(&mut self, rect: RectF, difference: bool, aa: bool) {
+        unsafe {
+            self.0.as_mut().canvas().clipRect(
+                &skrect(rect),
+                if difference {
+                    SkClipOp::kDifference
+                } else {
+                    SkClipOp::kIntersect
+                },
+                aa,
+            );
+        }
+    }
+    fn clip_rrect_bounds(&mut self, rect: RectF, is_rect: bool, difference: bool, aa: bool) {
+        unsafe {
+            let bounds = skrect(rect);
+            // SkNoPixelsDevice consumes a conservative bound and rect-ness for
+            // this analysis. A nonzero radius preserves the source non-rect
+            // classification without approximating any emitted pixels.
+            let rrect = if is_rect {
+                SkRRect::MakeRect(&bounds)
+            } else {
+                SkRRect::MakeRectXY(&bounds, 1.0, 1.0)
+            };
+            self.0.as_mut().canvas().clipRRect(
+                &rrect,
+                if difference {
+                    SkClipOp::kDifference
+                } else {
+                    SkClipOp::kIntersect
+                },
+                aa,
+            );
+        }
+    }
+    fn clip_path(
+        &mut self,
+        path: &<SkRegion as crate::runtime::types::SkiaValueBackend>::Path,
+        difference: bool,
+        aa: bool,
+    ) {
+        unsafe {
+            self.0.as_mut().canvas().clipPath(
+                path,
+                if difference {
+                    SkClipOp::kDifference
+                } else {
+                    SkClipOp::kIntersect
+                },
+                aa,
+            );
+        }
     }
 }
 impl ImageGatheringCanvas<NativeDiscardableBackend> for MapCanvas {
     fn getSaveCount(&self) -> i32 {
-        self.0.getSaveCount()
+        {
+            self.0.as_ref().canvas_ref().getSaveCount()
+        }
     }
     fn save(&mut self) {
-        self.0.save()
+        MapCanvas::save(self)
     }
     fn restore(&mut self) {
-        self.0.restore()
+        MapCanvas::restore(self)
     }
     fn restoreToCount(&mut self, c: i32) {
-        self.0.restoreToCount(c)
+        self.restore_to_count(c)
     }
     fn translate(&mut self, x: f32, y: f32) {
-        self.0.translate(x, y)
+        MapCanvas::translate(self, x, y)
     }
     fn getLocalToDevice(&self) -> ImageMapMatrix {
-        ImageMapMatrix(self.0.getLocalToDevice())
+        {
+            ImageMapMatrix(self.0.as_ref().canvas_ref().getLocalToDevice())
+        }
     }
     fn getDeviceClipBounds(&self) -> Rect {
-        let r = self.0.getDeviceClipBounds();
+        let r = self.0.as_ref().canvas_ref().getDeviceClipBounds();
         Rect::FromBounds(r.fLeft, r.fTop, r.fRight, r.fBottom)
     }
 }
@@ -536,7 +689,7 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for NativeDiscardableBa
             MapShader::Converted(s) => {
                 let Some((source, mask)) = s.source() else {
                     if let CpuPaintShader::PaintRecord { local_matrix, .. } = s {
-                        return ImageMapMatrix(SkM44::ColMajor(local_matrix.as_ref().map_or(
+                        return ImageMapMatrix(matrix_col_major(local_matrix.as_ref().map_or(
                             [
                                 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.,
                             ],
@@ -560,11 +713,11 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for NativeDiscardableBa
                 );
                 let mut m = SkM44::default();
                 m.preTranslate(px as f32, py as f32, 0.);
-                m.preScale(sx as f32, sy as f32, 1.);
+                matrix_pre_scale(&mut m, sx as f32, sy as f32);
                 ImageMapMatrix(m)
             }
             MapShader::Native(s, _) => {
-                ImageMapMatrix(SkM44::ColMajor(s.transform.values.map(|v| v as f32)))
+                ImageMapMatrix(matrix_col_major(s.transform.values.map(|v| v as f32)))
             }
         }
     }
@@ -631,8 +784,8 @@ impl paint::cc::paint::paint_op::PaintRectBackend for PaintRectProjection<'_> {
                         op.even_odd,
                         Default::default(),
                     );
-                    let b = p.single_path().expect("one native path").getBounds();
-                    RectF::new(b.left, b.top, b.right - b.left, b.bottom - b.top)
+                    let b = p.single_path().expect("one native path").bounds();
+                    RectF::new(b.x as f32, b.y as f32, b.width as f32, b.height as f32)
                 } else if op.r#type == N::kDrawGlyphRun {
                     let r = op.glyph_ink_rect?;
                     RectF::new(r.x as f32, r.y as f32, r.width as f32, r.height as f32)
@@ -645,10 +798,7 @@ impl paint::cc::paint::paint_op::PaintRectBackend for PaintRectProjection<'_> {
                     )
                 }
             }
-            CpuPaintOpRef::Converted(CpuPaintOp::DrawPath { path, .. }) => {
-                let b = path.getBounds();
-                RectF::new(b.left, b.top, b.right - b.left, b.bottom - b.top)
-            }
+            CpuPaintOpRef::Converted(CpuPaintOp::DrawPath { path, .. }) => path.bounds(),
             CpuPaintOpRef::Converted(CpuPaintOp::DrawRect(r, ..)) => *r,
             CpuPaintOpRef::Converted(CpuPaintOp::DrawRRect(r, ..)) => r.rect,
             CpuPaintOpRef::Converted(CpuPaintOp::DrawDRRect { outer, .. }) => outer.rect,
@@ -665,7 +815,7 @@ impl paint::cc::paint::paint_op::PaintRectBackend for PaintRectProjection<'_> {
         RectF::from(self.clip)
     }
     fn MapRect(&self, r: RectF) -> RectF {
-        frect(self.ctm.0.mapRect(skrect(r)))
+        frect(matrix_map_rect(&self.ctm.0, skrect(r)))
     }
     fn HasFlags(&self) -> bool {
         self.op.IsPaintOpWithFlags()
@@ -677,7 +827,6 @@ impl paint::cc::paint::paint_op::PaintRectBackend for PaintRectProjection<'_> {
     }
     fn ComputeFastBounds(&self, mut r: RectF) -> Option<RectF> {
         use paint::cc::paint::paint_flags::{Cap, Join, Style};
-        use skia::raster::{LineCap, LineJoin};
         let (width, miter, cap, join) = if let Some(f) = super::native_metadata::flags(self.op) {
             // A native filter without a published fast-bounds primitive cannot
             // promise one. The canonical source takes its full-clip branch.
@@ -693,14 +842,14 @@ impl paint::cc::paint::paint_op::PaintRectBackend for PaintRectProjection<'_> {
                 width,
                 f.getStrokeMiter(),
                 match f.getStrokeCap() {
-                    Cap::kButt_Cap => LineCap::Butt,
-                    Cap::kRound_Cap => LineCap::Round,
-                    Cap::kSquare_Cap => LineCap::Square,
+                    Cap::kButt_Cap => StrokeBoundsCap::Butt,
+                    Cap::kRound_Cap => StrokeBoundsCap::Round,
+                    Cap::kSquare_Cap => StrokeBoundsCap::Square,
                 },
                 match f.getStrokeJoin() {
-                    Join::kMiter_Join => LineJoin::Miter,
-                    Join::kRound_Join => LineJoin::Round,
-                    Join::kBevel_Join => LineJoin::Bevel,
+                    Join::kMiter_Join => StrokeBoundsJoin::Miter,
+                    Join::kRound_Join => StrokeBoundsJoin::Round,
+                    Join::kBevel_Join => StrokeBoundsJoin::Bevel,
                 },
             )
         } else if let CpuPaintOpRef::Native { op, .. } = self.op {
@@ -722,24 +871,24 @@ impl paint::cc::paint::paint_op::PaintRectBackend for PaintRectProjection<'_> {
                 if stroke { op.stroke_width as f32 } else { -1. },
                 op.miter_limit as f32,
                 if op.round_cap {
-                    LineCap::Round
+                    StrokeBoundsCap::Round
                 } else {
                     match op.svg_line_cap {
-                        C::kButt => LineCap::Butt,
-                        C::kRound => LineCap::Round,
-                        C::kSquare => LineCap::Square,
+                        C::kButt => StrokeBoundsCap::Butt,
+                        C::kRound => StrokeBoundsCap::Round,
+                        C::kSquare => StrokeBoundsCap::Square,
                     }
                 },
                 match op.svg_line_join {
-                    J::kMiter => LineJoin::Miter,
-                    J::kRound => LineJoin::Round,
-                    J::kBevel => LineJoin::Bevel,
+                    J::kMiter => StrokeBoundsJoin::Miter,
+                    J::kRound => StrokeBoundsJoin::Round,
+                    J::kBevel => StrokeBoundsJoin::Bevel,
                 },
             )
         } else {
             return Some(r);
         };
-        let radius = skia::src::core::SkStroke::native_inflation_radius(join, miter, cap, width);
+        let radius = stroke_inflation_radius(join, miter, cap, width);
         r.Inset(-radius, -radius, -radius, -radius);
         Some(r)
     }
@@ -835,27 +984,27 @@ pub(crate) fn raster_state(
             | N::kSaveLayerBlend
             | N::kSaveLayerDstIn
             | N::kSaveLayerFilter
-            | N::kBeginMask => c.0.save(),
-            N::kRestore | N::kEndMask => c.0.restore(),
-            N::kConcat => {
-                c.0.concat(&SkM44::ColMajor(op.transform.values.map(|v| v as f32)))
-            }
-            N::kClipRect | N::kClipOutRect => c.0.clipRect(
-                SkRRectBounds::MakeLTRB(
+            | N::kBeginMask => c.save(),
+            N::kRestore | N::kEndMask => c.restore(),
+            N::kConcat => c.concat(&ImageMapMatrix(matrix_col_major(
+                op.transform.values.map(|v| v as f32),
+            ))),
+            N::kClipRect | N::kClipOutRect => c.clip_rect(
+                RectF::new(
                     op.rect.x as f32,
                     op.rect.y as f32,
-                    (op.rect.x + op.rect.width) as f32,
-                    (op.rect.y + op.rect.height) as f32,
+                    op.rect.width as f32,
+                    op.rect.height as f32,
                 ),
                 op.r#type == N::kClipOutRect,
                 op.antialias,
             ),
-            N::kClipRoundedRect | N::kClipOutRoundedRect => c.0.clipRRect(
-                SkRRectBounds::MakeLTRB(
+            N::kClipRoundedRect | N::kClipOutRoundedRect => c.clip_rrect_bounds(
+                RectF::new(
                     op.rect.x as f32,
                     op.rect.y as f32,
-                    (op.rect.x + op.rect.width) as f32,
-                    (op.rect.y + op.rect.height) as f32,
+                    op.rect.width as f32,
+                    op.rect.height as f32,
                 ),
                 false,
                 op.r#type == N::kClipOutRoundedRect,
@@ -868,14 +1017,13 @@ pub(crate) fn raster_state(
                     op.even_odd,
                     Default::default(),
                 );
-                let p = p.single_path().unwrap();
-                let b = p.getBounds();
-                c.0.clipPathBounds(
-                    SkRRectBounds::MakeLTRB(b.left, b.top, b.right, b.bottom),
-                    op.inverse_winding,
-                    false,
-                    op.antialias,
-                )
+                let mut p = <SkRegion as crate::runtime::types::SkiaValueBackend>::FromPaintPath(
+                    p.single_path().unwrap(),
+                );
+                if p.is_inverse_fill_type() != op.inverse_winding {
+                    toggle_path_inverse(&mut p);
+                }
+                c.clip_path(&p, false, op.antialias)
             }
             _ => unreachable!("source native state subtype"),
         },
@@ -883,19 +1031,19 @@ pub(crate) fn raster_state(
             CpuPaintOp::Save
             | CpuPaintOp::SaveLayer { .. }
             | CpuPaintOp::SaveLayerAlpha { .. }
-            | CpuPaintOp::SaveLayerFilters { .. } => c.0.save(),
-            CpuPaintOp::Restore => c.0.restore(),
-            CpuPaintOp::Translate(x, y) => c.0.translate(*x, *y),
-            CpuPaintOp::Concat(m) => {
-                c.0.concat(&SkM44::ColMajor(m.native().GetColMajor().map(|v| v as f32)))
-            }
+            | CpuPaintOp::SaveLayerFilters { .. } => c.save(),
+            CpuPaintOp::Restore => c.restore(),
+            CpuPaintOp::Translate(x, y) => c.translate(*x, *y),
+            CpuPaintOp::Concat(m) => c.concat(&ImageMapMatrix(matrix_col_major(
+                m.native().GetColMajor().map(|v| v as f32),
+            ))),
             CpuPaintOp::ClipRect {
                 rect,
                 difference,
                 antialias,
-            } => c.0.clipRect(skrect(*rect), *difference, *antialias),
-            CpuPaintOp::ClipRRect(r, aa) => c.0.clipRRect(
-                skrect(r.rect),
+            } => c.clip_rect(*rect, *difference, *antialias),
+            CpuPaintOp::ClipRRect(r, aa) => c.clip_rrect_bounds(
+                r.rect,
                 r.corner_radii.iter().all(|v| v.x() == 0. && v.y() == 0.),
                 false,
                 *aa,
@@ -906,13 +1054,7 @@ pub(crate) fn raster_state(
                 antialias,
             } => {
                 let p = path.single_path().expect("validated path union capability");
-                let b = p.getBounds();
-                c.0.clipPathBounds(
-                    SkRRectBounds::MakeLTRB(b.left, b.top, b.right, b.bottom),
-                    p.isInverseFillType(),
-                    *difference,
-                    *antialias,
-                )
+                c.clip_path(p, *difference, *antialias)
             }
             CpuPaintOp::Noop => {}
             _ => unreachable!("draw op is not a state op"),

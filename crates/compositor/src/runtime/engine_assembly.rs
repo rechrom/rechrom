@@ -10,7 +10,7 @@ use super::{
     native_scheduler::{
         NativeSchedulerEffect, NativeSchedulerEffects, NativeSchedulerHost, NativeTimingHistory,
     },
-    resources::CpuReturnedResource,
+    resources::RasterReturnedResource,
 };
 use crate::{
     adapter::{begin_frame::BeginFrameArgs, layer_tree_host_impl::HostImplContext},
@@ -123,10 +123,16 @@ impl NativeEngineAssembly {
                 .PrepareCommit(artifact, viewport, &self.main_features)?;
         }
         self.scheduler.SetVisible(viewport.visible, &mut self.core);
-        if self.core.awaiting_main {
+        if self.core.awaiting_main
+            && self.core.HasReadyCommit()
+            && !self.core.ReadyCommitWasNotified()
+        {
             self.core
                 .NotifyReadyToCommit(&mut self.scheduler, true, true);
-        } else {
+        } else if self.core.HasReadyCommit()
+            && !self.core.awaiting_main
+            && !self.core.ReadyCommitWasNotified()
+        {
             self.scheduler
                 .SetNeedsBeginMainFrame(false, false, &mut self.core);
         }
@@ -331,7 +337,7 @@ impl NativeEngineAssembly {
     }
     pub(crate) fn ReclaimResources(
         &mut self,
-        resources: Vec<CpuReturnedResource>,
+        resources: Vec<RasterReturnedResource>,
     ) -> Result<CompositorOutput, CompositorError> {
         {
             let _query = self
@@ -792,6 +798,22 @@ impl NativeEngineAssembly {
                     })
             };
             self.scheduler.SetCanDraw(can_draw, &mut self.core);
+
+            // ScheduleTasks deliberately mutates only Chromium's resident task
+            // graph while TileManager/Host borrows are live.  Once this source
+            // turn has ended, hand the graph to the injected raster executor.
+            // The worker posts the original task-set callbacks back through
+            // `commands`; it does not call Host or choose compositor policy.
+            let raster_tasks = {
+                self.core
+                    .services
+                    .tile_execution
+                    .lock()
+                    .expect("independent native tile capabilities")
+                    .task_graph
+                    .clone()
+            };
+            raster_tasks.Kick();
             if !progressed
                 && self.commands.IsEmpty()
                 && self.lifecycle.IsEmpty()

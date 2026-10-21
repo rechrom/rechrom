@@ -15,7 +15,7 @@ pub(super) struct PageBeginFrame {
     last_frame: Option<(u64, u64)>,
 }
 impl Page {
-    #[cfg(feature = "pure_source_png")]
+    #[cfg(feature = "production_raster")]
     fn AdvanceCompositorBeginFrame(&mut self, args: BeginFrameArgs) -> io::Result<()> {
         let output = {
             let mut rendering = self.state.rendering.borrow_mut();
@@ -75,9 +75,9 @@ impl Page {
         // loading tasks. Re-requesting an unrenderable dirty page each tick
         // cannot advance that work and must not compete with its task queue.
         // Once readiness changes, the next task reaches UpdateFrameIfNeeded.
-        #[cfg(feature = "pure_source_png")]
+        #[cfg(feature = "production_raster")]
         let compositor_demand = self.state.rendering.borrow().NeedsBeginFrames();
-        #[cfg(not(feature = "pure_source_png"))]
+        #[cfg(not(feature = "production_raster"))]
         let compositor_demand = false;
         let demand = compositor_demand
             || (self.IsRenderingReady()
@@ -178,7 +178,7 @@ impl Page {
             }
             let initial_done = profile.map(|start| start.elapsed());
             self.DrainFrameInputs()?;
-            #[cfg(feature = "pure_source_png")]
+            #[cfg(feature = "production_raster")]
             self.AdvanceCompositorBeginFrame(args)?;
             // The scroll event observes the new visual scroll offset. Commit
             // the retained scroll properties before script geometry queries;

@@ -49,9 +49,9 @@ use webapi::{
     window_bindings::WindowJavaScriptBindings,
 };
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 pub use compositor::CompositorMainThreadEffect;
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 use compositor::{
     adapter::{
         begin_frame::{BeginFrameArgs, BeginFrameArgsType, BeginFrameId},
@@ -62,28 +62,42 @@ use compositor::{
     CompositorInput, CompositorOutput, CompositorViewportState, NativeCompositorFrameSubmission,
     ScrollPhase,
 };
-#[cfg(feature = "pure_source_png")]
-use raster::native::CpuRasterProvider;
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
+use raster::RasterEngine;
+#[cfg(feature = "production_raster")]
 use renderer::RenderUpdate;
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 use renderer_skia::{PixelFormat, RendererSkiaBackend};
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 struct PageCompositorExecutor {
     executor: Arc<dyn executor::Executor>,
     origin: std::time::Instant,
+    // Physical BeginFrame timestamps may have been sampled just before this
+    // Page executor was constructed, while manually driven frames use Now().
+    // Both enter cc's single TimeTicks domain here, whose source invariant is
+    // nondecreasing frame_time.
+    last_ticks_us: std::sync::atomic::AtomicI64,
     sequence: std::thread::ThreadId,
 }
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 impl PageCompositorExecutor {
     fn new(executor: Arc<dyn executor::Executor>) -> Self {
         Self {
             executor,
             origin: std::time::Instant::now(),
+            last_ticks_us: std::sync::atomic::AtomicI64::new(0),
             sequence: std::thread::current().id(),
         }
+    }
+
+    fn MonotonicTimeTicks(&self, candidate_us: i64) -> CompositorTimeTicks {
+        let candidate_us = candidate_us.max(1);
+        let previous = self
+            .last_ticks_us
+            .fetch_max(candidate_us, std::sync::atomic::Ordering::Relaxed);
+        CompositorTimeTicks::FromMicroseconds(candidate_us.max(previous))
     }
 
     fn TimeTicks(&self, instant: std::time::Instant) -> CompositorTimeTicks {
@@ -92,15 +106,15 @@ impl PageCompositorExecutor {
             .unwrap_or_default()
             .as_micros()
             .min(i64::MAX as u128) as i64;
-        CompositorTimeTicks::FromMicroseconds(micros.max(1))
+        self.MonotonicTimeTicks(micros)
     }
 }
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 impl CompositorExecutor for PageCompositorExecutor {
     fn Now(&self) -> CompositorTimeTicks {
         let micros = self.origin.elapsed().as_micros().min(i64::MAX as u128) as i64;
-        CompositorTimeTicks::FromMicroseconds(micros.max(1))
+        self.MonotonicTimeTicks(micros)
     }
 
     fn Execute(&self, task: Box<dyn FnOnce() + Send>) {
@@ -119,7 +133,7 @@ impl CompositorExecutor for PageCompositorExecutor {
     }
 }
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PreparedRenderInput {
     width: u32,
@@ -128,7 +142,7 @@ struct PreparedRenderInput {
     layout_zoom: u64,
 }
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 struct PendingPageRender {
     artifact: Arc<paint::PaintArtifact>,
     input: PreparedRenderInput,
@@ -136,7 +150,7 @@ struct PendingPageRender {
     needs_begin_frames: bool,
 }
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 impl PendingPageRender {
     fn Matches(
         &self,
@@ -157,17 +171,17 @@ impl PendingPageRender {
     }
 }
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 struct PresentablePageRender {
     artifact: std::sync::Weak<paint::PaintArtifact>,
     input: PreparedRenderInput,
 }
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 pub struct PageRenderPipeline {
     compositor: Option<CompositorEngine>,
     executor: Arc<PageCompositorExecutor>,
-    pixels: CpuRasterProvider,
+    raster_engine: RasterEngine,
     viz: viz::native::VizEngine,
     renderer: renderer::Renderer<RendererSkiaBackend>,
     surface: viz::native::SurfaceId,
@@ -189,7 +203,7 @@ pub struct PageRenderPipeline {
     presentable: Option<PresentablePageRender>,
 }
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 #[derive(Default)]
 pub struct CompositorWheelResult {
     pub handled: bool,
@@ -197,15 +211,15 @@ pub struct CompositorWheelResult {
     pub effects: Vec<CompositorMainThreadEffect>,
 }
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 pub type PageCompositorFrame = NativeCompositorFrameSubmission;
-#[cfg(feature = "pure_source_png")]
-pub type PageReturnedResource = compositor::runtime::resources::CpuReturnedResource;
+#[cfg(feature = "production_raster")]
+pub type PageReturnedResource = compositor::runtime::resources::RasterReturnedResource;
 
 /// Viz and software Renderer state owned by a Page presentation sequence.
 /// It consumes the Page's move-only CompositorFrame output without access to
 /// Blink, PaintEngine, cc trees, tiles, or input scheduling.
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 pub struct PageFramePresenter {
     viz: viz::native::VizEngine,
     renderer: renderer::Renderer<RendererSkiaBackend>,
@@ -216,12 +230,12 @@ pub struct PageFramePresenter {
     rendered_surface: Option<viz::native::SurfaceId>,
 }
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 impl PageFramePresenter {
-    fn new(pixels: CpuRasterProvider) -> Self {
+    fn new() -> Self {
         Self {
             viz: viz::native::VizEngine::New(),
-            renderer: renderer::Renderer::new(RendererSkiaBackend::new(Box::new(pixels))),
+            renderer: renderer::Renderer::new(RendererSkiaBackend::default()),
             surface: viz::native::SurfaceId(1),
             next_surface: 2,
             local_surface_id: None,
@@ -235,7 +249,7 @@ impl PageFramePresenter {
         submission: PageCompositorFrame,
     ) -> io::Result<(
         bool,
-        Vec<compositor::runtime::resources::CpuReturnedResource>,
+        Vec<compositor::runtime::resources::RasterReturnedResource>,
     )> {
         let local_surface_id = submission.local_surface_id;
         let frame = submission.frame;
@@ -256,7 +270,7 @@ impl PageFramePresenter {
             // Source: components/viz/common/surfaces/local_surface_id.cc:47-70.
             if same_embed && !local_surface_id.IsSameOrNewerThan(&current) {
                 returned.extend(frame.resource_list.iter().map(
-                    compositor::runtime::resources::CpuTransferableResource::ToReturnedResource,
+                    compositor::runtime::resources::RasterTransferableResource::ToReturnedResource,
                 ));
                 return Ok((false, returned));
             }
@@ -330,7 +344,7 @@ impl PageFramePresenter {
     }
 }
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 impl PageRenderPipeline {
     pub fn new(executor: Arc<dyn executor::Executor>) -> Self {
         Self::NewWithPresentation(executor, false).0
@@ -351,18 +365,18 @@ impl PageRenderPipeline {
         static NEXT_COMMAND_BUFFER: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(1);
         let command_buffer = NEXT_COMMAND_BUFFER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let pixels = CpuRasterProvider::new(command_buffer, 64 * 1024 * 1024);
-        let presenter = PageFramePresenter::new(pixels.clone());
+        let raster_engine = RasterEngine::new(command_buffer, 64 * 1024 * 1024);
+        let presenter = PageFramePresenter::new();
         let renderer = if external_presentation {
             renderer::Renderer::new(RendererSkiaBackend::default())
         } else {
-            renderer::Renderer::new(RendererSkiaBackend::new(Box::new(pixels.clone())))
+            renderer::Renderer::new(RendererSkiaBackend::default())
         };
         (
             Self {
                 compositor: None,
                 executor: Arc::new(PageCompositorExecutor::new(executor)),
-                pixels,
+                raster_engine,
                 viz: viz::native::VizEngine::New(),
                 renderer,
                 surface: viz::native::SurfaceId(1),
@@ -387,7 +401,7 @@ impl PageRenderPipeline {
         submission: NativeCompositorFrameSubmission,
     ) -> io::Result<(
         bool,
-        Vec<compositor::runtime::resources::CpuReturnedResource>,
+        Vec<compositor::runtime::resources::RasterReturnedResource>,
     )> {
         let local_surface_id = submission.local_surface_id;
         let frame = submission.frame;
@@ -405,7 +419,7 @@ impl PageRenderPipeline {
             let same_embed = current.embed_token == local_surface_id.embed_token;
             if same_embed && !local_surface_id.IsSameOrNewerThan(&current) {
                 returned.extend(frame.resource_list.iter().map(
-                    compositor::runtime::resources::CpuTransferableResource::ToReturnedResource,
+                    compositor::runtime::resources::RasterTransferableResource::ToReturnedResource,
                 ));
                 return Ok((false, returned));
             }
@@ -444,14 +458,16 @@ impl PageRenderPipeline {
     fn EnsureCompositor(&mut self) -> io::Result<()> {
         if self.compositor.is_none() {
             let executor: Arc<dyn CompositorExecutor> = self.executor.clone();
-            let pixels = Arc::new(self.pixels.clone());
+            let raster_provider = Arc::new(self.raster_engine.clone());
+            let ui_raster = raster_provider.clone();
             self.compositor = Some(
                 CompositorEngine::new(
                     CompositorConfig::default(),
                     CompositorExecutors {
                         compositor: executor.clone(),
                         raster: executor,
-                        pixels,
+                        raster_provider,
+                        ui_raster,
                     },
                 )
                 .map_err(|error| io::Error::other(error.to_string()))?,
@@ -743,7 +759,7 @@ impl PageRenderPipeline {
 
     pub fn ReclaimResources(
         &mut self,
-        resources: Vec<compositor::runtime::resources::CpuReturnedResource>,
+        resources: Vec<compositor::runtime::resources::RasterReturnedResource>,
     ) -> io::Result<()> {
         if resources.is_empty() || self.compositor.is_none() {
             return Ok(());
@@ -1091,7 +1107,7 @@ impl PageRenderPipeline {
     }
 }
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 impl Default for PageRenderPipeline {
     fn default() -> Self {
         Self::new(executor::inline())
@@ -1167,7 +1183,7 @@ struct PageState {
     style_engine: RefCell<style::StyleEngine>,
     layout_engine: RefCell<layoutng_assembly::layout_engine::LayoutEngine>,
     paint_engine: RefCell<paint::PaintEngine>,
-    #[cfg(feature = "pure_source_png")]
+    #[cfg(feature = "production_raster")]
     rendering: RefCell<PageRenderPipeline>,
     constraints: Rc<RefCell<ConstraintSpace>>,
     system_fonts: RefCell<crate::font_session::SystemFontSession>,
@@ -1203,7 +1219,7 @@ impl PageState {
         document: Rc<DocumentEngine>,
         layout_engine: layoutng_assembly::layout_engine::LayoutEngine,
         paint_engine: paint::PaintEngine,
-        #[cfg(feature = "pure_source_png")] rendering: PageRenderPipeline,
+        #[cfg(feature = "production_raster")] rendering: PageRenderPipeline,
         constraints: ConstraintSpace,
         client: Rc<RefCell<dyn PageClient>>,
     ) -> Rc<Self> {
@@ -1219,7 +1235,7 @@ impl PageState {
             style_engine: RefCell::new(style_engine),
             layout_engine: RefCell::new(layout_engine),
             paint_engine: RefCell::new(paint_engine),
-            #[cfg(feature = "pure_source_png")]
+            #[cfg(feature = "production_raster")]
             rendering: RefCell::new(rendering),
             constraints: Rc::new(RefCell::new(constraints)),
             system_fonts: RefCell::new(crate::font_session::SystemFontSession::new()),
@@ -1255,7 +1271,7 @@ impl PageState {
             Rc::new(DocumentEngine::new()),
             layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly()),
             paint::PaintEngine::new(),
-            #[cfg(feature = "pure_source_png")]
+            #[cfg(feature = "production_raster")]
             PageRenderPipeline::default(),
             constraints,
             client,
@@ -1716,7 +1732,7 @@ impl PageState {
                 );
             }
             let mut paint = self.paint_engine.borrow_mut();
-            #[cfg(feature = "pure_source_png")]
+            #[cfg(feature = "production_raster")]
             {
                 // Stop identifying the currently submitted artifact as the next
                 // commit input before Paint mutates its retained snapshot.
@@ -2845,7 +2861,7 @@ impl Page {
         let layout_engine =
             layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly());
         let paint_engine = paint::PaintEngine::new();
-        #[cfg(feature = "pure_source_png")]
+        #[cfg(feature = "production_raster")]
         let rendering = PageRenderPipeline::new(if threads.raster {
             threads.executor.clone()
         } else {
@@ -2855,7 +2871,7 @@ impl Page {
             document,
             layout_engine,
             paint_engine,
-            #[cfg(feature = "pure_source_png")]
+            #[cfg(feature = "production_raster")]
             rendering,
             constraints,
             client.clone(),
@@ -3377,9 +3393,9 @@ impl Page {
             .is_some()
             .then(std::time::Instant::now);
         let mut routed_input = input.clone();
-        #[cfg(feature = "pure_source_png")]
+        #[cfg(feature = "production_raster")]
         let mut compositor_wheel = CompositorWheelResult::default();
-        #[cfg(feature = "pure_source_png")]
+        #[cfg(feature = "production_raster")]
         if let interaction::input_event::InputEvent::Wheel(wheel) = &mut routed_input {
             let regions = self.BlockingWheelEventRegions();
             let contains = |rect: paint::paint_engine::PaintRect| {
@@ -3415,7 +3431,7 @@ impl Page {
 
         if !result.default_prevented {
             if let interaction::input_event::InputEvent::Wheel(wheel) = &routed_input {
-                #[cfg(feature = "pure_source_png")]
+                #[cfg(feature = "production_raster")]
                 if compositor_wheel.handled {
                     self.ApplyCompositorWheelEffects(compositor_wheel.effects)?;
                     if compositor_wheel.submitted {
@@ -4224,7 +4240,7 @@ pub fn OpenUrl(
 pub(crate) struct NullPageClient;
 impl PageClient for NullPageClient {}
 
-#[cfg(feature = "pure_source_png")]
+#[cfg(feature = "production_raster")]
 impl Page {
     /// Plan and raster the current Page artifact into the host's borrowed target.
     pub fn PaintInto(

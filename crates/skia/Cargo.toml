@@ -3,28 +3,25 @@ name = "skia"
 version = "0.0.1"
 edition = "2021"
 publish = false
+build = "build.rs"
 license = "BSD-3-Clause"
 
 [lib]
 path = "lib.rs"
 
 [features]
-default = ["std", "simd", "png-format"]
-std = []
-simd = []
-profiling = []
-png-format = ["dep:png"]
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("png-format", "no-std-float"))'] }
+default = ["browser_cpu"]
+# Production CPU drawing embedding. Encoded image decoding remains owned by
+# image_decoder; Skia receives decoded images at the raster boundary.
+browser_cpu = []
+# Optional Chromium base/logging/discardable-memory embedding. This requires
+# the genuine native ABI and configuration inputs consumed by build.rs.
+chromium_embedding = []
+sk_yuv_color_space_high_precision = []
 
 [dependencies]
-arrayref = "0.3.9"
-arrayvec = { version = "0.7", default-features = false }
-bytemuck = { version = "1.24", features = ["aarch64_simd"] }
-cfg-if = "1"
-log = "0.4"
-strict-num = { version = "0.1", default-features = false }
-ttf-parser = { version = "0.25.1", default-features = false, features = ["std", "variable-fonts", "gvar-alloc"] }
-half = "2.7.1"
-png = { version = "0.18.1", optional = true }
+browser_tracing = { path = "../tracing" }
+libc = "0.2.189"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(skvx_disable_simd)', 'cfg(SK_USE_LARGER_NO_BLUR_THRESHOLD)', 'cfg(SK_SUPPORT_LEGACY_RRECT_TRANSFORM)', 'cfg(SK_LEGACY_PATH_ACCESSORS)', 'cfg(SK_BUILD_FOR_FUZZER)', 'cfg(SK_BUILD_FOR_DEBUGGER)', 'cfg(SK_SUPPORT_LEGACY_PATHBUILDER_SETLASTPT)', 'cfg(SK_CPU_LIMIT_AVX)', 'cfg(SK_CPU_LIMIT_SSE41)', 'cfg(SK_CPU_LIMIT_SSE2)', 'cfg(SK_ENABLE_THREADLOCAL_STRIKECACHE)', 'cfg(SK_STRIKE_CACHE_DOESNT_AUTO_CHECK_PINNERS)', 'cfg(SK_UNTIL_CRBUG_1187654_IS_FIXED)', 'cfg(SK_USE_DRAWING_MIPMAP_DOWNSAMPLER)', 'cfg(SK_ENABLE_OPTIMIZE_SIZE)', 'cfg(SK_ENABLE_AVX512_OPTS)', 'cfg(SK_DISABLE_AVX512_OPTS)', 'cfg(SK_USE_INACCURATE_DIV255_IN_BLEND)', 'cfg(SK_USE_RSQRT_IN_RP_NORMALIZE)', 'cfg(sk_build_for_android_framework)', 'cfg(skia_memory_sanitizer)', 'cfg(SK_MSAN)', 'cfg(sk_build_for_google3)', 'cfg(sk_disable_effect_deserialization)', 'cfg(SK_SUPPORT_LEGACY_EMBOSSMASKFILTER)', 'cfg(BUILD_DIVIDE_TABLE)', 'cfg(SK_PMCOLOR_IS_RGBA)', 'cfg(SK_PMCOLOR_IS_BGRA)', 'cfg(SK_ENABLE_LEGACY_SHADERCONTEXT)', 'cfg(SK_FORCE_8_BYTE_ALIGNMENT)', 'cfg(SK_DUMP_STATS)', 'cfg(GPU_TEST_UTILS)', 'cfg(GR_CACHE_STATS, values("0", "1"))', 'cfg(GR_GPU_STATS, values("0", "1"))'] }

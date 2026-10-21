@@ -87,7 +87,7 @@ fn probe_text_baseline() {
         800,
         2.0,
         &mut pixels,
-        renderer::PixelFormat::Rgba8888,
+        renderer_skia::PixelFormat::Rgba8888,
         1280,
     )
     .unwrap();

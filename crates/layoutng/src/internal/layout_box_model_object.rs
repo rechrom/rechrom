@@ -12,7 +12,7 @@ use layoutng_style::style::outline_type::OutlineType;
 use super::caret_rect::CaretShape;
 use super::layout_box::LayoutBox;
 use super::layout_box_model_tree::LayoutBoxModelObjectBaseForNode;
-use super::layout_node_metadata::{ContainerNode, Element};
+use super::layout_node_metadata::{ContainerNode, Element, Node};
 use super::layout_object::LayoutObject;
 use super::layout_scrollable_area::PaintLayerScrollableArea;
 use super::outline_rect_collector::OutlineRectCollector;
@@ -34,10 +34,6 @@ unsafe extern "Rust" {
         this: &LayoutBoxModelObject,
         rect: &PhysicalRect,
     ) -> PhysicalRect;
-    fn LayoutBoxModelObjectBackgroundTransfersToView(
-        this: &LayoutBoxModelObject,
-        document_style: *const ComputedStyle,
-    ) -> bool;
     fn LayoutBoxModelObjectAddOutlineRectsForNormalChildren(
         this: &LayoutBoxModelObject,
         collector: &mut dyn OutlineRectCollector,
@@ -66,6 +62,95 @@ unsafe extern "Rust" {
         additional_offset: &PhysicalOffset,
         outline_type: OutlineType,
     );
+}
+
+// Source: third_party/blink/renderer/core/layout/layout_box_model_object.cc:1123-1151.
+//
+// Keep this source method in the LayoutNG owner.  The immutable paint boundary
+// also exports the selected canvas background, but callers inside the resident
+// LayoutObject tree still need Chromium's original predicate (for example the
+// fixed-background object set assertion).
+#[unsafe(no_mangle)]
+fn LayoutBoxModelObjectBackgroundTransfersToView(
+    this: &LayoutBoxModelObject,
+    document_style: *const ComputedStyle,
+) -> bool {
+    if this.IsDocumentElement() {
+        return true;
+    }
+    if !this.IsBody() {
+        return false;
+    }
+
+    // NativeNodeMetadataRelations validates a single document element and a
+    // single primary body role. Walk the retained metadata tree rather than
+    // reaching back into DOM ownership.
+    unsafe fn FindDocumentElement(node: *mut Node) -> *mut Node {
+        if node.is_null() {
+            return std::ptr::null_mut();
+        }
+        let node_ref = unsafe { &*node };
+        if matches!(
+            node_ref.InputDocumentRole(),
+            super::layout_input::DocumentRole::kDocumentElement
+                | super::layout_input::DocumentRole::kDocumentElementAndBody
+        ) {
+            return node;
+        }
+        if !node_ref.IsContainerNode() {
+            return std::ptr::null_mut();
+        }
+        let mut child = unsafe { &*node.cast::<ContainerNode>() }.firstChild();
+        while !child.is_null() {
+            let found = unsafe { FindDocumentElement(child) };
+            if !found.is_null() {
+                return found;
+            }
+            child = unsafe { &*child }.nextSibling();
+        }
+        std::ptr::null_mut()
+    }
+
+    let mut root = this.GetNode();
+    if root.is_null() {
+        return false;
+    }
+    loop {
+        let parent = unsafe { &*root }.parentNode();
+        if parent.is_null() {
+            break;
+        }
+        root = unsafe { &mut (*parent).node };
+    }
+    let document_element = unsafe { FindDocumentElement(root) };
+    if document_element.is_null() || !unsafe { &*document_element }.IsHTMLElement() {
+        return false;
+    }
+
+    let document_object = unsafe { &*document_element }.GetLayoutObject();
+    if document_object.is_null() {
+        return false;
+    }
+    let document_style = if document_style.is_null() {
+        unsafe { &*document_element }.GetComputedStyle()
+    } else {
+        document_style
+    };
+    if document_style.is_null() || unsafe { &*document_style }.HasBackground() {
+        return false;
+    }
+    let document_object = unsafe { &*document_object };
+    let document_style = unsafe { &*document_style };
+    let document_has_containment = document_object
+        .ShouldApplyPaintContainmentWithStyle(document_style)
+        || document_object.ShouldApplyLayoutContainmentWithStyle(document_style)
+        || document_style.ContainsStyle()
+        || ((document_style.ContainsBlockSize() || document_style.ContainsInlineSize())
+            && document_object.IsEligibleForSizeContainment());
+    if document_has_containment {
+        return false;
+    }
+    !this.ShouldApplyAnyContainment()
 }
 
 // cpp: layoutng/internal/layout_box_model_object.h:44-51

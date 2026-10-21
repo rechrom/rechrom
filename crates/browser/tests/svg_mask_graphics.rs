@@ -104,7 +104,7 @@ fn stroked_svg_is_visible_as_mask_and_image() {
             60,
             1.0,
             &mut pixels,
-            renderer::PixelFormat::Rgba8888,
+            renderer_skia::PixelFormat::Rgba8888,
             160,
         )
         .unwrap();
@@ -153,7 +153,7 @@ fn connected_shadow_pseudo_mask_fetches_and_paints_external_graphic() {
             60,
             1.0,
             &mut pixels,
-            renderer::PixelFormat::Rgba8888,
+            renderer_skia::PixelFormat::Rgba8888,
             160,
         )
         .unwrap();
@@ -181,7 +181,7 @@ fn artifact_pixels(
         60,
         1.0,
         &mut pixels,
-        renderer::PixelFormat::Rgba8888,
+        renderer_skia::PixelFormat::Rgba8888,
         160,
     )
     .unwrap();

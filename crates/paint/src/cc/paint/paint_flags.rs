@@ -1,12 +1,10 @@
 //! Canonical cc PaintFlags state and decisions. External native objects are
 //! reference-counted values, never services pointing back at a layer or tree.
 #![allow(non_snake_case, non_camel_case_types)]
-use skia::{
-    include::core::{
-        SkColor::SkColor4f,
-        SkSamplingOptions::{SkCubicResampler, SkFilterMode, SkMipmapMode, SkSamplingOptions},
-    },
-    BlendMode,
+use super::{
+    blend_mode::BlendMode,
+    color::Color4f,
+    sampling_options::{CubicResampler, FilterMode, MipmapMode, SamplingOptions},
 };
 use std::{
     ops::{Deref, DerefMut},
@@ -90,7 +88,7 @@ impl DynamicRangeLimitMixture {
 // actual u32, including native truncation and equality of the complete word.
 #[derive(Clone, Copy, Debug)]
 pub struct CorePaintFlags {
-    color_: SkColor4f,
+    color_: Color4f,
     width_: f32,
     miter_limit_: f32,
     bitfields_uint_: u32,
@@ -99,7 +97,7 @@ impl Default for CorePaintFlags {
     // Source: cc/paint/paint_flags.cc:35-50; paint_flags.h:193-195.
     fn default() -> Self {
         let mut value = Self {
-            color_: SkColor4f::new(0., 0., 0., 1.),
+            color_: Color4f::new(0., 0., 0., 1.),
             width_: 0.,
             miter_limit_: 4.,
             bitfields_uint_: 0,
@@ -143,26 +141,26 @@ impl CorePaintFlags {
     pub fn getColor(&self) -> u32 {
         self.color_.toSkColor()
     }
-    pub fn getColor4f(&self) -> &SkColor4f {
+    pub fn getColor4f(&self) -> &Color4f {
         &self.color_
     }
-    pub fn setColor(&mut self, value: SkColor4f) {
+    pub fn setColor(&mut self, value: Color4f) {
         self.color_ = value
     }
     pub fn setPackedColor(&mut self, value: u32) {
-        self.color_ = SkColor4f::FromColor(value)
+        self.color_ = Color4f::FromColor(value)
     }
     pub fn getAlphaf(&self) -> f32 {
-        self.color_.fA
+        self.color_.alpha
     }
     pub fn isFullyTransparent(&self) -> bool {
-        self.color_.fA == 0.
+        self.color_.alpha == 0.
     }
     pub fn isOpaque(&self) -> bool {
-        self.color_.fA >= 1.
+        self.color_.alpha >= 1.
     }
     pub fn setAlphaf(&mut self, value: f32) {
-        self.color_.fA = value
+        self.color_.alpha = value
     }
     pub fn setBlendMode(&mut self, value: BlendMode) {
         self.set_bits(8, 5, value as u32)
@@ -304,7 +302,7 @@ pub trait NativePaintValue<B: PaintFlagsTypes + ?Sized> {
     fn setShader(&mut self, value: &B::Shader, quality: FilterQuality);
     fn setColorFilter(&mut self, value: &B::ColorFilter);
     fn setImageFilter(&mut self, value: &B::ImageFilter);
-    fn setColor(&mut self, value: SkColor4f);
+    fn setColor(&mut self, value: Color4f);
     fn setStrokeWidth(&mut self, value: f32);
     fn setStrokeMiter(&mut self, value: f32);
     fn setBlendMode(&mut self, value: BlendMode);
@@ -491,31 +489,31 @@ impl<B: PaintFlagsTypes> PaintFlags<B> {
         true
     }
     // Source: cc/paint/paint_flags.cc:174-207.
-    pub fn FilterQualityToSkSamplingOptions(quality: FilterQuality) -> SkSamplingOptions {
+    pub fn FilterQualityToSkSamplingOptions(quality: FilterQuality) -> SamplingOptions {
         Self::FilterQualityToSkSamplingOptionsForScaling(quality, ScalingOperation::kDefault)
     }
     pub fn FilterQualityToSkSamplingOptionsForScaling(
         quality: FilterQuality,
         scaling: ScalingOperation,
-    ) -> SkSamplingOptions {
+    ) -> SamplingOptions {
         use FilterQuality::*;
         use ScalingOperation::*;
         match quality {
             kHigh => match scaling {
-                kDefault => SkSamplingOptions::Cubic(SkCubicResampler::CatmullRom()),
-                kUnknown => SkSamplingOptions::Filter(SkFilterMode::kLinear, SkMipmapMode::kLinear),
-                kUpscale => SkSamplingOptions::Cubic(SkCubicResampler::Mitchell()),
+                kDefault => SamplingOptions::Cubic(CubicResampler::CatmullRom()),
+                kUnknown => SamplingOptions::Filter(FilterMode::kLinear, MipmapMode::kLinear),
+                kUpscale => SamplingOptions::Cubic(CubicResampler::Mitchell()),
             },
             kMedium => match scaling {
                 kDefault => {
-                    SkSamplingOptions::Filter(SkFilterMode::kLinear, SkMipmapMode::kNearest)
+                    SamplingOptions::Filter(FilterMode::kLinear, MipmapMode::kNearest)
                 }
                 kUnknown | kUpscale => {
-                    SkSamplingOptions::Filter(SkFilterMode::kLinear, SkMipmapMode::kLinear)
+                    SamplingOptions::Filter(FilterMode::kLinear, MipmapMode::kLinear)
                 }
             },
-            kLow => SkSamplingOptions::Filter(SkFilterMode::kLinear, SkMipmapMode::kNone),
-            kNone => SkSamplingOptions::Filter(SkFilterMode::kNearest, SkMipmapMode::kNone),
+            kLow => SamplingOptions::Filter(FilterMode::kLinear, MipmapMode::kNone),
+            kNone => SamplingOptions::Filter(FilterMode::kNearest, MipmapMode::kNone),
         }
     }
     // Source: cc/paint/paint_flags.cc:213-236.

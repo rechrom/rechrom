@@ -18,9 +18,8 @@ use crate::{
         time::{TimeDelta, TimeTicks},
     },
     runtime::{
-        paint::CpuTileRasterBufferValue,
-        resources::{CpuReturnedResource, CpuSharedImage, CpuSyncToken},
-        skia::SkRegion,
+        paint::TileRasterBufferValue,
+        resources::{RasterReturnedResource, RasterSharedImage},
     },
     NativeCompositorFrameSubmission,
 };
@@ -37,12 +36,10 @@ pub trait CompositorExecutor: Send + Sync {
     fn RunsTasksInCurrentSequence(&self) -> bool;
 }
 
-/// Actual pixel allocation and replay primitives, implemented by the raster
+/// Resource allocation and replay primitives, implemented by the raster
 /// package. Selection, dependency graphs and completion accounting stay inside
 /// the compositor. Frame resources directly retain this backend's read lease.
-pub trait CompositorPixelProvider<R: crate::runtime::types::CpuSkiaBackend = SkRegion>:
-    crate::runtime::native_ui::NativeUiRasterServices + Send + Sync
-{
+pub trait CompositorRasterProvider: Send + Sync {
     fn CreateSharedImage(
         &self,
         // Preferred allocation id supplied by the tile resource owner. The
@@ -51,7 +48,7 @@ pub trait CompositorPixelProvider<R: crate::runtime::types::CpuSkiaBackend = SkR
         resource: ResourceId,
         size: Size,
         format: &SharedImageFormat,
-    ) -> io::Result<CpuSharedImage>;
+    ) -> io::Result<RasterSharedImage>;
     fn AcquireBufferForRaster(
         &self,
         resource: ResourceId,
@@ -59,10 +56,8 @@ pub trait CompositorPixelProvider<R: crate::runtime::types::CpuSkiaBackend = SkR
         format: &SharedImageFormat,
         resource_content_id: u64,
         previous_content_id: u64,
-    ) -> io::Result<Box<CpuTileRasterBufferValue<R>>>;
-    fn IsResourceReadyToDraw(&self, resource: ResourceId) -> bool;
+    ) -> io::Result<Box<TileRasterBufferValue>>;
     fn CanPartialRasterIntoProvidedResource(&self) -> bool;
-    fn CompletionToken(&self, resource: ResourceId) -> io::Result<CpuSyncToken>;
     fn NotifyWorkSubmitted(&self);
     fn Shutdown(&self) -> io::Result<()>;
 }
@@ -70,7 +65,10 @@ pub trait CompositorPixelProvider<R: crate::runtime::types::CpuSkiaBackend = SkR
 pub struct CompositorExecutors {
     pub compositor: Arc<dyn CompositorExecutor>,
     pub raster: Arc<dyn CompositorExecutor>,
-    pub pixels: Arc<dyn CompositorPixelProvider>,
+    pub raster_provider: Arc<dyn CompositorRasterProvider>,
+    /// UI bitmap/surface drawing is an independent capability even when the
+    /// embedding supplies the same RasterEngine for both roles.
+    pub ui_raster: Arc<dyn crate::runtime::native_ui::NativeUiRasterServices>,
 }
 
 #[derive(Clone, Debug)]
@@ -349,7 +347,7 @@ impl CompositorEngine {
     }
     pub fn ReclaimResources(
         &mut self,
-        resources: Vec<CpuReturnedResource>,
+        resources: Vec<RasterReturnedResource>,
     ) -> Result<CompositorOutput, CompositorError> {
         self.assembly.ReclaimResources(resources)
     }

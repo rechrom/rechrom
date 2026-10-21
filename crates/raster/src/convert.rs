@@ -1,5 +1,5 @@
 //! Convert paint inputs into independent Skia raster commands.
-use skia::compat::commands as target;
+use raster_commands::commands as target;
 pub trait ToSkia {
     type Output;
     fn to_skia(&self) -> Self::Output;
@@ -242,7 +242,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintFilterOperation {
             reflection_offset: self.reflection_offset,
             reflection_has_mask: self.reflection_has_mask,
             reflection_mask: self.reflection_has_mask.then(|| {
-                skia::cpu::layer_filters::RenderReflectionMask {
+                raster_commands::filter_graph::RenderReflectionMask {
                     // A specified but pending/empty mask is transparent. It
                     // must not degrade into an unmasked reflected branch.
                     layers: crate::reflection_mask::CompileReflectionMaskLayers(
@@ -921,10 +921,7 @@ mod font_identity_tests {
             ..Default::default()
         };
         let render = |artifact: &PaintArtifact| {
-            let resources = resources(artifact);
-            let mut canvas = skia::cpu::canvas::Canvas::new(&resources, 180, 48);
-            canvas.replay_item(&artifact.items[0].to_skia(), &resources);
-            canvas.finish()
+            crate::RasterizePaintArtifact(artifact, 180, 48)
         };
         let mislabeled = render(&artifact);
         assert!(mislabeled
@@ -949,7 +946,7 @@ mod font_identity_tests {
     #[test]
     fn shaped_collection_face_rasters_like_the_same_standalone_face() {
         let reference = include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
-        let other = include_bytes!("../../skia/src/ports/spider_symbol.ttf");
+        let other = include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
         let mut collection = Vec::from(b"ttcf".as_slice());
         collection.extend_from_slice(&0x00010000u32.to_be_bytes());
         collection.extend_from_slice(&2u32.to_be_bytes());

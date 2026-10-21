@@ -1,7 +1,7 @@
 //! Canonical cc ColorFilter owner/factories/codec. The native filter value is
 //! constructed by real Skia primitives; no compositor/host capability enters.
 #![allow(non_snake_case, non_camel_case_types)]
-use skia::{include::core::SkColor::SkColor4f, BlendMode};
+use super::{blend_mode::BlendMode, color::Color4f};
 use std::sync::Arc;
 // Source: cc/paint/color_filter.h:51-64.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,7 +16,7 @@ pub enum Type {
     kHighContrast,
 }
 pub trait NativeColorFilterValue {
-    fn filterColor4f(&self, color: SkColor4f) -> SkColor4f;
+    fn filterColor4f(&self, color: Color4f) -> Color4f;
     fn asAColorMatrix(&self, matrix: &mut [f32; 20]) -> bool;
 }
 pub trait NativeColorTableValue {
@@ -30,7 +30,7 @@ pub trait ColorFilterBackend {
     type ColorTable: NativeColorTableValue;
     type HighContrastConfig: Copy;
     fn Matrix(matrix: &[f32; 20]) -> Option<Self::Filter>;
-    fn Blend(color: SkColor4f, mode: BlendMode) -> Option<Self::Filter>;
+    fn Blend(color: Color4f, mode: BlendMode) -> Option<Self::Filter>;
     fn SRGBToLinearGamma() -> Option<Self::Filter>;
     fn LinearToSRGBGamma() -> Option<Self::Filter>;
     fn Luma() -> Option<Self::Filter>;
@@ -50,7 +50,7 @@ pub trait ColorFilterWriter<B: ColorFilterBackend> {
     fn SerializedSizeOfBytes(count: usize) -> usize;
     fn SerializedSizeConfig() -> usize;
     fn WriteScalar(&mut self, value: f32);
-    fn WriteColor(&mut self, value: SkColor4f);
+    fn WriteColor(&mut self, value: Color4f);
     fn WriteBlendMode(&mut self, value: BlendMode);
     fn WriteData(&mut self, value: &[u8]);
     fn WriteConfig(&mut self, value: B::HighContrastConfig);
@@ -58,7 +58,7 @@ pub trait ColorFilterWriter<B: ColorFilterBackend> {
 pub trait ColorFilterReader<B: ColorFilterBackend> {
     fn valid(&self) -> bool;
     fn ReadScalar(&mut self) -> f32;
-    fn ReadColor(&mut self) -> SkColor4f;
+    fn ReadColor(&mut self) -> Color4f;
     fn ReadBlendMode(&mut self) -> BlendMode;
     fn ReadData(&mut self, value: &mut [u8]);
     fn ReadConfig(&mut self) -> B::HighContrastConfig;
@@ -68,7 +68,7 @@ pub trait ColorFilterReader<B: ColorFilterBackend> {
 enum Data<B: ColorFilterBackend> {
     Matrix,
     Blend {
-        color: SkColor4f,
+        color: Color4f,
         blend_mode: BlendMode,
     },
     SRGBToLinear,
@@ -106,7 +106,7 @@ impl<B: ColorFilterBackend> ColorFilter<B> {
         })
     }
     // Source: cc/paint/color_filter.cc:52-59,148-152.
-    pub fn MakeBlend(color: SkColor4f, blend_mode: BlendMode) -> Arc<Self> {
+    pub fn MakeBlend(color: Color4f, blend_mode: BlendMode) -> Arc<Self> {
         Arc::new(Self {
             data: Data::Blend { color, blend_mode },
             sk_color_filter_: B::Blend(color, blend_mode),
@@ -151,7 +151,7 @@ impl<B: ColorFilterBackend> ColorFilter<B> {
         })
     }
     // Source: cc/paint/color_filter.cc:183-187.
-    pub fn FilterColor(&self, color: SkColor4f) -> SkColor4f {
+    pub fn FilterColor(&self, color: Color4f) -> Color4f {
         self.sk_color_filter_
             .as_ref()
             .map_or(color, |f| f.filterColor4f(color))

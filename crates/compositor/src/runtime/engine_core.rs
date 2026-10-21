@@ -10,7 +10,7 @@ use super::{
     native_frame_sink::NativeFrameSinkEndpoint,
     native_pac_scroll::{NativePacScrollCallbacks, NativePacScrollEffects},
     paint_services::CpuPaintServices,
-    resources::CpuReturnedResource,
+    resources::RasterReturnedResource,
     skia::SkRegion,
     types::{CpuCompositorTypes, LocalSurfaceId},
 };
@@ -62,6 +62,12 @@ pub(crate) struct NativeEngineCore {
     scroll_effects: NativePacScrollEffects,
     pub(crate) frame_sink: Arc<Mutex<NativeFrameSinkEndpoint>>,
     ready_commit: Option<CommitState<Root>>,
+    // `ready_commit` is built on the Page sequence before the Scheduler may
+    // open the BeginMainFrame that owns it. Keep the source distinction
+    // between a prepared commit and ProxyImpl's already-notified
+    // `data_for_commit_`; otherwise a re-entrant SEND_BEGIN_MAIN_FRAME can
+    // notify the same commit twice.
+    ready_commit_notified: bool,
     pub(crate) awaiting_main: bool,
     pub(crate) effects: Vec<CompositorMainThreadEffect>,
     pub(crate) failure: Option<CompositorError>,
@@ -145,6 +151,7 @@ impl NativeEngineCore {
             scroll_effects,
             frame_sink,
             ready_commit: None,
+            ready_commit_notified: false,
             awaiting_main: false,
             effects: Vec::new(),
             failure: None,
@@ -231,6 +238,7 @@ impl NativeEngineCore {
             .checked_add(1)
             .expect("native property-tree identity exhausted");
         self.ready_commit = Some(self.main.ActivateCommitState(property_owner));
+        self.ready_commit_notified = false;
         if let (Some(started), Some(pac), Some(layers), Some(will_commit)) =
             (profile_started, pac_done, layers_done, will_commit_done)
         {
@@ -259,10 +267,12 @@ impl NativeEngineCore {
     /// Called only for Scheduler's COMMIT action. The live main synchronization
     /// context borrows the very same resident ThreadUnsafeCommitState.
     pub(crate) fn Commit(&mut self) {
+        assert!(self.ready_commit_notified);
         let mut state = self
             .ready_commit
             .take()
             .expect("source ready-to-commit state");
+        self.ready_commit_notified = false;
         let host = self.host.as_mut().unwrap();
         let mut context = ClientHostContext {
             services: &mut self.services,
@@ -282,6 +292,9 @@ impl NativeEngineCore {
     }
     pub(crate) fn HasReadyCommit(&self) -> bool {
         self.ready_commit.is_some()
+    }
+    pub(crate) fn ReadyCommitWasNotified(&self) -> bool {
+        self.ready_commit_notified
     }
     pub(crate) fn PostCommit(&mut self) {
         self.host
@@ -372,7 +385,7 @@ impl NativeEngineCore {
         }
         result
     }
-    pub(crate) fn ReclaimResources(&mut self, resources: Vec<CpuReturnedResource>) {
+    pub(crate) fn ReclaimResources(&mut self, resources: Vec<RasterReturnedResource>) {
         self.host.as_mut().unwrap().BaseMutable().ReclaimResources(
             resources,
             &mut HostImplContext {
@@ -436,19 +449,17 @@ impl crate::cc::scheduler::scheduler::SchedulerClient for NativeEngineCore {
         // Scheduler opens the next BeginMainFrame. Chromium keeps both
         // DataForCommit owners: the ready commit consumes the primary slot,
         // while deltas pulled below belong to the pipelined next BMF.
-        let had_ready_commit = self.HasReadyCommit();
+        let had_unnotified_commit = self.HasReadyCommit() && !self.ReadyCommitWasNotified();
         self.awaiting_main = true;
         self.lifecycle.DidBeginMainFrame();
         scheduler.NotifyBeginMainFrameStarted(self.services.core.MonotonicTimeNow());
         self.ApplyCompositorDeltas();
-        if had_ready_commit {
-            self.NotifyReadyToCommit(scheduler, false, false);
+        if had_unnotified_commit {
+            self.NotifyReadyToCommit(scheduler, false, true);
+        } else {
+            self.effects
+                .push(CompositorMainThreadEffect::RequestMainFrame);
         }
-        // The BMF just opened above always needs its own Page lifecycle. A
-        // pre-existing ready commit cannot satisfy the deltas just pulled into
-        // SyncedProperty's next slot.
-        self.effects
-            .push(CompositorMainThreadEffect::RequestMainFrame);
     }
     fn ScheduledActionDrawIfPossible(&mut self, scheduler: &mut Scheduler) -> DrawResult {
         {
@@ -602,10 +613,11 @@ impl NativeEngineCore {
         scroll_and_viewport_changes_synced: bool,
         completes_awaiting_main: bool,
     ) {
-        assert!(self.awaiting_main && self.HasReadyCommit());
+        assert!(self.awaiting_main && self.HasReadyCommit() && !self.ready_commit_notified);
         if completes_awaiting_main {
             self.awaiting_main = false;
         }
+        self.ready_commit_notified = true;
         let query = self.scheduler_queries.Enter(scheduler.IsReadyToActivate());
         self.host.as_mut().unwrap().ReadyToCommit(
             scroll_and_viewport_changes_synced,

@@ -2,7 +2,7 @@
 //! operations are provided by the external raster backend, never reimplemented
 //! in the compositor. Each wrapper retains exactly the supplied native owner.
 use super::{
-    resources::{CpuColorSpace, CpuSharedImage, CpuSyncToken, CpuTransferableResource},
+    resources::{RasterColorSpace, RasterSharedImage, RasterSyncToken, RasterTransferableResource},
     types::{CpuCompositorTypes, CpuSkiaBackend},
 };
 use crate::adapter::{
@@ -13,7 +13,7 @@ use crate::adapter::{
         HostUISourceBitmap, HostUISurface,
     },
 };
-use std::sync::Arc;
+use std::{any::Any, sync::Arc};
 
 /// A default native WritableSharedMemoryMapping is invalid. A valid mapping is
 /// the actual external allocation and stays exclusively owned until dropped.
@@ -55,8 +55,13 @@ impl HostUIResourceImageInfo for UIImageInfo {
         self.min_row_bytes
     }
 }
-/// The concrete CPU image value is the actual external Skia allocation.
-pub type UIImage = Arc<skia::raster::Pixmap>;
+/// Opaque image owner produced and consumed by the injected raster service.
+/// Compositor retains identity and lifetime only; concrete Skia image types stay
+/// inside the raster package.
+pub trait NativeUiImage: Any {
+    fn as_any(&self) -> &dyn Any;
+}
+pub type UIImage = Arc<dyn NativeUiImage>;
 pub struct SourceBitmap<'a>(pub Box<dyn HostUISourceBitmap<'a, UIImageInfo, UIImage> + 'a>);
 impl<'a> HostUISourceBitmap<'a, UIImageInfo, UIImage> for SourceBitmap<'a> {
     fn setInfo(&mut self, info: UIImageInfo, row_bytes: usize) {
@@ -99,11 +104,11 @@ impl<'a> HostUISurface<UIImageInfo, UIImage> for UISurface<'a> {
         self.0.peekPixels()
     }
 }
-/// Native UI plane projection of the same exclusively mapped CPU backing.
+/// Native UI plane projection of the same exclusively mapped raster backing.
 /// This adapter owns only the external write lease; dropping it publishes the
 /// pixels through that lease's allocation owner, without a compositor cache.
-struct CpuSharedWriteMapping(Box<dyn super::resources::CpuWriteMapping>);
-impl HostUISharedMapping for CpuSharedWriteMapping {
+struct RasterSharedWriteMapping(Box<dyn super::resources::RasterWriteMapping>);
+impl HostUISharedMapping for RasterSharedWriteMapping {
     fn GetMemoryForPlane(&mut self, plane: usize) -> &mut [u8] {
         assert_eq!(
             plane, 0,
@@ -114,8 +119,8 @@ impl HostUISharedMapping for CpuSharedWriteMapping {
 }
 pub struct SharedMapping(pub Box<dyn HostUISharedMapping>);
 impl SharedMapping {
-    pub fn FromCpuWriteMapping(mapping: Box<dyn super::resources::CpuWriteMapping>) -> Self {
-        Self(Box::new(CpuSharedWriteMapping(mapping)))
+    pub fn FromRasterWriteMapping(mapping: Box<dyn super::resources::RasterWriteMapping>) -> Self {
+        Self(Box::new(RasterSharedWriteMapping(mapping)))
     }
 }
 impl HostUISharedMapping for SharedMapping {
@@ -125,17 +130,17 @@ impl HostUISharedMapping for SharedMapping {
 }
 impl<R: CpuSkiaBackend> HostImplResourceTypes for CpuCompositorTypes<R> {
     type SharedMemoryMapping = SharedMemoryMapping;
-    type SharedImage = CpuSharedImage;
+    type SharedImage = RasterSharedImage;
     type ResourceId = crate::adapter::layer_tree_impl::ResourceId;
 }
 impl<R: CpuSkiaBackend> HostUIResourceTypes for CpuCompositorTypes<R> {
     type UIBitmap = UIBitmap;
-    type UISyncToken = CpuSyncToken;
-    type UIColorSpace = CpuColorSpace;
+    type UISyncToken = RasterSyncToken;
+    type UIColorSpace = RasterColorSpace;
     type UIImageInfo = UIImageInfo;
     type UIImage = UIImage;
     type UISourceBitmap<'a> = SourceBitmap<'a>;
     type UIScopedMapping = SharedMapping;
     type UISurface<'a> = UISurface<'a>;
-    type UITransferableResource = CpuTransferableResource;
+    type UITransferableResource = RasterTransferableResource;
 }

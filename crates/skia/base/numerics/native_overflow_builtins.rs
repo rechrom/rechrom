@@ -1,0 +1,8029 @@
+//! Exact typed compiler builtin bindings. All mixed-width/mixed-sign triples
+//! call the actual native compiler builtin, which writes its destination even
+//! on overflow. No i128, widened arithmetic, Rust overflow flag substitution or
+//! guessed mangled C++ name is involved.
+pub unsafe trait BuiltinTriple<U, V>: Sized {
+    unsafe fn add(x: Self, y: U, result: *mut V) -> bool;
+    unsafe fn sub(x: Self, y: U, result: *mut V) -> bool;
+    unsafe fn mul(x: Self, y: U, result: *mut V) -> bool;
+}
+macro_rules! triple {
+    ($t:ty,$u:ty,$v:ty,$add:ident,$sub:ident,$mul:ident) => {
+        unsafe extern "C" {
+            fn $add(x: $t, y: $u, result: *mut $v) -> bool;
+            fn $sub(x: $t, y: $u, result: *mut $v) -> bool;
+            fn $mul(x: $t, y: $u, result: *mut $v) -> bool;
+        }
+        unsafe impl BuiltinTriple<$u, $v> for $t {
+            unsafe fn add(x: Self, y: $u, result: *mut $v) -> bool {
+                unsafe { $add(x, y, result) }
+            }
+            unsafe fn sub(x: Self, y: $u, result: *mut $v) -> bool {
+                unsafe { $sub(x, y, result) }
+            }
+            unsafe fn mul(x: Self, y: $u, result: *mut $v) -> bool {
+                unsafe { $mul(x, y, result) }
+            }
+        }
+    };
+}
+triple!(
+    i8,
+    i8,
+    i8,
+    rechrom_builtin_add_i8_i8_i8,
+    rechrom_builtin_sub_i8_i8_i8,
+    rechrom_builtin_mul_i8_i8_i8
+);
+triple!(
+    i8,
+    i8,
+    u8,
+    rechrom_builtin_add_i8_i8_u8,
+    rechrom_builtin_sub_i8_i8_u8,
+    rechrom_builtin_mul_i8_i8_u8
+);
+triple!(
+    i8,
+    i8,
+    i16,
+    rechrom_builtin_add_i8_i8_i16,
+    rechrom_builtin_sub_i8_i8_i16,
+    rechrom_builtin_mul_i8_i8_i16
+);
+triple!(
+    i8,
+    i8,
+    u16,
+    rechrom_builtin_add_i8_i8_u16,
+    rechrom_builtin_sub_i8_i8_u16,
+    rechrom_builtin_mul_i8_i8_u16
+);
+triple!(
+    i8,
+    i8,
+    i32,
+    rechrom_builtin_add_i8_i8_i32,
+    rechrom_builtin_sub_i8_i8_i32,
+    rechrom_builtin_mul_i8_i8_i32
+);
+triple!(
+    i8,
+    i8,
+    u32,
+    rechrom_builtin_add_i8_i8_u32,
+    rechrom_builtin_sub_i8_i8_u32,
+    rechrom_builtin_mul_i8_i8_u32
+);
+triple!(
+    i8,
+    i8,
+    i64,
+    rechrom_builtin_add_i8_i8_i64,
+    rechrom_builtin_sub_i8_i8_i64,
+    rechrom_builtin_mul_i8_i8_i64
+);
+triple!(
+    i8,
+    i8,
+    u64,
+    rechrom_builtin_add_i8_i8_u64,
+    rechrom_builtin_sub_i8_i8_u64,
+    rechrom_builtin_mul_i8_i8_u64
+);
+triple!(
+    i8,
+    i8,
+    isize,
+    rechrom_builtin_add_i8_i8_isize,
+    rechrom_builtin_sub_i8_i8_isize,
+    rechrom_builtin_mul_i8_i8_isize
+);
+triple!(
+    i8,
+    i8,
+    usize,
+    rechrom_builtin_add_i8_i8_usize,
+    rechrom_builtin_sub_i8_i8_usize,
+    rechrom_builtin_mul_i8_i8_usize
+);
+triple!(
+    i8,
+    u8,
+    i8,
+    rechrom_builtin_add_i8_u8_i8,
+    rechrom_builtin_sub_i8_u8_i8,
+    rechrom_builtin_mul_i8_u8_i8
+);
+triple!(
+    i8,
+    u8,
+    u8,
+    rechrom_builtin_add_i8_u8_u8,
+    rechrom_builtin_sub_i8_u8_u8,
+    rechrom_builtin_mul_i8_u8_u8
+);
+triple!(
+    i8,
+    u8,
+    i16,
+    rechrom_builtin_add_i8_u8_i16,
+    rechrom_builtin_sub_i8_u8_i16,
+    rechrom_builtin_mul_i8_u8_i16
+);
+triple!(
+    i8,
+    u8,
+    u16,
+    rechrom_builtin_add_i8_u8_u16,
+    rechrom_builtin_sub_i8_u8_u16,
+    rechrom_builtin_mul_i8_u8_u16
+);
+triple!(
+    i8,
+    u8,
+    i32,
+    rechrom_builtin_add_i8_u8_i32,
+    rechrom_builtin_sub_i8_u8_i32,
+    rechrom_builtin_mul_i8_u8_i32
+);
+triple!(
+    i8,
+    u8,
+    u32,
+    rechrom_builtin_add_i8_u8_u32,
+    rechrom_builtin_sub_i8_u8_u32,
+    rechrom_builtin_mul_i8_u8_u32
+);
+triple!(
+    i8,
+    u8,
+    i64,
+    rechrom_builtin_add_i8_u8_i64,
+    rechrom_builtin_sub_i8_u8_i64,
+    rechrom_builtin_mul_i8_u8_i64
+);
+triple!(
+    i8,
+    u8,
+    u64,
+    rechrom_builtin_add_i8_u8_u64,
+    rechrom_builtin_sub_i8_u8_u64,
+    rechrom_builtin_mul_i8_u8_u64
+);
+triple!(
+    i8,
+    u8,
+    isize,
+    rechrom_builtin_add_i8_u8_isize,
+    rechrom_builtin_sub_i8_u8_isize,
+    rechrom_builtin_mul_i8_u8_isize
+);
+triple!(
+    i8,
+    u8,
+    usize,
+    rechrom_builtin_add_i8_u8_usize,
+    rechrom_builtin_sub_i8_u8_usize,
+    rechrom_builtin_mul_i8_u8_usize
+);
+triple!(
+    i8,
+    i16,
+    i8,
+    rechrom_builtin_add_i8_i16_i8,
+    rechrom_builtin_sub_i8_i16_i8,
+    rechrom_builtin_mul_i8_i16_i8
+);
+triple!(
+    i8,
+    i16,
+    u8,
+    rechrom_builtin_add_i8_i16_u8,
+    rechrom_builtin_sub_i8_i16_u8,
+    rechrom_builtin_mul_i8_i16_u8
+);
+triple!(
+    i8,
+    i16,
+    i16,
+    rechrom_builtin_add_i8_i16_i16,
+    rechrom_builtin_sub_i8_i16_i16,
+    rechrom_builtin_mul_i8_i16_i16
+);
+triple!(
+    i8,
+    i16,
+    u16,
+    rechrom_builtin_add_i8_i16_u16,
+    rechrom_builtin_sub_i8_i16_u16,
+    rechrom_builtin_mul_i8_i16_u16
+);
+triple!(
+    i8,
+    i16,
+    i32,
+    rechrom_builtin_add_i8_i16_i32,
+    rechrom_builtin_sub_i8_i16_i32,
+    rechrom_builtin_mul_i8_i16_i32
+);
+triple!(
+    i8,
+    i16,
+    u32,
+    rechrom_builtin_add_i8_i16_u32,
+    rechrom_builtin_sub_i8_i16_u32,
+    rechrom_builtin_mul_i8_i16_u32
+);
+triple!(
+    i8,
+    i16,
+    i64,
+    rechrom_builtin_add_i8_i16_i64,
+    rechrom_builtin_sub_i8_i16_i64,
+    rechrom_builtin_mul_i8_i16_i64
+);
+triple!(
+    i8,
+    i16,
+    u64,
+    rechrom_builtin_add_i8_i16_u64,
+    rechrom_builtin_sub_i8_i16_u64,
+    rechrom_builtin_mul_i8_i16_u64
+);
+triple!(
+    i8,
+    i16,
+    isize,
+    rechrom_builtin_add_i8_i16_isize,
+    rechrom_builtin_sub_i8_i16_isize,
+    rechrom_builtin_mul_i8_i16_isize
+);
+triple!(
+    i8,
+    i16,
+    usize,
+    rechrom_builtin_add_i8_i16_usize,
+    rechrom_builtin_sub_i8_i16_usize,
+    rechrom_builtin_mul_i8_i16_usize
+);
+triple!(
+    i8,
+    u16,
+    i8,
+    rechrom_builtin_add_i8_u16_i8,
+    rechrom_builtin_sub_i8_u16_i8,
+    rechrom_builtin_mul_i8_u16_i8
+);
+triple!(
+    i8,
+    u16,
+    u8,
+    rechrom_builtin_add_i8_u16_u8,
+    rechrom_builtin_sub_i8_u16_u8,
+    rechrom_builtin_mul_i8_u16_u8
+);
+triple!(
+    i8,
+    u16,
+    i16,
+    rechrom_builtin_add_i8_u16_i16,
+    rechrom_builtin_sub_i8_u16_i16,
+    rechrom_builtin_mul_i8_u16_i16
+);
+triple!(
+    i8,
+    u16,
+    u16,
+    rechrom_builtin_add_i8_u16_u16,
+    rechrom_builtin_sub_i8_u16_u16,
+    rechrom_builtin_mul_i8_u16_u16
+);
+triple!(
+    i8,
+    u16,
+    i32,
+    rechrom_builtin_add_i8_u16_i32,
+    rechrom_builtin_sub_i8_u16_i32,
+    rechrom_builtin_mul_i8_u16_i32
+);
+triple!(
+    i8,
+    u16,
+    u32,
+    rechrom_builtin_add_i8_u16_u32,
+    rechrom_builtin_sub_i8_u16_u32,
+    rechrom_builtin_mul_i8_u16_u32
+);
+triple!(
+    i8,
+    u16,
+    i64,
+    rechrom_builtin_add_i8_u16_i64,
+    rechrom_builtin_sub_i8_u16_i64,
+    rechrom_builtin_mul_i8_u16_i64
+);
+triple!(
+    i8,
+    u16,
+    u64,
+    rechrom_builtin_add_i8_u16_u64,
+    rechrom_builtin_sub_i8_u16_u64,
+    rechrom_builtin_mul_i8_u16_u64
+);
+triple!(
+    i8,
+    u16,
+    isize,
+    rechrom_builtin_add_i8_u16_isize,
+    rechrom_builtin_sub_i8_u16_isize,
+    rechrom_builtin_mul_i8_u16_isize
+);
+triple!(
+    i8,
+    u16,
+    usize,
+    rechrom_builtin_add_i8_u16_usize,
+    rechrom_builtin_sub_i8_u16_usize,
+    rechrom_builtin_mul_i8_u16_usize
+);
+triple!(
+    i8,
+    i32,
+    i8,
+    rechrom_builtin_add_i8_i32_i8,
+    rechrom_builtin_sub_i8_i32_i8,
+    rechrom_builtin_mul_i8_i32_i8
+);
+triple!(
+    i8,
+    i32,
+    u8,
+    rechrom_builtin_add_i8_i32_u8,
+    rechrom_builtin_sub_i8_i32_u8,
+    rechrom_builtin_mul_i8_i32_u8
+);
+triple!(
+    i8,
+    i32,
+    i16,
+    rechrom_builtin_add_i8_i32_i16,
+    rechrom_builtin_sub_i8_i32_i16,
+    rechrom_builtin_mul_i8_i32_i16
+);
+triple!(
+    i8,
+    i32,
+    u16,
+    rechrom_builtin_add_i8_i32_u16,
+    rechrom_builtin_sub_i8_i32_u16,
+    rechrom_builtin_mul_i8_i32_u16
+);
+triple!(
+    i8,
+    i32,
+    i32,
+    rechrom_builtin_add_i8_i32_i32,
+    rechrom_builtin_sub_i8_i32_i32,
+    rechrom_builtin_mul_i8_i32_i32
+);
+triple!(
+    i8,
+    i32,
+    u32,
+    rechrom_builtin_add_i8_i32_u32,
+    rechrom_builtin_sub_i8_i32_u32,
+    rechrom_builtin_mul_i8_i32_u32
+);
+triple!(
+    i8,
+    i32,
+    i64,
+    rechrom_builtin_add_i8_i32_i64,
+    rechrom_builtin_sub_i8_i32_i64,
+    rechrom_builtin_mul_i8_i32_i64
+);
+triple!(
+    i8,
+    i32,
+    u64,
+    rechrom_builtin_add_i8_i32_u64,
+    rechrom_builtin_sub_i8_i32_u64,
+    rechrom_builtin_mul_i8_i32_u64
+);
+triple!(
+    i8,
+    i32,
+    isize,
+    rechrom_builtin_add_i8_i32_isize,
+    rechrom_builtin_sub_i8_i32_isize,
+    rechrom_builtin_mul_i8_i32_isize
+);
+triple!(
+    i8,
+    i32,
+    usize,
+    rechrom_builtin_add_i8_i32_usize,
+    rechrom_builtin_sub_i8_i32_usize,
+    rechrom_builtin_mul_i8_i32_usize
+);
+triple!(
+    i8,
+    u32,
+    i8,
+    rechrom_builtin_add_i8_u32_i8,
+    rechrom_builtin_sub_i8_u32_i8,
+    rechrom_builtin_mul_i8_u32_i8
+);
+triple!(
+    i8,
+    u32,
+    u8,
+    rechrom_builtin_add_i8_u32_u8,
+    rechrom_builtin_sub_i8_u32_u8,
+    rechrom_builtin_mul_i8_u32_u8
+);
+triple!(
+    i8,
+    u32,
+    i16,
+    rechrom_builtin_add_i8_u32_i16,
+    rechrom_builtin_sub_i8_u32_i16,
+    rechrom_builtin_mul_i8_u32_i16
+);
+triple!(
+    i8,
+    u32,
+    u16,
+    rechrom_builtin_add_i8_u32_u16,
+    rechrom_builtin_sub_i8_u32_u16,
+    rechrom_builtin_mul_i8_u32_u16
+);
+triple!(
+    i8,
+    u32,
+    i32,
+    rechrom_builtin_add_i8_u32_i32,
+    rechrom_builtin_sub_i8_u32_i32,
+    rechrom_builtin_mul_i8_u32_i32
+);
+triple!(
+    i8,
+    u32,
+    u32,
+    rechrom_builtin_add_i8_u32_u32,
+    rechrom_builtin_sub_i8_u32_u32,
+    rechrom_builtin_mul_i8_u32_u32
+);
+triple!(
+    i8,
+    u32,
+    i64,
+    rechrom_builtin_add_i8_u32_i64,
+    rechrom_builtin_sub_i8_u32_i64,
+    rechrom_builtin_mul_i8_u32_i64
+);
+triple!(
+    i8,
+    u32,
+    u64,
+    rechrom_builtin_add_i8_u32_u64,
+    rechrom_builtin_sub_i8_u32_u64,
+    rechrom_builtin_mul_i8_u32_u64
+);
+triple!(
+    i8,
+    u32,
+    isize,
+    rechrom_builtin_add_i8_u32_isize,
+    rechrom_builtin_sub_i8_u32_isize,
+    rechrom_builtin_mul_i8_u32_isize
+);
+triple!(
+    i8,
+    u32,
+    usize,
+    rechrom_builtin_add_i8_u32_usize,
+    rechrom_builtin_sub_i8_u32_usize,
+    rechrom_builtin_mul_i8_u32_usize
+);
+triple!(
+    i8,
+    i64,
+    i8,
+    rechrom_builtin_add_i8_i64_i8,
+    rechrom_builtin_sub_i8_i64_i8,
+    rechrom_builtin_mul_i8_i64_i8
+);
+triple!(
+    i8,
+    i64,
+    u8,
+    rechrom_builtin_add_i8_i64_u8,
+    rechrom_builtin_sub_i8_i64_u8,
+    rechrom_builtin_mul_i8_i64_u8
+);
+triple!(
+    i8,
+    i64,
+    i16,
+    rechrom_builtin_add_i8_i64_i16,
+    rechrom_builtin_sub_i8_i64_i16,
+    rechrom_builtin_mul_i8_i64_i16
+);
+triple!(
+    i8,
+    i64,
+    u16,
+    rechrom_builtin_add_i8_i64_u16,
+    rechrom_builtin_sub_i8_i64_u16,
+    rechrom_builtin_mul_i8_i64_u16
+);
+triple!(
+    i8,
+    i64,
+    i32,
+    rechrom_builtin_add_i8_i64_i32,
+    rechrom_builtin_sub_i8_i64_i32,
+    rechrom_builtin_mul_i8_i64_i32
+);
+triple!(
+    i8,
+    i64,
+    u32,
+    rechrom_builtin_add_i8_i64_u32,
+    rechrom_builtin_sub_i8_i64_u32,
+    rechrom_builtin_mul_i8_i64_u32
+);
+triple!(
+    i8,
+    i64,
+    i64,
+    rechrom_builtin_add_i8_i64_i64,
+    rechrom_builtin_sub_i8_i64_i64,
+    rechrom_builtin_mul_i8_i64_i64
+);
+triple!(
+    i8,
+    i64,
+    u64,
+    rechrom_builtin_add_i8_i64_u64,
+    rechrom_builtin_sub_i8_i64_u64,
+    rechrom_builtin_mul_i8_i64_u64
+);
+triple!(
+    i8,
+    i64,
+    isize,
+    rechrom_builtin_add_i8_i64_isize,
+    rechrom_builtin_sub_i8_i64_isize,
+    rechrom_builtin_mul_i8_i64_isize
+);
+triple!(
+    i8,
+    i64,
+    usize,
+    rechrom_builtin_add_i8_i64_usize,
+    rechrom_builtin_sub_i8_i64_usize,
+    rechrom_builtin_mul_i8_i64_usize
+);
+triple!(
+    i8,
+    u64,
+    i8,
+    rechrom_builtin_add_i8_u64_i8,
+    rechrom_builtin_sub_i8_u64_i8,
+    rechrom_builtin_mul_i8_u64_i8
+);
+triple!(
+    i8,
+    u64,
+    u8,
+    rechrom_builtin_add_i8_u64_u8,
+    rechrom_builtin_sub_i8_u64_u8,
+    rechrom_builtin_mul_i8_u64_u8
+);
+triple!(
+    i8,
+    u64,
+    i16,
+    rechrom_builtin_add_i8_u64_i16,
+    rechrom_builtin_sub_i8_u64_i16,
+    rechrom_builtin_mul_i8_u64_i16
+);
+triple!(
+    i8,
+    u64,
+    u16,
+    rechrom_builtin_add_i8_u64_u16,
+    rechrom_builtin_sub_i8_u64_u16,
+    rechrom_builtin_mul_i8_u64_u16
+);
+triple!(
+    i8,
+    u64,
+    i32,
+    rechrom_builtin_add_i8_u64_i32,
+    rechrom_builtin_sub_i8_u64_i32,
+    rechrom_builtin_mul_i8_u64_i32
+);
+triple!(
+    i8,
+    u64,
+    u32,
+    rechrom_builtin_add_i8_u64_u32,
+    rechrom_builtin_sub_i8_u64_u32,
+    rechrom_builtin_mul_i8_u64_u32
+);
+triple!(
+    i8,
+    u64,
+    i64,
+    rechrom_builtin_add_i8_u64_i64,
+    rechrom_builtin_sub_i8_u64_i64,
+    rechrom_builtin_mul_i8_u64_i64
+);
+triple!(
+    i8,
+    u64,
+    u64,
+    rechrom_builtin_add_i8_u64_u64,
+    rechrom_builtin_sub_i8_u64_u64,
+    rechrom_builtin_mul_i8_u64_u64
+);
+triple!(
+    i8,
+    u64,
+    isize,
+    rechrom_builtin_add_i8_u64_isize,
+    rechrom_builtin_sub_i8_u64_isize,
+    rechrom_builtin_mul_i8_u64_isize
+);
+triple!(
+    i8,
+    u64,
+    usize,
+    rechrom_builtin_add_i8_u64_usize,
+    rechrom_builtin_sub_i8_u64_usize,
+    rechrom_builtin_mul_i8_u64_usize
+);
+triple!(
+    i8,
+    isize,
+    i8,
+    rechrom_builtin_add_i8_isize_i8,
+    rechrom_builtin_sub_i8_isize_i8,
+    rechrom_builtin_mul_i8_isize_i8
+);
+triple!(
+    i8,
+    isize,
+    u8,
+    rechrom_builtin_add_i8_isize_u8,
+    rechrom_builtin_sub_i8_isize_u8,
+    rechrom_builtin_mul_i8_isize_u8
+);
+triple!(
+    i8,
+    isize,
+    i16,
+    rechrom_builtin_add_i8_isize_i16,
+    rechrom_builtin_sub_i8_isize_i16,
+    rechrom_builtin_mul_i8_isize_i16
+);
+triple!(
+    i8,
+    isize,
+    u16,
+    rechrom_builtin_add_i8_isize_u16,
+    rechrom_builtin_sub_i8_isize_u16,
+    rechrom_builtin_mul_i8_isize_u16
+);
+triple!(
+    i8,
+    isize,
+    i32,
+    rechrom_builtin_add_i8_isize_i32,
+    rechrom_builtin_sub_i8_isize_i32,
+    rechrom_builtin_mul_i8_isize_i32
+);
+triple!(
+    i8,
+    isize,
+    u32,
+    rechrom_builtin_add_i8_isize_u32,
+    rechrom_builtin_sub_i8_isize_u32,
+    rechrom_builtin_mul_i8_isize_u32
+);
+triple!(
+    i8,
+    isize,
+    i64,
+    rechrom_builtin_add_i8_isize_i64,
+    rechrom_builtin_sub_i8_isize_i64,
+    rechrom_builtin_mul_i8_isize_i64
+);
+triple!(
+    i8,
+    isize,
+    u64,
+    rechrom_builtin_add_i8_isize_u64,
+    rechrom_builtin_sub_i8_isize_u64,
+    rechrom_builtin_mul_i8_isize_u64
+);
+triple!(
+    i8,
+    isize,
+    isize,
+    rechrom_builtin_add_i8_isize_isize,
+    rechrom_builtin_sub_i8_isize_isize,
+    rechrom_builtin_mul_i8_isize_isize
+);
+triple!(
+    i8,
+    isize,
+    usize,
+    rechrom_builtin_add_i8_isize_usize,
+    rechrom_builtin_sub_i8_isize_usize,
+    rechrom_builtin_mul_i8_isize_usize
+);
+triple!(
+    i8,
+    usize,
+    i8,
+    rechrom_builtin_add_i8_usize_i8,
+    rechrom_builtin_sub_i8_usize_i8,
+    rechrom_builtin_mul_i8_usize_i8
+);
+triple!(
+    i8,
+    usize,
+    u8,
+    rechrom_builtin_add_i8_usize_u8,
+    rechrom_builtin_sub_i8_usize_u8,
+    rechrom_builtin_mul_i8_usize_u8
+);
+triple!(
+    i8,
+    usize,
+    i16,
+    rechrom_builtin_add_i8_usize_i16,
+    rechrom_builtin_sub_i8_usize_i16,
+    rechrom_builtin_mul_i8_usize_i16
+);
+triple!(
+    i8,
+    usize,
+    u16,
+    rechrom_builtin_add_i8_usize_u16,
+    rechrom_builtin_sub_i8_usize_u16,
+    rechrom_builtin_mul_i8_usize_u16
+);
+triple!(
+    i8,
+    usize,
+    i32,
+    rechrom_builtin_add_i8_usize_i32,
+    rechrom_builtin_sub_i8_usize_i32,
+    rechrom_builtin_mul_i8_usize_i32
+);
+triple!(
+    i8,
+    usize,
+    u32,
+    rechrom_builtin_add_i8_usize_u32,
+    rechrom_builtin_sub_i8_usize_u32,
+    rechrom_builtin_mul_i8_usize_u32
+);
+triple!(
+    i8,
+    usize,
+    i64,
+    rechrom_builtin_add_i8_usize_i64,
+    rechrom_builtin_sub_i8_usize_i64,
+    rechrom_builtin_mul_i8_usize_i64
+);
+triple!(
+    i8,
+    usize,
+    u64,
+    rechrom_builtin_add_i8_usize_u64,
+    rechrom_builtin_sub_i8_usize_u64,
+    rechrom_builtin_mul_i8_usize_u64
+);
+triple!(
+    i8,
+    usize,
+    isize,
+    rechrom_builtin_add_i8_usize_isize,
+    rechrom_builtin_sub_i8_usize_isize,
+    rechrom_builtin_mul_i8_usize_isize
+);
+triple!(
+    i8,
+    usize,
+    usize,
+    rechrom_builtin_add_i8_usize_usize,
+    rechrom_builtin_sub_i8_usize_usize,
+    rechrom_builtin_mul_i8_usize_usize
+);
+triple!(
+    u8,
+    i8,
+    i8,
+    rechrom_builtin_add_u8_i8_i8,
+    rechrom_builtin_sub_u8_i8_i8,
+    rechrom_builtin_mul_u8_i8_i8
+);
+triple!(
+    u8,
+    i8,
+    u8,
+    rechrom_builtin_add_u8_i8_u8,
+    rechrom_builtin_sub_u8_i8_u8,
+    rechrom_builtin_mul_u8_i8_u8
+);
+triple!(
+    u8,
+    i8,
+    i16,
+    rechrom_builtin_add_u8_i8_i16,
+    rechrom_builtin_sub_u8_i8_i16,
+    rechrom_builtin_mul_u8_i8_i16
+);
+triple!(
+    u8,
+    i8,
+    u16,
+    rechrom_builtin_add_u8_i8_u16,
+    rechrom_builtin_sub_u8_i8_u16,
+    rechrom_builtin_mul_u8_i8_u16
+);
+triple!(
+    u8,
+    i8,
+    i32,
+    rechrom_builtin_add_u8_i8_i32,
+    rechrom_builtin_sub_u8_i8_i32,
+    rechrom_builtin_mul_u8_i8_i32
+);
+triple!(
+    u8,
+    i8,
+    u32,
+    rechrom_builtin_add_u8_i8_u32,
+    rechrom_builtin_sub_u8_i8_u32,
+    rechrom_builtin_mul_u8_i8_u32
+);
+triple!(
+    u8,
+    i8,
+    i64,
+    rechrom_builtin_add_u8_i8_i64,
+    rechrom_builtin_sub_u8_i8_i64,
+    rechrom_builtin_mul_u8_i8_i64
+);
+triple!(
+    u8,
+    i8,
+    u64,
+    rechrom_builtin_add_u8_i8_u64,
+    rechrom_builtin_sub_u8_i8_u64,
+    rechrom_builtin_mul_u8_i8_u64
+);
+triple!(
+    u8,
+    i8,
+    isize,
+    rechrom_builtin_add_u8_i8_isize,
+    rechrom_builtin_sub_u8_i8_isize,
+    rechrom_builtin_mul_u8_i8_isize
+);
+triple!(
+    u8,
+    i8,
+    usize,
+    rechrom_builtin_add_u8_i8_usize,
+    rechrom_builtin_sub_u8_i8_usize,
+    rechrom_builtin_mul_u8_i8_usize
+);
+triple!(
+    u8,
+    u8,
+    i8,
+    rechrom_builtin_add_u8_u8_i8,
+    rechrom_builtin_sub_u8_u8_i8,
+    rechrom_builtin_mul_u8_u8_i8
+);
+triple!(
+    u8,
+    u8,
+    u8,
+    rechrom_builtin_add_u8_u8_u8,
+    rechrom_builtin_sub_u8_u8_u8,
+    rechrom_builtin_mul_u8_u8_u8
+);
+triple!(
+    u8,
+    u8,
+    i16,
+    rechrom_builtin_add_u8_u8_i16,
+    rechrom_builtin_sub_u8_u8_i16,
+    rechrom_builtin_mul_u8_u8_i16
+);
+triple!(
+    u8,
+    u8,
+    u16,
+    rechrom_builtin_add_u8_u8_u16,
+    rechrom_builtin_sub_u8_u8_u16,
+    rechrom_builtin_mul_u8_u8_u16
+);
+triple!(
+    u8,
+    u8,
+    i32,
+    rechrom_builtin_add_u8_u8_i32,
+    rechrom_builtin_sub_u8_u8_i32,
+    rechrom_builtin_mul_u8_u8_i32
+);
+triple!(
+    u8,
+    u8,
+    u32,
+    rechrom_builtin_add_u8_u8_u32,
+    rechrom_builtin_sub_u8_u8_u32,
+    rechrom_builtin_mul_u8_u8_u32
+);
+triple!(
+    u8,
+    u8,
+    i64,
+    rechrom_builtin_add_u8_u8_i64,
+    rechrom_builtin_sub_u8_u8_i64,
+    rechrom_builtin_mul_u8_u8_i64
+);
+triple!(
+    u8,
+    u8,
+    u64,
+    rechrom_builtin_add_u8_u8_u64,
+    rechrom_builtin_sub_u8_u8_u64,
+    rechrom_builtin_mul_u8_u8_u64
+);
+triple!(
+    u8,
+    u8,
+    isize,
+    rechrom_builtin_add_u8_u8_isize,
+    rechrom_builtin_sub_u8_u8_isize,
+    rechrom_builtin_mul_u8_u8_isize
+);
+triple!(
+    u8,
+    u8,
+    usize,
+    rechrom_builtin_add_u8_u8_usize,
+    rechrom_builtin_sub_u8_u8_usize,
+    rechrom_builtin_mul_u8_u8_usize
+);
+triple!(
+    u8,
+    i16,
+    i8,
+    rechrom_builtin_add_u8_i16_i8,
+    rechrom_builtin_sub_u8_i16_i8,
+    rechrom_builtin_mul_u8_i16_i8
+);
+triple!(
+    u8,
+    i16,
+    u8,
+    rechrom_builtin_add_u8_i16_u8,
+    rechrom_builtin_sub_u8_i16_u8,
+    rechrom_builtin_mul_u8_i16_u8
+);
+triple!(
+    u8,
+    i16,
+    i16,
+    rechrom_builtin_add_u8_i16_i16,
+    rechrom_builtin_sub_u8_i16_i16,
+    rechrom_builtin_mul_u8_i16_i16
+);
+triple!(
+    u8,
+    i16,
+    u16,
+    rechrom_builtin_add_u8_i16_u16,
+    rechrom_builtin_sub_u8_i16_u16,
+    rechrom_builtin_mul_u8_i16_u16
+);
+triple!(
+    u8,
+    i16,
+    i32,
+    rechrom_builtin_add_u8_i16_i32,
+    rechrom_builtin_sub_u8_i16_i32,
+    rechrom_builtin_mul_u8_i16_i32
+);
+triple!(
+    u8,
+    i16,
+    u32,
+    rechrom_builtin_add_u8_i16_u32,
+    rechrom_builtin_sub_u8_i16_u32,
+    rechrom_builtin_mul_u8_i16_u32
+);
+triple!(
+    u8,
+    i16,
+    i64,
+    rechrom_builtin_add_u8_i16_i64,
+    rechrom_builtin_sub_u8_i16_i64,
+    rechrom_builtin_mul_u8_i16_i64
+);
+triple!(
+    u8,
+    i16,
+    u64,
+    rechrom_builtin_add_u8_i16_u64,
+    rechrom_builtin_sub_u8_i16_u64,
+    rechrom_builtin_mul_u8_i16_u64
+);
+triple!(
+    u8,
+    i16,
+    isize,
+    rechrom_builtin_add_u8_i16_isize,
+    rechrom_builtin_sub_u8_i16_isize,
+    rechrom_builtin_mul_u8_i16_isize
+);
+triple!(
+    u8,
+    i16,
+    usize,
+    rechrom_builtin_add_u8_i16_usize,
+    rechrom_builtin_sub_u8_i16_usize,
+    rechrom_builtin_mul_u8_i16_usize
+);
+triple!(
+    u8,
+    u16,
+    i8,
+    rechrom_builtin_add_u8_u16_i8,
+    rechrom_builtin_sub_u8_u16_i8,
+    rechrom_builtin_mul_u8_u16_i8
+);
+triple!(
+    u8,
+    u16,
+    u8,
+    rechrom_builtin_add_u8_u16_u8,
+    rechrom_builtin_sub_u8_u16_u8,
+    rechrom_builtin_mul_u8_u16_u8
+);
+triple!(
+    u8,
+    u16,
+    i16,
+    rechrom_builtin_add_u8_u16_i16,
+    rechrom_builtin_sub_u8_u16_i16,
+    rechrom_builtin_mul_u8_u16_i16
+);
+triple!(
+    u8,
+    u16,
+    u16,
+    rechrom_builtin_add_u8_u16_u16,
+    rechrom_builtin_sub_u8_u16_u16,
+    rechrom_builtin_mul_u8_u16_u16
+);
+triple!(
+    u8,
+    u16,
+    i32,
+    rechrom_builtin_add_u8_u16_i32,
+    rechrom_builtin_sub_u8_u16_i32,
+    rechrom_builtin_mul_u8_u16_i32
+);
+triple!(
+    u8,
+    u16,
+    u32,
+    rechrom_builtin_add_u8_u16_u32,
+    rechrom_builtin_sub_u8_u16_u32,
+    rechrom_builtin_mul_u8_u16_u32
+);
+triple!(
+    u8,
+    u16,
+    i64,
+    rechrom_builtin_add_u8_u16_i64,
+    rechrom_builtin_sub_u8_u16_i64,
+    rechrom_builtin_mul_u8_u16_i64
+);
+triple!(
+    u8,
+    u16,
+    u64,
+    rechrom_builtin_add_u8_u16_u64,
+    rechrom_builtin_sub_u8_u16_u64,
+    rechrom_builtin_mul_u8_u16_u64
+);
+triple!(
+    u8,
+    u16,
+    isize,
+    rechrom_builtin_add_u8_u16_isize,
+    rechrom_builtin_sub_u8_u16_isize,
+    rechrom_builtin_mul_u8_u16_isize
+);
+triple!(
+    u8,
+    u16,
+    usize,
+    rechrom_builtin_add_u8_u16_usize,
+    rechrom_builtin_sub_u8_u16_usize,
+    rechrom_builtin_mul_u8_u16_usize
+);
+triple!(
+    u8,
+    i32,
+    i8,
+    rechrom_builtin_add_u8_i32_i8,
+    rechrom_builtin_sub_u8_i32_i8,
+    rechrom_builtin_mul_u8_i32_i8
+);
+triple!(
+    u8,
+    i32,
+    u8,
+    rechrom_builtin_add_u8_i32_u8,
+    rechrom_builtin_sub_u8_i32_u8,
+    rechrom_builtin_mul_u8_i32_u8
+);
+triple!(
+    u8,
+    i32,
+    i16,
+    rechrom_builtin_add_u8_i32_i16,
+    rechrom_builtin_sub_u8_i32_i16,
+    rechrom_builtin_mul_u8_i32_i16
+);
+triple!(
+    u8,
+    i32,
+    u16,
+    rechrom_builtin_add_u8_i32_u16,
+    rechrom_builtin_sub_u8_i32_u16,
+    rechrom_builtin_mul_u8_i32_u16
+);
+triple!(
+    u8,
+    i32,
+    i32,
+    rechrom_builtin_add_u8_i32_i32,
+    rechrom_builtin_sub_u8_i32_i32,
+    rechrom_builtin_mul_u8_i32_i32
+);
+triple!(
+    u8,
+    i32,
+    u32,
+    rechrom_builtin_add_u8_i32_u32,
+    rechrom_builtin_sub_u8_i32_u32,
+    rechrom_builtin_mul_u8_i32_u32
+);
+triple!(
+    u8,
+    i32,
+    i64,
+    rechrom_builtin_add_u8_i32_i64,
+    rechrom_builtin_sub_u8_i32_i64,
+    rechrom_builtin_mul_u8_i32_i64
+);
+triple!(
+    u8,
+    i32,
+    u64,
+    rechrom_builtin_add_u8_i32_u64,
+    rechrom_builtin_sub_u8_i32_u64,
+    rechrom_builtin_mul_u8_i32_u64
+);
+triple!(
+    u8,
+    i32,
+    isize,
+    rechrom_builtin_add_u8_i32_isize,
+    rechrom_builtin_sub_u8_i32_isize,
+    rechrom_builtin_mul_u8_i32_isize
+);
+triple!(
+    u8,
+    i32,
+    usize,
+    rechrom_builtin_add_u8_i32_usize,
+    rechrom_builtin_sub_u8_i32_usize,
+    rechrom_builtin_mul_u8_i32_usize
+);
+triple!(
+    u8,
+    u32,
+    i8,
+    rechrom_builtin_add_u8_u32_i8,
+    rechrom_builtin_sub_u8_u32_i8,
+    rechrom_builtin_mul_u8_u32_i8
+);
+triple!(
+    u8,
+    u32,
+    u8,
+    rechrom_builtin_add_u8_u32_u8,
+    rechrom_builtin_sub_u8_u32_u8,
+    rechrom_builtin_mul_u8_u32_u8
+);
+triple!(
+    u8,
+    u32,
+    i16,
+    rechrom_builtin_add_u8_u32_i16,
+    rechrom_builtin_sub_u8_u32_i16,
+    rechrom_builtin_mul_u8_u32_i16
+);
+triple!(
+    u8,
+    u32,
+    u16,
+    rechrom_builtin_add_u8_u32_u16,
+    rechrom_builtin_sub_u8_u32_u16,
+    rechrom_builtin_mul_u8_u32_u16
+);
+triple!(
+    u8,
+    u32,
+    i32,
+    rechrom_builtin_add_u8_u32_i32,
+    rechrom_builtin_sub_u8_u32_i32,
+    rechrom_builtin_mul_u8_u32_i32
+);
+triple!(
+    u8,
+    u32,
+    u32,
+    rechrom_builtin_add_u8_u32_u32,
+    rechrom_builtin_sub_u8_u32_u32,
+    rechrom_builtin_mul_u8_u32_u32
+);
+triple!(
+    u8,
+    u32,
+    i64,
+    rechrom_builtin_add_u8_u32_i64,
+    rechrom_builtin_sub_u8_u32_i64,
+    rechrom_builtin_mul_u8_u32_i64
+);
+triple!(
+    u8,
+    u32,
+    u64,
+    rechrom_builtin_add_u8_u32_u64,
+    rechrom_builtin_sub_u8_u32_u64,
+    rechrom_builtin_mul_u8_u32_u64
+);
+triple!(
+    u8,
+    u32,
+    isize,
+    rechrom_builtin_add_u8_u32_isize,
+    rechrom_builtin_sub_u8_u32_isize,
+    rechrom_builtin_mul_u8_u32_isize
+);
+triple!(
+    u8,
+    u32,
+    usize,
+    rechrom_builtin_add_u8_u32_usize,
+    rechrom_builtin_sub_u8_u32_usize,
+    rechrom_builtin_mul_u8_u32_usize
+);
+triple!(
+    u8,
+    i64,
+    i8,
+    rechrom_builtin_add_u8_i64_i8,
+    rechrom_builtin_sub_u8_i64_i8,
+    rechrom_builtin_mul_u8_i64_i8
+);
+triple!(
+    u8,
+    i64,
+    u8,
+    rechrom_builtin_add_u8_i64_u8,
+    rechrom_builtin_sub_u8_i64_u8,
+    rechrom_builtin_mul_u8_i64_u8
+);
+triple!(
+    u8,
+    i64,
+    i16,
+    rechrom_builtin_add_u8_i64_i16,
+    rechrom_builtin_sub_u8_i64_i16,
+    rechrom_builtin_mul_u8_i64_i16
+);
+triple!(
+    u8,
+    i64,
+    u16,
+    rechrom_builtin_add_u8_i64_u16,
+    rechrom_builtin_sub_u8_i64_u16,
+    rechrom_builtin_mul_u8_i64_u16
+);
+triple!(
+    u8,
+    i64,
+    i32,
+    rechrom_builtin_add_u8_i64_i32,
+    rechrom_builtin_sub_u8_i64_i32,
+    rechrom_builtin_mul_u8_i64_i32
+);
+triple!(
+    u8,
+    i64,
+    u32,
+    rechrom_builtin_add_u8_i64_u32,
+    rechrom_builtin_sub_u8_i64_u32,
+    rechrom_builtin_mul_u8_i64_u32
+);
+triple!(
+    u8,
+    i64,
+    i64,
+    rechrom_builtin_add_u8_i64_i64,
+    rechrom_builtin_sub_u8_i64_i64,
+    rechrom_builtin_mul_u8_i64_i64
+);
+triple!(
+    u8,
+    i64,
+    u64,
+    rechrom_builtin_add_u8_i64_u64,
+    rechrom_builtin_sub_u8_i64_u64,
+    rechrom_builtin_mul_u8_i64_u64
+);
+triple!(
+    u8,
+    i64,
+    isize,
+    rechrom_builtin_add_u8_i64_isize,
+    rechrom_builtin_sub_u8_i64_isize,
+    rechrom_builtin_mul_u8_i64_isize
+);
+triple!(
+    u8,
+    i64,
+    usize,
+    rechrom_builtin_add_u8_i64_usize,
+    rechrom_builtin_sub_u8_i64_usize,
+    rechrom_builtin_mul_u8_i64_usize
+);
+triple!(
+    u8,
+    u64,
+    i8,
+    rechrom_builtin_add_u8_u64_i8,
+    rechrom_builtin_sub_u8_u64_i8,
+    rechrom_builtin_mul_u8_u64_i8
+);
+triple!(
+    u8,
+    u64,
+    u8,
+    rechrom_builtin_add_u8_u64_u8,
+    rechrom_builtin_sub_u8_u64_u8,
+    rechrom_builtin_mul_u8_u64_u8
+);
+triple!(
+    u8,
+    u64,
+    i16,
+    rechrom_builtin_add_u8_u64_i16,
+    rechrom_builtin_sub_u8_u64_i16,
+    rechrom_builtin_mul_u8_u64_i16
+);
+triple!(
+    u8,
+    u64,
+    u16,
+    rechrom_builtin_add_u8_u64_u16,
+    rechrom_builtin_sub_u8_u64_u16,
+    rechrom_builtin_mul_u8_u64_u16
+);
+triple!(
+    u8,
+    u64,
+    i32,
+    rechrom_builtin_add_u8_u64_i32,
+    rechrom_builtin_sub_u8_u64_i32,
+    rechrom_builtin_mul_u8_u64_i32
+);
+triple!(
+    u8,
+    u64,
+    u32,
+    rechrom_builtin_add_u8_u64_u32,
+    rechrom_builtin_sub_u8_u64_u32,
+    rechrom_builtin_mul_u8_u64_u32
+);
+triple!(
+    u8,
+    u64,
+    i64,
+    rechrom_builtin_add_u8_u64_i64,
+    rechrom_builtin_sub_u8_u64_i64,
+    rechrom_builtin_mul_u8_u64_i64
+);
+triple!(
+    u8,
+    u64,
+    u64,
+    rechrom_builtin_add_u8_u64_u64,
+    rechrom_builtin_sub_u8_u64_u64,
+    rechrom_builtin_mul_u8_u64_u64
+);
+triple!(
+    u8,
+    u64,
+    isize,
+    rechrom_builtin_add_u8_u64_isize,
+    rechrom_builtin_sub_u8_u64_isize,
+    rechrom_builtin_mul_u8_u64_isize
+);
+triple!(
+    u8,
+    u64,
+    usize,
+    rechrom_builtin_add_u8_u64_usize,
+    rechrom_builtin_sub_u8_u64_usize,
+    rechrom_builtin_mul_u8_u64_usize
+);
+triple!(
+    u8,
+    isize,
+    i8,
+    rechrom_builtin_add_u8_isize_i8,
+    rechrom_builtin_sub_u8_isize_i8,
+    rechrom_builtin_mul_u8_isize_i8
+);
+triple!(
+    u8,
+    isize,
+    u8,
+    rechrom_builtin_add_u8_isize_u8,
+    rechrom_builtin_sub_u8_isize_u8,
+    rechrom_builtin_mul_u8_isize_u8
+);
+triple!(
+    u8,
+    isize,
+    i16,
+    rechrom_builtin_add_u8_isize_i16,
+    rechrom_builtin_sub_u8_isize_i16,
+    rechrom_builtin_mul_u8_isize_i16
+);
+triple!(
+    u8,
+    isize,
+    u16,
+    rechrom_builtin_add_u8_isize_u16,
+    rechrom_builtin_sub_u8_isize_u16,
+    rechrom_builtin_mul_u8_isize_u16
+);
+triple!(
+    u8,
+    isize,
+    i32,
+    rechrom_builtin_add_u8_isize_i32,
+    rechrom_builtin_sub_u8_isize_i32,
+    rechrom_builtin_mul_u8_isize_i32
+);
+triple!(
+    u8,
+    isize,
+    u32,
+    rechrom_builtin_add_u8_isize_u32,
+    rechrom_builtin_sub_u8_isize_u32,
+    rechrom_builtin_mul_u8_isize_u32
+);
+triple!(
+    u8,
+    isize,
+    i64,
+    rechrom_builtin_add_u8_isize_i64,
+    rechrom_builtin_sub_u8_isize_i64,
+    rechrom_builtin_mul_u8_isize_i64
+);
+triple!(
+    u8,
+    isize,
+    u64,
+    rechrom_builtin_add_u8_isize_u64,
+    rechrom_builtin_sub_u8_isize_u64,
+    rechrom_builtin_mul_u8_isize_u64
+);
+triple!(
+    u8,
+    isize,
+    isize,
+    rechrom_builtin_add_u8_isize_isize,
+    rechrom_builtin_sub_u8_isize_isize,
+    rechrom_builtin_mul_u8_isize_isize
+);
+triple!(
+    u8,
+    isize,
+    usize,
+    rechrom_builtin_add_u8_isize_usize,
+    rechrom_builtin_sub_u8_isize_usize,
+    rechrom_builtin_mul_u8_isize_usize
+);
+triple!(
+    u8,
+    usize,
+    i8,
+    rechrom_builtin_add_u8_usize_i8,
+    rechrom_builtin_sub_u8_usize_i8,
+    rechrom_builtin_mul_u8_usize_i8
+);
+triple!(
+    u8,
+    usize,
+    u8,
+    rechrom_builtin_add_u8_usize_u8,
+    rechrom_builtin_sub_u8_usize_u8,
+    rechrom_builtin_mul_u8_usize_u8
+);
+triple!(
+    u8,
+    usize,
+    i16,
+    rechrom_builtin_add_u8_usize_i16,
+    rechrom_builtin_sub_u8_usize_i16,
+    rechrom_builtin_mul_u8_usize_i16
+);
+triple!(
+    u8,
+    usize,
+    u16,
+    rechrom_builtin_add_u8_usize_u16,
+    rechrom_builtin_sub_u8_usize_u16,
+    rechrom_builtin_mul_u8_usize_u16
+);
+triple!(
+    u8,
+    usize,
+    i32,
+    rechrom_builtin_add_u8_usize_i32,
+    rechrom_builtin_sub_u8_usize_i32,
+    rechrom_builtin_mul_u8_usize_i32
+);
+triple!(
+    u8,
+    usize,
+    u32,
+    rechrom_builtin_add_u8_usize_u32,
+    rechrom_builtin_sub_u8_usize_u32,
+    rechrom_builtin_mul_u8_usize_u32
+);
+triple!(
+    u8,
+    usize,
+    i64,
+    rechrom_builtin_add_u8_usize_i64,
+    rechrom_builtin_sub_u8_usize_i64,
+    rechrom_builtin_mul_u8_usize_i64
+);
+triple!(
+    u8,
+    usize,
+    u64,
+    rechrom_builtin_add_u8_usize_u64,
+    rechrom_builtin_sub_u8_usize_u64,
+    rechrom_builtin_mul_u8_usize_u64
+);
+triple!(
+    u8,
+    usize,
+    isize,
+    rechrom_builtin_add_u8_usize_isize,
+    rechrom_builtin_sub_u8_usize_isize,
+    rechrom_builtin_mul_u8_usize_isize
+);
+triple!(
+    u8,
+    usize,
+    usize,
+    rechrom_builtin_add_u8_usize_usize,
+    rechrom_builtin_sub_u8_usize_usize,
+    rechrom_builtin_mul_u8_usize_usize
+);
+triple!(
+    i16,
+    i8,
+    i8,
+    rechrom_builtin_add_i16_i8_i8,
+    rechrom_builtin_sub_i16_i8_i8,
+    rechrom_builtin_mul_i16_i8_i8
+);
+triple!(
+    i16,
+    i8,
+    u8,
+    rechrom_builtin_add_i16_i8_u8,
+    rechrom_builtin_sub_i16_i8_u8,
+    rechrom_builtin_mul_i16_i8_u8
+);
+triple!(
+    i16,
+    i8,
+    i16,
+    rechrom_builtin_add_i16_i8_i16,
+    rechrom_builtin_sub_i16_i8_i16,
+    rechrom_builtin_mul_i16_i8_i16
+);
+triple!(
+    i16,
+    i8,
+    u16,
+    rechrom_builtin_add_i16_i8_u16,
+    rechrom_builtin_sub_i16_i8_u16,
+    rechrom_builtin_mul_i16_i8_u16
+);
+triple!(
+    i16,
+    i8,
+    i32,
+    rechrom_builtin_add_i16_i8_i32,
+    rechrom_builtin_sub_i16_i8_i32,
+    rechrom_builtin_mul_i16_i8_i32
+);
+triple!(
+    i16,
+    i8,
+    u32,
+    rechrom_builtin_add_i16_i8_u32,
+    rechrom_builtin_sub_i16_i8_u32,
+    rechrom_builtin_mul_i16_i8_u32
+);
+triple!(
+    i16,
+    i8,
+    i64,
+    rechrom_builtin_add_i16_i8_i64,
+    rechrom_builtin_sub_i16_i8_i64,
+    rechrom_builtin_mul_i16_i8_i64
+);
+triple!(
+    i16,
+    i8,
+    u64,
+    rechrom_builtin_add_i16_i8_u64,
+    rechrom_builtin_sub_i16_i8_u64,
+    rechrom_builtin_mul_i16_i8_u64
+);
+triple!(
+    i16,
+    i8,
+    isize,
+    rechrom_builtin_add_i16_i8_isize,
+    rechrom_builtin_sub_i16_i8_isize,
+    rechrom_builtin_mul_i16_i8_isize
+);
+triple!(
+    i16,
+    i8,
+    usize,
+    rechrom_builtin_add_i16_i8_usize,
+    rechrom_builtin_sub_i16_i8_usize,
+    rechrom_builtin_mul_i16_i8_usize
+);
+triple!(
+    i16,
+    u8,
+    i8,
+    rechrom_builtin_add_i16_u8_i8,
+    rechrom_builtin_sub_i16_u8_i8,
+    rechrom_builtin_mul_i16_u8_i8
+);
+triple!(
+    i16,
+    u8,
+    u8,
+    rechrom_builtin_add_i16_u8_u8,
+    rechrom_builtin_sub_i16_u8_u8,
+    rechrom_builtin_mul_i16_u8_u8
+);
+triple!(
+    i16,
+    u8,
+    i16,
+    rechrom_builtin_add_i16_u8_i16,
+    rechrom_builtin_sub_i16_u8_i16,
+    rechrom_builtin_mul_i16_u8_i16
+);
+triple!(
+    i16,
+    u8,
+    u16,
+    rechrom_builtin_add_i16_u8_u16,
+    rechrom_builtin_sub_i16_u8_u16,
+    rechrom_builtin_mul_i16_u8_u16
+);
+triple!(
+    i16,
+    u8,
+    i32,
+    rechrom_builtin_add_i16_u8_i32,
+    rechrom_builtin_sub_i16_u8_i32,
+    rechrom_builtin_mul_i16_u8_i32
+);
+triple!(
+    i16,
+    u8,
+    u32,
+    rechrom_builtin_add_i16_u8_u32,
+    rechrom_builtin_sub_i16_u8_u32,
+    rechrom_builtin_mul_i16_u8_u32
+);
+triple!(
+    i16,
+    u8,
+    i64,
+    rechrom_builtin_add_i16_u8_i64,
+    rechrom_builtin_sub_i16_u8_i64,
+    rechrom_builtin_mul_i16_u8_i64
+);
+triple!(
+    i16,
+    u8,
+    u64,
+    rechrom_builtin_add_i16_u8_u64,
+    rechrom_builtin_sub_i16_u8_u64,
+    rechrom_builtin_mul_i16_u8_u64
+);
+triple!(
+    i16,
+    u8,
+    isize,
+    rechrom_builtin_add_i16_u8_isize,
+    rechrom_builtin_sub_i16_u8_isize,
+    rechrom_builtin_mul_i16_u8_isize
+);
+triple!(
+    i16,
+    u8,
+    usize,
+    rechrom_builtin_add_i16_u8_usize,
+    rechrom_builtin_sub_i16_u8_usize,
+    rechrom_builtin_mul_i16_u8_usize
+);
+triple!(
+    i16,
+    i16,
+    i8,
+    rechrom_builtin_add_i16_i16_i8,
+    rechrom_builtin_sub_i16_i16_i8,
+    rechrom_builtin_mul_i16_i16_i8
+);
+triple!(
+    i16,
+    i16,
+    u8,
+    rechrom_builtin_add_i16_i16_u8,
+    rechrom_builtin_sub_i16_i16_u8,
+    rechrom_builtin_mul_i16_i16_u8
+);
+triple!(
+    i16,
+    i16,
+    i16,
+    rechrom_builtin_add_i16_i16_i16,
+    rechrom_builtin_sub_i16_i16_i16,
+    rechrom_builtin_mul_i16_i16_i16
+);
+triple!(
+    i16,
+    i16,
+    u16,
+    rechrom_builtin_add_i16_i16_u16,
+    rechrom_builtin_sub_i16_i16_u16,
+    rechrom_builtin_mul_i16_i16_u16
+);
+triple!(
+    i16,
+    i16,
+    i32,
+    rechrom_builtin_add_i16_i16_i32,
+    rechrom_builtin_sub_i16_i16_i32,
+    rechrom_builtin_mul_i16_i16_i32
+);
+triple!(
+    i16,
+    i16,
+    u32,
+    rechrom_builtin_add_i16_i16_u32,
+    rechrom_builtin_sub_i16_i16_u32,
+    rechrom_builtin_mul_i16_i16_u32
+);
+triple!(
+    i16,
+    i16,
+    i64,
+    rechrom_builtin_add_i16_i16_i64,
+    rechrom_builtin_sub_i16_i16_i64,
+    rechrom_builtin_mul_i16_i16_i64
+);
+triple!(
+    i16,
+    i16,
+    u64,
+    rechrom_builtin_add_i16_i16_u64,
+    rechrom_builtin_sub_i16_i16_u64,
+    rechrom_builtin_mul_i16_i16_u64
+);
+triple!(
+    i16,
+    i16,
+    isize,
+    rechrom_builtin_add_i16_i16_isize,
+    rechrom_builtin_sub_i16_i16_isize,
+    rechrom_builtin_mul_i16_i16_isize
+);
+triple!(
+    i16,
+    i16,
+    usize,
+    rechrom_builtin_add_i16_i16_usize,
+    rechrom_builtin_sub_i16_i16_usize,
+    rechrom_builtin_mul_i16_i16_usize
+);
+triple!(
+    i16,
+    u16,
+    i8,
+    rechrom_builtin_add_i16_u16_i8,
+    rechrom_builtin_sub_i16_u16_i8,
+    rechrom_builtin_mul_i16_u16_i8
+);
+triple!(
+    i16,
+    u16,
+    u8,
+    rechrom_builtin_add_i16_u16_u8,
+    rechrom_builtin_sub_i16_u16_u8,
+    rechrom_builtin_mul_i16_u16_u8
+);
+triple!(
+    i16,
+    u16,
+    i16,
+    rechrom_builtin_add_i16_u16_i16,
+    rechrom_builtin_sub_i16_u16_i16,
+    rechrom_builtin_mul_i16_u16_i16
+);
+triple!(
+    i16,
+    u16,
+    u16,
+    rechrom_builtin_add_i16_u16_u16,
+    rechrom_builtin_sub_i16_u16_u16,
+    rechrom_builtin_mul_i16_u16_u16
+);
+triple!(
+    i16,
+    u16,
+    i32,
+    rechrom_builtin_add_i16_u16_i32,
+    rechrom_builtin_sub_i16_u16_i32,
+    rechrom_builtin_mul_i16_u16_i32
+);
+triple!(
+    i16,
+    u16,
+    u32,
+    rechrom_builtin_add_i16_u16_u32,
+    rechrom_builtin_sub_i16_u16_u32,
+    rechrom_builtin_mul_i16_u16_u32
+);
+triple!(
+    i16,
+    u16,
+    i64,
+    rechrom_builtin_add_i16_u16_i64,
+    rechrom_builtin_sub_i16_u16_i64,
+    rechrom_builtin_mul_i16_u16_i64
+);
+triple!(
+    i16,
+    u16,
+    u64,
+    rechrom_builtin_add_i16_u16_u64,
+    rechrom_builtin_sub_i16_u16_u64,
+    rechrom_builtin_mul_i16_u16_u64
+);
+triple!(
+    i16,
+    u16,
+    isize,
+    rechrom_builtin_add_i16_u16_isize,
+    rechrom_builtin_sub_i16_u16_isize,
+    rechrom_builtin_mul_i16_u16_isize
+);
+triple!(
+    i16,
+    u16,
+    usize,
+    rechrom_builtin_add_i16_u16_usize,
+    rechrom_builtin_sub_i16_u16_usize,
+    rechrom_builtin_mul_i16_u16_usize
+);
+triple!(
+    i16,
+    i32,
+    i8,
+    rechrom_builtin_add_i16_i32_i8,
+    rechrom_builtin_sub_i16_i32_i8,
+    rechrom_builtin_mul_i16_i32_i8
+);
+triple!(
+    i16,
+    i32,
+    u8,
+    rechrom_builtin_add_i16_i32_u8,
+    rechrom_builtin_sub_i16_i32_u8,
+    rechrom_builtin_mul_i16_i32_u8
+);
+triple!(
+    i16,
+    i32,
+    i16,
+    rechrom_builtin_add_i16_i32_i16,
+    rechrom_builtin_sub_i16_i32_i16,
+    rechrom_builtin_mul_i16_i32_i16
+);
+triple!(
+    i16,
+    i32,
+    u16,
+    rechrom_builtin_add_i16_i32_u16,
+    rechrom_builtin_sub_i16_i32_u16,
+    rechrom_builtin_mul_i16_i32_u16
+);
+triple!(
+    i16,
+    i32,
+    i32,
+    rechrom_builtin_add_i16_i32_i32,
+    rechrom_builtin_sub_i16_i32_i32,
+    rechrom_builtin_mul_i16_i32_i32
+);
+triple!(
+    i16,
+    i32,
+    u32,
+    rechrom_builtin_add_i16_i32_u32,
+    rechrom_builtin_sub_i16_i32_u32,
+    rechrom_builtin_mul_i16_i32_u32
+);
+triple!(
+    i16,
+    i32,
+    i64,
+    rechrom_builtin_add_i16_i32_i64,
+    rechrom_builtin_sub_i16_i32_i64,
+    rechrom_builtin_mul_i16_i32_i64
+);
+triple!(
+    i16,
+    i32,
+    u64,
+    rechrom_builtin_add_i16_i32_u64,
+    rechrom_builtin_sub_i16_i32_u64,
+    rechrom_builtin_mul_i16_i32_u64
+);
+triple!(
+    i16,
+    i32,
+    isize,
+    rechrom_builtin_add_i16_i32_isize,
+    rechrom_builtin_sub_i16_i32_isize,
+    rechrom_builtin_mul_i16_i32_isize
+);
+triple!(
+    i16,
+    i32,
+    usize,
+    rechrom_builtin_add_i16_i32_usize,
+    rechrom_builtin_sub_i16_i32_usize,
+    rechrom_builtin_mul_i16_i32_usize
+);
+triple!(
+    i16,
+    u32,
+    i8,
+    rechrom_builtin_add_i16_u32_i8,
+    rechrom_builtin_sub_i16_u32_i8,
+    rechrom_builtin_mul_i16_u32_i8
+);
+triple!(
+    i16,
+    u32,
+    u8,
+    rechrom_builtin_add_i16_u32_u8,
+    rechrom_builtin_sub_i16_u32_u8,
+    rechrom_builtin_mul_i16_u32_u8
+);
+triple!(
+    i16,
+    u32,
+    i16,
+    rechrom_builtin_add_i16_u32_i16,
+    rechrom_builtin_sub_i16_u32_i16,
+    rechrom_builtin_mul_i16_u32_i16
+);
+triple!(
+    i16,
+    u32,
+    u16,
+    rechrom_builtin_add_i16_u32_u16,
+    rechrom_builtin_sub_i16_u32_u16,
+    rechrom_builtin_mul_i16_u32_u16
+);
+triple!(
+    i16,
+    u32,
+    i32,
+    rechrom_builtin_add_i16_u32_i32,
+    rechrom_builtin_sub_i16_u32_i32,
+    rechrom_builtin_mul_i16_u32_i32
+);
+triple!(
+    i16,
+    u32,
+    u32,
+    rechrom_builtin_add_i16_u32_u32,
+    rechrom_builtin_sub_i16_u32_u32,
+    rechrom_builtin_mul_i16_u32_u32
+);
+triple!(
+    i16,
+    u32,
+    i64,
+    rechrom_builtin_add_i16_u32_i64,
+    rechrom_builtin_sub_i16_u32_i64,
+    rechrom_builtin_mul_i16_u32_i64
+);
+triple!(
+    i16,
+    u32,
+    u64,
+    rechrom_builtin_add_i16_u32_u64,
+    rechrom_builtin_sub_i16_u32_u64,
+    rechrom_builtin_mul_i16_u32_u64
+);
+triple!(
+    i16,
+    u32,
+    isize,
+    rechrom_builtin_add_i16_u32_isize,
+    rechrom_builtin_sub_i16_u32_isize,
+    rechrom_builtin_mul_i16_u32_isize
+);
+triple!(
+    i16,
+    u32,
+    usize,
+    rechrom_builtin_add_i16_u32_usize,
+    rechrom_builtin_sub_i16_u32_usize,
+    rechrom_builtin_mul_i16_u32_usize
+);
+triple!(
+    i16,
+    i64,
+    i8,
+    rechrom_builtin_add_i16_i64_i8,
+    rechrom_builtin_sub_i16_i64_i8,
+    rechrom_builtin_mul_i16_i64_i8
+);
+triple!(
+    i16,
+    i64,
+    u8,
+    rechrom_builtin_add_i16_i64_u8,
+    rechrom_builtin_sub_i16_i64_u8,
+    rechrom_builtin_mul_i16_i64_u8
+);
+triple!(
+    i16,
+    i64,
+    i16,
+    rechrom_builtin_add_i16_i64_i16,
+    rechrom_builtin_sub_i16_i64_i16,
+    rechrom_builtin_mul_i16_i64_i16
+);
+triple!(
+    i16,
+    i64,
+    u16,
+    rechrom_builtin_add_i16_i64_u16,
+    rechrom_builtin_sub_i16_i64_u16,
+    rechrom_builtin_mul_i16_i64_u16
+);
+triple!(
+    i16,
+    i64,
+    i32,
+    rechrom_builtin_add_i16_i64_i32,
+    rechrom_builtin_sub_i16_i64_i32,
+    rechrom_builtin_mul_i16_i64_i32
+);
+triple!(
+    i16,
+    i64,
+    u32,
+    rechrom_builtin_add_i16_i64_u32,
+    rechrom_builtin_sub_i16_i64_u32,
+    rechrom_builtin_mul_i16_i64_u32
+);
+triple!(
+    i16,
+    i64,
+    i64,
+    rechrom_builtin_add_i16_i64_i64,
+    rechrom_builtin_sub_i16_i64_i64,
+    rechrom_builtin_mul_i16_i64_i64
+);
+triple!(
+    i16,
+    i64,
+    u64,
+    rechrom_builtin_add_i16_i64_u64,
+    rechrom_builtin_sub_i16_i64_u64,
+    rechrom_builtin_mul_i16_i64_u64
+);
+triple!(
+    i16,
+    i64,
+    isize,
+    rechrom_builtin_add_i16_i64_isize,
+    rechrom_builtin_sub_i16_i64_isize,
+    rechrom_builtin_mul_i16_i64_isize
+);
+triple!(
+    i16,
+    i64,
+    usize,
+    rechrom_builtin_add_i16_i64_usize,
+    rechrom_builtin_sub_i16_i64_usize,
+    rechrom_builtin_mul_i16_i64_usize
+);
+triple!(
+    i16,
+    u64,
+    i8,
+    rechrom_builtin_add_i16_u64_i8,
+    rechrom_builtin_sub_i16_u64_i8,
+    rechrom_builtin_mul_i16_u64_i8
+);
+triple!(
+    i16,
+    u64,
+    u8,
+    rechrom_builtin_add_i16_u64_u8,
+    rechrom_builtin_sub_i16_u64_u8,
+    rechrom_builtin_mul_i16_u64_u8
+);
+triple!(
+    i16,
+    u64,
+    i16,
+    rechrom_builtin_add_i16_u64_i16,
+    rechrom_builtin_sub_i16_u64_i16,
+    rechrom_builtin_mul_i16_u64_i16
+);
+triple!(
+    i16,
+    u64,
+    u16,
+    rechrom_builtin_add_i16_u64_u16,
+    rechrom_builtin_sub_i16_u64_u16,
+    rechrom_builtin_mul_i16_u64_u16
+);
+triple!(
+    i16,
+    u64,
+    i32,
+    rechrom_builtin_add_i16_u64_i32,
+    rechrom_builtin_sub_i16_u64_i32,
+    rechrom_builtin_mul_i16_u64_i32
+);
+triple!(
+    i16,
+    u64,
+    u32,
+    rechrom_builtin_add_i16_u64_u32,
+    rechrom_builtin_sub_i16_u64_u32,
+    rechrom_builtin_mul_i16_u64_u32
+);
+triple!(
+    i16,
+    u64,
+    i64,
+    rechrom_builtin_add_i16_u64_i64,
+    rechrom_builtin_sub_i16_u64_i64,
+    rechrom_builtin_mul_i16_u64_i64
+);
+triple!(
+    i16,
+    u64,
+    u64,
+    rechrom_builtin_add_i16_u64_u64,
+    rechrom_builtin_sub_i16_u64_u64,
+    rechrom_builtin_mul_i16_u64_u64
+);
+triple!(
+    i16,
+    u64,
+    isize,
+    rechrom_builtin_add_i16_u64_isize,
+    rechrom_builtin_sub_i16_u64_isize,
+    rechrom_builtin_mul_i16_u64_isize
+);
+triple!(
+    i16,
+    u64,
+    usize,
+    rechrom_builtin_add_i16_u64_usize,
+    rechrom_builtin_sub_i16_u64_usize,
+    rechrom_builtin_mul_i16_u64_usize
+);
+triple!(
+    i16,
+    isize,
+    i8,
+    rechrom_builtin_add_i16_isize_i8,
+    rechrom_builtin_sub_i16_isize_i8,
+    rechrom_builtin_mul_i16_isize_i8
+);
+triple!(
+    i16,
+    isize,
+    u8,
+    rechrom_builtin_add_i16_isize_u8,
+    rechrom_builtin_sub_i16_isize_u8,
+    rechrom_builtin_mul_i16_isize_u8
+);
+triple!(
+    i16,
+    isize,
+    i16,
+    rechrom_builtin_add_i16_isize_i16,
+    rechrom_builtin_sub_i16_isize_i16,
+    rechrom_builtin_mul_i16_isize_i16
+);
+triple!(
+    i16,
+    isize,
+    u16,
+    rechrom_builtin_add_i16_isize_u16,
+    rechrom_builtin_sub_i16_isize_u16,
+    rechrom_builtin_mul_i16_isize_u16
+);
+triple!(
+    i16,
+    isize,
+    i32,
+    rechrom_builtin_add_i16_isize_i32,
+    rechrom_builtin_sub_i16_isize_i32,
+    rechrom_builtin_mul_i16_isize_i32
+);
+triple!(
+    i16,
+    isize,
+    u32,
+    rechrom_builtin_add_i16_isize_u32,
+    rechrom_builtin_sub_i16_isize_u32,
+    rechrom_builtin_mul_i16_isize_u32
+);
+triple!(
+    i16,
+    isize,
+    i64,
+    rechrom_builtin_add_i16_isize_i64,
+    rechrom_builtin_sub_i16_isize_i64,
+    rechrom_builtin_mul_i16_isize_i64
+);
+triple!(
+    i16,
+    isize,
+    u64,
+    rechrom_builtin_add_i16_isize_u64,
+    rechrom_builtin_sub_i16_isize_u64,
+    rechrom_builtin_mul_i16_isize_u64
+);
+triple!(
+    i16,
+    isize,
+    isize,
+    rechrom_builtin_add_i16_isize_isize,
+    rechrom_builtin_sub_i16_isize_isize,
+    rechrom_builtin_mul_i16_isize_isize
+);
+triple!(
+    i16,
+    isize,
+    usize,
+    rechrom_builtin_add_i16_isize_usize,
+    rechrom_builtin_sub_i16_isize_usize,
+    rechrom_builtin_mul_i16_isize_usize
+);
+triple!(
+    i16,
+    usize,
+    i8,
+    rechrom_builtin_add_i16_usize_i8,
+    rechrom_builtin_sub_i16_usize_i8,
+    rechrom_builtin_mul_i16_usize_i8
+);
+triple!(
+    i16,
+    usize,
+    u8,
+    rechrom_builtin_add_i16_usize_u8,
+    rechrom_builtin_sub_i16_usize_u8,
+    rechrom_builtin_mul_i16_usize_u8
+);
+triple!(
+    i16,
+    usize,
+    i16,
+    rechrom_builtin_add_i16_usize_i16,
+    rechrom_builtin_sub_i16_usize_i16,
+    rechrom_builtin_mul_i16_usize_i16
+);
+triple!(
+    i16,
+    usize,
+    u16,
+    rechrom_builtin_add_i16_usize_u16,
+    rechrom_builtin_sub_i16_usize_u16,
+    rechrom_builtin_mul_i16_usize_u16
+);
+triple!(
+    i16,
+    usize,
+    i32,
+    rechrom_builtin_add_i16_usize_i32,
+    rechrom_builtin_sub_i16_usize_i32,
+    rechrom_builtin_mul_i16_usize_i32
+);
+triple!(
+    i16,
+    usize,
+    u32,
+    rechrom_builtin_add_i16_usize_u32,
+    rechrom_builtin_sub_i16_usize_u32,
+    rechrom_builtin_mul_i16_usize_u32
+);
+triple!(
+    i16,
+    usize,
+    i64,
+    rechrom_builtin_add_i16_usize_i64,
+    rechrom_builtin_sub_i16_usize_i64,
+    rechrom_builtin_mul_i16_usize_i64
+);
+triple!(
+    i16,
+    usize,
+    u64,
+    rechrom_builtin_add_i16_usize_u64,
+    rechrom_builtin_sub_i16_usize_u64,
+    rechrom_builtin_mul_i16_usize_u64
+);
+triple!(
+    i16,
+    usize,
+    isize,
+    rechrom_builtin_add_i16_usize_isize,
+    rechrom_builtin_sub_i16_usize_isize,
+    rechrom_builtin_mul_i16_usize_isize
+);
+triple!(
+    i16,
+    usize,
+    usize,
+    rechrom_builtin_add_i16_usize_usize,
+    rechrom_builtin_sub_i16_usize_usize,
+    rechrom_builtin_mul_i16_usize_usize
+);
+triple!(
+    u16,
+    i8,
+    i8,
+    rechrom_builtin_add_u16_i8_i8,
+    rechrom_builtin_sub_u16_i8_i8,
+    rechrom_builtin_mul_u16_i8_i8
+);
+triple!(
+    u16,
+    i8,
+    u8,
+    rechrom_builtin_add_u16_i8_u8,
+    rechrom_builtin_sub_u16_i8_u8,
+    rechrom_builtin_mul_u16_i8_u8
+);
+triple!(
+    u16,
+    i8,
+    i16,
+    rechrom_builtin_add_u16_i8_i16,
+    rechrom_builtin_sub_u16_i8_i16,
+    rechrom_builtin_mul_u16_i8_i16
+);
+triple!(
+    u16,
+    i8,
+    u16,
+    rechrom_builtin_add_u16_i8_u16,
+    rechrom_builtin_sub_u16_i8_u16,
+    rechrom_builtin_mul_u16_i8_u16
+);
+triple!(
+    u16,
+    i8,
+    i32,
+    rechrom_builtin_add_u16_i8_i32,
+    rechrom_builtin_sub_u16_i8_i32,
+    rechrom_builtin_mul_u16_i8_i32
+);
+triple!(
+    u16,
+    i8,
+    u32,
+    rechrom_builtin_add_u16_i8_u32,
+    rechrom_builtin_sub_u16_i8_u32,
+    rechrom_builtin_mul_u16_i8_u32
+);
+triple!(
+    u16,
+    i8,
+    i64,
+    rechrom_builtin_add_u16_i8_i64,
+    rechrom_builtin_sub_u16_i8_i64,
+    rechrom_builtin_mul_u16_i8_i64
+);
+triple!(
+    u16,
+    i8,
+    u64,
+    rechrom_builtin_add_u16_i8_u64,
+    rechrom_builtin_sub_u16_i8_u64,
+    rechrom_builtin_mul_u16_i8_u64
+);
+triple!(
+    u16,
+    i8,
+    isize,
+    rechrom_builtin_add_u16_i8_isize,
+    rechrom_builtin_sub_u16_i8_isize,
+    rechrom_builtin_mul_u16_i8_isize
+);
+triple!(
+    u16,
+    i8,
+    usize,
+    rechrom_builtin_add_u16_i8_usize,
+    rechrom_builtin_sub_u16_i8_usize,
+    rechrom_builtin_mul_u16_i8_usize
+);
+triple!(
+    u16,
+    u8,
+    i8,
+    rechrom_builtin_add_u16_u8_i8,
+    rechrom_builtin_sub_u16_u8_i8,
+    rechrom_builtin_mul_u16_u8_i8
+);
+triple!(
+    u16,
+    u8,
+    u8,
+    rechrom_builtin_add_u16_u8_u8,
+    rechrom_builtin_sub_u16_u8_u8,
+    rechrom_builtin_mul_u16_u8_u8
+);
+triple!(
+    u16,
+    u8,
+    i16,
+    rechrom_builtin_add_u16_u8_i16,
+    rechrom_builtin_sub_u16_u8_i16,
+    rechrom_builtin_mul_u16_u8_i16
+);
+triple!(
+    u16,
+    u8,
+    u16,
+    rechrom_builtin_add_u16_u8_u16,
+    rechrom_builtin_sub_u16_u8_u16,
+    rechrom_builtin_mul_u16_u8_u16
+);
+triple!(
+    u16,
+    u8,
+    i32,
+    rechrom_builtin_add_u16_u8_i32,
+    rechrom_builtin_sub_u16_u8_i32,
+    rechrom_builtin_mul_u16_u8_i32
+);
+triple!(
+    u16,
+    u8,
+    u32,
+    rechrom_builtin_add_u16_u8_u32,
+    rechrom_builtin_sub_u16_u8_u32,
+    rechrom_builtin_mul_u16_u8_u32
+);
+triple!(
+    u16,
+    u8,
+    i64,
+    rechrom_builtin_add_u16_u8_i64,
+    rechrom_builtin_sub_u16_u8_i64,
+    rechrom_builtin_mul_u16_u8_i64
+);
+triple!(
+    u16,
+    u8,
+    u64,
+    rechrom_builtin_add_u16_u8_u64,
+    rechrom_builtin_sub_u16_u8_u64,
+    rechrom_builtin_mul_u16_u8_u64
+);
+triple!(
+    u16,
+    u8,
+    isize,
+    rechrom_builtin_add_u16_u8_isize,
+    rechrom_builtin_sub_u16_u8_isize,
+    rechrom_builtin_mul_u16_u8_isize
+);
+triple!(
+    u16,
+    u8,
+    usize,
+    rechrom_builtin_add_u16_u8_usize,
+    rechrom_builtin_sub_u16_u8_usize,
+    rechrom_builtin_mul_u16_u8_usize
+);
+triple!(
+    u16,
+    i16,
+    i8,
+    rechrom_builtin_add_u16_i16_i8,
+    rechrom_builtin_sub_u16_i16_i8,
+    rechrom_builtin_mul_u16_i16_i8
+);
+triple!(
+    u16,
+    i16,
+    u8,
+    rechrom_builtin_add_u16_i16_u8,
+    rechrom_builtin_sub_u16_i16_u8,
+    rechrom_builtin_mul_u16_i16_u8
+);
+triple!(
+    u16,
+    i16,
+    i16,
+    rechrom_builtin_add_u16_i16_i16,
+    rechrom_builtin_sub_u16_i16_i16,
+    rechrom_builtin_mul_u16_i16_i16
+);
+triple!(
+    u16,
+    i16,
+    u16,
+    rechrom_builtin_add_u16_i16_u16,
+    rechrom_builtin_sub_u16_i16_u16,
+    rechrom_builtin_mul_u16_i16_u16
+);
+triple!(
+    u16,
+    i16,
+    i32,
+    rechrom_builtin_add_u16_i16_i32,
+    rechrom_builtin_sub_u16_i16_i32,
+    rechrom_builtin_mul_u16_i16_i32
+);
+triple!(
+    u16,
+    i16,
+    u32,
+    rechrom_builtin_add_u16_i16_u32,
+    rechrom_builtin_sub_u16_i16_u32,
+    rechrom_builtin_mul_u16_i16_u32
+);
+triple!(
+    u16,
+    i16,
+    i64,
+    rechrom_builtin_add_u16_i16_i64,
+    rechrom_builtin_sub_u16_i16_i64,
+    rechrom_builtin_mul_u16_i16_i64
+);
+triple!(
+    u16,
+    i16,
+    u64,
+    rechrom_builtin_add_u16_i16_u64,
+    rechrom_builtin_sub_u16_i16_u64,
+    rechrom_builtin_mul_u16_i16_u64
+);
+triple!(
+    u16,
+    i16,
+    isize,
+    rechrom_builtin_add_u16_i16_isize,
+    rechrom_builtin_sub_u16_i16_isize,
+    rechrom_builtin_mul_u16_i16_isize
+);
+triple!(
+    u16,
+    i16,
+    usize,
+    rechrom_builtin_add_u16_i16_usize,
+    rechrom_builtin_sub_u16_i16_usize,
+    rechrom_builtin_mul_u16_i16_usize
+);
+triple!(
+    u16,
+    u16,
+    i8,
+    rechrom_builtin_add_u16_u16_i8,
+    rechrom_builtin_sub_u16_u16_i8,
+    rechrom_builtin_mul_u16_u16_i8
+);
+triple!(
+    u16,
+    u16,
+    u8,
+    rechrom_builtin_add_u16_u16_u8,
+    rechrom_builtin_sub_u16_u16_u8,
+    rechrom_builtin_mul_u16_u16_u8
+);
+triple!(
+    u16,
+    u16,
+    i16,
+    rechrom_builtin_add_u16_u16_i16,
+    rechrom_builtin_sub_u16_u16_i16,
+    rechrom_builtin_mul_u16_u16_i16
+);
+triple!(
+    u16,
+    u16,
+    u16,
+    rechrom_builtin_add_u16_u16_u16,
+    rechrom_builtin_sub_u16_u16_u16,
+    rechrom_builtin_mul_u16_u16_u16
+);
+triple!(
+    u16,
+    u16,
+    i32,
+    rechrom_builtin_add_u16_u16_i32,
+    rechrom_builtin_sub_u16_u16_i32,
+    rechrom_builtin_mul_u16_u16_i32
+);
+triple!(
+    u16,
+    u16,
+    u32,
+    rechrom_builtin_add_u16_u16_u32,
+    rechrom_builtin_sub_u16_u16_u32,
+    rechrom_builtin_mul_u16_u16_u32
+);
+triple!(
+    u16,
+    u16,
+    i64,
+    rechrom_builtin_add_u16_u16_i64,
+    rechrom_builtin_sub_u16_u16_i64,
+    rechrom_builtin_mul_u16_u16_i64
+);
+triple!(
+    u16,
+    u16,
+    u64,
+    rechrom_builtin_add_u16_u16_u64,
+    rechrom_builtin_sub_u16_u16_u64,
+    rechrom_builtin_mul_u16_u16_u64
+);
+triple!(
+    u16,
+    u16,
+    isize,
+    rechrom_builtin_add_u16_u16_isize,
+    rechrom_builtin_sub_u16_u16_isize,
+    rechrom_builtin_mul_u16_u16_isize
+);
+triple!(
+    u16,
+    u16,
+    usize,
+    rechrom_builtin_add_u16_u16_usize,
+    rechrom_builtin_sub_u16_u16_usize,
+    rechrom_builtin_mul_u16_u16_usize
+);
+triple!(
+    u16,
+    i32,
+    i8,
+    rechrom_builtin_add_u16_i32_i8,
+    rechrom_builtin_sub_u16_i32_i8,
+    rechrom_builtin_mul_u16_i32_i8
+);
+triple!(
+    u16,
+    i32,
+    u8,
+    rechrom_builtin_add_u16_i32_u8,
+    rechrom_builtin_sub_u16_i32_u8,
+    rechrom_builtin_mul_u16_i32_u8
+);
+triple!(
+    u16,
+    i32,
+    i16,
+    rechrom_builtin_add_u16_i32_i16,
+    rechrom_builtin_sub_u16_i32_i16,
+    rechrom_builtin_mul_u16_i32_i16
+);
+triple!(
+    u16,
+    i32,
+    u16,
+    rechrom_builtin_add_u16_i32_u16,
+    rechrom_builtin_sub_u16_i32_u16,
+    rechrom_builtin_mul_u16_i32_u16
+);
+triple!(
+    u16,
+    i32,
+    i32,
+    rechrom_builtin_add_u16_i32_i32,
+    rechrom_builtin_sub_u16_i32_i32,
+    rechrom_builtin_mul_u16_i32_i32
+);
+triple!(
+    u16,
+    i32,
+    u32,
+    rechrom_builtin_add_u16_i32_u32,
+    rechrom_builtin_sub_u16_i32_u32,
+    rechrom_builtin_mul_u16_i32_u32
+);
+triple!(
+    u16,
+    i32,
+    i64,
+    rechrom_builtin_add_u16_i32_i64,
+    rechrom_builtin_sub_u16_i32_i64,
+    rechrom_builtin_mul_u16_i32_i64
+);
+triple!(
+    u16,
+    i32,
+    u64,
+    rechrom_builtin_add_u16_i32_u64,
+    rechrom_builtin_sub_u16_i32_u64,
+    rechrom_builtin_mul_u16_i32_u64
+);
+triple!(
+    u16,
+    i32,
+    isize,
+    rechrom_builtin_add_u16_i32_isize,
+    rechrom_builtin_sub_u16_i32_isize,
+    rechrom_builtin_mul_u16_i32_isize
+);
+triple!(
+    u16,
+    i32,
+    usize,
+    rechrom_builtin_add_u16_i32_usize,
+    rechrom_builtin_sub_u16_i32_usize,
+    rechrom_builtin_mul_u16_i32_usize
+);
+triple!(
+    u16,
+    u32,
+    i8,
+    rechrom_builtin_add_u16_u32_i8,
+    rechrom_builtin_sub_u16_u32_i8,
+    rechrom_builtin_mul_u16_u32_i8
+);
+triple!(
+    u16,
+    u32,
+    u8,
+    rechrom_builtin_add_u16_u32_u8,
+    rechrom_builtin_sub_u16_u32_u8,
+    rechrom_builtin_mul_u16_u32_u8
+);
+triple!(
+    u16,
+    u32,
+    i16,
+    rechrom_builtin_add_u16_u32_i16,
+    rechrom_builtin_sub_u16_u32_i16,
+    rechrom_builtin_mul_u16_u32_i16
+);
+triple!(
+    u16,
+    u32,
+    u16,
+    rechrom_builtin_add_u16_u32_u16,
+    rechrom_builtin_sub_u16_u32_u16,
+    rechrom_builtin_mul_u16_u32_u16
+);
+triple!(
+    u16,
+    u32,
+    i32,
+    rechrom_builtin_add_u16_u32_i32,
+    rechrom_builtin_sub_u16_u32_i32,
+    rechrom_builtin_mul_u16_u32_i32
+);
+triple!(
+    u16,
+    u32,
+    u32,
+    rechrom_builtin_add_u16_u32_u32,
+    rechrom_builtin_sub_u16_u32_u32,
+    rechrom_builtin_mul_u16_u32_u32
+);
+triple!(
+    u16,
+    u32,
+    i64,
+    rechrom_builtin_add_u16_u32_i64,
+    rechrom_builtin_sub_u16_u32_i64,
+    rechrom_builtin_mul_u16_u32_i64
+);
+triple!(
+    u16,
+    u32,
+    u64,
+    rechrom_builtin_add_u16_u32_u64,
+    rechrom_builtin_sub_u16_u32_u64,
+    rechrom_builtin_mul_u16_u32_u64
+);
+triple!(
+    u16,
+    u32,
+    isize,
+    rechrom_builtin_add_u16_u32_isize,
+    rechrom_builtin_sub_u16_u32_isize,
+    rechrom_builtin_mul_u16_u32_isize
+);
+triple!(
+    u16,
+    u32,
+    usize,
+    rechrom_builtin_add_u16_u32_usize,
+    rechrom_builtin_sub_u16_u32_usize,
+    rechrom_builtin_mul_u16_u32_usize
+);
+triple!(
+    u16,
+    i64,
+    i8,
+    rechrom_builtin_add_u16_i64_i8,
+    rechrom_builtin_sub_u16_i64_i8,
+    rechrom_builtin_mul_u16_i64_i8
+);
+triple!(
+    u16,
+    i64,
+    u8,
+    rechrom_builtin_add_u16_i64_u8,
+    rechrom_builtin_sub_u16_i64_u8,
+    rechrom_builtin_mul_u16_i64_u8
+);
+triple!(
+    u16,
+    i64,
+    i16,
+    rechrom_builtin_add_u16_i64_i16,
+    rechrom_builtin_sub_u16_i64_i16,
+    rechrom_builtin_mul_u16_i64_i16
+);
+triple!(
+    u16,
+    i64,
+    u16,
+    rechrom_builtin_add_u16_i64_u16,
+    rechrom_builtin_sub_u16_i64_u16,
+    rechrom_builtin_mul_u16_i64_u16
+);
+triple!(
+    u16,
+    i64,
+    i32,
+    rechrom_builtin_add_u16_i64_i32,
+    rechrom_builtin_sub_u16_i64_i32,
+    rechrom_builtin_mul_u16_i64_i32
+);
+triple!(
+    u16,
+    i64,
+    u32,
+    rechrom_builtin_add_u16_i64_u32,
+    rechrom_builtin_sub_u16_i64_u32,
+    rechrom_builtin_mul_u16_i64_u32
+);
+triple!(
+    u16,
+    i64,
+    i64,
+    rechrom_builtin_add_u16_i64_i64,
+    rechrom_builtin_sub_u16_i64_i64,
+    rechrom_builtin_mul_u16_i64_i64
+);
+triple!(
+    u16,
+    i64,
+    u64,
+    rechrom_builtin_add_u16_i64_u64,
+    rechrom_builtin_sub_u16_i64_u64,
+    rechrom_builtin_mul_u16_i64_u64
+);
+triple!(
+    u16,
+    i64,
+    isize,
+    rechrom_builtin_add_u16_i64_isize,
+    rechrom_builtin_sub_u16_i64_isize,
+    rechrom_builtin_mul_u16_i64_isize
+);
+triple!(
+    u16,
+    i64,
+    usize,
+    rechrom_builtin_add_u16_i64_usize,
+    rechrom_builtin_sub_u16_i64_usize,
+    rechrom_builtin_mul_u16_i64_usize
+);
+triple!(
+    u16,
+    u64,
+    i8,
+    rechrom_builtin_add_u16_u64_i8,
+    rechrom_builtin_sub_u16_u64_i8,
+    rechrom_builtin_mul_u16_u64_i8
+);
+triple!(
+    u16,
+    u64,
+    u8,
+    rechrom_builtin_add_u16_u64_u8,
+    rechrom_builtin_sub_u16_u64_u8,
+    rechrom_builtin_mul_u16_u64_u8
+);
+triple!(
+    u16,
+    u64,
+    i16,
+    rechrom_builtin_add_u16_u64_i16,
+    rechrom_builtin_sub_u16_u64_i16,
+    rechrom_builtin_mul_u16_u64_i16
+);
+triple!(
+    u16,
+    u64,
+    u16,
+    rechrom_builtin_add_u16_u64_u16,
+    rechrom_builtin_sub_u16_u64_u16,
+    rechrom_builtin_mul_u16_u64_u16
+);
+triple!(
+    u16,
+    u64,
+    i32,
+    rechrom_builtin_add_u16_u64_i32,
+    rechrom_builtin_sub_u16_u64_i32,
+    rechrom_builtin_mul_u16_u64_i32
+);
+triple!(
+    u16,
+    u64,
+    u32,
+    rechrom_builtin_add_u16_u64_u32,
+    rechrom_builtin_sub_u16_u64_u32,
+    rechrom_builtin_mul_u16_u64_u32
+);
+triple!(
+    u16,
+    u64,
+    i64,
+    rechrom_builtin_add_u16_u64_i64,
+    rechrom_builtin_sub_u16_u64_i64,
+    rechrom_builtin_mul_u16_u64_i64
+);
+triple!(
+    u16,
+    u64,
+    u64,
+    rechrom_builtin_add_u16_u64_u64,
+    rechrom_builtin_sub_u16_u64_u64,
+    rechrom_builtin_mul_u16_u64_u64
+);
+triple!(
+    u16,
+    u64,
+    isize,
+    rechrom_builtin_add_u16_u64_isize,
+    rechrom_builtin_sub_u16_u64_isize,
+    rechrom_builtin_mul_u16_u64_isize
+);
+triple!(
+    u16,
+    u64,
+    usize,
+    rechrom_builtin_add_u16_u64_usize,
+    rechrom_builtin_sub_u16_u64_usize,
+    rechrom_builtin_mul_u16_u64_usize
+);
+triple!(
+    u16,
+    isize,
+    i8,
+    rechrom_builtin_add_u16_isize_i8,
+    rechrom_builtin_sub_u16_isize_i8,
+    rechrom_builtin_mul_u16_isize_i8
+);
+triple!(
+    u16,
+    isize,
+    u8,
+    rechrom_builtin_add_u16_isize_u8,
+    rechrom_builtin_sub_u16_isize_u8,
+    rechrom_builtin_mul_u16_isize_u8
+);
+triple!(
+    u16,
+    isize,
+    i16,
+    rechrom_builtin_add_u16_isize_i16,
+    rechrom_builtin_sub_u16_isize_i16,
+    rechrom_builtin_mul_u16_isize_i16
+);
+triple!(
+    u16,
+    isize,
+    u16,
+    rechrom_builtin_add_u16_isize_u16,
+    rechrom_builtin_sub_u16_isize_u16,
+    rechrom_builtin_mul_u16_isize_u16
+);
+triple!(
+    u16,
+    isize,
+    i32,
+    rechrom_builtin_add_u16_isize_i32,
+    rechrom_builtin_sub_u16_isize_i32,
+    rechrom_builtin_mul_u16_isize_i32
+);
+triple!(
+    u16,
+    isize,
+    u32,
+    rechrom_builtin_add_u16_isize_u32,
+    rechrom_builtin_sub_u16_isize_u32,
+    rechrom_builtin_mul_u16_isize_u32
+);
+triple!(
+    u16,
+    isize,
+    i64,
+    rechrom_builtin_add_u16_isize_i64,
+    rechrom_builtin_sub_u16_isize_i64,
+    rechrom_builtin_mul_u16_isize_i64
+);
+triple!(
+    u16,
+    isize,
+    u64,
+    rechrom_builtin_add_u16_isize_u64,
+    rechrom_builtin_sub_u16_isize_u64,
+    rechrom_builtin_mul_u16_isize_u64
+);
+triple!(
+    u16,
+    isize,
+    isize,
+    rechrom_builtin_add_u16_isize_isize,
+    rechrom_builtin_sub_u16_isize_isize,
+    rechrom_builtin_mul_u16_isize_isize
+);
+triple!(
+    u16,
+    isize,
+    usize,
+    rechrom_builtin_add_u16_isize_usize,
+    rechrom_builtin_sub_u16_isize_usize,
+    rechrom_builtin_mul_u16_isize_usize
+);
+triple!(
+    u16,
+    usize,
+    i8,
+    rechrom_builtin_add_u16_usize_i8,
+    rechrom_builtin_sub_u16_usize_i8,
+    rechrom_builtin_mul_u16_usize_i8
+);
+triple!(
+    u16,
+    usize,
+    u8,
+    rechrom_builtin_add_u16_usize_u8,
+    rechrom_builtin_sub_u16_usize_u8,
+    rechrom_builtin_mul_u16_usize_u8
+);
+triple!(
+    u16,
+    usize,
+    i16,
+    rechrom_builtin_add_u16_usize_i16,
+    rechrom_builtin_sub_u16_usize_i16,
+    rechrom_builtin_mul_u16_usize_i16
+);
+triple!(
+    u16,
+    usize,
+    u16,
+    rechrom_builtin_add_u16_usize_u16,
+    rechrom_builtin_sub_u16_usize_u16,
+    rechrom_builtin_mul_u16_usize_u16
+);
+triple!(
+    u16,
+    usize,
+    i32,
+    rechrom_builtin_add_u16_usize_i32,
+    rechrom_builtin_sub_u16_usize_i32,
+    rechrom_builtin_mul_u16_usize_i32
+);
+triple!(
+    u16,
+    usize,
+    u32,
+    rechrom_builtin_add_u16_usize_u32,
+    rechrom_builtin_sub_u16_usize_u32,
+    rechrom_builtin_mul_u16_usize_u32
+);
+triple!(
+    u16,
+    usize,
+    i64,
+    rechrom_builtin_add_u16_usize_i64,
+    rechrom_builtin_sub_u16_usize_i64,
+    rechrom_builtin_mul_u16_usize_i64
+);
+triple!(
+    u16,
+    usize,
+    u64,
+    rechrom_builtin_add_u16_usize_u64,
+    rechrom_builtin_sub_u16_usize_u64,
+    rechrom_builtin_mul_u16_usize_u64
+);
+triple!(
+    u16,
+    usize,
+    isize,
+    rechrom_builtin_add_u16_usize_isize,
+    rechrom_builtin_sub_u16_usize_isize,
+    rechrom_builtin_mul_u16_usize_isize
+);
+triple!(
+    u16,
+    usize,
+    usize,
+    rechrom_builtin_add_u16_usize_usize,
+    rechrom_builtin_sub_u16_usize_usize,
+    rechrom_builtin_mul_u16_usize_usize
+);
+triple!(
+    i32,
+    i8,
+    i8,
+    rechrom_builtin_add_i32_i8_i8,
+    rechrom_builtin_sub_i32_i8_i8,
+    rechrom_builtin_mul_i32_i8_i8
+);
+triple!(
+    i32,
+    i8,
+    u8,
+    rechrom_builtin_add_i32_i8_u8,
+    rechrom_builtin_sub_i32_i8_u8,
+    rechrom_builtin_mul_i32_i8_u8
+);
+triple!(
+    i32,
+    i8,
+    i16,
+    rechrom_builtin_add_i32_i8_i16,
+    rechrom_builtin_sub_i32_i8_i16,
+    rechrom_builtin_mul_i32_i8_i16
+);
+triple!(
+    i32,
+    i8,
+    u16,
+    rechrom_builtin_add_i32_i8_u16,
+    rechrom_builtin_sub_i32_i8_u16,
+    rechrom_builtin_mul_i32_i8_u16
+);
+triple!(
+    i32,
+    i8,
+    i32,
+    rechrom_builtin_add_i32_i8_i32,
+    rechrom_builtin_sub_i32_i8_i32,
+    rechrom_builtin_mul_i32_i8_i32
+);
+triple!(
+    i32,
+    i8,
+    u32,
+    rechrom_builtin_add_i32_i8_u32,
+    rechrom_builtin_sub_i32_i8_u32,
+    rechrom_builtin_mul_i32_i8_u32
+);
+triple!(
+    i32,
+    i8,
+    i64,
+    rechrom_builtin_add_i32_i8_i64,
+    rechrom_builtin_sub_i32_i8_i64,
+    rechrom_builtin_mul_i32_i8_i64
+);
+triple!(
+    i32,
+    i8,
+    u64,
+    rechrom_builtin_add_i32_i8_u64,
+    rechrom_builtin_sub_i32_i8_u64,
+    rechrom_builtin_mul_i32_i8_u64
+);
+triple!(
+    i32,
+    i8,
+    isize,
+    rechrom_builtin_add_i32_i8_isize,
+    rechrom_builtin_sub_i32_i8_isize,
+    rechrom_builtin_mul_i32_i8_isize
+);
+triple!(
+    i32,
+    i8,
+    usize,
+    rechrom_builtin_add_i32_i8_usize,
+    rechrom_builtin_sub_i32_i8_usize,
+    rechrom_builtin_mul_i32_i8_usize
+);
+triple!(
+    i32,
+    u8,
+    i8,
+    rechrom_builtin_add_i32_u8_i8,
+    rechrom_builtin_sub_i32_u8_i8,
+    rechrom_builtin_mul_i32_u8_i8
+);
+triple!(
+    i32,
+    u8,
+    u8,
+    rechrom_builtin_add_i32_u8_u8,
+    rechrom_builtin_sub_i32_u8_u8,
+    rechrom_builtin_mul_i32_u8_u8
+);
+triple!(
+    i32,
+    u8,
+    i16,
+    rechrom_builtin_add_i32_u8_i16,
+    rechrom_builtin_sub_i32_u8_i16,
+    rechrom_builtin_mul_i32_u8_i16
+);
+triple!(
+    i32,
+    u8,
+    u16,
+    rechrom_builtin_add_i32_u8_u16,
+    rechrom_builtin_sub_i32_u8_u16,
+    rechrom_builtin_mul_i32_u8_u16
+);
+triple!(
+    i32,
+    u8,
+    i32,
+    rechrom_builtin_add_i32_u8_i32,
+    rechrom_builtin_sub_i32_u8_i32,
+    rechrom_builtin_mul_i32_u8_i32
+);
+triple!(
+    i32,
+    u8,
+    u32,
+    rechrom_builtin_add_i32_u8_u32,
+    rechrom_builtin_sub_i32_u8_u32,
+    rechrom_builtin_mul_i32_u8_u32
+);
+triple!(
+    i32,
+    u8,
+    i64,
+    rechrom_builtin_add_i32_u8_i64,
+    rechrom_builtin_sub_i32_u8_i64,
+    rechrom_builtin_mul_i32_u8_i64
+);
+triple!(
+    i32,
+    u8,
+    u64,
+    rechrom_builtin_add_i32_u8_u64,
+    rechrom_builtin_sub_i32_u8_u64,
+    rechrom_builtin_mul_i32_u8_u64
+);
+triple!(
+    i32,
+    u8,
+    isize,
+    rechrom_builtin_add_i32_u8_isize,
+    rechrom_builtin_sub_i32_u8_isize,
+    rechrom_builtin_mul_i32_u8_isize
+);
+triple!(
+    i32,
+    u8,
+    usize,
+    rechrom_builtin_add_i32_u8_usize,
+    rechrom_builtin_sub_i32_u8_usize,
+    rechrom_builtin_mul_i32_u8_usize
+);
+triple!(
+    i32,
+    i16,
+    i8,
+    rechrom_builtin_add_i32_i16_i8,
+    rechrom_builtin_sub_i32_i16_i8,
+    rechrom_builtin_mul_i32_i16_i8
+);
+triple!(
+    i32,
+    i16,
+    u8,
+    rechrom_builtin_add_i32_i16_u8,
+    rechrom_builtin_sub_i32_i16_u8,
+    rechrom_builtin_mul_i32_i16_u8
+);
+triple!(
+    i32,
+    i16,
+    i16,
+    rechrom_builtin_add_i32_i16_i16,
+    rechrom_builtin_sub_i32_i16_i16,
+    rechrom_builtin_mul_i32_i16_i16
+);
+triple!(
+    i32,
+    i16,
+    u16,
+    rechrom_builtin_add_i32_i16_u16,
+    rechrom_builtin_sub_i32_i16_u16,
+    rechrom_builtin_mul_i32_i16_u16
+);
+triple!(
+    i32,
+    i16,
+    i32,
+    rechrom_builtin_add_i32_i16_i32,
+    rechrom_builtin_sub_i32_i16_i32,
+    rechrom_builtin_mul_i32_i16_i32
+);
+triple!(
+    i32,
+    i16,
+    u32,
+    rechrom_builtin_add_i32_i16_u32,
+    rechrom_builtin_sub_i32_i16_u32,
+    rechrom_builtin_mul_i32_i16_u32
+);
+triple!(
+    i32,
+    i16,
+    i64,
+    rechrom_builtin_add_i32_i16_i64,
+    rechrom_builtin_sub_i32_i16_i64,
+    rechrom_builtin_mul_i32_i16_i64
+);
+triple!(
+    i32,
+    i16,
+    u64,
+    rechrom_builtin_add_i32_i16_u64,
+    rechrom_builtin_sub_i32_i16_u64,
+    rechrom_builtin_mul_i32_i16_u64
+);
+triple!(
+    i32,
+    i16,
+    isize,
+    rechrom_builtin_add_i32_i16_isize,
+    rechrom_builtin_sub_i32_i16_isize,
+    rechrom_builtin_mul_i32_i16_isize
+);
+triple!(
+    i32,
+    i16,
+    usize,
+    rechrom_builtin_add_i32_i16_usize,
+    rechrom_builtin_sub_i32_i16_usize,
+    rechrom_builtin_mul_i32_i16_usize
+);
+triple!(
+    i32,
+    u16,
+    i8,
+    rechrom_builtin_add_i32_u16_i8,
+    rechrom_builtin_sub_i32_u16_i8,
+    rechrom_builtin_mul_i32_u16_i8
+);
+triple!(
+    i32,
+    u16,
+    u8,
+    rechrom_builtin_add_i32_u16_u8,
+    rechrom_builtin_sub_i32_u16_u8,
+    rechrom_builtin_mul_i32_u16_u8
+);
+triple!(
+    i32,
+    u16,
+    i16,
+    rechrom_builtin_add_i32_u16_i16,
+    rechrom_builtin_sub_i32_u16_i16,
+    rechrom_builtin_mul_i32_u16_i16
+);
+triple!(
+    i32,
+    u16,
+    u16,
+    rechrom_builtin_add_i32_u16_u16,
+    rechrom_builtin_sub_i32_u16_u16,
+    rechrom_builtin_mul_i32_u16_u16
+);
+triple!(
+    i32,
+    u16,
+    i32,
+    rechrom_builtin_add_i32_u16_i32,
+    rechrom_builtin_sub_i32_u16_i32,
+    rechrom_builtin_mul_i32_u16_i32
+);
+triple!(
+    i32,
+    u16,
+    u32,
+    rechrom_builtin_add_i32_u16_u32,
+    rechrom_builtin_sub_i32_u16_u32,
+    rechrom_builtin_mul_i32_u16_u32
+);
+triple!(
+    i32,
+    u16,
+    i64,
+    rechrom_builtin_add_i32_u16_i64,
+    rechrom_builtin_sub_i32_u16_i64,
+    rechrom_builtin_mul_i32_u16_i64
+);
+triple!(
+    i32,
+    u16,
+    u64,
+    rechrom_builtin_add_i32_u16_u64,
+    rechrom_builtin_sub_i32_u16_u64,
+    rechrom_builtin_mul_i32_u16_u64
+);
+triple!(
+    i32,
+    u16,
+    isize,
+    rechrom_builtin_add_i32_u16_isize,
+    rechrom_builtin_sub_i32_u16_isize,
+    rechrom_builtin_mul_i32_u16_isize
+);
+triple!(
+    i32,
+    u16,
+    usize,
+    rechrom_builtin_add_i32_u16_usize,
+    rechrom_builtin_sub_i32_u16_usize,
+    rechrom_builtin_mul_i32_u16_usize
+);
+triple!(
+    i32,
+    i32,
+    i8,
+    rechrom_builtin_add_i32_i32_i8,
+    rechrom_builtin_sub_i32_i32_i8,
+    rechrom_builtin_mul_i32_i32_i8
+);
+triple!(
+    i32,
+    i32,
+    u8,
+    rechrom_builtin_add_i32_i32_u8,
+    rechrom_builtin_sub_i32_i32_u8,
+    rechrom_builtin_mul_i32_i32_u8
+);
+triple!(
+    i32,
+    i32,
+    i16,
+    rechrom_builtin_add_i32_i32_i16,
+    rechrom_builtin_sub_i32_i32_i16,
+    rechrom_builtin_mul_i32_i32_i16
+);
+triple!(
+    i32,
+    i32,
+    u16,
+    rechrom_builtin_add_i32_i32_u16,
+    rechrom_builtin_sub_i32_i32_u16,
+    rechrom_builtin_mul_i32_i32_u16
+);
+triple!(
+    i32,
+    i32,
+    i32,
+    rechrom_builtin_add_i32_i32_i32,
+    rechrom_builtin_sub_i32_i32_i32,
+    rechrom_builtin_mul_i32_i32_i32
+);
+triple!(
+    i32,
+    i32,
+    u32,
+    rechrom_builtin_add_i32_i32_u32,
+    rechrom_builtin_sub_i32_i32_u32,
+    rechrom_builtin_mul_i32_i32_u32
+);
+triple!(
+    i32,
+    i32,
+    i64,
+    rechrom_builtin_add_i32_i32_i64,
+    rechrom_builtin_sub_i32_i32_i64,
+    rechrom_builtin_mul_i32_i32_i64
+);
+triple!(
+    i32,
+    i32,
+    u64,
+    rechrom_builtin_add_i32_i32_u64,
+    rechrom_builtin_sub_i32_i32_u64,
+    rechrom_builtin_mul_i32_i32_u64
+);
+triple!(
+    i32,
+    i32,
+    isize,
+    rechrom_builtin_add_i32_i32_isize,
+    rechrom_builtin_sub_i32_i32_isize,
+    rechrom_builtin_mul_i32_i32_isize
+);
+triple!(
+    i32,
+    i32,
+    usize,
+    rechrom_builtin_add_i32_i32_usize,
+    rechrom_builtin_sub_i32_i32_usize,
+    rechrom_builtin_mul_i32_i32_usize
+);
+triple!(
+    i32,
+    u32,
+    i8,
+    rechrom_builtin_add_i32_u32_i8,
+    rechrom_builtin_sub_i32_u32_i8,
+    rechrom_builtin_mul_i32_u32_i8
+);
+triple!(
+    i32,
+    u32,
+    u8,
+    rechrom_builtin_add_i32_u32_u8,
+    rechrom_builtin_sub_i32_u32_u8,
+    rechrom_builtin_mul_i32_u32_u8
+);
+triple!(
+    i32,
+    u32,
+    i16,
+    rechrom_builtin_add_i32_u32_i16,
+    rechrom_builtin_sub_i32_u32_i16,
+    rechrom_builtin_mul_i32_u32_i16
+);
+triple!(
+    i32,
+    u32,
+    u16,
+    rechrom_builtin_add_i32_u32_u16,
+    rechrom_builtin_sub_i32_u32_u16,
+    rechrom_builtin_mul_i32_u32_u16
+);
+triple!(
+    i32,
+    u32,
+    i32,
+    rechrom_builtin_add_i32_u32_i32,
+    rechrom_builtin_sub_i32_u32_i32,
+    rechrom_builtin_mul_i32_u32_i32
+);
+triple!(
+    i32,
+    u32,
+    u32,
+    rechrom_builtin_add_i32_u32_u32,
+    rechrom_builtin_sub_i32_u32_u32,
+    rechrom_builtin_mul_i32_u32_u32
+);
+triple!(
+    i32,
+    u32,
+    i64,
+    rechrom_builtin_add_i32_u32_i64,
+    rechrom_builtin_sub_i32_u32_i64,
+    rechrom_builtin_mul_i32_u32_i64
+);
+triple!(
+    i32,
+    u32,
+    u64,
+    rechrom_builtin_add_i32_u32_u64,
+    rechrom_builtin_sub_i32_u32_u64,
+    rechrom_builtin_mul_i32_u32_u64
+);
+triple!(
+    i32,
+    u32,
+    isize,
+    rechrom_builtin_add_i32_u32_isize,
+    rechrom_builtin_sub_i32_u32_isize,
+    rechrom_builtin_mul_i32_u32_isize
+);
+triple!(
+    i32,
+    u32,
+    usize,
+    rechrom_builtin_add_i32_u32_usize,
+    rechrom_builtin_sub_i32_u32_usize,
+    rechrom_builtin_mul_i32_u32_usize
+);
+triple!(
+    i32,
+    i64,
+    i8,
+    rechrom_builtin_add_i32_i64_i8,
+    rechrom_builtin_sub_i32_i64_i8,
+    rechrom_builtin_mul_i32_i64_i8
+);
+triple!(
+    i32,
+    i64,
+    u8,
+    rechrom_builtin_add_i32_i64_u8,
+    rechrom_builtin_sub_i32_i64_u8,
+    rechrom_builtin_mul_i32_i64_u8
+);
+triple!(
+    i32,
+    i64,
+    i16,
+    rechrom_builtin_add_i32_i64_i16,
+    rechrom_builtin_sub_i32_i64_i16,
+    rechrom_builtin_mul_i32_i64_i16
+);
+triple!(
+    i32,
+    i64,
+    u16,
+    rechrom_builtin_add_i32_i64_u16,
+    rechrom_builtin_sub_i32_i64_u16,
+    rechrom_builtin_mul_i32_i64_u16
+);
+triple!(
+    i32,
+    i64,
+    i32,
+    rechrom_builtin_add_i32_i64_i32,
+    rechrom_builtin_sub_i32_i64_i32,
+    rechrom_builtin_mul_i32_i64_i32
+);
+triple!(
+    i32,
+    i64,
+    u32,
+    rechrom_builtin_add_i32_i64_u32,
+    rechrom_builtin_sub_i32_i64_u32,
+    rechrom_builtin_mul_i32_i64_u32
+);
+triple!(
+    i32,
+    i64,
+    i64,
+    rechrom_builtin_add_i32_i64_i64,
+    rechrom_builtin_sub_i32_i64_i64,
+    rechrom_builtin_mul_i32_i64_i64
+);
+triple!(
+    i32,
+    i64,
+    u64,
+    rechrom_builtin_add_i32_i64_u64,
+    rechrom_builtin_sub_i32_i64_u64,
+    rechrom_builtin_mul_i32_i64_u64
+);
+triple!(
+    i32,
+    i64,
+    isize,
+    rechrom_builtin_add_i32_i64_isize,
+    rechrom_builtin_sub_i32_i64_isize,
+    rechrom_builtin_mul_i32_i64_isize
+);
+triple!(
+    i32,
+    i64,
+    usize,
+    rechrom_builtin_add_i32_i64_usize,
+    rechrom_builtin_sub_i32_i64_usize,
+    rechrom_builtin_mul_i32_i64_usize
+);
+triple!(
+    i32,
+    u64,
+    i8,
+    rechrom_builtin_add_i32_u64_i8,
+    rechrom_builtin_sub_i32_u64_i8,
+    rechrom_builtin_mul_i32_u64_i8
+);
+triple!(
+    i32,
+    u64,
+    u8,
+    rechrom_builtin_add_i32_u64_u8,
+    rechrom_builtin_sub_i32_u64_u8,
+    rechrom_builtin_mul_i32_u64_u8
+);
+triple!(
+    i32,
+    u64,
+    i16,
+    rechrom_builtin_add_i32_u64_i16,
+    rechrom_builtin_sub_i32_u64_i16,
+    rechrom_builtin_mul_i32_u64_i16
+);
+triple!(
+    i32,
+    u64,
+    u16,
+    rechrom_builtin_add_i32_u64_u16,
+    rechrom_builtin_sub_i32_u64_u16,
+    rechrom_builtin_mul_i32_u64_u16
+);
+triple!(
+    i32,
+    u64,
+    i32,
+    rechrom_builtin_add_i32_u64_i32,
+    rechrom_builtin_sub_i32_u64_i32,
+    rechrom_builtin_mul_i32_u64_i32
+);
+triple!(
+    i32,
+    u64,
+    u32,
+    rechrom_builtin_add_i32_u64_u32,
+    rechrom_builtin_sub_i32_u64_u32,
+    rechrom_builtin_mul_i32_u64_u32
+);
+triple!(
+    i32,
+    u64,
+    i64,
+    rechrom_builtin_add_i32_u64_i64,
+    rechrom_builtin_sub_i32_u64_i64,
+    rechrom_builtin_mul_i32_u64_i64
+);
+triple!(
+    i32,
+    u64,
+    u64,
+    rechrom_builtin_add_i32_u64_u64,
+    rechrom_builtin_sub_i32_u64_u64,
+    rechrom_builtin_mul_i32_u64_u64
+);
+triple!(
+    i32,
+    u64,
+    isize,
+    rechrom_builtin_add_i32_u64_isize,
+    rechrom_builtin_sub_i32_u64_isize,
+    rechrom_builtin_mul_i32_u64_isize
+);
+triple!(
+    i32,
+    u64,
+    usize,
+    rechrom_builtin_add_i32_u64_usize,
+    rechrom_builtin_sub_i32_u64_usize,
+    rechrom_builtin_mul_i32_u64_usize
+);
+triple!(
+    i32,
+    isize,
+    i8,
+    rechrom_builtin_add_i32_isize_i8,
+    rechrom_builtin_sub_i32_isize_i8,
+    rechrom_builtin_mul_i32_isize_i8
+);
+triple!(
+    i32,
+    isize,
+    u8,
+    rechrom_builtin_add_i32_isize_u8,
+    rechrom_builtin_sub_i32_isize_u8,
+    rechrom_builtin_mul_i32_isize_u8
+);
+triple!(
+    i32,
+    isize,
+    i16,
+    rechrom_builtin_add_i32_isize_i16,
+    rechrom_builtin_sub_i32_isize_i16,
+    rechrom_builtin_mul_i32_isize_i16
+);
+triple!(
+    i32,
+    isize,
+    u16,
+    rechrom_builtin_add_i32_isize_u16,
+    rechrom_builtin_sub_i32_isize_u16,
+    rechrom_builtin_mul_i32_isize_u16
+);
+triple!(
+    i32,
+    isize,
+    i32,
+    rechrom_builtin_add_i32_isize_i32,
+    rechrom_builtin_sub_i32_isize_i32,
+    rechrom_builtin_mul_i32_isize_i32
+);
+triple!(
+    i32,
+    isize,
+    u32,
+    rechrom_builtin_add_i32_isize_u32,
+    rechrom_builtin_sub_i32_isize_u32,
+    rechrom_builtin_mul_i32_isize_u32
+);
+triple!(
+    i32,
+    isize,
+    i64,
+    rechrom_builtin_add_i32_isize_i64,
+    rechrom_builtin_sub_i32_isize_i64,
+    rechrom_builtin_mul_i32_isize_i64
+);
+triple!(
+    i32,
+    isize,
+    u64,
+    rechrom_builtin_add_i32_isize_u64,
+    rechrom_builtin_sub_i32_isize_u64,
+    rechrom_builtin_mul_i32_isize_u64
+);
+triple!(
+    i32,
+    isize,
+    isize,
+    rechrom_builtin_add_i32_isize_isize,
+    rechrom_builtin_sub_i32_isize_isize,
+    rechrom_builtin_mul_i32_isize_isize
+);
+triple!(
+    i32,
+    isize,
+    usize,
+    rechrom_builtin_add_i32_isize_usize,
+    rechrom_builtin_sub_i32_isize_usize,
+    rechrom_builtin_mul_i32_isize_usize
+);
+triple!(
+    i32,
+    usize,
+    i8,
+    rechrom_builtin_add_i32_usize_i8,
+    rechrom_builtin_sub_i32_usize_i8,
+    rechrom_builtin_mul_i32_usize_i8
+);
+triple!(
+    i32,
+    usize,
+    u8,
+    rechrom_builtin_add_i32_usize_u8,
+    rechrom_builtin_sub_i32_usize_u8,
+    rechrom_builtin_mul_i32_usize_u8
+);
+triple!(
+    i32,
+    usize,
+    i16,
+    rechrom_builtin_add_i32_usize_i16,
+    rechrom_builtin_sub_i32_usize_i16,
+    rechrom_builtin_mul_i32_usize_i16
+);
+triple!(
+    i32,
+    usize,
+    u16,
+    rechrom_builtin_add_i32_usize_u16,
+    rechrom_builtin_sub_i32_usize_u16,
+    rechrom_builtin_mul_i32_usize_u16
+);
+triple!(
+    i32,
+    usize,
+    i32,
+    rechrom_builtin_add_i32_usize_i32,
+    rechrom_builtin_sub_i32_usize_i32,
+    rechrom_builtin_mul_i32_usize_i32
+);
+triple!(
+    i32,
+    usize,
+    u32,
+    rechrom_builtin_add_i32_usize_u32,
+    rechrom_builtin_sub_i32_usize_u32,
+    rechrom_builtin_mul_i32_usize_u32
+);
+triple!(
+    i32,
+    usize,
+    i64,
+    rechrom_builtin_add_i32_usize_i64,
+    rechrom_builtin_sub_i32_usize_i64,
+    rechrom_builtin_mul_i32_usize_i64
+);
+triple!(
+    i32,
+    usize,
+    u64,
+    rechrom_builtin_add_i32_usize_u64,
+    rechrom_builtin_sub_i32_usize_u64,
+    rechrom_builtin_mul_i32_usize_u64
+);
+triple!(
+    i32,
+    usize,
+    isize,
+    rechrom_builtin_add_i32_usize_isize,
+    rechrom_builtin_sub_i32_usize_isize,
+    rechrom_builtin_mul_i32_usize_isize
+);
+triple!(
+    i32,
+    usize,
+    usize,
+    rechrom_builtin_add_i32_usize_usize,
+    rechrom_builtin_sub_i32_usize_usize,
+    rechrom_builtin_mul_i32_usize_usize
+);
+triple!(
+    u32,
+    i8,
+    i8,
+    rechrom_builtin_add_u32_i8_i8,
+    rechrom_builtin_sub_u32_i8_i8,
+    rechrom_builtin_mul_u32_i8_i8
+);
+triple!(
+    u32,
+    i8,
+    u8,
+    rechrom_builtin_add_u32_i8_u8,
+    rechrom_builtin_sub_u32_i8_u8,
+    rechrom_builtin_mul_u32_i8_u8
+);
+triple!(
+    u32,
+    i8,
+    i16,
+    rechrom_builtin_add_u32_i8_i16,
+    rechrom_builtin_sub_u32_i8_i16,
+    rechrom_builtin_mul_u32_i8_i16
+);
+triple!(
+    u32,
+    i8,
+    u16,
+    rechrom_builtin_add_u32_i8_u16,
+    rechrom_builtin_sub_u32_i8_u16,
+    rechrom_builtin_mul_u32_i8_u16
+);
+triple!(
+    u32,
+    i8,
+    i32,
+    rechrom_builtin_add_u32_i8_i32,
+    rechrom_builtin_sub_u32_i8_i32,
+    rechrom_builtin_mul_u32_i8_i32
+);
+triple!(
+    u32,
+    i8,
+    u32,
+    rechrom_builtin_add_u32_i8_u32,
+    rechrom_builtin_sub_u32_i8_u32,
+    rechrom_builtin_mul_u32_i8_u32
+);
+triple!(
+    u32,
+    i8,
+    i64,
+    rechrom_builtin_add_u32_i8_i64,
+    rechrom_builtin_sub_u32_i8_i64,
+    rechrom_builtin_mul_u32_i8_i64
+);
+triple!(
+    u32,
+    i8,
+    u64,
+    rechrom_builtin_add_u32_i8_u64,
+    rechrom_builtin_sub_u32_i8_u64,
+    rechrom_builtin_mul_u32_i8_u64
+);
+triple!(
+    u32,
+    i8,
+    isize,
+    rechrom_builtin_add_u32_i8_isize,
+    rechrom_builtin_sub_u32_i8_isize,
+    rechrom_builtin_mul_u32_i8_isize
+);
+triple!(
+    u32,
+    i8,
+    usize,
+    rechrom_builtin_add_u32_i8_usize,
+    rechrom_builtin_sub_u32_i8_usize,
+    rechrom_builtin_mul_u32_i8_usize
+);
+triple!(
+    u32,
+    u8,
+    i8,
+    rechrom_builtin_add_u32_u8_i8,
+    rechrom_builtin_sub_u32_u8_i8,
+    rechrom_builtin_mul_u32_u8_i8
+);
+triple!(
+    u32,
+    u8,
+    u8,
+    rechrom_builtin_add_u32_u8_u8,
+    rechrom_builtin_sub_u32_u8_u8,
+    rechrom_builtin_mul_u32_u8_u8
+);
+triple!(
+    u32,
+    u8,
+    i16,
+    rechrom_builtin_add_u32_u8_i16,
+    rechrom_builtin_sub_u32_u8_i16,
+    rechrom_builtin_mul_u32_u8_i16
+);
+triple!(
+    u32,
+    u8,
+    u16,
+    rechrom_builtin_add_u32_u8_u16,
+    rechrom_builtin_sub_u32_u8_u16,
+    rechrom_builtin_mul_u32_u8_u16
+);
+triple!(
+    u32,
+    u8,
+    i32,
+    rechrom_builtin_add_u32_u8_i32,
+    rechrom_builtin_sub_u32_u8_i32,
+    rechrom_builtin_mul_u32_u8_i32
+);
+triple!(
+    u32,
+    u8,
+    u32,
+    rechrom_builtin_add_u32_u8_u32,
+    rechrom_builtin_sub_u32_u8_u32,
+    rechrom_builtin_mul_u32_u8_u32
+);
+triple!(
+    u32,
+    u8,
+    i64,
+    rechrom_builtin_add_u32_u8_i64,
+    rechrom_builtin_sub_u32_u8_i64,
+    rechrom_builtin_mul_u32_u8_i64
+);
+triple!(
+    u32,
+    u8,
+    u64,
+    rechrom_builtin_add_u32_u8_u64,
+    rechrom_builtin_sub_u32_u8_u64,
+    rechrom_builtin_mul_u32_u8_u64
+);
+triple!(
+    u32,
+    u8,
+    isize,
+    rechrom_builtin_add_u32_u8_isize,
+    rechrom_builtin_sub_u32_u8_isize,
+    rechrom_builtin_mul_u32_u8_isize
+);
+triple!(
+    u32,
+    u8,
+    usize,
+    rechrom_builtin_add_u32_u8_usize,
+    rechrom_builtin_sub_u32_u8_usize,
+    rechrom_builtin_mul_u32_u8_usize
+);
+triple!(
+    u32,
+    i16,
+    i8,
+    rechrom_builtin_add_u32_i16_i8,
+    rechrom_builtin_sub_u32_i16_i8,
+    rechrom_builtin_mul_u32_i16_i8
+);
+triple!(
+    u32,
+    i16,
+    u8,
+    rechrom_builtin_add_u32_i16_u8,
+    rechrom_builtin_sub_u32_i16_u8,
+    rechrom_builtin_mul_u32_i16_u8
+);
+triple!(
+    u32,
+    i16,
+    i16,
+    rechrom_builtin_add_u32_i16_i16,
+    rechrom_builtin_sub_u32_i16_i16,
+    rechrom_builtin_mul_u32_i16_i16
+);
+triple!(
+    u32,
+    i16,
+    u16,
+    rechrom_builtin_add_u32_i16_u16,
+    rechrom_builtin_sub_u32_i16_u16,
+    rechrom_builtin_mul_u32_i16_u16
+);
+triple!(
+    u32,
+    i16,
+    i32,
+    rechrom_builtin_add_u32_i16_i32,
+    rechrom_builtin_sub_u32_i16_i32,
+    rechrom_builtin_mul_u32_i16_i32
+);
+triple!(
+    u32,
+    i16,
+    u32,
+    rechrom_builtin_add_u32_i16_u32,
+    rechrom_builtin_sub_u32_i16_u32,
+    rechrom_builtin_mul_u32_i16_u32
+);
+triple!(
+    u32,
+    i16,
+    i64,
+    rechrom_builtin_add_u32_i16_i64,
+    rechrom_builtin_sub_u32_i16_i64,
+    rechrom_builtin_mul_u32_i16_i64
+);
+triple!(
+    u32,
+    i16,
+    u64,
+    rechrom_builtin_add_u32_i16_u64,
+    rechrom_builtin_sub_u32_i16_u64,
+    rechrom_builtin_mul_u32_i16_u64
+);
+triple!(
+    u32,
+    i16,
+    isize,
+    rechrom_builtin_add_u32_i16_isize,
+    rechrom_builtin_sub_u32_i16_isize,
+    rechrom_builtin_mul_u32_i16_isize
+);
+triple!(
+    u32,
+    i16,
+    usize,
+    rechrom_builtin_add_u32_i16_usize,
+    rechrom_builtin_sub_u32_i16_usize,
+    rechrom_builtin_mul_u32_i16_usize
+);
+triple!(
+    u32,
+    u16,
+    i8,
+    rechrom_builtin_add_u32_u16_i8,
+    rechrom_builtin_sub_u32_u16_i8,
+    rechrom_builtin_mul_u32_u16_i8
+);
+triple!(
+    u32,
+    u16,
+    u8,
+    rechrom_builtin_add_u32_u16_u8,
+    rechrom_builtin_sub_u32_u16_u8,
+    rechrom_builtin_mul_u32_u16_u8
+);
+triple!(
+    u32,
+    u16,
+    i16,
+    rechrom_builtin_add_u32_u16_i16,
+    rechrom_builtin_sub_u32_u16_i16,
+    rechrom_builtin_mul_u32_u16_i16
+);
+triple!(
+    u32,
+    u16,
+    u16,
+    rechrom_builtin_add_u32_u16_u16,
+    rechrom_builtin_sub_u32_u16_u16,
+    rechrom_builtin_mul_u32_u16_u16
+);
+triple!(
+    u32,
+    u16,
+    i32,
+    rechrom_builtin_add_u32_u16_i32,
+    rechrom_builtin_sub_u32_u16_i32,
+    rechrom_builtin_mul_u32_u16_i32
+);
+triple!(
+    u32,
+    u16,
+    u32,
+    rechrom_builtin_add_u32_u16_u32,
+    rechrom_builtin_sub_u32_u16_u32,
+    rechrom_builtin_mul_u32_u16_u32
+);
+triple!(
+    u32,
+    u16,
+    i64,
+    rechrom_builtin_add_u32_u16_i64,
+    rechrom_builtin_sub_u32_u16_i64,
+    rechrom_builtin_mul_u32_u16_i64
+);
+triple!(
+    u32,
+    u16,
+    u64,
+    rechrom_builtin_add_u32_u16_u64,
+    rechrom_builtin_sub_u32_u16_u64,
+    rechrom_builtin_mul_u32_u16_u64
+);
+triple!(
+    u32,
+    u16,
+    isize,
+    rechrom_builtin_add_u32_u16_isize,
+    rechrom_builtin_sub_u32_u16_isize,
+    rechrom_builtin_mul_u32_u16_isize
+);
+triple!(
+    u32,
+    u16,
+    usize,
+    rechrom_builtin_add_u32_u16_usize,
+    rechrom_builtin_sub_u32_u16_usize,
+    rechrom_builtin_mul_u32_u16_usize
+);
+triple!(
+    u32,
+    i32,
+    i8,
+    rechrom_builtin_add_u32_i32_i8,
+    rechrom_builtin_sub_u32_i32_i8,
+    rechrom_builtin_mul_u32_i32_i8
+);
+triple!(
+    u32,
+    i32,
+    u8,
+    rechrom_builtin_add_u32_i32_u8,
+    rechrom_builtin_sub_u32_i32_u8,
+    rechrom_builtin_mul_u32_i32_u8
+);
+triple!(
+    u32,
+    i32,
+    i16,
+    rechrom_builtin_add_u32_i32_i16,
+    rechrom_builtin_sub_u32_i32_i16,
+    rechrom_builtin_mul_u32_i32_i16
+);
+triple!(
+    u32,
+    i32,
+    u16,
+    rechrom_builtin_add_u32_i32_u16,
+    rechrom_builtin_sub_u32_i32_u16,
+    rechrom_builtin_mul_u32_i32_u16
+);
+triple!(
+    u32,
+    i32,
+    i32,
+    rechrom_builtin_add_u32_i32_i32,
+    rechrom_builtin_sub_u32_i32_i32,
+    rechrom_builtin_mul_u32_i32_i32
+);
+triple!(
+    u32,
+    i32,
+    u32,
+    rechrom_builtin_add_u32_i32_u32,
+    rechrom_builtin_sub_u32_i32_u32,
+    rechrom_builtin_mul_u32_i32_u32
+);
+triple!(
+    u32,
+    i32,
+    i64,
+    rechrom_builtin_add_u32_i32_i64,
+    rechrom_builtin_sub_u32_i32_i64,
+    rechrom_builtin_mul_u32_i32_i64
+);
+triple!(
+    u32,
+    i32,
+    u64,
+    rechrom_builtin_add_u32_i32_u64,
+    rechrom_builtin_sub_u32_i32_u64,
+    rechrom_builtin_mul_u32_i32_u64
+);
+triple!(
+    u32,
+    i32,
+    isize,
+    rechrom_builtin_add_u32_i32_isize,
+    rechrom_builtin_sub_u32_i32_isize,
+    rechrom_builtin_mul_u32_i32_isize
+);
+triple!(
+    u32,
+    i32,
+    usize,
+    rechrom_builtin_add_u32_i32_usize,
+    rechrom_builtin_sub_u32_i32_usize,
+    rechrom_builtin_mul_u32_i32_usize
+);
+triple!(
+    u32,
+    u32,
+    i8,
+    rechrom_builtin_add_u32_u32_i8,
+    rechrom_builtin_sub_u32_u32_i8,
+    rechrom_builtin_mul_u32_u32_i8
+);
+triple!(
+    u32,
+    u32,
+    u8,
+    rechrom_builtin_add_u32_u32_u8,
+    rechrom_builtin_sub_u32_u32_u8,
+    rechrom_builtin_mul_u32_u32_u8
+);
+triple!(
+    u32,
+    u32,
+    i16,
+    rechrom_builtin_add_u32_u32_i16,
+    rechrom_builtin_sub_u32_u32_i16,
+    rechrom_builtin_mul_u32_u32_i16
+);
+triple!(
+    u32,
+    u32,
+    u16,
+    rechrom_builtin_add_u32_u32_u16,
+    rechrom_builtin_sub_u32_u32_u16,
+    rechrom_builtin_mul_u32_u32_u16
+);
+triple!(
+    u32,
+    u32,
+    i32,
+    rechrom_builtin_add_u32_u32_i32,
+    rechrom_builtin_sub_u32_u32_i32,
+    rechrom_builtin_mul_u32_u32_i32
+);
+triple!(
+    u32,
+    u32,
+    u32,
+    rechrom_builtin_add_u32_u32_u32,
+    rechrom_builtin_sub_u32_u32_u32,
+    rechrom_builtin_mul_u32_u32_u32
+);
+triple!(
+    u32,
+    u32,
+    i64,
+    rechrom_builtin_add_u32_u32_i64,
+    rechrom_builtin_sub_u32_u32_i64,
+    rechrom_builtin_mul_u32_u32_i64
+);
+triple!(
+    u32,
+    u32,
+    u64,
+    rechrom_builtin_add_u32_u32_u64,
+    rechrom_builtin_sub_u32_u32_u64,
+    rechrom_builtin_mul_u32_u32_u64
+);
+triple!(
+    u32,
+    u32,
+    isize,
+    rechrom_builtin_add_u32_u32_isize,
+    rechrom_builtin_sub_u32_u32_isize,
+    rechrom_builtin_mul_u32_u32_isize
+);
+triple!(
+    u32,
+    u32,
+    usize,
+    rechrom_builtin_add_u32_u32_usize,
+    rechrom_builtin_sub_u32_u32_usize,
+    rechrom_builtin_mul_u32_u32_usize
+);
+triple!(
+    u32,
+    i64,
+    i8,
+    rechrom_builtin_add_u32_i64_i8,
+    rechrom_builtin_sub_u32_i64_i8,
+    rechrom_builtin_mul_u32_i64_i8
+);
+triple!(
+    u32,
+    i64,
+    u8,
+    rechrom_builtin_add_u32_i64_u8,
+    rechrom_builtin_sub_u32_i64_u8,
+    rechrom_builtin_mul_u32_i64_u8
+);
+triple!(
+    u32,
+    i64,
+    i16,
+    rechrom_builtin_add_u32_i64_i16,
+    rechrom_builtin_sub_u32_i64_i16,
+    rechrom_builtin_mul_u32_i64_i16
+);
+triple!(
+    u32,
+    i64,
+    u16,
+    rechrom_builtin_add_u32_i64_u16,
+    rechrom_builtin_sub_u32_i64_u16,
+    rechrom_builtin_mul_u32_i64_u16
+);
+triple!(
+    u32,
+    i64,
+    i32,
+    rechrom_builtin_add_u32_i64_i32,
+    rechrom_builtin_sub_u32_i64_i32,
+    rechrom_builtin_mul_u32_i64_i32
+);
+triple!(
+    u32,
+    i64,
+    u32,
+    rechrom_builtin_add_u32_i64_u32,
+    rechrom_builtin_sub_u32_i64_u32,
+    rechrom_builtin_mul_u32_i64_u32
+);
+triple!(
+    u32,
+    i64,
+    i64,
+    rechrom_builtin_add_u32_i64_i64,
+    rechrom_builtin_sub_u32_i64_i64,
+    rechrom_builtin_mul_u32_i64_i64
+);
+triple!(
+    u32,
+    i64,
+    u64,
+    rechrom_builtin_add_u32_i64_u64,
+    rechrom_builtin_sub_u32_i64_u64,
+    rechrom_builtin_mul_u32_i64_u64
+);
+triple!(
+    u32,
+    i64,
+    isize,
+    rechrom_builtin_add_u32_i64_isize,
+    rechrom_builtin_sub_u32_i64_isize,
+    rechrom_builtin_mul_u32_i64_isize
+);
+triple!(
+    u32,
+    i64,
+    usize,
+    rechrom_builtin_add_u32_i64_usize,
+    rechrom_builtin_sub_u32_i64_usize,
+    rechrom_builtin_mul_u32_i64_usize
+);
+triple!(
+    u32,
+    u64,
+    i8,
+    rechrom_builtin_add_u32_u64_i8,
+    rechrom_builtin_sub_u32_u64_i8,
+    rechrom_builtin_mul_u32_u64_i8
+);
+triple!(
+    u32,
+    u64,
+    u8,
+    rechrom_builtin_add_u32_u64_u8,
+    rechrom_builtin_sub_u32_u64_u8,
+    rechrom_builtin_mul_u32_u64_u8
+);
+triple!(
+    u32,
+    u64,
+    i16,
+    rechrom_builtin_add_u32_u64_i16,
+    rechrom_builtin_sub_u32_u64_i16,
+    rechrom_builtin_mul_u32_u64_i16
+);
+triple!(
+    u32,
+    u64,
+    u16,
+    rechrom_builtin_add_u32_u64_u16,
+    rechrom_builtin_sub_u32_u64_u16,
+    rechrom_builtin_mul_u32_u64_u16
+);
+triple!(
+    u32,
+    u64,
+    i32,
+    rechrom_builtin_add_u32_u64_i32,
+    rechrom_builtin_sub_u32_u64_i32,
+    rechrom_builtin_mul_u32_u64_i32
+);
+triple!(
+    u32,
+    u64,
+    u32,
+    rechrom_builtin_add_u32_u64_u32,
+    rechrom_builtin_sub_u32_u64_u32,
+    rechrom_builtin_mul_u32_u64_u32
+);
+triple!(
+    u32,
+    u64,
+    i64,
+    rechrom_builtin_add_u32_u64_i64,
+    rechrom_builtin_sub_u32_u64_i64,
+    rechrom_builtin_mul_u32_u64_i64
+);
+triple!(
+    u32,
+    u64,
+    u64,
+    rechrom_builtin_add_u32_u64_u64,
+    rechrom_builtin_sub_u32_u64_u64,
+    rechrom_builtin_mul_u32_u64_u64
+);
+triple!(
+    u32,
+    u64,
+    isize,
+    rechrom_builtin_add_u32_u64_isize,
+    rechrom_builtin_sub_u32_u64_isize,
+    rechrom_builtin_mul_u32_u64_isize
+);
+triple!(
+    u32,
+    u64,
+    usize,
+    rechrom_builtin_add_u32_u64_usize,
+    rechrom_builtin_sub_u32_u64_usize,
+    rechrom_builtin_mul_u32_u64_usize
+);
+triple!(
+    u32,
+    isize,
+    i8,
+    rechrom_builtin_add_u32_isize_i8,
+    rechrom_builtin_sub_u32_isize_i8,
+    rechrom_builtin_mul_u32_isize_i8
+);
+triple!(
+    u32,
+    isize,
+    u8,
+    rechrom_builtin_add_u32_isize_u8,
+    rechrom_builtin_sub_u32_isize_u8,
+    rechrom_builtin_mul_u32_isize_u8
+);
+triple!(
+    u32,
+    isize,
+    i16,
+    rechrom_builtin_add_u32_isize_i16,
+    rechrom_builtin_sub_u32_isize_i16,
+    rechrom_builtin_mul_u32_isize_i16
+);
+triple!(
+    u32,
+    isize,
+    u16,
+    rechrom_builtin_add_u32_isize_u16,
+    rechrom_builtin_sub_u32_isize_u16,
+    rechrom_builtin_mul_u32_isize_u16
+);
+triple!(
+    u32,
+    isize,
+    i32,
+    rechrom_builtin_add_u32_isize_i32,
+    rechrom_builtin_sub_u32_isize_i32,
+    rechrom_builtin_mul_u32_isize_i32
+);
+triple!(
+    u32,
+    isize,
+    u32,
+    rechrom_builtin_add_u32_isize_u32,
+    rechrom_builtin_sub_u32_isize_u32,
+    rechrom_builtin_mul_u32_isize_u32
+);
+triple!(
+    u32,
+    isize,
+    i64,
+    rechrom_builtin_add_u32_isize_i64,
+    rechrom_builtin_sub_u32_isize_i64,
+    rechrom_builtin_mul_u32_isize_i64
+);
+triple!(
+    u32,
+    isize,
+    u64,
+    rechrom_builtin_add_u32_isize_u64,
+    rechrom_builtin_sub_u32_isize_u64,
+    rechrom_builtin_mul_u32_isize_u64
+);
+triple!(
+    u32,
+    isize,
+    isize,
+    rechrom_builtin_add_u32_isize_isize,
+    rechrom_builtin_sub_u32_isize_isize,
+    rechrom_builtin_mul_u32_isize_isize
+);
+triple!(
+    u32,
+    isize,
+    usize,
+    rechrom_builtin_add_u32_isize_usize,
+    rechrom_builtin_sub_u32_isize_usize,
+    rechrom_builtin_mul_u32_isize_usize
+);
+triple!(
+    u32,
+    usize,
+    i8,
+    rechrom_builtin_add_u32_usize_i8,
+    rechrom_builtin_sub_u32_usize_i8,
+    rechrom_builtin_mul_u32_usize_i8
+);
+triple!(
+    u32,
+    usize,
+    u8,
+    rechrom_builtin_add_u32_usize_u8,
+    rechrom_builtin_sub_u32_usize_u8,
+    rechrom_builtin_mul_u32_usize_u8
+);
+triple!(
+    u32,
+    usize,
+    i16,
+    rechrom_builtin_add_u32_usize_i16,
+    rechrom_builtin_sub_u32_usize_i16,
+    rechrom_builtin_mul_u32_usize_i16
+);
+triple!(
+    u32,
+    usize,
+    u16,
+    rechrom_builtin_add_u32_usize_u16,
+    rechrom_builtin_sub_u32_usize_u16,
+    rechrom_builtin_mul_u32_usize_u16
+);
+triple!(
+    u32,
+    usize,
+    i32,
+    rechrom_builtin_add_u32_usize_i32,
+    rechrom_builtin_sub_u32_usize_i32,
+    rechrom_builtin_mul_u32_usize_i32
+);
+triple!(
+    u32,
+    usize,
+    u32,
+    rechrom_builtin_add_u32_usize_u32,
+    rechrom_builtin_sub_u32_usize_u32,
+    rechrom_builtin_mul_u32_usize_u32
+);
+triple!(
+    u32,
+    usize,
+    i64,
+    rechrom_builtin_add_u32_usize_i64,
+    rechrom_builtin_sub_u32_usize_i64,
+    rechrom_builtin_mul_u32_usize_i64
+);
+triple!(
+    u32,
+    usize,
+    u64,
+    rechrom_builtin_add_u32_usize_u64,
+    rechrom_builtin_sub_u32_usize_u64,
+    rechrom_builtin_mul_u32_usize_u64
+);
+triple!(
+    u32,
+    usize,
+    isize,
+    rechrom_builtin_add_u32_usize_isize,
+    rechrom_builtin_sub_u32_usize_isize,
+    rechrom_builtin_mul_u32_usize_isize
+);
+triple!(
+    u32,
+    usize,
+    usize,
+    rechrom_builtin_add_u32_usize_usize,
+    rechrom_builtin_sub_u32_usize_usize,
+    rechrom_builtin_mul_u32_usize_usize
+);
+triple!(
+    i64,
+    i8,
+    i8,
+    rechrom_builtin_add_i64_i8_i8,
+    rechrom_builtin_sub_i64_i8_i8,
+    rechrom_builtin_mul_i64_i8_i8
+);
+triple!(
+    i64,
+    i8,
+    u8,
+    rechrom_builtin_add_i64_i8_u8,
+    rechrom_builtin_sub_i64_i8_u8,
+    rechrom_builtin_mul_i64_i8_u8
+);
+triple!(
+    i64,
+    i8,
+    i16,
+    rechrom_builtin_add_i64_i8_i16,
+    rechrom_builtin_sub_i64_i8_i16,
+    rechrom_builtin_mul_i64_i8_i16
+);
+triple!(
+    i64,
+    i8,
+    u16,
+    rechrom_builtin_add_i64_i8_u16,
+    rechrom_builtin_sub_i64_i8_u16,
+    rechrom_builtin_mul_i64_i8_u16
+);
+triple!(
+    i64,
+    i8,
+    i32,
+    rechrom_builtin_add_i64_i8_i32,
+    rechrom_builtin_sub_i64_i8_i32,
+    rechrom_builtin_mul_i64_i8_i32
+);
+triple!(
+    i64,
+    i8,
+    u32,
+    rechrom_builtin_add_i64_i8_u32,
+    rechrom_builtin_sub_i64_i8_u32,
+    rechrom_builtin_mul_i64_i8_u32
+);
+triple!(
+    i64,
+    i8,
+    i64,
+    rechrom_builtin_add_i64_i8_i64,
+    rechrom_builtin_sub_i64_i8_i64,
+    rechrom_builtin_mul_i64_i8_i64
+);
+triple!(
+    i64,
+    i8,
+    u64,
+    rechrom_builtin_add_i64_i8_u64,
+    rechrom_builtin_sub_i64_i8_u64,
+    rechrom_builtin_mul_i64_i8_u64
+);
+triple!(
+    i64,
+    i8,
+    isize,
+    rechrom_builtin_add_i64_i8_isize,
+    rechrom_builtin_sub_i64_i8_isize,
+    rechrom_builtin_mul_i64_i8_isize
+);
+triple!(
+    i64,
+    i8,
+    usize,
+    rechrom_builtin_add_i64_i8_usize,
+    rechrom_builtin_sub_i64_i8_usize,
+    rechrom_builtin_mul_i64_i8_usize
+);
+triple!(
+    i64,
+    u8,
+    i8,
+    rechrom_builtin_add_i64_u8_i8,
+    rechrom_builtin_sub_i64_u8_i8,
+    rechrom_builtin_mul_i64_u8_i8
+);
+triple!(
+    i64,
+    u8,
+    u8,
+    rechrom_builtin_add_i64_u8_u8,
+    rechrom_builtin_sub_i64_u8_u8,
+    rechrom_builtin_mul_i64_u8_u8
+);
+triple!(
+    i64,
+    u8,
+    i16,
+    rechrom_builtin_add_i64_u8_i16,
+    rechrom_builtin_sub_i64_u8_i16,
+    rechrom_builtin_mul_i64_u8_i16
+);
+triple!(
+    i64,
+    u8,
+    u16,
+    rechrom_builtin_add_i64_u8_u16,
+    rechrom_builtin_sub_i64_u8_u16,
+    rechrom_builtin_mul_i64_u8_u16
+);
+triple!(
+    i64,
+    u8,
+    i32,
+    rechrom_builtin_add_i64_u8_i32,
+    rechrom_builtin_sub_i64_u8_i32,
+    rechrom_builtin_mul_i64_u8_i32
+);
+triple!(
+    i64,
+    u8,
+    u32,
+    rechrom_builtin_add_i64_u8_u32,
+    rechrom_builtin_sub_i64_u8_u32,
+    rechrom_builtin_mul_i64_u8_u32
+);
+triple!(
+    i64,
+    u8,
+    i64,
+    rechrom_builtin_add_i64_u8_i64,
+    rechrom_builtin_sub_i64_u8_i64,
+    rechrom_builtin_mul_i64_u8_i64
+);
+triple!(
+    i64,
+    u8,
+    u64,
+    rechrom_builtin_add_i64_u8_u64,
+    rechrom_builtin_sub_i64_u8_u64,
+    rechrom_builtin_mul_i64_u8_u64
+);
+triple!(
+    i64,
+    u8,
+    isize,
+    rechrom_builtin_add_i64_u8_isize,
+    rechrom_builtin_sub_i64_u8_isize,
+    rechrom_builtin_mul_i64_u8_isize
+);
+triple!(
+    i64,
+    u8,
+    usize,
+    rechrom_builtin_add_i64_u8_usize,
+    rechrom_builtin_sub_i64_u8_usize,
+    rechrom_builtin_mul_i64_u8_usize
+);
+triple!(
+    i64,
+    i16,
+    i8,
+    rechrom_builtin_add_i64_i16_i8,
+    rechrom_builtin_sub_i64_i16_i8,
+    rechrom_builtin_mul_i64_i16_i8
+);
+triple!(
+    i64,
+    i16,
+    u8,
+    rechrom_builtin_add_i64_i16_u8,
+    rechrom_builtin_sub_i64_i16_u8,
+    rechrom_builtin_mul_i64_i16_u8
+);
+triple!(
+    i64,
+    i16,
+    i16,
+    rechrom_builtin_add_i64_i16_i16,
+    rechrom_builtin_sub_i64_i16_i16,
+    rechrom_builtin_mul_i64_i16_i16
+);
+triple!(
+    i64,
+    i16,
+    u16,
+    rechrom_builtin_add_i64_i16_u16,
+    rechrom_builtin_sub_i64_i16_u16,
+    rechrom_builtin_mul_i64_i16_u16
+);
+triple!(
+    i64,
+    i16,
+    i32,
+    rechrom_builtin_add_i64_i16_i32,
+    rechrom_builtin_sub_i64_i16_i32,
+    rechrom_builtin_mul_i64_i16_i32
+);
+triple!(
+    i64,
+    i16,
+    u32,
+    rechrom_builtin_add_i64_i16_u32,
+    rechrom_builtin_sub_i64_i16_u32,
+    rechrom_builtin_mul_i64_i16_u32
+);
+triple!(
+    i64,
+    i16,
+    i64,
+    rechrom_builtin_add_i64_i16_i64,
+    rechrom_builtin_sub_i64_i16_i64,
+    rechrom_builtin_mul_i64_i16_i64
+);
+triple!(
+    i64,
+    i16,
+    u64,
+    rechrom_builtin_add_i64_i16_u64,
+    rechrom_builtin_sub_i64_i16_u64,
+    rechrom_builtin_mul_i64_i16_u64
+);
+triple!(
+    i64,
+    i16,
+    isize,
+    rechrom_builtin_add_i64_i16_isize,
+    rechrom_builtin_sub_i64_i16_isize,
+    rechrom_builtin_mul_i64_i16_isize
+);
+triple!(
+    i64,
+    i16,
+    usize,
+    rechrom_builtin_add_i64_i16_usize,
+    rechrom_builtin_sub_i64_i16_usize,
+    rechrom_builtin_mul_i64_i16_usize
+);
+triple!(
+    i64,
+    u16,
+    i8,
+    rechrom_builtin_add_i64_u16_i8,
+    rechrom_builtin_sub_i64_u16_i8,
+    rechrom_builtin_mul_i64_u16_i8
+);
+triple!(
+    i64,
+    u16,
+    u8,
+    rechrom_builtin_add_i64_u16_u8,
+    rechrom_builtin_sub_i64_u16_u8,
+    rechrom_builtin_mul_i64_u16_u8
+);
+triple!(
+    i64,
+    u16,
+    i16,
+    rechrom_builtin_add_i64_u16_i16,
+    rechrom_builtin_sub_i64_u16_i16,
+    rechrom_builtin_mul_i64_u16_i16
+);
+triple!(
+    i64,
+    u16,
+    u16,
+    rechrom_builtin_add_i64_u16_u16,
+    rechrom_builtin_sub_i64_u16_u16,
+    rechrom_builtin_mul_i64_u16_u16
+);
+triple!(
+    i64,
+    u16,
+    i32,
+    rechrom_builtin_add_i64_u16_i32,
+    rechrom_builtin_sub_i64_u16_i32,
+    rechrom_builtin_mul_i64_u16_i32
+);
+triple!(
+    i64,
+    u16,
+    u32,
+    rechrom_builtin_add_i64_u16_u32,
+    rechrom_builtin_sub_i64_u16_u32,
+    rechrom_builtin_mul_i64_u16_u32
+);
+triple!(
+    i64,
+    u16,
+    i64,
+    rechrom_builtin_add_i64_u16_i64,
+    rechrom_builtin_sub_i64_u16_i64,
+    rechrom_builtin_mul_i64_u16_i64
+);
+triple!(
+    i64,
+    u16,
+    u64,
+    rechrom_builtin_add_i64_u16_u64,
+    rechrom_builtin_sub_i64_u16_u64,
+    rechrom_builtin_mul_i64_u16_u64
+);
+triple!(
+    i64,
+    u16,
+    isize,
+    rechrom_builtin_add_i64_u16_isize,
+    rechrom_builtin_sub_i64_u16_isize,
+    rechrom_builtin_mul_i64_u16_isize
+);
+triple!(
+    i64,
+    u16,
+    usize,
+    rechrom_builtin_add_i64_u16_usize,
+    rechrom_builtin_sub_i64_u16_usize,
+    rechrom_builtin_mul_i64_u16_usize
+);
+triple!(
+    i64,
+    i32,
+    i8,
+    rechrom_builtin_add_i64_i32_i8,
+    rechrom_builtin_sub_i64_i32_i8,
+    rechrom_builtin_mul_i64_i32_i8
+);
+triple!(
+    i64,
+    i32,
+    u8,
+    rechrom_builtin_add_i64_i32_u8,
+    rechrom_builtin_sub_i64_i32_u8,
+    rechrom_builtin_mul_i64_i32_u8
+);
+triple!(
+    i64,
+    i32,
+    i16,
+    rechrom_builtin_add_i64_i32_i16,
+    rechrom_builtin_sub_i64_i32_i16,
+    rechrom_builtin_mul_i64_i32_i16
+);
+triple!(
+    i64,
+    i32,
+    u16,
+    rechrom_builtin_add_i64_i32_u16,
+    rechrom_builtin_sub_i64_i32_u16,
+    rechrom_builtin_mul_i64_i32_u16
+);
+triple!(
+    i64,
+    i32,
+    i32,
+    rechrom_builtin_add_i64_i32_i32,
+    rechrom_builtin_sub_i64_i32_i32,
+    rechrom_builtin_mul_i64_i32_i32
+);
+triple!(
+    i64,
+    i32,
+    u32,
+    rechrom_builtin_add_i64_i32_u32,
+    rechrom_builtin_sub_i64_i32_u32,
+    rechrom_builtin_mul_i64_i32_u32
+);
+triple!(
+    i64,
+    i32,
+    i64,
+    rechrom_builtin_add_i64_i32_i64,
+    rechrom_builtin_sub_i64_i32_i64,
+    rechrom_builtin_mul_i64_i32_i64
+);
+triple!(
+    i64,
+    i32,
+    u64,
+    rechrom_builtin_add_i64_i32_u64,
+    rechrom_builtin_sub_i64_i32_u64,
+    rechrom_builtin_mul_i64_i32_u64
+);
+triple!(
+    i64,
+    i32,
+    isize,
+    rechrom_builtin_add_i64_i32_isize,
+    rechrom_builtin_sub_i64_i32_isize,
+    rechrom_builtin_mul_i64_i32_isize
+);
+triple!(
+    i64,
+    i32,
+    usize,
+    rechrom_builtin_add_i64_i32_usize,
+    rechrom_builtin_sub_i64_i32_usize,
+    rechrom_builtin_mul_i64_i32_usize
+);
+triple!(
+    i64,
+    u32,
+    i8,
+    rechrom_builtin_add_i64_u32_i8,
+    rechrom_builtin_sub_i64_u32_i8,
+    rechrom_builtin_mul_i64_u32_i8
+);
+triple!(
+    i64,
+    u32,
+    u8,
+    rechrom_builtin_add_i64_u32_u8,
+    rechrom_builtin_sub_i64_u32_u8,
+    rechrom_builtin_mul_i64_u32_u8
+);
+triple!(
+    i64,
+    u32,
+    i16,
+    rechrom_builtin_add_i64_u32_i16,
+    rechrom_builtin_sub_i64_u32_i16,
+    rechrom_builtin_mul_i64_u32_i16
+);
+triple!(
+    i64,
+    u32,
+    u16,
+    rechrom_builtin_add_i64_u32_u16,
+    rechrom_builtin_sub_i64_u32_u16,
+    rechrom_builtin_mul_i64_u32_u16
+);
+triple!(
+    i64,
+    u32,
+    i32,
+    rechrom_builtin_add_i64_u32_i32,
+    rechrom_builtin_sub_i64_u32_i32,
+    rechrom_builtin_mul_i64_u32_i32
+);
+triple!(
+    i64,
+    u32,
+    u32,
+    rechrom_builtin_add_i64_u32_u32,
+    rechrom_builtin_sub_i64_u32_u32,
+    rechrom_builtin_mul_i64_u32_u32
+);
+triple!(
+    i64,
+    u32,
+    i64,
+    rechrom_builtin_add_i64_u32_i64,
+    rechrom_builtin_sub_i64_u32_i64,
+    rechrom_builtin_mul_i64_u32_i64
+);
+triple!(
+    i64,
+    u32,
+    u64,
+    rechrom_builtin_add_i64_u32_u64,
+    rechrom_builtin_sub_i64_u32_u64,
+    rechrom_builtin_mul_i64_u32_u64
+);
+triple!(
+    i64,
+    u32,
+    isize,
+    rechrom_builtin_add_i64_u32_isize,
+    rechrom_builtin_sub_i64_u32_isize,
+    rechrom_builtin_mul_i64_u32_isize
+);
+triple!(
+    i64,
+    u32,
+    usize,
+    rechrom_builtin_add_i64_u32_usize,
+    rechrom_builtin_sub_i64_u32_usize,
+    rechrom_builtin_mul_i64_u32_usize
+);
+triple!(
+    i64,
+    i64,
+    i8,
+    rechrom_builtin_add_i64_i64_i8,
+    rechrom_builtin_sub_i64_i64_i8,
+    rechrom_builtin_mul_i64_i64_i8
+);
+triple!(
+    i64,
+    i64,
+    u8,
+    rechrom_builtin_add_i64_i64_u8,
+    rechrom_builtin_sub_i64_i64_u8,
+    rechrom_builtin_mul_i64_i64_u8
+);
+triple!(
+    i64,
+    i64,
+    i16,
+    rechrom_builtin_add_i64_i64_i16,
+    rechrom_builtin_sub_i64_i64_i16,
+    rechrom_builtin_mul_i64_i64_i16
+);
+triple!(
+    i64,
+    i64,
+    u16,
+    rechrom_builtin_add_i64_i64_u16,
+    rechrom_builtin_sub_i64_i64_u16,
+    rechrom_builtin_mul_i64_i64_u16
+);
+triple!(
+    i64,
+    i64,
+    i32,
+    rechrom_builtin_add_i64_i64_i32,
+    rechrom_builtin_sub_i64_i64_i32,
+    rechrom_builtin_mul_i64_i64_i32
+);
+triple!(
+    i64,
+    i64,
+    u32,
+    rechrom_builtin_add_i64_i64_u32,
+    rechrom_builtin_sub_i64_i64_u32,
+    rechrom_builtin_mul_i64_i64_u32
+);
+triple!(
+    i64,
+    i64,
+    i64,
+    rechrom_builtin_add_i64_i64_i64,
+    rechrom_builtin_sub_i64_i64_i64,
+    rechrom_builtin_mul_i64_i64_i64
+);
+triple!(
+    i64,
+    i64,
+    u64,
+    rechrom_builtin_add_i64_i64_u64,
+    rechrom_builtin_sub_i64_i64_u64,
+    rechrom_builtin_mul_i64_i64_u64
+);
+triple!(
+    i64,
+    i64,
+    isize,
+    rechrom_builtin_add_i64_i64_isize,
+    rechrom_builtin_sub_i64_i64_isize,
+    rechrom_builtin_mul_i64_i64_isize
+);
+triple!(
+    i64,
+    i64,
+    usize,
+    rechrom_builtin_add_i64_i64_usize,
+    rechrom_builtin_sub_i64_i64_usize,
+    rechrom_builtin_mul_i64_i64_usize
+);
+triple!(
+    i64,
+    u64,
+    i8,
+    rechrom_builtin_add_i64_u64_i8,
+    rechrom_builtin_sub_i64_u64_i8,
+    rechrom_builtin_mul_i64_u64_i8
+);
+triple!(
+    i64,
+    u64,
+    u8,
+    rechrom_builtin_add_i64_u64_u8,
+    rechrom_builtin_sub_i64_u64_u8,
+    rechrom_builtin_mul_i64_u64_u8
+);
+triple!(
+    i64,
+    u64,
+    i16,
+    rechrom_builtin_add_i64_u64_i16,
+    rechrom_builtin_sub_i64_u64_i16,
+    rechrom_builtin_mul_i64_u64_i16
+);
+triple!(
+    i64,
+    u64,
+    u16,
+    rechrom_builtin_add_i64_u64_u16,
+    rechrom_builtin_sub_i64_u64_u16,
+    rechrom_builtin_mul_i64_u64_u16
+);
+triple!(
+    i64,
+    u64,
+    i32,
+    rechrom_builtin_add_i64_u64_i32,
+    rechrom_builtin_sub_i64_u64_i32,
+    rechrom_builtin_mul_i64_u64_i32
+);
+triple!(
+    i64,
+    u64,
+    u32,
+    rechrom_builtin_add_i64_u64_u32,
+    rechrom_builtin_sub_i64_u64_u32,
+    rechrom_builtin_mul_i64_u64_u32
+);
+triple!(
+    i64,
+    u64,
+    i64,
+    rechrom_builtin_add_i64_u64_i64,
+    rechrom_builtin_sub_i64_u64_i64,
+    rechrom_builtin_mul_i64_u64_i64
+);
+triple!(
+    i64,
+    u64,
+    u64,
+    rechrom_builtin_add_i64_u64_u64,
+    rechrom_builtin_sub_i64_u64_u64,
+    rechrom_builtin_mul_i64_u64_u64
+);
+triple!(
+    i64,
+    u64,
+    isize,
+    rechrom_builtin_add_i64_u64_isize,
+    rechrom_builtin_sub_i64_u64_isize,
+    rechrom_builtin_mul_i64_u64_isize
+);
+triple!(
+    i64,
+    u64,
+    usize,
+    rechrom_builtin_add_i64_u64_usize,
+    rechrom_builtin_sub_i64_u64_usize,
+    rechrom_builtin_mul_i64_u64_usize
+);
+triple!(
+    i64,
+    isize,
+    i8,
+    rechrom_builtin_add_i64_isize_i8,
+    rechrom_builtin_sub_i64_isize_i8,
+    rechrom_builtin_mul_i64_isize_i8
+);
+triple!(
+    i64,
+    isize,
+    u8,
+    rechrom_builtin_add_i64_isize_u8,
+    rechrom_builtin_sub_i64_isize_u8,
+    rechrom_builtin_mul_i64_isize_u8
+);
+triple!(
+    i64,
+    isize,
+    i16,
+    rechrom_builtin_add_i64_isize_i16,
+    rechrom_builtin_sub_i64_isize_i16,
+    rechrom_builtin_mul_i64_isize_i16
+);
+triple!(
+    i64,
+    isize,
+    u16,
+    rechrom_builtin_add_i64_isize_u16,
+    rechrom_builtin_sub_i64_isize_u16,
+    rechrom_builtin_mul_i64_isize_u16
+);
+triple!(
+    i64,
+    isize,
+    i32,
+    rechrom_builtin_add_i64_isize_i32,
+    rechrom_builtin_sub_i64_isize_i32,
+    rechrom_builtin_mul_i64_isize_i32
+);
+triple!(
+    i64,
+    isize,
+    u32,
+    rechrom_builtin_add_i64_isize_u32,
+    rechrom_builtin_sub_i64_isize_u32,
+    rechrom_builtin_mul_i64_isize_u32
+);
+triple!(
+    i64,
+    isize,
+    i64,
+    rechrom_builtin_add_i64_isize_i64,
+    rechrom_builtin_sub_i64_isize_i64,
+    rechrom_builtin_mul_i64_isize_i64
+);
+triple!(
+    i64,
+    isize,
+    u64,
+    rechrom_builtin_add_i64_isize_u64,
+    rechrom_builtin_sub_i64_isize_u64,
+    rechrom_builtin_mul_i64_isize_u64
+);
+triple!(
+    i64,
+    isize,
+    isize,
+    rechrom_builtin_add_i64_isize_isize,
+    rechrom_builtin_sub_i64_isize_isize,
+    rechrom_builtin_mul_i64_isize_isize
+);
+triple!(
+    i64,
+    isize,
+    usize,
+    rechrom_builtin_add_i64_isize_usize,
+    rechrom_builtin_sub_i64_isize_usize,
+    rechrom_builtin_mul_i64_isize_usize
+);
+triple!(
+    i64,
+    usize,
+    i8,
+    rechrom_builtin_add_i64_usize_i8,
+    rechrom_builtin_sub_i64_usize_i8,
+    rechrom_builtin_mul_i64_usize_i8
+);
+triple!(
+    i64,
+    usize,
+    u8,
+    rechrom_builtin_add_i64_usize_u8,
+    rechrom_builtin_sub_i64_usize_u8,
+    rechrom_builtin_mul_i64_usize_u8
+);
+triple!(
+    i64,
+    usize,
+    i16,
+    rechrom_builtin_add_i64_usize_i16,
+    rechrom_builtin_sub_i64_usize_i16,
+    rechrom_builtin_mul_i64_usize_i16
+);
+triple!(
+    i64,
+    usize,
+    u16,
+    rechrom_builtin_add_i64_usize_u16,
+    rechrom_builtin_sub_i64_usize_u16,
+    rechrom_builtin_mul_i64_usize_u16
+);
+triple!(
+    i64,
+    usize,
+    i32,
+    rechrom_builtin_add_i64_usize_i32,
+    rechrom_builtin_sub_i64_usize_i32,
+    rechrom_builtin_mul_i64_usize_i32
+);
+triple!(
+    i64,
+    usize,
+    u32,
+    rechrom_builtin_add_i64_usize_u32,
+    rechrom_builtin_sub_i64_usize_u32,
+    rechrom_builtin_mul_i64_usize_u32
+);
+triple!(
+    i64,
+    usize,
+    i64,
+    rechrom_builtin_add_i64_usize_i64,
+    rechrom_builtin_sub_i64_usize_i64,
+    rechrom_builtin_mul_i64_usize_i64
+);
+triple!(
+    i64,
+    usize,
+    u64,
+    rechrom_builtin_add_i64_usize_u64,
+    rechrom_builtin_sub_i64_usize_u64,
+    rechrom_builtin_mul_i64_usize_u64
+);
+triple!(
+    i64,
+    usize,
+    isize,
+    rechrom_builtin_add_i64_usize_isize,
+    rechrom_builtin_sub_i64_usize_isize,
+    rechrom_builtin_mul_i64_usize_isize
+);
+triple!(
+    i64,
+    usize,
+    usize,
+    rechrom_builtin_add_i64_usize_usize,
+    rechrom_builtin_sub_i64_usize_usize,
+    rechrom_builtin_mul_i64_usize_usize
+);
+triple!(
+    u64,
+    i8,
+    i8,
+    rechrom_builtin_add_u64_i8_i8,
+    rechrom_builtin_sub_u64_i8_i8,
+    rechrom_builtin_mul_u64_i8_i8
+);
+triple!(
+    u64,
+    i8,
+    u8,
+    rechrom_builtin_add_u64_i8_u8,
+    rechrom_builtin_sub_u64_i8_u8,
+    rechrom_builtin_mul_u64_i8_u8
+);
+triple!(
+    u64,
+    i8,
+    i16,
+    rechrom_builtin_add_u64_i8_i16,
+    rechrom_builtin_sub_u64_i8_i16,
+    rechrom_builtin_mul_u64_i8_i16
+);
+triple!(
+    u64,
+    i8,
+    u16,
+    rechrom_builtin_add_u64_i8_u16,
+    rechrom_builtin_sub_u64_i8_u16,
+    rechrom_builtin_mul_u64_i8_u16
+);
+triple!(
+    u64,
+    i8,
+    i32,
+    rechrom_builtin_add_u64_i8_i32,
+    rechrom_builtin_sub_u64_i8_i32,
+    rechrom_builtin_mul_u64_i8_i32
+);
+triple!(
+    u64,
+    i8,
+    u32,
+    rechrom_builtin_add_u64_i8_u32,
+    rechrom_builtin_sub_u64_i8_u32,
+    rechrom_builtin_mul_u64_i8_u32
+);
+triple!(
+    u64,
+    i8,
+    i64,
+    rechrom_builtin_add_u64_i8_i64,
+    rechrom_builtin_sub_u64_i8_i64,
+    rechrom_builtin_mul_u64_i8_i64
+);
+triple!(
+    u64,
+    i8,
+    u64,
+    rechrom_builtin_add_u64_i8_u64,
+    rechrom_builtin_sub_u64_i8_u64,
+    rechrom_builtin_mul_u64_i8_u64
+);
+triple!(
+    u64,
+    i8,
+    isize,
+    rechrom_builtin_add_u64_i8_isize,
+    rechrom_builtin_sub_u64_i8_isize,
+    rechrom_builtin_mul_u64_i8_isize
+);
+triple!(
+    u64,
+    i8,
+    usize,
+    rechrom_builtin_add_u64_i8_usize,
+    rechrom_builtin_sub_u64_i8_usize,
+    rechrom_builtin_mul_u64_i8_usize
+);
+triple!(
+    u64,
+    u8,
+    i8,
+    rechrom_builtin_add_u64_u8_i8,
+    rechrom_builtin_sub_u64_u8_i8,
+    rechrom_builtin_mul_u64_u8_i8
+);
+triple!(
+    u64,
+    u8,
+    u8,
+    rechrom_builtin_add_u64_u8_u8,
+    rechrom_builtin_sub_u64_u8_u8,
+    rechrom_builtin_mul_u64_u8_u8
+);
+triple!(
+    u64,
+    u8,
+    i16,
+    rechrom_builtin_add_u64_u8_i16,
+    rechrom_builtin_sub_u64_u8_i16,
+    rechrom_builtin_mul_u64_u8_i16
+);
+triple!(
+    u64,
+    u8,
+    u16,
+    rechrom_builtin_add_u64_u8_u16,
+    rechrom_builtin_sub_u64_u8_u16,
+    rechrom_builtin_mul_u64_u8_u16
+);
+triple!(
+    u64,
+    u8,
+    i32,
+    rechrom_builtin_add_u64_u8_i32,
+    rechrom_builtin_sub_u64_u8_i32,
+    rechrom_builtin_mul_u64_u8_i32
+);
+triple!(
+    u64,
+    u8,
+    u32,
+    rechrom_builtin_add_u64_u8_u32,
+    rechrom_builtin_sub_u64_u8_u32,
+    rechrom_builtin_mul_u64_u8_u32
+);
+triple!(
+    u64,
+    u8,
+    i64,
+    rechrom_builtin_add_u64_u8_i64,
+    rechrom_builtin_sub_u64_u8_i64,
+    rechrom_builtin_mul_u64_u8_i64
+);
+triple!(
+    u64,
+    u8,
+    u64,
+    rechrom_builtin_add_u64_u8_u64,
+    rechrom_builtin_sub_u64_u8_u64,
+    rechrom_builtin_mul_u64_u8_u64
+);
+triple!(
+    u64,
+    u8,
+    isize,
+    rechrom_builtin_add_u64_u8_isize,
+    rechrom_builtin_sub_u64_u8_isize,
+    rechrom_builtin_mul_u64_u8_isize
+);
+triple!(
+    u64,
+    u8,
+    usize,
+    rechrom_builtin_add_u64_u8_usize,
+    rechrom_builtin_sub_u64_u8_usize,
+    rechrom_builtin_mul_u64_u8_usize
+);
+triple!(
+    u64,
+    i16,
+    i8,
+    rechrom_builtin_add_u64_i16_i8,
+    rechrom_builtin_sub_u64_i16_i8,
+    rechrom_builtin_mul_u64_i16_i8
+);
+triple!(
+    u64,
+    i16,
+    u8,
+    rechrom_builtin_add_u64_i16_u8,
+    rechrom_builtin_sub_u64_i16_u8,
+    rechrom_builtin_mul_u64_i16_u8
+);
+triple!(
+    u64,
+    i16,
+    i16,
+    rechrom_builtin_add_u64_i16_i16,
+    rechrom_builtin_sub_u64_i16_i16,
+    rechrom_builtin_mul_u64_i16_i16
+);
+triple!(
+    u64,
+    i16,
+    u16,
+    rechrom_builtin_add_u64_i16_u16,
+    rechrom_builtin_sub_u64_i16_u16,
+    rechrom_builtin_mul_u64_i16_u16
+);
+triple!(
+    u64,
+    i16,
+    i32,
+    rechrom_builtin_add_u64_i16_i32,
+    rechrom_builtin_sub_u64_i16_i32,
+    rechrom_builtin_mul_u64_i16_i32
+);
+triple!(
+    u64,
+    i16,
+    u32,
+    rechrom_builtin_add_u64_i16_u32,
+    rechrom_builtin_sub_u64_i16_u32,
+    rechrom_builtin_mul_u64_i16_u32
+);
+triple!(
+    u64,
+    i16,
+    i64,
+    rechrom_builtin_add_u64_i16_i64,
+    rechrom_builtin_sub_u64_i16_i64,
+    rechrom_builtin_mul_u64_i16_i64
+);
+triple!(
+    u64,
+    i16,
+    u64,
+    rechrom_builtin_add_u64_i16_u64,
+    rechrom_builtin_sub_u64_i16_u64,
+    rechrom_builtin_mul_u64_i16_u64
+);
+triple!(
+    u64,
+    i16,
+    isize,
+    rechrom_builtin_add_u64_i16_isize,
+    rechrom_builtin_sub_u64_i16_isize,
+    rechrom_builtin_mul_u64_i16_isize
+);
+triple!(
+    u64,
+    i16,
+    usize,
+    rechrom_builtin_add_u64_i16_usize,
+    rechrom_builtin_sub_u64_i16_usize,
+    rechrom_builtin_mul_u64_i16_usize
+);
+triple!(
+    u64,
+    u16,
+    i8,
+    rechrom_builtin_add_u64_u16_i8,
+    rechrom_builtin_sub_u64_u16_i8,
+    rechrom_builtin_mul_u64_u16_i8
+);
+triple!(
+    u64,
+    u16,
+    u8,
+    rechrom_builtin_add_u64_u16_u8,
+    rechrom_builtin_sub_u64_u16_u8,
+    rechrom_builtin_mul_u64_u16_u8
+);
+triple!(
+    u64,
+    u16,
+    i16,
+    rechrom_builtin_add_u64_u16_i16,
+    rechrom_builtin_sub_u64_u16_i16,
+    rechrom_builtin_mul_u64_u16_i16
+);
+triple!(
+    u64,
+    u16,
+    u16,
+    rechrom_builtin_add_u64_u16_u16,
+    rechrom_builtin_sub_u64_u16_u16,
+    rechrom_builtin_mul_u64_u16_u16
+);
+triple!(
+    u64,
+    u16,
+    i32,
+    rechrom_builtin_add_u64_u16_i32,
+    rechrom_builtin_sub_u64_u16_i32,
+    rechrom_builtin_mul_u64_u16_i32
+);
+triple!(
+    u64,
+    u16,
+    u32,
+    rechrom_builtin_add_u64_u16_u32,
+    rechrom_builtin_sub_u64_u16_u32,
+    rechrom_builtin_mul_u64_u16_u32
+);
+triple!(
+    u64,
+    u16,
+    i64,
+    rechrom_builtin_add_u64_u16_i64,
+    rechrom_builtin_sub_u64_u16_i64,
+    rechrom_builtin_mul_u64_u16_i64
+);
+triple!(
+    u64,
+    u16,
+    u64,
+    rechrom_builtin_add_u64_u16_u64,
+    rechrom_builtin_sub_u64_u16_u64,
+    rechrom_builtin_mul_u64_u16_u64
+);
+triple!(
+    u64,
+    u16,
+    isize,
+    rechrom_builtin_add_u64_u16_isize,
+    rechrom_builtin_sub_u64_u16_isize,
+    rechrom_builtin_mul_u64_u16_isize
+);
+triple!(
+    u64,
+    u16,
+    usize,
+    rechrom_builtin_add_u64_u16_usize,
+    rechrom_builtin_sub_u64_u16_usize,
+    rechrom_builtin_mul_u64_u16_usize
+);
+triple!(
+    u64,
+    i32,
+    i8,
+    rechrom_builtin_add_u64_i32_i8,
+    rechrom_builtin_sub_u64_i32_i8,
+    rechrom_builtin_mul_u64_i32_i8
+);
+triple!(
+    u64,
+    i32,
+    u8,
+    rechrom_builtin_add_u64_i32_u8,
+    rechrom_builtin_sub_u64_i32_u8,
+    rechrom_builtin_mul_u64_i32_u8
+);
+triple!(
+    u64,
+    i32,
+    i16,
+    rechrom_builtin_add_u64_i32_i16,
+    rechrom_builtin_sub_u64_i32_i16,
+    rechrom_builtin_mul_u64_i32_i16
+);
+triple!(
+    u64,
+    i32,
+    u16,
+    rechrom_builtin_add_u64_i32_u16,
+    rechrom_builtin_sub_u64_i32_u16,
+    rechrom_builtin_mul_u64_i32_u16
+);
+triple!(
+    u64,
+    i32,
+    i32,
+    rechrom_builtin_add_u64_i32_i32,
+    rechrom_builtin_sub_u64_i32_i32,
+    rechrom_builtin_mul_u64_i32_i32
+);
+triple!(
+    u64,
+    i32,
+    u32,
+    rechrom_builtin_add_u64_i32_u32,
+    rechrom_builtin_sub_u64_i32_u32,
+    rechrom_builtin_mul_u64_i32_u32
+);
+triple!(
+    u64,
+    i32,
+    i64,
+    rechrom_builtin_add_u64_i32_i64,
+    rechrom_builtin_sub_u64_i32_i64,
+    rechrom_builtin_mul_u64_i32_i64
+);
+triple!(
+    u64,
+    i32,
+    u64,
+    rechrom_builtin_add_u64_i32_u64,
+    rechrom_builtin_sub_u64_i32_u64,
+    rechrom_builtin_mul_u64_i32_u64
+);
+triple!(
+    u64,
+    i32,
+    isize,
+    rechrom_builtin_add_u64_i32_isize,
+    rechrom_builtin_sub_u64_i32_isize,
+    rechrom_builtin_mul_u64_i32_isize
+);
+triple!(
+    u64,
+    i32,
+    usize,
+    rechrom_builtin_add_u64_i32_usize,
+    rechrom_builtin_sub_u64_i32_usize,
+    rechrom_builtin_mul_u64_i32_usize
+);
+triple!(
+    u64,
+    u32,
+    i8,
+    rechrom_builtin_add_u64_u32_i8,
+    rechrom_builtin_sub_u64_u32_i8,
+    rechrom_builtin_mul_u64_u32_i8
+);
+triple!(
+    u64,
+    u32,
+    u8,
+    rechrom_builtin_add_u64_u32_u8,
+    rechrom_builtin_sub_u64_u32_u8,
+    rechrom_builtin_mul_u64_u32_u8
+);
+triple!(
+    u64,
+    u32,
+    i16,
+    rechrom_builtin_add_u64_u32_i16,
+    rechrom_builtin_sub_u64_u32_i16,
+    rechrom_builtin_mul_u64_u32_i16
+);
+triple!(
+    u64,
+    u32,
+    u16,
+    rechrom_builtin_add_u64_u32_u16,
+    rechrom_builtin_sub_u64_u32_u16,
+    rechrom_builtin_mul_u64_u32_u16
+);
+triple!(
+    u64,
+    u32,
+    i32,
+    rechrom_builtin_add_u64_u32_i32,
+    rechrom_builtin_sub_u64_u32_i32,
+    rechrom_builtin_mul_u64_u32_i32
+);
+triple!(
+    u64,
+    u32,
+    u32,
+    rechrom_builtin_add_u64_u32_u32,
+    rechrom_builtin_sub_u64_u32_u32,
+    rechrom_builtin_mul_u64_u32_u32
+);
+triple!(
+    u64,
+    u32,
+    i64,
+    rechrom_builtin_add_u64_u32_i64,
+    rechrom_builtin_sub_u64_u32_i64,
+    rechrom_builtin_mul_u64_u32_i64
+);
+triple!(
+    u64,
+    u32,
+    u64,
+    rechrom_builtin_add_u64_u32_u64,
+    rechrom_builtin_sub_u64_u32_u64,
+    rechrom_builtin_mul_u64_u32_u64
+);
+triple!(
+    u64,
+    u32,
+    isize,
+    rechrom_builtin_add_u64_u32_isize,
+    rechrom_builtin_sub_u64_u32_isize,
+    rechrom_builtin_mul_u64_u32_isize
+);
+triple!(
+    u64,
+    u32,
+    usize,
+    rechrom_builtin_add_u64_u32_usize,
+    rechrom_builtin_sub_u64_u32_usize,
+    rechrom_builtin_mul_u64_u32_usize
+);
+triple!(
+    u64,
+    i64,
+    i8,
+    rechrom_builtin_add_u64_i64_i8,
+    rechrom_builtin_sub_u64_i64_i8,
+    rechrom_builtin_mul_u64_i64_i8
+);
+triple!(
+    u64,
+    i64,
+    u8,
+    rechrom_builtin_add_u64_i64_u8,
+    rechrom_builtin_sub_u64_i64_u8,
+    rechrom_builtin_mul_u64_i64_u8
+);
+triple!(
+    u64,
+    i64,
+    i16,
+    rechrom_builtin_add_u64_i64_i16,
+    rechrom_builtin_sub_u64_i64_i16,
+    rechrom_builtin_mul_u64_i64_i16
+);
+triple!(
+    u64,
+    i64,
+    u16,
+    rechrom_builtin_add_u64_i64_u16,
+    rechrom_builtin_sub_u64_i64_u16,
+    rechrom_builtin_mul_u64_i64_u16
+);
+triple!(
+    u64,
+    i64,
+    i32,
+    rechrom_builtin_add_u64_i64_i32,
+    rechrom_builtin_sub_u64_i64_i32,
+    rechrom_builtin_mul_u64_i64_i32
+);
+triple!(
+    u64,
+    i64,
+    u32,
+    rechrom_builtin_add_u64_i64_u32,
+    rechrom_builtin_sub_u64_i64_u32,
+    rechrom_builtin_mul_u64_i64_u32
+);
+triple!(
+    u64,
+    i64,
+    i64,
+    rechrom_builtin_add_u64_i64_i64,
+    rechrom_builtin_sub_u64_i64_i64,
+    rechrom_builtin_mul_u64_i64_i64
+);
+triple!(
+    u64,
+    i64,
+    u64,
+    rechrom_builtin_add_u64_i64_u64,
+    rechrom_builtin_sub_u64_i64_u64,
+    rechrom_builtin_mul_u64_i64_u64
+);
+triple!(
+    u64,
+    i64,
+    isize,
+    rechrom_builtin_add_u64_i64_isize,
+    rechrom_builtin_sub_u64_i64_isize,
+    rechrom_builtin_mul_u64_i64_isize
+);
+triple!(
+    u64,
+    i64,
+    usize,
+    rechrom_builtin_add_u64_i64_usize,
+    rechrom_builtin_sub_u64_i64_usize,
+    rechrom_builtin_mul_u64_i64_usize
+);
+triple!(
+    u64,
+    u64,
+    i8,
+    rechrom_builtin_add_u64_u64_i8,
+    rechrom_builtin_sub_u64_u64_i8,
+    rechrom_builtin_mul_u64_u64_i8
+);
+triple!(
+    u64,
+    u64,
+    u8,
+    rechrom_builtin_add_u64_u64_u8,
+    rechrom_builtin_sub_u64_u64_u8,
+    rechrom_builtin_mul_u64_u64_u8
+);
+triple!(
+    u64,
+    u64,
+    i16,
+    rechrom_builtin_add_u64_u64_i16,
+    rechrom_builtin_sub_u64_u64_i16,
+    rechrom_builtin_mul_u64_u64_i16
+);
+triple!(
+    u64,
+    u64,
+    u16,
+    rechrom_builtin_add_u64_u64_u16,
+    rechrom_builtin_sub_u64_u64_u16,
+    rechrom_builtin_mul_u64_u64_u16
+);
+triple!(
+    u64,
+    u64,
+    i32,
+    rechrom_builtin_add_u64_u64_i32,
+    rechrom_builtin_sub_u64_u64_i32,
+    rechrom_builtin_mul_u64_u64_i32
+);
+triple!(
+    u64,
+    u64,
+    u32,
+    rechrom_builtin_add_u64_u64_u32,
+    rechrom_builtin_sub_u64_u64_u32,
+    rechrom_builtin_mul_u64_u64_u32
+);
+triple!(
+    u64,
+    u64,
+    i64,
+    rechrom_builtin_add_u64_u64_i64,
+    rechrom_builtin_sub_u64_u64_i64,
+    rechrom_builtin_mul_u64_u64_i64
+);
+triple!(
+    u64,
+    u64,
+    u64,
+    rechrom_builtin_add_u64_u64_u64,
+    rechrom_builtin_sub_u64_u64_u64,
+    rechrom_builtin_mul_u64_u64_u64
+);
+triple!(
+    u64,
+    u64,
+    isize,
+    rechrom_builtin_add_u64_u64_isize,
+    rechrom_builtin_sub_u64_u64_isize,
+    rechrom_builtin_mul_u64_u64_isize
+);
+triple!(
+    u64,
+    u64,
+    usize,
+    rechrom_builtin_add_u64_u64_usize,
+    rechrom_builtin_sub_u64_u64_usize,
+    rechrom_builtin_mul_u64_u64_usize
+);
+triple!(
+    u64,
+    isize,
+    i8,
+    rechrom_builtin_add_u64_isize_i8,
+    rechrom_builtin_sub_u64_isize_i8,
+    rechrom_builtin_mul_u64_isize_i8
+);
+triple!(
+    u64,
+    isize,
+    u8,
+    rechrom_builtin_add_u64_isize_u8,
+    rechrom_builtin_sub_u64_isize_u8,
+    rechrom_builtin_mul_u64_isize_u8
+);
+triple!(
+    u64,
+    isize,
+    i16,
+    rechrom_builtin_add_u64_isize_i16,
+    rechrom_builtin_sub_u64_isize_i16,
+    rechrom_builtin_mul_u64_isize_i16
+);
+triple!(
+    u64,
+    isize,
+    u16,
+    rechrom_builtin_add_u64_isize_u16,
+    rechrom_builtin_sub_u64_isize_u16,
+    rechrom_builtin_mul_u64_isize_u16
+);
+triple!(
+    u64,
+    isize,
+    i32,
+    rechrom_builtin_add_u64_isize_i32,
+    rechrom_builtin_sub_u64_isize_i32,
+    rechrom_builtin_mul_u64_isize_i32
+);
+triple!(
+    u64,
+    isize,
+    u32,
+    rechrom_builtin_add_u64_isize_u32,
+    rechrom_builtin_sub_u64_isize_u32,
+    rechrom_builtin_mul_u64_isize_u32
+);
+triple!(
+    u64,
+    isize,
+    i64,
+    rechrom_builtin_add_u64_isize_i64,
+    rechrom_builtin_sub_u64_isize_i64,
+    rechrom_builtin_mul_u64_isize_i64
+);
+triple!(
+    u64,
+    isize,
+    u64,
+    rechrom_builtin_add_u64_isize_u64,
+    rechrom_builtin_sub_u64_isize_u64,
+    rechrom_builtin_mul_u64_isize_u64
+);
+triple!(
+    u64,
+    isize,
+    isize,
+    rechrom_builtin_add_u64_isize_isize,
+    rechrom_builtin_sub_u64_isize_isize,
+    rechrom_builtin_mul_u64_isize_isize
+);
+triple!(
+    u64,
+    isize,
+    usize,
+    rechrom_builtin_add_u64_isize_usize,
+    rechrom_builtin_sub_u64_isize_usize,
+    rechrom_builtin_mul_u64_isize_usize
+);
+triple!(
+    u64,
+    usize,
+    i8,
+    rechrom_builtin_add_u64_usize_i8,
+    rechrom_builtin_sub_u64_usize_i8,
+    rechrom_builtin_mul_u64_usize_i8
+);
+triple!(
+    u64,
+    usize,
+    u8,
+    rechrom_builtin_add_u64_usize_u8,
+    rechrom_builtin_sub_u64_usize_u8,
+    rechrom_builtin_mul_u64_usize_u8
+);
+triple!(
+    u64,
+    usize,
+    i16,
+    rechrom_builtin_add_u64_usize_i16,
+    rechrom_builtin_sub_u64_usize_i16,
+    rechrom_builtin_mul_u64_usize_i16
+);
+triple!(
+    u64,
+    usize,
+    u16,
+    rechrom_builtin_add_u64_usize_u16,
+    rechrom_builtin_sub_u64_usize_u16,
+    rechrom_builtin_mul_u64_usize_u16
+);
+triple!(
+    u64,
+    usize,
+    i32,
+    rechrom_builtin_add_u64_usize_i32,
+    rechrom_builtin_sub_u64_usize_i32,
+    rechrom_builtin_mul_u64_usize_i32
+);
+triple!(
+    u64,
+    usize,
+    u32,
+    rechrom_builtin_add_u64_usize_u32,
+    rechrom_builtin_sub_u64_usize_u32,
+    rechrom_builtin_mul_u64_usize_u32
+);
+triple!(
+    u64,
+    usize,
+    i64,
+    rechrom_builtin_add_u64_usize_i64,
+    rechrom_builtin_sub_u64_usize_i64,
+    rechrom_builtin_mul_u64_usize_i64
+);
+triple!(
+    u64,
+    usize,
+    u64,
+    rechrom_builtin_add_u64_usize_u64,
+    rechrom_builtin_sub_u64_usize_u64,
+    rechrom_builtin_mul_u64_usize_u64
+);
+triple!(
+    u64,
+    usize,
+    isize,
+    rechrom_builtin_add_u64_usize_isize,
+    rechrom_builtin_sub_u64_usize_isize,
+    rechrom_builtin_mul_u64_usize_isize
+);
+triple!(
+    u64,
+    usize,
+    usize,
+    rechrom_builtin_add_u64_usize_usize,
+    rechrom_builtin_sub_u64_usize_usize,
+    rechrom_builtin_mul_u64_usize_usize
+);
+triple!(
+    isize,
+    i8,
+    i8,
+    rechrom_builtin_add_isize_i8_i8,
+    rechrom_builtin_sub_isize_i8_i8,
+    rechrom_builtin_mul_isize_i8_i8
+);
+triple!(
+    isize,
+    i8,
+    u8,
+    rechrom_builtin_add_isize_i8_u8,
+    rechrom_builtin_sub_isize_i8_u8,
+    rechrom_builtin_mul_isize_i8_u8
+);
+triple!(
+    isize,
+    i8,
+    i16,
+    rechrom_builtin_add_isize_i8_i16,
+    rechrom_builtin_sub_isize_i8_i16,
+    rechrom_builtin_mul_isize_i8_i16
+);
+triple!(
+    isize,
+    i8,
+    u16,
+    rechrom_builtin_add_isize_i8_u16,
+    rechrom_builtin_sub_isize_i8_u16,
+    rechrom_builtin_mul_isize_i8_u16
+);
+triple!(
+    isize,
+    i8,
+    i32,
+    rechrom_builtin_add_isize_i8_i32,
+    rechrom_builtin_sub_isize_i8_i32,
+    rechrom_builtin_mul_isize_i8_i32
+);
+triple!(
+    isize,
+    i8,
+    u32,
+    rechrom_builtin_add_isize_i8_u32,
+    rechrom_builtin_sub_isize_i8_u32,
+    rechrom_builtin_mul_isize_i8_u32
+);
+triple!(
+    isize,
+    i8,
+    i64,
+    rechrom_builtin_add_isize_i8_i64,
+    rechrom_builtin_sub_isize_i8_i64,
+    rechrom_builtin_mul_isize_i8_i64
+);
+triple!(
+    isize,
+    i8,
+    u64,
+    rechrom_builtin_add_isize_i8_u64,
+    rechrom_builtin_sub_isize_i8_u64,
+    rechrom_builtin_mul_isize_i8_u64
+);
+triple!(
+    isize,
+    i8,
+    isize,
+    rechrom_builtin_add_isize_i8_isize,
+    rechrom_builtin_sub_isize_i8_isize,
+    rechrom_builtin_mul_isize_i8_isize
+);
+triple!(
+    isize,
+    i8,
+    usize,
+    rechrom_builtin_add_isize_i8_usize,
+    rechrom_builtin_sub_isize_i8_usize,
+    rechrom_builtin_mul_isize_i8_usize
+);
+triple!(
+    isize,
+    u8,
+    i8,
+    rechrom_builtin_add_isize_u8_i8,
+    rechrom_builtin_sub_isize_u8_i8,
+    rechrom_builtin_mul_isize_u8_i8
+);
+triple!(
+    isize,
+    u8,
+    u8,
+    rechrom_builtin_add_isize_u8_u8,
+    rechrom_builtin_sub_isize_u8_u8,
+    rechrom_builtin_mul_isize_u8_u8
+);
+triple!(
+    isize,
+    u8,
+    i16,
+    rechrom_builtin_add_isize_u8_i16,
+    rechrom_builtin_sub_isize_u8_i16,
+    rechrom_builtin_mul_isize_u8_i16
+);
+triple!(
+    isize,
+    u8,
+    u16,
+    rechrom_builtin_add_isize_u8_u16,
+    rechrom_builtin_sub_isize_u8_u16,
+    rechrom_builtin_mul_isize_u8_u16
+);
+triple!(
+    isize,
+    u8,
+    i32,
+    rechrom_builtin_add_isize_u8_i32,
+    rechrom_builtin_sub_isize_u8_i32,
+    rechrom_builtin_mul_isize_u8_i32
+);
+triple!(
+    isize,
+    u8,
+    u32,
+    rechrom_builtin_add_isize_u8_u32,
+    rechrom_builtin_sub_isize_u8_u32,
+    rechrom_builtin_mul_isize_u8_u32
+);
+triple!(
+    isize,
+    u8,
+    i64,
+    rechrom_builtin_add_isize_u8_i64,
+    rechrom_builtin_sub_isize_u8_i64,
+    rechrom_builtin_mul_isize_u8_i64
+);
+triple!(
+    isize,
+    u8,
+    u64,
+    rechrom_builtin_add_isize_u8_u64,
+    rechrom_builtin_sub_isize_u8_u64,
+    rechrom_builtin_mul_isize_u8_u64
+);
+triple!(
+    isize,
+    u8,
+    isize,
+    rechrom_builtin_add_isize_u8_isize,
+    rechrom_builtin_sub_isize_u8_isize,
+    rechrom_builtin_mul_isize_u8_isize
+);
+triple!(
+    isize,
+    u8,
+    usize,
+    rechrom_builtin_add_isize_u8_usize,
+    rechrom_builtin_sub_isize_u8_usize,
+    rechrom_builtin_mul_isize_u8_usize
+);
+triple!(
+    isize,
+    i16,
+    i8,
+    rechrom_builtin_add_isize_i16_i8,
+    rechrom_builtin_sub_isize_i16_i8,
+    rechrom_builtin_mul_isize_i16_i8
+);
+triple!(
+    isize,
+    i16,
+    u8,
+    rechrom_builtin_add_isize_i16_u8,
+    rechrom_builtin_sub_isize_i16_u8,
+    rechrom_builtin_mul_isize_i16_u8
+);
+triple!(
+    isize,
+    i16,
+    i16,
+    rechrom_builtin_add_isize_i16_i16,
+    rechrom_builtin_sub_isize_i16_i16,
+    rechrom_builtin_mul_isize_i16_i16
+);
+triple!(
+    isize,
+    i16,
+    u16,
+    rechrom_builtin_add_isize_i16_u16,
+    rechrom_builtin_sub_isize_i16_u16,
+    rechrom_builtin_mul_isize_i16_u16
+);
+triple!(
+    isize,
+    i16,
+    i32,
+    rechrom_builtin_add_isize_i16_i32,
+    rechrom_builtin_sub_isize_i16_i32,
+    rechrom_builtin_mul_isize_i16_i32
+);
+triple!(
+    isize,
+    i16,
+    u32,
+    rechrom_builtin_add_isize_i16_u32,
+    rechrom_builtin_sub_isize_i16_u32,
+    rechrom_builtin_mul_isize_i16_u32
+);
+triple!(
+    isize,
+    i16,
+    i64,
+    rechrom_builtin_add_isize_i16_i64,
+    rechrom_builtin_sub_isize_i16_i64,
+    rechrom_builtin_mul_isize_i16_i64
+);
+triple!(
+    isize,
+    i16,
+    u64,
+    rechrom_builtin_add_isize_i16_u64,
+    rechrom_builtin_sub_isize_i16_u64,
+    rechrom_builtin_mul_isize_i16_u64
+);
+triple!(
+    isize,
+    i16,
+    isize,
+    rechrom_builtin_add_isize_i16_isize,
+    rechrom_builtin_sub_isize_i16_isize,
+    rechrom_builtin_mul_isize_i16_isize
+);
+triple!(
+    isize,
+    i16,
+    usize,
+    rechrom_builtin_add_isize_i16_usize,
+    rechrom_builtin_sub_isize_i16_usize,
+    rechrom_builtin_mul_isize_i16_usize
+);
+triple!(
+    isize,
+    u16,
+    i8,
+    rechrom_builtin_add_isize_u16_i8,
+    rechrom_builtin_sub_isize_u16_i8,
+    rechrom_builtin_mul_isize_u16_i8
+);
+triple!(
+    isize,
+    u16,
+    u8,
+    rechrom_builtin_add_isize_u16_u8,
+    rechrom_builtin_sub_isize_u16_u8,
+    rechrom_builtin_mul_isize_u16_u8
+);
+triple!(
+    isize,
+    u16,
+    i16,
+    rechrom_builtin_add_isize_u16_i16,
+    rechrom_builtin_sub_isize_u16_i16,
+    rechrom_builtin_mul_isize_u16_i16
+);
+triple!(
+    isize,
+    u16,
+    u16,
+    rechrom_builtin_add_isize_u16_u16,
+    rechrom_builtin_sub_isize_u16_u16,
+    rechrom_builtin_mul_isize_u16_u16
+);
+triple!(
+    isize,
+    u16,
+    i32,
+    rechrom_builtin_add_isize_u16_i32,
+    rechrom_builtin_sub_isize_u16_i32,
+    rechrom_builtin_mul_isize_u16_i32
+);
+triple!(
+    isize,
+    u16,
+    u32,
+    rechrom_builtin_add_isize_u16_u32,
+    rechrom_builtin_sub_isize_u16_u32,
+    rechrom_builtin_mul_isize_u16_u32
+);
+triple!(
+    isize,
+    u16,
+    i64,
+    rechrom_builtin_add_isize_u16_i64,
+    rechrom_builtin_sub_isize_u16_i64,
+    rechrom_builtin_mul_isize_u16_i64
+);
+triple!(
+    isize,
+    u16,
+    u64,
+    rechrom_builtin_add_isize_u16_u64,
+    rechrom_builtin_sub_isize_u16_u64,
+    rechrom_builtin_mul_isize_u16_u64
+);
+triple!(
+    isize,
+    u16,
+    isize,
+    rechrom_builtin_add_isize_u16_isize,
+    rechrom_builtin_sub_isize_u16_isize,
+    rechrom_builtin_mul_isize_u16_isize
+);
+triple!(
+    isize,
+    u16,
+    usize,
+    rechrom_builtin_add_isize_u16_usize,
+    rechrom_builtin_sub_isize_u16_usize,
+    rechrom_builtin_mul_isize_u16_usize
+);
+triple!(
+    isize,
+    i32,
+    i8,
+    rechrom_builtin_add_isize_i32_i8,
+    rechrom_builtin_sub_isize_i32_i8,
+    rechrom_builtin_mul_isize_i32_i8
+);
+triple!(
+    isize,
+    i32,
+    u8,
+    rechrom_builtin_add_isize_i32_u8,
+    rechrom_builtin_sub_isize_i32_u8,
+    rechrom_builtin_mul_isize_i32_u8
+);
+triple!(
+    isize,
+    i32,
+    i16,
+    rechrom_builtin_add_isize_i32_i16,
+    rechrom_builtin_sub_isize_i32_i16,
+    rechrom_builtin_mul_isize_i32_i16
+);
+triple!(
+    isize,
+    i32,
+    u16,
+    rechrom_builtin_add_isize_i32_u16,
+    rechrom_builtin_sub_isize_i32_u16,
+    rechrom_builtin_mul_isize_i32_u16
+);
+triple!(
+    isize,
+    i32,
+    i32,
+    rechrom_builtin_add_isize_i32_i32,
+    rechrom_builtin_sub_isize_i32_i32,
+    rechrom_builtin_mul_isize_i32_i32
+);
+triple!(
+    isize,
+    i32,
+    u32,
+    rechrom_builtin_add_isize_i32_u32,
+    rechrom_builtin_sub_isize_i32_u32,
+    rechrom_builtin_mul_isize_i32_u32
+);
+triple!(
+    isize,
+    i32,
+    i64,
+    rechrom_builtin_add_isize_i32_i64,
+    rechrom_builtin_sub_isize_i32_i64,
+    rechrom_builtin_mul_isize_i32_i64
+);
+triple!(
+    isize,
+    i32,
+    u64,
+    rechrom_builtin_add_isize_i32_u64,
+    rechrom_builtin_sub_isize_i32_u64,
+    rechrom_builtin_mul_isize_i32_u64
+);
+triple!(
+    isize,
+    i32,
+    isize,
+    rechrom_builtin_add_isize_i32_isize,
+    rechrom_builtin_sub_isize_i32_isize,
+    rechrom_builtin_mul_isize_i32_isize
+);
+triple!(
+    isize,
+    i32,
+    usize,
+    rechrom_builtin_add_isize_i32_usize,
+    rechrom_builtin_sub_isize_i32_usize,
+    rechrom_builtin_mul_isize_i32_usize
+);
+triple!(
+    isize,
+    u32,
+    i8,
+    rechrom_builtin_add_isize_u32_i8,
+    rechrom_builtin_sub_isize_u32_i8,
+    rechrom_builtin_mul_isize_u32_i8
+);
+triple!(
+    isize,
+    u32,
+    u8,
+    rechrom_builtin_add_isize_u32_u8,
+    rechrom_builtin_sub_isize_u32_u8,
+    rechrom_builtin_mul_isize_u32_u8
+);
+triple!(
+    isize,
+    u32,
+    i16,
+    rechrom_builtin_add_isize_u32_i16,
+    rechrom_builtin_sub_isize_u32_i16,
+    rechrom_builtin_mul_isize_u32_i16
+);
+triple!(
+    isize,
+    u32,
+    u16,
+    rechrom_builtin_add_isize_u32_u16,
+    rechrom_builtin_sub_isize_u32_u16,
+    rechrom_builtin_mul_isize_u32_u16
+);
+triple!(
+    isize,
+    u32,
+    i32,
+    rechrom_builtin_add_isize_u32_i32,
+    rechrom_builtin_sub_isize_u32_i32,
+    rechrom_builtin_mul_isize_u32_i32
+);
+triple!(
+    isize,
+    u32,
+    u32,
+    rechrom_builtin_add_isize_u32_u32,
+    rechrom_builtin_sub_isize_u32_u32,
+    rechrom_builtin_mul_isize_u32_u32
+);
+triple!(
+    isize,
+    u32,
+    i64,
+    rechrom_builtin_add_isize_u32_i64,
+    rechrom_builtin_sub_isize_u32_i64,
+    rechrom_builtin_mul_isize_u32_i64
+);
+triple!(
+    isize,
+    u32,
+    u64,
+    rechrom_builtin_add_isize_u32_u64,
+    rechrom_builtin_sub_isize_u32_u64,
+    rechrom_builtin_mul_isize_u32_u64
+);
+triple!(
+    isize,
+    u32,
+    isize,
+    rechrom_builtin_add_isize_u32_isize,
+    rechrom_builtin_sub_isize_u32_isize,
+    rechrom_builtin_mul_isize_u32_isize
+);
+triple!(
+    isize,
+    u32,
+    usize,
+    rechrom_builtin_add_isize_u32_usize,
+    rechrom_builtin_sub_isize_u32_usize,
+    rechrom_builtin_mul_isize_u32_usize
+);
+triple!(
+    isize,
+    i64,
+    i8,
+    rechrom_builtin_add_isize_i64_i8,
+    rechrom_builtin_sub_isize_i64_i8,
+    rechrom_builtin_mul_isize_i64_i8
+);
+triple!(
+    isize,
+    i64,
+    u8,
+    rechrom_builtin_add_isize_i64_u8,
+    rechrom_builtin_sub_isize_i64_u8,
+    rechrom_builtin_mul_isize_i64_u8
+);
+triple!(
+    isize,
+    i64,
+    i16,
+    rechrom_builtin_add_isize_i64_i16,
+    rechrom_builtin_sub_isize_i64_i16,
+    rechrom_builtin_mul_isize_i64_i16
+);
+triple!(
+    isize,
+    i64,
+    u16,
+    rechrom_builtin_add_isize_i64_u16,
+    rechrom_builtin_sub_isize_i64_u16,
+    rechrom_builtin_mul_isize_i64_u16
+);
+triple!(
+    isize,
+    i64,
+    i32,
+    rechrom_builtin_add_isize_i64_i32,
+    rechrom_builtin_sub_isize_i64_i32,
+    rechrom_builtin_mul_isize_i64_i32
+);
+triple!(
+    isize,
+    i64,
+    u32,
+    rechrom_builtin_add_isize_i64_u32,
+    rechrom_builtin_sub_isize_i64_u32,
+    rechrom_builtin_mul_isize_i64_u32
+);
+triple!(
+    isize,
+    i64,
+    i64,
+    rechrom_builtin_add_isize_i64_i64,
+    rechrom_builtin_sub_isize_i64_i64,
+    rechrom_builtin_mul_isize_i64_i64
+);
+triple!(
+    isize,
+    i64,
+    u64,
+    rechrom_builtin_add_isize_i64_u64,
+    rechrom_builtin_sub_isize_i64_u64,
+    rechrom_builtin_mul_isize_i64_u64
+);
+triple!(
+    isize,
+    i64,
+    isize,
+    rechrom_builtin_add_isize_i64_isize,
+    rechrom_builtin_sub_isize_i64_isize,
+    rechrom_builtin_mul_isize_i64_isize
+);
+triple!(
+    isize,
+    i64,
+    usize,
+    rechrom_builtin_add_isize_i64_usize,
+    rechrom_builtin_sub_isize_i64_usize,
+    rechrom_builtin_mul_isize_i64_usize
+);
+triple!(
+    isize,
+    u64,
+    i8,
+    rechrom_builtin_add_isize_u64_i8,
+    rechrom_builtin_sub_isize_u64_i8,
+    rechrom_builtin_mul_isize_u64_i8
+);
+triple!(
+    isize,
+    u64,
+    u8,
+    rechrom_builtin_add_isize_u64_u8,
+    rechrom_builtin_sub_isize_u64_u8,
+    rechrom_builtin_mul_isize_u64_u8
+);
+triple!(
+    isize,
+    u64,
+    i16,
+    rechrom_builtin_add_isize_u64_i16,
+    rechrom_builtin_sub_isize_u64_i16,
+    rechrom_builtin_mul_isize_u64_i16
+);
+triple!(
+    isize,
+    u64,
+    u16,
+    rechrom_builtin_add_isize_u64_u16,
+    rechrom_builtin_sub_isize_u64_u16,
+    rechrom_builtin_mul_isize_u64_u16
+);
+triple!(
+    isize,
+    u64,
+    i32,
+    rechrom_builtin_add_isize_u64_i32,
+    rechrom_builtin_sub_isize_u64_i32,
+    rechrom_builtin_mul_isize_u64_i32
+);
+triple!(
+    isize,
+    u64,
+    u32,
+    rechrom_builtin_add_isize_u64_u32,
+    rechrom_builtin_sub_isize_u64_u32,
+    rechrom_builtin_mul_isize_u64_u32
+);
+triple!(
+    isize,
+    u64,
+    i64,
+    rechrom_builtin_add_isize_u64_i64,
+    rechrom_builtin_sub_isize_u64_i64,
+    rechrom_builtin_mul_isize_u64_i64
+);
+triple!(
+    isize,
+    u64,
+    u64,
+    rechrom_builtin_add_isize_u64_u64,
+    rechrom_builtin_sub_isize_u64_u64,
+    rechrom_builtin_mul_isize_u64_u64
+);
+triple!(
+    isize,
+    u64,
+    isize,
+    rechrom_builtin_add_isize_u64_isize,
+    rechrom_builtin_sub_isize_u64_isize,
+    rechrom_builtin_mul_isize_u64_isize
+);
+triple!(
+    isize,
+    u64,
+    usize,
+    rechrom_builtin_add_isize_u64_usize,
+    rechrom_builtin_sub_isize_u64_usize,
+    rechrom_builtin_mul_isize_u64_usize
+);
+triple!(
+    isize,
+    isize,
+    i8,
+    rechrom_builtin_add_isize_isize_i8,
+    rechrom_builtin_sub_isize_isize_i8,
+    rechrom_builtin_mul_isize_isize_i8
+);
+triple!(
+    isize,
+    isize,
+    u8,
+    rechrom_builtin_add_isize_isize_u8,
+    rechrom_builtin_sub_isize_isize_u8,
+    rechrom_builtin_mul_isize_isize_u8
+);
+triple!(
+    isize,
+    isize,
+    i16,
+    rechrom_builtin_add_isize_isize_i16,
+    rechrom_builtin_sub_isize_isize_i16,
+    rechrom_builtin_mul_isize_isize_i16
+);
+triple!(
+    isize,
+    isize,
+    u16,
+    rechrom_builtin_add_isize_isize_u16,
+    rechrom_builtin_sub_isize_isize_u16,
+    rechrom_builtin_mul_isize_isize_u16
+);
+triple!(
+    isize,
+    isize,
+    i32,
+    rechrom_builtin_add_isize_isize_i32,
+    rechrom_builtin_sub_isize_isize_i32,
+    rechrom_builtin_mul_isize_isize_i32
+);
+triple!(
+    isize,
+    isize,
+    u32,
+    rechrom_builtin_add_isize_isize_u32,
+    rechrom_builtin_sub_isize_isize_u32,
+    rechrom_builtin_mul_isize_isize_u32
+);
+triple!(
+    isize,
+    isize,
+    i64,
+    rechrom_builtin_add_isize_isize_i64,
+    rechrom_builtin_sub_isize_isize_i64,
+    rechrom_builtin_mul_isize_isize_i64
+);
+triple!(
+    isize,
+    isize,
+    u64,
+    rechrom_builtin_add_isize_isize_u64,
+    rechrom_builtin_sub_isize_isize_u64,
+    rechrom_builtin_mul_isize_isize_u64
+);
+triple!(
+    isize,
+    isize,
+    isize,
+    rechrom_builtin_add_isize_isize_isize,
+    rechrom_builtin_sub_isize_isize_isize,
+    rechrom_builtin_mul_isize_isize_isize
+);
+triple!(
+    isize,
+    isize,
+    usize,
+    rechrom_builtin_add_isize_isize_usize,
+    rechrom_builtin_sub_isize_isize_usize,
+    rechrom_builtin_mul_isize_isize_usize
+);
+triple!(
+    isize,
+    usize,
+    i8,
+    rechrom_builtin_add_isize_usize_i8,
+    rechrom_builtin_sub_isize_usize_i8,
+    rechrom_builtin_mul_isize_usize_i8
+);
+triple!(
+    isize,
+    usize,
+    u8,
+    rechrom_builtin_add_isize_usize_u8,
+    rechrom_builtin_sub_isize_usize_u8,
+    rechrom_builtin_mul_isize_usize_u8
+);
+triple!(
+    isize,
+    usize,
+    i16,
+    rechrom_builtin_add_isize_usize_i16,
+    rechrom_builtin_sub_isize_usize_i16,
+    rechrom_builtin_mul_isize_usize_i16
+);
+triple!(
+    isize,
+    usize,
+    u16,
+    rechrom_builtin_add_isize_usize_u16,
+    rechrom_builtin_sub_isize_usize_u16,
+    rechrom_builtin_mul_isize_usize_u16
+);
+triple!(
+    isize,
+    usize,
+    i32,
+    rechrom_builtin_add_isize_usize_i32,
+    rechrom_builtin_sub_isize_usize_i32,
+    rechrom_builtin_mul_isize_usize_i32
+);
+triple!(
+    isize,
+    usize,
+    u32,
+    rechrom_builtin_add_isize_usize_u32,
+    rechrom_builtin_sub_isize_usize_u32,
+    rechrom_builtin_mul_isize_usize_u32
+);
+triple!(
+    isize,
+    usize,
+    i64,
+    rechrom_builtin_add_isize_usize_i64,
+    rechrom_builtin_sub_isize_usize_i64,
+    rechrom_builtin_mul_isize_usize_i64
+);
+triple!(
+    isize,
+    usize,
+    u64,
+    rechrom_builtin_add_isize_usize_u64,
+    rechrom_builtin_sub_isize_usize_u64,
+    rechrom_builtin_mul_isize_usize_u64
+);
+triple!(
+    isize,
+    usize,
+    isize,
+    rechrom_builtin_add_isize_usize_isize,
+    rechrom_builtin_sub_isize_usize_isize,
+    rechrom_builtin_mul_isize_usize_isize
+);
+triple!(
+    isize,
+    usize,
+    usize,
+    rechrom_builtin_add_isize_usize_usize,
+    rechrom_builtin_sub_isize_usize_usize,
+    rechrom_builtin_mul_isize_usize_usize
+);
+triple!(
+    usize,
+    i8,
+    i8,
+    rechrom_builtin_add_usize_i8_i8,
+    rechrom_builtin_sub_usize_i8_i8,
+    rechrom_builtin_mul_usize_i8_i8
+);
+triple!(
+    usize,
+    i8,
+    u8,
+    rechrom_builtin_add_usize_i8_u8,
+    rechrom_builtin_sub_usize_i8_u8,
+    rechrom_builtin_mul_usize_i8_u8
+);
+triple!(
+    usize,
+    i8,
+    i16,
+    rechrom_builtin_add_usize_i8_i16,
+    rechrom_builtin_sub_usize_i8_i16,
+    rechrom_builtin_mul_usize_i8_i16
+);
+triple!(
+    usize,
+    i8,
+    u16,
+    rechrom_builtin_add_usize_i8_u16,
+    rechrom_builtin_sub_usize_i8_u16,
+    rechrom_builtin_mul_usize_i8_u16
+);
+triple!(
+    usize,
+    i8,
+    i32,
+    rechrom_builtin_add_usize_i8_i32,
+    rechrom_builtin_sub_usize_i8_i32,
+    rechrom_builtin_mul_usize_i8_i32
+);
+triple!(
+    usize,
+    i8,
+    u32,
+    rechrom_builtin_add_usize_i8_u32,
+    rechrom_builtin_sub_usize_i8_u32,
+    rechrom_builtin_mul_usize_i8_u32
+);
+triple!(
+    usize,
+    i8,
+    i64,
+    rechrom_builtin_add_usize_i8_i64,
+    rechrom_builtin_sub_usize_i8_i64,
+    rechrom_builtin_mul_usize_i8_i64
+);
+triple!(
+    usize,
+    i8,
+    u64,
+    rechrom_builtin_add_usize_i8_u64,
+    rechrom_builtin_sub_usize_i8_u64,
+    rechrom_builtin_mul_usize_i8_u64
+);
+triple!(
+    usize,
+    i8,
+    isize,
+    rechrom_builtin_add_usize_i8_isize,
+    rechrom_builtin_sub_usize_i8_isize,
+    rechrom_builtin_mul_usize_i8_isize
+);
+triple!(
+    usize,
+    i8,
+    usize,
+    rechrom_builtin_add_usize_i8_usize,
+    rechrom_builtin_sub_usize_i8_usize,
+    rechrom_builtin_mul_usize_i8_usize
+);
+triple!(
+    usize,
+    u8,
+    i8,
+    rechrom_builtin_add_usize_u8_i8,
+    rechrom_builtin_sub_usize_u8_i8,
+    rechrom_builtin_mul_usize_u8_i8
+);
+triple!(
+    usize,
+    u8,
+    u8,
+    rechrom_builtin_add_usize_u8_u8,
+    rechrom_builtin_sub_usize_u8_u8,
+    rechrom_builtin_mul_usize_u8_u8
+);
+triple!(
+    usize,
+    u8,
+    i16,
+    rechrom_builtin_add_usize_u8_i16,
+    rechrom_builtin_sub_usize_u8_i16,
+    rechrom_builtin_mul_usize_u8_i16
+);
+triple!(
+    usize,
+    u8,
+    u16,
+    rechrom_builtin_add_usize_u8_u16,
+    rechrom_builtin_sub_usize_u8_u16,
+    rechrom_builtin_mul_usize_u8_u16
+);
+triple!(
+    usize,
+    u8,
+    i32,
+    rechrom_builtin_add_usize_u8_i32,
+    rechrom_builtin_sub_usize_u8_i32,
+    rechrom_builtin_mul_usize_u8_i32
+);
+triple!(
+    usize,
+    u8,
+    u32,
+    rechrom_builtin_add_usize_u8_u32,
+    rechrom_builtin_sub_usize_u8_u32,
+    rechrom_builtin_mul_usize_u8_u32
+);
+triple!(
+    usize,
+    u8,
+    i64,
+    rechrom_builtin_add_usize_u8_i64,
+    rechrom_builtin_sub_usize_u8_i64,
+    rechrom_builtin_mul_usize_u8_i64
+);
+triple!(
+    usize,
+    u8,
+    u64,
+    rechrom_builtin_add_usize_u8_u64,
+    rechrom_builtin_sub_usize_u8_u64,
+    rechrom_builtin_mul_usize_u8_u64
+);
+triple!(
+    usize,
+    u8,
+    isize,
+    rechrom_builtin_add_usize_u8_isize,
+    rechrom_builtin_sub_usize_u8_isize,
+    rechrom_builtin_mul_usize_u8_isize
+);
+triple!(
+    usize,
+    u8,
+    usize,
+    rechrom_builtin_add_usize_u8_usize,
+    rechrom_builtin_sub_usize_u8_usize,
+    rechrom_builtin_mul_usize_u8_usize
+);
+triple!(
+    usize,
+    i16,
+    i8,
+    rechrom_builtin_add_usize_i16_i8,
+    rechrom_builtin_sub_usize_i16_i8,
+    rechrom_builtin_mul_usize_i16_i8
+);
+triple!(
+    usize,
+    i16,
+    u8,
+    rechrom_builtin_add_usize_i16_u8,
+    rechrom_builtin_sub_usize_i16_u8,
+    rechrom_builtin_mul_usize_i16_u8
+);
+triple!(
+    usize,
+    i16,
+    i16,
+    rechrom_builtin_add_usize_i16_i16,
+    rechrom_builtin_sub_usize_i16_i16,
+    rechrom_builtin_mul_usize_i16_i16
+);
+triple!(
+    usize,
+    i16,
+    u16,
+    rechrom_builtin_add_usize_i16_u16,
+    rechrom_builtin_sub_usize_i16_u16,
+    rechrom_builtin_mul_usize_i16_u16
+);
+triple!(
+    usize,
+    i16,
+    i32,
+    rechrom_builtin_add_usize_i16_i32,
+    rechrom_builtin_sub_usize_i16_i32,
+    rechrom_builtin_mul_usize_i16_i32
+);
+triple!(
+    usize,
+    i16,
+    u32,
+    rechrom_builtin_add_usize_i16_u32,
+    rechrom_builtin_sub_usize_i16_u32,
+    rechrom_builtin_mul_usize_i16_u32
+);
+triple!(
+    usize,
+    i16,
+    i64,
+    rechrom_builtin_add_usize_i16_i64,
+    rechrom_builtin_sub_usize_i16_i64,
+    rechrom_builtin_mul_usize_i16_i64
+);
+triple!(
+    usize,
+    i16,
+    u64,
+    rechrom_builtin_add_usize_i16_u64,
+    rechrom_builtin_sub_usize_i16_u64,
+    rechrom_builtin_mul_usize_i16_u64
+);
+triple!(
+    usize,
+    i16,
+    isize,
+    rechrom_builtin_add_usize_i16_isize,
+    rechrom_builtin_sub_usize_i16_isize,
+    rechrom_builtin_mul_usize_i16_isize
+);
+triple!(
+    usize,
+    i16,
+    usize,
+    rechrom_builtin_add_usize_i16_usize,
+    rechrom_builtin_sub_usize_i16_usize,
+    rechrom_builtin_mul_usize_i16_usize
+);
+triple!(
+    usize,
+    u16,
+    i8,
+    rechrom_builtin_add_usize_u16_i8,
+    rechrom_builtin_sub_usize_u16_i8,
+    rechrom_builtin_mul_usize_u16_i8
+);
+triple!(
+    usize,
+    u16,
+    u8,
+    rechrom_builtin_add_usize_u16_u8,
+    rechrom_builtin_sub_usize_u16_u8,
+    rechrom_builtin_mul_usize_u16_u8
+);
+triple!(
+    usize,
+    u16,
+    i16,
+    rechrom_builtin_add_usize_u16_i16,
+    rechrom_builtin_sub_usize_u16_i16,
+    rechrom_builtin_mul_usize_u16_i16
+);
+triple!(
+    usize,
+    u16,
+    u16,
+    rechrom_builtin_add_usize_u16_u16,
+    rechrom_builtin_sub_usize_u16_u16,
+    rechrom_builtin_mul_usize_u16_u16
+);
+triple!(
+    usize,
+    u16,
+    i32,
+    rechrom_builtin_add_usize_u16_i32,
+    rechrom_builtin_sub_usize_u16_i32,
+    rechrom_builtin_mul_usize_u16_i32
+);
+triple!(
+    usize,
+    u16,
+    u32,
+    rechrom_builtin_add_usize_u16_u32,
+    rechrom_builtin_sub_usize_u16_u32,
+    rechrom_builtin_mul_usize_u16_u32
+);
+triple!(
+    usize,
+    u16,
+    i64,
+    rechrom_builtin_add_usize_u16_i64,
+    rechrom_builtin_sub_usize_u16_i64,
+    rechrom_builtin_mul_usize_u16_i64
+);
+triple!(
+    usize,
+    u16,
+    u64,
+    rechrom_builtin_add_usize_u16_u64,
+    rechrom_builtin_sub_usize_u16_u64,
+    rechrom_builtin_mul_usize_u16_u64
+);
+triple!(
+    usize,
+    u16,
+    isize,
+    rechrom_builtin_add_usize_u16_isize,
+    rechrom_builtin_sub_usize_u16_isize,
+    rechrom_builtin_mul_usize_u16_isize
+);
+triple!(
+    usize,
+    u16,
+    usize,
+    rechrom_builtin_add_usize_u16_usize,
+    rechrom_builtin_sub_usize_u16_usize,
+    rechrom_builtin_mul_usize_u16_usize
+);
+triple!(
+    usize,
+    i32,
+    i8,
+    rechrom_builtin_add_usize_i32_i8,
+    rechrom_builtin_sub_usize_i32_i8,
+    rechrom_builtin_mul_usize_i32_i8
+);
+triple!(
+    usize,
+    i32,
+    u8,
+    rechrom_builtin_add_usize_i32_u8,
+    rechrom_builtin_sub_usize_i32_u8,
+    rechrom_builtin_mul_usize_i32_u8
+);
+triple!(
+    usize,
+    i32,
+    i16,
+    rechrom_builtin_add_usize_i32_i16,
+    rechrom_builtin_sub_usize_i32_i16,
+    rechrom_builtin_mul_usize_i32_i16
+);
+triple!(
+    usize,
+    i32,
+    u16,
+    rechrom_builtin_add_usize_i32_u16,
+    rechrom_builtin_sub_usize_i32_u16,
+    rechrom_builtin_mul_usize_i32_u16
+);
+triple!(
+    usize,
+    i32,
+    i32,
+    rechrom_builtin_add_usize_i32_i32,
+    rechrom_builtin_sub_usize_i32_i32,
+    rechrom_builtin_mul_usize_i32_i32
+);
+triple!(
+    usize,
+    i32,
+    u32,
+    rechrom_builtin_add_usize_i32_u32,
+    rechrom_builtin_sub_usize_i32_u32,
+    rechrom_builtin_mul_usize_i32_u32
+);
+triple!(
+    usize,
+    i32,
+    i64,
+    rechrom_builtin_add_usize_i32_i64,
+    rechrom_builtin_sub_usize_i32_i64,
+    rechrom_builtin_mul_usize_i32_i64
+);
+triple!(
+    usize,
+    i32,
+    u64,
+    rechrom_builtin_add_usize_i32_u64,
+    rechrom_builtin_sub_usize_i32_u64,
+    rechrom_builtin_mul_usize_i32_u64
+);
+triple!(
+    usize,
+    i32,
+    isize,
+    rechrom_builtin_add_usize_i32_isize,
+    rechrom_builtin_sub_usize_i32_isize,
+    rechrom_builtin_mul_usize_i32_isize
+);
+triple!(
+    usize,
+    i32,
+    usize,
+    rechrom_builtin_add_usize_i32_usize,
+    rechrom_builtin_sub_usize_i32_usize,
+    rechrom_builtin_mul_usize_i32_usize
+);
+triple!(
+    usize,
+    u32,
+    i8,
+    rechrom_builtin_add_usize_u32_i8,
+    rechrom_builtin_sub_usize_u32_i8,
+    rechrom_builtin_mul_usize_u32_i8
+);
+triple!(
+    usize,
+    u32,
+    u8,
+    rechrom_builtin_add_usize_u32_u8,
+    rechrom_builtin_sub_usize_u32_u8,
+    rechrom_builtin_mul_usize_u32_u8
+);
+triple!(
+    usize,
+    u32,
+    i16,
+    rechrom_builtin_add_usize_u32_i16,
+    rechrom_builtin_sub_usize_u32_i16,
+    rechrom_builtin_mul_usize_u32_i16
+);
+triple!(
+    usize,
+    u32,
+    u16,
+    rechrom_builtin_add_usize_u32_u16,
+    rechrom_builtin_sub_usize_u32_u16,
+    rechrom_builtin_mul_usize_u32_u16
+);
+triple!(
+    usize,
+    u32,
+    i32,
+    rechrom_builtin_add_usize_u32_i32,
+    rechrom_builtin_sub_usize_u32_i32,
+    rechrom_builtin_mul_usize_u32_i32
+);
+triple!(
+    usize,
+    u32,
+    u32,
+    rechrom_builtin_add_usize_u32_u32,
+    rechrom_builtin_sub_usize_u32_u32,
+    rechrom_builtin_mul_usize_u32_u32
+);
+triple!(
+    usize,
+    u32,
+    i64,
+    rechrom_builtin_add_usize_u32_i64,
+    rechrom_builtin_sub_usize_u32_i64,
+    rechrom_builtin_mul_usize_u32_i64
+);
+triple!(
+    usize,
+    u32,
+    u64,
+    rechrom_builtin_add_usize_u32_u64,
+    rechrom_builtin_sub_usize_u32_u64,
+    rechrom_builtin_mul_usize_u32_u64
+);
+triple!(
+    usize,
+    u32,
+    isize,
+    rechrom_builtin_add_usize_u32_isize,
+    rechrom_builtin_sub_usize_u32_isize,
+    rechrom_builtin_mul_usize_u32_isize
+);
+triple!(
+    usize,
+    u32,
+    usize,
+    rechrom_builtin_add_usize_u32_usize,
+    rechrom_builtin_sub_usize_u32_usize,
+    rechrom_builtin_mul_usize_u32_usize
+);
+triple!(
+    usize,
+    i64,
+    i8,
+    rechrom_builtin_add_usize_i64_i8,
+    rechrom_builtin_sub_usize_i64_i8,
+    rechrom_builtin_mul_usize_i64_i8
+);
+triple!(
+    usize,
+    i64,
+    u8,
+    rechrom_builtin_add_usize_i64_u8,
+    rechrom_builtin_sub_usize_i64_u8,
+    rechrom_builtin_mul_usize_i64_u8
+);
+triple!(
+    usize,
+    i64,
+    i16,
+    rechrom_builtin_add_usize_i64_i16,
+    rechrom_builtin_sub_usize_i64_i16,
+    rechrom_builtin_mul_usize_i64_i16
+);
+triple!(
+    usize,
+    i64,
+    u16,
+    rechrom_builtin_add_usize_i64_u16,
+    rechrom_builtin_sub_usize_i64_u16,
+    rechrom_builtin_mul_usize_i64_u16
+);
+triple!(
+    usize,
+    i64,
+    i32,
+    rechrom_builtin_add_usize_i64_i32,
+    rechrom_builtin_sub_usize_i64_i32,
+    rechrom_builtin_mul_usize_i64_i32
+);
+triple!(
+    usize,
+    i64,
+    u32,
+    rechrom_builtin_add_usize_i64_u32,
+    rechrom_builtin_sub_usize_i64_u32,
+    rechrom_builtin_mul_usize_i64_u32
+);
+triple!(
+    usize,
+    i64,
+    i64,
+    rechrom_builtin_add_usize_i64_i64,
+    rechrom_builtin_sub_usize_i64_i64,
+    rechrom_builtin_mul_usize_i64_i64
+);
+triple!(
+    usize,
+    i64,
+    u64,
+    rechrom_builtin_add_usize_i64_u64,
+    rechrom_builtin_sub_usize_i64_u64,
+    rechrom_builtin_mul_usize_i64_u64
+);
+triple!(
+    usize,
+    i64,
+    isize,
+    rechrom_builtin_add_usize_i64_isize,
+    rechrom_builtin_sub_usize_i64_isize,
+    rechrom_builtin_mul_usize_i64_isize
+);
+triple!(
+    usize,
+    i64,
+    usize,
+    rechrom_builtin_add_usize_i64_usize,
+    rechrom_builtin_sub_usize_i64_usize,
+    rechrom_builtin_mul_usize_i64_usize
+);
+triple!(
+    usize,
+    u64,
+    i8,
+    rechrom_builtin_add_usize_u64_i8,
+    rechrom_builtin_sub_usize_u64_i8,
+    rechrom_builtin_mul_usize_u64_i8
+);
+triple!(
+    usize,
+    u64,
+    u8,
+    rechrom_builtin_add_usize_u64_u8,
+    rechrom_builtin_sub_usize_u64_u8,
+    rechrom_builtin_mul_usize_u64_u8
+);
+triple!(
+    usize,
+    u64,
+    i16,
+    rechrom_builtin_add_usize_u64_i16,
+    rechrom_builtin_sub_usize_u64_i16,
+    rechrom_builtin_mul_usize_u64_i16
+);
+triple!(
+    usize,
+    u64,
+    u16,
+    rechrom_builtin_add_usize_u64_u16,
+    rechrom_builtin_sub_usize_u64_u16,
+    rechrom_builtin_mul_usize_u64_u16
+);
+triple!(
+    usize,
+    u64,
+    i32,
+    rechrom_builtin_add_usize_u64_i32,
+    rechrom_builtin_sub_usize_u64_i32,
+    rechrom_builtin_mul_usize_u64_i32
+);
+triple!(
+    usize,
+    u64,
+    u32,
+    rechrom_builtin_add_usize_u64_u32,
+    rechrom_builtin_sub_usize_u64_u32,
+    rechrom_builtin_mul_usize_u64_u32
+);
+triple!(
+    usize,
+    u64,
+    i64,
+    rechrom_builtin_add_usize_u64_i64,
+    rechrom_builtin_sub_usize_u64_i64,
+    rechrom_builtin_mul_usize_u64_i64
+);
+triple!(
+    usize,
+    u64,
+    u64,
+    rechrom_builtin_add_usize_u64_u64,
+    rechrom_builtin_sub_usize_u64_u64,
+    rechrom_builtin_mul_usize_u64_u64
+);
+triple!(
+    usize,
+    u64,
+    isize,
+    rechrom_builtin_add_usize_u64_isize,
+    rechrom_builtin_sub_usize_u64_isize,
+    rechrom_builtin_mul_usize_u64_isize
+);
+triple!(
+    usize,
+    u64,
+    usize,
+    rechrom_builtin_add_usize_u64_usize,
+    rechrom_builtin_sub_usize_u64_usize,
+    rechrom_builtin_mul_usize_u64_usize
+);
+triple!(
+    usize,
+    isize,
+    i8,
+    rechrom_builtin_add_usize_isize_i8,
+    rechrom_builtin_sub_usize_isize_i8,
+    rechrom_builtin_mul_usize_isize_i8
+);
+triple!(
+    usize,
+    isize,
+    u8,
+    rechrom_builtin_add_usize_isize_u8,
+    rechrom_builtin_sub_usize_isize_u8,
+    rechrom_builtin_mul_usize_isize_u8
+);
+triple!(
+    usize,
+    isize,
+    i16,
+    rechrom_builtin_add_usize_isize_i16,
+    rechrom_builtin_sub_usize_isize_i16,
+    rechrom_builtin_mul_usize_isize_i16
+);
+triple!(
+    usize,
+    isize,
+    u16,
+    rechrom_builtin_add_usize_isize_u16,
+    rechrom_builtin_sub_usize_isize_u16,
+    rechrom_builtin_mul_usize_isize_u16
+);
+triple!(
+    usize,
+    isize,
+    i32,
+    rechrom_builtin_add_usize_isize_i32,
+    rechrom_builtin_sub_usize_isize_i32,
+    rechrom_builtin_mul_usize_isize_i32
+);
+triple!(
+    usize,
+    isize,
+    u32,
+    rechrom_builtin_add_usize_isize_u32,
+    rechrom_builtin_sub_usize_isize_u32,
+    rechrom_builtin_mul_usize_isize_u32
+);
+triple!(
+    usize,
+    isize,
+    i64,
+    rechrom_builtin_add_usize_isize_i64,
+    rechrom_builtin_sub_usize_isize_i64,
+    rechrom_builtin_mul_usize_isize_i64
+);
+triple!(
+    usize,
+    isize,
+    u64,
+    rechrom_builtin_add_usize_isize_u64,
+    rechrom_builtin_sub_usize_isize_u64,
+    rechrom_builtin_mul_usize_isize_u64
+);
+triple!(
+    usize,
+    isize,
+    isize,
+    rechrom_builtin_add_usize_isize_isize,
+    rechrom_builtin_sub_usize_isize_isize,
+    rechrom_builtin_mul_usize_isize_isize
+);
+triple!(
+    usize,
+    isize,
+    usize,
+    rechrom_builtin_add_usize_isize_usize,
+    rechrom_builtin_sub_usize_isize_usize,
+    rechrom_builtin_mul_usize_isize_usize
+);
+triple!(
+    usize,
+    usize,
+    i8,
+    rechrom_builtin_add_usize_usize_i8,
+    rechrom_builtin_sub_usize_usize_i8,
+    rechrom_builtin_mul_usize_usize_i8
+);
+triple!(
+    usize,
+    usize,
+    u8,
+    rechrom_builtin_add_usize_usize_u8,
+    rechrom_builtin_sub_usize_usize_u8,
+    rechrom_builtin_mul_usize_usize_u8
+);
+triple!(
+    usize,
+    usize,
+    i16,
+    rechrom_builtin_add_usize_usize_i16,
+    rechrom_builtin_sub_usize_usize_i16,
+    rechrom_builtin_mul_usize_usize_i16
+);
+triple!(
+    usize,
+    usize,
+    u16,
+    rechrom_builtin_add_usize_usize_u16,
+    rechrom_builtin_sub_usize_usize_u16,
+    rechrom_builtin_mul_usize_usize_u16
+);
+triple!(
+    usize,
+    usize,
+    i32,
+    rechrom_builtin_add_usize_usize_i32,
+    rechrom_builtin_sub_usize_usize_i32,
+    rechrom_builtin_mul_usize_usize_i32
+);
+triple!(
+    usize,
+    usize,
+    u32,
+    rechrom_builtin_add_usize_usize_u32,
+    rechrom_builtin_sub_usize_usize_u32,
+    rechrom_builtin_mul_usize_usize_u32
+);
+triple!(
+    usize,
+    usize,
+    i64,
+    rechrom_builtin_add_usize_usize_i64,
+    rechrom_builtin_sub_usize_usize_i64,
+    rechrom_builtin_mul_usize_usize_i64
+);
+triple!(
+    usize,
+    usize,
+    u64,
+    rechrom_builtin_add_usize_usize_u64,
+    rechrom_builtin_sub_usize_usize_u64,
+    rechrom_builtin_mul_usize_usize_u64
+);
+triple!(
+    usize,
+    usize,
+    isize,
+    rechrom_builtin_add_usize_usize_isize,
+    rechrom_builtin_sub_usize_usize_isize,
+    rechrom_builtin_mul_usize_usize_isize
+);
+triple!(
+    usize,
+    usize,
+    usize,
+    rechrom_builtin_add_usize_usize_usize,
+    rechrom_builtin_sub_usize_usize_usize,
+    rechrom_builtin_mul_usize_usize_usize
+);

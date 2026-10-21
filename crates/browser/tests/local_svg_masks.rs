@@ -69,7 +69,7 @@ fn artifact_pixels(
         80,
         1.,
         &mut p,
-        renderer::PixelFormat::Rgba8888,
+        renderer_skia::PixelFormat::Rgba8888,
         140,
     )
     .unwrap();
@@ -645,7 +645,7 @@ fn existing_pattern_mask_reads_canonical_override() {
                 80,
                 1.,
                 &mut bytes,
-                renderer::PixelFormat::Rgba8888,
+                renderer_skia::PixelFormat::Rgba8888,
                 140,
             )
             .unwrap_err()

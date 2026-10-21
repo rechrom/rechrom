@@ -1,168 +1,159 @@
-// Migrated unchanged in behavior from tiny-skia-0.12.0/src/line_clipper.rs.
-
-// Copyright 2011 Google Inc.
-// Copyright 2020 Yevhenii Reizner
-//
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
-
-use crate::raster::{Point, Rect};
-
-use crate::path::Scalar;
-
-pub const MAX_POINTS: usize = 4;
-
-/// Clip the line pts[0]...pts[1] against clip, ignoring segments that
-/// lie completely above or below the clip. For portions to the left or
-/// right, turn those into vertical line segments that are aligned to the
-/// edge of the clip.
-///
-/// Return the number of line segments that result, and store the end-points
-/// of those segments sequentially in lines as follows:
-///
-/// 1st segment: lines[0]..lines[1]
-/// 2nd segment: lines[1]..lines[2]
-/// 3rd segment: lines[2]..lines[3]
-pub fn clip<'a>(
-    src: &[Point; 2],
-    clip: &Rect,
-    can_cull_to_the_right: bool,
-    points: &'a mut [Point; MAX_POINTS],
-) -> &'a [Point] {
-    let (mut index0, mut index1) = if src[0].y < src[1].y { (0, 1) } else { (1, 0) };
-
-    // Check if we're completely clipped out in Y (above or below)
-
-    if src[index1].y <= clip.top() {
-        // we're above the clip
-        return &[];
-    }
-
-    if src[index0].y >= clip.bottom() {
-        // we're below the clip
-        return &[];
-    }
-
-    // Chop in Y to produce a single segment, stored in tmp[0..1]
-
-    let mut tmp = *src;
-
-    // now compute intersections
-    if src[index0].y < clip.top() {
-        tmp[index0] = Point::from_xy(sect_with_horizontal(src, clip.top()), clip.top());
-        debug_assert!(is_between_unsorted(tmp[index0].x, src[0].x, src[1].x));
-    }
-
-    if tmp[index1].y > clip.bottom() {
-        tmp[index1] = Point::from_xy(sect_with_horizontal(src, clip.bottom()), clip.bottom());
-        debug_assert!(is_between_unsorted(tmp[index1].x, src[0].x, src[1].x));
-    }
-
-    // Chop it into 1..3 segments that are wholly within the clip in X.
-
-    // temp storage for up to 3 segments
-    let mut result_storage = [Point::zero(); MAX_POINTS];
-    let mut line_count = 1;
-    let mut reverse;
-
-    if src[0].x < src[1].x {
-        index0 = 0;
-        index1 = 1;
-        reverse = false;
-    } else {
-        index0 = 1;
-        index1 = 0;
-        reverse = true;
-    }
-
-    let result: &[Point] = if tmp[index1].x <= clip.left() {
-        // wholly to the left
-        tmp[0].x = clip.left();
-        tmp[1].x = clip.left();
-        reverse = false;
-        &tmp
-    } else if tmp[index0].x >= clip.right() {
-        // wholly to the right
-        if can_cull_to_the_right {
-            return &[];
-        }
-
-        tmp[0].x = clip.right();
-        tmp[1].x = clip.right();
-        reverse = false;
-        &tmp
-    } else {
-        let mut offset = 0;
-
-        if tmp[index0].x < clip.left() {
-            result_storage[offset] = Point::from_xy(clip.left(), tmp[index0].y);
-            offset += 1;
-            result_storage[offset] =
-                Point::from_xy(clip.left(), sect_clamp_with_vertical(&tmp, clip.left()));
-            debug_assert!(is_between_unsorted(
-                result_storage[offset].y,
-                tmp[0].y,
-                tmp[1].y
-            ));
-        } else {
-            result_storage[offset] = tmp[index0];
-        }
-        offset += 1;
-
-        if tmp[index1].x > clip.right() {
-            result_storage[offset] =
-                Point::from_xy(clip.right(), sect_clamp_with_vertical(&tmp, clip.right()));
-            debug_assert!(is_between_unsorted(
-                result_storage[offset].y,
-                tmp[0].y,
-                tmp[1].y
-            ));
-            offset += 1;
-            result_storage[offset] = Point::from_xy(clip.right(), tmp[index1].y);
-        } else {
-            result_storage[offset] = tmp[index1];
-        }
-
-        line_count = offset;
-        &result_storage
-    };
-
-    // Now copy the results into the caller's lines[] parameter
-    if reverse {
-        // copy the pts in reverse order to maintain winding order
-        for i in 0..=line_count {
-            points[line_count - i] = result[i];
-        }
-    } else {
-        let len = line_count + 1;
-        points[0..len].copy_from_slice(&result[0..len]);
-    }
-
-    &points[0..line_count + 1]
+// Copyright 2011 Google Inc. BSD-style license.
+use crate::src::core::SkPoint::SkPoint;
+use crate::src::core::SkRect::SkRect;
+// Source: src/core/SkLineClipper.h:13-18
+pub struct SkLineClipper;
+impl SkLineClipper {
+    pub const kMaxPoints: usize = 4;
+    pub const kMaxClippedLineSegments: usize = 3;
 }
-
-/// Returns X coordinate of intersection with horizontal line at Y.
-fn sect_with_horizontal(src: &[Point; 2], y: f32) -> f32 {
-    let dy = src[1].y - src[0].y;
-    if dy.is_nearly_zero() {
-        src[0].x.ave(src[1].x)
+// Source: src/core/SkLineClipper.cpp:20-34
+fn pin_unsorted<T: PartialOrd>(mut value: T, mut limit0: T, mut limit1: T) -> T {
+    if limit1 < limit0 {
+        std::mem::swap(&mut limit0, &mut limit1);
+    }
+    crate::SkASSERT!(@source b"src/core/SkLineClipper.cpp\0".as_ptr(), 26; @condition b"limit0 <= limit1\0".as_ptr(); limit0 <= limit1);
+    if value < limit0 {
+        value = limit0;
+    } else if value > limit1 {
+        value = limit1;
+    }
+    value
+}
+// Source: src/core/SkLineClipper.cpp:37-55
+fn sect_with_horizontal(src: &[SkPoint; 2], y: f32) -> f32 {
+    let dy = src[1].fY - src[0].fY;
+    if dy.abs() <= 1.0 / 4096.0 {
+        (0.5 * (src[0].fX as f64 + src[1].fX as f64)) as f32
     } else {
-        // need the extra precision so we don't compute a value that exceeds
-        // our original limits
-        let x0 = f64::from(src[0].x);
-        let y0 = f64::from(src[0].y);
-        let x1 = f64::from(src[1].x);
-        let y1 = f64::from(src[1].y);
-        let result = x0 + (f64::from(y) - y0) * (x1 - x0) / (y1 - y0);
-
-        // The computed X value might still exceed [X0..X1] due to quantum flux
-        // when the doubles were added and subtracted, so we have to pin the
-        // answer :(
-        pin_unsorted_f64(result, x0, x1) as f32
+        let x0 = src[0].fX as f64;
+        let y0 = src[0].fY as f64;
+        let x1 = src[1].fX as f64;
+        let y1 = src[1].fY as f64;
+        let result = x0 + (y as f64 - y0) * (x1 - x0) / (y1 - y0);
+        pin_unsorted(result, x0, x1) as f32
     }
 }
-
-/// Returns value between the two limits, where the limits are either ascending or descending.
+// Source: src/core/SkLineClipper.cpp:58-72
+fn sect_with_vertical(src: &[SkPoint; 2], x: f32) -> f32 {
+    let dx = src[1].fX - src[0].fX;
+    if dx.abs() <= 1.0 / 4096.0 {
+        (0.5 * (src[0].fY as f64 + src[1].fY as f64)) as f32
+    } else {
+        let x0 = src[0].fX as f64;
+        let y0 = src[0].fY as f64;
+        let x1 = src[1].fX as f64;
+        let y1 = src[1].fY as f64;
+        (y0 + (x as f64 - x0) * (y1 - y0) / (x1 - x0)) as f32
+    }
+}
+// Source: src/core/SkLineClipper.cpp:74-81
+fn sect_clamp_with_vertical(src: &[SkPoint; 2], x: f32) -> f32 {
+    pin_unsorted(sect_with_vertical(src, x), src[0].fY, src[1].fY)
+}
+// Source: src/core/SkLineClipper.cpp:85-87
+fn nestedLT(a: f32, b: f32, dim: f32) -> bool {
+    a <= b && (a < b || dim > 0.0)
+}
+// Source: src/core/SkLineClipper.cpp:91-95
+fn containsNoEmptyCheck(outer: &SkRect, inner: &SkRect) -> bool {
+    outer.fLeft <= inner.fLeft
+        && outer.fTop <= inner.fTop
+        && outer.fRight >= inner.fRight
+        && outer.fBottom >= inner.fBottom
+}
+impl SkLineClipper {
+    // Source: src/core/SkLineClipper.cpp:97-167
+    pub fn IntersectLine(src: &[SkPoint; 2], clip: &SkRect, dst: &mut [SkPoint; 2]) -> bool {
+        // SkRect::set(point,point) uses ordered comparisons rather than f32::min/max,
+        // retaining upstream NaN comparison behavior.
+        let left = if src[1].fX < src[0].fX {
+            src[1].fX
+        } else {
+            src[0].fX
+        };
+        let right = if src[0].fX < src[1].fX {
+            src[1].fX
+        } else {
+            src[0].fX
+        };
+        let top = if src[1].fY < src[0].fY {
+            src[1].fY
+        } else {
+            src[0].fY
+        };
+        let bottom = if src[0].fY < src[1].fY {
+            src[1].fY
+        } else {
+            src[0].fY
+        };
+        let bounds = SkRect {
+            fLeft: left,
+            fRight: right,
+            fTop: top,
+            fBottom: bottom,
+        };
+        if containsNoEmptyCheck(clip, &bounds) {
+            *dst = *src;
+            return true;
+        }
+        if nestedLT(bounds.fRight, clip.fLeft, bounds.fRight - bounds.fLeft)
+            || nestedLT(clip.fRight, bounds.fLeft, bounds.fRight - bounds.fLeft)
+            || nestedLT(bounds.fBottom, clip.fTop, bounds.fBottom - bounds.fTop)
+            || nestedLT(clip.fBottom, bounds.fTop, bounds.fBottom - bounds.fTop)
+        {
+            return false;
+        }
+        let (mut index0, mut index1) = if src[0].fY < src[1].fY {
+            (0, 1)
+        } else {
+            (1, 0)
+        };
+        let mut tmp = *src;
+        if tmp[index0].fY < clip.fTop {
+            tmp[index0] = SkPoint {
+                fX: sect_with_horizontal(src, clip.fTop),
+                fY: clip.fTop,
+            };
+        }
+        if tmp[index1].fY > clip.fBottom {
+            tmp[index1] = SkPoint {
+                fX: sect_with_horizontal(src, clip.fBottom),
+                fY: clip.fBottom,
+            };
+        }
+        (index0, index1) = if tmp[0].fX < tmp[1].fX {
+            (0, 1)
+        } else {
+            (1, 0)
+        };
+        if tmp[index1].fX <= clip.fLeft || tmp[index0].fX >= clip.fRight {
+            if tmp[0].fX != tmp[1].fX || tmp[0].fX < clip.fLeft || tmp[0].fX > clip.fRight {
+                return false;
+            }
+        }
+        if tmp[index0].fX < clip.fLeft {
+            tmp[index0] = SkPoint {
+                fX: clip.fLeft,
+                fY: sect_with_vertical(&tmp, clip.fLeft),
+            };
+        }
+        if tmp[index1].fX > clip.fRight {
+            tmp[index1] = SkPoint {
+                fX: clip.fRight,
+                fY: sect_with_vertical(&tmp, clip.fRight),
+            };
+        }
+        crate::SkASSERT!(@source b"src/core/SkLineClipper.cpp\0".as_ptr(), 163; @condition b"containsNoEmptyCheck(clip, bounds)\0".as_ptr(); tmp.iter().all(|p| p.fX >= clip.fLeft
+            && p.fX <= clip.fRight
+            && p.fY >= clip.fTop
+            && p.fY <= clip.fBottom));
+        *dst = tmp;
+        true
+    }
+}
+// Source: src/core/SkLineClipper.cpp:172-179
+#[cfg(sk_debug)]
 fn is_between_unsorted(value: f32, limit0: f32, limit1: f32) -> bool {
     if limit0 < limit1 {
         limit0 <= value && value <= limit1
@@ -170,199 +161,105 @@ fn is_between_unsorted(value: f32, limit0: f32, limit1: f32) -> bool {
         limit1 <= value && value <= limit0
     }
 }
-
-fn sect_clamp_with_vertical(src: &[Point; 2], x: f32) -> f32 {
-    let y = sect_with_vertical(src, x);
-    // Our caller expects y to be between src[0].y and src[1].y (unsorted), but due to the
-    // numerics of floats/doubles, we might have computed a value slightly outside of that,
-    // so we have to manually clamp afterwards.
-    // See skbug.com/7491
-    pin_unsorted_f32(y, src[0].y, src[1].y)
-}
-
-/// Returns Y coordinate of intersection with vertical line at X.
-fn sect_with_vertical(src: &[Point; 2], x: f32) -> f32 {
-    let dx = src[1].x - src[0].x;
-    if dx.is_nearly_zero() {
-        src[0].y.ave(src[1].y)
-    } else {
-        // need the extra precision so we don't compute a value that exceeds
-        // our original limits
-        let x0 = f64::from(src[0].x);
-        let y0 = f64::from(src[0].y);
-        let x1 = f64::from(src[1].x);
-        let y1 = f64::from(src[1].y);
-        let result = y0 + (f64::from(x) - x0) * (y1 - y0) / (x1 - x0);
-        result as f32
-    }
-}
-
-fn pin_unsorted_f32(value: f32, mut limit0: f32, mut limit1: f32) -> f32 {
-    if limit1 < limit0 {
-        core::mem::swap(&mut limit0, &mut limit1);
-    }
-    // now the limits are sorted
-    debug_assert!(limit0 <= limit1);
-
-    if value < limit0 {
-        limit0
-    } else if value > limit1 {
-        limit1
-    } else {
-        value
-    }
-}
-
-fn pin_unsorted_f64(value: f64, mut limit0: f64, mut limit1: f64) -> f64 {
-    if limit1 < limit0 {
-        core::mem::swap(&mut limit0, &mut limit1);
-    }
-    // now the limits are sorted
-    debug_assert!(limit0 <= limit1);
-
-    if value < limit0 {
-        limit0
-    } else if value > limit1 {
-        limit1
-    } else {
-        value
-    }
-}
-
-/// Intersect the line segment against the rect. If there is a non-empty
-/// resulting segment, return true and set dst[] to that segment. If not,
-/// return false and ignore dst[].
-///
-/// `clip` is specialized for scan-conversion, as it adds vertical
-/// segments on the sides to show where the line extended beyond the
-/// left or right sides. `intersect` does not.
-pub fn intersect(src: &[Point; 2], clip: &Rect, dst: &mut [Point; 2]) -> bool {
-    let bounds = Rect::from_ltrb(
-        src[0].x.min(src[1].x),
-        src[0].y.min(src[1].y),
-        src[0].x.max(src[1].x),
-        src[0].y.max(src[1].y),
-    );
-
-    if let Some(bounds) = bounds {
-        if contains_no_empty_check(clip, &bounds) {
-            dst.copy_from_slice(src);
-            return true;
-        }
-
-        // check for no overlap, and only permit coincident edges if the line
-        // and the edge are collinear
-        if nested_lt(bounds.right(), clip.left(), bounds.width())
-            || nested_lt(clip.right(), bounds.left(), bounds.width())
-            || nested_lt(bounds.bottom(), clip.top(), bounds.height())
-            || nested_lt(clip.bottom(), bounds.top(), bounds.height())
-        {
-            return false;
-        }
-    }
-
-    let (index0, index1) = if src[0].y < src[1].y { (0, 1) } else { (1, 0) };
-
-    let mut tmp = src.clone();
-
-    // now compute Y intersections
-    if tmp[index0].y < clip.top() {
-        tmp[index0] = Point::from_xy(sect_with_horizontal(src, clip.top()), clip.top());
-    }
-
-    if tmp[index1].y > clip.bottom() {
-        tmp[index1] = Point::from_xy(sect_with_horizontal(src, clip.bottom()), clip.bottom());
-    }
-
-    let (index0, index1) = if tmp[0].x < tmp[1].x { (0, 1) } else { (1, 0) };
-
-    // check for quick-reject in X again, now that we may have been chopped
-    if tmp[index1].x <= clip.left() || tmp[index0].x >= clip.right() {
-        // usually we will return false, but we don't if the line is vertical and coincident
-        // with the clip.
-        if tmp[0].x != tmp[1].x || tmp[0].x < clip.left() || tmp[0].x > clip.right() {
-            return false;
-        }
-    }
-
-    if tmp[index0].x < clip.left() {
-        tmp[index0] = Point::from_xy(clip.left(), sect_with_vertical(src, clip.left()));
-    }
-
-    if tmp[index1].x > clip.right() {
-        tmp[index1] = Point::from_xy(clip.right(), sect_with_vertical(src, clip.right()));
-    }
-
-    dst.copy_from_slice(&tmp);
-    true
-}
-
-fn nested_lt(a: f32, b: f32, dim: f32) -> bool {
-    a <= b && (a < b || dim > 0.0)
-}
-
-// returns true if outer contains inner, even if inner is empty.
-fn contains_no_empty_check(outer: &Rect, inner: &Rect) -> bool {
-    outer.left() <= inner.left()
-        && outer.top() <= inner.top()
-        && outer.right() >= inner.right()
-        && outer.bottom() >= inner.bottom()
-}
-
-// Tuple-point adapter for the IntersectLine stage.
-use crate::src::core::SkAnalyticEdge::Pt;
-pub(crate) fn intersect_tuple(mut p: [Pt; 2], c: [f32; 4]) -> Option<[Pt; 2]> {
-    let b = tuple_bounds(&p);
-    let nested = |a, b, dim| a <= b && (a < b || dim > 0.0);
-    if nested(b[2], c[0], b[2] - b[0])
-        || nested(c[2], b[0], b[2] - b[0])
-        || nested(b[3], c[1], b[3] - b[1])
-        || nested(c[3], b[1], b[3] - b[1])
-    {
-        return None;
-    }
-    let sect = |p: [Pt; 2], v: f32, axis: usize| {
-        let (a, b, oa, ob) = if axis == 1 {
-            (p[0].1, p[1].1, p[0].0, p[1].0)
+impl SkLineClipper {
+    // Source: src/core/SkLineClipper.cpp:182-283
+    pub fn ClipLine(
+        pts: &[SkPoint; 2],
+        clip: &SkRect,
+        lines: &mut [SkPoint; 4],
+        can_cull_to_the_right: bool,
+    ) -> usize {
+        let (mut index0, mut index1) = if pts[0].fY < pts[1].fY {
+            (0, 1)
         } else {
-            (p[0].0, p[1].0, p[0].1, p[1].1)
+            (1, 0)
         };
-        if (b - a).abs() <= 1.0 / 4096.0 {
-            (oa + ob) * 0.5
-        } else {
-            (oa as f64 + (v as f64 - a as f64) * (ob as f64 - oa as f64) / (b as f64 - a as f64))
-                .clamp(oa.min(ob) as f64, oa.max(ob) as f64) as f32
+        if pts[index1].fY <= clip.fTop {
+            return 0;
         }
-    };
-    let (i, j) = if p[0].1 < p[1].1 { (0, 1) } else { (1, 0) };
-    let src = p;
-    if p[i].1 < c[1] {
-        p[i] = (sect(src, c[1], 1), c[1]);
+        if pts[index0].fY >= clip.fBottom {
+            return 0;
+        }
+        let mut tmp = *pts;
+        if pts[index0].fY < clip.fTop {
+            tmp[index0] = SkPoint {
+                fX: sect_with_horizontal(pts, clip.fTop),
+                fY: clip.fTop,
+            };
+            crate::SkASSERT!(@source b"src/core/SkLineClipper.cpp\0".as_ptr(), 211; @condition b"is_between_unsorted(tmp[index0].fX, pts[0].fX, pts[1].fX)\0".as_ptr(); is_between_unsorted(tmp[index0].fX, pts[0].fX, pts[1].fX));
+        }
+        if tmp[index1].fY > clip.fBottom {
+            tmp[index1] = SkPoint {
+                fX: sect_with_horizontal(pts, clip.fBottom),
+                fY: clip.fBottom,
+            };
+            crate::SkASSERT!(@source b"src/core/SkLineClipper.cpp\0".as_ptr(), 215; @condition b"is_between_unsorted(tmp[index1].fX, pts[0].fX, pts[1].fX)\0".as_ptr(); is_between_unsorted(tmp[index1].fX, pts[0].fX, pts[1].fX));
+        }
+        let mut storage = [tmp[0]; 4];
+        let mut line_count = 1;
+        let mut reverse;
+        if pts[0].fX < pts[1].fX {
+            index0 = 0;
+            index1 = 1;
+            reverse = false;
+        } else {
+            index0 = 1;
+            index1 = 0;
+            reverse = true;
+        }
+        if tmp[index1].fX <= clip.fLeft {
+            tmp[0].fX = clip.fLeft;
+            tmp[1].fX = clip.fLeft;
+            storage[..2].copy_from_slice(&tmp);
+            reverse = false;
+        } else if tmp[index0].fX >= clip.fRight {
+            if can_cull_to_the_right {
+                return 0;
+            }
+            tmp[0].fX = clip.fRight;
+            tmp[1].fX = clip.fRight;
+            storage[..2].copy_from_slice(&tmp);
+            reverse = false;
+        } else {
+            let mut r = 0;
+            if tmp[index0].fX < clip.fLeft {
+                storage[r] = SkPoint {
+                    fX: clip.fLeft,
+                    fY: tmp[index0].fY,
+                };
+                r += 1;
+                storage[r] = SkPoint {
+                    fX: clip.fLeft,
+                    fY: sect_clamp_with_vertical(&tmp, clip.fLeft),
+                };
+                crate::SkASSERT!(@source b"src/core/SkLineClipper.cpp\0".as_ptr(), 255; @condition b"is_between_unsorted(r->fY, tmp[0].fY, tmp[1].fY)\0".as_ptr(); is_between_unsorted(storage[r].fY, tmp[0].fY, tmp[1].fY));
+            } else {
+                storage[r] = tmp[index0];
+            }
+            r += 1;
+            if tmp[index1].fX > clip.fRight {
+                storage[r] = SkPoint {
+                    fX: clip.fRight,
+                    fY: sect_clamp_with_vertical(&tmp, clip.fRight),
+                };
+                crate::SkASSERT!(@source b"src/core/SkLineClipper.cpp\0".as_ptr(), 263; @condition b"is_between_unsorted(r->fY, tmp[0].fY, tmp[1].fY)\0".as_ptr(); is_between_unsorted(storage[r].fY, tmp[0].fY, tmp[1].fY));
+                r += 1;
+                storage[r] = SkPoint {
+                    fX: clip.fRight,
+                    fY: tmp[index1].fY,
+                };
+            } else {
+                storage[r] = tmp[index1];
+            }
+            line_count = r;
+        }
+        if reverse {
+            for i in 0..=line_count {
+                lines[line_count - i] = storage[i];
+            }
+        } else {
+            lines[..line_count + 1].copy_from_slice(&storage[..line_count + 1]);
+        }
+        line_count
     }
-    if p[j].1 > c[3] {
-        p[j] = (sect(src, c[3], 1), c[3]);
-    }
-    let (i, j) = if p[0].0 < p[1].0 { (0, 1) } else { (1, 0) };
-    if (p[j].0 <= c[0] || p[i].0 >= c[2]) && (p[0].0 != p[1].0 || p[0].0 < c[0] || p[0].0 > c[2]) {
-        return None;
-    }
-    if p[i].0 < c[0] {
-        p[i] = (c[0], sect(p, c[0], 0));
-    }
-    if p[j].0 > c[2] {
-        p[j] = (c[2], sect(p, c[2], 0));
-    }
-    Some(p)
-}
-
-fn tuple_bounds(points: &[Pt]) -> [f32; 4] {
-    points.iter().fold(
-        [
-            f32::INFINITY,
-            f32::INFINITY,
-            f32::NEG_INFINITY,
-            f32::NEG_INFINITY,
-        ],
-        |a, p| [a[0].min(p.0), a[1].min(p.1), a[2].max(p.0), a[3].max(p.1)],
-    )
 }

@@ -1364,39 +1364,55 @@ impl DOMJavaScriptBindings {
                 let Some(parsed) = dom::svg_path_parser::ParseSVGPathDefault(data) else {
                     return Self::value(HostValue::Number(0.0));
                 };
-                let mut path = skia::PathBuilder::new();
+                use skia::src::core::{
+                    SkContourMeasure::SkContourMeasureIter, SkPathBuilder::SkPathBuilder,
+                };
+                let mut path = SkPathBuilder::default();
                 for command in parsed.commands {
                     match command.verb {
                         PaintPathVerb::kMoveTo => {
-                            path.move_to(command.point.x as f32, command.point.y as f32)
+                            path.moveToXY(command.point.x as f32, command.point.y as f32);
                         }
                         PaintPathVerb::kLineTo => {
-                            path.line_to(command.point.x as f32, command.point.y as f32)
+                            path.lineToXY(command.point.x as f32, command.point.y as f32);
                         }
-                        PaintPathVerb::kQuadraticTo => path.quad_to(
-                            command.control1.x as f32,
-                            command.control1.y as f32,
-                            command.point.x as f32,
-                            command.point.y as f32,
-                        ),
-                        PaintPathVerb::kCubicTo => path.cubic_to(
-                            command.control1.x as f32,
-                            command.control1.y as f32,
-                            command.control2.x as f32,
-                            command.control2.y as f32,
-                            command.point.x as f32,
-                            command.point.y as f32,
-                        ),
-                        PaintPathVerb::kClose => path.close(),
+                        PaintPathVerb::kQuadraticTo => {
+                            path.quadToXY(
+                                command.control1.x as f32,
+                                command.control1.y as f32,
+                                command.point.x as f32,
+                                command.point.y as f32,
+                            );
+                        }
+                        PaintPathVerb::kCubicTo => {
+                            path.cubicToXY(
+                                command.control1.x as f32,
+                                command.control1.y as f32,
+                                command.control2.x as f32,
+                                command.control2.y as f32,
+                                command.point.x as f32,
+                                command.point.y as f32,
+                            );
+                        }
+                        PaintPathVerb::kClose => {
+                            path.close();
+                        }
                         PaintPathVerb::kConicTo => {
                             return Self::type_error("invalid SVG path geometry")
                         }
                     }
                 }
-                let length = path.finish().map_or(0.0, |path| {
-                    f64::from(skia::src::core::SkContourMeasure::path_length(&path))
-                });
-                Self::value(HostValue::Number(length))
+                let path = path.detach(None);
+                let mut contours = SkContourMeasureIter::new(&path, false, 1.0);
+                let mut length = 0.0_f32;
+                loop {
+                    let contour = contours.next();
+                    if !contour.is_some() {
+                        break;
+                    }
+                    length += contour.length();
+                }
+                Self::value(HostValue::Number(f64::from(length)))
             }
             "contains" => {
                 let Some(HostValue::Object(other)) = arguments.first() else {

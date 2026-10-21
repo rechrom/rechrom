@@ -9,7 +9,7 @@ use super::{
     metadata::{FrameTimingDetails, PresentationFeedback},
     native_host_frame_sink::NativeHostFrameSinkCallbacks,
     native_resource_events::{NativeResourceEffect, NativeResourceEffects},
-    resources::CpuReturnedResource,
+    resources::RasterReturnedResource,
     types::LocalSurfaceId,
 };
 use crate::{
@@ -75,7 +75,7 @@ impl HostImplResourceReturnServices<NativeCompositorTypes> for NativeResourceSer
     fn ReceiveReturnsFromParent(
         &mut self,
         p: &mut ClientResourceProvider<NativeCompositorTypes>,
-        r: Vec<CpuReturnedResource>,
+        r: Vec<RasterReturnedResource>,
         pool: Option<&mut ResourcePool<NativeCompositorTypes>>,
         client: &mut dyn HostUIResourceReleaseClient<NativeCompositorTypes>,
     ) {

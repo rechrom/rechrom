@@ -1,334 +1,663 @@
-// Copyright 2010 Google Inc.
-//
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+use crate::include::core::SkClipOp::SkClipOp;
+use crate::src::core::SkAAClip::SkAAClip;
+use crate::src::core::SkRect::SkIRect;
+use crate::src::core::SkRegion::{Op, SkRegion};
+use crate::src::shaders::SkShader::SkShader;
+use std::sync::Arc;
 
-//! Metadata subset of upstream SkRasterClip.h / SkRasterClip.cpp.
-//!
-//! The dense u8 mask remains owned by the caller. `from_mask` is a local Rust
-//! adapter, not a line-by-line translation: it derives the exact nonzero bounds
-//! and hard-edged rectangle classification in one scan. This type does not
-//! implement SkRegion, SkAAClip storage, clip operations, or AA compression.
-//! Empty bounds use Option because the existing Rust IntRect cannot be empty.
-use crate::raster::IntRect;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+// Geometric path entries use the actual Scan conversion. The native shader
+// lifetime is retained through empty/rect transitions; current Arc is adapted.
+// Source: src/core/SkRasterClip.h:98-105
 pub struct SkRasterClip {
-    bounds: Option<IntRect>,
+    // Rust declarations drop in source order; preserve native reverse member
+    // destruction: Shader, AAClip, Region. Layout is not claimed ABI identical.
+    shader: Option<Arc<dyn SkShader>>,
+    aa: SkAAClip,
+    bw: SkRegion,
+    is_bw: bool,
+    is_empty: bool,
     is_rect: bool,
 }
-
-// Local dense coverage driver: the rectangle interior and zero margins are
-// normally uniform. Skip initialized eight-byte equal-alpha runs; tails and
-// nonuniform AA boundary bytes retain the exact scalar metadata decisions.
-fn alpha_run_end(row: &[u8], start: usize, value: u8) -> usize {
-    crate::compat::analytic_masks::equal_byte_run_end(row, start, value)
-}
-
-#[allow(non_snake_case)]
+// Source: src/core/SkRasterClip.h:42-62
 impl SkRasterClip {
-    /// Computes metadata for width*height densely packed u8 coverage bytes.
-    /// Empty/malformed dimensions, unrepresentable bounds, or a short slice
-    /// return None. Bytes after the specified mask dimensions are ignored.
-    pub fn from_mask(width: u32, height: u32, data: &[u8]) -> Option<Self> {
-        if width == 0 || height == 0 || width > i32::MAX as u32 || height > i32::MAX as u32 {
-            return None;
-        }
-        Self::from_mask_with_bounds(width, height, data, IntRect::from_xywh(0, 0, width, height))
+    pub fn is_bw(&self) -> bool {
+        self.is_bw
     }
-
-    /// Local dense-mask adapter for SkRasterClip's bounded intersection.
-    /// `support` must contain every nonzero byte; bytes outside it are known
-    /// zero and are intentionally not read. The returned bounds and rectangle
-    /// classification are exact, including holes and partial coverage.
-    pub(crate) fn from_mask_with_bounds(
-        width: u32,
-        height: u32,
-        data: &[u8],
-        support: Option<IntRect>,
-    ) -> Option<Self> {
-        let device = IntRect::from_xywh(0, 0, width, height)?;
-        let stride = usize::try_from(width).ok()?;
-        let length = stride.checked_mul(height as usize)?;
-        let data = data.get(..length)?;
-        Self::from_rows(device, support, |y, left, right| {
-            &data[y as usize * stride + left as usize..y as usize * stride + right as usize]
-        })
+    pub fn is_aa(&self) -> bool {
+        !self.is_bw
     }
-
-    /// Local bounds/rowBytes adapter. Packed masks retain their storage;
-    /// metadata scanning never requests the legacy full-device byte slice.
-    pub(crate) fn from_mask_builder(
-        mask: &crate::raster::Mask,
-        support: Option<IntRect>,
-    ) -> Option<Self> {
-        let device = IntRect::from_xywh(0, 0, mask.width(), mask.height())?;
-        let support = support.and_then(|b| b.intersect(&mask.storage_bounds()));
-        Self::from_rows(device, support, |y, left, right| {
-            mask.row_range(y, left, right)
-        })
+    pub fn bw_rgn(&self) -> &SkRegion {
+        crate::SkASSERT!(@source b"src/core/SkRasterClip.h\0".as_ptr(), 44; @condition b"fIsBW\0".as_ptr(); self.is_bw);
+        &self.bw
     }
-
-    fn from_rows<'a>(
-        device: IntRect,
-        support: Option<IntRect>,
-        mut row_at: impl FnMut(u32, u32, u32) -> &'a [u8],
-    ) -> Option<Self> {
-        let Some(support) = support.and_then(|bounds| bounds.intersect(&device)) else {
-            return Some(Self::default());
-        };
-        let mut left = support.right() as usize;
-        let mut top = support.bottom() as usize;
-        let mut right = 0usize;
-        let mut bottom = 0usize;
-        let mut nonzero_count = 0usize;
-        let mut all_nonzero_are_opaque = true;
-        for y in support.top() as usize..support.bottom() as usize {
-            let row = row_at(y as u32, support.left() as u32, support.right() as u32);
-            let mut row_left = support.right() as usize;
-            let mut row_right = 0usize;
-            let mut offset = 0;
-            while offset < row.len() {
-                let coverage = row[offset];
-                let end = alpha_run_end(row, offset, coverage);
-                if coverage != 0 {
-                    let x = support.left() as usize + offset;
-                    row_left = row_left.min(x);
-                    row_right = support.left() as usize + end;
-                    nonzero_count += end - offset;
-                    all_nonzero_are_opaque &= coverage == 255;
-                }
-                offset = end;
-            }
-            if row_right != 0 {
-                left = left.min(row_left);
-                right = right.max(row_right);
-                top = top.min(y);
-                bottom = y + 1;
-            }
-        }
-        if nonzero_count == 0 {
-            return Some(Self::default());
-        }
-        let bounds = IntRect::from_xywh(
-            left as i32,
-            top as i32,
-            (right - left) as u32,
-            (bottom - top) as u32,
-        )?;
-        // A finite grid set fills its bounding rectangle exactly iff its
-        // cardinality equals the rectangle's area. Together with opaque alpha
-        // this catches holes, missing rows, and shifted scanline intervals.
-        let rectangle_area = (right - left).checked_mul(bottom - top)?;
-        Some(Self {
-            bounds: Some(bounds),
-            is_rect: all_nonzero_are_opaque && nonzero_count == rectangle_area,
-        })
+    pub fn aa_rgn(&self) -> &SkAAClip {
+        crate::SkASSERT!(@source b"src/core/SkRasterClip.h\0".as_ptr(), 45; @condition b"!fIsBW\0".as_ptr(); !self.is_bw);
+        &self.aa
     }
-
-    /// Exact nonzero coverage bounds, or None for the empty clip.
-    pub fn getBounds(&self) -> Option<IntRect> {
-        self.bounds
+    pub fn is_empty(&self) -> bool {
+        crate::SkASSERT!(@source b"src/core/SkRasterClip.h\0".as_ptr(), 48; @condition b"this->computeIsEmpty() == fIsEmpty\0".as_ptr(); (self.compute_is_empty()) == (self.is_empty));
+        self.is_empty
     }
-
-    /// True only for a nonempty, completely opaque rectangular clip.
-    pub fn isRect(&self) -> bool {
+    pub fn is_rect(&self) -> bool {
+        crate::SkASSERT!(@source b"src/core/SkRasterClip.h\0".as_ptr(), 53; @condition b"this->computeIsRect() == fIsRect\0".as_ptr(); (self.compute_is_rect()) == (self.is_rect));
         self.is_rect
     }
-
-    /// Replaces metadata with a hard-edged rectangle, or an empty clip.
-    /// Mirrors the nonempty boolean returned by upstream setRect.
-    pub fn setRect(&mut self, bounds: Option<IntRect>) -> bool {
-        self.bounds = bounds;
-        self.is_rect = bounds.is_some();
-        self.is_rect
+    pub fn is_complex(&self) -> bool {
+        if self.is_bw {
+            self.bw.is_complex()
+        } else {
+            !self.aa.is_empty()
+        }
     }
-
-    /// Guaranteed rejection by bounds. False does not prove actual coverage
-    /// intersects the rectangle, exactly as upstream quickReject documents.
-    pub fn quickReject(&self, bounds: IntRect) -> bool {
-        self.bounds.map_or(true, |clip| {
-            clip.left() >= bounds.right()
-                || bounds.left() >= clip.right()
-                || clip.top() >= bounds.bottom()
-                || bounds.top() >= clip.bottom()
-        })
+    pub fn get_bounds(&self) -> &SkIRect {
+        if self.is_bw {
+            self.bw.get_bounds()
+        } else {
+            self.aa.get_bounds()
+        }
+    }
+}
+// Source: src/core/SkRasterClip.h:76-78
+impl SkRasterClip {
+    pub fn quick_contains(&self, rect: &SkIRect) -> bool {
+        if self.is_bw {
+            self.bw.quick_contains(rect)
+        } else {
+            self.aa.quick_contains_rect(rect)
+        }
+    }
+    // Source: src/core/SkRasterClip.h:85-87
+    pub fn quick_reject(&self, rect: &SkIRect) -> bool {
+        !SkIRect::intersects(self.get_bounds(), rect)
+    }
+    // Source: src/core/SkRasterClip.h:95-95
+    pub fn clip_shader(&self) -> Option<Arc<dyn SkShader>> {
+        self.shader.clone()
+    }
+}
+// Source: src/core/SkRasterClip.h:107-127
+impl SkRasterClip {
+    fn compute_is_empty(&self) -> bool {
+        if self.is_bw {
+            self.bw.is_empty()
+        } else {
+            self.aa.is_empty()
+        }
+    }
+    fn compute_is_rect(&self) -> bool {
+        if self.is_bw {
+            self.bw.is_rect()
+        } else {
+            self.aa.is_rect()
+        }
+    }
+    fn update_cache(&mut self, detect_aa_rect: bool) -> bool {
+        self.is_empty = self.compute_is_empty();
+        if detect_aa_rect && !self.is_empty && !self.is_bw && self.aa.is_rect() {
+            self.bw.set_rect(*self.aa.get_bounds());
+            self.aa.set_empty();
+            self.is_bw = true;
+        }
+        self.is_rect = self.compute_is_rect();
+        !self.is_empty
+    }
+}
+// Source: src/core/SkRasterClip.h:134-144
+// The original guard is noncopyable and retains the original clip identity.
+// Raw construction permits the native lexical validation scope around mutation
+// without holding a Rust shared projection across the mutable operation.
+pub struct SkAutoRasterClipValidate<'clip> {
+    fRC: core::ptr::NonNull<SkRasterClip>,
+    lease: core::marker::PhantomData<&'clip SkRasterClip>,
+}
+impl<'clip> SkAutoRasterClipValidate<'clip> {
+    // Source: src/core/SkRasterClip.h:136-138
+    pub fn new(rc: &'clip SkRasterClip) -> Self {
+        // This retained immutable borrow is sufficient for readonly scopes.
+        unsafe { Self::from_raw(core::ptr::NonNull::from(rc)) }
+    }
+    /// The exact clip allocation remains live and unmoved until this guard
+    /// drops. Mutation is allowed only between validation calls; no reference
+    /// created by this guard survives either call, including unwind cleanup.
+    pub unsafe fn from_raw(rc: core::ptr::NonNull<SkRasterClip>) -> Self {
+        unsafe {
+            rc.as_ref().validate();
+        }
+        Self {
+            fRC: rc,
+            lease: core::marker::PhantomData,
+        }
+    }
+}
+impl Drop for SkAutoRasterClipValidate<'_> {
+    // Source: src/core/SkRasterClip.h:139-141
+    fn drop(&mut self) {
+        unsafe {
+            self.fRC.as_ref().validate();
+        }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn rect(x: i32, y: i32, width: u32, height: u32) -> IntRect {
-        IntRect::from_xywh(x, y, width, height).unwrap()
+// Source: src/core/SkRasterClip.cpp:20-35
+impl Clone for SkRasterClip {
+    fn clone(&self) -> Self {
+        let mut result = Self {
+            bw: SkRegion::new(),
+            aa: SkAAClip::new(),
+            is_bw: self.is_bw,
+            is_empty: self.is_empty,
+            is_rect: self.is_rect,
+            shader: self.shader.clone(),
+        };
+        let _source_validate = SkAutoRasterClipValidate::new(self);
+        if result.is_bw {
+            result.bw.set_region(&self.bw);
+        } else {
+            result.aa.assign(&self.aa);
+        }
+        result.validate();
+        result
     }
-
-    #[test]
-    fn empty_and_full_masks_have_exact_metadata() {
-        let empty = SkRasterClip::from_mask(4, 3, &[0; 12]).unwrap();
-        assert_eq!(empty, SkRasterClip::default());
-        assert_eq!(empty.getBounds(), None);
-        assert!(!empty.isRect());
-        assert!(empty.quickReject(rect(0, 0, 1, 1)));
-        let full = SkRasterClip::from_mask(4, 3, &[255; 12]).unwrap();
-        assert_eq!(full.getBounds(), Some(rect(0, 0, 4, 3)));
-        assert!(full.isRect());
+    fn clone_from(&mut self, source: &Self) {
+        self.assign(source);
     }
-
-    #[test]
-    fn inset_opaque_rectangle_and_single_pixel_are_recognized() {
-        let mask = [
-            0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 0, 0, 0, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0,
-        ];
-        let clip = SkRasterClip::from_mask(6, 4, &mask).unwrap();
-        assert_eq!(clip.getBounds(), Some(rect(2, 1, 3, 2)));
-        assert!(clip.isRect());
-        let clip = SkRasterClip::from_mask(3, 2, &[0, 0, 0, 0, 0, 255]).unwrap();
-        assert_eq!(clip.getBounds(), Some(rect(2, 1, 1, 1)));
-        assert!(clip.isRect());
+}
+// Source: src/core/SkRasterClip.cpp:37-52
+impl SkRasterClip {
+    pub fn assign(&mut self, other: &Self) {
+        let _source_validate = SkAutoRasterClipValidate::new(other);
+        self.is_bw = other.is_bw;
+        if self.is_bw {
+            self.bw.set_region(&other.bw);
+        } else {
+            self.aa.assign(&other.aa);
+        }
+        self.is_empty = other.is_empty();
+        self.is_rect = other.is_rect();
+        let old_shader = core::mem::replace(&mut self.shader, other.shader.clone());
+        drop(old_shader);
+        self.validate();
     }
+}
+// Source: src/core/SkRasterClip.cpp:54-59
+impl SkRasterClip {
+    pub fn from_region(region: &SkRegion) -> Self {
+        let bw = region.clone();
+        let is_empty = bw.is_empty();
+        let result = Self {
+            bw,
+            aa: SkAAClip::new(),
+            is_bw: true,
+            is_empty,
+            is_rect: !is_empty,
+            shader: None,
+        };
+        result.validate();
+        result
+    }
+}
+// Source: src/core/SkRasterClip.cpp:61-66
+impl SkRasterClip {
+    pub fn from_rect(bounds: SkIRect) -> Self {
+        let bw = SkRegion::from_rect(bounds);
+        let is_empty = bw.is_empty();
+        let result = Self {
+            bw,
+            aa: SkAAClip::new(),
+            is_bw: true,
+            is_empty,
+            is_rect: !is_empty,
+            shader: None,
+        };
+        result.validate();
+        result
+    }
+}
+// Source: src/core/SkRasterClip.cpp:68-73
+impl SkRasterClip {
+    pub fn new() -> Self {
+        let result = Self {
+            bw: SkRegion::new(),
+            aa: SkAAClip::new(),
+            is_bw: true,
+            is_empty: true,
+            is_rect: false,
+            shader: None,
+        };
+        result.validate();
+        result
+    }
+}
+// Source: src/core/SkRasterClip.cpp:88-90
+impl Drop for SkRasterClip {
+    fn drop(&mut self) {
+        #[cfg(sk_debug)]
+        self.validate();
+    }
+}
+// Source: src/core/SkRasterClip.cpp:92-101
+impl SkRasterClip {
+    pub fn set_empty(&mut self) -> bool {
+        self.validate();
+        self.is_bw = true;
+        self.bw.set_empty();
+        self.aa.set_empty();
+        self.is_empty = true;
+        self.is_rect = false;
+        self.validate();
+        false
+    }
+}
+// Source: src/core/SkRasterClip.cpp:103-111
+impl SkRasterClip {
+    pub fn set_rect(&mut self, rect: SkIRect) -> bool {
+        self.validate();
+        self.is_bw = true;
+        self.aa.set_empty();
+        self.is_rect = self.bw.set_rect(rect);
+        self.is_empty = !self.is_rect;
+        self.validate();
+        self.is_rect
+    }
+}
+// Source: src/core/SkRasterClip.cpp:115-124
+impl SkRasterClip {
+    pub fn op_irect(&mut self, rect: SkIRect, op: SkClipOp) -> bool {
+        self.validate();
+        if self.is_bw {
+            self.bw.op_rect(rect, region_op(op));
+        } else {
+            self.aa.op_rect(rect, op);
+        }
+        let result = self.update_cache(true);
+        self.validate();
+        result
+    }
+}
+// Source: src/core/SkRasterClip.cpp:126-137
+impl SkRasterClip {
+    pub fn op_region(&mut self, region: &SkRegion, op: SkClipOp) -> bool {
+        self.validate();
+        if self.is_bw {
+            self.bw.op_region(region, region_op(op));
+        } else {
+            let mut tmp = SkAAClip::new();
+            tmp.set_region(region);
+            self.aa.op(&tmp, op);
+        }
+        let result = self.update_cache(true);
+        self.validate();
+        result
+    }
+}
+// Source: src/core/SkRasterClip.cpp:144-150
+fn nearly_integral(mut x: f32) -> bool {
+    let domain = 1.0 / 4.0;
+    let half_domain = domain / 2.0;
+    x += half_domain;
+    x - crate::include::core::SkScalar::SkScalarFloorToScalar(x) < domain
+}
+// Source: src/core/SkRasterClip.cpp:221-243
+impl SkRasterClip {
+    fn op_clip(&mut self, clip: &Self, op: SkClipOp) -> bool {
+        self.validate();
+        clip.validate();
+        if self.is_bw && clip.is_bw {
+            self.bw.op_region(&clip.bw, region_op(op));
+        } else {
+            let mut tmp = SkAAClip::new();
+            if self.is_bw {
+                self.convert_to_aa();
+            }
+            let other = if clip.is_bw {
+                tmp.set_region(clip.bw_rgn());
+                &tmp
+            } else {
+                clip.aa_rgn()
+            };
+            self.aa.op(other, op);
+        }
+        let result = self.update_cache(true);
+        self.validate();
+        result
+    }
+}
+// Source: src/core/SkRasterClip.cpp:245-270
+impl SkRasterClip {
+    pub fn translate_to(&self, dx: i32, dy: i32, dst: Option<&mut Self>) {
+        let Some(dst) = dst else { return };
+        self.validate();
+        if self.is_empty() {
+            dst.set_empty();
+            return;
+        }
+        if dx | dy == 0 {
+            dst.assign(self);
+            return;
+        }
+        dst.is_bw = self.is_bw;
+        if self.is_bw {
+            self.bw.translate_to(dx, dy, Some(&mut dst.bw));
+            dst.aa.set_empty();
+        } else {
+            self.aa.translate_to(dx, dy, Some(&mut dst.aa));
+            dst.bw.set_empty();
+        }
+        dst.update_cache(true);
+        self.validate();
+    }
+}
+// Source: src/core/SkRasterClip.cpp:272-282
+impl SkRasterClip {
+    fn convert_to_aa(&mut self) {
+        self.validate();
+        crate::SkASSERT!(@source b"src/core/SkRasterClip.cpp\0".as_ptr(), 275; @condition b"fIsBW\0".as_ptr(); self.is_bw);
+        self.aa.set_region(&self.bw);
+        self.is_bw = false;
+        self.update_cache(false);
+        self.validate();
+    }
+}
+// Source: src/core/SkRasterClip.cpp:284-297
+impl SkRasterClip {
+    pub fn validate(&self) {
+        #[cfg(sk_debug)]
+        {
+            if self.is_bw {
+                debug_assert!(self.aa.is_empty());
+            }
+            crate::src::core::SkRegionPriv::SkRegionPriv::Validate(&self.bw);
+            self.aa.validate();
+            crate::SkASSERT!(@source b"src/core/SkRasterClip.cpp\0".as_ptr(), 294; @condition b"this->computeIsEmpty() == fIsEmpty\0".as_ptr(); (self.compute_is_empty()) == (self.is_empty));
+            crate::SkASSERT!(@source b"src/core/SkRasterClip.cpp\0".as_ptr(), 295; @condition b"this->computeIsRect() == fIsRect\0".as_ptr(); (self.compute_is_rect()) == (self.is_rect));
+        }
+    }
+}
+// Enum cast in native SkRegion shares the first two SkClipOp discriminants.
+fn region_op(op: SkClipOp) -> Op {
+    match op {
+        SkClipOp::kDifference => Op::Difference,
+        SkClipOp::kIntersect => Op::Intersect,
+    }
+}
 
-    #[test]
-    fn holes_partial_alpha_missing_rows_and_shifted_rows_are_not_rectangles() {
-        let cases: &[(u32, u32, &[u8], IntRect)] = &[
-            (
-                3,
-                3,
-                &[255, 255, 255, 255, 0, 255, 255, 255, 255],
-                rect(0, 0, 3, 3),
+// Source: src/core/SkRasterClip.cpp:210-219
+impl SkRasterClip {
+    pub fn op_shader(&mut self, shader: Option<Arc<dyn SkShader>>) -> bool {
+        self.validate();
+        if self.shader.is_none() {
+            self.shader = shader;
+        } else {
+            let replacement = crate::src::shaders::SkBlendShader::Blend(
+                crate::src::core::SkBlendMode::SkBlendMode::kSrcIn,
+                shader,
+                self.shader.clone(),
+            );
+            let old_shader = core::mem::replace(&mut self.shader, replacement);
+            drop(old_shader);
+        }
+        let result = !self.is_empty();
+        self.validate();
+        result
+    }
+}
+
+// Source: src/core/SkRasterClip.h:185-189
+// Rust selectors replace the two self-referential result pointers. The owned
+// region and AA blitter remain present in both modes, preserving scratch reuse.
+pub struct SkAAClipBlitterWrapper<'a> {
+    bw_region: SkRegion,
+    aa_blitter: core::mem::ManuallyDrop<crate::src::core::SkAAClip::SkAAClipBlitter<'a>>,
+    borrowed_region: Option<&'a SkRegion>,
+    borrowed_blitter: Option<core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>>,
+    use_aa: bool,
+}
+// Source: src/core/SkRasterClip.cpp:301-305
+impl<'a> SkAAClipBlitterWrapper<'a> {
+    pub fn new() -> Self {
+        Self {
+            bw_region: SkRegion::new(),
+            aa_blitter: core::mem::ManuallyDrop::new(
+                crate::src::core::SkAAClip::SkAAClipBlitter::new(),
             ),
-            (3, 2, &[255, 1, 255, 255, 254, 255], rect(0, 0, 3, 2)),
+            borrowed_region: None,
+            borrowed_blitter: None,
+            use_aa: false,
+        }
+    }
+}
+// Source: src/core/SkRasterClip.cpp:306-309
+impl<'a> SkAAClipBlitterWrapper<'a> {
+    pub fn from_clip(
+        clip: &'a SkRasterClip,
+        blitter: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
+    ) -> Self {
+        let mut wrapper = Self::new();
+        wrapper.init_fields(clip, blitter);
+        wrapper
+    }
+}
+// Source: src/core/SkRasterClip.cpp:311-320
+impl<'a> SkAAClipBlitterWrapper<'a> {
+    pub fn from_aa_clip(
+        clip: &'a SkAAClip,
+        blitter: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
+    ) -> Self {
+        let mut wrapper = Self::new();
+        wrapper.bw_region.set_rect(*clip.get_bounds());
+        wrapper.aa_blitter.init_fields(blitter, clip);
+        wrapper.use_aa = true;
+        wrapper
+    }
+}
+// Source: src/core/SkRasterClip.cpp:322-335
+impl<'a> SkAAClipBlitterWrapper<'a> {
+    pub fn init(
+        self: core::pin::Pin<&mut Self>,
+        clip: &'a SkRasterClip,
+        blitter: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
+    ) {
+        unsafe { self.get_unchecked_mut() }.init_fields(clip, blitter);
+    }
+    // Constructor-only configuration writes no self-address or arena allocation.
+    fn init_fields(
+        &mut self,
+        clip: &'a SkRasterClip,
+        blitter: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
+    ) {
+        if clip.is_bw() {
+            self.borrowed_region = Some(clip.bw_rgn());
+            self.borrowed_blitter = Some(blitter);
+            self.use_aa = false;
+        } else {
+            let aa = clip.aa_rgn();
+            self.bw_region.set_rect(*aa.get_bounds());
+            self.aa_blitter.init_fields(blitter, aa);
+            self.use_aa = true;
+        }
+    }
+}
+// Source: src/core/SkRasterClip.h:171-182
+impl<'a> SkAAClipBlitterWrapper<'a> {
+    pub fn get_bounds(&self) -> &SkIRect {
+        self.get_rgn().get_bounds()
+    }
+    pub fn get_rgn(&self) -> &SkRegion {
+        if self.use_aa {
+            &self.bw_region
+        } else {
+            self.borrowed_region.expect("initialized clip region")
+        }
+    }
+    pub fn get_blitter(
+        self: core::pin::Pin<&mut Self>,
+    ) -> core::pin::Pin<&mut (dyn crate::src::core::SkBlitter::SkBlitter + 'a)> {
+        let this = unsafe { self.get_unchecked_mut() };
+        if this.use_aa {
+            unsafe { core::pin::Pin::new_unchecked(&mut *this.aa_blitter) }
+        } else {
+            this.borrowed_blitter
+                .as_mut()
+                .expect("initialized blitter")
+                .as_mut()
+        }
+    }
+    // Disjoint actual region and pinned blitter projections share the wrapper lease.
+    pub fn parts(
+        self: core::pin::Pin<&mut Self>,
+    ) -> (
+        &SkRegion,
+        core::pin::Pin<&mut (dyn crate::src::core::SkBlitter::SkBlitter + 'a)>,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
+        if this.use_aa {
+            (&this.bw_region, unsafe {
+                core::pin::Pin::new_unchecked(&mut *this.aa_blitter)
+            })
+        } else {
             (
-                3,
-                3,
-                &[255, 255, 255, 0, 0, 0, 255, 255, 255],
-                rect(0, 0, 3, 3),
-            ),
-            (4, 2, &[255, 255, 0, 0, 0, 255, 255, 0], rect(0, 0, 3, 2)),
-            (3, 3, &[0, 0, 0, 0, 127, 0, 0, 0, 0], rect(1, 1, 1, 1)),
-        ];
-        for &(width, height, data, bounds) in cases {
-            let clip = SkRasterClip::from_mask(width, height, data).unwrap();
-            assert_eq!(clip.getBounds(), Some(bounds));
-            assert!(!clip.isRect());
+                this.borrowed_region.expect("initialized clip region"),
+                this.borrowed_blitter
+                    .as_mut()
+                    .expect("initialized blitter")
+                    .as_mut(),
+            )
         }
     }
+}
 
-    #[test]
-    fn touching_edges_reject_but_overlapping_bounds_and_holes_do_not() {
-        let mut clip = SkRasterClip::default();
-        assert!(clip.setRect(Some(rect(2, 3, 4, 5))));
-        for outside in [
-            rect(0, 3, 2, 5),
-            rect(6, 3, 2, 5),
-            rect(2, 0, 4, 3),
-            rect(2, 8, 4, 2),
-            rect(-10, -10, 1, 1),
-        ] {
-            assert!(clip.quickReject(outside));
+// C++ destroys the AA blitter member before its owned fallback BW region.
+impl Drop for SkAAClipBlitterWrapper<'_> {
+    fn drop(&mut self) {
+        // Same native reverse-member order, in place even after pin publication.
+        unsafe {
+            core::mem::ManuallyDrop::drop(&mut self.aa_blitter);
         }
-        for inside in [
-            rect(2, 3, 1, 1),
-            rect(5, 7, 1, 1),
-            rect(0, 0, 3, 4),
-            rect(1, 2, 8, 9),
-        ] {
-            assert!(!clip.quickReject(inside));
-        }
-        let hole =
-            SkRasterClip::from_mask(3, 3, &[255, 255, 255, 255, 0, 255, 255, 255, 255]).unwrap();
-        assert!(
-            !hole.quickReject(rect(1, 1, 1, 1)),
-            "bounds test cannot reject interior holes"
-        );
-        assert!(!clip.setRect(None));
-        assert!(!clip.isRect());
-        assert!(clip.quickReject(rect(2, 3, 4, 5)));
-        assert_eq!(clip.getBounds(), None);
     }
+}
 
-    #[test]
-    fn malformed_masks_are_rejected_and_extra_storage_is_ignored() {
-        for (width, height, data) in [
-            (0, 0, &[][..]),
-            (0, 1, &[][..]),
-            (1, 0, &[][..]),
-            (2, 2, &[255, 255, 255][..]),
-            (u32::MAX, 1, &[][..]),
-            (1, u32::MAX, &[][..]),
-            (i32::MAX as u32, i32::MAX as u32, &[][..]),
-        ] {
-            assert!(SkRasterClip::from_mask(width, height, data).is_none());
+// Source: src/core/SkRasterClip.cpp:75-86
+impl SkRasterClip {
+    pub fn from_path(
+        path: &crate::src::core::SkPath::SkPath,
+        bounds: SkIRect,
+        do_aa: bool,
+    ) -> Self {
+        let mut result = Self {
+            bw: SkRegion::new(),
+            aa: SkAAClip::new(),
+            is_bw: true,
+            is_empty: true,
+            is_rect: false,
+            shader: None,
+        };
+        if do_aa {
+            result.is_bw = false;
+            result.aa.set_path(path, bounds, true);
+        } else {
+            result.is_bw = true;
+            result.bw.set_path(path, &SkRegion::from_rect(bounds));
         }
-        let opaque = SkRasterClip::from_mask(2, 1, &[255, 255, 0, 128, 0]).unwrap();
-        assert_eq!(opaque.getBounds(), Some(rect(0, 0, 2, 1)));
-        assert!(opaque.isRect());
-        let empty = SkRasterClip::from_mask(2, 1, &[0, 0, 255, 255]).unwrap();
-        assert_eq!(empty, SkRasterClip::default());
+        result.is_empty = result.compute_is_empty();
+        result.is_rect = result.compute_is_rect();
+        result.validate();
+        result
     }
-
-    #[test]
-    fn bounded_metadata_matches_full_scan_for_partial_alpha_holes_and_empty() {
-        let (width, height) = (19, 13);
-        for support in [None, Some(rect(4, 3, 7, 6)), Some(rect(-4, 3, 11, 8))] {
-            for seed in 0..17u32 {
-                let mut data = vec![0u8; (width * height) as usize];
-                if let Some(bounds) = support.and_then(|b| b.intersect(&rect(0, 0, width, height)))
-                {
-                    for y in bounds.top()..bounds.bottom() {
-                        for x in bounds.left()..bounds.right() {
-                            data[y as usize * width as usize + x as usize] =
-                                match (x as u32 * 3 + y as u32 * 7 + seed) % 5 {
-                                    0 => 0,
-                                    1 => 127,
-                                    _ => 255,
-                                };
-                        }
-                    }
-                }
-                assert_eq!(
-                    SkRasterClip::from_mask_with_bounds(width, height, &data, support),
-                    SkRasterClip::from_mask(width, height, &data),
-                );
+}
+// Source: src/core/SkRasterClip.cpp:152-179
+impl SkRasterClip {
+    pub fn op_rect(
+        &mut self,
+        rect: &crate::src::core::SkRect::SkRect,
+        matrix: &crate::src::core::SkMatrix::SkMatrix,
+        op: SkClipOp,
+        mut do_aa: bool,
+    ) -> bool {
+        use crate::include::core::SkPathTypes::{SkPathDirection, SkPathFillType};
+        use crate::src::core::SkPath::SkPath;
+        use crate::src::core::SkRect::SkRect;
+        self.validate();
+        let is_scale_translate = matrix.isScaleTranslate();
+        if !is_scale_translate {
+            return self.op_path(
+                &SkPath::Rect(rect, SkPathFillType::kDefault, SkPathDirection::kCW, 0),
+                matrix,
+                op,
+                do_aa,
+            );
+        }
+        let mut device_rect = SkRect::MakeEmpty();
+        matrix.mapRect(&mut device_rect, rect);
+        if self.is_bw && do_aa {
+            if nearly_integral(device_rect.fLeft)
+                && nearly_integral(device_rect.fTop)
+                && nearly_integral(device_rect.fRight)
+                && nearly_integral(device_rect.fBottom)
+            {
+                do_aa = false;
             }
         }
+        if self.is_bw && !do_aa {
+            self.bw.op_rect(device_rect.round(), region_op(op));
+        } else {
+            if self.is_bw {
+                self.convert_to_aa();
+            }
+            self.aa.op_float_rect(&device_rect, op, do_aa);
+        }
+        let result = self.update_cache(true);
+        self.validate();
+        result
     }
-
-    #[test]
-    fn all_small_binary_masks_match_independent_coverage_oracle() {
-        // Exhaust all 4x3 masks; compute the reference with an independent
-        // second-pass containment test to validate the one-scan adapter.
-        for bits in 0..(1u32 << 12) {
-            let mask: Vec<u8> = (0..12)
-                .map(|i| if bits & (1 << i) == 0 { 0 } else { 255 })
-                .collect();
-            let clip = SkRasterClip::from_mask(4, 3, &mask).unwrap();
-            let points: Vec<(usize, usize)> = (0..12)
-                .filter(|&i| mask[i] != 0)
-                .map(|i| (i % 4, i / 4))
-                .collect();
-            let expected = if points.is_empty() {
-                None
+}
+// Source: src/core/SkRasterClip.cpp:181-183
+impl SkRasterClip {
+    pub fn op_rrect(
+        &mut self,
+        rrect: &crate::src::core::SkRRect::SkRRect,
+        matrix: &crate::src::core::SkMatrix::SkMatrix,
+        op: SkClipOp,
+        do_aa: bool,
+    ) -> bool {
+        self.op_path(
+            &crate::src::core::SkPath::SkPath::RRect(
+                rrect,
+                crate::include::core::SkPathTypes::SkPathDirection::kCW,
+                6,
+            ),
+            matrix,
+            op,
+            do_aa,
+        )
+    }
+}
+// Source: src/core/SkRasterClip.cpp:185-208
+impl SkRasterClip {
+    pub fn op_path(
+        &mut self,
+        path: &crate::src::core::SkPath::SkPath,
+        matrix: &crate::src::core::SkMatrix::SkMatrix,
+        op: SkClipOp,
+        do_aa: bool,
+    ) -> bool {
+        self.validate();
+        let device_path = path.makeTransform(matrix);
+        if self.is_rect() && op == SkClipOp::kIntersect {
+            if do_aa && self.is_bw {
+                self.convert_to_aa();
+            }
+            let bounds = *self.get_bounds();
+            if self.is_bw {
+                self.bw.set_path(&device_path, &SkRegion::from_rect(bounds));
             } else {
-                let left = points.iter().map(|p| p.0).min().unwrap();
-                let right = points.iter().map(|p| p.0).max().unwrap() + 1;
-                let top = points.iter().map(|p| p.1).min().unwrap();
-                let bottom = points.iter().map(|p| p.1).max().unwrap() + 1;
-                Some(rect(
-                    left as i32,
-                    top as i32,
-                    (right - left) as u32,
-                    (bottom - top) as u32,
-                ))
-            };
-            assert_eq!(clip.getBounds(), expected);
-            let rectangle = expected.is_some_and(|r| {
-                (r.top()..r.bottom()).all(|y| {
-                    (r.left()..r.right()).all(|x| mask[y as usize * 4 + x as usize] == 255)
-                })
-            });
-            assert_eq!(clip.isRect(), rectangle);
+                self.aa.set_path(&device_path, bounds, do_aa);
+            }
+            let result = self.update_cache(true);
+            self.validate();
+            result
+        } else {
+            let other = Self::from_path(&device_path, *self.get_bounds(), do_aa);
+            self.op_clip(&other, op)
         }
     }
 }

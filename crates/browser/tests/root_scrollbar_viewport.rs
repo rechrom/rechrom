@@ -357,7 +357,7 @@ fn classic_root_canvas_background_reaches_compositor_with_matching_clip() {
             200,
             1.0,
             &mut pixels,
-            renderer::PixelFormat::Rgba8888,
+            renderer_skia::PixelFormat::Rgba8888,
             300,
         )
         .unwrap();
@@ -377,10 +377,10 @@ fn canvas_scroll_and_fixed_layers_keep_clip_parity_after_scroll() {
             ] {
                 let mut page=fixture(&format!("html{{{background}}}#fill{{height:400px}}"),"<div id=fill></div>",overlay);
                 let mut pixels=vec![0;300*200];
-                page.PaintInto(300,200,1.0,&mut pixels,renderer::PixelFormat::Rgba8888,300).unwrap();
+                page.PaintInto(300,200,1.0,&mut pixels,renderer_skia::PixelFormat::Rgba8888,300).unwrap();
                 page.ScrollWheelDefault(&interaction::input_event::WheelEvent { phase: interaction::input_event::WheelPhase::kEnded, position: layoutng_assembly::internal::layout_input::Offset { x: 100.0, y: 100.0 }, delta: layoutng_assembly::internal::layout_input::Offset { x: 0.0, y: 80.0 }, ..Default::default() }).unwrap();
                 assert_eq!(page.CurrentFrame().unwrap().fragments.paint.scroll_offset.y,80.0);
-                page.PaintInto(300,200,1.0,&mut pixels,renderer::PixelFormat::Rgba8888,300).unwrap();
+                page.PaintInto(300,200,1.0,&mut pixels,renderer_skia::PixelFormat::Rgba8888,300).unwrap();
                 assert_eq!(pixels[100*300+100].to_ne_bytes()[3],255);
             }
         }
@@ -394,7 +394,7 @@ fn paint_fixed_control(page: &Page, width: u32, height: u32, x: usize, y: usize)
         height,
         1.0,
         &mut pixels,
-        renderer::PixelFormat::Rgba8888,
+        renderer_skia::PixelFormat::Rgba8888,
         width as usize,
     )
     .unwrap();

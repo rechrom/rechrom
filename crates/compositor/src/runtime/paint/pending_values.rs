@@ -31,7 +31,7 @@ impl<R: CpuSkiaBackend> CpuPaintCanvas<R> for CpuLoggingCanvas<R> {
     fn Playback(
         &mut self,
         b: &CpuPaintOpBuffer<R>,
-        p: &mut CpuPlaybackParams<'_, R>,
+        p: &mut RasterPlaybackParams<'_, R>,
         local: bool,
         offsets: Option<&[usize]>,
     ) {

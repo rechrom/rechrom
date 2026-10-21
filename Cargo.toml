@@ -5,6 +5,7 @@ members = [
     "crates/event_loop",
     "crates/devtools",
     "crates/skia",
+    "crates/raster_commands",
     "crates/quickjs",
     "crates/quickjs_tools",
     "crates/foundation",

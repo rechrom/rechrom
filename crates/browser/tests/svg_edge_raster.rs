@@ -95,7 +95,7 @@ fn render(page: &Page, label: &str) -> Vec<u32> {
         200,
         1.0,
         &mut result,
-        renderer::PixelFormat::Rgba8888,
+        renderer_skia::PixelFormat::Rgba8888,
         320,
     )
     .unwrap();
@@ -231,7 +231,7 @@ fn clipped_asset_edges_match_at_device_scales_fractional_placement_and_backgroun
                         height,
                         scale,
                         &mut pixels,
-                        renderer::PixelFormat::Rgba8888,
+                        renderer_skia::PixelFormat::Rgba8888,
                         width as usize,
                     )
                     .unwrap();

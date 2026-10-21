@@ -1,6 +1,6 @@
 //! Native shadow-layer owner and painter-order application.
 #![allow(non_snake_case, non_upper_case_globals)]
-use skia::{include::core::SkColor::SkColor4f, BlendMode};
+use super::{blend_mode::BlendMode, color::Color4f};
 use std::sync::Arc;
 // Source: cc/paint/draw_looper.h:27-39,72-89.
 pub const kPostTransformFlag: u32 = 1;
@@ -16,7 +16,7 @@ pub struct Point {
 pub struct Layer {
     pub offset: Point,
     pub blur_sigma: f32,
-    pub color: SkColor4f,
+    pub color: Color4f,
     pub flags: u32,
 }
 pub trait LooperCanvas {
@@ -31,7 +31,7 @@ pub trait LooperCanvas {
 pub trait LooperPaint: Clone {
     fn setAlpha(&mut self, alpha: u8);
     fn setMaskFilterNormalBlur(&mut self, sigma: f32, respect_ctm: bool);
-    fn setColorFilterSRGBBlend(&mut self, color: SkColor4f, mode: BlendMode);
+    fn setColorFilterSRGBBlend(&mut self, color: Color4f, mode: BlendMode);
 }
 impl Layer {
     // Source: cc/paint/draw_looper.cc:22-42. The native backend performs only
@@ -101,7 +101,7 @@ impl DrawLooperBuilder {
         self.AddShadow(
             Point::default(),
             0.,
-            SkColor4f::new(0., 0., 0., 1.),
+            Color4f::new(0., 0., 0., 1.),
             kDontModifyPaintFlag,
             add_on_top,
         )
@@ -111,7 +111,7 @@ impl DrawLooperBuilder {
         &mut self,
         offset: Point,
         blur_sigma: f32,
-        color: SkColor4f,
+        color: Color4f,
         flags: u32,
         add_on_top: bool,
     ) {

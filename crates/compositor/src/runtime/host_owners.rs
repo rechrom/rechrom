@@ -1,6 +1,6 @@
 //! External native allocations supplied to HostImpl. The wrappers expose only
 //! the precise native capability; none owns a compositor tree, Page or policy.
-use super::resources::{CpuReturnedResource, CpuSyncToken, CpuTransferableResource};
+use super::resources::{RasterReturnedResource, RasterSyncToken, RasterTransferableResource};
 use crate::adapter::{
     layer_tree_host_impl::{
         HostImplImageDecodeCache, HostImplResourceTypes, HostRasterContextLock,
@@ -35,12 +35,12 @@ pub trait NativePoolReleaseClient {
     fn OnPoolResourceReleased(
         &mut self,
         callback: crate::adapter::resource_pool::ResourcePoolReleaseCallback,
-        token: &CpuSyncToken,
+        token: &RasterSyncToken,
         lost: bool,
     );
 }
 pub trait NativeClientResourceProvider<
-    B: HostUIResourceTypes<UITransferableResource = CpuTransferableResource>
+    B: HostUIResourceTypes<UITransferableResource = RasterTransferableResource>
         + HostImplResourceTypes<ResourceId = ResourceId>,
 >: HostUIResourceProvider<B>
 {
@@ -54,7 +54,7 @@ pub trait NativeClientResourceProvider<
     fn ShutdownAndReleaseAllResources(&mut self, client: &mut dyn HostUIResourceReleaseClient<B>);
     fn ReceiveReturnsFromParent(
         &mut self,
-        resources: Vec<CpuReturnedResource>,
+        resources: Vec<RasterReturnedResource>,
         pool: Option<&mut dyn NativePoolReleaseClient>,
         client: &mut dyn HostUIResourceReleaseClient<B>,
     );
@@ -67,22 +67,22 @@ pub trait NativeClientResourceProvider<
     fn PrepareSendToParent(
         &mut self,
         resources: &[ResourceId],
-        output: &mut Vec<CpuTransferableResource>,
+        output: &mut Vec<RasterTransferableResource>,
         interface: HostSharedImageInterfaceId,
     );
 }
 pub struct ClientResourceProvider<
-    B: HostUIResourceTypes<UITransferableResource = CpuTransferableResource>
+    B: HostUIResourceTypes<UITransferableResource = RasterTransferableResource>
         + HostImplResourceTypes<ResourceId = ResourceId>,
 >(pub Box<dyn NativeClientResourceProvider<B>>);
 impl<
-        B: HostUIResourceTypes<UITransferableResource = CpuTransferableResource>
+        B: HostUIResourceTypes<UITransferableResource = RasterTransferableResource>
             + HostImplResourceTypes<ResourceId = ResourceId>,
     > HostUIResourceProvider<B> for ClientResourceProvider<B>
 {
     fn ImportResource(
         &mut self,
-        resource: CpuTransferableResource,
+        resource: RasterTransferableResource,
         release: HostUIResourceReleaseTask,
     ) -> ResourceId {
         self.0.ImportResource(resource, release)
@@ -226,7 +226,7 @@ pub trait NativeViewTransitionRequest:
             crate::adapter::property_types::ViewTransitionElementResourceId,
             super::frame::RenderPassId,
         >,
-        colors: &super::resources::CpuDisplayColorSpaces,
+        colors: &super::resources::RasterDisplayColorSpaces,
         delay: bool,
     ) -> super::metadata::TransitionDirective;
 }
@@ -238,7 +238,7 @@ impl ViewTransitionRequest {
             crate::adapter::property_types::ViewTransitionElementResourceId,
             super::frame::RenderPassId,
         >,
-        colors: &super::resources::CpuDisplayColorSpaces,
+        colors: &super::resources::RasterDisplayColorSpaces,
         delay: bool,
     ) -> super::metadata::TransitionDirective {
         self.0.ConstructDirective(elements, colors, delay)
@@ -267,17 +267,17 @@ impl crate::adapter::layer_tree_host_impl::HostMetadataTransitionRequest for Vie
 pub struct ColorSpaceCache(
     pub  Box<
         dyn crate::adapter::layer_tree_host_impl::HostColorSpaceCache<
-            super::resources::CpuColorSpace,
+            super::resources::RasterColorSpace,
         >,
     >,
 );
-impl crate::adapter::layer_tree_host_impl::HostColorSpaceCache<super::resources::CpuColorSpace>
+impl crate::adapter::layer_tree_host_impl::HostColorSpaceCache<super::resources::RasterColorSpace>
     for ColorSpaceCache
 {
-    fn Get(&mut self, key: &super::resources::CpuColorSpace) -> Option<&bool> {
+    fn Get(&mut self, key: &super::resources::RasterColorSpace) -> Option<&bool> {
         self.0.Get(key)
     }
-    fn Put(&mut self, key: super::resources::CpuColorSpace, value: bool) {
+    fn Put(&mut self, key: super::resources::RasterColorSpace, value: bool) {
         self.0.Put(key, value)
     }
 }

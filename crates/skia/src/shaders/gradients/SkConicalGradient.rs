@@ -1,468 +1,515 @@
-//! Two-circle gradient geometry belongs to upstream SkConicalGradient, not SkRadialGradient.
-//! Migrated tiny-skia algorithms retain their original arithmetic and data layout.
+// RasterError interface/propagation adaptation only; UNVERIFIED; no added native-line credit.
+// Copyright 2012 Google Inc. BSD-style license.
+use super::SkGradientBaseShader::SkGradientBaseShader;
+use crate::include::effects::SkGradient::SkGradient;
+use crate::src::core::SkArenaAlloc::SkArenaAlloc;
+use crate::src::core::SkMatrix::SkMatrix;
+use crate::src::core::SkPoint::SkPoint;
+use crate::src::core::SkRasterPipeline::SkRasterPipeline;
+use crate::src::core::SkRasterPipelineOpContexts::Conical2PtCtx;
+use crate::src::core::SkRasterPipelineOpList::SkRasterPipelineOp as Op;
 
-// Migrated unchanged in behavior from tiny-skia-0.12.0/src/shaders/radial_gradient.rs.
-
-// Copyright 2006 The Android Open Source Project
-// Copyright 2020 Yevhenii Reizner
-//
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
-
-use alloc::vec::Vec;
-
-use crate::path::Scalar;
-
-use crate::raster::{ColorSpace, GradientStop, Point, Shader, SpreadMode, Transform};
-
-use crate::compat::gradient_interpolation::{GradientHueMethod, GradientInterpolationSpace};
-use crate::raster::pipeline;
-use crate::raster::pipeline::RasterPipelineBuilder;
-use crate::raster::shaders::gradient::{
-    average_gradient_color_in_space, Gradient, DEGENERATE_THRESHOLD,
-};
-use crate::raster::wide::u32x8;
-
-#[cfg(all(not(feature = "std"), feature = "no-std-float"))]
-use crate::path::NoStdFloat;
-
-#[derive(Copy, Clone, PartialEq, Debug, Default)]
-struct FocalData {
-    r1: f32,      // r1 after mapping focal point to (0, 0)
-    focal_x: f32, // f
-    is_swapped: bool,
+// Source: src/shaders/gradients/SkConicalGradient.h:30-33
+#[derive(Clone, Copy)]
+pub struct FocalData {
+    pub fR1: f32,
+    pub fFocalX: f32,
+    pub fIsSwapped: bool,
 }
-
+// Source: src/shaders/gradients/SkConicalGradient.h:46-50
 impl FocalData {
-    fn set(&mut self, mut r0: f32, mut r1: f32, matrix: &mut Transform) -> bool {
-        self.is_swapped = false;
-        self.focal_x = r0 / (r0 - r1);
-
-        if (self.focal_x - 1.0).is_nearly_zero() {
-            // swap r0, r1
-            *matrix = matrix.post_translate(-1.0, 0.0).post_scale(-1.0, 1.0);
-            core::mem::swap(&mut r0, &mut r1);
-
-            self.focal_x = 0.0; // because r0 is now 0
-            self.is_swapped = true;
+    pub fn isFocalOnCircle(&self) -> bool {
+        (1.0 - self.fR1).abs() <= 1.0 / 4096.0
+    }
+    pub fn isSwapped(&self) -> bool {
+        self.fIsSwapped
+    }
+    pub fn isWellBehaved(&self) -> bool {
+        !self.isFocalOnCircle() && self.fR1 > 1.0
+    }
+    pub fn isNativelyFocal(&self) -> bool {
+        self.fFocalX.abs() <= 1.0 / 4096.0
+    }
+}
+// Source: src/shaders/gradients/SkConicalGradient.h:53-53
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Type {
+    kRadial,
+    kStrip,
+    kFocal,
+}
+// Source: src/shaders/gradients/SkConicalGradient.h:68-76
+impl SkConicalGradient {
+    pub fn getCenterX1(&self) -> f32 {
+        (self.fCenter1 - self.fCenter2).length()
+    }
+    pub fn getStartRadius(&self) -> f32 {
+        self.fRadius1
+    }
+    pub fn getDiffRadius(&self) -> f32 {
+        self.fRadius2 - self.fRadius1
+    }
+    pub fn getStartCenter(&self) -> &SkPoint {
+        &self.fCenter1
+    }
+    pub fn getEndCenter(&self) -> &SkPoint {
+        &self.fCenter2
+    }
+    pub fn getEndRadius(&self) -> f32 {
+        self.fRadius2
+    }
+    pub fn getType(&self) -> Type {
+        self.fType
+    }
+    pub fn getFocalData(&self) -> Option<&FocalData> {
+        self.fFocalData.as_ref()
+    }
+}
+// Source: src/shaders/gradients/SkConicalGradient.h:96-96
+impl crate::src::core::SkFlattenable::SkFlattenableView for SkConicalGradient {
+    fn getFactory(&self) -> Option<crate::src::core::SkFlattenable::Factory> {
+        Some(Self::CreateProc)
+    }
+    fn getTypeName(&self) -> Option<&str> {
+        Some("SkConicalGradient")
+    }
+    fn getFlattenableType(&self) -> crate::src::core::SkFlattenable::Type {
+        crate::src::core::SkFlattenable::Type::kSkShader_Type
+    }
+    fn flatten(
+        &self,
+        buffer: &mut dyn crate::src::core::SkWriteBuffer::SkWriteBuffer,
+    ) -> Result<(), crate::RasterError> {
+        self.flatten_impl(buffer)?;
+        Ok(())
+    }
+}
+// Source: src/shaders/gradients/SkConicalGradient.h:98-104
+pub struct SkConicalGradient {
+    base: SkGradientBaseShader,
+    fCenter1: SkPoint,
+    fCenter2: SkPoint,
+    fRadius1: f32,
+    fRadius2: f32,
+    fType: Type,
+    // C++ leaves focal data uninitialized for nonfocal variants; Option prevents reading it there.
+    fFocalData: Option<FocalData>,
+}
+// Source: src/shaders/gradients/SkConicalGradient.cpp:32-63
+impl FocalData {
+    pub fn set(&mut self, mut r0: f32, mut r1: f32, matrix: &mut SkMatrix) -> bool {
+        self.fIsSwapped = false;
+        self.fFocalX = r0 / (r0 - r1);
+        if (self.fFocalX - 1.0).abs() <= 1.0 / 4096.0 {
+            matrix.postTranslate(-1.0, 0.0);
+            matrix.postScale(-1.0, 1.0);
+            std::mem::swap(&mut r0, &mut r1);
+            self.fFocalX = 0.0;
+            self.fIsSwapped = true;
         }
-
-        // Map {focal point, (1, 0)} to {(0, 0), (1, 0)}
-        let from = [Point::from_xy(self.focal_x, 0.0), Point::from_xy(1.0, 0.0)];
-        let to = [Point::from_xy(0.0, 0.0), Point::from_xy(1.0, 0.0)];
-
-        let focal_matrix = match ts_from_poly_to_poly(from[0], from[1], to[0], to[1]) {
-            Some(m) => m,
-            None => return false,
+        let from = [
+            SkPoint {
+                fX: self.fFocalX,
+                fY: 0.0,
+            },
+            SkPoint { fX: 1.0, fY: 0.0 },
+        ];
+        let to = [SkPoint { fX: 0.0, fY: 0.0 }, SkPoint { fX: 1.0, fY: 0.0 }];
+        let Some(focal_matrix) = SkMatrix::PolyToPoly(&from, &to) else {
+            return false;
         };
-
-        *matrix = matrix.post_concat(focal_matrix);
-        self.r1 = r1 / (1.0 - self.focal_x).abs(); // focalMatrix has a scale of 1/(1-f).
-
-        // The following transformations are just to accelerate the shader computation by saving
-        // some arithmetic operations.
+        matrix.postConcat(&focal_matrix);
+        self.fR1 = r1 / (1.0 - self.fFocalX).abs();
         if self.isFocalOnCircle() {
-            *matrix = matrix.post_scale(0.5, 0.5);
+            matrix.postScale(0.5, 0.5);
         } else {
-            *matrix = matrix.post_scale(
-                self.r1 / (self.r1 * self.r1 - 1.0),
-                1.0 / (self.r1 * self.r1 - 1.0).abs().sqrt(),
+            matrix.postScale(
+                self.fR1 / (self.fR1 * self.fR1 - 1.0),
+                1.0 / (self.fR1 * self.fR1 - 1.0).abs().sqrt(),
             );
         }
-
-        *matrix = matrix.post_scale((1.0 - self.focal_x).abs(), (1.0 - self.focal_x).abs()); // scale |1 - f|
-
+        matrix.postScale((1.0 - self.fFocalX).abs(), (1.0 - self.fFocalX).abs());
         true
     }
-
-    fn isFocalOnCircle(&self) -> bool {
-        (1.0 - self.r1).is_nearly_zero()
-    }
-
-    fn isWellBehaved(&self) -> bool {
-        !self.isFocalOnCircle() && self.r1 > 1.0
-    }
-
-    fn isNativelyFocal(&self) -> bool {
-        self.focal_x.is_nearly_zero()
-    }
 }
-
-#[derive(Clone, PartialEq, Debug)]
-enum Type {
-    Radial {
-        radius1: f32,
-        radius2: f32,
-    },
-    Strip {
-        /// Radius of the first circle scaled by the distance between centers (r0 / d_center)
-        scaled_r0: f32,
-    },
-    Focal(FocalData),
-}
-
-/// A 2-point conical gradient shader.
-#[derive(Clone, PartialEq, Debug)]
-pub struct SkConicalGradient {
-    pub(crate) base: Gradient,
-    gradient_type: Type,
-}
-
+// Source: src/shaders/gradients/SkConicalGradient.cpp:65-70
 impl SkConicalGradient {
-    /// Creates a new two-point conical gradient shader.
-    ///
-    /// A two-point conical gradient (also known as a radial gradient)
-    /// interpolates colors between two circles defined by their center points
-    /// and radii.
-    ///
-    /// Returns `Shader::SolidColor` when:
-    /// - `stops.len()` == 1
-    ///
-    /// Returns `None` when:
-    /// - `stops` is empty
-    /// - `start_radius` < 0 or `end_radius` < 0
-    /// - `transform` is not invertible
-    /// - The gradient is degenerate (both radii and centers are equal, except
-    ///   in specific pad mode cases)
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(
-        start_point: Point,
-        start_radius: f32,
-        end_point: Point,
-        end_radius: f32,
-        stops: Vec<GradientStop>,
-        mode: SpreadMode,
-        transform: Transform,
-    ) -> Option<Shader<'static>> {
-        Self::new_with_interpolation(
-            start_point,
-            start_radius,
-            end_point,
-            end_radius,
-            stops,
-            mode,
-            transform,
-            GradientInterpolationSpace::None,
-            GradientHueMethod::Shorter,
-            false,
+    pub fn MapToUnitX(start: &SkPoint, end: &SkPoint) -> Option<SkMatrix> {
+        SkMatrix::PolyToPoly(
+            &[*start, *end],
+            &[SkPoint { fX: 0.0, fY: 0.0 }, SkPoint { fX: 1.0, fY: 0.0 }],
         )
     }
-
-    pub(crate) fn new_with_interpolation(
-        start_point: Point,
-        start_radius: f32,
-        end_point: Point,
-        end_radius: f32,
-        mut stops: Vec<GradientStop>,
-        mode: SpreadMode,
-        transform: Transform,
-        interpolation_space: GradientInterpolationSpace,
-        hue_method: GradientHueMethod,
-        interpolate_premultiplied: bool,
-    ) -> Option<Shader<'static>> {
-        if start_radius < 0.0 || end_radius < 0.0 {
-            return None;
-        }
-
-        if mode == SpreadMode::kDecal && stops.len() == 1 {
-            let c = stops[0].color;
-            stops = alloc::vec![GradientStop::new(0., c), GradientStop::new(1., c)];
-        }
-        match stops.as_slice() {
-            [] => return None,
-            [stop] => return Some(Shader::SolidColor(stop.color)),
-            _ => {}
-        }
-
-        transform.invert()?;
-
-        let length = (start_point - end_point).length();
-        if !length.is_finite() {
-            return None;
-        }
-        if length.is_nearly_zero_within_tolerance(DEGENERATE_THRESHOLD) {
-            if start_radius.is_nearly_equal_within_tolerance(end_radius, DEGENERATE_THRESHOLD) {
-                // Degenerate case, where the interpolation region area approaches zero. The proper
-                // behavior depends on the tile mode, which is consistent with the default degenerate
-                // gradient behavior, except when mode = clamp and the radii > 0.
-                if mode == SpreadMode::Pad && end_radius > DEGENERATE_THRESHOLD {
-                    // The interpolation region becomes an infinitely thin ring at the radius, so the
-                    // final gradient will be the first color repeated from p=0 to 1, and then a hard
-                    // stop switching to the last color at p=1.
-                    let start_color = stops.first()?.clone().color;
-                    let end_color = stops.last()?.clone().color;
-                    let mut new_stops = stops; // Reuse allocation from stops.
-                    new_stops.clear();
-                    new_stops.extend_from_slice(&[
-                        GradientStop::new(0.0, start_color),
-                        GradientStop::new(1.0, start_color),
-                        GradientStop::new(1.0, end_color),
-                    ]);
-                    // If the center positions are the same, then the gradient is the radial variant
-                    // of a 2 pt conical gradient, an actual radial gradient (startRadius == 0), or
-                    // it is fully degenerate (startRadius == endRadius).
-                    // We can treat this gradient as a simple radial, which is faster. If we got
-                    // here, we know that endRadius is not equal to 0, so this produces a meaningful
-                    // gradient
-                    return Self::new_radial_unchecked(
-                        start_point,
-                        end_radius,
-                        new_stops,
-                        mode,
-                        transform,
-                        interpolation_space,
-                        hue_method,
-                        interpolate_premultiplied,
-                    );
-                }
-                return match mode {
-                    SpreadMode::Repeat | SpreadMode::Reflect => {
-                        Some(Shader::SolidColor(average_gradient_color_in_space(
-                            &stops,
-                            interpolation_space,
-                            hue_method,
-                            interpolate_premultiplied,
-                        )))
-                    }
-                    SpreadMode::Pad => None,
-                    SpreadMode::kDecal => {
-                        Some(Shader::SolidColor(crate::raster::Color::TRANSPARENT))
-                    }
-                };
+    // Source: src/shaders/gradients/SkConicalGradient.cpp:72-110
+    // Native Create geometry prefix, shared by the complete retained constructor below.
+    pub fn prepare_geometry(
+        c0: SkPoint,
+        r0: f32,
+        c1: SkPoint,
+        r1: f32,
+    ) -> Option<(SkMatrix, Type, Option<FocalData>)> {
+        let mut matrix;
+        let kind;
+        if (c0 - c1).length().abs() <= 1.0 / 4096.0 {
+            let max_r = if r0 < r1 { r1 } else { r0 };
+            if max_r.abs() <= 1.0 / 4096.0 || (r0 - r1).abs() <= 1.0 / 4096.0 {
+                return None;
             }
+            let scale = 1.0 / max_r;
+            matrix = SkMatrix::Translate(-c1.fX, -c1.fY);
+            matrix.postScale(scale, scale);
+            kind = Type::kRadial;
+        } else {
+            matrix = Self::MapToUnitX(&c0, &c1)?;
+            kind = if (r1 - r0).abs() <= 1.0 / 4096.0 {
+                Type::kStrip
+            } else {
+                Type::kFocal
+            };
+        }
+        let focal = if kind == Type::kFocal {
+            let distance = (c0 - c1).length();
+            let mut focal = FocalData {
+                fR1: 0.0,
+                fFocalX: 0.0,
+                fIsSwapped: false,
+            };
+            if !focal.set(r0 / distance, r1 / distance, &mut matrix) {
+                return None;
+            }
+            Some(focal)
+        } else {
+            None
+        };
+        Some((matrix, kind, focal))
+    }
+    // Source: src/shaders/gradients/SkConicalGradient.cpp:112-115
+    pub fn Create(
+        c0: SkPoint,
+        r0: f32,
+        c1: SkPoint,
+        r1: f32,
+        desc: &SkGradient<'_>,
+        local_matrix: Option<&SkMatrix>,
+    ) -> Option<std::sync::Arc<dyn crate::src::shaders::SkShader::SkShader>> {
+        let (matrix, kind, focal) = Self::prepare_geometry(c0, r0, c1, r1)?;
+        let shader: std::sync::Arc<dyn crate::src::shaders::SkShader::SkShader> =
+            std::sync::Arc::new(Self::new(c0, r0, c1, r1, desc, kind, &matrix, focal));
+        Some(shader.makeWithLocalMatrix(local_matrix.unwrap_or(SkMatrix::I())))
+    }
+    // Source: src/shaders/gradients/SkConicalGradient.cpp:117-136
+    pub fn new(
+        start: SkPoint,
+        startRadius: f32,
+        end: SkPoint,
+        endRadius: f32,
+        desc: &SkGradient<'_>,
+        kind: Type,
+        matrix: &SkMatrix,
+        data: Option<FocalData>,
+    ) -> Self {
+        crate::SkASSERT!(@source b"src/shaders/gradients/SkConicalGradient.cpp\0".as_ptr(),132; @condition b"fCenter1 != fCenter2 || fRadius1 != fRadius2\0".as_ptr(); start != end || startRadius != endRadius);
+        debug_assert!(kind != Type::kFocal || data.is_some());
+        Self {
+            base: SkGradientBaseShader::new(desc, matrix),
+            fCenter1: start,
+            fCenter2: end,
+            fRadius1: startRadius,
+            fRadius2: endRadius,
+            fType: kind,
+            fFocalData: if kind == Type::kFocal { data } else { None },
+        }
+    }
+    // Source: src/shaders/gradients/SkConicalGradient.cpp:138-143
+    pub fn isOpaque(&self) -> bool {
+        false
+    }
+    // Source: src/shaders/gradients/SkConicalGradient.cpp:146-159
+    /// Safety: info's nonnull color/offset pointers must have capacity declared in fColorCount.
+    pub unsafe fn asGradient(
+        &self,
+        info: Option<&mut crate::src::shaders::SkShaderBase::GradientInfo>,
+        local_matrix: Option<&mut SkMatrix>,
+    ) -> crate::src::shaders::SkShaderBase::GradientType {
+        if let Some(info) = info {
+            unsafe {
+                self.base.commonAsAGradient(info);
+            }
+            info.fPoint[0] = self.fCenter1;
+            info.fPoint[1] = self.fCenter2;
+            info.fRadius[0] = self.fRadius1;
+            info.fRadius[1] = self.fRadius2;
+        }
+        if let Some(matrix) = local_matrix {
+            *matrix = SkMatrix::default();
+        }
+        crate::src::shaders::SkShaderBase::GradientType::kConical
+    }
+    // Source: src/shaders/gradients/SkConicalGradient.cpp:161-180
+    pub fn CreateProc(
+        buffer: &mut crate::src::core::SkReadBuffer::SkReadBuffer<'_>,
+    ) -> crate::src::core::SkFlattenable::FactoryResult {
+        let mut scope = super::SkGradientBaseShader::SkGradientScope::new();
+        let mut legacy = SkMatrix::default();
+        let Some(descriptor) = scope.unflatten(buffer, &mut legacy) else {
+            return Ok(None);
+        };
+        let local = if legacy.isIdentity() {
+            None
+        } else {
+            Some(&legacy)
+        };
+        let first = buffer.readPoint();
+        let second = buffer.readPoint();
+        let first_radius = buffer.readScalar();
+        let second_radius = buffer.readScalar();
+        if !buffer.isValid() {
+            return Ok(None);
+        }
+        let Some(gradient) = descriptor.typed() else {
+            return Ok(None);
+        };
+        Ok(
+            TwoPointConicalGradient(first, first_radius, second, second_radius, &gradient, local)
+                .map(crate::src::core::SkFlattenable::FlattenableOwner::Shader),
+        )
+    }
+    // Source: src/shaders/gradients/SkConicalGradient.h:88-88
+    // Source: src/shaders/gradients/SkConicalGradient.cpp:182-188
+    fn flatten_impl(
+        &self,
+        buffer: &mut dyn crate::src::core::SkWriteBuffer::SkWriteBuffer,
+    ) -> Result<(), crate::RasterError> {
+        self.base.flatten(buffer)?;
+        buffer.writePoint(&self.fCenter1);
+        buffer.writePoint(&self.fCenter2);
+        buffer.writeScalar(self.fRadius1);
+        buffer.writeScalar(self.fRadius2);
 
-            if start_radius.is_nearly_zero_within_tolerance(DEGENERATE_THRESHOLD) {
-                // If the center positions are the same, then the gradient
-                // is the radial variant of a 2 pt conical gradient,
-                // an actual radial gradient (startRadius == 0),
-                // or it is fully degenerate (startRadius == endRadius).
-                // We can treat this gradient as a simple radial, which is faster. If we got here,
-                // we know that endRadius is not equal to 0, so this produces a meaningful gradient.
-                return Self::new_radial_unchecked(
-                    start_point,
-                    end_radius,
-                    stops,
-                    mode,
-                    transform,
-                    interpolation_space,
-                    hue_method,
-                    interpolate_premultiplied,
+        Ok(())
+    }
+    // Source: src/shaders/gradients/SkConicalGradient.cpp:190-245
+    /// Safety: alloc and both pipeline pointers must stay alive until execution finishes.
+    pub unsafe fn appendGradientStages(
+        &self,
+        alloc: *mut SkArenaAlloc,
+        p: *mut SkRasterPipeline,
+        post: *mut SkRasterPipeline,
+    ) {
+        unsafe {
+            let d_radius = self.fRadius2 - self.fRadius1;
+            if self.fType == Type::kRadial {
+                (*p).append(Op::xy_to_radius, std::ptr::null_mut());
+                let max_r = if self.fRadius1 < self.fRadius2 {
+                    self.fRadius2
+                } else {
+                    self.fRadius1
+                };
+                let scale = max_r / d_radius;
+                let bias = -self.fRadius1 / d_radius;
+                let mut matrix = SkMatrix::default();
+                matrix.setConcat(
+                    &SkMatrix::Translate(bias, 0.0),
+                    &SkMatrix::Scale(scale, 1.0),
+                );
+                (*p).appendMatrix(alloc, &matrix);
+                return;
+            }
+            let ctx = (*alloc)
+                .makeBytesAlignedTo(
+                    std::mem::size_of::<Conical2PtCtx>(),
+                    std::mem::align_of::<Conical2PtCtx>(),
+                )
+                .cast::<Conical2PtCtx>();
+            // Rust adaptation: upstream POD allocation leaves unused members unset.
+            // Initialize the complete value before any stage forms a whole-context reference.
+            ctx.write(Conical2PtCtx {
+                fMask: [0; 16],
+                fP0: 0.0,
+                fP1: 0.0,
+            });
+            if self.fType == Type::kStrip {
+                let scaled_r0 = self.fRadius1 / self.getCenterX1();
+                (*ctx).fP0 = scaled_r0 * scaled_r0;
+                (*p).append(Op::xy_to_2pt_conical_strip, ctx.cast());
+                (*p).append(Op::mask_2pt_conical_nan, ctx.cast());
+                (*post).append(
+                    Op::apply_vector_mask,
+                    std::ptr::addr_of_mut!((*ctx).fMask).cast(),
+                );
+                return;
+            }
+            let focal = self
+                .fFocalData
+                .as_ref()
+                .expect("focal data belongs to focal variant");
+            (*ctx).fP0 = 1.0 / focal.fR1;
+            (*ctx).fP1 = focal.fFocalX;
+            if focal.isFocalOnCircle() {
+                (*p).append(Op::xy_to_2pt_conical_focal_on_circle, std::ptr::null_mut());
+            } else if focal.isWellBehaved() {
+                (*p).append(Op::xy_to_2pt_conical_well_behaved, ctx.cast());
+            } else if focal.isSwapped() || 1.0 - focal.fFocalX < 0.0 {
+                (*p).append(Op::xy_to_2pt_conical_smaller, ctx.cast());
+            } else {
+                (*p).append(Op::xy_to_2pt_conical_greater, ctx.cast());
+            }
+            if !focal.isWellBehaved() {
+                (*p).append(Op::mask_2pt_conical_degenerates, ctx.cast());
+            }
+            if 1.0 - focal.fFocalX < 0.0 {
+                (*p).append(Op::negate_x, std::ptr::null_mut());
+            }
+            if !focal.isNativelyFocal() {
+                (*p).append(Op::alter_2pt_conical_compensate_focal, ctx.cast());
+            }
+            if focal.isSwapped() {
+                (*p).append(Op::alter_2pt_conical_unswap, std::ptr::null_mut());
+            }
+            if !focal.isWellBehaved() {
+                (*post).append(
+                    Op::apply_vector_mask,
+                    std::ptr::addr_of_mut!((*ctx).fMask).cast(),
                 );
             }
         }
-
-        let mut shader = create(
-            start_point,
-            start_radius,
-            end_point,
-            end_radius,
-            stops,
-            mode,
-            transform,
-        )?;
-        shader.set_gradient_interpolation(
-            interpolation_space,
-            hue_method,
-            interpolate_premultiplied,
-        );
-        Some(shader)
-    }
-
-    /// Creates a simple radial gradient shader without validation.
-    ///
-    /// This is an optimized path for creating radial gradients when the start radius is 0
-    /// and the gradient is known to be valid. The function computes the points-to-unit
-    /// transformation internally based on the center point and radius.
-    ///
-    /// # Parameters
-    /// - `center`: The center point of the radial gradient
-    /// - `radius`: The radius of the gradient (assumed to be > 0)
-    /// - `stops`: Color stops for the gradient (assumed to have length >= 2)
-    /// - `mode`: How the gradient extends beyond its bounds
-    /// - `transform`: The gradient's transformation matrix (assumed to be invertible)
-    fn new_radial_unchecked(
-        center: Point,
-        radius: f32,
-        mut stops: Vec<GradientStop>,
-        mode: SpreadMode,
-        transform: Transform,
-        interpolation_space: GradientInterpolationSpace,
-        hue_method: GradientHueMethod,
-        interpolate_premultiplied: bool,
-    ) -> Option<Shader<'static>> {
-        let inv = radius.invert();
-        let points_to_unit = Transform::from_translate(-center.x, -center.y).post_scale(inv, inv);
-
-        let mut shader = Shader::RadialGradient(SkConicalGradient {
-            base: Gradient::new(stops, mode, transform, points_to_unit),
-            gradient_type: Type::Radial {
-                radius1: 0.0,
-                radius2: radius,
-            },
-        });
-        shader.set_gradient_interpolation(
-            interpolation_space,
-            hue_method,
-            interpolate_premultiplied,
-        );
-        Some(shader)
-    }
-
-    pub(crate) fn appendStages(&self, cs: ColorSpace, p: &mut RasterPipelineBuilder) -> bool {
-        let (p0, p1) = match self.gradient_type {
-            Type::Radial { radius1, radius2 } => {
-                if radius1 == 0.0 {
-                    (1.0, 0.0)
-                } else {
-                    let d_radius = radius2 - radius1;
-                    // For concentric gradients: t = t * scale + bias
-                    let p0 = radius1.max(radius2) / d_radius;
-                    let p1 = -radius1 / d_radius;
-                    (p0, p1)
-                }
-            }
-            Type::Strip { scaled_r0 } => {
-                (scaled_r0 * scaled_r0, 0.0 /*unused*/)
-            }
-            Type::Focal(fd) => (1.0 / fd.r1, fd.focal_x),
-        };
-
-        p.ctx.two_point_conical_gradient = pipeline::TwoPointConicalGradientCtx {
-            mask: u32x8::default(),
-            p0,
-            p1,
-        };
-
-        self.base.appendStages(
-            p,
-            cs,
-            &|p| {
-                match self.gradient_type {
-                    Type::Radial { .. } => {
-                        p.push(pipeline::Stage::XYToRadius);
-                        // Apply scale/bias to map t from [0, 1] based on r_max to proper t where
-                        // t=0 at r0 and t=1 at r1
-                        if (p0, p1) != (1.0, 0.0) {
-                            p.push(pipeline::Stage::ApplyConcentricScaleBias);
-                        }
-                    }
-                    Type::Strip { .. } => {
-                        p.push(pipeline::Stage::XYTo2PtConicalStrip);
-                        p.push(pipeline::Stage::Mask2PtConicalNan);
-                    }
-                    Type::Focal(fd) => {
-                        if fd.isFocalOnCircle() {
-                            p.push(pipeline::Stage::XYTo2PtConicalFocalOnCircle);
-                        } else if fd.isWellBehaved() {
-                            p.push(pipeline::Stage::XYTo2PtConicalWellBehaved);
-                        } else if fd.is_swapped || (1.0 - fd.focal_x) < 0.0 {
-                            p.push(pipeline::Stage::XYTo2PtConicalSmaller);
-                        } else {
-                            p.push(pipeline::Stage::XYTo2PtConicalGreater);
-                        }
-
-                        if !fd.isWellBehaved() {
-                            p.push(pipeline::Stage::Mask2PtConicalDegenerates);
-                        }
-
-                        if (1.0 - fd.focal_x) < 0.0 {
-                            p.push(pipeline::Stage::NegateX);
-                        }
-
-                        if !fd.isNativelyFocal() {
-                            p.push(pipeline::Stage::Alter2PtConicalCompensateFocal);
-                        }
-
-                        if fd.is_swapped {
-                            p.push(pipeline::Stage::Alter2PtConicalUnswap);
-                        }
-                    }
-                }
-            },
-            &|p| match self.gradient_type {
-                Type::Strip { .. } => p.push(pipeline::Stage::ApplyVectorMask),
-                Type::Focal(fd) if !fd.isWellBehaved() => p.push(pipeline::Stage::ApplyVectorMask),
-                _ => {}
-            },
-        )
     }
 }
 
-fn create(
-    c0: Point,
-    r0: f32,
-    c1: Point,
-    r1: f32,
-    stops: Vec<GradientStop>,
-    mode: SpreadMode,
-    transform: Transform,
-) -> Option<Shader<'static>> {
-    let mut gradient_type;
-    let mut gradient_matrix;
-
-    if (c0 - c1).length().is_nearly_zero() {
-        if r0.max(r1).is_nearly_zero() || r0.is_nearly_equal(r1) {
-            // Degenerate case; avoid dividing by zero. Should have been caught
-            // by caller but just in case, recheck here.
-            return None;
-        }
-
-        // Concentric case: we can pretend we're radial (with a tiny twist).
-        let scale = 1.0 / r0.max(r1);
-        gradient_matrix = Transform::from_translate(-c1.x, -c1.y).post_scale(scale, scale);
-        gradient_type = Type::Radial {
-            radius1: r0,
-            radius2: r1,
-        };
-    } else {
-        gradient_matrix = MapToUnitX(c0, c1)?;
-        let d_center = (c0 - c1).length();
-        gradient_type = if (r0 - r1).is_nearly_zero() {
-            let scaled_r0 = r0 / d_center;
-            Type::Strip { scaled_r0 }
-        } else {
-            Type::Focal(FocalData::default())
-        };
+// Source: src/shaders/gradients/SkConicalGradient.cpp:247-308
+pub fn TwoPointConicalGradient(
+    start: SkPoint,
+    start_radius: f32,
+    end: SkPoint,
+    end_radius: f32,
+    gradient: &SkGradient<'_>,
+    local_matrix: Option<&SkMatrix>,
+) -> Option<std::sync::Arc<dyn crate::src::shaders::SkShader::SkShader>> {
+    use crate::include::core::SkTileMode::SkTileMode;
+    use crate::include::effects::SkGradient::Colors;
+    if start_radius < 0.0 || end_radius < 0.0 {
+        return None;
     }
-    if let Type::Focal(ref mut focal_data) = &mut gradient_type {
-        let d_center = (c0 - c1).length();
-        if !focal_data.set(r0 / d_center, r1 / d_center, &mut gradient_matrix) {
+    let colors = gradient.colors();
+    let interpolation = *gradient.interpolation();
+    if !SkGradientBaseShader::ValidGradient(colors.colors(), colors.tileMode(), &interpolation) {
+        return None;
+    }
+    if let Some(matrix) = local_matrix {
+        if matrix.invert().is_none() {
             return None;
         }
     }
-
-    Some(Shader::RadialGradient(SkConicalGradient {
-        base: Gradient::new(stops, mode, transform, gradient_matrix),
-        gradient_type,
-    }))
-}
-
-fn MapToUnitX(origin: Point, x_is_one: Point) -> Option<Transform> {
-    ts_from_poly_to_poly(
-        origin,
-        x_is_one,
-        Point::from_xy(0.0, 0.0),
-        Point::from_xy(1.0, 0.0),
+    let threshold = SkGradientBaseShader::kDegenerateThreshold;
+    if (start - end).length().abs() <= threshold {
+        if (start_radius - end_radius).abs() <= threshold {
+            if colors.tileMode() == SkTileMode::kClamp && end_radius > threshold {
+                let source = colors.colors();
+                let repeated = [source[0], source[0], source[source.len() - 1]];
+                let positions = [0.0, 1.0, 1.0];
+                let colors = Colors::new(
+                    &repeated,
+                    &positions,
+                    colors.tileMode(),
+                    colors.colorSpace().clone(),
+                );
+                return super::SkRadialGradient::RadialGradient(
+                    start,
+                    end_radius,
+                    &SkGradient::new(colors, interpolation),
+                    local_matrix,
+                );
+            } else {
+                return SkGradientBaseShader::MakeDegenerateGradient(colors);
+            }
+        } else if start_radius.abs() <= threshold {
+            return super::SkRadialGradient::RadialGradient(
+                start,
+                end_radius,
+                gradient,
+                local_matrix,
+            );
+        }
+    }
+    let mut source = colors.colors();
+    let mut positions = colors.positions();
+    let repeated;
+    if source.len() == 1 {
+        repeated = [source[0], source[0]];
+        source = &repeated;
+        positions = &[];
+    }
+    let colors = Colors::new(
+        source,
+        positions,
+        colors.tileMode(),
+        colors.colorSpace().clone(),
+    );
+    SkConicalGradient::Create(
+        start,
+        start_radius,
+        end,
+        end_radius,
+        &SkGradient::new(colors, interpolation),
+        local_matrix,
     )
 }
 
-fn ts_from_poly_to_poly(src1: Point, src2: Point, dst1: Point, dst2: Point) -> Option<Transform> {
-    let tmp = from_poly2(src1, src2);
-    let res = tmp.invert()?;
-    let tmp = from_poly2(dst1, dst2);
-    Some(tmp.pre_concat(res))
+// Source: src/shaders/gradients/SkConicalGradient.cpp:311-315
+/// Safety: exclusive native registration phase, before once publication;
+/// no concurrent lookup/registration, with space in the fixed factory table.
+pub unsafe fn SkRegisterConicalGradientShaderFlattenable() {
+    unsafe {
+        crate::src::core::SkFlattenable::Register(
+            b"SkConicalGradient",
+            SkConicalGradient::CreateProc,
+        );
+        crate::src::core::SkFlattenable::Register(
+            b"SkTwoPointConicalGradient",
+            SkConicalGradient::CreateProc,
+        );
+    }
 }
 
-fn from_poly2(p0: Point, p1: Point) -> Transform {
-    Transform::from_row(
-        p1.y - p0.y,
-        p0.x - p1.x,
-        p1.x - p0.x,
-        p1.y - p0.y,
-        p0.x,
-        p0.y,
-    )
+// Rust delegation of the native inherited shader interfaces; the algorithms
+// remain in the existing concrete methods and base pipeline implementation.
+impl super::SkGradientBaseShader::SkGradientShader for SkConicalGradient {
+    fn gradient_base(&self) -> &SkGradientBaseShader {
+        &self.base
+    }
+    unsafe fn append_gradient_stages(
+        &self,
+        alloc: *mut crate::src::core::SkArenaAlloc::SkArenaAlloc,
+        pipeline: *mut crate::src::core::SkRasterPipeline::SkRasterPipeline,
+        post: *mut crate::src::core::SkRasterPipeline::SkRasterPipeline,
+    ) {
+        self.appendGradientStages(alloc, pipeline, post);
+    }
 }
-
-/// Compatibility spelling retained for migrated callers; use `SkConicalGradient` in the mapped API.
-pub use SkConicalGradient as RadialGradient;
+impl crate::src::shaders::SkShader::SkShader for SkConicalGradient {
+    fn isOpaque(&self) -> bool {
+        SkConicalGradient::isOpaque(self)
+    }
+}
+impl crate::src::shaders::SkShaderBase::SkShaderBase for SkConicalGradient {
+    fn r#type(&self) -> crate::src::shaders::SkShaderBase::ShaderType {
+        self.base.r#type()
+    }
+    unsafe fn asGradient(
+        &self,
+        info: Option<&mut crate::src::shaders::SkShaderBase::GradientInfo>,
+        matrix: Option<&mut SkMatrix>,
+    ) -> crate::src::shaders::SkShaderBase::GradientType {
+        unsafe { SkConicalGradient::asGradient(self, info, matrix) }
+    }
+    fn onAsLuminanceColor(&self, color: &mut crate::src::core::SkColor::SkColor4f) -> bool {
+        self.base.onAsLuminanceColor(color)
+    }
+    unsafe fn appendStages(
+        &self,
+        rec: &crate::src::core::SkEffectPriv::SkStageRec<'_>,
+        mrec: &crate::src::shaders::SkShaderBase::MatrixRec,
+    ) -> Result<bool, crate::RasterError> {
+        super::SkGradientBaseShader::SkGradientShader::append_gradient_pipeline(self, rec, mrec)
+    }
+}

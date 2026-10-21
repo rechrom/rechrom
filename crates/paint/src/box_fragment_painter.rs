@@ -405,19 +405,11 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             DisplayItemIdType::PaintPhaseToDrawingType(PaintPhase::kMask),
             bounds,
         );
-        // Flat Canvas replay needs the same Mask effect as property consumers.
-        // Its layer spans the current clip, so transparent source outside mask
-        // ink still clears the whole isolated destination. Tile lowering strips
-        // this wrapper and draws kDrawMask as an ordinary cached source plane.
-        self.context.borrow_mut().Append(
-            DisplayItem {
-                r#type: DisplayItemType::kSaveLayerDstIn,
-                phase: PaintPhase::kMask,
-                node_id: fragment.node_id,
-                ..Default::default()
-            },
-            self.node,
-        );
+        // Chromium records only the mask source in the kMask paint phase. Its
+        // EffectPaintPropertyNode supplies kDstIn when PaintArtifactCompositor
+        // builds the cc mask layer; applying DstIn inside this source record
+        // would first intersect the mask with a transparent destination and
+        // publish an empty mask layer.
         if !self.node.mask_layers.is_empty() {
             self.context.borrow_mut().Append(
                 DisplayItem {
@@ -432,15 +424,6 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             );
         }
         NinePieceImagePainter::PaintMaskBox(self.node, self.context, PaintPhase::kMask);
-        self.context.borrow_mut().Append(
-            DisplayItem {
-                r#type: DisplayItemType::kRestore,
-                phase: PaintPhase::kMask,
-                node_id: fragment.node_id,
-                ..Default::default()
-            },
-            self.node,
-        );
     }
 
     // cpp: paint/box_fragment_painter.h:29

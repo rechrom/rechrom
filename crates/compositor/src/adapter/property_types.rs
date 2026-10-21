@@ -2,6 +2,7 @@
 //! geometry/paint backends, while node state and control flow stay in cc.
 
 use super::geometry::{self, Value};
+pub use paint::cc::paint::blend_mode::BlendMode;
 use std::{
     collections::BTreeMap,
     ops::{Deref, DerefMut},
@@ -337,75 +338,6 @@ impl PartialEq for ViewTransitionElementResourceId {
 }
 impl Eq for ViewTransitionElementResourceId {}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(i32)]
-pub enum BlendMode {
-    kClear,
-    kSrc,
-    kDst,
-    kSrcOver,
-    kDstOver,
-    kSrcIn,
-    kDstIn,
-    kSrcOut,
-    kDstOut,
-    kSrcATop,
-    kDstATop,
-    kXor,
-    kPlus,
-    kModulate,
-    kScreen,
-    kOverlay,
-    kDarken,
-    kLighten,
-    kColorDodge,
-    kColorBurn,
-    kHardLight,
-    kSoftLight,
-    kDifference,
-    kExclusion,
-    kMultiply,
-    kHue,
-    kSaturation,
-    kColor,
-    kLuminosity,
-}
-impl BlendMode {
-    pub fn Name(self) -> &'static str {
-        match self {
-            Self::kClear => "Clear",
-            Self::kSrc => "Src",
-            Self::kDst => "Dst",
-            Self::kSrcOver => "SrcOver",
-            Self::kDstOver => "DstOver",
-            Self::kSrcIn => "SrcIn",
-            Self::kDstIn => "DstIn",
-            Self::kSrcOut => "SrcOut",
-            Self::kDstOut => "DstOut",
-            Self::kSrcATop => "SrcATop",
-            Self::kDstATop => "DstATop",
-            Self::kXor => "Xor",
-            Self::kPlus => "Plus",
-            Self::kModulate => "Modulate",
-            Self::kScreen => "Screen",
-            Self::kOverlay => "Overlay",
-            Self::kDarken => "Darken",
-            Self::kLighten => "Lighten",
-            Self::kColorDodge => "ColorDodge",
-            Self::kColorBurn => "ColorBurn",
-            Self::kHardLight => "HardLight",
-            Self::kSoftLight => "SoftLight",
-            Self::kDifference => "Difference",
-            Self::kExclusion => "Exclusion",
-            Self::kMultiply => "Multiply",
-            Self::kHue => "Hue",
-            Self::kSaturation => "Saturation",
-            Self::kColor => "Color",
-            Self::kLuminosity => "Luminosity",
-        }
-    }
-}
-
 /// gfx RectF's trace-only %g formatting (six significant digits).
 pub fn RectFToString(rect: geometry::RectF) -> String {
     fn g(value: f32) -> String {
@@ -446,41 +378,4 @@ pub fn RectFToString(rect: geometry::RectF) -> String {
         g(rect.width()),
         g(rect.height())
     )
-}
-
-// External SkBlendMode value boundary; all native enumerants retain identity.
-impl From<BlendMode> for skia::BlendMode {
-    fn from(value: BlendMode) -> Self {
-        match value {
-            BlendMode::kClear => Self::kClear,
-            BlendMode::kSrc => Self::kSrc,
-            BlendMode::kDst => Self::kDst,
-            BlendMode::kSrcOver => Self::kSrcOver,
-            BlendMode::kDstOver => Self::kDstOver,
-            BlendMode::kSrcIn => Self::kSrcIn,
-            BlendMode::kDstIn => Self::kDstIn,
-            BlendMode::kSrcOut => Self::kSrcOut,
-            BlendMode::kDstOut => Self::kDstOut,
-            BlendMode::kSrcATop => Self::kSrcATop,
-            BlendMode::kDstATop => Self::kDstATop,
-            BlendMode::kXor => Self::kXor,
-            BlendMode::kPlus => Self::kPlus,
-            BlendMode::kModulate => Self::kModulate,
-            BlendMode::kScreen => Self::kScreen,
-            BlendMode::kOverlay => Self::kOverlay,
-            BlendMode::kDarken => Self::kDarken,
-            BlendMode::kLighten => Self::kLighten,
-            BlendMode::kColorDodge => Self::kColorDodge,
-            BlendMode::kColorBurn => Self::kColorBurn,
-            BlendMode::kHardLight => Self::kHardLight,
-            BlendMode::kSoftLight => Self::kSoftLight,
-            BlendMode::kDifference => Self::kDifference,
-            BlendMode::kExclusion => Self::kExclusion,
-            BlendMode::kMultiply => Self::kMultiply,
-            BlendMode::kHue => Self::kHue,
-            BlendMode::kSaturation => Self::kSaturation,
-            BlendMode::kColor => Self::kColor,
-            BlendMode::kLuminosity => Self::kLuminosity,
-        }
-    }
 }

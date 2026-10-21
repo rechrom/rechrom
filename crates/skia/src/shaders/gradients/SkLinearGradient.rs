@@ -1,233 +1,201 @@
-//! Rust subset and compatibility adaptation of the matching official Skia file.
-//! Migrated tiny-skia algorithms retain their original arithmetic and data layout.
-
-// Migrated unchanged in behavior from tiny-skia-0.12.0/src/shaders/linear_gradient.rs.
-
-// Copyright 2006 The Android Open Source Project
-// Copyright 2020 Yevhenii Reizner
-//
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
-
-use alloc::vec::Vec;
-
-use crate::path::Scalar;
-
-use crate::raster::{ColorSpace, GradientStop, Point, Shader, SpreadMode, Transform};
-
-use crate::compat::gradient_interpolation::{GradientHueMethod, GradientInterpolationSpace};
-use crate::raster::pipeline::RasterPipelineBuilder;
-use crate::raster::shaders::gradient::{
-    average_gradient_color_in_space, Gradient, DEGENERATE_THRESHOLD,
-};
-
-/// A linear gradient shader.
-#[derive(Clone, PartialEq, Debug)]
-pub struct SkLinearGradient {
-    pub(crate) base: Gradient,
-}
-
+// RasterError interface/propagation adaptation only; UNVERIFIED; no added native-line credit.
+// Copyright 2012 Google Inc. BSD-style license.
+use super::SkGradientBaseShader::SkGradientBaseShader;
+use crate::include::effects::SkGradient::SkGradient;
+use crate::src::core::SkMatrix::SkMatrix;
+use crate::src::core::SkPoint::SkPoint;
+// Source: src/shaders/gradients/SkLinearGradient.h:27-28
 impl SkLinearGradient {
-    /// Creates a new linear gradient shader.
-    ///
-    /// Returns `Shader::SolidColor` when:
-    /// - `stops.len()` == 1
-    /// - `start` and `end` are very close
-    ///
-    /// Returns `None` when:
-    ///
-    /// - `stops` is empty
-    /// - `start` == `end`
-    /// - `transform` is not invertible
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(
-        start: Point,
-        end: Point,
-        stops: Vec<GradientStop>,
-        mode: SpreadMode,
-        transform: Transform,
-    ) -> Option<Shader<'static>> {
-        Self::new_with_interpolation(
-            start,
-            end,
-            stops,
-            mode,
-            transform,
-            GradientInterpolationSpace::None,
-            GradientHueMethod::Shorter,
-            false,
-        )
+    pub fn start(&self) -> &SkPoint {
+        &self.fStart
     }
-
-    pub(crate) fn new_with_interpolation(
-        start: Point,
-        end: Point,
-        mut stops: Vec<GradientStop>,
-        mode: SpreadMode,
-        transform: Transform,
-        interpolation_space: GradientInterpolationSpace,
-        hue_method: GradientHueMethod,
-        interpolate_premultiplied: bool,
-    ) -> Option<Shader<'static>> {
-        if stops.is_empty() {
-            return None;
-        }
-
-        if stops.len() == 1 {
-            if mode != SpreadMode::kDecal {
-                return Some(Shader::SolidColor(stops[0].color));
-            }
-            let c = stops[0].color;
-            stops = alloc::vec![GradientStop::new(0., c), GradientStop::new(1., c)];
-        }
-
-        let length = (end - start).length();
-        if !length.is_finite() {
-            return None;
-        }
-
-        if length.is_nearly_zero_within_tolerance(DEGENERATE_THRESHOLD) {
-            // Degenerate gradient, the only tricky complication is when in clamp mode,
-            // the limit of the gradient approaches two half planes of solid color
-            // (first and last). However, they are divided by the line perpendicular
-            // to the start and end point, which becomes undefined once start and end
-            // are exactly the same, so just use the end color for a stable solution.
-
-            // Except for special circumstances of clamped gradients,
-            // every gradient shape (when degenerate) can be mapped to the same fallbacks.
-            // The specific shape factories must account for special clamped conditions separately,
-            // this will always return the last color for clamped gradients.
-            match mode {
-                SpreadMode::kDecal => {
-                    return Some(Shader::SolidColor(crate::raster::Color::TRANSPARENT))
-                }
-                SpreadMode::Pad => {
-                    // Depending on how the gradient shape degenerates,
-                    // there may be a more specialized fallback representation
-                    // for the factories to use, but this is a reasonable default.
-                    return Some(Shader::SolidColor(stops.last().unwrap().color));
-                }
-                SpreadMode::Reflect | SpreadMode::Repeat => {
-                    // repeat and mirror are treated the same: the border colors are never visible,
-                    // but approximate the final color as infinite repetitions of the colors, so
-                    // it can be represented as the average color of the gradient.
-                    return Some(Shader::SolidColor(average_gradient_color_in_space(
-                        &stops,
-                        interpolation_space,
-                        hue_method,
-                        interpolate_premultiplied,
-                    )));
-                }
-            }
-        }
-
-        transform.invert()?;
-
-        let unit_ts = points_to_unit_ts(start, end)?;
-        let mut base = Gradient::new(stops, mode, transform, unit_ts);
-        base.set_interpolation(interpolation_space, hue_method, interpolate_premultiplied);
-        Some(Shader::LinearGradient(SkLinearGradient { base }))
-    }
-
-    pub(crate) fn is_opaque(&self) -> bool {
-        self.base.is_opaque()
-    }
-
-    pub(crate) fn appendStages(&self, cs: ColorSpace, p: &mut RasterPipelineBuilder) -> bool {
-        self.base.appendStages(p, cs, &|_| {}, &|_| {})
+    pub fn end(&self) -> &SkPoint {
+        &self.fEnd
     }
 }
-
-fn points_to_unit_ts(start: Point, end: Point) -> Option<Transform> {
-    let mut vec = end - start;
+// Source: src/shaders/gradients/SkLinearGradient.h:38-38
+impl crate::src::core::SkFlattenable::SkFlattenableView for SkLinearGradient {
+    fn getFactory(&self) -> Option<crate::src::core::SkFlattenable::Factory> {
+        Some(Self::CreateProc)
+    }
+    fn getTypeName(&self) -> Option<&str> {
+        Some("SkLinearGradient")
+    }
+    fn getFlattenableType(&self) -> crate::src::core::SkFlattenable::Type {
+        crate::src::core::SkFlattenable::Type::kSkShader_Type
+    }
+    fn flatten(
+        &self,
+        buffer: &mut dyn crate::src::core::SkWriteBuffer::SkWriteBuffer,
+    ) -> Result<(), crate::RasterError> {
+        self.flatten_impl(buffer)?;
+        Ok(())
+    }
+}
+// Source: src/shaders/gradients/SkLinearGradient.h:44-45
+pub struct SkLinearGradient {
+    base: SkGradientBaseShader,
+    fStart: SkPoint,
+    fEnd: SkPoint,
+}
+// Source: src/shaders/gradients/SkLinearGradient.cpp:30-41
+pub fn pts_to_unit_matrix(pts: &[SkPoint; 2]) -> SkMatrix {
+    let mut vec = pts[1] - pts[0];
     let mag = vec.length();
-    let inv = if mag != 0.0 { mag.invert() } else { 0.0 };
-
-    vec.scale(inv);
-
-    let mut ts = ts_from_sin_cos_at(-vec.y, vec.x, start.x, start.y);
-    ts = ts.post_translate(-start.x, -start.y);
-    ts = ts.post_scale(inv, inv);
-    Some(ts)
+    let inv = if mag != 0.0 { 1.0 / mag } else { 0.0 };
+    vec.fX *= inv;
+    vec.fY *= inv;
+    let mut matrix = SkMatrix::default();
+    matrix.setSinCosPivot(-vec.fY, vec.fX, pts[0].fX, pts[0].fY);
+    matrix.postTranslate(-pts[0].fX, -pts[0].fY);
+    matrix.postScale(inv, inv);
+    matrix
 }
-
-fn ts_from_sin_cos_at(sin: f32, cos: f32, px: f32, py: f32) -> Transform {
-    let cos_inv = 1.0 - cos;
-    Transform::from_row(
-        cos,
-        sin,
-        -sin,
-        cos,
-        sdot(sin, py, cos_inv, px),
-        sdot(-sin, px, cos_inv, py),
-    )
-}
-
-fn sdot(a: f32, b: f32, c: f32, d: f32) -> f32 {
-    a * b + c * d
-}
-
-/// Compatibility spelling retained for migrated callers; use `SkLinearGradient` in the mapped API.
-pub use SkLinearGradient as LinearGradient;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::raster::Color;
-
-    fn solid(shader: Shader<'static>) -> Color {
-        match shader {
-            Shader::SolidColor(color) => color,
-            _ => panic!("zero-length repeating gradient must become a solid average"),
+// Source: src/shaders/gradients/SkLinearGradient.cpp:45-46
+impl SkLinearGradient {
+    pub fn new(pts: &[SkPoint; 2], desc: &SkGradient<'_>) -> Self {
+        Self {
+            base: SkGradientBaseShader::new(desc, &pts_to_unit_matrix(pts)),
+            fStart: pts[0],
+            fEnd: pts[1],
         }
     }
-
-    #[test]
-    fn zero_length_repeat_averages_in_the_requested_space() {
-        let stops = || {
-            vec![
-                GradientStop::new_extended(
-                    0.0,
-                    [1.0, 0.0, 0.0, 1.0],
-                    Color::from_rgba8(255, 0, 0, 255),
-                    GradientInterpolationSpace::Srgb,
-                    0,
-                ),
-                GradientStop::new_extended(
-                    1.0,
-                    [0.0, 0.0, 1.0, 1.0],
-                    Color::from_rgba8(0, 0, 255, 255),
-                    GradientInterpolationSpace::Srgb,
-                    0,
-                ),
-            ]
+    // Source: src/shaders/gradients/SkLinearGradient.cpp:48-62
+    pub fn CreateProc(
+        buffer: &mut crate::src::core::SkReadBuffer::SkReadBuffer<'_>,
+    ) -> crate::src::core::SkFlattenable::FactoryResult {
+        let mut scope = super::SkGradientBaseShader::SkGradientScope::new();
+        let mut legacy = SkMatrix::default();
+        let Some(descriptor) = scope.unflatten(buffer, &mut legacy) else {
+            return Ok(None);
         };
-        let srgb = solid(
-            SkLinearGradient::new_with_interpolation(
-                Point::from_xy(0.0, 0.0),
-                Point::from_xy(0.0, 0.0),
-                stops(),
-                SpreadMode::Repeat,
-                Transform::identity(),
-                GradientInterpolationSpace::Srgb,
-                GradientHueMethod::Shorter,
-                true,
-            )
-            .unwrap(),
+        let local = if legacy.isIdentity() {
+            None
+        } else {
+            Some(&legacy)
+        };
+        let points = [buffer.readPoint(), buffer.readPoint()];
+        let Some(gradient) = descriptor.typed() else {
+            return Ok(None);
+        };
+        Ok(LinearGradient(Some(&points), &gradient, local)
+            .map(crate::src::core::SkFlattenable::FlattenableOwner::Shader))
+    }
+    // Source: src/shaders/gradients/SkLinearGradient.h:31-31
+    // Source: src/shaders/gradients/SkLinearGradient.cpp:64-68
+    fn flatten_impl(
+        &self,
+        buffer: &mut dyn crate::src::core::SkWriteBuffer::SkWriteBuffer,
+    ) -> Result<(), crate::RasterError> {
+        self.base.flatten(buffer)?;
+        buffer.writePoint(&self.fStart);
+        buffer.writePoint(&self.fEnd);
+
+        Ok(())
+    }
+    // Source: src/shaders/gradients/SkLinearGradient.cpp:70-73
+    pub fn appendGradientStages(
+        &self,
+        _: *mut crate::src::core::SkArenaAlloc::SkArenaAlloc,
+        _: *mut crate::src::core::SkRasterPipeline::SkRasterPipeline,
+        _: *mut crate::src::core::SkRasterPipeline::SkRasterPipeline,
+    ) {
+        // Upstream linear gradients require no additional stage.
+    }
+}
+// Source: src/shaders/gradients/SkLinearGradient.cpp:75-87
+impl SkLinearGradient {
+    /// Safety: info's nonnull color/offset pointers must have capacity declared in fColorCount.
+    pub unsafe fn asGradient(
+        &self,
+        info: Option<&mut crate::src::shaders::SkShaderBase::GradientInfo>,
+        local_matrix: Option<&mut SkMatrix>,
+    ) -> crate::src::shaders::SkShaderBase::GradientType {
+        if let Some(info) = info {
+            unsafe {
+                self.base.commonAsAGradient(info);
+            }
+            info.fPoint[0] = self.fStart;
+            info.fPoint[1] = self.fEnd;
+        }
+        if let Some(matrix) = local_matrix {
+            *matrix = SkMatrix::default();
+        }
+        crate::src::shaders::SkShaderBase::GradientType::kLinear
+    }
+}
+
+// Source: src/shaders/gradients/SkLinearGradient.cpp:88-107
+pub fn LinearGradient(
+    pts: Option<&[SkPoint; 2]>,
+    grad: &SkGradient<'_>,
+    lm: Option<&SkMatrix>,
+) -> Option<std::sync::Arc<dyn crate::src::shaders::SkShader::SkShader>> {
+    let pts = pts?;
+    let length = (pts[1] - pts[0]).length();
+    if !length.is_finite() {
+        return None;
+    }
+    super::SkGradientBaseShader::gradient_factory_early_exit!(grad, lm);
+    if length.abs() <= SkGradientBaseShader::kDegenerateThreshold {
+        return SkGradientBaseShader::MakeDegenerateGradient(grad.colors());
+    }
+    let shader: std::sync::Arc<dyn crate::src::shaders::SkShader::SkShader> =
+        std::sync::Arc::new(SkLinearGradient::new(pts, grad));
+    Some(shader.makeWithLocalMatrix(lm.unwrap_or(SkMatrix::I())))
+}
+
+// Source: src/shaders/gradients/SkLinearGradient.cpp:109-111
+/// Safety: exclusive native registration phase, before once publication;
+/// no concurrent lookup/registration, with space in the fixed factory table.
+pub unsafe fn SkRegisterLinearGradientShaderFlattenable() {
+    unsafe {
+        crate::src::core::SkFlattenable::Register(
+            b"SkLinearGradient",
+            SkLinearGradient::CreateProc,
         );
-        let oklab = solid(
-            SkLinearGradient::new_with_interpolation(
-                Point::from_xy(0.0, 0.0),
-                Point::from_xy(0.0, 0.0),
-                stops(),
-                SpreadMode::Repeat,
-                Transform::identity(),
-                GradientInterpolationSpace::Oklab,
-                GradientHueMethod::Shorter,
-                true,
-            )
-            .unwrap(),
-        );
-        assert!(oklab.red() > srgb.red() && oklab.green() > srgb.green());
+    }
+}
+
+// Rust delegation of the native inherited shader interfaces; the algorithms
+// remain in the existing concrete methods and base pipeline implementation.
+impl super::SkGradientBaseShader::SkGradientShader for SkLinearGradient {
+    fn gradient_base(&self) -> &SkGradientBaseShader {
+        &self.base
+    }
+    unsafe fn append_gradient_stages(
+        &self,
+        alloc: *mut crate::src::core::SkArenaAlloc::SkArenaAlloc,
+        pipeline: *mut crate::src::core::SkRasterPipeline::SkRasterPipeline,
+        post: *mut crate::src::core::SkRasterPipeline::SkRasterPipeline,
+    ) {
+        self.appendGradientStages(alloc, pipeline, post);
+    }
+}
+impl crate::src::shaders::SkShader::SkShader for SkLinearGradient {
+    fn isOpaque(&self) -> bool {
+        self.base.isOpaque()
+    }
+}
+impl crate::src::shaders::SkShaderBase::SkShaderBase for SkLinearGradient {
+    fn r#type(&self) -> crate::src::shaders::SkShaderBase::ShaderType {
+        self.base.r#type()
+    }
+    unsafe fn asGradient(
+        &self,
+        info: Option<&mut crate::src::shaders::SkShaderBase::GradientInfo>,
+        matrix: Option<&mut SkMatrix>,
+    ) -> crate::src::shaders::SkShaderBase::GradientType {
+        unsafe { SkLinearGradient::asGradient(self, info, matrix) }
+    }
+    fn onAsLuminanceColor(&self, color: &mut crate::src::core::SkColor::SkColor4f) -> bool {
+        self.base.onAsLuminanceColor(color)
+    }
+    unsafe fn appendStages(
+        &self,
+        rec: &crate::src::core::SkEffectPriv::SkStageRec<'_>,
+        mrec: &crate::src::shaders::SkShaderBase::MatrixRec,
+    ) -> Result<bool, crate::RasterError> {
+        super::SkGradientBaseShader::SkGradientShader::append_gradient_pipeline(self, rec, mrec)
     }
 }

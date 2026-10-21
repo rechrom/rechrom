@@ -124,7 +124,7 @@ fn pixels(page: &Page) -> Vec<u32> {
         240,
         1.0,
         &mut pixels,
-        renderer::PixelFormat::Rgba8888,
+        renderer_skia::PixelFormat::Rgba8888,
         320,
     )
     .unwrap();
@@ -256,7 +256,7 @@ fn retained_svg_bounds_refresh_after_dy_mutation_and_preserve_old_artifact() {
             240,
             1.0,
             &mut old_pixels,
-            renderer::PixelFormat::Rgba8888,
+            renderer_skia::PixelFormat::Rgba8888,
             320,
         )
         .unwrap();

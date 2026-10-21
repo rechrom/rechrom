@@ -19,7 +19,7 @@ use super::{
     native_frame_sink::NativeFrameSinkEndpoint,
     native_host_lifecycle::NativeHostLifecycle,
     native_services::NativeEventSink,
-    resources::{CpuDisplayColorSpaces, CpuTransferableResource},
+    resources::{RasterDisplayColorSpaces, RasterTransferableResource},
     types::FrameSinkId,
 };
 use crate::{
@@ -265,7 +265,7 @@ impl HostImplDServices<NativeCompositorTypes> for NativeHostMetadataServices {
             crate::adapter::property_types::ViewTransitionElementResourceId,
             super::frame::RenderPassId,
         >,
-        colors: &CpuDisplayColorSpaces,
+        colors: &RasterDisplayColorSpaces,
         delay: bool,
     ) -> TransitionDirective {
         request.ConstructDirective(elements, colors, delay)
@@ -305,7 +305,7 @@ impl HostImplDServices<NativeCompositorTypes> for NativeHostMetadataServices {
         &mut self,
         provider: &mut ClientResourceProvider<NativeCompositorTypes>,
         resources: &[crate::adapter::layer_tree_impl::ResourceId],
-        output: &mut Vec<CpuTransferableResource>,
+        output: &mut Vec<RasterTransferableResource>,
         interface: HostSharedImageInterfaceId,
     ) {
         provider.0.PrepareSendToParent(resources, output, interface)

@@ -1,293 +1,288 @@
-// CPU implementation moved from renderer/glyphs/mask_gamma.rs.
+use std::sync::Arc;
 
-// SkMaskGamma A8 coverage correction, translated to Rust.
-use crate::compat::commands::Color;
+// Source: src/core/SkMaskGamma.h:32-34
+// Source: src/core/SkMaskGamma.h:37-37
+// Source: src/core/SkMaskGamma.h:39-39
+pub trait SkColorSpaceLuminance: Sync {
+    fn to_luma(&self, gamma: f32, luminance: f32) -> f32;
+    fn from_luma(&self, gamma: f32, luma: f32) -> f32;
+}
 
-fn linear(value: f32) -> f32 {
-    if value <= 0.04045 {
-        value / 12.92
-    } else {
-        ((value + 0.055) / 1.055).powf(2.4)
+// Source: src/core/SkMaskGamma.h:42-52
+pub fn compute_luminance(gamma: f32, color: u32) -> u32 {
+    use crate::src::core::SkColorData::{SK_LUM_COEFF_B, SK_LUM_COEFF_G, SK_LUM_COEFF_R};
+    let luminance = fetch_luminance(gamma);
+    let r = luminance.to_luma(gamma, ((color >> 16) & 255) as f32 / 255.);
+    let g = luminance.to_luma(gamma, ((color >> 8) & 255) as f32 / 255.);
+    let b = luminance.to_luma(gamma, (color & 255) as f32 / 255.);
+    let luma = r * SK_LUM_COEFF_R + g * SK_LUM_COEFF_G + b * SK_LUM_COEFF_B;
+    debug_assert!(luma <= 1.);
+    ((luminance.from_luma(gamma, luma) * 255.) as f64 + 0.5).floor() as i32 as u32
+}
+
+// Source: src/core/SkMaskGamma.h:64-83
+pub fn sk_t_scale255<const N: u32>(mut base: u32) -> u32 {
+    match N {
+        1 => base * 0xff,
+        2 => base * 0x55,
+        4 => base * 0x11,
+        8 => base,
+        _ => {
+            assert!((1..=8).contains(&N));
+            base <<= 8 - N;
+            let mut lum = base;
+            let mut i = N;
+            while i < 8 {
+                lum |= base >> i;
+                i += N;
+            }
+            lum
+        }
     }
 }
-fn srgb(value: f32) -> f32 {
-    if value <= 0.0031308 {
-        value * 12.92
-    } else {
-        1.055 * value.powf(1.0 / 2.4) - 0.055
-    }
-}
-fn canonical(value: u8) -> u8 {
-    let n = value >> 5;
-    (n << 5) | (n << 2) | (n >> 1)
-}
 
-// SkMaskGamma.cpp: SkTMaskGamma_build_correcting_lut, with sRGB and zero
-// contrast, the project/Chromium macOS software surface configuration.
-fn correcting_lut(source: u8) -> [u8; 256] {
-    let src = f32::from(source) / 255.0;
-    let dst = 1.0 - src;
-    let lin_src = linear(src);
-    let lin_dst = linear(dst);
-    std::array::from_fn(|i| {
-        let alpha = i as f32 / 255.0;
-        let result = if (src - dst).abs() < 1.0 / 256.0 {
-            alpha
+// Source: src/core/SkMaskGamma.h:102-102
+// Source: src/core/SkMaskGamma.h:104-104
+// Source: src/core/SkMaskGamma.h:107-107
+pub struct SkTMaskGamma<const R: u32, const G: u32, const B: u32> {
+    // Source: src/core/SkMaskGamma.h:186-186
+    gamma_tables: Option<Box<[u8]>>,
+}
+impl<const R: u32, const G: u32, const B: u32> SkTMaskGamma<R, G, B> {
+    pub const fn linear() -> Self {
+        Self { gamma_tables: None }
+    }
+    // Source: src/core/SkMaskGamma.h:117-126
+    pub fn new(contrast: f32, device_gamma: f32) -> Self {
+        let mut tables = vec![0; Self::TABLE_NUM_ELEMENTS].into_boxed_slice();
+        let convert = fetch_luminance(device_gamma);
+        for i in 0..Self::NUM_TABLES {
+            // Rust cannot use an expression involving generic parameters as a const argument.
+            let base = (i as u32) << (8 - Self::MAX_LUM_BITS);
+            let mut lum = base;
+            let mut bit = Self::MAX_LUM_BITS;
+            while bit < 8 {
+                lum |= base >> bit;
+                bit += Self::MAX_LUM_BITS;
+            }
+            let row: &mut [u8; 256] = (&mut tables[i * 256..(i + 1) * 256]).try_into().unwrap();
+            build_correcting_lut(row, lum, contrast, convert, device_gamma);
+        }
+        Self {
+            gamma_tables: Some(tables),
+        }
+    }
+    // Source: src/core/SkMaskGamma.h:129-134
+    pub fn canonical_color(color: u32) -> u32 {
+        0xff000000
+            | sk_t_scale255::<R>(((color >> 16) & 255) >> (8 - R)) << 16
+            | sk_t_scale255::<G>(((color >> 8) & 255) >> (8 - G)) << 8
+            | sk_t_scale255::<B>((color & 255) >> (8 - B))
+    }
+    // Source: src/core/SkMaskGamma.h:150-153
+    pub fn gamma_table_dimensions(&self) -> (usize, usize) {
+        (Self::TABLE_WIDTH, Self::NUM_TABLES)
+    }
+    // Source: src/core/SkMaskGamma.h:159-161
+    pub const fn gamma_table_size_in_bytes(&self) -> usize {
+        Self::TABLE_NUM_ELEMENTS
+    }
+    // Source: src/core/SkMaskGamma.h:168-170
+    // Source: src/core/SkMaskGamma.h:172-176
+    // Source: src/core/SkMaskGamma.h:178-180
+    pub fn gamma_tables(&self) -> Option<&[u8]> {
+        self.gamma_tables.as_deref()
+    }
+    const MAX_LUM_BITS: u32 = if B > R {
+        if B > G {
+            B
         } else {
-            (srgb(lin_src * alpha + (1.0 - alpha) * lin_dst) - dst) / (src - dst)
-        };
-        (255.0 * result + 0.5).floor().clamp(0.0, 255.0) as u8
-    })
-}
-
-// SkMaskGamma.h: SkTMaskGamma<3,3,3> constructs eight canonical tables
-// once per gamma/contrast configuration, then preBlend selects a table by the
-// high three luminance bits. SkScalerContextRec::CachedMaskGamma retains this
-// configuration across scaler contexts. Our surface configuration is fixed to
-// sRGB (gamma=0) and contrast=0, so this immutable 2KB table set is sufficient.
-fn canonical_luts() -> &'static [[u8; 256]; 8] {
-    static TABLES: std::sync::OnceLock<[[u8; 256]; 8]> = std::sync::OnceLock::new();
-    TABLES.get_or_init(|| std::array::from_fn(|i| correcting_lut(canonical((i as u8) << 5))))
-}
-
-// SkTypeface_mac_ct.cpp: onFilterRec. Skia canonicalizes to three bits,
-// halves the canonical foreground for gray CoreGraphics smoothing, then
-// canonicalizes again. A8 conversion then uses canonical luminance.
-pub(crate) fn mac_smoothing_lut(
-    color: Color,
-    behavior: crate::cpu::scaler_context_mac_ct::SmoothBehavior,
-) -> [u8; 256] {
-    let channel = |value: f32| {
-        let value = (value.clamp(0.0, 1.0) * 255.0 + 0.5).floor() as u8;
-        let value = canonical(value);
-        let value = match behavior {
-            crate::cpu::scaler_context_mac_ct::SmoothBehavior::Gray => value / 2,
-            crate::cpu::scaler_context_mac_ct::SmoothBehavior::Subpixel => {
-                (u32::from(value) * 3 / 4) as u8
-            }
-            crate::cpu::scaler_context_mac_ct::SmoothBehavior::None => value,
-        };
-        u32::from(canonical(value))
+            G
+        }
+    } else if R > G {
+        R
+    } else {
+        G
     };
-    // SkScalerContext.cpp: PreprocessRec converts the filtered canonical RGB
-    // luminance color to A8 luminance and canonicalizes a third time.
-    let luminance =
-        ((channel(color.red) * 54 + channel(color.green) * 183 + channel(color.blue) * 19) >> 8)
-            as u8;
-    canonical_luts()[usize::from(luminance >> 5)]
+    const NUM_TABLES: usize = 1 << Self::MAX_LUM_BITS;
+    const TABLE_WIDTH: usize = 256;
+    const TABLE_NUM_ELEMENTS: usize = Self::NUM_TABLES * Self::TABLE_WIDTH;
+    pub fn is_linear(&self) -> bool {
+        self.gamma_tables.is_none()
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cpu::scaler_context_mac_ct::SmoothBehavior;
-
-    // Independent pre-cache scalar path, retaining its operation order. No
-    // production canonicalization, color-conversion, or cache helper is used.
-    fn previous_scalar_lut(color: Color, behavior: SmoothBehavior) -> [u8; 256] {
-        let channel = |value: f32| {
-            let canonical = |value: u8| {
-                let n = value >> 5;
-                (n << 5) | (n << 2) | (n >> 1)
-            };
-            let value = canonical((value.clamp(0.0, 1.0) * 255.0 + 0.5).floor() as u8);
-            let value = match behavior {
-                SmoothBehavior::None => value,
-                SmoothBehavior::Gray => value / 2,
-                SmoothBehavior::Subpixel => (u32::from(value) * 3 / 4) as u8,
-            };
-            u32::from(canonical(value))
-        };
-        let luminance = ((channel(color.red) * 54
-            + channel(color.green) * 183
-            + channel(color.blue) * 19)
-            >> 8) as u8;
-        let n = luminance >> 5;
-        previous_scalar_table((n << 5) | (n << 2) | (n >> 1))
-    }
-
-    fn previous_scalar_table(source: u8) -> [u8; 256] {
-        let to_linear = |v: f32| {
-            if v <= 0.04045 {
-                v / 12.92
-            } else {
-                ((v + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        let from_linear = |v: f32| {
-            if v <= 0.0031308 {
-                v * 12.92
-            } else {
-                1.055 * v.powf(1.0 / 2.4) - 0.055
-            }
-        };
-        let foreground = f32::from(source) / 255.0;
-        let background = 1.0 - foreground;
-        let fg = to_linear(foreground);
-        let bg = to_linear(background);
-        let mut result = [0; 256];
-        for (i, entry) in result.iter_mut().enumerate() {
-            let a = i as f32 / 255.0;
-            let corrected = if (foreground - background).abs() < 1.0 / 256.0 {
-                a
-            } else {
-                (from_linear(fg * a + (1.0 - a) * bg) - background) / (foreground - background)
-            };
-            *entry = (255.0 * corrected + 0.5).floor().clamp(0.0, 255.0) as u8;
-        }
-        result
-    }
-
-    #[test]
-    fn mask_gamma_all_canonical_tables_are_exact_and_reused() {
-        let tables = canonical_luts();
-        for (i, &source) in [0, 36, 73, 109, 146, 182, 219, 255].iter().enumerate() {
-            assert_eq!(
-                tables[i],
-                previous_scalar_table(source),
-                "luminance={source}"
-            );
-        }
-        assert!(core::ptr::eq(tables, canonical_luts()));
-        // Native SkTMaskGamma<3,3,3>(contrast=0,gamma=0) oracle generated
-        // by artifacts/baidu-16ms-20261002/mask-gamma/gamma-native-oracle.cc.
-        let hash = tables
-            .iter()
-            .flatten()
-            .fold(0xcbf29ce484222325_u64, |h, &b| {
-                (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
-            });
-        assert_eq!(hash, 0x85528d34f620e3c5);
-    }
-
-    #[test]
-    fn mask_gamma_all_behaviors_and_colors_match_previous_scalar() {
-        let channels = [
-            0.0,
-            31.0 / 255.0,
-            32.0 / 255.0,
-            63.0 / 255.0,
-            64.0 / 255.0,
-            95.0 / 255.0,
-            96.0 / 255.0,
-            127.0 / 255.0,
-            128.0 / 255.0,
-            159.0 / 255.0,
-            160.0 / 255.0,
-            191.0 / 255.0,
-            192.0 / 255.0,
-            223.0 / 255.0,
-            224.0 / 255.0,
-            1.0,
-        ];
-        for behavior in [
-            SmoothBehavior::None,
-            SmoothBehavior::Gray,
-            SmoothBehavior::Subpixel,
-        ] {
-            for red in channels {
-                for green in channels {
-                    for blue in channels {
-                        let color = Color {
-                            red,
-                            green,
-                            blue,
-                            alpha: 0.37,
-                        };
-                        assert_eq!(
-                            mac_smoothing_lut(color, behavior),
-                            previous_scalar_lut(color, behavior)
-                        );
-                    }
-                }
-            }
-            for i in 0..=255_u32 {
-                for red in [(i as f32 - 0.5) / 255.0, (i as f32 + 0.5) / 255.0] {
-                    let color = Color {
-                        red,
-                        green: ((i * 73) % 256) as f32 / 255.0,
-                        blue: ((i * 37 + 17) % 256) as f32 / 255.0,
-                        alpha: 1.0,
-                    };
-                    assert_eq!(
-                        mac_smoothing_lut(color, behavior),
-                        previous_scalar_lut(color, behavior)
-                    );
-                    assert_eq!(
-                        mac_smoothing_lut(
-                            Color {
-                                alpha: 0.0,
-                                ..color
-                            },
-                            behavior
-                        ),
-                        mac_smoothing_lut(color, behavior)
-                    );
-                }
-            }
+// Source: src/core/SkMaskGamma.h:200-204
+// Source: src/core/SkMaskGamma.h:206-208
+// Source: src/core/SkMaskGamma.h:210-210
+// Source: src/core/SkMaskGamma.h:216-217
+// Source: src/core/SkMaskGamma.h:219-219
+// Source: src/core/SkMaskGamma.h:222-222
+// Source: src/core/SkMaskGamma.h:224-227
+// Arc replaces sk_sp; row offsets replace self-referential pointers without changing lifetime.
+#[derive(Clone)]
+// Source: src/core/SkMaskGamma.h:86-86
+pub struct SkTMaskPreBlend<const R: u32, const G: u32, const B: u32> {
+    parent: Option<Arc<SkTMaskGamma<R, G, B>>>,
+    rows: [usize; 3],
+}
+impl<const R: u32, const G: u32, const B: u32> SkTMaskPreBlend<R, G, B> {
+    pub fn new() -> Self {
+        Self {
+            parent: None,
+            rows: [0; 3],
         }
     }
-
-    #[test]
-    fn mask_gamma_table_set_is_shared_by_concurrent_readers() {
-        let readers: Vec<_> = (0..8)
-            .map(|i| {
-                std::thread::spawn(move || {
-                    let tables = canonical_luts();
-                    assert_eq!(
-                        tables[i],
-                        previous_scalar_table([0, 36, 73, 109, 146, 182, 219, 255][i])
-                    );
-                    tables.as_ptr() as usize
-                })
-            })
-            .collect();
-        let address = canonical_luts().as_ptr() as usize;
-        for reader in readers {
-            assert_eq!(reader.join().unwrap(), address);
+    pub fn is_applicable(&self) -> bool {
+        self.parent.is_some()
+    }
+    pub fn channel(&self, channel: usize) -> Option<&[u8; 256]> {
+        let parent = self.parent.as_ref()?;
+        let start = self.rows[channel];
+        parent
+            .gamma_tables
+            .as_ref()
+            .map(|t| t[start..start + 256].try_into().unwrap())
+    }
+}
+// Source: src/core/SkMaskGamma.h:229-246
+impl<const R: u32, const G: u32, const B: u32> SkTMaskGamma<R, G, B> {
+    // Source: src/core/SkMaskGamma.h:137-144
+    pub fn pre_blend(self: &Arc<Self>, color: u32) -> SkTMaskPreBlend<R, G, B> {
+        if self.is_linear() {
+            return SkTMaskPreBlend::new();
+        }
+        let lum_shift = 8 - Self::MAX_LUM_BITS;
+        let r = (((color >> 16) & 255) >> lum_shift) as usize * Self::TABLE_WIDTH;
+        let g = (((color >> 8) & 255) >> lum_shift) as usize * Self::TABLE_WIDTH;
+        let b = ((color & 255) >> lum_shift) as usize * Self::TABLE_WIDTH;
+        debug_assert!(
+            r < Self::TABLE_NUM_ELEMENTS
+                && g < Self::TABLE_NUM_ELEMENTS
+                && b < Self::TABLE_NUM_ELEMENTS
+        );
+        SkTMaskPreBlend {
+            parent: Some(Arc::clone(self)),
+            rows: [r, g, b],
         }
     }
+}
+// Source: src/core/SkMaskGamma.h:256-261
+pub fn sk_apply_lut_if<const APPLY: bool>(component: u32, lut: Option<&[u8; 256]>) -> u32 {
+    if APPLY {
+        lut.unwrap()[component as usize] as u32
+    } else {
+        component
+    }
+}
 
-    #[test]
-    #[ignore = "manual Debug timing; no performance assertion"]
-    fn mask_gamma_debug_cache_benchmark() {
-        use std::time::Instant;
-        let _ = canonical_luts();
-        for behavior in [
-            SmoothBehavior::None,
-            SmoothBehavior::Gray,
-            SmoothBehavior::Subpixel,
-        ] {
-            let mut before = Vec::new();
-            let mut after = Vec::new();
-            for _ in 0..3 {
-                for old in [true, false] {
-                    let start = Instant::now();
-                    for i in 0..4096_u32 {
-                        let color = Color {
-                            red: (i % 256) as f32 / 255.0,
-                            green: ((i * 73) % 256) as f32 / 255.0,
-                            blue: ((i * 37 + 17) % 256) as f32 / 255.0,
-                            alpha: 1.0,
-                        };
-                        let lut = if old {
-                            previous_scalar_lut(std::hint::black_box(color), behavior)
-                        } else {
-                            mac_smoothing_lut(std::hint::black_box(color), behavior)
-                        };
-                        std::hint::black_box(lut);
-                    }
-                    let ms = start.elapsed().as_secs_f64() * 1000.0;
-                    if old {
-                        before.push(ms);
-                    } else {
-                        after.push(ms);
-                    }
-                }
-            }
-            before.sort_by(f64::total_cmp);
-            after.sort_by(f64::total_cmp);
-            eprintln!("MASK_GAMMA_BENCH behavior={} calls=4096 before_scalar_ms={:.3} after_cached_ms={:.3} speedup={:.2}",behavior as u8,before[1],after[1],before[1]/after[1]);
+// Source: src/core/SkMaskGamma.cpp:17-26
+struct LinearLuminance;
+impl SkColorSpaceLuminance for LinearLuminance {
+    fn to_luma(&self, gamma: f32, luminance: f32) -> f32 {
+        debug_assert_eq!(gamma, 1.);
+        luminance
+    }
+    fn from_luma(&self, gamma: f32, luma: f32) -> f32 {
+        debug_assert_eq!(gamma, 1.);
+        luma
+    }
+}
+// Source: src/core/SkMaskGamma.cpp:28-35
+struct GammaLuminance;
+impl SkColorSpaceLuminance for GammaLuminance {
+    fn to_luma(&self, gamma: f32, luminance: f32) -> f32 {
+        luminance.powf(gamma)
+    }
+    fn from_luma(&self, gamma: f32, luma: f32) -> f32 {
+        luma.powf(1. / gamma)
+    }
+}
+// Source: src/core/SkMaskGamma.cpp:37-39
+// Source: src/core/SkMaskGamma.cpp:42-49
+// Source: src/core/SkMaskGamma.cpp:52-58
+struct SrgbLuminance;
+impl SkColorSpaceLuminance for SrgbLuminance {
+    fn to_luma(&self, gamma: f32, luminance: f32) -> f32 {
+        debug_assert_eq!(gamma, 0.);
+        if luminance <= 0.04045 {
+            return luminance / 12.92;
+        }
+        ((luminance + 0.055) / 1.055).powf(2.4)
+    }
+    fn from_luma(&self, gamma: f32, luma: f32) -> f32 {
+        debug_assert_eq!(gamma, 0.);
+        if luma <= 0.0031308 {
+            return luma * 12.92;
+        }
+        1.055 * luma.powf(1. / 2.4) - 0.055
+    }
+}
+// Source: src/core/SkMaskGamma.cpp:60-63
+// Source: src/core/SkMaskGamma.cpp:65-72
+// Source: src/core/SkMaskGamma.h:55-55
+pub fn fetch_luminance(gamma: f32) -> &'static dyn SkColorSpaceLuminance {
+    static LINEAR: LinearLuminance = LinearLuminance;
+    static GAMMA: GammaLuminance = GammaLuminance;
+    static SRGB: SrgbLuminance = SrgbLuminance;
+    if gamma == 0. {
+        &SRGB
+    } else if gamma == 1. {
+        &LINEAR
+    } else {
+        &GAMMA
+    }
+}
+// Source: src/core/SkMaskGamma.cpp:74-76
+fn apply_contrast(srca: f32, contrast: f32) -> f32 {
+    srca + ((1. - srca) * contrast * srca)
+}
+// Source: src/core/SkMaskGamma.cpp:78-83
+// Source: src/core/SkMaskGamma.cpp:88-89
+// Source: src/core/SkMaskGamma.cpp:92-92
+// Source: src/core/SkMaskGamma.cpp:96-103
+// Source: src/core/SkMaskGamma.cpp:105-106
+// Source: src/core/SkMaskGamma.cpp:111-114
+// Source: src/core/SkMaskGamma.cpp:117-119
+// Source: src/core/SkMaskGamma.cpp:122-123
+// Source: src/core/SkMaskGamma.cpp:125-128
+// Source: src/core/SkMaskGamma.h:88-89
+pub fn build_correcting_lut(
+    table: &mut [u8; 256],
+    src_i: u32,
+    contrast: f32,
+    dst_convert: &dyn SkColorSpaceLuminance,
+    dst_gamma: f32,
+) {
+    let src_convert = dst_convert;
+    let src_gamma = dst_gamma;
+    let src = src_i as f32 / 255.;
+    let lin_src = src_convert.to_luma(src_gamma, src);
+    let dst = 1. - src;
+    let lin_dst = dst_convert.to_luma(dst_gamma, dst);
+    let adjusted_contrast = contrast * lin_dst;
+    if (src - dst).abs() < 1. / 256. {
+        let mut ii = 0.;
+        for i in 0..256 {
+            let raw_srca = ii / 255.;
+            let srca = apply_contrast(raw_srca, adjusted_contrast);
+            table[i] = ((255. * srca) as f64 + 0.5).floor() as i32 as u8;
+            ii += 1.;
+        }
+    } else {
+        let mut ii = 0.;
+        for i in 0..256 {
+            let raw_srca = ii / 255.;
+            let srca = apply_contrast(raw_srca, adjusted_contrast);
+            debug_assert!(srca <= 1.);
+            let dsta = 1. - srca;
+            let lin_out = lin_src * srca + dsta * lin_dst;
+            debug_assert!(lin_out <= 1.);
+            let out = dst_convert.from_luma(dst_gamma, lin_out);
+            let result = (out - dst) / (src - dst);
+            debug_assert!(((255. * result) as f64 + 0.5).floor() <= 255.);
+            table[i] = ((255. * result) as f64 + 0.5).floor() as i32 as u8;
+            ii += 1.;
         }
     }
 }

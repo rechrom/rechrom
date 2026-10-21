@@ -99,7 +99,7 @@ pub(crate) enum HostLifecycleEffect {
     },
     ReturnResource {
         delegate: HostImplDelegateId,
-        resource: crate::runtime::resources::CpuReturnedResource,
+        resource: crate::runtime::resources::RasterReturnedResource,
     },
     NewLocalSurfaceIdExpectedWhilePaused {
         sink: crate::adapter::layer_tree_host_impl::HostImplFrameSinkId,
@@ -371,7 +371,7 @@ impl NativeHostLifecycle {
     pub(crate) fn ReturnResource(
         &self,
         delegate: HostImplDelegateId,
-        resource: crate::runtime::resources::CpuReturnedResource,
+        resource: crate::runtime::resources::RasterReturnedResource,
     ) {
         self.effects
             .Push(HostLifecycleEffect::ReturnResource { delegate, resource });

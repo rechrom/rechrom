@@ -131,7 +131,7 @@ fn pixels(page: &Page) -> Vec<u32> {
         240,
         1.0,
         &mut pixels,
-        renderer::PixelFormat::Rgba8888,
+        renderer_skia::PixelFormat::Rgba8888,
         320,
     )
     .unwrap();
@@ -300,7 +300,7 @@ fn artifact_pixels(page: &Page, artifact: &Arc<paint::paint_engine::PaintArtifac
         240,
         1.0,
         &mut pixels,
-        renderer::PixelFormat::Rgba8888,
+        renderer_skia::PixelFormat::Rgba8888,
         320,
     )
     .unwrap();
@@ -468,20 +468,18 @@ fn svg_reflection_mask_container_is_requested_before_resource_snapshot() {
         // this regression covers its resource request and exact publication.
         let artifact = &page.CurrentFrame().unwrap().display_items;
         for chunk in &artifact.chunks {
-            for filter in &chunk.properties.effect.filters {
-                for layer in &filter.reflection_mask_layers {
-                    if let (Some(image), Some(key)) =
-                        (&layer.image, &layer.document_image_container_key)
-                    {
-                        let image_resource::PaintImageContent::Document(content) = &image.content
-                        else {
-                            panic!()
-                        };
-                        assert!(
-                            content.exact_record_for(key).is_some(),
-                            "reflection retains the fulfilled snapshot"
-                        );
-                    }
+            for layer in chunk.properties.effect.filters.reflection_mask_layers() {
+                if let (Some(image), Some(key)) =
+                    (&layer.image, &layer.document_image_container_key)
+                {
+                    let image_resource::PaintImageContent::Document(content) = &image.content
+                    else {
+                        panic!()
+                    };
+                    assert!(
+                        content.exact_record_for(key).is_some(),
+                        "reflection retains the fulfilled snapshot"
+                    );
                 }
             }
         }

@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+browser_tracing = { path = "../tracing" }
 renderer = { path = "../renderer" }
 bytemuck = "1.24"
 compositor_core = { package = "compositor", path = "../compositor" }
@@ -18,8 +19,4 @@ layoutng_assembly = { path = "../layoutng_assembly" }
 
 [features]
 default = []
-text = ["raster/text"]
-source_replay = ["raster/source_replay"]
-pure_replay = ["raster/pure_replay"]
 compose_work_profile = []
-profiling = ["raster/profiling", "skia/profiling"]

@@ -1,7 +1,7 @@
 //! Concrete value storage and injected execution boundaries for the Page façade.
 //! Canonical compositor owners/algorithms remain in the source-relative modules; these modules
 //! implement external owned output values, never an alternative layer graph.
-pub mod cpu_raster;
+pub mod raster_execution;
 pub mod frame;
 
 pub mod metadata;

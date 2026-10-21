@@ -268,11 +268,12 @@ impl<R: CpuSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
         self.effect_ == other.effect_
     }
     fn EffectUnaliasedParentSameAs(&self, ancestor: &Self) -> bool {
-        self.effect_.node().parent.as_ref().is_some_and(|parent| {
-            parent
-                .lifecycle
-                .same_node(&ancestor.effect_.node().lifecycle)
-        })
+        ancestor
+            .effect_
+            .node()
+            .parent
+            .as_ref()
+            .is_some_and(|parent| parent.lifecycle.same_node(&self.effect_.node().lifecycle))
     }
     fn EffectIsOpacityOnly(&self) -> bool {
         self.EffectBlendMode() == BlendMode::kSrcOver

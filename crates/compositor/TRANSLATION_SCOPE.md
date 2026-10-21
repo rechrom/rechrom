@@ -24,7 +24,7 @@ reachable through the production wiring.
 | Tiling, tile ownership, priorities, and queues | 39 | 9,593 |
 | Compositor-owned tile resource pool | 2 | 1,346 |
 | Raster task boundary types | 6 | 572 |
-| Default CPU native task graph dependency queue and synchronous runner | 4 | 832 |
+| Default native task graph dependency queue and synchronous runner | 4 | 832 |
 | Blink PaintArtifact compositor/layerization | 14 | 7,919 |
 | Converted display-list value owner and direct RTree/geometry/invalidation closure | 7 | 2,803 |
 | Node geometry caches, FloatClipRect, per-item invalidation and tracking | 9 | 1,449 |
@@ -120,14 +120,14 @@ layer/tile or compositor owner remains in Page or the application host.
 5. Deleted `LayerTileEngine`, `FramePlan`, the separate layer/tile crate, and
    the old compositor after switching the production dependency graph.
 
-The default CPU path is a required production acceptance gate: PaintEngine's
-resident `Arc<PaintArtifact>` must drive layerization, scheduling, CPU raster
+The default raster path is a required production acceptance gate: PaintEngine's
+resident `Arc<PaintArtifact>` must drive layerization, scheduling, raster
 playback through the injected executor, completion, and visible
 `CompositorFrame` submission for first paint, incremental mutations, scrolling,
 and resource-loss recovery. Source coverage and successful compilation alone do
 not complete the migration.
 
-The default CPU path additionally owns `cc/raster/task_graph_work_queue` and
+The default raster path additionally owns `cc/raster/task_graph_work_queue` and
 `cc/raster/synchronous_task_graph_runner`: these are dependency/cancellation/
 completion algorithms needed to run the selected tile tasks. The synchronous
 runner creates no worker or clock. A threaded implementation may inject task
@@ -140,12 +140,12 @@ It is part of the normal pending-tree path; commit-to-active remains a source
 configuration branch. Its typed executor/worklet effects cross the existing
 Page boundary without including Proxy, GPU, or platform implementations.
 
-## CPU raster external dependency evidence
+## Raster external dependency evidence
 
-The injected `raster::native::CpuRasterProvider` executes the selected immutable
-`RasterPlayback` through existing Skia CPU playback. ResourcePool/TileManager
-retain allocation policy and completion decisions; the external provider owns
-only actual pixel storage, decode-cache execution and immutable read leases.
+The injected `raster::RasterEngine` executes the selected immutable
+`RasterPlayback` through the injected backend. ResourcePool/TileManager retain
+allocation policy and completion decisions; the external provider owns the
+actual resources, decode-cache execution and immutable read leases.
 `cc/paint/clear_for_opaque_raster.{h,cc}` (35 + 83 physical source lines) is
 translated in Paint as a pure raster helper consumed by
 `RasterSource::PlaybackToCanvas` (`cc/raster/raster_source.cc:43–139`). It is an
@@ -153,7 +153,7 @@ external Paint dependency and does not change this compositor core manifest.
 The new native execution modules do not consume `LayerTileEngine` or `FramePlan`.
 
 
-## CPU Paint value-analysis dependency closure
+## Paint value-analysis dependency closure
 
 These Paint-owned sources remain external dependencies and are excluded from
 this compositor core manifest and its source-line total:
@@ -198,7 +198,7 @@ solid-color decoration path is now wired: actual `DrawPath` in a tile record,
 then `DrawRect` holding that immutable `PaintRecordShader`, with Repeat-X and
 Decal-Y. The adapter follows `.cc:225–238,281–289,306–324,497–526`; it does not
 claim the SVG paint-server ribbon branches. The retained record owns its real
-ops and resource leases, with no PaintArtifact copy. Native CPU tiling uses
+ops and resource leases, with no PaintArtifact copy. Native tiling uses
 `SkPictureShader.cpp:180–241`, affine scale extraction from
 `SkMatrix.cpp:1479–1495`, and native independent-axis image sampling from
 `SkImageShader.cpp:455–468,547–580,655–660` /
@@ -245,12 +245,12 @@ The runnable scheduler directly consumes `cc/metrics/compositor_timing_history.{
 
 ### Native wheel/autoscroll animation owner closure (2026-10-18)
 
-The source normal CPU wheel/autoscroll path directly requires nine complete `cc/animation` stems: `scroll_offset_animations_impl`, `scroll_offset_animation_curve`, `scroll_offset_animation_curve_factory`, `keyframe_model`, `keyframe_effect`, `animation`, `animation_timeline`, `animation_id_provider`, and `animation_events`. Their 18 header/implementation sources contribute 4,429 lines; the core baseline is now **317 sources / 177 same-stem targets / 92,742 lines**. These owners keep source model/effect/phase ordering. Concrete CSS transform/filter/color curves are outside this closure and retain typed curve interfaces.
+The source normal wheel/autoscroll path directly requires nine complete `cc/animation` stems: `scroll_offset_animations_impl`, `scroll_offset_animation_curve`, `scroll_offset_animation_curve_factory`, `keyframe_model`, `keyframe_effect`, `animation`, `animation_timeline`, `animation_id_provider`, and `animation_events`. Their 18 header/implementation sources contribute 4,429 lines; the core baseline is now **317 sources / 177 same-stem targets / 92,742 lines**. These owners keep source model/effect/phase ordering. Concrete CSS transform/filter/color curves are outside this closure and retain typed curve interfaces.
 
 The direct pure animation phase dependency `ui/gfx/animation/keyframe/keyframe_model.{h,cc}` contributes 622 lines (258 + 364), and `keyframe_effect.{h,cc}` 507 lines (133 + 374). These two same-stem external value/phase owners are recorded separately (4 source files / 1,129 lines), not silently counted as translated cc core. They contain no platform clocks, renderer, GPU, or pixel execution. Runtime supplies the current native clock/diagnostics and call-scoped mutation targets. A stem remains in progress until all of its fields and methods are faithfully covered.
 
 
-### Production CPU Paint capability assembly
+### Production Paint capability assembly
 
 `runtime/paint/native_services.rs` constructs the concrete value/metadata,
 raster-tracking and logging/recorder capabilities. Metadata updates remain in
@@ -274,10 +274,10 @@ static images or unrelated Paint op kinds. These blockers are not part of the
 completed HTML solid-color wavy record-shader path.
 
 
-The CPU UI resource capability is implemented by the same injected
-`raster::native::CpuRasterProvider`: its single native backing table/counter
+The UI resource capability is implemented by the same injected
+`raster::RasterEngine`: its single native backing table/counter
 serves both tile and UI images. The returned shared image supplies the actual
-allocation identity; the caller's tile id is only preferred. CPU write mapping
+allocation identity; the caller's tile id is only preferred. Host write mapping
 moves the sole mutable pixel owner, rejects concurrent read/raster leases and
 publishes the same backing on Drop. `SharedMapping` is only a plane projection.
 The six native UI methods delegate copy, scale, clear and image draw to Skia's

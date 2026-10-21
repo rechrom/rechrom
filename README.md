@@ -28,7 +28,7 @@ The current implementation includes:
 
 - a persistent DOM-to-layout pipeline modeled on Chromium's LayoutNG;
 - PaintArtifact, retained layer, tile, raster, and composition stages;
-- Skia-aligned CPU rendering and native window presentation;
+- backend-independent raster scheduling, Skia-backed rendering, and native window presentation;
 - QuickJS-based JavaScript execution and browser APIs;
 - an F12 Performance panel for input, frame scheduling, raster, composition, and presentation timing.
 
@@ -60,7 +60,7 @@ on the first build.
 The translated foundation primitives are owned by `crates/foundation/base`;
 `crates/foundation` preserves the higher-level foundation interfaces. The
 Roboto fallback/test font is bundled in `assets/fonts` with its license.
-Linux and macOS use the internal Rust Skia CPU renderer. Text shaping uses
+Linux and macOS currently use the internal Rust Skia software renderer. Text shaping uses
 `rustybuzz`; OpenType metadata, glyph metrics, math and Unicode helpers still
 use native HarfBuzz. Neither normal application build needs a sibling source checkout or
 C++ Skia library. On macOS the translated Rust scaler calls Apple's system
@@ -69,15 +69,13 @@ System HarfBuzz and ICU development libraries are still required, so the whole
 browser is not yet free of native C/C++ dependencies. macOS also needs Xcode
 command-line tools (`brew install pkg-config harfbuzz icu4c` for dependencies).
 
-Only explicit reference-oracle features (`raster/text`, `raster/font_backend`,
-`raster/source_replay`, `browser/native_text`, `browser/source_png`, and
-`rechrom_app/profile_native`) compile the retained C++ comparison bridge.
-These are macOS-only verification tools, not production renderer switches.
-They require `RECHROM_REFERENCE_SKIA_DIR` pointing to a Skia checkout with
-headers, `lib/libskia.a`, and `lib/libskcms.a`; no sibling checkout is selected
-implicitly. Some optional macOS Skia tests also need reference fixtures under
-`../src/third_party/skia/resources`. Native comparison sources are retained to
-check the Rust translation and are excluded from normal builds.
+Raster work has one production route: compositor-selected work enters
+`raster::RasterEngine`, whose current private backend replays it through
+`skia`.
+The browser, compositor, Viz and renderer do not select a Skia implementation
+or exchange mutable canvases and pixel buffers. The previous Rust Skia crate,
+C++ comparison bridge and their feature-selected replay paths have been
+removed from the workspace.
 
 For a displayless browser process using the same Page, Compositor, Viz and
 Renderer pipeline:
@@ -120,7 +118,11 @@ crates/dom/         DOM ownership and mutation routing
 crates/layoutng_*/  layout algorithms and fragment output
 crates/paint/       pre-paint state and PaintArtifact generation
 crates/layer_tile/  retained layers, tiles, and frame planning
-crates/renderer/    raster and composition
+crates/compositor/  retained cc state, tiling and raster-work selection
+crates/raster/      RasterEngine resource lifecycle and private backend
+crates/skia/   source-aligned Rust Skia raster implementation
+crates/renderer/    composition contracts
+crates/renderer_skia/ software Viz renderer implementation
 crates/devtools/    local Performance protocol and UI
 vendor/             patched build dependencies
 ```

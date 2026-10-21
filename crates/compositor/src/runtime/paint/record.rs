@@ -5,7 +5,7 @@ use super::{CpuPaintWorkletInputs, CpuWorkletInput, PaintOp, PaintRecord};
 use crate::{
     adapter::{
         display_item_list::*,
-        geometry::{Rect, RectF, Vector2dF},
+        geometry::{Rect, RectF, SizeF, Vector2dF},
         input_types::ElementId,
         layer_tree_host_impl::ContentColorUsage,
         layer_tree_impl::Color4f,
@@ -26,15 +26,27 @@ pub enum CpuFilterQuality {
     kHigh,
 }
 pub type TargetColorParams = crate::adapter::layer_tree_host_impl::HostTargetColorParams<
-    crate::runtime::resources::CpuColorSpace,
+    crate::runtime::resources::RasterColorSpace,
 >;
 pub type ImageDecodingMode = crate::adapter::layer_tree_host_impl::HostImageDecodingMode;
 /// The external immutable image allocation supplies actual source metadata.
 /// It may own decoded/encoded image resources; it cannot hold compositor owners.
+/// One immutable document-image recording and the two coordinate spaces needed
+/// to sample it. `intrinsic_size` is the Image source space used by DrawImage;
+/// `record_size` is the container-sized space in which the nested artifact was
+/// painted. Keeping them with the record prevents raster backends from guessing
+/// a transform from the outer image dimensions.
+#[derive(Clone)]
+pub struct CpuPaintRecordImage {
+    pub record: PaintRecord,
+    pub intrinsic_size: SizeF,
+    pub record_size: SizeF,
+}
+
 pub trait CpuPaintImageValue: Send + Sync {
     /// The source PaintImage GetSwSkImage allocation, with actual premul pixels.
     fn GetSwSkImage(&self) -> std::io::Result<Arc<Vec<u8>>>;
-    fn GetPaintRecord(&self) -> Option<PaintRecord>;
+    fn GetPaintRecord(&self) -> Option<CpuPaintRecordImage>;
     fn stable_id(&self) -> crate::adapter::image_animation::PaintImageId;
     fn ShouldAnimate(&self) -> bool;
     fn IsLazyGenerated(&self) -> bool;
@@ -98,17 +110,14 @@ impl paint::cc::paint::filter_operation::PaintFilter for CpuOperationsFilter {
     fn MapRect(
         &self,
         rect: foundation::gfx::Rect,
-        ctm: Option<&skia::include::core::SkRRect::SkMatrix3x3>,
+        ctm: Option<&dyn paint::cc::paint::filter_operation::FilterMapTransform>,
         direction: paint::cc::paint::filter_operation::MapDirection,
     ) -> foundation::gfx::Rect {
         match direction {
             paint::cc::paint::filter_operation::MapDirection::Forward => self.0.MapRect(rect, ctm),
-            paint::cc::paint::filter_operation::MapDirection::Reverse => self.0.MapRectReverse(
-                rect,
-                ctm.unwrap_or(&skia::include::core::SkRRect::SkMatrix3x3 {
-                    values: [1., 0., 0., 0., 1., 0., 0., 0., 1.],
-                }),
-            ),
+            paint::cc::paint::filter_operation::MapDirection::Reverse => {
+                self.0.MapRectReverse(rect, ctm)
+            }
         }
     }
     fn TypeToString(&self) -> &'static str {
@@ -215,7 +224,7 @@ pub trait CpuPaintCanvas<R: CpuSkiaBackend>: DisplayCanvas {
     fn Playback(
         &mut self,
         buffer: &CpuPaintOpBuffer<R>,
-        params: &mut CpuPlaybackParams<'_, R>,
+        params: &mut RasterPlaybackParams<'_, R>,
         local_ctm: bool,
         offsets: Option<&[usize]>,
     );
@@ -223,11 +232,11 @@ pub trait CpuPaintCanvas<R: CpuSkiaBackend>: DisplayCanvas {
 /// Source PlaybackParams owns no provider: the raw mutable pointee is an
 /// exclusive, call-scoped Rust borrow. Mutable envelope propagation preserves
 /// synchronous nested-record access without RefCell or a retained callback.
-pub struct CpuPlaybackParams<'a, R: CpuSkiaBackend> {
+pub struct RasterPlaybackParams<'a, R: CpuSkiaBackend> {
     pub raster_inducing_scroll_offsets: Option<&'a ScrollOffsetMap>,
     pub image_provider: Option<&'a mut dyn super::CpuImageProvider<R>>,
 }
-impl<R: CpuSkiaBackend> Default for CpuPlaybackParams<'_, R> {
+impl<R: CpuSkiaBackend> Default for RasterPlaybackParams<'_, R> {
     fn default() -> Self {
         Self {
             raster_inducing_scroll_offsets: None,
@@ -236,11 +245,43 @@ impl<R: CpuSkiaBackend> Default for CpuPlaybackParams<'_, R> {
     }
 }
 
+/// Backend-selected clip paths retained by the converted cc paint stream.
+/// Each authored child stays independent because SVG clip-path union semantics
+/// cannot be reproduced by concatenating verbs with different fill rules.
+pub struct CpuClipPath<R: CpuSkiaBackend> {
+    paths: Arc<[Arc<R::Path>]>,
+}
+impl<R: CpuSkiaBackend> CpuClipPath<R> {
+    pub fn FromPaintPath(path: &paint::paint_clip_path::PaintClipPath) -> Self {
+        Self {
+            paths: path
+                .paths()
+                .iter()
+                .map(|path| Arc::new(R::FromPaintPath(path)))
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+    pub fn paths(&self) -> &[Arc<R::Path>] {
+        &self.paths
+    }
+    pub fn single_path(&self) -> Option<&Arc<R::Path>> {
+        (self.paths.len() == 1).then(|| &self.paths[0])
+    }
+}
+impl<R: CpuSkiaBackend> Clone for CpuClipPath<R> {
+    fn clone(&self) -> Self {
+        Self {
+            paths: Arc::clone(&self.paths),
+        }
+    }
+}
+
 pub enum CpuPaintOp<R: CpuSkiaBackend> {
     NativeAtom(super::NativePaintSource),
     DrawRect(RectF, CpuPaintFlags<R>),
     DrawPath {
-        path: Arc<skia::include::core::SkPath::SkPath>,
+        path: Arc<R::Path>,
         flags: CpuPaintFlags<R>,
     },
     DrawDRRect {
@@ -260,7 +301,7 @@ pub enum CpuPaintOp<R: CpuSkiaBackend> {
     },
     ClipRRect(crate::adapter::geometry::RRectF, bool),
     ClipPath {
-        path: Arc<paint::paint_clip_path::PaintClipPath>,
+        path: Arc<CpuClipPath<R>>,
         difference: bool,
         antialias: bool,
     },
@@ -281,7 +322,7 @@ pub enum CpuPaintOp<R: CpuSkiaBackend> {
     DrawTransparentColorSrc,
     DrawColor {
         color: Color4f,
-        blend: skia::BlendMode,
+        blend: paint::cc::paint::blend_mode::BlendMode,
     },
     DrawRecord(CpuPaintRecord<R>),
     DrawScrollingContents {
@@ -408,8 +449,8 @@ impl<'a, R: CpuSkiaBackend> Iterator for CpuPaintIter<'a, R> {
 impl<R: CpuSkiaBackend> DisplayItemListTypes for CpuPaintTypes<R> {
     type PaintOp = CpuPaintOp<R>;
     type PaintOpBuffer = CpuPaintOpBuffer<R>;
-    type Canvas = dyn CpuPaintCanvas<R>;
-    type PlaybackParams<'a> = CpuPlaybackParams<'a, R>;
+    type Canvas<'canvas> = dyn CpuPaintCanvas<R> + 'canvas;
+    type PlaybackParams<'a> = RasterPlaybackParams<'a, R>;
     type PaintRecord = CpuPaintRecord<R>;
     type SaveLayerBounds = RectF;
     type NodeInfo = crate::runtime::display_item_list::NodeInfo;
@@ -417,8 +458,8 @@ impl<R: CpuSkiaBackend> DisplayItemListTypes for CpuPaintTypes<R> {
     type DecodingModeMap =
         BTreeMap<crate::adapter::image_animation::PaintImageId, ImageDecodingMode>;
     type PaintWorkletInputs = CpuPaintWorkletInputs;
-    fn PlaybackParams<'a>(scrolls: Option<&'a ScrollOffsetMap>) -> CpuPlaybackParams<'a, R> {
-        CpuPlaybackParams {
+    fn PlaybackParams<'a>(scrolls: Option<&'a ScrollOffsetMap>) -> RasterPlaybackParams<'a, R> {
+        RasterPlaybackParams {
             raster_inducing_scroll_offsets: scrolls,
             image_provider: None,
         }
@@ -625,10 +666,10 @@ impl<R: CpuSkiaBackend> DisplayPaintOpBuffer<CpuPaintTypes<R>> for CpuPaintOpBuf
             _ => panic!("source save-layer operation expected"),
         }
     }
-    fn Playback(
+    fn Playback<'canvas>(
         &self,
-        canvas: &mut (dyn CpuPaintCanvas<R> + 'static),
-        params: &mut CpuPlaybackParams<'_, R>,
+        canvas: &mut (dyn CpuPaintCanvas<R> + 'canvas),
+        params: &mut RasterPlaybackParams<'_, R>,
         local_ctm: bool,
         offsets: Option<&[usize]>,
     ) {
@@ -790,10 +831,10 @@ impl crate::adapter::tile_manager::TileManagerPaintImage for CpuPaintImage {
 }
 impl
     crate::adapter::tile_manager::TileManagerTargetColorParams<
-        crate::runtime::resources::CpuColorSpace,
+        crate::runtime::resources::RasterColorSpace,
     > for TargetColorParams
 {
-    fn color_space(&self) -> &crate::runtime::resources::CpuColorSpace {
+    fn color_space(&self) -> &crate::runtime::resources::RasterColorSpace {
         &self.color_space
     }
     fn GetHdrHeadroom(&self) -> f32 {
@@ -1109,7 +1150,7 @@ impl<'a, R: CpuSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintOpV
                 | CpuPaintOp::DrawPath { flags, .. }
                 | CpuPaintOp::DrawDRRect { flags, .. },
             ) => {
-                flags.getBlendMode() == skia::BlendMode::kSrcOver
+                flags.getBlendMode() == paint::cc::paint::blend_mode::BlendMode::kSrcOver
                     && flags.image_filter.is_none()
                     && flags.looper.is_none()
                     && flags.color_filter.is_none()
@@ -1136,7 +1177,7 @@ impl<'a, R: CpuSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintOpV
             Self::Converted(CpuPaintOp::DrawTransparentColorSrc) => ([0.; 4], false),
             Self::Converted(CpuPaintOp::DrawColor { color, blend }) => (
                 [color.red, color.green, color.blue, color.alpha],
-                *blend == skia::BlendMode::kSrcOver,
+                *blend == paint::cc::paint::blend_mode::BlendMode::kSrcOver,
             ),
             _ => panic!("source DrawColorOp required"),
         }

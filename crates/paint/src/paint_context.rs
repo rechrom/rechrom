@@ -333,6 +333,7 @@ impl<'o> PaintContext<'o> {
             is_cacheable: client.is_cacheable,
             is_tombstone: false,
             paint_invalidation_reason: client.invalidation_reason,
+            image_content_revisions: Vec::new(),
             scrollbar_needs_update_display: client.scrollbar_needs_update_display,
             kind: RecordedDisplayItemKind::Drawing,
             scroll_translation: None,
@@ -451,7 +452,7 @@ impl<'o> PaintContext<'o> {
             .take()
             .expect("DrawingRecorder must be active");
         let record_end = self.output.items.len();
-        let (visual_rect, tightened) = if kind == RecordedDisplayItemKind::Drawing {
+        let (mut visual_rect, tightened) = if kind == RecordedDisplayItemKind::Drawing {
             TightenDrawingVisualRect(
                 visual_rect,
                 &self.output.items[record_begin..record_end],
@@ -460,6 +461,17 @@ impl<'o> PaintContext<'o> {
         } else {
             (EnclosingRectInPropertySpace(visual_rect, delta), false)
         };
+        // Source: paint_chunks_to_cc_layer.cc:816-827. A reference filter can
+        // produce pixels outside every source DrawingDisplayItem (or with no
+        // source pixels at all). PendingLayer is sized from PaintChunk bounds
+        // before PaintChunksToCcLayer records its synthetic empty visual op, so
+        // retain that same producer-owned output bound on the resident chunk.
+        // This prevents cc from allocating only the unfiltered source extent.
+        if kind == RecordedDisplayItemKind::Drawing {
+            if let Some(filtered) = properties.effect.compositor.filter_output_bounds {
+                visual_rect.union(filtered);
+            }
+        }
         let visual_rect_is_accurate = visual_rect_is_accurate || tightened;
         // DrawingDisplayItem uses !record.empty(), including state ops.
         // ScrollbarDisplayItem is independently drawable, without a PaintRecord.
@@ -501,6 +513,7 @@ impl<'o> PaintContext<'o> {
             is_cacheable: client.is_cacheable,
             is_tombstone: false,
             paint_invalidation_reason: client.invalidation_reason,
+            image_content_revisions: Vec::new(),
             scrollbar_needs_update_display: client.scrollbar_needs_update_display,
             kind,
             scroll_translation,

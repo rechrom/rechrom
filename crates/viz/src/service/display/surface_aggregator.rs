@@ -23,7 +23,7 @@ use crate::{
 use compositor_core::{
     adapter::{geometry::Rect, layer_tree_impl::ResourceId},
     runtime::frame::{QuadMaterial, RenderPassId},
-    NativeCompositorFrame, NativeCompositorRenderPass, NativeCpuResourceLease,
+    NativeCompositorFrame, NativeCompositorRenderPass, NativeRasterResourceLease,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -163,7 +163,7 @@ impl SurfaceAggregator {
         destination: Rect,
         result: &mut PrewalkResult,
         passes: &mut Vec<OwnedAggregatedRenderPass>,
-        resources: &mut BTreeMap<u32, Arc<NativeCpuResourceLease>>,
+        resources: &mut BTreeMap<u32, Arc<NativeRasterResourceLease>>,
         roots: &mut Vec<RootPresentation>,
         receipt: &mut DrawReceipt,
     ) -> Result<(), VizError> {
@@ -259,7 +259,7 @@ impl SurfaceAggregator {
         resolved: &ResolvedFrameData<'_>,
         damage: &DisplayDamageTracker,
         passes: &mut Vec<OwnedAggregatedRenderPass>,
-        resources: &mut BTreeMap<u32, Arc<NativeCpuResourceLease>>,
+        resources: &mut BTreeMap<u32, Arc<NativeRasterResourceLease>>,
         roots: &mut Vec<RootPresentation>,
     ) -> Result<(), VizError> {
         let known_ids = self
@@ -291,7 +291,7 @@ impl SurfaceAggregator {
                     id
                 });
             remapped_resources.insert(resource.id.0, display_id);
-            if let Some(lease) = resource.CpuReadLease() {
+            if let Some(lease) = resource.RasterReadLease() {
                 resources.insert(display_id.0, lease);
             }
         }

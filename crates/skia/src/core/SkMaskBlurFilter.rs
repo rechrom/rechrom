@@ -1,1489 +1,1179 @@
-//! PlanGauss and A8 small/three-box blur algorithms from SkMaskBlurFilter.cpp.
-//! Rust buffer scanning is adapted; arithmetic/order retain the existing port.
-use crate::raster::{IntRect, Mask};
-struct PlanGauss {
-    pass_sizes: [usize; 3],
-    border: usize,
-    weight: u64,
+// Copyright 2017 Google LLC. BSD-style license.
+// Rust index ranges replace the three adjacent pointer ranges, retaining their shared scratch storage.
+
+// Source: src/core/SkMaskBlurFilter.h:20-20
+// Source: src/core/SkMaskBlurFilter.h:24-24
+// Source: src/core/SkMaskBlurFilter.h:27-27
+// Source: src/core/SkMaskBlurFilter.h:30-30
+// Source: src/core/SkMaskBlurFilter.h:33-34
+pub struct SkMaskBlurFilter {
+    fSigmaW: f64,
+    fSigmaH: f64,
 }
 
+// Source: src/core/SkMaskBlurFilter.cpp:25-25
+// Source: src/core/SkMaskBlurFilter.cpp:27-29
+// Source: src/core/SkMaskBlurFilter.cpp:31-33
+// Source: src/core/SkMaskBlurFilter.cpp:77-78
+// Source: src/core/SkMaskBlurFilter.cpp:82-84
+// Source: src/core/SkMaskBlurFilter.cpp:86-86
+// Source: src/core/SkMaskBlurFilter.cpp:89-89
+// Source: src/core/SkMaskBlurFilter.cpp:91-91
+pub struct PlanGauss {
+    fWeight: u64,
+    fBorder: i32,
+    fSlidingWindow: i32,
+    fPass0Size: usize,
+    fPass1Size: usize,
+    fPass2Size: usize,
+}
 impl PlanGauss {
-    fn new(sigma: f32) -> Self {
-        let possible_window = (f64::from(sigma) * 3.0 * (2.0 * std::f64::consts::PI).sqrt() / 4.0
-            + 0.5)
-            .floor() as usize;
-        let window = possible_window.max(1);
-        let pass_sizes = [
-            window - 1,
-            window - 1,
-            window - 1 + usize::from(window % 2 == 0),
-        ];
-        let border = if window % 2 == 1 {
+    pub fn new(sigma: f64) -> Self {
+        let possible_window =
+            (sigma * 3.0 * (2.0 * std::f64::consts::PI).sqrt() / 4.0 + 0.5).floor() as i32;
+        let window = 1.max(possible_window);
+        let fPass0Size = (window - 1) as usize;
+        let fPass1Size = (window - 1) as usize;
+        let fPass2Size = (if (window & 1) == 1 {
+            window - 1
+        } else {
+            window
+        }) as usize;
+        let fBorder = if (window & 1) == 1 {
             3 * ((window - 1) / 2)
         } else {
             3 * (window / 2) - 1
         };
-        let divisor = if window % 2 == 1 {
-            window.pow(3)
+        let fSlidingWindow = 2 * fBorder + 1;
+        let window2 = window * window;
+        let window3 = window2 * window;
+        let divisor = if (window & 1) == 1 {
+            window3
         } else {
-            window.pow(3) + window.pow(2)
+            window3 + window2
         };
-        let weight = ((1_u64 << 32) as f64 / divisor as f64).round() as u64;
+        let fWeight = (1.0 / divisor as f64 * ((1u64 << 32) as f64)).round() as u64;
         Self {
-            pass_sizes,
-            border,
-            weight,
+            fWeight,
+            fBorder,
+            fSlidingWindow,
+            fPass0Size,
+            fPass1Size,
+            fPass2Size,
         }
     }
-
-    #[cfg(test)]
-    fn scan(&self, src: &[u8]) -> Vec<u8> {
-        let mut output = vec![0; src.len() + 2 * self.border];
-        Scan::new(self).blur(src, &mut output);
-        output
+    pub fn bufferSize(&self) -> usize {
+        self.fPass0Size + self.fPass1Size + self.fPass2Size
+    }
+    pub fn border(&self) -> i32 {
+        self.fBorder
     }
 }
 
-/// PlanGauss::Scan scratch is reused for all rows and columns. The three
-/// integrators and cursor updates have the same order as the upstream Scan;
-/// unsigned wrapping operations match C++ uint32_t arithmetic. The caller's
-/// 135 sigma clamp keeps all legitimate A8 accumulator values representable.
-struct Scan {
-    weight: u64,
-    border: usize,
-    buffers: [Vec<u32>; 3],
+// Source: src/core/SkMaskBlurFilter.cpp:94-94
+// Source: src/core/SkMaskBlurFilter.cpp:96-108
+pub struct Scan<'a> {
+    fWeight: u64,
+    fNoChangeCount: i32,
+    buffer: &'a mut [u32],
+    starts: [usize; 3],
+    ends: [usize; 3],
 }
 
-impl Scan {
-    fn new(plan: &PlanGauss) -> Self {
-        Self {
-            weight: plan.weight,
-            border: plan.border,
-            buffers: plan.pass_sizes.map(|size| vec![0_u32; size]),
+// Language substitution for the AlphaIter template; implementors preserve cursor arithmetic.
+pub trait AlphaCursor: Copy {
+    fn increment(&mut self);
+    fn decrement(&mut self);
+    fn less_than(&self, end: &Self) -> bool;
+    /// Safety: cursor must point at a live readable pixel.
+    unsafe fn value(&self) -> u8;
+}
+macro_rules! alpha_cursor {
+    ($t:ty) => {
+        impl AlphaCursor for $t {
+            fn increment(&mut self) {
+                <$t>::increment(self);
+            }
+            fn decrement(&mut self) {
+                <$t>::decrement(self);
+            }
+            fn less_than(&self, end: &Self) -> bool {
+                <$t>::less_than(self, end)
+            }
+            unsafe fn value(&self) -> u8 {
+                unsafe { <$t>::value(self) }
+            }
+        }
+    };
+}
+alpha_cursor!(crate::src::core::SkMask::BWAlphaIter);
+alpha_cursor!(crate::src::core::SkMask::A8AlphaIter);
+alpha_cursor!(crate::src::core::SkMask::ARGB32AlphaIter);
+alpha_cursor!(crate::src::core::SkMask::LCD16AlphaIter);
+
+// Source: src/core/SkMaskBlurFilter.cpp:110-114
+// Source: src/core/SkMaskBlurFilter.cpp:116-116
+// Source: src/core/SkMaskBlurFilter.cpp:118-120
+// Source: src/core/SkMaskBlurFilter.cpp:123-127
+// Source: src/core/SkMaskBlurFilter.cpp:129-129
+// Source: src/core/SkMaskBlurFilter.cpp:131-133
+// Source: src/core/SkMaskBlurFilter.cpp:135-137
+// Source: src/core/SkMaskBlurFilter.cpp:139-141
+// Source: src/core/SkMaskBlurFilter.cpp:145-149
+// Source: src/core/SkMaskBlurFilter.cpp:151-151
+// Source: src/core/SkMaskBlurFilter.cpp:153-155
+// Source: src/core/SkMaskBlurFilter.cpp:157-159
+// Source: src/core/SkMaskBlurFilter.cpp:161-163
+// Source: src/core/SkMaskBlurFilter.cpp:165-165
+// Source: src/core/SkMaskBlurFilter.cpp:169-169
+// Source: src/core/SkMaskBlurFilter.cpp:171-171
+// Source: src/core/SkMaskBlurFilter.cpp:173-180
+// Source: src/core/SkMaskBlurFilter.cpp:182-182
+// Source: src/core/SkMaskBlurFilter.cpp:184-186
+// Source: src/core/SkMaskBlurFilter.cpp:188-190
+// Source: src/core/SkMaskBlurFilter.cpp:192-194
+impl Scan<'_> {
+    /// Safety: source range and all destination addresses must remain valid for this scan.
+    pub unsafe fn blur<A: AlphaCursor>(
+        &mut self,
+        srcBegin: A,
+        srcEnd: A,
+        mut dst: *mut u8,
+        dstStride: i32,
+        dstEnd: *mut u8,
+    ) {
+        let mut cursor = self.starts;
+        self.buffer.fill(0);
+        let (mut sum0, mut sum1, mut sum2) = (0u32, 0u32, 0u32);
+        let mut src = srcBegin;
+        while src.less_than(&srcEnd) {
+            let leading_edge = unsafe { src.value() } as u32;
+            sum0 = sum0.wrapping_add(leading_edge);
+            sum1 = sum1.wrapping_add(sum0);
+            sum2 = sum2.wrapping_add(sum1);
+            unsafe {
+                *dst = self.finalScale(sum2);
+            }
+            sum2 = sum2.wrapping_sub(self.buffer[cursor[2]]);
+            self.buffer[cursor[2]] = sum1;
+            cursor[2] = if cursor[2] + 1 < self.ends[2] {
+                cursor[2] + 1
+            } else {
+                self.starts[2]
+            };
+            sum1 = sum1.wrapping_sub(self.buffer[cursor[1]]);
+            self.buffer[cursor[1]] = sum0;
+            cursor[1] = if cursor[1] + 1 < self.ends[1] {
+                cursor[1] + 1
+            } else {
+                self.starts[1]
+            };
+            sum0 = sum0.wrapping_sub(self.buffer[cursor[0]]);
+            self.buffer[cursor[0]] = leading_edge;
+            cursor[0] = if cursor[0] + 1 < self.ends[0] {
+                cursor[0] + 1
+            } else {
+                self.starts[0]
+            };
+            src.increment();
+            dst = dst.wrapping_offset(dstStride as isize);
+        }
+        for _ in 0..self.fNoChangeCount {
+            let leading_edge = 0;
+            sum0 = sum0.wrapping_add(leading_edge);
+            sum1 = sum1.wrapping_add(sum0);
+            sum2 = sum2.wrapping_add(sum1);
+            unsafe {
+                *dst = self.finalScale(sum2);
+            }
+            sum2 = sum2.wrapping_sub(self.buffer[cursor[2]]);
+            self.buffer[cursor[2]] = sum1;
+            cursor[2] = if cursor[2] + 1 < self.ends[2] {
+                cursor[2] + 1
+            } else {
+                self.starts[2]
+            };
+            sum1 = sum1.wrapping_sub(self.buffer[cursor[1]]);
+            self.buffer[cursor[1]] = sum0;
+            cursor[1] = if cursor[1] + 1 < self.ends[1] {
+                cursor[1] + 1
+            } else {
+                self.starts[1]
+            };
+            sum0 = sum0.wrapping_sub(self.buffer[cursor[0]]);
+            self.buffer[cursor[0]] = leading_edge;
+            cursor[0] = if cursor[0] + 1 < self.ends[0] {
+                cursor[0] + 1
+            } else {
+                self.starts[0]
+            };
+            dst = dst.wrapping_offset(dstStride as isize);
+        }
+        self.buffer.fill(0);
+        sum0 = 0;
+        sum1 = 0;
+        sum2 = 0;
+        let mut dst_cursor = dstEnd;
+        let mut src = srcEnd;
+        while dst_cursor > dst {
+            dst_cursor = dst_cursor.wrapping_offset(-(dstStride as isize));
+            src.decrement();
+            let leading_edge = unsafe { src.value() } as u32;
+            sum0 = sum0.wrapping_add(leading_edge);
+            sum1 = sum1.wrapping_add(sum0);
+            sum2 = sum2.wrapping_add(sum1);
+            unsafe {
+                *dst_cursor = self.finalScale(sum2);
+            }
+            sum2 = sum2.wrapping_sub(self.buffer[cursor[2]]);
+            self.buffer[cursor[2]] = sum1;
+            cursor[2] = if cursor[2] + 1 < self.ends[2] {
+                cursor[2] + 1
+            } else {
+                self.starts[2]
+            };
+            sum1 = sum1.wrapping_sub(self.buffer[cursor[1]]);
+            self.buffer[cursor[1]] = sum0;
+            cursor[1] = if cursor[1] + 1 < self.ends[1] {
+                cursor[1] + 1
+            } else {
+                self.starts[1]
+            };
+            sum0 = sum0.wrapping_sub(self.buffer[cursor[0]]);
+            self.buffer[cursor[0]] = leading_edge;
+            cursor[0] = if cursor[0] + 1 < self.ends[0] {
+                cursor[0] + 1
+            } else {
+                self.starts[0]
+            };
         }
     }
+}
+// Source: src/core/SkMaskBlurFilter.cpp:199-199
+// Source: src/core/SkMaskBlurFilter.cpp:201-202
+// Source: src/core/SkMaskBlurFilter.cpp:205-212
+impl Scan<'_> {
+    fn finalScale(&self, sum: u32) -> u8 {
+        ((self
+            .fWeight
+            .wrapping_mul(sum as u64)
+            .wrapping_add(1u64 << 31))
+            >> 32) as u8
+    }
+}
 
-    fn blur(&mut self, src: &[u8], dst: &mut [u8]) {
-        // Validate the pointer walk's extent once; the hot loops below then
-        // mirror upstream AlphaIter/dstStride=1 and ring cursor arithmetic.
-        assert!(!src.is_empty());
-        assert_eq!(dst.len(), src.len() + 2 * self.border);
-        let [buffer0, buffer1, buffer2] = &mut self.buffers;
-        let (length0, length1, length2) = (buffer0.len(), buffer1.len(), buffer2.len());
-        let (base0, base1, base2) = (
-            buffer0.as_mut_ptr(),
-            buffer1.as_mut_ptr(),
-            buffer2.as_mut_ptr(),
-        );
-        // SAFETY: each ring allocation remains fixed throughout this call.
-        // Every cursor is either the start of an empty ring (never read) or
-        // a valid element of its nonempty ring. Increment reaches at most its
-        // one-past-end pointer and immediately resets to the ring start.
-        // src/dst are nonaliasing initialized slices with the checked extents;
-        // forward writes `max(src.len(), 2*border+1)` bytes, <= dst.len() because
-        // src is nonempty. Reverse fills exactly the remaining suffix, whose
-        // length is <= src.len(). No output or source pointer escapes.
-        // Ring zeroing uses the same raw pointers, avoiding intervening mutable
-        // slice reborrows while the cursors remain live.
+// Source: src/core/SkMaskBlurFilter.cpp:215-221
+// Source: src/core/SkMaskBlurFilter.cpp:223-227
+// Source: src/core/SkMaskBlurFilter.cpp:230-235
+impl PlanGauss {
+    pub fn makeBlurScan<'a>(&self, width: i32, buffer: &'a mut [u32]) -> Scan<'a> {
+        let start1 = self.fPass0Size;
+        let start2 = start1 + self.fPass1Size;
+        let end2 = start2 + self.fPass2Size;
+        let no_change_count = if self.fSlidingWindow > width {
+            self.fSlidingWindow - width
+        } else {
+            0
+        };
+        Scan {
+            fWeight: self.fWeight,
+            fNoChangeCount: no_change_count,
+            buffer: &mut buffer[..end2],
+            starts: [0, start1, start2],
+            ends: [start1, start2, end2],
+        }
+    }
+}
+
+// Source: src/core/SkMaskBlurFilter.cpp:254-256
+// Source: src/core/SkMaskBlurFilter.cpp:258-259
+impl SkMaskBlurFilter {
+    pub fn new(sigma_w: f64, sigma_h: f64) -> Self {
+        let pin = |x: f64| {
+            let hi = if 135.0 < x { 135.0 } else { x };
+            if 0.0 < hi {
+                hi
+            } else {
+                0.0
+            }
+        };
+        let result = Self {
+            fSigmaW: pin(sigma_w),
+            fSigmaH: pin(sigma_h),
+        };
+        crate::SkASSERT!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),258; @condition b"sigmaW >= 0\0".as_ptr(); sigma_w>=0.0);
+        crate::SkASSERT!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),259; @condition b"sigmaH >= 0\0".as_ptr(); sigma_h>=0.0);
+        result
+    }
+}
+// Source: src/core/SkMaskBlurFilter.cpp:262-262
+// Source: src/core/SkMaskBlurFilter.cpp:267-267
+// Source: src/core/SkMaskBlurFilter.cpp:271-271
+// Source: src/core/SkMaskBlurFilter.cpp:273-273
+impl SkMaskBlurFilter {
+    pub fn hasNoBlur(&self) -> bool {
+        // Preserve the upstream compile-time threshold switch as a Rust cfg of the same name.
+        let no_window_sigma = if cfg!(SK_USE_LARGER_NO_BLUR_THRESHOLD) {
+            0.531923
+        } else {
+            1.0 / 3.0
+        };
+        self.fSigmaW < no_window_sigma && self.fSigmaH <= no_window_sigma
+    }
+}
+
+// Source: src/core/SkMaskBlurFilter.cpp:278-279
+// Source: src/core/SkMaskBlurFilter.cpp:281-284
+unsafe fn bw_to_a8(a8: *mut u8, from: *const u8, width: i32) {
+    crate::SkASSERT!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),279; @condition b"0 < width && width <= 8\0".as_ptr(); 0 < width && width <= 8);
+    let masks = unsafe { *from };
+    for i in 0..width {
         unsafe {
-            let (end0, end1, end2) = (base0.add(length0), base1.add(length1), base2.add(length2));
-            core::ptr::write_bytes(base0, 0, length0);
-            core::ptr::write_bytes(base1, 0, length1);
-            core::ptr::write_bytes(base2, 0, length2);
-            let (mut cursor0, mut cursor1, mut cursor2) = (base0, base1, base2);
-            let (mut sum0, mut sum1, mut sum2) = (0u32, 0u32, 0u32);
-            // Three source phases share the literal upstream update sequence.
-            // Expansion avoids a per-pixel closure or level-loop dispatch.
-            macro_rules! advance {
-                ($alpha:expr) => {{
-                    let leading = u32::from($alpha);
-                    sum0 = sum0.wrapping_add(leading);
-                    sum1 = sum1.wrapping_add(sum0);
-                    sum2 = sum2.wrapping_add(sum1);
-                    let output = ((self.weight * u64::from(sum2) + (1u64 << 31)) >> 32) as u8;
-                    if length2 != 0 {
-                        sum2 = sum2.wrapping_sub(*cursor2);
-                        *cursor2 = sum1;
-                        cursor2 = cursor2.add(1);
-                        if cursor2 == end2 {
-                            cursor2 = base2;
-                        }
-                    }
-                    if length1 != 0 {
-                        sum1 = sum1.wrapping_sub(*cursor1);
-                        *cursor1 = sum0;
-                        cursor1 = cursor1.add(1);
-                        if cursor1 == end1 {
-                            cursor1 = base1;
-                        }
-                    }
-                    if length0 != 0 {
-                        sum0 = sum0.wrapping_sub(*cursor0);
-                        *cursor0 = leading;
-                        cursor0 = cursor0.add(1);
-                        if cursor0 == end0 {
-                            cursor0 = base0;
-                        }
-                    }
-                    output
-                }};
-            }
-            let source_begin = src.as_ptr();
-            let source_end = source_begin.add(src.len());
-            let mut source = source_begin;
-            let mut output = dst.as_mut_ptr();
-            let output_end = output.add(dst.len());
-            while source != source_end {
-                *output = advance!(*source);
-                source = source.add(1);
-                output = output.add(1);
-            }
-            let no_change_count = (2 * self.border + 1).saturating_sub(src.len());
-            for _ in 0..no_change_count {
-                *output = advance!(0u8);
-                output = output.add(1);
-            }
-            core::ptr::write_bytes(base0, 0, length0);
-            core::ptr::write_bytes(base1, 0, length1);
-            core::ptr::write_bytes(base2, 0, length2);
-            sum0 = 0;
-            sum1 = 0;
-            sum2 = 0;
-            // Retaining the source's ring positions after zeroing is equivalent
-            // to rotating an all-zero ring, including odd/even window sizes.
-            let mut output_cursor = output_end;
-            while output_cursor != output {
-                output_cursor = output_cursor.sub(1);
-                source = source.sub(1);
-                *output_cursor = advance!(*source);
-            }
+            *a8.add(i as usize) = if ((masks >> (7 - i)) & 1) != 0 {
+                255
+            } else {
+                0
+            };
         }
     }
 }
-
-// Local mask ownership adapter: source support is a conservative nonzero
-// superset. Scan only those rows to recover exact alpha bounds for SkMask.
-fn source_bounds(mask: &Mask, support: Option<IntRect>) -> Option<(usize, usize, usize, usize)> {
-    let device = IntRect::from_xywh(0, 0, mask.width(), mask.height())?;
-    let support = support?.intersect(&device)?;
-    let stride = mask.width() as usize;
-    let (mut left, mut top, mut right, mut bottom) = (
-        support.right() as usize,
-        support.bottom() as usize,
-        0usize,
-        0usize,
-    );
-    for y in support.top() as usize..support.bottom() as usize {
-        let start = y * stride + support.left() as usize;
-        let end = y * stride + support.right() as usize;
-        let row = &mask.data()[start..end];
-        if let Some(first) = row.iter().position(|&a| a != 0) {
-            let last = row.iter().rposition(|&a| a != 0).unwrap();
-            left = left.min(support.left() as usize + first);
-            right = right.max(support.left() as usize + last);
-            top = top.min(y);
-            bottom = y;
+// Source: src/core/SkMaskBlurFilter.cpp:287-288
+// Source: src/core/SkMaskBlurFilter.cpp:290-295
+unsafe fn lcd_to_a8(a8: *mut u8, from: *const u8, width: i32) {
+    crate::SkASSERT!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),288; @condition b"0 < width && width <= 8\0".as_ptr(); 0 < width && width <= 8);
+    use crate::src::core::SkColorData::{SkPacked16ToB32, SkPacked16ToG32, SkPacked16ToR32};
+    for i in 0..width {
+        let rgb = unsafe { *from.cast::<u16>().add(i as usize) } as u32;
+        let r = SkPacked16ToR32(rgb);
+        let g = SkPacked16ToG32(rgb);
+        let b = SkPacked16ToB32(rgb);
+        unsafe {
+            *a8.add(i as usize) = ((r + g + b) / 3) as u8;
         }
     }
-    (right >= left && bottom >= top).then_some((left, top, right, bottom))
 }
-
-fn clear_source(mask: &mut Mask, bounds: (usize, usize, usize, usize)) {
-    let (left, top, right, bottom) = bounds;
-    let stride = mask.width() as usize;
-    for y in top..=bottom {
-        mask.data_mut()[y * stride + left..y * stride + right + 1].fill(0);
+// Source: src/core/SkMaskBlurFilter.cpp:298-302
+// Source: src/core/SkMaskBlurFilter.cpp:305-305
+unsafe fn argb32_to_a8(a8: *mut u8, from: *const u8, width: i32) {
+    crate::SkASSERT!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),299; @condition b"0 < width && width <= 8\0".as_ptr(); 0 < width && width <= 8);
+    for i in 0..width {
+        let rgba = unsafe { *from.cast::<u32>().add(i as usize) };
+        unsafe {
+            *a8.add(i as usize) = crate::src::core::SkColorPriv::SkGetPackedA32(rgba) as u8;
+        }
     }
 }
+type ToA8 = unsafe fn(*mut u8, *const u8, i32);
 
-pub(crate) fn blur_alpha_mask(mask: &mut Mask, sigma: f32) {
-    blur_alpha_mask_with_bounds(
-        mask,
-        sigma,
-        IntRect::from_xywh(0, 0, mask.width(), mask.height()),
-    );
+// Source: src/core/SkMaskBlurFilter.cpp:307-307
+// A fixed array replaces skvx::Vec; all operations retain lane-wise unsigned wrapping semantics.
+type Fp88 = [u16; 8];
+
+// Source: src/core/SkMaskBlurFilter.cpp:309-309
+// Source: src/core/SkMaskBlurFilter.cpp:314-320
+// Source: src/core/SkMaskBlurFilter.cpp:322-322
+// Source: src/core/SkMaskBlurFilter.cpp:326-326
+unsafe fn load(mut from: *const u8, width: i32, to_a8: Option<ToA8>) -> Fp88 {
+    let mut tmp = [0u8; 8];
+    if let Some(convert) = to_a8 {
+        unsafe {
+            convert(tmp.as_mut_ptr(), from, width);
+        }
+        from = tmp.as_ptr();
+    } else if width < 8 {
+        for i in 0..width {
+            tmp[i as usize] = unsafe { *from.add(i as usize) };
+        }
+        from = tmp.as_ptr();
+    }
+    core::array::from_fn(|i| (unsafe { *from.add(i) } as u16) << 8)
 }
-
-/// Device-space expansion used by `SkMaskBuilder::PrepareDestination`.
-/// Rounded-rect mask filters use this value to construct their cached
-/// nine-patch before any source pixels are allocated.
-pub(crate) fn blur_alpha_mask_margin(sigma: f32) -> usize {
-    if sigma <= 0.0 || !sigma.is_finite() || sigma < 1.0 / 3.0 {
-        0
-    } else if sigma < 2.0 {
-        skia_small_gauss_factors(sigma).len() - 1
+// Source: src/core/SkMaskBlurFilter.cpp:329-337
+unsafe fn store(to: *mut u8, v: &Fp88, width: i32) {
+    let b: [u8; 8] = core::array::from_fn(|i| (v[i] >> 8) as u8);
+    if width == 8 {
+        unsafe {
+            core::ptr::copy_nonoverlapping(b.as_ptr(), to, 8);
+        }
     } else {
-        PlanGauss::new(sigma.min(135.0)).border
+        let buffer = b;
+        for i in 0..width {
+            unsafe {
+                *to.add(i as usize) = buffer[i as usize];
+            }
+        }
+    }
+}
+// Source: src/core/SkMaskBlurFilter.cpp:342-343
+const ZERO: u16 = 0;
+const HALF: u16 = 0x80;
+
+// Language substitutions for vector multiply-high and unsigned lane accumulation.
+fn mulhi(a: &Fp88, b: &Fp88) -> Fp88 {
+    core::array::from_fn(|i| ((a[i] as u32 * b[i] as u32) >> 16) as u16)
+}
+fn add_lanes(dst: &mut Fp88, v: Fp88) {
+    for i in 0..8 {
+        dst[i] = dst[i].wrapping_add(v[i]);
     }
 }
 
-/// Source support is a known nonzero superset; None is a known empty mask.
-/// Padding offsets belong to the caller's mask coordinates, not the canvas.
-/// Thresholds, Gaussian factors, three-box plan and integer rounding retain
-/// the established Skia implementation; only local buffer work is bounded.
-pub(crate) fn blur_alpha_mask_with_bounds(
-    mask: &mut Mask,
-    sigma: f32,
-    source_support: Option<IntRect>,
+// Source: src/core/SkMaskBlurFilter.cpp:424-427
+// Source: src/core/SkMaskBlurFilter.cpp:429-430
+// Source: src/core/SkMaskBlurFilter.cpp:433-433
+// Source: src/core/SkMaskBlurFilter.cpp:436-437
+// Source: src/core/SkMaskBlurFilter.cpp:440-441
+fn blur_x_radius_1(
+    s0: &Fp88,
+    g0: &Fp88,
+    g1: &Fp88,
+    g2: &Fp88,
+    g3: &Fp88,
+    g4: &Fp88,
+    d0: &mut Fp88,
+    d8: &mut Fp88,
 ) {
-    if sigma <= 0.0 || !sigma.is_finite() {
-        return;
-    }
-    if sigma >= 2.0 {
-        blur_alpha_mask_box(mask, sigma, source_support);
-    } else if sigma >= 1.0 / 3.0 {
-        blur_alpha_mask_small(mask, sigma, source_support);
-    }
+    let v1 = mulhi(s0, g1);
+    let v0 = mulhi(s0, g0);
+    add_lanes(d0, v1);
+    add_lanes(d0, [ZERO, v0[0], v0[1], v0[2], v0[3], v0[4], v0[5], v0[6]]);
+    add_lanes(d8, [v0[7], ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, v1[0], v1[1], v1[2], v1[3], v1[4], v1[5]]);
+    add_lanes(d8, [v1[6], v1[7], ZERO, ZERO, ZERO, ZERO, ZERO, ZERO]);
 }
 
-fn skia_small_gauss_factors(sigma: f32) -> Vec<u16> {
-    let variance = f64::from(sigma).powi(2);
-    let bessel0 = |t: f64| {
-        let t_squared_over_four = t * t / 4.0;
-        let mut sum = 1.0;
-        let mut factor = 1.0;
-        let mut k = 1;
-        while factor > 1.0 / 1_000_000.0 {
-            factor *= t_squared_over_four / f64::from(k * k);
-            sum += factor;
-            k += 1;
-        }
-        sum
-    };
-    let bessel1 = |t: f64| {
-        let t_squared_over_four = t * t / 4.0;
-        let mut sum = t / 2.0;
-        let mut factor = sum;
-        let mut k = 1;
-        while factor > 1.0 / 1_000_000.0 {
-            factor *= t_squared_over_four / f64::from(k * (k + 1));
-            sum += factor;
-            k += 1;
-        }
-        sum
-    };
-    let divisor = variance.exp();
-    let mut bessel = [0.0_f64; 6];
-    let mut factors = [0.0_f64; 6];
-    bessel[0] = bessel0(variance);
-    bessel[1] = bessel1(variance);
-    factors[0] = bessel[0] / divisor;
-    factors[1] = bessel[1] / divisor;
-    let mut count = 1;
-    while factors[count] > 0.01 {
-        bessel[count + 1] = -(2.0 * count as f64 / variance) * bessel[count] + bessel[count - 1];
-        factors[count + 1] = bessel[count + 1] / divisor;
-        count += 1;
-    }
-    let mut sum = 0.0;
-    for factor in factors[1..count].iter().rev() {
-        sum += 2.0 * factor;
-    }
-    sum += factors[0];
-    for factor in &mut factors[..count] {
-        *factor /= sum;
-    }
-    let mut sum = 0.0;
-    for factor in factors[1..count].iter().rev() {
-        sum += 2.0 * factor;
-    }
-    factors[0] = 1.0 - sum;
-    factors[..count]
-        .iter()
-        .map(|factor| (factor * 65536.0).round() as u16)
-        .collect()
+// Source: src/core/SkMaskBlurFilter.cpp:445-451
+// Source: src/core/SkMaskBlurFilter.cpp:454-454
+// Source: src/core/SkMaskBlurFilter.cpp:457-458
+// Source: src/core/SkMaskBlurFilter.cpp:461-462
+// Source: src/core/SkMaskBlurFilter.cpp:465-466
+// Source: src/core/SkMaskBlurFilter.cpp:469-470
+fn blur_x_radius_2(
+    s0: &Fp88,
+    g0: &Fp88,
+    g1: &Fp88,
+    g2: &Fp88,
+    g3: &Fp88,
+    g4: &Fp88,
+    d0: &mut Fp88,
+    d8: &mut Fp88,
+) {
+    let v0 = mulhi(s0, g0);
+    let v1 = mulhi(s0, g1);
+    let v2 = mulhi(s0, g2);
+    add_lanes(d0, v2);
+    add_lanes(d0, [ZERO, v1[0], v1[1], v1[2], v1[3], v1[4], v1[5], v1[6]]);
+    add_lanes(d8, [v1[7], ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, v0[0], v0[1], v0[2], v0[3], v0[4], v0[5]]);
+    add_lanes(d8, [v0[6], v0[7], ZERO, ZERO, ZERO, ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, ZERO, v1[0], v1[1], v1[2], v1[3], v1[4]]);
+    add_lanes(d8, [v1[5], v1[6], v1[7], ZERO, ZERO, ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, ZERO, ZERO, v2[0], v2[1], v2[2], v2[3]]);
+    add_lanes(d8, [v2[4], v2[5], v2[6], v2[7], ZERO, ZERO, ZERO, ZERO]);
 }
 
-fn blur_alpha_mask_small(mask: &mut Mask, sigma: f32, support: Option<IntRect>) {
-    let width = mask.width() as usize;
-    let height = mask.height() as usize;
-    let factors = skia_small_gauss_factors(sigma);
-    let radius = factors.len() - 1;
-    let Some((left, top, right, bottom)) = source_bounds(mask, support) else {
-        return;
-    };
-    let src_width = right - left + 1;
-    let src_height = bottom - top + 1;
-    let blurred_height = src_height + 2 * radius;
-    let blurred_width = src_width + 2 * radius;
-    let mut vertical = vec![0_u8; src_width * blurred_height];
-    let source = mask.data();
-    for y in 0..blurred_height {
-        for x in 0..src_width {
-            let mut value = 128_u32;
-            for offset in -(radius as isize)..=(radius as isize) {
-                let source_y = y as isize - radius as isize + offset;
-                if (0..src_height as isize).contains(&source_y) {
-                    let alpha = u32::from(source[(top + source_y as usize) * width + left + x]);
-                    let factor = u32::from(factors[offset.unsigned_abs()]);
-                    value += ((alpha << 8) * factor) >> 16;
-                }
-            }
-            vertical[y * src_width + x] = (value >> 8) as u8;
-        }
-    }
-    clear_source(mask, (left, top, right, bottom));
-    let output = mask.data_mut();
-    for y in 0..blurred_height {
-        let dest_y = top as isize + y as isize - radius as isize;
-        if dest_y < 0 || dest_y >= height as isize {
-            continue;
-        }
-        for x in 0..blurred_width {
-            let dest_x = left as isize + x as isize - radius as isize;
-            if dest_x < 0 || dest_x >= width as isize {
-                continue;
-            }
-            let mut value = 128_u32;
-            for offset in -(radius as isize)..=(radius as isize) {
-                let source_x = x as isize - radius as isize + offset;
-                if (0..src_width as isize).contains(&source_x) {
-                    let alpha = u32::from(vertical[y * src_width + source_x as usize]);
-                    let factor = u32::from(factors[offset.unsigned_abs()]);
-                    value += ((alpha << 8) * factor) >> 16;
-                }
-            }
-            output[dest_y as usize * width + dest_x as usize] = (value >> 8) as u8;
-        }
-    }
+// Source: src/core/SkMaskBlurFilter.cpp:473-480
+// Source: src/core/SkMaskBlurFilter.cpp:483-483
+// Source: src/core/SkMaskBlurFilter.cpp:486-487
+// Source: src/core/SkMaskBlurFilter.cpp:490-491
+// Source: src/core/SkMaskBlurFilter.cpp:494-495
+// Source: src/core/SkMaskBlurFilter.cpp:498-499
+// Source: src/core/SkMaskBlurFilter.cpp:502-503
+// Source: src/core/SkMaskBlurFilter.cpp:506-507
+fn blur_x_radius_3(
+    s0: &Fp88,
+    g0: &Fp88,
+    g1: &Fp88,
+    g2: &Fp88,
+    g3: &Fp88,
+    g4: &Fp88,
+    d0: &mut Fp88,
+    d8: &mut Fp88,
+) {
+    let v0 = mulhi(s0, g0);
+    let v1 = mulhi(s0, g1);
+    let v2 = mulhi(s0, g2);
+    let v3 = mulhi(s0, g3);
+    add_lanes(d0, v3);
+    add_lanes(d0, [ZERO, v2[0], v2[1], v2[2], v2[3], v2[4], v2[5], v2[6]]);
+    add_lanes(d8, [v2[7], ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, v1[0], v1[1], v1[2], v1[3], v1[4], v1[5]]);
+    add_lanes(d8, [v1[6], v1[7], ZERO, ZERO, ZERO, ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, ZERO, v0[0], v0[1], v0[2], v0[3], v0[4]]);
+    add_lanes(d8, [v0[5], v0[6], v0[7], ZERO, ZERO, ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, ZERO, ZERO, v1[0], v1[1], v1[2], v1[3]]);
+    add_lanes(d8, [v1[4], v1[5], v1[6], v1[7], ZERO, ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, ZERO, ZERO, ZERO, v2[0], v2[1], v2[2]]);
+    add_lanes(d8, [v2[3], v2[4], v2[5], v2[6], v2[7], ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, v3[0], v3[1]]);
+    add_lanes(d8, [v3[2], v3[3], v3[4], v3[5], v3[6], v3[7], ZERO, ZERO]);
 }
 
-fn blur_alpha_mask_box(mask: &mut Mask, sigma: f32, support: Option<IntRect>) {
-    let width = mask.width() as usize;
-    let height = mask.height() as usize;
-    let Some((left, top, right, bottom)) = source_bounds(mask, support) else {
-        return;
-    };
-    let src_width = right - left + 1;
-    let src_height = bottom - top + 1;
-    let plan = PlanGauss::new(sigma.min(135.0));
-    let blurred_width = src_width + 2 * plan.border;
-    let blurred_height = src_height + 2 * plan.border;
-    // Pad only independent SIMD lanes, never the logical source height.
-    // The vertical pass still reads exactly src_height original rows.
-    let horizontal_rows = if cfg!(all(
-        feature = "simd",
-        target_arch = "aarch64",
-        target_endian = "little"
-    )) {
-        src_height.div_ceil(8) * 8
-    } else {
-        src_height
-    };
-    let mut horizontal = vec![0_u8; blurred_width * horizontal_rows];
-    let mut scan = Scan::new(&plan);
-    let source = mask.data();
-    let mut y = 0;
-    #[cfg(all(feature = "simd", target_arch = "aarch64", target_endian = "little"))]
-    let mut vector_scan = neon_scan::Scan8::new(&plan);
-    #[cfg(all(feature = "simd", target_arch = "aarch64", target_endian = "little"))]
-    {
-        // SkMaskBlurFilter transposes its horizontal output so the next scan
-        // reads in memory order. Pack eight independent rows into contiguous
-        // lanes with 8x8 transposes, preserving each row's original scan order.
-        let mut packed_source = vec![0u8; src_width * 8];
-        let mut packed_output = vec![0u8; blurred_width * 8];
-        while y + 8 <= src_height {
-            let start = (top + y) * width + left;
-            unsafe {
-                neon_scan::transpose_rows8(&source[start..], width, src_width, &mut packed_source);
-                vector_scan.blur(&packed_source, 8, src_width, &mut packed_output);
-                neon_scan::untranspose_rows8(
-                    &packed_output,
-                    blurred_width,
-                    &mut horizontal[y * blurred_width..],
-                    blurred_width,
-                );
-            }
-            y += 8;
-        }
-        if y < src_height {
-            // Standard SIMD tail lanes: missing rows are zero scratch, and
-            // their independent output is never consumed by the vertical pass.
-            let mut tail_source = vec![0u8; src_width * 8];
-            for row in 0..src_height - y {
-                let start = (top + y + row) * width + left;
-                tail_source[row * src_width..(row + 1) * src_width]
-                    .copy_from_slice(&source[start..start + src_width]);
-            }
-            unsafe {
-                neon_scan::transpose_rows8(&tail_source, src_width, src_width, &mut packed_source);
-                vector_scan.blur(&packed_source, 8, src_width, &mut packed_output);
-                neon_scan::untranspose_rows8(
-                    &packed_output,
-                    blurred_width,
-                    &mut horizontal[y * blurred_width..],
-                    blurred_width,
-                );
-            }
-            y = src_height;
-        }
-    }
-    for y in y..src_height {
-        let start = (top + y) * width + left;
-        scan.blur(
-            &source[start..start + src_width],
-            &mut horizontal[y * blurred_width..(y + 1) * blurred_width],
+// Source: src/core/SkMaskBlurFilter.cpp:510-518
+// Source: src/core/SkMaskBlurFilter.cpp:521-521
+// Source: src/core/SkMaskBlurFilter.cpp:524-525
+// Source: src/core/SkMaskBlurFilter.cpp:528-529
+// Source: src/core/SkMaskBlurFilter.cpp:532-533
+// Source: src/core/SkMaskBlurFilter.cpp:536-537
+// Source: src/core/SkMaskBlurFilter.cpp:540-541
+// Source: src/core/SkMaskBlurFilter.cpp:544-545
+// Source: src/core/SkMaskBlurFilter.cpp:548-549
+// Source: src/core/SkMaskBlurFilter.cpp:552-552
+fn blur_x_radius_4(
+    s0: &Fp88,
+    g0: &Fp88,
+    g1: &Fp88,
+    g2: &Fp88,
+    g3: &Fp88,
+    g4: &Fp88,
+    d0: &mut Fp88,
+    d8: &mut Fp88,
+) {
+    let v0 = mulhi(s0, g0);
+    let v1 = mulhi(s0, g1);
+    let v2 = mulhi(s0, g2);
+    let v3 = mulhi(s0, g3);
+    let v4 = mulhi(s0, g4);
+    add_lanes(d0, v4);
+    add_lanes(d0, [ZERO, v3[0], v3[1], v3[2], v3[3], v3[4], v3[5], v3[6]]);
+    add_lanes(d8, [v3[7], ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, v2[0], v2[1], v2[2], v2[3], v2[4], v2[5]]);
+    add_lanes(d8, [v2[6], v2[7], ZERO, ZERO, ZERO, ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, ZERO, v1[0], v1[1], v1[2], v1[3], v1[4]]);
+    add_lanes(d8, [v1[5], v1[6], v1[7], ZERO, ZERO, ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, ZERO, ZERO, v0[0], v0[1], v0[2], v0[3]]);
+    add_lanes(d8, [v0[4], v0[5], v0[6], v0[7], ZERO, ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, ZERO, ZERO, ZERO, v1[0], v1[1], v1[2]]);
+    add_lanes(d8, [v1[3], v1[4], v1[5], v1[6], v1[7], ZERO, ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, v2[0], v2[1]]);
+    add_lanes(d8, [v2[2], v2[3], v2[4], v2[5], v2[6], v2[7], ZERO, ZERO]);
+    add_lanes(d0, [ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, v3[0]]);
+    add_lanes(d8, [v3[1], v3[2], v3[3], v3[4], v3[5], v3[6], v3[7], ZERO]);
+    add_lanes(d8, v4);
+}
+
+// Source: src/core/SkMaskBlurFilter.cpp:555-555
+type BlurX = fn(&Fp88, &Fp88, &Fp88, &Fp88, &Fp88, &Fp88, &mut Fp88, &mut Fp88);
+
+// Source: src/core/SkMaskBlurFilter.cpp:558-562
+// Source: src/core/SkMaskBlurFilter.cpp:564-564
+// Source: src/core/SkMaskBlurFilter.cpp:567-569
+// Source: src/core/SkMaskBlurFilter.cpp:571-571
+// Source: src/core/SkMaskBlurFilter.cpp:573-574
+// Source: src/core/SkMaskBlurFilter.cpp:576-577
+// Source: src/core/SkMaskBlurFilter.cpp:581-582
+// Source: src/core/SkMaskBlurFilter.cpp:584-584
+// Source: src/core/SkMaskBlurFilter.cpp:586-587
+// Source: src/core/SkMaskBlurFilter.cpp:589-591
+// Source: src/core/SkMaskBlurFilter.cpp:595-597
+unsafe fn blur_row(
+    blur: BlurX,
+    g0: &Fp88,
+    g1: &Fp88,
+    g2: &Fp88,
+    g3: &Fp88,
+    g4: &Fp88,
+    mut src: *const u8,
+    src_w: i32,
+    mut dst: *mut u8,
+    dst_w: i32,
+) {
+    let (mut d0, mut d8) = ([HALF; 8], [HALF; 8]);
+    let mut x = 0;
+    while x <= src_w - 8 {
+        blur(
+            &unsafe { load(src, 8, None) },
+            g0,
+            g1,
+            g2,
+            g3,
+            g4,
+            &mut d0,
+            &mut d8,
         );
-    }
-    clear_source(mask, (left, top, right, bottom));
-    let output = mask.data_mut();
-    let mut column = vec![0_u8; src_height];
-    let mut blurred = vec![0_u8; blurred_height];
-    // The horizontal result still contains the complete filter expansion.
-    // Independent vertical columns whose output lies beyond this mask need
-    // no scan, and only their in-device row interval needs to be copied.
-    let x_start = plan.border.saturating_sub(left);
-    let x_end = blurred_width.min(width + plan.border - left);
-    let y_start = plan.border.saturating_sub(top);
-    let y_end = blurred_height.min(height + plan.border - top);
-    let first_dest_y = top + y_start - plan.border;
-    let mut x = x_start;
-    #[cfg(all(feature = "simd", target_arch = "aarch64", target_endian = "little"))]
-    {
-        let mut vector_output = vec![0u8; blurred_height * 8];
-        while x + 8 <= x_end {
-            // Eight adjacent A8 columns are contiguous in each source row.
-            // Each lane is an independent original PlanGauss::Scan.
-            unsafe {
-                vector_scan.blur(
-                    &horizontal[x..],
-                    blurred_width,
-                    src_height,
-                    &mut vector_output,
-                );
-            }
-            let dest_x = left + x - plan.border;
-            let dest = first_dest_y * width + dest_x;
-            unsafe {
-                neon_scan::copy_rows8(
-                    &vector_output[y_start * 8..y_end * 8],
-                    &mut output[dest..],
-                    y_end - y_start,
-                    width,
-                );
-            }
-            x += 8;
+        unsafe {
+            store(dst, &d0, 8);
         }
+        d0 = d8;
+        d8 = [HALF; 8];
+        src = src.wrapping_add(8);
+        dst = dst.wrapping_add(8);
+        x += 8;
     }
-    for x in x..x_end {
-        for y in 0..src_height {
-            column[y] = horizontal[y * blurred_width + x];
+    let src_tail = src_w - x;
+    if src_tail > 0 {
+        blur(
+            &unsafe { load(src, src_tail, None) },
+            g0,
+            g1,
+            g2,
+            g3,
+            g4,
+            &mut d0,
+            &mut d8,
+        );
+        let dst_tail = 8.min(dst_w - x);
+        unsafe {
+            store(dst, &d0, dst_tail);
         }
-        scan.blur(&column, &mut blurred);
-        let dest_x = left + x - plan.border;
-        for (row, &alpha) in blurred[y_start..y_end].iter().enumerate() {
-            output[(first_dest_y + row) * width + dest_x] = alpha;
+        d0 = d8;
+        dst = dst.wrapping_offset(dst_tail as isize);
+        x += dst_tail;
+    }
+    let dst_tail = dst_w - x;
+    if dst_tail > 0 {
+        unsafe {
+            store(dst, &d0, dst_tail);
         }
     }
 }
 
-// SkBlurEngine.cpp::ThreeBoxApproxPass gangs the same three u32 integrators
-// into vector lanes. This A8 backend retains SkMaskBlurFilter::PlanGauss's
-// weight/rounding and two-ended Scan schedule instead of the engine's divider.
-// It changes only the number of independent rows/columns processed together.
-// The explicit byte/register packing is little-endian; other targets and
-// builds without `simd` retain the scalar backend.
-#[cfg(all(feature = "simd", target_arch = "aarch64", target_endian = "little"))]
-mod neon_scan {
-    use super::PlanGauss;
+// Source: src/core/SkMaskBlurFilter.cpp:602-605
+// Source: src/core/SkMaskBlurFilter.cpp:607-611
+// Source: src/core/SkMaskBlurFilter.cpp:614-617
+unsafe fn blur_x_rect(
+    blur: BlurX,
+    gauss: &[u16; 6],
+    mut src: *const u8,
+    src_stride: usize,
+    src_w: i32,
+    mut dst: *mut u8,
+    dst_stride: usize,
+    dst_w: i32,
+    dst_h: i32,
+) {
+    let (g0, g1, g2, g3, g4) = (
+        [gauss[0]; 8],
+        [gauss[1]; 8],
+        [gauss[2]; 8],
+        [gauss[3]; 8],
+        [gauss[4]; 8],
+    );
+    for _ in 0..dst_h {
+        unsafe {
+            blur_row(blur, &g0, &g1, &g2, &g3, &g4, src, src_w, dst, dst_w);
+        }
+        src = src.wrapping_add(src_stride);
+        dst = dst.wrapping_add(dst_stride);
+    }
+}
 
-    // The three byte/halfword/word interleaves are an exact 8x8 transpose.
-    // `src` and `dst` each admit eight rows of blocks*8 initialized/writable
-    // bytes, with the supplied strides and complete-tile advances. Each
-    // tile's loads precede its stores; wrappers check the whole extent and
-    // use distinct allocations. No alignment greater than one is needed.
-    #[inline(always)]
-    unsafe fn transpose8_blocks(
-        src: *const u8,
-        src_stride: usize,
-        dst: *mut u8,
-        dst_stride: usize,
-        blocks: usize,
-        src_advance: usize,
-        dst_advance: usize,
-    ) {
-        if blocks == 0 {
+// Source: src/core/SkMaskBlurFilter.cpp:621-623
+// Source: src/core/SkMaskBlurFilter.cpp:625-628
+// Source: src/core/SkMaskBlurFilter.cpp:630-632
+// Source: src/core/SkMaskBlurFilter.cpp:634-636
+// Source: src/core/SkMaskBlurFilter.cpp:638-640
+// Source: src/core/SkMaskBlurFilter.cpp:642-643
+unsafe fn direct_blur_x(
+    radius: i32,
+    gauss: &[u16; 6],
+    src: *const u8,
+    src_stride: usize,
+    src_w: i32,
+    dst: *mut u8,
+    dst_stride: usize,
+    dst_w: i32,
+    dst_h: i32,
+) {
+    let blur: BlurX = match radius {
+        1 => blur_x_radius_1,
+        2 => blur_x_radius_2,
+        3 => blur_x_radius_3,
+        4 => blur_x_radius_4,
+        _ => {
+            crate::SkASSERTF!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),643; @condition b"false\0".as_ptr(); false,"The radius %d is not handled\n",radius as core::ffi::c_int);
             return;
         }
-        core::arch::asm!(
-            "2:", "mov {read}, {src}", "mov {write}, {dst}",
-            "ldr {a0:d}, [{read}]", "add {read}, {read}, {ss}",
-            "ldr {a1:d}, [{read}]", "add {read}, {read}, {ss}",
-            "ldr {a2:d}, [{read}]", "add {read}, {read}, {ss}",
-            "ldr {a3:d}, [{read}]", "add {read}, {read}, {ss}",
-            "ldr {a4:d}, [{read}]", "add {read}, {read}, {ss}",
-            "ldr {a5:d}, [{read}]", "add {read}, {read}, {ss}",
-            "ldr {a6:d}, [{read}]", "add {read}, {read}, {ss}",
-            "ldr {a7:d}, [{read}]",
-            "trn1 {b0:v}.8b, {a0:v}.8b, {a1:v}.8b",
-            "trn2 {b1:v}.8b, {a0:v}.8b, {a1:v}.8b",
-            "trn1 {b2:v}.8b, {a2:v}.8b, {a3:v}.8b",
-            "trn2 {b3:v}.8b, {a2:v}.8b, {a3:v}.8b",
-            "trn1 {b4:v}.8b, {a4:v}.8b, {a5:v}.8b",
-            "trn2 {b5:v}.8b, {a4:v}.8b, {a5:v}.8b",
-            "trn1 {b6:v}.8b, {a6:v}.8b, {a7:v}.8b",
-            "trn2 {b7:v}.8b, {a6:v}.8b, {a7:v}.8b",
-            "trn1 {a0:v}.4h, {b0:v}.4h, {b2:v}.4h",
-            "trn1 {a1:v}.4h, {b1:v}.4h, {b3:v}.4h",
-            "trn2 {a2:v}.4h, {b0:v}.4h, {b2:v}.4h",
-            "trn2 {a3:v}.4h, {b1:v}.4h, {b3:v}.4h",
-            "trn1 {a4:v}.4h, {b4:v}.4h, {b6:v}.4h",
-            "trn1 {a5:v}.4h, {b5:v}.4h, {b7:v}.4h",
-            "trn2 {a6:v}.4h, {b4:v}.4h, {b6:v}.4h",
-            "trn2 {a7:v}.4h, {b5:v}.4h, {b7:v}.4h",
-            "trn1 {b0:v}.2s, {a0:v}.2s, {a4:v}.2s",
-            "trn1 {b1:v}.2s, {a1:v}.2s, {a5:v}.2s",
-            "trn1 {b2:v}.2s, {a2:v}.2s, {a6:v}.2s",
-            "trn1 {b3:v}.2s, {a3:v}.2s, {a7:v}.2s",
-            "trn2 {b4:v}.2s, {a0:v}.2s, {a4:v}.2s",
-            "trn2 {b5:v}.2s, {a1:v}.2s, {a5:v}.2s",
-            "trn2 {b6:v}.2s, {a2:v}.2s, {a6:v}.2s",
-            "trn2 {b7:v}.2s, {a3:v}.2s, {a7:v}.2s",
-            "str {b0:d}, [{write}]", "add {write}, {write}, {ds}",
-            "str {b1:d}, [{write}]", "add {write}, {write}, {ds}",
-            "str {b2:d}, [{write}]", "add {write}, {write}, {ds}",
-            "str {b3:d}, [{write}]", "add {write}, {write}, {ds}",
-            "str {b4:d}, [{write}]", "add {write}, {write}, {ds}",
-            "str {b5:d}, [{write}]", "add {write}, {write}, {ds}",
-            "str {b6:d}, [{write}]", "add {write}, {write}, {ds}",
-            "str {b7:d}, [{write}]",
-            "add {src}, {src}, {sa}", "add {dst}, {dst}, {da}",
-            "subs {blocks}, {blocks}, #1", "b.ne 2b",
-            src = inout(reg) src => _, dst = inout(reg) dst => _,
-            sa = in(reg) src_advance, da = in(reg) dst_advance,
-            blocks = inout(reg) blocks => _, read = out(reg) _, write = out(reg) _,
-            ss = in(reg) src_stride, ds = in(reg) dst_stride,
-            a0 = out(vreg) _, a1 = out(vreg) _, a2 = out(vreg) _, a3 = out(vreg) _,
-            a4 = out(vreg) _, a5 = out(vreg) _, a6 = out(vreg) _, a7 = out(vreg) _,
-            b0 = out(vreg) _, b1 = out(vreg) _, b2 = out(vreg) _, b3 = out(vreg) _,
-            b4 = out(vreg) _, b5 = out(vreg) _, b6 = out(vreg) _, b7 = out(vreg) _,
-            options(nostack),
+    };
+    unsafe {
+        blur_x_rect(
+            blur, gauss, src, src_stride, src_w, dst, dst_stride, dst_w, dst_h,
         );
     }
+}
 
-    pub(super) unsafe fn transpose_rows8(src: &[u8], stride: usize, width: usize, dst: &mut [u8]) {
-        assert!(stride >= width && 7 * stride + width <= src.len());
-        assert_eq!(dst.len(), width * 8);
-        let complete = width / 8 * 8;
-        // Admit all complete tiles once; retain row/block cursors in registers.
-        transpose8_blocks(src.as_ptr(), stride, dst.as_mut_ptr(), 8, width / 8, 8, 64);
-        for x in complete..width {
-            for y in 0..8 {
-                dst[x * 8 + y] = src[y * stride + x];
-            }
+// Lane-wise wrapping addition replaces skvx vector addition.
+fn sum_lanes(a: Fp88, b: Fp88) -> Fp88 {
+    core::array::from_fn(|i| a[i].wrapping_add(b[i]))
+}
+
+// Source: src/core/SkMaskBlurFilter.cpp:697-702
+// Source: src/core/SkMaskBlurFilter.cpp:704-706
+// Source: src/core/SkMaskBlurFilter.cpp:708-708
+fn blur_y_radius_1(
+    s0: &Fp88,
+    g0: &Fp88,
+    g1: &Fp88,
+    g2: &Fp88,
+    g3: &Fp88,
+    g4: &Fp88,
+    d: &mut [Fp88; 8],
+) -> Fp88 {
+    let v0 = mulhi(s0, g0);
+    let v1 = mulhi(s0, g1);
+    let answer = sum_lanes(d[0], v1);
+    d[0] = sum_lanes(d[1], v0);
+    d[1] = sum_lanes(v1, [HALF; 8]);
+    answer
+}
+
+// Source: src/core/SkMaskBlurFilter.cpp:711-717
+// Source: src/core/SkMaskBlurFilter.cpp:719-723
+// Source: src/core/SkMaskBlurFilter.cpp:725-725
+fn blur_y_radius_2(
+    s0: &Fp88,
+    g0: &Fp88,
+    g1: &Fp88,
+    g2: &Fp88,
+    g3: &Fp88,
+    g4: &Fp88,
+    d: &mut [Fp88; 8],
+) -> Fp88 {
+    let v0 = mulhi(s0, g0);
+    let v1 = mulhi(s0, g1);
+    let v2 = mulhi(s0, g2);
+    let answer = sum_lanes(d[0], v2);
+    d[0] = sum_lanes(d[1], v1);
+    d[1] = sum_lanes(d[2], v0);
+    d[2] = sum_lanes(d[3], v1);
+    d[3] = sum_lanes(v2, [HALF; 8]);
+    answer
+}
+
+// Source: src/core/SkMaskBlurFilter.cpp:728-735
+// Source: src/core/SkMaskBlurFilter.cpp:737-743
+// Source: src/core/SkMaskBlurFilter.cpp:745-745
+fn blur_y_radius_3(
+    s0: &Fp88,
+    g0: &Fp88,
+    g1: &Fp88,
+    g2: &Fp88,
+    g3: &Fp88,
+    g4: &Fp88,
+    d: &mut [Fp88; 8],
+) -> Fp88 {
+    let v0 = mulhi(s0, g0);
+    let v1 = mulhi(s0, g1);
+    let v2 = mulhi(s0, g2);
+    let v3 = mulhi(s0, g3);
+    let answer = sum_lanes(d[0], v3);
+    d[0] = sum_lanes(d[1], v2);
+    d[1] = sum_lanes(d[2], v1);
+    d[2] = sum_lanes(d[3], v0);
+    d[3] = sum_lanes(d[4], v1);
+    d[4] = sum_lanes(d[5], v2);
+    d[5] = sum_lanes(v3, [HALF; 8]);
+    answer
+}
+
+// Source: src/core/SkMaskBlurFilter.cpp:748-756
+// Source: src/core/SkMaskBlurFilter.cpp:758-766
+// Source: src/core/SkMaskBlurFilter.cpp:768-768
+fn blur_y_radius_4(
+    s0: &Fp88,
+    g0: &Fp88,
+    g1: &Fp88,
+    g2: &Fp88,
+    g3: &Fp88,
+    g4: &Fp88,
+    d: &mut [Fp88; 8],
+) -> Fp88 {
+    let v0 = mulhi(s0, g0);
+    let v1 = mulhi(s0, g1);
+    let v2 = mulhi(s0, g2);
+    let v3 = mulhi(s0, g3);
+    let v4 = mulhi(s0, g4);
+    let answer = sum_lanes(d[0], v4);
+    d[0] = sum_lanes(d[1], v3);
+    d[1] = sum_lanes(d[2], v2);
+    d[2] = sum_lanes(d[3], v1);
+    d[3] = sum_lanes(d[4], v0);
+    d[4] = sum_lanes(d[5], v1);
+    d[5] = sum_lanes(d[6], v2);
+    d[6] = sum_lanes(d[7], v3);
+    d[7] = sum_lanes(v4, [HALF; 8]);
+    answer
+}
+
+// Source: src/core/SkMaskBlurFilter.cpp:771-771
+type BlurY = fn(&Fp88, &Fp88, &Fp88, &Fp88, &Fp88, &Fp88, &mut [Fp88; 8]) -> Fp88;
+
+// Source: src/core/SkMaskBlurFilter.cpp:774-781
+// Source: src/core/SkMaskBlurFilter.cpp:783-787
+// Source: src/core/SkMaskBlurFilter.cpp:790-797
+// Source: src/core/SkMaskBlurFilter.cpp:800-801
+// Source: src/core/SkMaskBlurFilter.cpp:803-804
+// Source: src/core/SkMaskBlurFilter.cpp:806-807
+// Source: src/core/SkMaskBlurFilter.cpp:809-810
+unsafe fn blur_column(
+    to_a8: Option<ToA8>,
+    blur: BlurY,
+    radius: i32,
+    width: i32,
+    g0: &Fp88,
+    g1: &Fp88,
+    g2: &Fp88,
+    g3: &Fp88,
+    g4: &Fp88,
+    mut src: *const u8,
+    src_rb: usize,
+    src_h: i32,
+    mut dst: *mut u8,
+    dst_rb: usize,
+) {
+    let mut d = [[HALF; 8]; 8];
+    let flush = |mut to: *mut u8, v0: &Fp88, v1: &Fp88| {
+        unsafe {
+            store(to, v0, width);
         }
-    }
-
-    pub(super) unsafe fn untranspose_rows8(
-        src: &[u8],
-        width: usize,
-        dst: &mut [u8],
-        stride: usize,
-    ) {
-        assert_eq!(src.len(), width * 8);
-        assert!(stride >= width && 7 * stride + width <= dst.len());
-        let complete = width / 8 * 8;
-        transpose8_blocks(src.as_ptr(), 8, dst.as_mut_ptr(), stride, width / 8, 64, 8);
-        for x in complete..width {
-            for y in 0..8 {
-                dst[y * stride + x] = src[x * 8 + y];
-            }
+        to = to.wrapping_add(dst_rb);
+        unsafe {
+            store(to, v1, width);
         }
-    }
-
-    // Scan8 output is contiguous; the destination consists of admitted
-    // eight-byte row spans. Match SkMaskBlurFilter's dstStride scatter without
-    // O0 iterator/slice calls per row. Only these eight bytes are written.
-    // Last-row progression creates only an unused machine address marker;
-    // all loads/stores satisfy the checked extent and no cursor escapes asm.
-    pub(super) unsafe fn copy_rows8(src: &[u8], dst: &mut [u8], rows: usize, stride: usize) {
-        if rows == 0 {
-            return;
+        to.wrapping_add(dst_rb)
+    };
+    for _ in 0..src_h {
+        let s = unsafe { load(src, width, to_a8) };
+        let b = blur(&s, g0, g1, g2, g3, g4, &mut d);
+        unsafe {
+            store(dst, &b, width);
         }
-        assert!(rows * 8 <= src.len());
-        assert!(stride >= 8 && (rows - 1) * stride + 8 <= dst.len());
-        core::arch::asm!(
-            "2:",
-            "ldr {value}, [{source}], #8",
-            "str {value}, [{dest}]",
-            "add {dest}, {dest}, {stride}",
-            "subs {rows}, {rows}, #1",
-            "b.ne 2b",
-            source = inout(reg) src.as_ptr() => _,
-            dest = inout(reg) dst.as_mut_ptr() => _,
-            stride = in(reg) stride, rows = inout(reg) rows => _,
-            value = out(reg) _, options(nostack),
-        );
+        src = src.wrapping_add(src_rb);
+        dst = dst.wrapping_add(dst_rb);
     }
-
-    pub(super) struct Scan8 {
-        weight: u32,
-        border: usize,
-        buffers: [Vec<[u32; 8]>; 3],
+    if radius >= 1 {
+        dst = flush(dst, &d[0], &d[1]);
     }
+    if radius >= 2 {
+        dst = flush(dst, &d[2], &d[3]);
+    }
+    if radius >= 3 {
+        dst = flush(dst, &d[4], &d[5]);
+    }
+    if radius >= 4 {
+        flush(dst, &d[6], &d[7]);
+    }
+}
 
-    impl Scan8 {
-        pub(super) fn new(plan: &PlanGauss) -> Self {
-            // PlanGauss's box path starts at sigma >= 2 (window >= 4).
-            // Its 32.32 weight therefore fits a u32. Window=1 stays scalar.
-            assert!(plan.weight <= u64::from(u32::MAX));
-            assert!(plan.pass_sizes.iter().all(|&size| size != 0));
-            Self {
-                weight: plan.weight as u32,
-                border: plan.border,
-                buffers: plan.pass_sizes.map(|size| vec![[0; 8]; size]),
-            }
-        }
-
-        pub(super) unsafe fn blur(
-            &mut self,
-            src: &[u8],
-            stride: usize,
-            length: usize,
-            dst: &mut [u8],
-        ) {
-            assert!(length != 0 && stride >= 8);
-            assert!((length - 1) * stride + 8 <= src.len());
-            assert_eq!(dst.len(), (length + 2 * self.border) * 8);
-            let [ring0, ring1, ring2] = &mut self.buffers;
-            let (n0, n1, n2) = (ring0.len(), ring1.len(), ring2.len());
-            let (base0, base1, base2) = (
-                ring0.as_mut_ptr().cast::<u32>(),
-                ring1.as_mut_ptr().cast::<u32>(),
-                ring2.as_mut_ptr().cast::<u32>(),
+// Source: src/core/SkMaskBlurFilter.cpp:815-818
+// Source: src/core/SkMaskBlurFilter.cpp:820-824
+// Source: src/core/SkMaskBlurFilter.cpp:826-833
+// Source: src/core/SkMaskBlurFilter.cpp:836-841
+unsafe fn blur_y_rect(
+    to_a8: Option<ToA8>,
+    stride_of_8: i32,
+    blur: BlurY,
+    radius: i32,
+    gauss: &[u16; 6],
+    mut src: *const u8,
+    src_rb: usize,
+    src_w: i32,
+    src_h: i32,
+    mut dst: *mut u8,
+    dst_rb: usize,
+) {
+    let (g0, g1, g2, g3, g4) = (
+        [gauss[0]; 8],
+        [gauss[1]; 8],
+        [gauss[2]; 8],
+        [gauss[3]; 8],
+        [gauss[4]; 8],
+    );
+    let mut x = 0;
+    while x <= src_w - 8 {
+        unsafe {
+            blur_column(
+                to_a8, blur, radius, 8, &g0, &g1, &g2, &g3, &g4, src, src_rb, src_h, dst, dst_rb,
             );
-            // SAFETY: the three fixed allocations have n*8 initialized u32s.
-            // Nonempty cursors point to a complete eight-lane entry; advancing
-            // reaches only one-past-end before resetting. The factory proves
-            // all three rings nonempty. NEON permits unaligned accesses.
-            // The source check admits exactly eight bytes per strided row.
-            // Forward writes max(length, 2*border+1) complete entries; reverse
-            // fills the remaining suffix using <= length source entries.
-            // Every dereference stays inside its distinct original allocation.
-            let (end0, end1, end2) = (base0.add(n0 * 8), base1.add(n1 * 8), base2.add(n2 * 8));
-            let no_change = (2 * self.border + 1).saturating_sub(length);
-            let reverse = dst.len() / 8 - length - no_change;
-            // Keep the whole literal Scan, including cursors and six sums,
-            // in registers. O0 cannot otherwise keep states live across a
-            // Rust loop containing individual inline-asm advances.
-            // Source/destination memory is admitted by the checks above.
-            // Strided source progression may create an unused exterior
-            // address marker after its final load; only the checked forward
-            // and reverse entries are ever read, and no marker escapes asm.
-            // As in official Scan, reverse keeps the rotated ring positions
-            // after zeroing. No phases or integer operations are omitted.
-            let dest_pointer = dst.as_mut_ptr();
-            core::arch::asm!(
-                "movi {tmp0:v}.4s, #0",
-                "mov {tmpint}, {base0}",
-                "2:",
-                "stp {tmp0:q}, {tmp0:q}, [{tmpint}], #32",
-                "cmp {tmpint}, {end0}",
-                "b.lo 2b",
-                "mov {tmpint}, {base1}",
-                "3:",
-                "stp {tmp0:q}, {tmp0:q}, [{tmpint}], #32",
-                "cmp {tmpint}, {end1}",
-                "b.lo 3b",
-                "mov {tmpint}, {base2}",
-                "4:",
-                "stp {tmp0:q}, {tmp0:q}, [{tmpint}], #32",
-                "cmp {tmpint}, {end2}",
-                "b.lo 4b",
-                "movi {s0a:v}.4s, #0",
-                "movi {s0b:v}.4s, #0",
-                "movi {s1a:v}.4s, #0",
-                "movi {s1b:v}.4s, #0",
-                "movi {s2a:v}.4s, #0",
-                "movi {s2b:v}.4s, #0",
-                "dup {weight:v}.4s, {weightvalue:w}",
-                "mov {tmpint}, #0x80000000",
-                "dup {half:v}.2d, {tmpint}",
-                "mov {c0}, {base0}",
-                "mov {c1}, {base1}",
-                "mov {c2}, {base2}",
-                "mov {count}, {length}",
-                "5:",
-                "ldr {leading_a:d}, [{source}]",
-                "ushll {leading_a:v}.8h, {leading_a:v}.8b, #0",
-                "ushll2 {leading_b:v}.4s, {leading_a:v}.8h, #0",
-                "ushll {leading_a:v}.4s, {leading_a:v}.4h, #0",
-                "add {s0a:v}.4s, {s0a:v}.4s, {leading_a:v}.4s",
-                "add {s0b:v}.4s, {s0b:v}.4s, {leading_b:v}.4s",
-                "add {s1a:v}.4s, {s1a:v}.4s, {s0a:v}.4s",
-                "add {s1b:v}.4s, {s1b:v}.4s, {s0b:v}.4s",
-                "add {s2a:v}.4s, {s2a:v}.4s, {s1a:v}.4s",
-                "add {s2b:v}.4s, {s2b:v}.4s, {s1b:v}.4s",
-                "umull {tmp0:v}.2d, {s2a:v}.2s, {weight:v}.2s",
-                "umull2 {tmp1:v}.2d, {s2a:v}.4s, {weight:v}.4s",
-                "add {tmp0:v}.2d, {tmp0:v}.2d, {half:v}.2d",
-                "add {tmp1:v}.2d, {tmp1:v}.2d, {half:v}.2d",
-                "shrn {tmp0:v}.2s, {tmp0:v}.2d, #32",
-                "shrn2 {tmp0:v}.4s, {tmp1:v}.2d, #32",
-                "umull {tmp1:v}.2d, {s2b:v}.2s, {weight:v}.2s",
-                "umull2 {tmp2:v}.2d, {s2b:v}.4s, {weight:v}.4s",
-                "add {tmp1:v}.2d, {tmp1:v}.2d, {half:v}.2d",
-                "add {tmp2:v}.2d, {tmp2:v}.2d, {half:v}.2d",
-                "shrn {tmp1:v}.2s, {tmp1:v}.2d, #32",
-                "shrn2 {tmp1:v}.4s, {tmp2:v}.2d, #32",
-                "xtn {tmp0:v}.4h, {tmp0:v}.4s",
-                "xtn2 {tmp0:v}.8h, {tmp1:v}.4s",
-                "xtn {tmp0:v}.8b, {tmp0:v}.8h",
-                "str {tmp0:d}, [{output}]",
-                "ldp {tmp1:q}, {tmp2:q}, [{c2}]",
-                "sub {s2a:v}.4s, {s2a:v}.4s, {tmp1:v}.4s",
-                "sub {s2b:v}.4s, {s2b:v}.4s, {tmp2:v}.4s",
-                "stp {s1a:q}, {s1b:q}, [{c2}]",
-                "ldp {tmp1:q}, {tmp2:q}, [{c1}]",
-                "sub {s1a:v}.4s, {s1a:v}.4s, {tmp1:v}.4s",
-                "sub {s1b:v}.4s, {s1b:v}.4s, {tmp2:v}.4s",
-                "stp {s0a:q}, {s0b:q}, [{c1}]",
-                "ldp {tmp1:q}, {tmp2:q}, [{c0}]",
-                "sub {s0a:v}.4s, {s0a:v}.4s, {tmp1:v}.4s",
-                "sub {s0b:v}.4s, {s0b:v}.4s, {tmp2:v}.4s",
-                "stp {leading_a:q}, {leading_b:q}, [{c0}]",
-                "add {c2}, {c2}, #32",
-                "cmp {c2}, {end2}",
-                "csel {c2}, {c2}, {base2}, lo",
-                "add {c1}, {c1}, #32",
-                "cmp {c1}, {end1}",
-                "csel {c1}, {c1}, {base1}, lo",
-                "add {c0}, {c0}, #32",
-                "cmp {c0}, {end0}",
-                "csel {c0}, {c0}, {base0}, lo",
-                "add {source}, {source}, {stride}",
-                "add {output}, {output}, #8",
-                "subs {count}, {count}, #1",
-                "b.ne 5b",
-                "mov {count}, {nochange}",
-                "cbz {count}, 7f",
-                "6:",
-                "movi {leading_a:v}.8b, #0",
-                "ushll {leading_a:v}.8h, {leading_a:v}.8b, #0",
-                "ushll2 {leading_b:v}.4s, {leading_a:v}.8h, #0",
-                "ushll {leading_a:v}.4s, {leading_a:v}.4h, #0",
-                "add {s0a:v}.4s, {s0a:v}.4s, {leading_a:v}.4s",
-                "add {s0b:v}.4s, {s0b:v}.4s, {leading_b:v}.4s",
-                "add {s1a:v}.4s, {s1a:v}.4s, {s0a:v}.4s",
-                "add {s1b:v}.4s, {s1b:v}.4s, {s0b:v}.4s",
-                "add {s2a:v}.4s, {s2a:v}.4s, {s1a:v}.4s",
-                "add {s2b:v}.4s, {s2b:v}.4s, {s1b:v}.4s",
-                "umull {tmp0:v}.2d, {s2a:v}.2s, {weight:v}.2s",
-                "umull2 {tmp1:v}.2d, {s2a:v}.4s, {weight:v}.4s",
-                "add {tmp0:v}.2d, {tmp0:v}.2d, {half:v}.2d",
-                "add {tmp1:v}.2d, {tmp1:v}.2d, {half:v}.2d",
-                "shrn {tmp0:v}.2s, {tmp0:v}.2d, #32",
-                "shrn2 {tmp0:v}.4s, {tmp1:v}.2d, #32",
-                "umull {tmp1:v}.2d, {s2b:v}.2s, {weight:v}.2s",
-                "umull2 {tmp2:v}.2d, {s2b:v}.4s, {weight:v}.4s",
-                "add {tmp1:v}.2d, {tmp1:v}.2d, {half:v}.2d",
-                "add {tmp2:v}.2d, {tmp2:v}.2d, {half:v}.2d",
-                "shrn {tmp1:v}.2s, {tmp1:v}.2d, #32",
-                "shrn2 {tmp1:v}.4s, {tmp2:v}.2d, #32",
-                "xtn {tmp0:v}.4h, {tmp0:v}.4s",
-                "xtn2 {tmp0:v}.8h, {tmp1:v}.4s",
-                "xtn {tmp0:v}.8b, {tmp0:v}.8h",
-                "str {tmp0:d}, [{output}]",
-                "ldp {tmp1:q}, {tmp2:q}, [{c2}]",
-                "sub {s2a:v}.4s, {s2a:v}.4s, {tmp1:v}.4s",
-                "sub {s2b:v}.4s, {s2b:v}.4s, {tmp2:v}.4s",
-                "stp {s1a:q}, {s1b:q}, [{c2}]",
-                "ldp {tmp1:q}, {tmp2:q}, [{c1}]",
-                "sub {s1a:v}.4s, {s1a:v}.4s, {tmp1:v}.4s",
-                "sub {s1b:v}.4s, {s1b:v}.4s, {tmp2:v}.4s",
-                "stp {s0a:q}, {s0b:q}, [{c1}]",
-                "ldp {tmp1:q}, {tmp2:q}, [{c0}]",
-                "sub {s0a:v}.4s, {s0a:v}.4s, {tmp1:v}.4s",
-                "sub {s0b:v}.4s, {s0b:v}.4s, {tmp2:v}.4s",
-                "stp {leading_a:q}, {leading_b:q}, [{c0}]",
-                "add {c2}, {c2}, #32",
-                "cmp {c2}, {end2}",
-                "csel {c2}, {c2}, {base2}, lo",
-                "add {c1}, {c1}, #32",
-                "cmp {c1}, {end1}",
-                "csel {c1}, {c1}, {base1}, lo",
-                "add {c0}, {c0}, #32",
-                "cmp {c0}, {end0}",
-                "csel {c0}, {c0}, {base0}, lo",
-                "add {output}, {output}, #8",
-                "subs {count}, {count}, #1",
-                "b.ne 6b",
-                "7:",
-                "movi {tmp0:v}.4s, #0",
-                "mov {tmpint}, {base0}",
-                "8:",
-                "stp {tmp0:q}, {tmp0:q}, [{tmpint}], #32",
-                "cmp {tmpint}, {end0}",
-                "b.lo 8b",
-                "mov {tmpint}, {base1}",
-                "9:",
-                "stp {tmp0:q}, {tmp0:q}, [{tmpint}], #32",
-                "cmp {tmpint}, {end1}",
-                "b.lo 9b",
-                "mov {tmpint}, {base2}",
-                "12:",
-                "stp {tmp0:q}, {tmp0:q}, [{tmpint}], #32",
-                "cmp {tmpint}, {end2}",
-                "b.lo 12b",
-                "movi {s0a:v}.4s, #0",
-                "movi {s0b:v}.4s, #0",
-                "movi {s1a:v}.4s, #0",
-                "movi {s1b:v}.4s, #0",
-                "movi {s2a:v}.4s, #0",
-                "movi {s2b:v}.4s, #0",
-                "mov {count}, {reverse}",
-                "cbz {count}, 14f",
-                "mov {output}, {outputend}",
-                "13:",
-                "sub {source}, {source}, {stride}",
-                "sub {output}, {output}, #8",
-                "ldr {leading_a:d}, [{source}]",
-                "ushll {leading_a:v}.8h, {leading_a:v}.8b, #0",
-                "ushll2 {leading_b:v}.4s, {leading_a:v}.8h, #0",
-                "ushll {leading_a:v}.4s, {leading_a:v}.4h, #0",
-                "add {s0a:v}.4s, {s0a:v}.4s, {leading_a:v}.4s",
-                "add {s0b:v}.4s, {s0b:v}.4s, {leading_b:v}.4s",
-                "add {s1a:v}.4s, {s1a:v}.4s, {s0a:v}.4s",
-                "add {s1b:v}.4s, {s1b:v}.4s, {s0b:v}.4s",
-                "add {s2a:v}.4s, {s2a:v}.4s, {s1a:v}.4s",
-                "add {s2b:v}.4s, {s2b:v}.4s, {s1b:v}.4s",
-                "umull {tmp0:v}.2d, {s2a:v}.2s, {weight:v}.2s",
-                "umull2 {tmp1:v}.2d, {s2a:v}.4s, {weight:v}.4s",
-                "add {tmp0:v}.2d, {tmp0:v}.2d, {half:v}.2d",
-                "add {tmp1:v}.2d, {tmp1:v}.2d, {half:v}.2d",
-                "shrn {tmp0:v}.2s, {tmp0:v}.2d, #32",
-                "shrn2 {tmp0:v}.4s, {tmp1:v}.2d, #32",
-                "umull {tmp1:v}.2d, {s2b:v}.2s, {weight:v}.2s",
-                "umull2 {tmp2:v}.2d, {s2b:v}.4s, {weight:v}.4s",
-                "add {tmp1:v}.2d, {tmp1:v}.2d, {half:v}.2d",
-                "add {tmp2:v}.2d, {tmp2:v}.2d, {half:v}.2d",
-                "shrn {tmp1:v}.2s, {tmp1:v}.2d, #32",
-                "shrn2 {tmp1:v}.4s, {tmp2:v}.2d, #32",
-                "xtn {tmp0:v}.4h, {tmp0:v}.4s",
-                "xtn2 {tmp0:v}.8h, {tmp1:v}.4s",
-                "xtn {tmp0:v}.8b, {tmp0:v}.8h",
-                "str {tmp0:d}, [{output}]",
-                "ldp {tmp1:q}, {tmp2:q}, [{c2}]",
-                "sub {s2a:v}.4s, {s2a:v}.4s, {tmp1:v}.4s",
-                "sub {s2b:v}.4s, {s2b:v}.4s, {tmp2:v}.4s",
-                "stp {s1a:q}, {s1b:q}, [{c2}]",
-                "ldp {tmp1:q}, {tmp2:q}, [{c1}]",
-                "sub {s1a:v}.4s, {s1a:v}.4s, {tmp1:v}.4s",
-                "sub {s1b:v}.4s, {s1b:v}.4s, {tmp2:v}.4s",
-                "stp {s0a:q}, {s0b:q}, [{c1}]",
-                "ldp {tmp1:q}, {tmp2:q}, [{c0}]",
-                "sub {s0a:v}.4s, {s0a:v}.4s, {tmp1:v}.4s",
-                "sub {s0b:v}.4s, {s0b:v}.4s, {tmp2:v}.4s",
-                "stp {leading_a:q}, {leading_b:q}, [{c0}]",
-                "add {c2}, {c2}, #32",
-                "cmp {c2}, {end2}",
-                "csel {c2}, {c2}, {base2}, lo",
-                "add {c1}, {c1}, #32",
-                "cmp {c1}, {end1}",
-                "csel {c1}, {c1}, {base1}, lo",
-                "add {c0}, {c0}, #32",
-                "cmp {c0}, {end0}",
-                "csel {c0}, {c0}, {base0}, lo",
-                "subs {count}, {count}, #1",
-                "b.ne 13b",
-                "14:",
-                source = inout(reg) src.as_ptr() => _,
-                output = inout(reg) dest_pointer => _,
-                outputend = in(reg) dest_pointer.add(dst.len()),
-                base0 = in(reg) base0, end0 = in(reg) end0,
-                base1 = in(reg) base1, end1 = in(reg) end1,
-                base2 = in(reg) base2, end2 = in(reg) end2,
-                stride = in(reg) stride, length = in(reg) length,
-                nochange = in(reg) no_change, reverse = in(reg) reverse,
-                weightvalue = in(reg) self.weight,
-                c0 = out(reg) _, c1 = out(reg) _, c2 = out(reg) _,
-                count = out(reg) _, tmpint = out(reg) _,
-                weight = out(vreg) _, half = out(vreg) _,
-                s0a = out(vreg) _, s0b = out(vreg) _,
-                s1a = out(vreg) _, s1b = out(vreg) _,
-                s2a = out(vreg) _, s2b = out(vreg) _,
-                leading_a = out(vreg) _, leading_b = out(vreg) _,
-                tmp0 = out(vreg) _, tmp1 = out(vreg) _, tmp2 = out(vreg) _,
-                options(nostack),
+        }
+        src = src.wrapping_offset(stride_of_8 as isize);
+        dst = dst.wrapping_add(8);
+        x += 8;
+    }
+    let x_tail = src_w - x;
+    if x_tail > 0 {
+        unsafe {
+            blur_column(
+                to_a8, blur, radius, x_tail, &g0, &g1, &g2, &g3, &g4, src, src_rb, src_h, dst,
+                dst_rb,
             );
         }
     }
 }
-#[cfg(test)]
-mod legacy_oracle {
-    use super::*;
-    struct LegacyPlanGauss {
-        pass_sizes: [usize; 3],
-        border: usize,
-        weight: u64,
-    }
 
-    impl LegacyPlanGauss {
-        fn new(sigma: f32) -> Self {
-            let possible_window =
-                (f64::from(sigma) * 3.0 * (2.0 * std::f64::consts::PI).sqrt() / 4.0 + 0.5).floor()
-                    as usize;
-            let window = possible_window.max(1);
-            let pass_sizes = [
-                window - 1,
-                window - 1,
-                window - 1 + usize::from(window % 2 == 0),
-            ];
-            let border = if window % 2 == 1 {
-                3 * ((window - 1) / 2)
-            } else {
-                3 * (window / 2) - 1
-            };
-            let divisor = if window % 2 == 1 {
-                window.pow(3)
-            } else {
-                window.pow(3) + window.pow(2)
-            };
-            let weight = ((1_u64 << 32) as f64 / divisor as f64).round() as u64;
-            Self {
-                pass_sizes,
-                border,
-                weight,
-            }
-        }
-
-        fn scan(&self, src: &[u8]) -> Vec<u8> {
-            let mut dst = vec![0; src.len() + 2 * self.border];
-            let mut buffers = [
-                vec![0_u32; self.pass_sizes[0]],
-                vec![0_u32; self.pass_sizes[1]],
-                vec![0_u32; self.pass_sizes[2]],
-            ];
-            let mut cursors = [0_usize; 3];
-            let mut sums = [0_u32; 3];
-            let mut advance = |leading: u8| -> u8 {
-                sums[0] += u32::from(leading);
-                sums[1] += sums[0];
-                sums[2] += sums[1];
-                let result = ((self.weight * u64::from(sums[2]) + (1_u64 << 31)) >> 32) as u8;
-                for level in (0..3).rev() {
-                    if !buffers[level].is_empty() {
-                        sums[level] -= buffers[level][cursors[level]];
-                        buffers[level][cursors[level]] = if level == 0 {
-                            u32::from(leading)
-                        } else {
-                            sums[level - 1]
-                        };
-                        cursors[level] = (cursors[level] + 1) % buffers[level].len();
-                    }
-                }
-                result
-            };
-            for (index, &alpha) in src.iter().enumerate() {
-                dst[index] = advance(alpha);
-            }
-            let sliding_window = 2 * self.border + 1;
-            let no_change_count = sliding_window.saturating_sub(src.len());
-            for index in src.len()..src.len() + no_change_count {
-                dst[index] = advance(0);
-            }
-            drop(advance);
-            buffers.iter_mut().for_each(|buffer| buffer.fill(0));
-            cursors = [0; 3];
-            sums = [0; 3];
-            for (index, &alpha) in src.iter().rev().enumerate() {
-                let leading = u32::from(alpha);
-                sums[0] += leading;
-                sums[1] += sums[0];
-                sums[2] += sums[1];
-                let output_index = dst.len() - 1 - index;
-                if output_index < src.len() + no_change_count {
-                    break;
-                }
-                dst[output_index] =
-                    ((self.weight * u64::from(sums[2]) + (1_u64 << 31)) >> 32) as u8;
-                for level in (0..3).rev() {
-                    if !buffers[level].is_empty() {
-                        sums[level] -= buffers[level][cursors[level]];
-                        buffers[level][cursors[level]] =
-                            if level == 0 { leading } else { sums[level - 1] };
-                        cursors[level] = (cursors[level] + 1) % buffers[level].len();
-                    }
-                }
-            }
-            dst
-        }
-    }
-
-    fn legacy_blur_alpha_mask(mask: &mut Mask, sigma: f32) {
-        if sigma <= 0.0 || !sigma.is_finite() {
+// Source: src/core/SkMaskBlurFilter.cpp:845-848
+// Source: src/core/SkMaskBlurFilter.cpp:850-855
+// Source: src/core/SkMaskBlurFilter.cpp:857-861
+// Source: src/core/SkMaskBlurFilter.cpp:863-867
+// Source: src/core/SkMaskBlurFilter.cpp:869-873
+// Source: src/core/SkMaskBlurFilter.cpp:875-876
+unsafe fn direct_blur_y(
+    to_a8: Option<ToA8>,
+    stride_of_8: i32,
+    radius: i32,
+    gauss: &[u16; 6],
+    src: *const u8,
+    src_rb: usize,
+    src_w: i32,
+    src_h: i32,
+    dst: *mut u8,
+    dst_rb: usize,
+) {
+    let blur: BlurY = match radius {
+        1 => blur_y_radius_1,
+        2 => blur_y_radius_2,
+        3 => blur_y_radius_3,
+        4 => blur_y_radius_4,
+        _ => {
+            crate::SkASSERTF!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),876; @condition b"false\0".as_ptr(); false,"The radius %d is not handled\n",radius as core::ffi::c_int);
             return;
         }
-        if sigma >= 2.0 {
-            legacy_blur_alpha_mask_box(mask, sigma);
-        } else if sigma >= 1.0 / 3.0 {
-            legacy_blur_alpha_mask_small(mask, sigma);
-        }
+    };
+    unsafe {
+        blur_y_rect(
+            to_a8,
+            stride_of_8,
+            blur,
+            radius,
+            gauss,
+            src,
+            src_rb,
+            src_w,
+            src_h,
+            dst,
+            dst_rb,
+        );
     }
+}
 
-    fn legacy_skia_small_gauss_factors(sigma: f32) -> Vec<u16> {
-        let variance = f64::from(sigma).powi(2);
-        let bessel0 = |t: f64| {
-            let t_squared_over_four = t * t / 4.0;
-            let mut sum = 1.0;
-            let mut factor = 1.0;
-            let mut k = 1;
-            while factor > 1.0 / 1_000_000.0 {
-                factor *= t_squared_over_four / f64::from(k * k);
-                sum += factor;
-                k += 1;
-            }
-            sum
+// Source: src/core/SkMaskBlurFilter.cpp:880-883
+// Source: src/core/SkMaskBlurFilter.cpp:885-886
+// Source: src/core/SkMaskBlurFilter.cpp:888-889
+// Source: src/core/SkMaskBlurFilter.cpp:891-891
+// Source: src/core/SkMaskBlurFilter.cpp:893-896
+// Source: src/core/SkMaskBlurFilter.cpp:900-901
+// Source: src/core/SkMaskBlurFilter.cpp:903-904
+// Source: src/core/SkMaskBlurFilter.cpp:906-908
+// Source: src/core/SkMaskBlurFilter.cpp:910-912
+// Source: src/core/SkMaskBlurFilter.cpp:915-916
+// Source: src/core/SkMaskBlurFilter.cpp:918-919
+// Source: src/core/SkMaskBlurFilter.cpp:921-922
+// Source: src/core/SkMaskBlurFilter.cpp:927-952
+// Source: src/core/SkMaskBlurFilter.cpp:956-958
+// Source: src/core/SkMaskBlurFilter.cpp:960-960
+pub unsafe fn small_blur(
+    sigma_x: f64,
+    sigma_y: f64,
+    src: &crate::src::core::SkMask::SkMask,
+    dst: &mut crate::src::core::SkMask::SkMaskBuilder,
+) -> crate::src::core::SkPoint::SkIPoint {
+    use crate::src::core::{
+        SkGaussFilter::SkGaussFilter,
+        SkMask::{Format, SkMaskBuilder},
+        SkPoint::SkIPoint,
+    };
+    crate::SkASSERT!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),881; @condition b"sigmaX == sigmaY\0".as_ptr(); (sigma_x)==(sigma_y));
+    crate::SkASSERT!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),882; @condition b"0.01 <= sigmaX && sigmaX < 2\0".as_ptr(); 0.01<=sigma_x && sigma_x<2.0);
+    crate::SkASSERT!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),883; @condition b"0.01 <= sigmaY && sigmaY < 2\0".as_ptr(); 0.01<=sigma_y && sigma_y<2.0);
+    let filter_x = SkGaussFilter::new(sigma_x);
+    let filter_y = SkGaussFilter::new(sigma_y);
+    let radius_x = filter_x.radius();
+    let radius_y = filter_y.radius();
+    crate::SkASSERT!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),891; @condition b"radiusX <= 4 && radiusY <= 4\0".as_ptr(); radius_x<=4 && radius_y<=4);
+    let prepare_gauss = |filter: &SkGaussFilter, factors: &mut [u16; 6]| {
+        let mut i = 0;
+        for &d in filter.as_slice() {
+            factors[i] = (d * ((1u32 << 16) as f64)).round() as u16;
+            i += 1;
+        }
+    };
+    // Inactive factors are initialized in Rust; radius specializations never consume them.
+    let (mut factors_x, mut factors_y) = ([0u16; 6], [0u16; 6]);
+    prepare_gauss(&filter_x, &mut factors_x);
+    prepare_gauss(&filter_y, &mut factors_y);
+    *dst = SkMaskBuilder::PrepareDestination(radius_x, radius_y, src);
+    if src.fImage.is_null() {
+        return SkIPoint {
+            fX: radius_x,
+            fY: radius_y,
         };
-        let bessel1 = |t: f64| {
-            let t_squared_over_four = t * t / 4.0;
-            let mut sum = t / 2.0;
-            let mut factor = sum;
-            let mut k = 1;
-            while factor > 1.0 / 1_000_000.0 {
-                factor *= t_squared_over_four / f64::from(k * (k + 1));
-                sum += factor;
-                k += 1;
-            }
-            sum
-        };
-        let divisor = variance.exp();
-        let mut bessel = [0.0_f64; 6];
-        let mut factors = [0.0_f64; 6];
-        bessel[0] = bessel0(variance);
-        bessel[1] = bessel1(variance);
-        factors[0] = bessel[0] / divisor;
-        factors[1] = bessel[1] / divisor;
-        let mut count = 1;
-        while factors[count] > 0.01 {
-            bessel[count + 1] =
-                -(2.0 * count as f64 / variance) * bessel[count] + bessel[count - 1];
-            factors[count + 1] = bessel[count + 1] / divisor;
-            count += 1;
-        }
-        let mut sum = 0.0;
-        for factor in factors[1..count].iter().rev() {
-            sum += 2.0 * factor;
-        }
-        sum += factors[0];
-        for factor in &mut factors[..count] {
-            *factor /= sum;
-        }
-        let mut sum = 0.0;
-        for factor in factors[1..count].iter().rev() {
-            sum += 2.0 * factor;
-        }
-        factors[0] = 1.0 - sum;
-        factors[..count]
-            .iter()
-            .map(|factor| (factor * 65536.0).round() as u16)
-            .collect()
     }
-
-    fn legacy_blur_alpha_mask_small(mask: &mut Mask, sigma: f32) {
-        let width = mask.width() as usize;
-        let height = mask.height() as usize;
-        let factors = legacy_skia_small_gauss_factors(sigma);
-        let radius = factors.len() - 1;
-        let mut bounds = None::<(usize, usize, usize, usize)>;
-        for (index, &alpha) in mask.data().iter().enumerate() {
-            if alpha != 0 {
-                let x = index % width;
-                let y = index / width;
-                bounds = Some(match bounds {
-                    Some((left, top, right, bottom)) => {
-                        (left.min(x), top.min(y), right.max(x), bottom.max(y))
-                    }
-                    None => (x, y, x, y),
-                });
-            }
-        }
-        let Some((left, top, right, bottom)) = bounds else {
-            return;
-        };
-        let src_width = right - left + 1;
-        let src_height = bottom - top + 1;
-        let blurred_height = src_height + 2 * radius;
-        let blurred_width = src_width + 2 * radius;
-        let mut vertical = vec![0_u8; src_width * blurred_height];
-        for y in 0..blurred_height {
-            for x in 0..src_width {
-                let mut value = 128_u32;
-                for offset in -(radius as isize)..=(radius as isize) {
-                    let source_y = y as isize - radius as isize + offset;
-                    if (0..src_height as isize).contains(&source_y) {
-                        let alpha =
-                            u32::from(mask.data()[(top + source_y as usize) * width + left + x]);
-                        let factor = u32::from(factors[offset.unsigned_abs()]);
-                        value += ((alpha << 8) * factor) >> 16;
-                    }
-                }
-                vertical[y * src_width + x] = (value >> 8) as u8;
-            }
-        }
-        let mut output = vec![0_u8; width * height];
-        for y in 0..blurred_height {
-            let dest_y = top as isize + y as isize - radius as isize;
-            if dest_y < 0 || dest_y >= height as isize {
-                continue;
-            }
-            for x in 0..blurred_width {
-                let dest_x = left as isize + x as isize - radius as isize;
-                if dest_x < 0 || dest_x >= width as isize {
-                    continue;
-                }
-                let mut value = 128_u32;
-                for offset in -(radius as isize)..=(radius as isize) {
-                    let source_x = x as isize - radius as isize + offset;
-                    if (0..src_width as isize).contains(&source_x) {
-                        let alpha = u32::from(vertical[y * src_width + source_x as usize]);
-                        let factor = u32::from(factors[offset.unsigned_abs()]);
-                        value += ((alpha << 8) * factor) >> 16;
-                    }
-                }
-                output[dest_y as usize * width + dest_x as usize] = (value >> 8) as u8;
-            }
-        }
-        mask.data_mut().copy_from_slice(&output);
+    if dst.fImage.is_null() {
+        dst.bounds().set_empty();
+        return SkIPoint { fX: 0, fY: 0 };
     }
-
-    fn legacy_blur_alpha_mask_box(mask: &mut Mask, sigma: f32) {
-        let width = mask.width() as usize;
-        let height = mask.height() as usize;
-        let mut bounds = None::<(usize, usize, usize, usize)>;
-        for (index, &alpha) in mask.data().iter().enumerate() {
-            if alpha != 0 {
-                let x = index % width;
-                let y = index / width;
-                bounds = Some(match bounds {
-                    Some((left, top, right, bottom)) => {
-                        (left.min(x), top.min(y), right.max(x), bottom.max(y))
-                    }
-                    None => (x, y, x, y),
-                });
-            }
+    let (src_w, src_h) = (src.fBounds.width(), src.fBounds.height());
+    let (dst_w, dst_h) = (dst.fBounds.width(), dst.fBounds.height());
+    let (src_rb, dst_rb) = (src.fRowBytes as usize, dst.fRowBytes as usize);
+    let dst_image = dst.fImage.cast_mut();
+    let (to_a8, stride): (Option<ToA8>, i32) = match src.fFormat {
+        Format::kBW_Format => (Some(bw_to_a8), 1),
+        Format::kA8_Format => (None, 8),
+        Format::kARGB32_Format => (Some(argb32_to_a8), 32),
+        Format::kLCD16_Format => (Some(lcd_to_a8), 16),
+        _ => {
+            crate::SK_ABORT!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),952; "Unhandled format.")
         }
-        let Some((left, top, right, bottom)) = bounds else {
-            return;
-        };
-        let src_width = right - left + 1;
-        let src_height = bottom - top + 1;
-        let plan = LegacyPlanGauss::new(sigma.min(135.0));
-        let blurred_width = src_width + 2 * plan.border;
-        let blurred_height = src_height + 2 * plan.border;
-        let mut horizontal = vec![0_u8; blurred_width * src_height];
-        for y in 0..src_height {
-            let start = (top + y) * width + left;
-            let row = plan.scan(&mask.data()[start..start + src_width]);
-            horizontal[y * blurred_width..(y + 1) * blurred_width].copy_from_slice(&row);
-        }
-        let mut output = vec![0_u8; width * height];
-        let mut column = vec![0_u8; src_height];
-        for x in 0..blurred_width {
-            for y in 0..src_height {
-                column[y] = horizontal[y * blurred_width + x];
-            }
-            let blurred = plan.scan(&column);
-            let dest_x = left as isize + x as isize - plan.border as isize;
-            if dest_x < 0 || dest_x >= width as isize {
-                continue;
-            }
-            for (y, &alpha) in blurred.iter().enumerate().take(blurred_height) {
-                let dest_y = top as isize + y as isize - plan.border as isize;
-                if dest_y >= 0 && dest_y < height as isize {
-                    output[dest_y as usize * width + dest_x as usize] = alpha;
-                }
-            }
-        }
-        mask.data_mut().copy_from_slice(&output);
+    };
+    unsafe {
+        direct_blur_y(
+            to_a8,
+            stride,
+            radius_y,
+            &factors_y,
+            src.fImage,
+            src_rb,
+            src_w,
+            src_h,
+            dst_image.wrapping_offset(radius_x as isize),
+            dst_rb,
+        );
     }
-
-    #[test]
-    fn scan_cursor_and_reused_scratch_match_old_gauss_arithmetic() {
-        for sigma in [0.1, 0.5, 0.8, 1.2, 1.6, 2.0, 2.25, 3.5, 9.0, 20.0, 135.0] {
-            let old = LegacyPlanGauss::new(sigma);
-            let new = super::PlanGauss::new(sigma);
-            let mut reusable = super::Scan::new(&new);
-            for size in [1, 2, 3, 11, 17, 40, 255, 256, 520] {
-                if sigma < 0.6 && size > 17 {
-                    continue;
-                }
-                for pattern in 0..4 {
-                    let src: Vec<_> = (0..size)
-                        .map(|i| match pattern {
-                            0 => 0,
-                            1 => 255,
-                            2 => {
-                                if i % 2 == 0 {
-                                    0
-                                } else {
-                                    255
-                                }
-                            }
-                            _ => ((i * 37 + i * i * 13 + 71) % 256) as u8,
-                        })
-                        .collect();
-                    let expected = old.scan(&src);
-                    assert_eq!(new.scan(&src), expected);
-                    let mut actual = vec![0xa5; expected.len()];
-                    reusable.blur(&src, &mut actual);
-                    assert_eq!(
-                        actual, expected,
-                        "sigma={sigma},size={size},pattern={pattern}"
-                    );
-                }
-            }
-        }
+    unsafe {
+        direct_blur_x(
+            radius_x,
+            &factors_x,
+            dst_image.wrapping_offset(radius_x as isize),
+            dst_rb,
+            src_w,
+            dst_image,
+            dst_rb,
+            dst_w,
+            dst_h,
+        );
     }
-
-    #[cfg(all(feature = "simd", target_arch = "aarch64", target_endian = "little"))]
-    #[test]
-    fn eight_lane_scan_matches_independent_old_scans_with_stride_and_reused_rings() {
-        for sigma in [0.8, 1.2, 1.6, 2.0, 2.25, 3.5, 9.0, 18.0, 20.0, 40.0, 135.0] {
-            let old = LegacyPlanGauss::new(sigma);
-            let plan = super::PlanGauss::new(sigma);
-            let mut scan = super::neon_scan::Scan8::new(&plan);
-            for length in [1, 2, 3, 11, 17, 40, 255, 256, 520] {
-                for stride in [8, 13] {
-                    for pattern in 0..4 {
-                        let mut src = vec![0xa5; length * stride];
-                        for y in 0..length {
-                            for lane in 0..8 {
-                                src[y * stride + lane] = match pattern {
-                                    0 => 0,
-                                    1 => 255,
-                                    2 => {
-                                        if (y + lane) % 2 == 0 {
-                                            255
-                                        } else {
-                                            0
-                                        }
-                                    }
-                                    _ => ((y * y * 13 + y * 37 + lane * 71 + 43) % 256) as u8,
-                                };
-                            }
-                        }
-                        let mut expected = vec![0u8; (length + 2 * plan.border) * 8];
-                        for lane in 0..8 {
-                            let column: Vec<_> =
-                                (0..length).map(|y| src[y * stride + lane]).collect();
-                            for (y, alpha) in old.scan(&column).into_iter().enumerate() {
-                                expected[y * 8 + lane] = alpha;
-                            }
-                        }
-                        let mut actual = vec![0xa5; expected.len()];
-                        unsafe {
-                            scan.blur(&src, stride, length, &mut actual);
-                        }
-                        assert_eq!(
-                            actual, expected,
-                            "sigma={sigma},length={length},stride={stride},pattern={pattern}"
-                        );
-                    }
-                }
-            }
-        }
+    SkIPoint {
+        fX: radius_x,
+        fY: radius_y,
     }
+}
 
-    #[cfg(all(feature = "simd", target_arch = "aarch64", target_endian = "little"))]
-    #[test]
-    fn eight_row_transpose_preserves_lane_order_tail_and_unaligned_strides() {
-        for width in [1, 7, 8, 9, 15, 16, 17, 33, 1600] {
-            let stride = width + 5;
-            let mut source = vec![0xa5; 3 + stride * 8];
-            for y in 0..8 {
-                for x in 0..width {
-                    source[3 + y * stride + x] = ((y * 71 + x * 37 + 43) % 256) as u8;
-                }
-            }
-            let mut packed = vec![0xa5; width * 8];
-            unsafe {
-                super::neon_scan::transpose_rows8(&source[3..], stride, width, &mut packed);
-            }
-            for x in 0..width {
-                for y in 0..8 {
-                    assert_eq!(packed[x * 8 + y], source[3 + y * stride + x]);
-                }
-            }
-            let mut restored = vec![0xa5; 5 + stride * 8];
-            unsafe {
-                super::neon_scan::untranspose_rows8(&packed, width, &mut restored[5..], stride);
-            }
-            assert!(restored[..5].iter().all(|&a| a == 0xa5));
-            for y in 0..8 {
-                assert_eq!(
-                    &restored[5 + y * stride..5 + y * stride + width],
-                    &source[3 + y * stride..3 + y * stride + width]
-                );
-                assert!(restored[5 + y * stride + width..5 + (y + 1) * stride]
-                    .iter()
-                    .all(|&a| a == 0xa5));
-            }
+// Source: src/core/SkMaskBlurFilter.cpp:965-965
+// Source: src/core/SkMaskBlurFilter.cpp:967-968
+// Source: src/core/SkMaskBlurFilter.cpp:972-972
+// Source: src/core/SkMaskBlurFilter.cpp:974-975
+// Source: src/core/SkMaskBlurFilter.cpp:977-979
+// Source: src/core/SkMaskBlurFilter.cpp:981-983
+// Source: src/core/SkMaskBlurFilter.cpp:985-987
+// Source: src/core/SkMaskBlurFilter.cpp:990-994
+// Source: src/core/SkMaskBlurFilter.cpp:996-997
+// Source: src/core/SkMaskBlurFilter.cpp:1000-1001
+// Source: src/core/SkMaskBlurFilter.cpp:1004-1005
+// Source: src/core/SkMaskBlurFilter.cpp:1007-1007
+// Source: src/core/SkMaskBlurFilter.cpp:1010-1018
+// Source: src/core/SkMaskBlurFilter.cpp:1020-1027
+// Source: src/core/SkMaskBlurFilter.cpp:1029-1036
+// Source: src/core/SkMaskBlurFilter.cpp:1038-1045
+// Source: src/core/SkMaskBlurFilter.cpp:1047-1049
+// Source: src/core/SkMaskBlurFilter.cpp:1054-1057
+// Source: src/core/SkMaskBlurFilter.cpp:1059-1060
+// Source: src/core/SkMaskBlurFilter.cpp:1063-1063
+impl SkMaskBlurFilter {
+    /// Safety: source image and row storage must remain valid throughout filtering.
+    pub unsafe fn blur(
+        &self,
+        src: &crate::src::core::SkMask::SkMask,
+        dst: &mut crate::src::core::SkMask::SkMaskBuilder,
+    ) -> crate::src::core::SkPoint::SkIPoint {
+        use crate::src::core::{SkMask::*, SkPoint::SkIPoint};
+        if self.fSigmaW < 2.0 && self.fSigmaH < 2.0 {
+            return unsafe { small_blur(self.fSigmaW, self.fSigmaH, src, dst) };
         }
-    }
-
-    #[cfg(all(feature = "simd", target_arch = "aarch64", target_endian = "little"))]
-    #[test]
-    fn strided_eight_byte_copy_preserves_unaligned_spans_and_padding() {
-        for rows in [0, 1, 2, 3, 17, 198, 424] {
-            for stride in [8, 9, 13, 520] {
-                for prefix in [0, 1, 7] {
-                    let src: Vec<_> = (0..rows * 8).map(|i| ((i * 37 + 43) % 256) as u8).collect();
-                    let mut actual = vec![0xa5; prefix + rows * stride + 11];
-                    let mut expected = actual.clone();
-                    for row in 0..rows {
-                        expected[prefix + row * stride..prefix + row * stride + 8]
-                            .copy_from_slice(&src[row * 8..row * 8 + 8]);
-                    }
+        // Vec storage replaces the scoped arena; scratch allocations remain local to this call.
+        let plan_w = PlanGauss::new(self.fSigmaW);
+        let plan_h = PlanGauss::new(self.fSigmaH);
+        let (border_w, border_h) = (plan_w.border(), plan_h.border());
+        crate::SkASSERT!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),979; @condition b"borderH >= 0 && borderW >= 0\0".as_ptr(); border_h>=0 && border_w>=0);
+        *dst = SkMaskBuilder::PrepareDestination(border_w, border_h, src);
+        if src.fImage.is_null() {
+            return SkIPoint {
+                fX: border_w,
+                fY: border_h,
+            };
+        }
+        if dst.fImage.is_null() {
+            dst.bounds().set_empty();
+            return SkIPoint { fX: 0, fY: 0 };
+        }
+        let (src_w, src_h, dst_w, dst_h) = (
+            src.fBounds.width(),
+            src.fBounds.height(),
+            dst.fBounds.width(),
+            dst.fBounds.height(),
+        );
+        crate::SkASSERT!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),994; @condition b"srcW >= 0 && srcH >= 0 && dstW >= 0 && dstH >= 0\0".as_ptr(); src_w>=0 && src_h>=0 && dst_w>=0 && dst_h>=0);
+        let buffer_size = plan_w.bufferSize().max(plan_h.bufferSize());
+        let mut buffer = vec![0u32; buffer_size];
+        let (tmp_w, tmp_h) = (src_h, dst_w);
+        if tmp_h > i32::MAX / tmp_w {
+            return SkIPoint { fX: 0, fY: 0 };
+        }
+        let mut tmp = vec![0u8; (tmp_w * tmp_h) as usize];
+        let mut scan_w = plan_w.makeBlurScan(src_w, &mut buffer);
+        macro_rules! horizontal {
+            ($start:expr,$end:expr) => {{
+                let mut start = $start;
+                let mut end = $end;
+                for y in 0..src_h {
+                    let tmp_start = tmp.as_mut_ptr().wrapping_offset(y as isize);
                     unsafe {
-                        super::neon_scan::copy_rows8(&src, &mut actual[prefix..], rows, stride);
-                    }
-                    assert_eq!(actual, expected);
-                }
-            }
-        }
-    }
-
-    #[cfg(all(feature = "simd", target_arch = "aarch64", target_endian = "little"))]
-    #[test]
-    fn padded_row_lanes_never_change_logical_blur_height_or_tail_pixels() {
-        for height in 1..=15 {
-            for width in [7, 8, 9, 17] {
-                let support = IntRect::from_xywh(3, 2, width, height).unwrap();
-                let mut input = Mask::new(96, 80).unwrap();
-                for y in 2..2 + height {
-                    for x in 3..3 + width {
-                        input.data_mut()[(y * 96 + x) as usize] =
-                            ((x * 37 + y * 71) % 255 + 1) as u8;
-                    }
-                }
-                for sigma in [2.0, 18.0, 40.0] {
-                    let mut expected = input.clone();
-                    legacy_blur_alpha_mask(&mut expected, sigma);
-                    let mut actual = input.clone();
-                    super::blur_alpha_mask_with_bounds(&mut actual, sigma, Some(support));
-                    assert_eq!(
-                        actual.data(),
-                        expected.data(),
-                        "size={width}x{height},sigma={sigma}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn bounded_shadow_blur_matches_old_dense_algorithm_at_edges_and_thresholds() {
-        for (width, height) in [(7, 5), (61, 43), (520, 360)] {
-            for (x, y, w, h) in [(0, 0, 1, 1), (3, 2, 13, 9), (width - 3, height - 2, 9, 5)] {
-                let support = IntRect::from_xywh(x as i32, y as i32, w, h).unwrap();
-                for pattern in 0..3 {
-                    let mut input = Mask::new(width, height).unwrap();
-                    for yy in y..(y + h).min(height) {
-                        for xx in x..(x + w).min(width) {
-                            input.data_mut()[(yy * width + xx) as usize] = match pattern {
-                                0 => 255,
-                                1 if (xx + yy) % 3 == 0 => 0,
-                                _ => ((xx * 37 + yy * 13 + 71) % 256) as u8,
-                            };
-                        }
-                    }
-                    for sigma in [
-                        0.0,
-                        1.0 / 3.0 - 0.001,
-                        1.0 / 3.0,
-                        0.5,
-                        1.0,
-                        1.5,
-                        1.99,
-                        2.0,
-                        2.5,
-                        9.0,
-                        20.0,
-                        135.0,
-                    ] {
-                        let mut expected = input.clone();
-                        legacy_blur_alpha_mask(&mut expected, sigma);
-                        let mut bounded = input.clone();
-                        super::blur_alpha_mask_with_bounds(&mut bounded, sigma, Some(support));
-                        assert_eq!(
-                            bounded.data(),
-                            expected.data(),
-                            "size={width}x{height},sigma={sigma},pattern={pattern},xy={x},{y}"
+                        scan_w.blur(
+                            start,
+                            end,
+                            tmp_start,
+                            tmp_w,
+                            tmp_start.wrapping_offset((tmp_w * tmp_h) as isize),
                         );
-                        let mut whole = input.clone();
-                        super::blur_alpha_mask(&mut whole, sigma);
-                        assert_eq!(whole.data(), expected.data());
                     }
+                    start.advance_row(src.fRowBytes);
+                    end.advance_row(src.fRowBytes);
                 }
+            }};
+        }
+        match src.fFormat {
+            Format::kBW_Format => horizontal!(
+                BWAlphaIter::new(src.fImage, 0),
+                BWAlphaIter::new(src.fImage.wrapping_offset((src_w / 8) as isize), src_w % 8)
+            ),
+            Format::kA8_Format => horizontal!(
+                A8AlphaIter::new(src.fImage),
+                A8AlphaIter::new(src.fImage.wrapping_offset(src_w as isize))
+            ),
+            Format::kARGB32_Format => {
+                let argb = src.fImage.cast::<u32>();
+                horizontal!(
+                    ARGB32AlphaIter::new(argb),
+                    ARGB32AlphaIter::new(argb.wrapping_offset(src_w as isize))
+                );
+            }
+            Format::kLCD16_Format => {
+                let lcd = src.fImage.cast::<u16>();
+                horizontal!(
+                    LCD16AlphaIter::new(lcd),
+                    LCD16AlphaIter::new(lcd.wrapping_offset(src_w as isize))
+                );
+            }
+            _ => {
+                crate::SK_ABORT!(@source b"src/core/SkMaskBlurFilter.cpp\0".as_ptr(),1049; "Unhandled format.")
             }
         }
-        let mut empty = Mask::new(7, 5).unwrap();
-        super::blur_alpha_mask_with_bounds(&mut empty, 20.0, None);
-        assert_eq!(empty.data(), &[0; 35]);
-    }
-
-    #[test]
-    #[ignore = "reproducible debug large-shadow blur benchmark"]
-    fn bounded_shadow_debug_timing() {
-        let (width, height) = (2560, 1542);
-        let support = IntRect::from_xywh(281, 311, 1215, 79).unwrap();
-        let mut input = Mask::new(width, height).unwrap();
-        for y in support.top()..support.bottom() {
-            input.data_mut()[y as usize * width as usize + support.left() as usize
-                ..y as usize * width as usize + support.right() as usize]
-                .fill(255);
-        }
-        for sigma in [9.0, 20.0] {
-            let mut expected = input.clone();
-            let before = std::time::Instant::now();
-            legacy_blur_alpha_mask(&mut expected, sigma);
-            let old_time = before.elapsed();
-            let mut new = input.clone();
-            let now = std::time::Instant::now();
-            super::blur_alpha_mask_with_bounds(&mut new, sigma, Some(support));
-            let new_time = now.elapsed();
-            assert_eq!(new.data(), expected.data());
-            eprintln!(
-                "debug shadow sigma={sigma}: old {:.3}ms, bounded/reused Scan {:.3}ms, {:.1}x",
-                old_time.as_secs_f64() * 1000.0,
-                new_time.as_secs_f64() * 1000.0,
-                old_time.as_secs_f64() / new_time.as_secs_f64()
-            );
-        }
-    }
-
-    #[test]
-    #[ignore = "reproducible debug high-DPI shadow pointer benchmark"]
-    fn highdpi_shadow_pointer_debug_timing() {
-        let (width, height) = (2048, 1536);
-        let support = IntRect::from_xywh(224, 370, 1600, 198).unwrap();
-        let mut input = Mask::new(width, height).unwrap();
-        for y in support.top()..support.bottom() {
-            input.data_mut()[y as usize * width as usize + support.left() as usize
-                ..y as usize * width as usize + support.right() as usize]
-                .fill(255);
-        }
-        for sigma in [18.0, 40.0] {
-            let mut expected = input.clone();
-            legacy_blur_alpha_mask(&mut expected, sigma);
-            let mut samples = Vec::new();
-            let repetitions = std::env::var("SKIA_BLUR_BENCH_REPEAT")
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(7)
-                .max(1);
-            for _ in 0..repetitions {
-                let mut actual = input.clone();
-                let start = std::time::Instant::now();
-                super::blur_alpha_mask_with_bounds(&mut actual, sigma, Some(support));
-                samples.push(start.elapsed().as_secs_f64() * 1000.0);
-                assert_eq!(actual.data(), expected.data());
-                std::hint::black_box(&actual);
+        let mut scan_h = plan_h.makeBlurScan(tmp_w, &mut buffer);
+        for y in 0..tmp_h {
+            let tmp_start = tmp.as_ptr().wrapping_offset((y * tmp_w) as isize);
+            let dst_start = dst.fImage.cast_mut().wrapping_offset(y as isize);
+            unsafe {
+                scan_h.blur(
+                    A8AlphaIter::new(tmp_start),
+                    A8AlphaIter::new(tmp_start.wrapping_offset(tmp_w as isize)),
+                    dst_start,
+                    dst.fRowBytes as i32,
+                    dst_start.wrapping_offset((dst.fRowBytes * dst_h as u32) as isize),
+                );
             }
-            samples.sort_by(f64::total_cmp);
-            eprintln!("highdpi shadow device={width}x{height},source=1600x198,sigma={sigma}: min={:.3} median={:.3} max={:.3}ms", samples[0], samples[repetitions / 2], samples[repetitions - 1]);
+        }
+        SkIPoint {
+            fX: border_w,
+            fY: border_h,
         }
     }
 }

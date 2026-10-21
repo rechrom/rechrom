@@ -21,10 +21,10 @@ use crate::{
         },
     },
 };
-use compositor_core::runtime::resources::CpuReturnedResource;
+use compositor_core::runtime::resources::RasterReturnedResource;
 use compositor_core::{
     adapter::layer_tree_impl::ResourceId, runtime::frame::RenderPassId, NativeCompositorFrame,
-    NativeCpuResourceLease,
+    NativeRasterResourceLease,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -69,7 +69,7 @@ impl fmt::Display for VizError {
 impl Error for VizError {}
 pub struct FrameSubmission {
     pub submission: u64,
-    pub returned_resources: Vec<CpuReturnedResource>,
+    pub returned_resources: Vec<RasterReturnedResource>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -86,7 +86,7 @@ pub(crate) struct RootPresentation {
 /// opaque capabilities owned by this Engine output transaction.
 pub struct VizOutput {
     pub(crate) frame: AggregatedFrame,
-    pub(crate) resources: BTreeMap<u32, Arc<NativeCpuResourceLease>>,
+    pub(crate) resources: BTreeMap<u32, Arc<NativeRasterResourceLease>>,
     pub(crate) receipt: DrawReceipt,
     pub(crate) roots: Vec<RootPresentation>,
     pub(crate) output_rect: DeviceRect,
@@ -95,7 +95,7 @@ impl VizOutput {
     pub fn Frame(&self) -> &AggregatedFrame {
         &self.frame
     }
-    pub fn Resource(&self, id: ResourceId) -> Option<Arc<NativeCpuResourceLease>> {
+    pub fn Resource(&self, id: ResourceId) -> Option<Arc<NativeRasterResourceLease>> {
         self.resources.get(&id.0).cloned()
     }
     pub fn RootDestination(&self, id: RenderPassId) -> Option<DeviceRect> {
@@ -308,7 +308,7 @@ impl VizEngine {
             }
         }
     }
-    pub fn DestroySurface(&mut self, id: SurfaceId) -> Option<Vec<CpuReturnedResource>> {
+    pub fn DestroySurface(&mut self, id: SurfaceId) -> Option<Vec<RasterReturnedResource>> {
         let core = self.ids.remove(&id)?;
         self.damage.OnSurfaceMarkedForDestruction(core);
         let mut surface = self.manager.DestroySurface(core)?;

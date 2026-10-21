@@ -1,0 +1,62 @@
+// Copyright 2018 Google LLC. BSD-style license.
+// skcms_internals.h:112-123 defines SKCMS_DISABLE_SKX on the selected
+// non-x86 ARM64 configuration. This is the ORIGINAL disabled-ISA wrapper;
+// The enabled x86 N=16 branch instantiates the actual common program.
+
+use super::skcms_Transform::Op;
+use core::ffi::c_void;
+// Source: modules/skcms/src/skcms_TransformSkx.cc:41-46
+/// Safety: program/context/pixel spans obey the actual baseline interpreter's
+/// native pointer, pixel count, layout and retained context lifetime contract.
+#[cfg(any(
+    skcms_portable,
+    not(target_arch = "x86_64"),
+    target_os = "android",
+    skcms_disable_skx
+))]
+pub unsafe fn run_program(
+    program: *const Op,
+    contexts: *const *const c_void,
+    programSize: isize,
+    src: *const u8,
+    dst: *mut u8,
+    n: i32,
+    src_bpp: usize,
+    dst_bpp: usize,
+) {
+    unsafe {
+        super::skcms_TransformBaseline::run_program(
+            program,
+            contexts,
+            programSize,
+            src,
+            dst,
+            n,
+            src_bpp,
+            dst_bpp,
+        )
+    }
+}
+
+// Source: modules/skcms/src/skcms_TransformSkx.cc:51-52
+// Actual native wide lane storage, not an ARM program or scalar evaluator.
+// The common native program is instantiated at this exact width below.
+#[cfg(all(
+    target_arch = "x86_64",
+    not(target_os = "android"),
+    not(skcms_portable),
+    not(skcms_disable_skx)
+))]
+pub mod enabled {
+    pub const N: usize = 16;
+    pub type V<T> = [T; N];
+    // Source: modules/skcms/src/skcms_TransformSkx.cc:53
+    crate::modules::skcms::src::Transform_inl::instantiate_transform_wide_backend!(skx);
+}
+#[cfg(all(
+    target_arch = "x86_64",
+    not(target_os = "android"),
+    not(skcms_portable),
+    not(skcms_disable_skx)
+))]
+pub use enabled::{run_program, N, V};

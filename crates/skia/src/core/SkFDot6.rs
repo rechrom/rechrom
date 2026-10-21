@@ -1,68 +1,94 @@
-// Copyright 2006 The Android Open Source Project
-// Copyright 2020 Yevhenii Reizner
-// BSD-3-Clause; see LICENSE and provenance in translation_map.json.
-//! Fixed-point 26.6 routines from src/core/SkFDot6.h.
-//! can_convert_to_fdot16 / small_scale are Rust scan-converter helpers.
+use crate::include::private::SkFixed::{SkFixed, SkFixedDiv};
 
-use crate::include::private::SkFixed::{fdot16, FDot16};
-use crate::raster::math::left_shift;
+// Source: src/core/SkFDot6.h:18-18
 pub type SkFDot6 = i32;
-use core::convert::TryFrom;
-pub use SkFDot6 as FDot6;
 
-pub const ONE: FDot6 = 64;
-
-pub fn SkIntToFDot6(n: i32) -> FDot6 {
-    debug_assert!(n as i16 as i32 == n);
-    n << 6
+// Source: src/core/SkFDot6.h:25-40
+#[inline]
+pub fn SkScalarRoundToFDot6(x: f32, shift: i32) -> SkFDot6 {
+    let fractional_bits = 6 + shift;
+    let magic = (1i64.wrapping_shl((52 - fractional_bits) as u32)) as f64 * 1.5;
+    let value = x as f64 + magic;
+    value.to_bits() as u32 as i32
 }
 
-pub fn SkFloatToFDot6(n: f32) -> FDot6 {
-    (n * 64.0) as i32
+// Source: src/core/SkFDot6.h:42-42
+pub const SK_FDot6One: i32 = 64;
+
+// Source: src/core/SkFDot6.h:43-43
+pub const SK_FDot6Half: i32 = 32;
+
+// Source: src/core/SkFDot6.h:46-50
+#[cfg(sk_debug)]
+#[inline]
+pub const fn SkIntToFDot6(x: i32) -> SkFDot6 {
+    debug_assert!(x >= i32::MIN >> 6 && x <= i32::MAX >> 6);
+    x.wrapping_shl(6)
 }
 
-pub fn SkFDot6Floor(n: FDot6) -> FDot6 {
-    n >> 6
+// Source: src/core/SkFDot6.h:52-52
+#[cfg(not(sk_debug))]
+#[inline]
+pub const fn SkIntToFDot6(x: i32) -> SkFDot6 {
+    x.wrapping_shl(6)
 }
 
-pub fn SkFDot6Ceil(n: FDot6) -> FDot6 {
-    (n + 63) >> 6
+// Source: src/core/SkFDot6.h:55-55
+#[inline]
+pub fn SkFDot6Floor(x: i32) -> i32 {
+    x >> 6
 }
 
-pub fn SkFDot6Round(n: FDot6) -> FDot6 {
-    (n + 32) >> 6
+// Source: src/core/SkFDot6.h:56-56
+#[inline]
+pub fn SkFDot6Ceil(x: i32) -> i32 {
+    x.wrapping_add(63) >> 6
 }
 
-pub fn SkFDot6ToFixed(n: FDot6) -> FDot16 {
-    debug_assert!((left_shift(n, 10) >> 10) == n);
-    left_shift(n, 10)
+// Source: src/core/SkFDot6.h:57-57
+#[inline]
+pub fn SkFDot6Round(x: i32) -> i32 {
+    x.wrapping_add(SK_FDot6Half) >> 6
 }
 
-pub fn SkFDot6Div(a: FDot6, b: FDot6) -> FDot16 {
-    debug_assert_ne!(b, 0);
+// Source: src/core/SkFDot6.h:59-59
+#[inline]
+pub fn SkFixedToFDot6(x: i32) -> i32 {
+    x >> 10
+}
 
+// Source: src/core/SkFDot6.h:61-65
+#[inline]
+pub fn SkFDot6ToFixed(x: SkFDot6) -> SkFixed {
+    debug_assert_eq!(x.wrapping_shl(10) >> 10, x);
+    x.wrapping_shl(10)
+}
+
+// Source: src/core/SkFDot6.h:67-67
+#[inline]
+pub fn SkFloatToFDot6(x: f32) -> SkFDot6 {
+    (x * SK_FDot6One as f32) as i32
+}
+
+// Source: src/core/SkFDot6.h:68-68
+pub use SkFloatToFDot6 as SkScalarToFDot6;
+
+// Source: src/core/SkFDot6.h:69-69
+#[inline]
+pub fn SkFDot6ToFloat(x: SkFDot6) -> f32 {
+    x as f32 * 0.015625
+}
+
+// Source: src/core/SkFDot6.h:70-70
+pub use SkFDot6ToFloat as SkFDot6ToScalar;
+
+// Source: src/core/SkFDot6.h:72-80
+#[inline]
+pub fn SkFDot6Div(a: SkFDot6, b: SkFDot6) -> SkFixed {
+    crate::SkASSERT!(@source b"src/core/SkFDot6.h\0".as_ptr(),73; @condition b"b != 0\0".as_ptr(); b != 0);
     if i16::try_from(a).is_ok() {
-        left_shift(a, 16) / b
+        a.wrapping_shl(16) / b
     } else {
-        fdot16::div(a, b)
+        SkFixedDiv(a, b)
     }
 }
-
-pub fn can_convert_to_fdot16(n: FDot6) -> bool {
-    let max_dot6 = i32::MAX >> (16 - 6);
-    n.abs() <= max_dot6
-}
-
-pub fn small_scale(value: u8, dot6: FDot6) -> u8 {
-    debug_assert!(dot6 as u32 <= 64);
-    ((value as i32 * dot6) >> 6) as u8
-}
-
-// Rust compatibility spellings.
-pub use SkFDot6Ceil as ceil;
-pub use SkFDot6Div as div;
-pub use SkFDot6Floor as floor;
-pub use SkFDot6Round as round;
-pub use SkFDot6ToFixed as to_fdot16;
-pub use SkFloatToFDot6 as from_f32;
-pub use SkIntToFDot6 as from_i32;

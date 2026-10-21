@@ -464,7 +464,8 @@ impl Default for DisplayItem {
 // Public producer analysis also serves canonical PaintRecords downstream.
 pub use crate::paint_context::CalculateRectKnownToBeOpaqueForRecord;
 pub use image_resource::{
-    PaintImageContent, PaintImageId as NativePaintImageId,
+    ContainerKey as DocumentImageContainerKey, PaintImageContent,
+    PaintImageId as NativePaintImageId,
     PaintImageMetadataUnavailable as ImageMetadataUnavailable,
 };
 pub use layoutng_assembly::internal::layout_input::PaintImage as NativePaintImage;
@@ -643,6 +644,15 @@ pub struct RecordedDisplayItem {
     pub is_cacheable: bool,
     pub is_tombstone: bool,
     pub paint_invalidation_reason: Option<foundation::PaintInvalidationReason>,
+    /// Immutable content versions of image resources sampled by this record.
+    ///
+    /// Blink normally carries an image client's invalidation through the next
+    /// PaintController transaction. Rechrom also permits an older immutable
+    /// PaintArtifact to be presented again, so a one-shot dirty bit is not a
+    /// sufficient proof. Keeping the exact `(resource id, revision)` set on
+    /// the record lets RasterInvalidator compare any two retained artifacts in
+    /// either direction without retaining Paint or Page state.
+    pub image_content_revisions: Vec<(image_resource::ImageId, u64)>,
     pub scrollbar_needs_update_display: Option<bool>,
     pub kind: RecordedDisplayItemKind,
     pub id: crate::display_item_id::DisplayItemId,
@@ -900,6 +910,46 @@ impl PartialEq for PaintArtifact {
 }
 
 impl PaintArtifact {
+    /// Rebuild the per-record image-content proof from the canonical retained
+    /// dependency index and resource catalog. Returns the records whose sampled
+    /// content changed and clears cached-subsequence reuse for their chunks.
+    fn RefreshImageContentRevisions(&mut self) -> Vec<usize> {
+        let mut revisions = vec![Vec::new(); self.display_items.len()];
+        if let Some(resources) = self.resources.as_deref() {
+            for image in &resources.images {
+                for dependency in self.image_dependencies.dependencies(image.id) {
+                    if let Some(record) = revisions.get_mut(dependency.record_index) {
+                        record.push((image.id, image.revision));
+                    }
+                }
+            }
+        }
+        for record in &mut revisions {
+            record.sort_unstable();
+            record.dedup();
+        }
+        let changed: Vec<_> = self
+            .display_items
+            .iter()
+            .zip(&revisions)
+            .enumerate()
+            .filter_map(|(index, (item, revision))| {
+                (item.image_content_revisions != *revision).then_some(index)
+            })
+            .collect();
+        for (item, revision) in self.display_items.iter_mut().zip(revisions) {
+            item.image_content_revisions = revision;
+        }
+        for chunk in &mut self.chunks {
+            if changed.iter().any(|index| {
+                chunk.begin_index as usize <= *index && *index < chunk.end_index as usize
+            }) {
+                chunk.is_moved_from_cached_subsequence = false;
+            }
+        }
+        changed
+    }
+
     /// Compose a font-only overlay without mutating either source artifact.
     /// Images need separate resource-ID remapping and remain unsupported here.
     pub fn WithFontOnlyOverlay(content: Option<&Self>, popup: &Self) -> std::io::Result<Self> {
@@ -1150,6 +1200,7 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
         is_cacheable: true,
         is_tombstone: false,
         paint_invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
+        image_content_revisions: Vec::new(),
         scrollbar_needs_update_display: None,
         kind: RecordedDisplayItemKind::Drawing,
         id: Default::default(),
@@ -1469,6 +1520,7 @@ fn RecordPaint(
         &output.display_items,
         &output.chunks,
     ));
+    output.RefreshImageContentRevisions();
     output.recording_revision = foundation::NewUniqueObjectId();
     if pre_paint.stats.post_walk || pre_paint.retained_scroll_state.is_none() {
         pre_paint.retained_scroll_state =
@@ -1566,7 +1618,9 @@ impl PaintEngine {
         {
             return true;
         }
-        Arc::make_mut(artifact).resources = Some(resources);
+        let artifact = Arc::make_mut(artifact);
+        artifact.resources = Some(resources);
+        artifact.RefreshImageContentRevisions();
         true
     }
 
@@ -1623,7 +1677,9 @@ impl PaintEngine {
         image.content = image_resource::PaintImageContent::Document(Arc::new(
             content.with_variant(frame.container_key.clone(), frame.record.clone()),
         ));
-        Arc::make_mut(artifact).resources = Some(Arc::new(resources));
+        let artifact = Arc::make_mut(artifact);
+        artifact.resources = Some(Arc::new(resources));
+        artifact.RefreshImageContentRevisions();
         Some(PaintMutationResult { damaged_records })
     }
 

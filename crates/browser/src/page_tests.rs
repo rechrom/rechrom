@@ -128,7 +128,7 @@ impl PageClient for Client {
             .push(format!("frame\t{}", frame.sequence));
         self.frames
             .borrow_mut()
-            .push(raster::pure_replay::RasterizeDisplayItemList(
+            .push(raster::RasterizePaintArtifactTransparent(
                 &frame.display_items,
                 160,
                 96,
@@ -351,7 +351,7 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
                 (document.body.getAttribute('qqcom-theme')==='dark') === {dark})) throw Error('injected preference mismatch');
             "#, !dark), "fixture:color-scheme").unwrap();
             assert!(result.Succeeded(), "{:?}", result.exception);
-            let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(
+            let rgba = raster::RasterizePaintArtifact(
                 &page.CurrentFrame().unwrap().display_items,
                 160,
                 96,
@@ -400,7 +400,7 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
             .unwrap();
 
-        let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(
+        let rgba = raster::RasterizePaintArtifact(
             &page.CurrentFrame().unwrap().display_items,
             160,
             96,
@@ -439,7 +439,7 @@ fn css_semibold_font_selection_matches_repository_chromium() {
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
             .unwrap();
 
-        let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(
+        let rgba = raster::RasterizePaintArtifact(
             &page.CurrentFrame().unwrap().display_items,
             160,
             96,
@@ -467,7 +467,7 @@ fn image_mipmap_sampling_matches_repository_chromium() {
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
             .unwrap();
 
-        let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(
+        let rgba = raster::RasterizePaintArtifact(
             &page.CurrentFrame().unwrap().display_items,
             160,
             96,
@@ -849,7 +849,7 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
             96,
             1.0,
             &mut target,
-            renderer::PixelFormat::Rgba8888,
+            renderer_skia::PixelFormat::Rgba8888,
             160,
         )
         .unwrap();
@@ -859,13 +859,13 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
             96,
             1.0,
             &mut target,
-            renderer::PixelFormat::Rgba8888,
+            renderer_skia::PixelFormat::Rgba8888,
             160,
         )
         .unwrap();
         assert_eq!(target, first_pixels);
         let snapshot = page.CurrentFrame().unwrap().fragments.clone();
-        let old_pixels = raster::pure_replay::RasterizeDisplayItemList(
+        let old_pixels = raster::RasterizePaintArtifactTransparent(
             &paint::paint_engine::Paint(&snapshot),
             160,
             96,
@@ -886,7 +886,7 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
         ));
         assert_eq!(
             old_pixels,
-            raster::pure_replay::RasterizeDisplayItemList(
+            raster::RasterizePaintArtifactTransparent(
                 &paint::paint_engine::Paint(&snapshot),
                 160,
                 96
@@ -993,7 +993,7 @@ fn css_zoom_matches_repository_chromium_geometry_and_pixels() {
             )
             .unwrap();
         assert!(result.Succeeded(), "{:?}", result.exception);
-        let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(
+        let rgba = raster::RasterizePaintArtifact(
             &page.CurrentFrame().unwrap().display_items,
             160,
             96,
@@ -1782,22 +1782,18 @@ fn profile_qq_loading_stall() {
         }
         if let Some(frame) = page.CurrentFrame() {
             for (width, height, scale) in [(1216, 704, 1.0), (2432, 1408, 2.0)] {
-                let mut pixels = vec![0_u32; width as usize * height as usize];
                 for iteration in 0..5 {
                     let started = std::time::Instant::now();
-                    raster::surface::RenderDisplayItemListIntoWindowBuffer(
+                    let pixels = raster::RasterizePaintArtifactWithScale(
                         &frame.display_items,
                         width,
                         height,
                         scale,
-                        &mut pixels,
-                    )
-                    .unwrap();
+                    );
                     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
                     let hash = pixels
                         .iter()
-                        .flat_map(|pixel| pixel.to_ne_bytes())
-                        .fold(0xcbf29ce484222325_u64, |value, byte| {
+                        .fold(0xcbf29ce484222325_u64, |value, &byte| {
                             (value ^ u64::from(byte)).wrapping_mul(0x100000001b3)
                         });
                     eprintln!("qq-direct-raster-probe iteration={iteration} items={} viewport={width}x{height} scale={scale} ms={elapsed:.3} fnv1a64={hash:016x}",frame.display_items.items.len());
@@ -1806,7 +1802,7 @@ fn profile_qq_loading_stall() {
             for iteration in 0..5 {
                 let started = std::time::Instant::now();
                 let pixels =
-                    raster::pure_replay::RasterizeDisplayItemList(&frame.display_items, 1216, 704);
+                    raster::RasterizePaintArtifactTransparent(&frame.display_items, 1216, 704);
                 let elapsed = started.elapsed().as_secs_f64() * 1000.0;
                 let hash = pixels.iter().fold(0xcbf29ce484222325_u64, |value, &byte| {
                     (value ^ u64::from(byte)).wrapping_mul(0x100000001b3)

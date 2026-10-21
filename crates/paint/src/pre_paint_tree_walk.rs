@@ -4648,14 +4648,35 @@ impl PrePaintTreeWalk {
                 PaintPropertyRole::Effect,
                 node.properties.effect_id,
             );
+            let filter_reference_box = (!style.backdrop_filters.is_empty()).then(|| {
+                PropertySpaceRect(
+                    NinePieceImagePainter::ReferenceRect(&node),
+                    property_space_delta,
+                )
+            });
+            let filter_reference_scale = if IsSvgEffectChild(fragment.paint.source_kind) {
+                1.0
+            } else {
+                f64::from(fragment.paint.effective_zoom)
+            };
+            let backdrop_filters =
+                crate::property_filter_operations::PropertyFilterOperations::from_authored(
+                    &style.backdrop_filters,
+                    filter_reference_box,
+                    filter_reference_scale,
+                );
+            let mut compositor = EffectCompositorState(
+                fragment,
+                PaintPropertyRole::Effect,
+                style.will_change_transform,
+                node.applies_mask && node.applies_backdrop_filter,
+            );
+            compositor.filter_output_bounds = filter_reference_box.and_then(|reference| {
+                backdrop_filters.reference_output_bounds(reference)
+            });
             node.properties.nodes.effect = Arc::new(
                 EffectPaintPropertyNode {
-                    compositor: EffectCompositorState(
-                        fragment,
-                        PaintPropertyRole::Effect,
-                        style.will_change_transform,
-                        node.applies_mask && node.applies_backdrop_filter,
-                    ),
+                    compositor,
 
                     self_or_ancestor_participates_in_view_transition: false,
                     lifecycle: Default::default(),
@@ -4663,24 +4684,12 @@ impl PrePaintTreeWalk {
                     parent: Some(node.properties.nodes.effect.clone()),
                     local_transform_space: node.properties.nodes.transform.clone(),
                     output_clip: Some(node.properties.nodes.clip.clone()),
-                    filter_reference_box: (!style.backdrop_filters.is_empty()).then(|| {
-                        PropertySpaceRect(
-                            NinePieceImagePainter::ReferenceRect(&node),
-                            property_space_delta,
-                        )
-                    }),
-                    filter_reference_scale: if IsSvgEffectChild(fragment.paint.source_kind) {
-                        1.0
-                    } else {
-                        f64::from(fragment.paint.effective_zoom)
-                    },
+                    filter_reference_box,
+                    filter_reference_scale,
                     opacity: MaskAdjustedOpacity(style),
                     blend_mode: style.blend_mode,
                     filters: Default::default(),
-                    backdrop_filters:
-                        crate::property_filter_operations::PropertyFilterOperations::from_authored(
-                            &style.backdrop_filters,
-                        ),
+                    backdrop_filters,
                     backdrop_filter_has_reference: style.backdrop_filter_has_reference,
                     backdrop_filter_bounds: backdrop_filter_clip.as_ref().map(|clip| {
                         crate::paint_clip_path::rounded_bounds(
@@ -4838,16 +4847,34 @@ impl PrePaintTreeWalk {
                 PaintPropertyRole::Filter,
                 node.properties.effect_id,
             );
+            let filter_reference_box = PropertySpaceRect(
+                NinePieceImagePainter::ReferenceRect(&node),
+                property_space_delta,
+            );
+            let filter_reference_scale = if IsSvgEffectChild(fragment.paint.source_kind) {
+                1.0
+            } else {
+                f64::from(fragment.paint.effective_zoom)
+            };
+            let filters =
+                crate::property_filter_operations::PropertyFilterOperations::from_authored(
+                    &node.recording_filters,
+                    Some(filter_reference_box),
+                    filter_reference_scale,
+                );
+            let mut compositor = EffectCompositorState(
+                fragment,
+                PaintPropertyRole::Filter,
+                style.will_change_transform,
+                false,
+            );
+            compositor.filter_output_bounds =
+                filters.reference_output_bounds(filter_reference_box);
             // UpdateFilter follows UpdateEffect and has its own persistent
             // ObjectPaintProperties slot (paint_property_tree_builder.cc:2630).
             node.properties.nodes.effect = Arc::new(
                 EffectPaintPropertyNode {
-                    compositor: EffectCompositorState(
-                        fragment,
-                        PaintPropertyRole::Filter,
-                        style.will_change_transform,
-                        false,
-                    ),
+                    compositor,
                     backdrop_filter_bounds: None,
                     self_or_ancestor_participates_in_view_transition: false,
                     lifecycle: Default::default(),
@@ -4855,21 +4882,11 @@ impl PrePaintTreeWalk {
                     parent: Some(node.properties.nodes.effect.clone()),
                     local_transform_space: node.properties.nodes.transform.clone(),
                     output_clip: Some(node.properties.nodes.clip.clone()),
-                    filter_reference_box: Some(PropertySpaceRect(
-                        NinePieceImagePainter::ReferenceRect(&node),
-                        property_space_delta,
-                    )),
-                    filter_reference_scale: if IsSvgEffectChild(fragment.paint.source_kind) {
-                        1.0
-                    } else {
-                        f64::from(fragment.paint.effective_zoom)
-                    },
+                    filter_reference_box: Some(filter_reference_box),
+                    filter_reference_scale,
                     opacity: 1.0,
                     blend_mode: PaintBlendMode::kNormal,
-                    filters:
-                        crate::property_filter_operations::PropertyFilterOperations::from_authored(
-                            &node.recording_filters,
-                        ),
+                    filters,
                     backdrop_filters: Default::default(),
                     backdrop_filter_has_reference: false,
                     backdrop_filter_clip: None,

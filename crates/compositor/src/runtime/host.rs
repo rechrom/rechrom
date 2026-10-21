@@ -1,6 +1,6 @@
 //! Host-owned external value/capability bindings. No tree, layer, pool or Page
 //! is captured in these service objects; canonical owners consume them live.
-use super::resources::{ColorPrimaryId, CpuColorSpace};
+use super::resources::{ColorPrimaryId, RasterColorSpace};
 use crate::adapter::{
     geometry::TracedValue,
     input_types::ElementId,
@@ -8,15 +8,15 @@ use crate::adapter::{
     layer_tree_host_impl::{HostColorSpace, HostColorSpacePrimaryID, HostTraceValue},
     property_types::PropertyTrace,
 };
-impl HostColorSpace for CpuColorSpace {
+impl HostColorSpace for RasterColorSpace {
     fn CreateSRGB() -> Self {
-        CpuColorSpace::CreateSRGB()
+        RasterColorSpace::CreateSRGB()
     }
     fn IsValid(&self) -> bool {
-        CpuColorSpace::IsValid(self)
+        RasterColorSpace::IsValid(self)
     }
     fn IsHDR(&self) -> bool {
-        CpuColorSpace::IsHDR(self)
+        RasterColorSpace::IsHDR(self)
     }
     fn GetPrimaryID(&self) -> HostColorSpacePrimaryID {
         match self.primaries {
@@ -40,7 +40,7 @@ impl HostColorSpace for CpuColorSpace {
         }
     }
     fn ContainsSRGB(&self) -> bool {
-        CpuColorSpace::ContainsSRGB(self)
+        RasterColorSpace::ContainsSRGB(self)
     }
 }
 

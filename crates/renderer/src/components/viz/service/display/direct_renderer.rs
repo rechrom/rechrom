@@ -411,6 +411,11 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
         root: bool,
         damage: Rect,
     ) -> io::Result<()> {
+        let mut trace = browser_tracing::span("renderer", "Renderer.DrawRenderPass");
+        trace.set("root", root as u8 as f64);
+        trace.set("quads", pass.Quads().len() as f64);
+        trace.set("width", pass.output_rect.width as f64);
+        trace.set("height", pass.output_rect.height as f64);
         if self.CanSkipRenderPass(pass, root) {
             self.skipped_render_pass_ids.insert(pass.RenderPassId());
             return Ok(());
@@ -438,6 +443,10 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
         }
         self.total_pixels_rendered_this_frame +=
             scissor.width.max(0) as u64 * scissor.height.max(0) as u64;
+        trace.set(
+            "damage_pixels",
+            scissor.width.max(0) as f64 * scissor.height.max(0) as f64,
+        );
         let clipped = !scissor.Contains(surface);
         let clear = !root || self.settings.should_clear_root_render_pass;
         let update = Self::MoveFromDrawToWindowSpace(pass, if clipped { scissor } else { surface });

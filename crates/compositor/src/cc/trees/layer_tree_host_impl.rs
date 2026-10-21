@@ -16873,7 +16873,7 @@ pub(crate) mod source_tile_manager_runtime {
             &'a mut Option<Box<<Cpu<R> as HostImplTypes>::ContextVisibility>>,
         pub worker_visibility: &'a mut Option<Box<<Cpu<R> as HostImplTypes>::ContextVisibility>>,
         pub image_frame: ImageFrameFields<'a>,
-        pub execution: &'a mut crate::runtime::tile_execution::CpuTileExecution<R>,
+        pub execution: &'a mut crate::runtime::tile_execution::TileExecution<R>,
         pub raster_provider: &'a mut Option<Box<<Cpu<R> as HostImplTypes>::RasterBufferProvider>>,
         pub raster_queries: &'a mut Option<Box<<Cpu<R> as HostImplTypes>::RasterQueryQueue>>,
         pub services: &'a mut dyn HostImplServices<Cpu<R>>,
@@ -17124,7 +17124,7 @@ pub(crate) mod source_tile_manager_runtime {
     use crate::runtime::{
         execution::EngineTask,
         paint::{CpuPlaybackImageProvider, CpuWorkletProvider},
-        resources::CpuColorSpace,
+        resources::RasterColorSpace,
     };
     use crate::cc::resources::resource_pool::{InUsePoolResource, ResourcePool};
     use std::sync::{Arc, Weak};
@@ -17186,8 +17186,8 @@ pub(crate) mod source_tile_manager_runtime {
     }
     // Source: cc/raster/zero_copy_raster_buffer_provider.cc:190. There is no
     // deferred GPU command stream in the native CPU provider.
-    struct CpuRasterFlush;
-    impl crate::cc::tiles::tile_manager::TileManagerRasterFlush for CpuRasterFlush {
+    struct RasterFlush;
+    impl crate::cc::tiles::tile_manager::TileManagerRasterFlush for RasterFlush {
         fn FlushTileRasterGraphiteCommands(&self) {}
     }
     impl<R: CpuSkiaBackend> Runtime<'_, R> {
@@ -17267,7 +17267,7 @@ pub(crate) mod source_tile_manager_runtime {
             resource: &InUsePoolResource<Cpu<R>>,
             content: u64,
             previous: u64,
-        ) -> Option<crate::runtime::paint::CpuTileRasterBuffer<R>> {
+        ) -> Option<crate::runtime::paint::TileRasterBuffer<R>> {
             self.CheckRasterProvider(provider);
             let pool = self.pool.as_deref_mut().expect("source resource pool");
             assert_eq!(pool.identity(), pool_id, "same source pool");
@@ -17300,7 +17300,7 @@ pub(crate) mod source_tile_manager_runtime {
             id: RasterBufferProviderId,
         ) -> Arc<dyn crate::cc::tiles::tile_manager::TileManagerRasterFlush> {
             self.CheckRasterProvider(id);
-            Arc::new(CpuRasterFlush)
+            Arc::new(RasterFlush)
         }
         fn TestSharedImageInterface(&self) -> &dyn PoolSharedImageInterface<Cpu<R>> {
             &self.execution.shared_images
@@ -17634,7 +17634,7 @@ pub(crate) mod source_tile_manager_runtime {
             &self,
             client: TileManagerClientId,
             usage: ContentColorUsage,
-        ) -> HostTargetColorParams<CpuColorSpace> {
+        ) -> HostTargetColorParams<RasterColorSpace> {
             self.CheckClient(client);
             TargetColorParamsForHost::<Cpu<R>>(*self.sink, usage, self.services, || {
                 self.pending

@@ -1,66 +1,154 @@
-//! Scalar quadratic roots from src/core/SkQuads.{h,cpp}.
+// Source: src/core/SkQuads.h:15-15
+pub struct SkQuads;
 
-// SkCubics / SkQuads root solvers and SkGeometry::first_axis_intersection.
-// Copyright 2023 Google LLC (BSD-3-Clause). License: ../glyphs/SKIA_LICENSE.
-pub(crate) fn zero(a: f64) -> bool {
-    a.abs() < f32::EPSILON as f64
+// Source: src/core/SkQuads.h:32-36
+#[derive(Clone, Copy, Debug)]
+pub struct RootResult {
+    pub discriminant: f64,
+    pub root0: f64,
+    pub root1: f64,
 }
-pub(crate) fn ulps(a: f64, b: f64) -> bool {
-    let magnitude = |a: f64| f64::from_bits(a.to_bits() & 0x7ff0_0000_0000_0000);
-    let m = magnitude(a).max(f64::MIN_POSITIVE).max(magnitude(b));
-    a == b || (b - a).abs() < m * (f64::EPSILON * 17.0)
+
+// Source: src/core/SkQuads.cpp:18-31
+fn solve_linear(m: f64, b: f64, solution: &mut [f64; 2]) -> usize {
+    if crate::src::core::SkFloatingPoint::sk_double_nearly_zero(m) {
+        solution[0] = 0.0;
+        if crate::src::core::SkFloatingPoint::sk_double_nearly_zero(b) {
+            return 1;
+        }
+        return 0;
+    }
+    solution[0] = -b / m;
+    if !solution[0].is_finite() {
+        return 0;
+    }
+    1
 }
-pub(crate) fn near(a: f64, b: f64) -> bool {
-    if zero(a) {
-        zero(b)
-    } else {
-        ulps(a, b)
+
+// Source: src/core/SkQuads.cpp:37-45
+fn close_to_linear(a: f64, b: f64) -> bool {
+    if a != 0.0 {
+        return (b / a).abs() >= 1.0e16;
+    }
+    true
+}
+
+// Source: src/core/SkQuads.cpp:47-96
+impl SkQuads {
+    // Source: src/core/SkQuads.h:30-30
+    pub fn Discriminant(a: f64, b: f64, c: f64) -> f64 {
+        let b2 = b * b;
+        let ac = a * c;
+        let rough_discriminant = b2 - ac;
+        if 3.0 * rough_discriminant.abs() >= b2 + ac {
+            return rough_discriminant;
+        }
+        let b2_rounding_error = b.mul_add(b, -b2);
+        let ac_rounding_error = a.mul_add(c, -ac);
+        let discriminant = (b2 - ac) + (b2_rounding_error - ac_rounding_error);
+        discriminant
     }
 }
-pub(crate) fn RootsReal(a: f64, b: f64, c: f64) -> Vec<f64> {
-    if a == 0.0 || (b / a).abs() >= 1e16 {
-        return if zero(b) {
-            if zero(c) {
-                vec![0.0]
+
+// Source: src/core/SkQuads.cpp:98-129
+impl SkQuads {
+    // Source: src/core/SkQuads.h:49-59
+    pub fn Roots(a: f64, b: f64, c: f64) -> RootResult {
+        let discriminant = Self::Discriminant(a, b, c);
+        if a == 0.0 {
+            let root = if b == 0.0 {
+                if c == 0.0 {
+                    f64::INFINITY
+                } else {
+                    f64::NAN
+                }
             } else {
-                vec![]
-            }
-        } else {
-            let r = -c / b;
-            if r.is_finite() {
-                vec![r]
-            } else {
-                vec![]
-            }
-        };
-    }
-    let b = -0.5 * b;
-    let b2 = b * b;
-    let ac = a * c;
-    let rough = b2 - ac;
-    let disc = if 3.0 * rough.abs() >= b2 + ac {
-        rough
-    } else {
-        rough + (b.mul_add(b, -b2) - a.mul_add(c, -ac))
-    };
-    if !disc.is_finite() || disc < 0.0 {
-        return vec![];
-    }
-    let (r0, r1) = if disc == 0.0 {
-        (b / a, b / a)
-    } else {
-        let d = disc.sqrt();
-        let r = if b > 0.0 { b + d } else { b - d };
-        (r / a, c / r)
-    };
-    let mut roots = Vec::new();
-    for r in [r0, r1] {
-        if r.is_finite() {
-            roots.push(if zero(r) { 0.0 } else { r });
+                c / (2.0 * b)
+            };
+            return RootResult {
+                discriminant,
+                root0: root,
+                root1: root,
+            };
+        }
+        debug_assert!(a != 0.0);
+        if discriminant == 0.0 {
+            return RootResult {
+                discriminant,
+                root0: b / a,
+                root1: b / a,
+            };
+        }
+        if discriminant > 0.0 {
+            let d = discriminant.sqrt();
+            let r = if b > 0.0 { b + d } else { b - d };
+            return RootResult {
+                discriminant,
+                root0: r / a,
+                root1: c / r,
+            };
+        }
+        RootResult {
+            discriminant,
+            root0: f64::NAN,
+            root1: f64::NAN,
         }
     }
-    if roots.len() == 2 && ulps(roots[0], roots[1]) {
-        roots.pop();
+}
+
+// Source: src/core/SkQuads.cpp:131-133
+fn zero_if_tiny(x: f64) -> f64 {
+    if crate::src::core::SkFloatingPoint::sk_double_nearly_zero(x) {
+        0.0
+    } else {
+        x
     }
-    roots
+}
+
+// Source: src/core/SkQuads.cpp:135-162
+impl SkQuads {
+    // Source: src/core/SkQuads.h:66-66
+    pub fn RootsReal(a: f64, b: f64, c: f64, solution: &mut [f64; 2]) -> usize {
+        if close_to_linear(a, b) {
+            return solve_linear(b, c, solution);
+        }
+        debug_assert!(a != 0.0);
+        let RootResult {
+            discriminant,
+            root0,
+            root1,
+        } = Self::Roots(a, -0.5 * b, c);
+        if !discriminant.is_finite() || discriminant < 0.0 {
+            return 0;
+        }
+        let mut roots = 0;
+        let r0 = zero_if_tiny(root0);
+        if r0.is_finite() {
+            solution[roots] = r0;
+            roots += 1;
+        }
+        let r1 = zero_if_tiny(root1);
+        if r1.is_finite() {
+            solution[roots] = r1;
+            roots += 1;
+        }
+        if roots == 2
+            && crate::src::core::SkFloatingPoint::sk_doubles_nearly_equal_ulps(
+                solution[0],
+                solution[1],
+                16,
+            )
+        {
+            roots = 1;
+        }
+        roots
+    }
+}
+
+// Source: src/core/SkQuads.cpp:164-167
+impl SkQuads {
+    // Source: src/core/SkQuads.h:72-72
+    pub fn EvalAt(a: f64, b: f64, c: f64, t: f64) -> f64 {
+        a.mul_add(t, b).mul_add(t, c)
+    }
 }

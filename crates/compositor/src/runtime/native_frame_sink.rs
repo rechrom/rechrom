@@ -6,11 +6,11 @@
 //! - components/viz/client/client_resource_provider.cc:275-407
 //!
 //! A submitted frame is moved once into `FrameOutput`. The endpoint and the
-//! ResourcePool share one `CpuClientResources` allocation, so there is one
+//! ResourcePool share one `RasterClientResources` allocation, so there is one
 //! import/export table and no resource snapshot or parallel bundle.
 
 use super::{
-    client_resources::CpuClientResources,
+    client_resources::RasterClientResources,
     frame_sink::{FrameOutput, FrameSink, OutputFrameSink},
     host_owners::ClientResourceProvider,
     host_types::UnboundedClientIdentity,
@@ -34,14 +34,14 @@ pub(crate) struct NativeFrameSinkEndpoint {
     id: HostImplFrameSinkId,
     sink: FrameSink<NativeCompositorTypes>,
     output: FrameOutput<NativeCompositorFrameSubmission>,
-    resources: CpuClientResources,
+    resources: RasterClientResources,
     begin_frame_source: Option<BeginFrameSource>,
     source_frame_number: i32,
     current_local_surface_id: LocalSurfaceId,
 }
 
 impl NativeFrameSinkEndpoint {
-    pub(crate) fn new(id: HostImplFrameSinkId, resources: CpuClientResources) -> Self {
+    pub(crate) fn new(id: HostImplFrameSinkId, resources: RasterClientResources) -> Self {
         assert_ne!(id.0, 0, "native frame-sink identity is non-null");
         let output = FrameOutput::default();
         let sink = FrameSink::new(Box::new(OutputFrameSink::new(output.clone())));
@@ -108,7 +108,7 @@ impl NativeFrameSinkEndpoint {
         ClientResourceProvider(Box::new(self.resources.clone()))
     }
 
-    pub(crate) fn resources(&self) -> &CpuClientResources {
+    pub(crate) fn resources(&self) -> &RasterClientResources {
         &self.resources
     }
 }

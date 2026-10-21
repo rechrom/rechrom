@@ -1,241 +1,438 @@
-// Migrated unchanged in behavior from tiny-skia-path-0.12.0/src/dash.rs.
-
-// Copyright 2014 Google Inc.
-// Copyright 2020 Yevhenii Reizner
-//
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
-
-// This module is a mix of SkDashPath, SkDashPathEffect, SkContourMeasure and SkPathMeasure.
-
-use alloc::vec::Vec;
-
-use crate::src::core::SkContourMeasure::SkContourMeasureIter;
-
-use crate::path::Path;
-
-use crate::path::floating_point::{FiniteF32, NonZeroPositiveF32};
-
-use crate::path::path_builder::PathBuilder;
-
-#[cfg(all(not(feature = "std"), feature = "no-std-float"))]
-use crate::path::NoStdFloat;
-
-/// A stroke dashing properties.
-///
-/// Contains an array of pairs, where the first number indicates an "on" interval
-/// and the second one indicates an "off" interval;
-/// a dash offset value and internal properties.
-///
-/// # Guarantees
-///
-/// - The dash array always have an even number of values.
-/// - All dash array values are finite and >= 0.
-/// - There is at least two dash array values.
-/// - The sum of all dash array values is positive and finite.
-/// - Dash offset is finite.
-#[derive(Clone, PartialEq, Debug)]
-pub struct StrokeDash {
-    array: Vec<f32>,
-    offset: f32,
-    interval_len: NonZeroPositiveF32,
-    first_len: f32, // TODO: PositiveF32
-    first_index: usize,
+use crate::include::core::SkScalar::{SK_ScalarNearlyZero, SkScalarCeilToInt, SkScalarMod};
+use crate::src::core::SkPaint::{Cap, Join};
+use crate::src::core::SkPath::{Iter, SkPath};
+use crate::src::core::SkPathBuilder::SkPathBuilder;
+use crate::src::core::SkPathMeasure::SkPathMeasure;
+use crate::src::core::SkPoint::SkPoint;
+use crate::src::core::SkPointPriv::SkPointPriv;
+use crate::src::core::SkRect::SkRect;
+use crate::src::core::SkStrokeRec::{SkStrokeRec, Style};
+use crate::src::utils::SkDashPathPriv::{kMaxDashCount, StrokeRecApplication};
+// Source: src/utils/SkDashPath.cpp:31-33
+fn is_even(x: i32) -> bool {
+    x & 1 == 0
 }
-
-impl StrokeDash {
-    /// Creates a new stroke dashing object.
-    pub fn new(dash_array: Vec<f32>, dash_offset: f32) -> Option<Self> {
-        let dash_offset = FiniteF32::new(dash_offset)?;
-
-        if dash_array.len() < 2 || dash_array.len() % 2 != 0 {
-            return None;
-        }
-
-        if dash_array.iter().any(|n| *n < 0.0) {
-            return None;
-        }
-
-        let interval_len: f32 = dash_array.iter().sum();
-        let interval_len = NonZeroPositiveF32::new(interval_len)?;
-
-        let dash_offset = adjust_dash_offset(dash_offset.get(), interval_len.get());
-        debug_assert!(dash_offset >= 0.0);
-        debug_assert!(dash_offset < interval_len.get());
-
-        let (first_len, first_index) = find_first_interval(&dash_array, dash_offset);
-        debug_assert!(first_len >= 0.0);
-        debug_assert!(first_index < dash_array.len());
-
-        Some(StrokeDash {
-            array: dash_array,
-            offset: dash_offset,
-            interval_len,
-            first_len,
-            first_index,
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloc::vec;
-
-    #[test]
-    fn test() {
-        assert_eq!(StrokeDash::new(vec![], 0.0), None);
-        assert_eq!(StrokeDash::new(vec![1.0], 0.0), None);
-        assert_eq!(StrokeDash::new(vec![1.0, 2.0, 3.0], 0.0), None);
-        assert_eq!(StrokeDash::new(vec![1.0, -2.0], 0.0), None);
-        assert_eq!(StrokeDash::new(vec![0.0, 0.0], 0.0), None);
-        assert_eq!(StrokeDash::new(vec![1.0, -1.0], 0.0), None);
-        assert_eq!(StrokeDash::new(vec![1.0, 1.0], f32::INFINITY), None);
-        assert_eq!(StrokeDash::new(vec![1.0, f32::INFINITY], 0.0), None);
-    }
-
-    #[test]
-    fn bug_26() {
-        let mut pb = PathBuilder::new();
-        pb.move_to(665.54, 287.3);
-        pb.line_to(675.67, 273.04);
-        pb.line_to(675.52, 271.32);
-        pb.line_to(674.79, 269.61);
-        pb.line_to(674.05, 268.04);
-        pb.line_to(672.88, 266.47);
-        pb.line_to(671.27, 264.9);
-        let path = pb.finish().unwrap();
-
-        let stroke_dash = StrokeDash::new(vec![6.0, 4.5], 0.0).unwrap();
-
-        assert!(path.dash(&stroke_dash, 1.0).is_some());
-    }
-}
-
-// Adjust phase to be between 0 and len, "flipping" phase if negative.
-// e.g., if len is 100, then phase of -20 (or -120) is equivalent to 80.
-fn adjust_dash_offset(mut offset: f32, len: f32) -> f32 {
-    if offset < 0.0 {
-        offset = -offset;
-        if offset > len {
-            offset %= len;
-        }
-
-        offset = len - offset;
-
-        // Due to finite precision, it's possible that phase == len,
-        // even after the subtract (if len >>> phase), so fix that here.
-        debug_assert!(offset <= len);
-        if offset == len {
-            offset = 0.0;
-        }
-
-        offset
-    } else if offset >= len {
-        offset % len
-    } else {
-        offset
-    }
-}
-
-fn find_first_interval(dash_array: &[f32], mut dash_offset: f32) -> (f32, usize) {
-    for (i, gap) in dash_array.iter().copied().enumerate() {
-        if dash_offset > gap || (dash_offset == gap && gap != 0.0) {
-            dash_offset -= gap;
+// Source: src/utils/SkDashPath.cpp:35-52
+fn find_first_interval(intervals: &[f32], mut phase: f32, index: &mut usize) -> f32 {
+    for (i, &gap) in intervals.iter().enumerate() {
+        if phase > gap || (phase == gap && gap != 0.0) {
+            phase -= gap;
         } else {
-            return (gap - dash_offset, i);
+            *index = i;
+            return gap - phase;
         }
     }
-
-    // If we get here, phase "appears" to be larger than our length. This
-    // shouldn't happen with perfect precision, but we can accumulate errors
-    // during the initial length computation (rounding can make our sum be too
-    // big or too small. In that event, we just have to eat the error here.
-    (dash_array[0], 0)
+    *index = 0;
+    intervals[0]
 }
-
-impl Path {
-    /// Converts the current path into a dashed one.
-    ///
-    /// `resolution_scale` can be obtained via
-    /// [`compute_resolution_scale`](crate::path::PathStroker::compute_resolution_scale).
-    ///
-    /// Returns `None` when more than 1_000_000 dashes had to be produced
-    /// or when the final path has an invalid bounding box.
-    pub fn dash(&self, dash: &StrokeDash, resolution_scale: f32) -> Option<Path> {
-        dash_impl(self, dash, resolution_scale)
+// Source: src/utils/SkDashPath.cpp:54-90
+pub fn CalcDashParameters(
+    mut phase: f32,
+    intervals: &[f32],
+    initialDashLength: &mut f32,
+    initialDashIndex: &mut usize,
+    intervalLength: &mut f32,
+    adjustedPhase: Option<&mut f32>,
+) {
+    let mut len = 0.0;
+    for &interval in intervals {
+        len += interval;
     }
-}
-
-fn dash_impl(src: &Path, dash: &StrokeDash, res_scale: f32) -> Option<Path> {
-    // We do not support the `cull_path` branch here.
-    // Skia has a lot of code for cases when a path contains only a single zero-length line
-    // or when a path is a rect. Not sure why.
-    // We simply ignoring it for the sake of simplicity.
-
-    // We also doesn't support the `SpecialLineRec` case.
-    // I have no idea what the point in it.
-
-    fn is_even(x: usize) -> bool {
-        x % 2 == 0
-    }
-
-    let mut pb = PathBuilder::new();
-    let mut dash_count = 0.0;
-    for contour in SkContourMeasureIter::new(src, res_scale) {
-        let mut skip_first_segment = contour.is_closed;
-        let mut added_segment = false;
-        let length = contour.length;
-        let mut index = dash.first_index;
-
-        // Since the path length / dash length ratio may be arbitrarily large, we can exert
-        // significant memory pressure while attempting to build the filtered path. To avoid this,
-        // we simply give up dashing beyond a certain threshold.
-        //
-        // The original bug report (http://crbug.com/165432) is based on a path yielding more than
-        // 90 million dash segments and crashing the memory allocator. A limit of 1 million
-        // segments seems reasonable: at 2 verbs per segment * 9 bytes per verb, this caps the
-        // maximum dash memory overhead at roughly 17MB per path.
-        const MAX_DASH_COUNT: usize = 1000000;
-        dash_count += length * (dash.array.len() >> 1) as f32 / dash.interval_len.get();
-        if dash_count > MAX_DASH_COUNT as f32 {
-            return None;
-        }
-
-        // Using double precision to avoid looping indefinitely due to single precision rounding
-        // (for extreme path_length/dash_length ratios). See test_infinite_dash() unittest.
-        let mut distance = 0.0;
-        let mut d_len = dash.first_len;
-
-        while distance < length {
-            debug_assert!(d_len >= 0.0);
-            added_segment = false;
-            if is_even(index) && !skip_first_segment {
-                added_segment = true;
-                contour.push_segment(distance, distance + d_len, true, &mut pb);
+    *intervalLength = len;
+    if let Some(adjustedPhase) = adjustedPhase {
+        if phase < 0.0 {
+            phase = -phase;
+            if phase > len {
+                phase = SkScalarMod(phase, len);
             }
-
-            distance += d_len;
-
-            // clear this so we only respect it the first time around
-            skip_first_segment = false;
-
-            // wrap around our intervals array if necessary
+            phase = len - phase;
+            crate::SkASSERT!(@source b"src/utils/SkDashPath.cpp\0".as_ptr(),75; @condition b"phase <= len\0".as_ptr(); phase<=len);
+            if phase == len {
+                phase = 0.0;
+            }
+        } else if phase >= len {
+            phase = SkScalarMod(phase, len);
+        }
+        *adjustedPhase = phase;
+    }
+    debug_assert!(phase >= 0.0 && phase < len);
+    *initialDashLength = find_first_interval(intervals, phase, initialDashIndex);
+    debug_assert!(*initialDashLength >= 0.0);
+    crate::SkASSERT!(@source b"src/utils/SkDashPath.cpp\0".as_ptr(),89; @condition b"*initialDashIndex < intervals.size()\0".as_ptr(); *initialDashIndex<intervals.len());
+}
+// Source: src/utils/SkDashPath.cpp:92-101
+fn outset_for_stroke(rect: &mut SkRect, rec: &SkStrokeRec) {
+    let mut radius = rec.getWidth() / 2.0;
+    if radius == 0.0 {
+        radius = 1.0;
+    }
+    if rec.getJoin() == Join::kMiter_Join {
+        radius *= rec.getMiter();
+    }
+    rect.outset(radius, radius);
+}
+// Source: src/utils/SkDashPath.cpp:108-111
+fn adjust_zero_length_line(pts: &mut [SkPoint; 2]) {
+    crate::SkASSERT!(@source b"src/utils/SkDashPath.cpp\0".as_ptr(),109; @condition b"pts[0] == pts[1]\0".as_ptr(); (pts[0])==(pts[1]));
+    let multiplier = if 1.001_f32 < pts[1].fX {
+        pts[1].fX
+    } else {
+        1.001_f32
+    };
+    pts[1].fX += multiplier * SK_ScalarNearlyZero;
+}
+// Source: src/utils/SkDashPath.cpp:113-167
+fn clip_line(
+    pts: &mut [SkPoint; 2],
+    bounds: &SkRect,
+    intervalLength: f32,
+    priorPhase: f32,
+) -> bool {
+    let dxy = pts[1] - pts[0];
+    if dxy.fX != 0.0 && dxy.fY != 0.0 {
+        return false;
+    }
+    let vertical = dxy.fY != 0.0;
+    let mut minXY = if vertical { pts[0].fY } else { pts[0].fX };
+    let mut maxXY = if vertical { pts[1].fY } else { pts[1].fX };
+    let swapped = maxXY < minXY;
+    if swapped {
+        std::mem::swap(&mut minXY, &mut maxXY);
+    }
+    crate::SkASSERT!(@source b"src/utils/SkDashPath.cpp\0".as_ptr(),131; @condition b"minXY <= maxXY\0".as_ptr(); minXY<=maxXY);
+    let leftTop = if vertical { bounds.fTop } else { bounds.fLeft };
+    let rightBottom = if vertical {
+        bounds.fBottom
+    } else {
+        bounds.fRight
+    };
+    if maxXY < leftTop || minXY > rightBottom {
+        return false;
+    }
+    if minXY < leftTop {
+        minXY = leftTop - SkScalarMod(leftTop - minXY, intervalLength);
+        if !swapped {
+            minXY -= priorPhase;
+        }
+    }
+    if maxXY > rightBottom {
+        maxXY = rightBottom + SkScalarMod(maxXY - rightBottom, intervalLength);
+        if swapped {
+            maxXY += priorPhase;
+        }
+    }
+    crate::SkASSERT!(@source b"src/utils/SkDashPath.cpp\0".as_ptr(),155; @condition b"maxXY >= minXY\0".as_ptr(); maxXY>=minXY);
+    if swapped {
+        std::mem::swap(&mut minXY, &mut maxXY);
+    }
+    if vertical {
+        pts[0].fY = minXY;
+        pts[1].fY = maxXY;
+    } else {
+        pts[0].fX = minXY;
+        pts[1].fX = maxXY;
+    }
+    if minXY == maxXY {
+        adjust_zero_length_line(pts);
+    }
+    true
+}
+// Source: src/utils/SkDashPath.cpp:172-233
+fn cull_path(
+    srcPath: &SkPath,
+    rec: &SkStrokeRec,
+    cullRect: Option<&SkRect>,
+    intervalLength: f32,
+    builder: &mut SkPathBuilder,
+) -> bool {
+    let z = SkPoint::make(0.0, 0.0);
+    let Some(cullRect) = cullRect else {
+        let mut pts = [z; 2];
+        if srcPath.isLine(Some(&mut pts)) && pts[0] == pts[1] {
+            adjust_zero_length_line(&mut pts);
+            builder.moveTo(pts[0]);
+            builder.lineTo(pts[1]);
+            return true;
+        }
+        return false;
+    };
+    let mut bounds = *cullRect;
+    outset_for_stroke(&mut bounds, rec);
+    {
+        let mut pts = [z; 2];
+        if srcPath.isLine(Some(&mut pts)) {
+            if clip_line(&mut pts, &bounds, intervalLength, 0.0) {
+                builder.moveTo(pts[0]);
+                builder.lineTo(pts[1]);
+                return true;
+            }
+            return false;
+        }
+    }
+    if srcPath.isRect(None, None, None) {
+        let mut iter = Iter::new(srcPath, false);
+        let first = iter.next();
+        debug_assert!(
+            first.is_some_and(|r| r.fVerb == crate::include::core::SkPathTypes::SkPathVerb::kMove)
+        );
+        let mut accum = 0.0_f64;
+        while let Some(it) = iter.next() {
+            if it.fVerb != crate::include::core::SkPathTypes::SkPathVerb::kLine {
+                break;
+            }
+            let v = it.fPoints[1] - it.fPoints[0];
+            let mut pts = [it.fPoints[0], it.fPoints[1]];
+            if clip_line(
+                &mut pts,
+                &bounds,
+                intervalLength,
+                (accum % intervalLength as f64) as f32,
+            ) {
+                if builder.getLastPt().is_none_or(|last| last != pts[0]) {
+                    builder.moveTo(pts[0]);
+                }
+                builder.lineTo(pts[1]);
+            }
+            debug_assert!(v.fX == 0.0 || v.fY == 0.0);
+            accum += (v.fX + v.fY).abs() as f64;
+        }
+        return !builder.isEmpty();
+    }
+    false
+}
+// Source: src/utils/SkDashPath.cpp:235-306
+struct SpecialLineRec {
+    fPts: [SkPoint; 2],
+    fTangent: SkPoint,
+    fNormal: SkPoint,
+    fPathLength: f32,
+}
+impl SpecialLineRec {
+    // Language storage initialization; native init overwrites every field before addSegment.
+    fn storage() -> Self {
+        let z = SkPoint::make(0.0, 0.0);
+        Self {
+            fPts: [z; 2],
+            fTangent: z,
+            fNormal: z,
+            fPathLength: 0.0,
+        }
+    }
+    fn init(
+        &mut self,
+        src: &SkPath,
+        dst: &mut SkPathBuilder,
+        rec: &mut SkStrokeRec,
+        intervalCount: i32,
+        intervalLength: f32,
+    ) -> bool {
+        if rec.isHairlineStyle() || !src.isLine(Some(&mut self.fPts)) {
+            return false;
+        }
+        if rec.getCap() != Cap::kButt_Cap {
+            return false;
+        }
+        let pathLength = SkPoint::distance(self.fPts[0], self.fPts[1]);
+        self.fTangent = self.fPts[1] - self.fPts[0];
+        if self.fTangent.is_zero() {
+            return false;
+        }
+        self.fPathLength = pathLength;
+        self.fTangent.scale(1.0_f32 / pathLength);
+        if !self.fTangent.fX.is_finite() || !self.fTangent.fY.is_finite() {
+            return false;
+        }
+        self.fNormal = self.fTangent;
+        SkPointPriv::RotateCCW(&mut self.fNormal);
+        self.fNormal.scale(rec.getWidth() / 2.0);
+        let mut ptCount = pathLength * intervalCount as f32 / intervalLength;
+        if kMaxDashCount < ptCount {
+            ptCount = kMaxDashCount;
+        }
+        if ptCount.is_nan() {
+            return false;
+        }
+        let n = SkScalarCeilToInt(ptCount) << 2;
+        dst.incReserve(n as usize, 0, 0);
+        rec.setFillStyle();
+        true
+    }
+    fn addSegment(&self, d0: f32, mut d1: f32, path: &mut SkPathBuilder) {
+        crate::SkASSERT!(@source b"src/utils/SkDashPath.cpp\0".as_ptr(),281; @condition b"d0 <= fPathLength\0".as_ptr(); d0<=self.fPathLength);
+        if d1 > self.fPathLength {
+            d1 = self.fPathLength;
+        }
+        let x0 = self.fPts[0].fX + self.fTangent.fX * d0;
+        let x1 = self.fPts[0].fX + self.fTangent.fX * d1;
+        let y0 = self.fPts[0].fY + self.fTangent.fY * d0;
+        let y1 = self.fPts[0].fY + self.fTangent.fY * d1;
+        let pts = [
+            SkPoint::make(x0 + self.fNormal.fX, y0 + self.fNormal.fY),
+            SkPoint::make(x1 + self.fNormal.fX, y1 + self.fNormal.fY),
+            SkPoint::make(x1 - self.fNormal.fX, y1 - self.fNormal.fY),
+            SkPoint::make(x0 - self.fNormal.fX, y0 - self.fNormal.fY),
+        ];
+        path.addPolygon(&pts, false);
+    }
+}
+// Source: src/utils/SkDashPath.cpp:309-458
+pub fn InternalFilter(
+    dst: &mut SkPathBuilder,
+    src: &SkPath,
+    rec: &mut SkStrokeRec,
+    cullRect: Option<&SkRect>,
+    aIntervals: &[f32],
+    initialDashLength: f32,
+    initialDashIndex: i32,
+    intervalLength: f32,
+    startPhase: f32,
+    strokeRecApplication: StrokeRecApplication,
+) -> bool {
+    let srcPts = src.points();
+    if srcPts.is_empty() {
+        return true;
+    }
+    let count = aIntervals.len();
+    debug_assert!(is_even(count as i32));
+    let style = rec.getStyle();
+    if style == Style::kFill_Style || style == Style::kStrokeAndFill_Style {
+        return false;
+    }
+    let intervals = aIntervals;
+    let mut dashCount = 0.0;
+    let mut builder = SkPathBuilder::new();
+    let mut cullPathStorage = SkPath::default();
+    let mut srcPtr = src;
+    if cull_path(src, rec, cullRect, intervalLength, &mut builder) {
+        if src.isRect(None, None, None) && src.isLastContourClosed() && is_even(initialDashIndex) {
+            let pathLength = SkPathMeasure::new(src, false, rec.getResScale()).getLength();
+            let mut endPhase = SkScalarMod(pathLength + startPhase, intervalLength);
+            let mut index = 0;
+            while endPhase > intervals[index] {
+                endPhase -= intervals[index];
+                index += 1;
+                debug_assert!(index <= count);
+                if index == count {
+                    endPhase = 0.0;
+                    break;
+                }
+            }
+            if is_even(index as i32) == (endPhase > 0.0) {
+                let midPoint = srcPts[0];
+                let mut last = src.countPoints() as i32 - 1;
+                while midPoint == srcPts[last as usize] {
+                    last -= 1;
+                    crate::SkASSERT!(@source b"src/utils/SkDashPath.cpp\0".as_ptr(),360; @condition b"last >= 0\0".as_ptr(); last>=0);
+                }
+                let mut next = 1_i32;
+                while midPoint == srcPts[next as usize] {
+                    next += 1;
+                    crate::SkASSERT!(@source b"src/utils/SkDashPath.cpp\0".as_ptr(),366; @condition b"next < last\0".as_ptr(); next<last);
+                }
+                let mut v = midPoint - srcPts[last as usize];
+                let kTinyOffset = SK_ScalarNearlyZero;
+                v *= kTinyOffset;
+                builder.moveTo(midPoint - v);
+                builder.lineTo(midPoint);
+                v = midPoint - srcPts[next as usize];
+                v *= kTinyOffset;
+                builder.lineTo(midPoint - v);
+            }
+        }
+        cullPathStorage = builder.detach(None);
+        srcPtr = &cullPathStorage;
+    }
+    let mut lineRec = SpecialLineRec::storage();
+    let specialLine = strokeRecApplication == StrokeRecApplication::kAllow
+        && lineRec.init(srcPtr, dst, rec, (count >> 1) as i32, intervalLength);
+    let mut meas = SkPathMeasure::new(srcPtr, false, rec.getResScale());
+    loop {
+        let mut skipFirstSegment = meas.isClosed();
+        let mut addedSegment = false;
+        let length = meas.getLength();
+        let mut index = initialDashIndex as usize;
+        dashCount += length * (count >> 1) as f32 / intervalLength;
+        if dashCount > kMaxDashCount {
+            dst.reset();
+            return false;
+        }
+        let mut distance = 0.0_f64;
+        let mut dlen = initialDashLength as f64;
+        while distance < length as f64 {
+            debug_assert!(dlen >= 0.0);
+            addedSegment = false;
+            if is_even(index as i32) && !skipFirstSegment {
+                addedSegment = true;
+                if specialLine {
+                    lineRec.addSegment(distance as f32, (distance + dlen) as f32, dst);
+                } else {
+                    meas.getSegment(distance as f32, (distance + dlen) as f32, dst, true);
+                }
+            }
+            distance += dlen;
+            skipFirstSegment = false;
             index += 1;
-            debug_assert!(index <= dash.array.len());
-            if index == dash.array.len() {
+            debug_assert!(index <= count);
+            if index == count {
                 index = 0;
             }
-
-            // fetch our next d_len
-            d_len = dash.array[index];
+            dlen = intervals[index] as f64;
         }
-
-        // extend if we ended on a segment and we need to join up with the (skipped) initial segment
-        if contour.is_closed && is_even(dash.first_index) && dash.first_len >= 0.0 {
-            contour.push_segment(0.0, dash.first_len, !added_segment, &mut pb);
+        if meas.isClosed() && is_even(initialDashIndex) && initialDashLength >= 0.0 {
+            meas.getSegment(0.0, initialDashLength, dst, !addedSegment);
+        }
+        if !meas.nextContour() {
+            break;
         }
     }
-
-    pb.finish()
+    true
+}
+// Source: src/utils/SkDashPath.cpp:460-472
+pub fn FilterDashPath(
+    dst: &mut SkPathBuilder,
+    src: &SkPath,
+    rec: &mut SkStrokeRec,
+    cullRect: Option<&SkRect>,
+    info: &crate::src::core::SkPathEffectBase::DashInfo<'_>,
+) -> bool {
+    if !ValidDashPath(info.fPhase, info.fIntervals) {
+        return false;
+    }
+    let mut initialDashLength = 0.0;
+    let mut initialDashIndex = 0;
+    let mut intervalLength = 0.0;
+    CalcDashParameters(
+        info.fPhase,
+        info.fIntervals,
+        &mut initialDashLength,
+        &mut initialDashIndex,
+        &mut intervalLength,
+        None,
+    );
+    InternalFilter(
+        dst,
+        src,
+        rec,
+        cullRect,
+        info.fIntervals,
+        initialDashLength,
+        initialDashIndex as i32,
+        intervalLength,
+        info.fPhase,
+        StrokeRecApplication::kAllow,
+    )
+}
+// Source: src/utils/SkDashPath.cpp:474-487
+pub fn ValidDashPath(phase: f32, intervals: &[f32]) -> bool {
+    if intervals.len() < 2 || intervals.len() & 1 != 0 {
+        return false;
+    }
+    let mut length = 0.0;
+    for &interval in intervals {
+        if interval < 0.0 {
+            return false;
+        }
+        length += interval;
+    }
+    length > 0.0 && phase.is_finite() && length.is_finite()
 }

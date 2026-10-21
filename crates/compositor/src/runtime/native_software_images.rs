@@ -2,7 +2,7 @@
 //! Source no-cache images retain the actual PaintImage/GetSwSkImage allocation.
 //! Inputs requiring a decoder/color conversion are rejected as backend errors;
 //! they are never acknowledged with fabricated pixels or decode completion.
-use super::{host_owners::*, native_images::*, paint::*, resources::CpuColorSpace};
+use super::{host_owners::*, native_images::*, paint::*, resources::RasterColorSpace};
 use crate::{
     adapter::{
         geometry::{Size, SizeF},
@@ -23,13 +23,13 @@ use std::{
 
 pub(crate) struct NativeSoftwareImageDecodeFactory {
     registry: NativeImageDecodeCaches<B>,
-    failure: Arc<dyn CpuRasterFailureHandler>,
+    failure: Arc<dyn RasterFailureHandler>,
     values: Arc<dyn CpuPaintValueServices<super::skia::SkRegion>>,
 }
 impl NativeSoftwareImageDecodeFactory {
     pub(crate) fn new(
         registry: NativeImageDecodeCaches<B>,
-        failure: Arc<dyn CpuRasterFailureHandler>,
+        failure: Arc<dyn RasterFailureHandler>,
         values: Arc<dyn CpuPaintValueServices<super::skia::SkRegion>>,
     ) -> Self {
         Self {
@@ -41,7 +41,7 @@ impl NativeSoftwareImageDecodeFactory {
 }
 struct SoftwareImages {
     budget: usize,
-    failure: Arc<dyn CpuRasterFailureHandler>,
+    failure: Arc<dyn RasterFailureHandler>,
     values: Arc<dyn CpuPaintValueServices<super::skia::SkRegion>>,
     next_request: AtomicU64,
 }
@@ -57,7 +57,7 @@ impl SoftwareImages {
             return true;
         }
         let target = image.target.as_ref().map(|t| &t.color_space);
-        target.is_some_and(|c| c.IsValid() && *c != CpuColorSpace::CreateSRGB())
+        target.is_some_and(|c| c.IsValid() && *c != RasterColorSpace::CreateSRGB())
     }
     fn Reject(&self, message: &'static str) {
         self.failure
@@ -176,7 +176,7 @@ impl NativeImageDecodeCache<B> for SoftwareImages {
     ) -> CpuScopedRasterResult<super::skia::SkRegion> {
         if let Some(record) = image.image.0.GetPaintRecord() {
             return CpuScopedRasterResult::Record(CpuPaintRecord::from_native(
-                record,
+                record.record,
                 self.values.clone(),
             ));
         }

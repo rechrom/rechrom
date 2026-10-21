@@ -42,7 +42,7 @@ impl<R: CpuSkiaBackend> crate::adapter::paint_chunks_to_cc_layer::PaintChunksTyp
 impl<R: CpuSkiaBackend> crate::adapter::paint_artifact_compositor::SynthesizedClipTypes
     for CpuCompositorTypes<R>
 {
-    type SkRoundedRect = skia::include::core::SkRRect::SkRRect;
+    type SkRoundedRect = super::skia::SkRoundedRect;
 }
 impl<R: CpuSkiaBackend> crate::adapter::property_tree_manager::PropertyTreeManagerTypes
     for CpuCompositorTypes<R>
@@ -148,7 +148,7 @@ impl<R: CpuSkiaBackend> TileTypes for CpuCompositorTypes<R> {
     >;
 }
 impl<R: CpuSkiaBackend> PictureLayerTilingTypes for CpuCompositorTypes<R> {
-    type RasterSource = paint::CpuRasterSource<R>;
+    type RasterSource = paint::NativeRasterSource<R>;
     type RegionBackend = R;
     type OcclusionTransform = super::geometry::Transform<R>;
     type PaintWorkletRecordMap = crate::adapter::picture_layer_impl::PaintWorkletRecordMap<
@@ -212,12 +212,12 @@ impl<R: CpuSkiaBackend> crate::adapter::tile_manager::TileManagerTypes for CpuCo
     type PaintImageId = crate::adapter::image_animation::PaintImageId;
     type TargetColorParams = paint::TargetColorParams;
     type ContentColorUsage = crate::adapter::layer_tree_host_impl::ContentColorUsage;
-    type RasterBuffer = paint::CpuTileRasterBuffer<R>;
+    type RasterBuffer = paint::TileRasterBuffer<R>;
     type PlaybackImageProvider = paint::CpuPlaybackImageProvider<R>;
     type PaintWorkletImageProvider = paint::CpuWorkletProvider<R>;
     type ScopedRasterResult = paint::CpuScopedRasterResult<R>;
     fn TileRasterTaskResourceSource() -> Self::ResourceSource {
-        super::resources::CpuResourceSource::TileRasterTask
+        super::resources::RasterResourceSource::TileRasterTask
     }
     fn HdrContentColorUsage() -> Self::ContentColorUsage {
         crate::adapter::layer_tree_host_impl::ContentColorUsage::kHDR
@@ -226,10 +226,10 @@ impl<R: CpuSkiaBackend> crate::adapter::tile_manager::TileManagerTypes for CpuCo
         crate::adapter::layer_tree_host_impl::ContentColorUsage::kSRGB
     }
     fn TestResourceSource() -> Self::ResourceSource {
-        super::resources::CpuResourceSource::Test
+        super::resources::RasterResourceSource::Test
     }
     fn TestRasterSyncToken() -> Self::SyncToken {
-        super::resources::CpuSyncToken::new(super::resources::CommandBufferNamespace::GpuIo, 1, 1)
+        super::resources::RasterSyncToken::new(super::resources::CommandBufferNamespace::GpuIo, 1, 1)
     }
     fn IsHDR(space: &Self::ColorSpace) -> bool {
         space.IsHDR()

@@ -4,7 +4,7 @@
 use super::paint_op_buffer_iterator::{
     CompositeIterator, PaintOpBufferView, PaintOpType, PaintOpView,
 };
-use skia::BlendMode;
+use super::blend_mode::BlendMode;
 
 pub type Color = [f32; 4];
 #[derive(Clone, Copy, Debug)]

@@ -46,14 +46,14 @@ pub struct UnboundedClientIdentity(pub u64);
 pub type CpuFrame<R> = frame::CompositorFrame<
     metadata::CompositorFrameMetadata<CpuCompositorTypes<R>>,
     frame::CompositorRenderPass<CpuCompositorTypes<R>>,
-    super::resources::CpuTransferableResource,
+    super::resources::RasterTransferableResource,
 >;
 impl<R: CpuSkiaBackend> UnboundedTypes for CpuCompositorTypes<R> {
     type LocalSurfaceId = super::types::LocalSurfaceId;
     type ClientIdentity = UnboundedClientIdentity;
     type Frame = CpuFrame<R>;
     type FrameSink = frame_sink::FrameSink<Self>;
-    type ReturnedResource = super::resources::CpuReturnedResource;
+    type ReturnedResource = super::resources::RasterReturnedResource;
     type HitTestRegionList = HostHitTestRegionList<Self>;
     type BeginFrameSource = std::sync::Arc<dyn crate::adapter::scheduler_host::BeginFrameSource>;
     type RepeatingClosure = crate::adapter::task_runner::RepeatingClosure;
@@ -249,7 +249,7 @@ impl<R: CpuSkiaBackend> HostImplTypes for CpuCompositorTypes<R> {
     ) {
         manager.DidModifyTilePriorities()
     }
-    type TileExecution = super::tile_execution::CpuTileExecution<R>;
+    type TileExecution = super::tile_execution::TileExecution<R>;
     fn PrepareResidentTiles(
         host: &mut crate::cc::trees::layer_tree_host_impl::LayerTreeHostImpl<Self>,
         context: &mut crate::adapter::layer_tree_host_impl::HostImplContext<'_, Self>,
@@ -312,7 +312,7 @@ impl<R: CpuSkiaBackend> HostImplTypes for CpuCompositorTypes<R> {
     type PaintWorkletLayerPainter = super::host_owners::PaintWorkletLayerPainter<R>;
     type AverageLagTrackingManager = super::host_owners::AverageLagTrackingManager;
     type EventsMetricsManager = super::host_owners::EventsMetricsManager;
-    type ColorSpace = super::resources::CpuColorSpace;
+    type ColorSpace = super::resources::RasterColorSpace;
     type ColorSpaceCache = super::host_owners::ColorSpaceCache;
     type ThrottleTypes = super::host_owners::ThrottleTypes<R>;
 }
@@ -324,7 +324,7 @@ impl<R: CpuSkiaBackend> crate::adapter::layer_tree_host_impl::HostImplDTypes
     type RegionCaptureId = metadata::RegionCaptureCropId;
     type RegionCaptureBounds = metadata::RegionCaptureBounds;
     type EventMetricsSet = input::EventMetricsSet;
-    type TransferableResource = super::resources::CpuTransferableResource;
+    type TransferableResource = super::resources::RasterTransferableResource;
     type TransitionDirective = metadata::TransitionDirective;
     type FrameDeadline = metadata::FrameDeadline;
     type DebugDrawContext<'a> = super::debug::DebugContext<'a, Self>;

@@ -2,7 +2,7 @@
 //! Every returned owner and every forwarded callback refers to the existing
 //! native allocation. Canonical management policy stays in translated cc.
 use super::{
-    client_resources::CpuClientResources, host_services::CpuHostCoreServices,
+    client_resources::RasterClientResources, host_services::CpuHostCoreServices,
     native_host_core::NativeHostCoreOwners, native_host_lifecycle::NativeHostLifecycle,
     native_host_picture::NativeHostPictureFeatures, native_services::NativeEventSink,
 };
@@ -164,7 +164,7 @@ impl NativeCoreGpuCapabilities for CpuNoGpuCapabilities {
 pub(crate) struct NativeCoreServices {
     owners: NativeHostCoreOwners,
     lifecycle: Arc<NativeHostLifecycle>,
-    resources: CpuClientResources,
+    resources: RasterClientResources,
     features: Arc<NativeHostPictureFeatures>,
     config: NativeCoreConfig,
     executor: Arc<dyn CompositorExecutor>,
@@ -177,7 +177,7 @@ impl NativeCoreServices {
     pub(crate) fn new(
         owners: NativeHostCoreOwners,
         lifecycle: Arc<NativeHostLifecycle>,
-        resources: CpuClientResources,
+        resources: RasterClientResources,
         features: Arc<NativeHostPictureFeatures>,
         config: NativeCoreConfig,
         executor: Arc<dyn CompositorExecutor>,

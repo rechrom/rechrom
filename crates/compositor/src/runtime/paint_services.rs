@@ -131,8 +131,8 @@ impl<R: CpuSkiaBackend> RecordingSourceServices<paint::CpuRecordingTypes<R>>
     fn CreateRasterSource(
         &self,
         recording: &RecordingSource<paint::CpuRecordingTypes<R>>,
-    ) -> Arc<paint::CpuRasterSource<R>> {
-        Arc::new(paint::CpuRasterSource::from_recording(recording))
+    ) -> Arc<paint::NativeRasterSource<R>> {
+        Arc::new(paint::NativeRasterSource::from_recording(recording))
     }
     fn TraceScope(&self, category: &str, name: &str, count: Option<usize>) {
         self.platform.TraceScope(category, name, count)
@@ -176,20 +176,11 @@ impl<R: CpuSkiaBackend>
     fn PushDrawRRect(
         &self,
         list: &mut paint::ContentDisplayItemList<R>,
-        r: &skia::include::core::SkRRect::SkRRect,
+        r: &crate::runtime::skia::SkRoundedRect,
         flags: paint::CpuPaintFlags<R>,
     ) {
         use crate::adapter::display_item_list::DisplayPaintOpBuffer;
-        let b = r.getBounds();
-        let rect = crate::adapter::geometry::RRectF {
-            rect: crate::adapter::geometry::RectF::new(
-                b.left,
-                b.top,
-                b.right - b.left,
-                b.bottom - b.top,
-            ),
-            corner_radii: r.radii().map(|p| Vector2dF::new(p.x, p.y)),
-        };
+        let rect = crate::runtime::skia::SkRoundedRectValue(r);
         list.push(paint::CpuPaintOp::DrawRRect(rect, flags));
     }
 }
@@ -424,27 +415,24 @@ impl<R: CpuSkiaBackend> crate::adapter::paint_chunks_to_cc_layer::PaintChunksSer
     fn PathBounds(&self, p: &Arc<::paint::paint_clip_path::PaintClipPath>) -> RectF {
         let mut rect = RectF::default();
         for p in p.paths() {
-            let b = p.getBounds();
+            let b = p.bounds();
             rect.Union(RectF::new(
-                b.left,
-                b.top,
-                b.right - b.left,
-                b.bottom - b.top,
+                b.x as f32,
+                b.y as f32,
+                b.width as f32,
+                b.height as f32,
             ));
         }
         rect
     }
     fn PathIsRect(&self, p: &Arc<::paint::paint_clip_path::PaintClipPath>) -> Option<RectF> {
         let p = p.single_path()?;
-        if p.isInverseFillType() {
-            return None;
-        }
-        let b = p.isRect()?.rect;
+        let b = p.is_rect()?;
         Some(RectF::new(
-            b.left,
-            b.top,
-            b.right - b.left,
-            b.bottom - b.top,
+            b.x as f32,
+            b.y as f32,
+            b.width as f32,
+            b.height as f32,
         ))
     }
     fn InfiniteIntRect(&self) -> Rect {
@@ -459,7 +447,7 @@ impl<R: CpuSkiaBackend> crate::adapter::paint_chunks_to_cc_layer::PaintChunksSer
         f: &mut paint::CpuPaintFlags<R>,
         m: crate::adapter::property_types::BlendMode,
     ) {
-        f.setBlendMode(m.into())
+        f.setBlendMode(m)
     }
     fn SetAlphaf(&self, f: &mut paint::CpuPaintFlags<R>, a: f32) {
         f.setAlphaf(a)
@@ -649,17 +637,11 @@ impl<R: CpuSkiaBackend> crate::adapter::paint_artifact_compositor::SynthesizedCl
     ) -> super::geometry::Transform<R> {
         GeometryMapper::<CpuGeometryMapper<R>>::SourceToDestinationProjection(s, d)
     }
-    fn ToSkRoundedRect(&self, r: &RRectF) -> skia::include::core::SkRRect::SkRRect {
-        use skia::include::core::SkRRect::{SkRRect, SkRRectBounds, SkRRectVector};
-        let mut result = SkRRect::default();
-        result.setRectRadii(
-            SkRRectBounds::MakeLTRB(r.rect.x(), r.rect.y(), r.rect.right(), r.rect.bottom()),
-            r.corner_radii.map(|p| SkRRectVector::new(p.x(), p.y())),
-        );
-        result
+    fn ToSkRoundedRect(&self, r: &RRectF) -> crate::runtime::skia::SkRoundedRect {
+        crate::runtime::skia::MakeSkRoundedRect(r)
     }
-    fn OffsetSkRoundedRect(&self, r: &mut skia::include::core::SkRRect::SkRRect, v: Vector2dF) {
-        r.offset(v.x(), v.y())
+    fn OffsetSkRoundedRect(&self, r: &mut crate::runtime::skia::SkRoundedRect, v: Vector2dF) {
+        crate::runtime::skia::OffsetSkRoundedRect(r, v)
     }
     fn MapRect(&self, t: &super::geometry::Transform<R>, r: Rect) -> Rect {
         crate::adapter::draw_property::DrawTransform::MapRectInt(t, r)
@@ -826,12 +808,25 @@ impl<R: CpuSkiaBackend> CpuPaintServices<R> {
             //
             // Source: local_frame_view.cc:3545-3563;
             // paint_artifact_compositor.cc:468-515,646-671.
-            let property_trees_changed = previous.chunks.len() == input.artifact().chunks.len()
+            // LocalFrameView also reports an in-place value change on any
+            // ancestor of a chunk's direct property state. Comparing only the
+            // direct state values misses that case: retained nodes keep their
+            // identity while their shared lifecycle marker is raised. This is
+            // the same ChangedToRoot threshold asserted by PAC's fast path.
+            let changed_to_root = input.artifact().chunks.iter().any(|chunk| {
+                ::paint::property_node_geometry::PropertyStateChanged(
+                    &chunk.properties,
+                    ::paint::paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues,
+                    &::paint::paint_property_tree::PropertyTreeState::default(),
+                )
+            });
+            let property_trees_changed = changed_to_root
+                || (previous.chunks.len() == input.artifact().chunks.len()
                 && previous
                     .chunks
                     .iter()
                     .zip(&input.artifact().chunks)
-                    .any(|(old, new)| !old.properties.same_nodes(&new.properties));
+                        .any(|(old, new)| !old.properties.same_nodes(&new.properties)));
             if property_trees_changed {
                 pac.SetNeedsUpdate();
             } else {
@@ -860,7 +855,7 @@ const _: fn() = || {
             + crate::adapter::tile_manager::TileManagerTypes,
     >() {
     }
-    require::<Root<skia::include::core::SkRegion::SkRegion>>();
+    require::<Root<crate::runtime::skia::SkRegion>>();
 };
 
 impl<R:CpuSkiaBackend> crate::third_party::blink::renderer::platform::graphics::compositing::layers_as_json::LayersAsJsonColor for CpuPaintServices<R>{fn ColorNameForLayoutTree(&self,color:Color4f)->String{self.platform.ColorNameForLayoutTree(color)}}

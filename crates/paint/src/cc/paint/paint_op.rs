@@ -5,7 +5,6 @@ use super::{
     paint_op_buffer::{MetadataOp, PaintOpBufferMetadata},
     paint_op_buffer_iterator::PaintOpType,
 };
-use skia::include::core::SkPath::SkPath;
 /// Borrowed actual flags. All methods project native resident values, not
 /// summary booleans cached beside a Paint operation.
 pub trait MetadataFlags<C> {
@@ -27,7 +26,9 @@ pub trait PaintOpMetadataFields<C: Copy> {
     fn IsValidGeometry(&self) -> bool;
     fn ClipAntialias(&self) -> bool;
     fn NestedBytesUsed(&self) -> usize;
-    fn Path(&self) -> &SkPath;
+    fn PathIsConvex(&self) -> bool;
+    fn PathBounds(&self) -> [f32; 4];
+    fn PathIsVolatile(&self) -> bool;
     fn NestedMetadata(&self) -> &PaintOpBufferMetadata<C>;
     fn IsDrawOp(&self) -> bool;
     /// The actual image's IsDiscardableImage projection (paint_op.cc:377-386).
@@ -95,7 +96,7 @@ impl<C: Copy + Ord, V: PaintOpMetadataFields<C>> MetadataOp<C> for PaintOpMetada
     fn CountSlowPaths(&self) -> i32 {
         use PaintOpType::*;
         match self.0.GetType() {
-            kClipPath => (self.0.ClipAntialias() && !self.0.Path().isConvex()) as i32,
+            kClipPath => (self.0.ClipAntialias() && !self.0.PathIsConvex()) as i32,
             kDrawLine => {
                 if let Some(f) = self.0.Flags() {
                     if f.HasPathEffect() && !f.StrokeCapIsRound() && f.DashIntervalCount() == 2 {
@@ -106,17 +107,16 @@ impl<C: Copy + Ord, V: PaintOpMetadataFields<C>> MetadataOp<C> for PaintOpMetada
             }
             kDrawPath => {
                 let f = self.0.Flags().expect("DrawPathOp source flags");
-                let path = self.0.Path();
-                if !f.isAntiAlias() || path.isConvex() {
+                if !f.isAntiAlias() || self.0.PathIsConvex() {
                     return 0;
                 }
-                let bounds = path.getBounds();
+                let [left, top, right, bottom] = self.0.PathBounds();
                 if f.IsStroke() && f.StrokeWidth() == 0. {
                     0
                 } else if !f.IsStroke()
-                    && bounds.right - bounds.left < 64.
-                    && bounds.bottom - bounds.top < 64.
-                    && !path.isVolatile()
+                    && right - left < 64.
+                    && bottom - top < 64.
+                    && !self.0.PathIsVolatile()
                 {
                     0
                 } else {

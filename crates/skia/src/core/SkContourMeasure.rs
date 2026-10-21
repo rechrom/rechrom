@@ -1,714 +1,1001 @@
-// Copyright 2014 Google Inc.
-// Copyright 2020 Yevhenii Reizner
-// BSD-3-Clause; see LICENSE and provenance in translation_map.json.
-//! Contour measurement subset from src/core/SkContourMeasure.cpp.
-//! The iterator stores traversal state directly instead of a C++ Impl allocation.
-use crate::path::floating_point::{NormalizedF32, NormalizedF32Exclusive};
-use crate::path::path::{PathSegment, PathSegmentsIter, PathVerb};
-use crate::path::path_builder::PathBuilder;
-use crate::path::path_geometry;
-use crate::path::scalar::Scalar;
-#[cfg(all(not(feature = "std"), feature = "no-std-float"))]
-use crate::path::NoStdFloat;
-use crate::path::{Path, Point};
-use alloc::vec::Vec;
-use arrayref::array_ref;
-const MAX_T_VALUE: u32 = 0x3FFFFFFF;
-
-pub(crate) struct SkContourMeasureIter<'a> {
-    iter: PathSegmentsIter<'a>,
-    tolerance: f32,
-}
-
-/// Sum the lengths of every nonempty contour using Skia's contour
-/// subdivision and tolerance rules (the basis of SVGPathElement length APIs).
-pub fn path_length(path: &Path) -> f32 {
-    SkContourMeasureIter::new(path, 1.0)
-        .map(|contour| contour.length)
-        .sum()
-}
-
-/// Position and unit tangent sampled with Skia's contour subdivision rules.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PathPointAndTangent {
-    pub x: f32,
-    pub y: f32,
-    pub tangent_x: f32,
-    pub tangent_y: f32,
-}
-
-/// Samples across all contours, matching Blink's `Path::PointAndNormalAtLength`.
-pub fn point_and_tangent_at_length(path: &Path, distance: f32) -> PathPointAndTangent {
-    let distance = if distance.is_finite() { distance } else { 0.0 };
-    let mut contour_start = 0.0;
-    for contour in SkContourMeasureIter::new(path, 1.0) {
-        let contour_end = contour_start + contour.length;
-        if distance <= contour_end {
-            let local_distance = (distance - contour_start).clamp(0.0, contour.length);
-            if let Some((segment_index, t)) = contour.distance_to_segment(local_distance) {
-                let segment = contour.segments[segment_index];
-                let mut position = Point::zero();
-                let mut tangent = Point::zero();
-                compute_pos_tan(
-                    &contour.points[segment.point_index..],
-                    segment.kind,
-                    t,
-                    Some(&mut position),
-                    Some(&mut tangent),
-                );
-                return PathPointAndTangent {
-                    x: position.x,
-                    y: position.y,
-                    tangent_x: tangent.x,
-                    tangent_y: tangent.y,
-                };
-            }
-        }
-        contour_start = contour_end;
+use crate::include::core::SkPathTypes::SkPathVerb;
+use crate::include::core::SkRefCnt::{sk_make_sp, sk_sp, SkRefCnt, SkRefCntBase, SkRefCntObject};
+use crate::src::core::SkGeometry::SkConic;
+use crate::src::core::SkMatrix::SkMatrix;
+use crate::src::core::SkPath::{RangeIter, SkPath};
+use crate::src::core::SkPathBuilder::SkPathBuilder;
+use crate::src::core::SkPathPriv::SkPathPriv;
+use crate::src::core::SkPoint::SkPoint;
+use crate::src::core::SkTDArray::SkTDArray;
+// Source: include/core/SkContourMeasure.h:26-26
+unsafe impl SkRefCntObject for SkContourMeasure {
+    // Native complete-object virtual disposal dispatch; this actual concrete
+    // Sized type pairs the original raw allocation with its typed adapter.
+    fn internal_dispose_raw_proc(&self) -> crate::include::core::SkRefCnt::SkRawDisposeProc {
+        crate::include::core::SkRefCnt::SkRefCntDispose::<Self>
     }
-
-    let first = path.points().first().copied().unwrap_or_else(Point::zero);
-    PathPointAndTangent {
-        x: first.x,
-        y: first.y,
-        tangent_x: 1.0,
-        tangent_y: 0.0,
+    fn ref_cnt_base(&self) -> &SkRefCntBase {
+        self.fRefCnt.ref_cnt_base()
+    }
+    fn ref_(&self) {
+        self.fRefCnt.ref_();
     }
 }
-
-/// Whether the final contour is closed, matching `SkPath::isLastContourClosed`.
-pub fn last_contour_is_closed(path: &Path) -> bool {
-    path.verbs().last() == Some(&PathVerb::Close)
-}
-
-impl<'a> SkContourMeasureIter<'a> {
-    pub(crate) fn new(path: &'a Path, res_scale: f32) -> Self {
-        // can't use tangents, since we need [0..1..................2] to be seen
-        // as definitely not a line (it is when drawn, but not parametrically)
-        // so we compare midpoints
-        const CHEAP_DIST_LIMIT: f32 = 0.5; // just made this value up
-
-        SkContourMeasureIter {
-            iter: path.segments(),
-            tolerance: CHEAP_DIST_LIMIT * res_scale.invert(),
-        }
-    }
-}
-
-impl Iterator for SkContourMeasureIter<'_> {
-    type Item = SkContourMeasure;
-
-    // If it encounters a zero-length contour, it is skipped.
-    fn next(&mut self) -> Option<Self::Item> {
-        // Note:
-        // as we accumulate distance, we have to check that the result of +=
-        // actually made it larger, since a very small delta might be > 0, but
-        // still have no effect on distance (if distance >>> delta).
-        //
-        // We do this check below, and in compute_quad_segs and compute_cubic_segs
-
-        let mut contour = SkContourMeasure::default();
-
-        let mut point_index = 0;
-        let mut distance = 0.0;
-        let mut have_seen_close = false;
-        let mut prev_p = Point::zero();
-        while let Some(seg) = self.iter.next() {
-            match seg {
-                PathSegment::MoveTo(p0) => {
-                    contour.points.push(p0);
-                    prev_p = p0;
-                }
-                PathSegment::LineTo(p0) => {
-                    let prev_d = distance;
-                    distance = contour.compute_line_seg(prev_p, p0, distance, point_index);
-
-                    if distance > prev_d {
-                        contour.points.push(p0);
-                        point_index += 1;
-                    }
-
-                    prev_p = p0;
-                }
-                PathSegment::QuadTo(p0, p1) => {
-                    let prev_d = distance;
-                    distance = contour.compute_quad_segs(
-                        prev_p,
-                        p0,
-                        p1,
-                        distance,
-                        0,
-                        MAX_T_VALUE,
-                        point_index,
-                        self.tolerance,
-                    );
-
-                    if distance > prev_d {
-                        contour.points.push(p0);
-                        contour.points.push(p1);
-                        point_index += 2;
-                    }
-
-                    prev_p = p1;
-                }
-                PathSegment::CubicTo(p0, p1, p2) => {
-                    let prev_d = distance;
-                    distance = contour.compute_cubic_segs(
-                        prev_p,
-                        p0,
-                        p1,
-                        p2,
-                        distance,
-                        0,
-                        MAX_T_VALUE,
-                        point_index,
-                        self.tolerance,
-                    );
-
-                    if distance > prev_d {
-                        contour.points.push(p0);
-                        contour.points.push(p1);
-                        contour.points.push(p2);
-                        point_index += 3;
-                    }
-
-                    prev_p = p2;
-                }
-                PathSegment::Close => {
-                    have_seen_close = true;
-                }
-            }
-
-            // TODO: to contour iter?
-            if self.iter.next_verb() == Some(PathVerb::Move) {
-                break;
-            }
-        }
-
-        if !distance.is_finite() {
-            return None;
-        }
-
-        if have_seen_close {
-            let prev_d = distance;
-            let first_pt = contour.points[0];
-            distance = contour.compute_line_seg(
-                contour.points[point_index],
-                first_pt,
-                distance,
-                point_index,
-            );
-
-            if distance > prev_d {
-                contour.points.push(first_pt);
-            }
-        }
-
-        contour.length = distance;
-        contour.is_closed = have_seen_close;
-
-        if contour.points.is_empty() {
-            None
-        } else {
-            Some(contour)
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Debug)]
-enum SegmentType {
-    Line,
-    Quad,
-    Cubic,
-}
-
-#[derive(Copy, Clone, Debug)]
-struct Segment {
-    distance: f32,      // total distance up to this point
-    point_index: usize, // index into the SkContourMeasure::points array
-    t_value: u32,
-    kind: SegmentType,
-}
-
-impl Segment {
-    fn scalar_t(&self) -> f32 {
-        debug_assert!(self.t_value <= MAX_T_VALUE);
-        // 1/kMaxTValue can't be represented as a float, but it's close and the limits work fine.
-        const MAX_T_RECIPROCAL: f32 = 1.0 / MAX_T_VALUE as f32;
-        self.t_value as f32 * MAX_T_RECIPROCAL
-    }
-}
-
-#[derive(Default, Debug)]
-pub(crate) struct SkContourMeasure {
-    segments: Vec<Segment>,
-    points: Vec<Point>,
-    pub(crate) length: f32,
-    pub(crate) is_closed: bool,
-}
-
 impl SkContourMeasure {
-    pub(crate) fn push_segment(
-        &self,
-        mut start_d: f32,
-        mut stop_d: f32,
-        start_with_move_to: bool,
-        pb: &mut PathBuilder,
-    ) {
-        if start_d < 0.0 {
-            start_d = 0.0;
+    // Source: include/core/SkContourMeasure.h:30-30
+    pub fn length(&self) -> f32 {
+        self.fLength
+    }
+}
+// Source: include/core/SkContourMeasure.h:37-41
+pub type MatrixFlags = u32;
+pub const kGetPosition_MatrixFlag: MatrixFlags = 0x01;
+pub const kGetTangent_MatrixFlag: MatrixFlags = 0x02;
+pub const kGetPosAndTan_MatrixFlag: MatrixFlags = kGetPosition_MatrixFlag | kGetTangent_MatrixFlag;
+impl SkContourMeasure {
+    // Source: include/core/SkContourMeasure.h:62-62
+    pub fn isClosed(&self) -> bool {
+        self.fIsClosed
+    }
+}
+// Source: include/core/SkContourMeasure.h:66-70
+pub struct VerbMeasure<'a> {
+    pub fDistance: f32,
+    pub fVerb: SkPathVerb,
+    pub fPts: &'a [SkPoint],
+}
+impl<'a> ForwardVerbIterator<'a> {
+    // Source: include/core/SkContourMeasure.h:86-92
+    pub fn advance(&mut self) -> &mut Self {
+        crate::SkASSERT!(@source b"include/core/SkContourMeasure.h\0".as_ptr(),87; @condition b"!fSegments.empty()\0".as_ptr(); !self.fSegments.is_empty());
+        self.fSegments = Self::LastSegForCurrentVerb(&self.fSegments[1..]);
+        self
+    }
+}
+// Source: include/core/SkContourMeasure.h:94-102
+impl PartialEq for ForwardVerbIterator<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        debug_assert!(
+            self.fSegments.as_ptr() != other.fSegments.as_ptr()
+                || self.fSegments.len() == other.fSegments.len()
+        );
+        self.fSegments.as_ptr() == other.fSegments.as_ptr()
+    }
+    fn ne(&self, other: &Self) -> bool {
+        !self.eq(other)
+    }
+}
+impl<'a> ForwardVerbIterator<'a> {
+    // Source: include/core/SkContourMeasure.h:107-109
+    pub(crate) fn new(segs: &'a [Segment], pts: &'a [SkPoint]) -> Self {
+        Self {
+            fSegments: Self::LastSegForCurrentVerb(segs),
+            fPts: pts,
         }
-
-        if stop_d > self.length {
-            stop_d = self.length;
+    }
+    // Source: include/core/SkContourMeasure.h:111-118
+    fn LastSegForCurrentVerb(segs: &'a [Segment]) -> &'a [Segment] {
+        let mut i = 1;
+        while i < segs.len() && segs[0].fPtIndex == segs[i].fPtIndex {
+            i += 1;
         }
-
-        if !(start_d <= stop_d) {
-            // catch NaN values as well
-            return;
+        &segs[i - 1..]
+    }
+}
+// Source: include/core/SkContourMeasure.h:123-126
+pub struct ForwardVerbIterator<'a> {
+    fSegments: &'a [Segment],
+    fPts: &'a [SkPoint],
+}
+// Source: include/core/SkContourMeasure.h:129-134
+impl SkContourMeasure {
+    pub fn begin(&self) -> ForwardVerbIterator<'_> {
+        ForwardVerbIterator::new(self.fSegments.as_slice(), self.fPts.as_slice())
+    }
+    pub fn end(&self) -> ForwardVerbIterator<'_> {
+        ForwardVerbIterator::new(
+            &self.fSegments.as_slice()[self.fSegments.size() as usize..],
+            self.fPts.as_slice(),
+        )
+    }
+}
+// Source: include/core/SkContourMeasure.h:137-141
+// The native 30/2 bitfields share one u32. Accessors preserve their truncation.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Segment {
+    pub fDistance: f32,
+    pub fPtIndex: u32,
+    packed: u32,
+}
+impl Segment {
+    pub(crate) fn t_value(&self) -> u32 {
+        self.packed & 0x3fffffff
+    }
+    pub(crate) fn seg_type(&self) -> u32 {
+        self.packed >> 30
+    }
+}
+// Source: include/core/SkContourMeasure.h:146-152
+impl Segment {
+    pub(crate) fn Next(segs: &[Self]) -> &[Self] {
+        let ptIndex = segs[0].fPtIndex;
+        let mut index = 1;
+        while segs[index].fPtIndex == ptIndex {
+            index += 1;
         }
-
-        if self.segments.is_empty() {
-            return;
+        &segs[index..]
+    }
+}
+// Source: include/core/SkContourMeasure.h:156-160
+// Field drop order is the C++ reverse declaration order: point storage, segment storage, base.
+pub struct SkContourMeasure {
+    fPts: SkTDArray<SkPoint>,
+    pub(crate) fSegments: SkTDArray<Segment>,
+    fLength: f32,
+    fIsClosed: bool,
+    fRefCnt: SkRefCnt,
+}
+// Source: include/core/SkContourMeasure.h:212-212
+pub struct SkContourMeasureIter {
+    fImpl: Option<Box<MeasureIterImpl>>,
+}
+// Source: src/core/SkContourMeasure.cpp:27-34
+pub(crate) const kMaxTValue: i32 = 0x3fffffff;
+pub(crate) fn tValue2Scalar(t: i32) -> f32 {
+    debug_assert!((t as u32) <= kMaxTValue as u32);
+    let kMaxTReciprocal = 1.0_f32 / kMaxTValue as f32;
+    t as f32 * kMaxTReciprocal
+}
+// Source: src/core/SkContourMeasure.cpp:36-37
+const _: () = assert!(0.0 == 0.0_f32 * (1.0_f32 / kMaxTValue as f32));
+const _: () = assert!(1.0 == kMaxTValue as f32 * (1.0_f32 / kMaxTValue as f32));
+// Source: src/core/SkContourMeasure.cpp:39-41
+impl Segment {
+    pub(crate) fn getScalarT(&self) -> f32 {
+        tValue2Scalar(self.t_value() as i32)
+    }
+}
+// Source: src/core/SkContourMeasure.cpp:43-135
+pub(crate) fn SkContourMeasure_segTo(
+    pts: &[SkPoint],
+    segType: u32,
+    startT: f32,
+    stopT: f32,
+    dst: &mut SkPathBuilder,
+) {
+    use crate::include::core::SkScalar::SkScalarInterp;
+    use crate::src::core::SkGeometry::{SkChopCubicAt, SkChopQuadAt};
+    use crate::src::core::SkPathMeasurePriv::SkSegType;
+    debug_assert!(startT >= 0.0 && startT <= 1.0);
+    debug_assert!(stopT >= 0.0 && stopT <= 1.0);
+    crate::SkASSERT!(@source b"src/core/SkContourMeasure.cpp\0".as_ptr(),47; @condition b"startT <= stopT\0".as_ptr(); startT<=stopT);
+    if startT == stopT {
+        if !dst.isEmpty() {
+            let last = dst.getLastPt().expect("nonempty builder has last point");
+            dst.lineTo(last);
         }
-
-        let (seg_index, mut start_t) = match self.distance_to_segment(start_d) {
-            Some(v) => v,
-            None => return,
-        };
-        let mut seg = self.segments[seg_index];
-
-        let (stop_seg_index, stop_t) = match self.distance_to_segment(stop_d) {
-            Some(v) => v,
-            None => return,
-        };
-        let stop_seg = self.segments[stop_seg_index];
-
-        debug_assert!(stop_seg_index <= stop_seg_index);
-        let mut p = Point::zero();
-        if start_with_move_to {
-            compute_pos_tan(
-                &self.points[seg.point_index..],
-                seg.kind,
-                start_t,
-                Some(&mut p),
-                None,
-            );
-            pb.move_to(p.x, p.y);
+        return;
+    }
+    let mut tmp0 = [SkPoint::make(0.0, 0.0); 7];
+    let mut tmp1 = tmp0;
+    match segType {
+        v if v == SkSegType::kLine_SegType as u32 => {
+            if stopT == 1.0 {
+                dst.lineTo(pts[1]);
+            } else {
+                dst.lineTo(SkPoint::make(
+                    SkScalarInterp(pts[0].fX, pts[1].fX, stopT),
+                    SkScalarInterp(pts[0].fY, pts[1].fY, stopT),
+                ));
+            }
         }
-
-        if seg.point_index == stop_seg.point_index {
-            segment_to(
-                &self.points[seg.point_index..],
-                seg.kind,
-                start_t,
-                stop_t,
-                pb,
-            );
-        } else {
-            let mut new_seg_index = seg_index;
-            loop {
-                segment_to(
-                    &self.points[seg.point_index..],
-                    seg.kind,
-                    start_t,
-                    NormalizedF32::ONE,
-                    pb,
+        v if v == SkSegType::kQuad_SegType as u32 => {
+            if startT == 0.0 {
+                if stopT == 1.0 {
+                    dst.quadTo(pts[1], pts[2]);
+                } else {
+                    SkChopQuadAt(
+                        pts[..3].try_into().unwrap(),
+                        (&mut tmp0[..5]).try_into().unwrap(),
+                        stopT,
+                    );
+                    dst.quadTo(tmp0[1], tmp0[2]);
+                }
+            } else {
+                SkChopQuadAt(
+                    pts[..3].try_into().unwrap(),
+                    (&mut tmp0[..5]).try_into().unwrap(),
+                    startT,
                 );
-
-                let old_point_index = seg.point_index;
-                loop {
-                    new_seg_index += 1;
-                    if self.segments[new_seg_index].point_index != old_point_index {
-                        break;
+                if stopT == 1.0 {
+                    dst.quadTo(tmp0[3], tmp0[4]);
+                } else {
+                    SkChopQuadAt(
+                        tmp0[2..5].try_into().unwrap(),
+                        (&mut tmp1[..5]).try_into().unwrap(),
+                        (stopT - startT) / (1.0 - startT),
+                    );
+                    dst.quadTo(tmp1[1], tmp1[2]);
+                }
+            }
+        }
+        v if v == SkSegType::kConic_SegType as u32 => {
+            let conic = SkConic::new(&[pts[0], pts[2], pts[3]], pts[1].fX);
+            if startT == 0.0 {
+                if stopT == 1.0 {
+                    dst.conicTo(conic.fPts[1], conic.fPts[2], conic.fW);
+                } else {
+                    let mut tmp = [SkConic::default(); 2];
+                    if conic.chopAt(stopT, &mut tmp) {
+                        dst.conicTo(tmp[0].fPts[1], tmp[0].fPts[2], tmp[0].fW);
                     }
                 }
-                seg = self.segments[new_seg_index];
-
-                start_t = NormalizedF32::ZERO;
-
-                if seg.point_index >= stop_seg.point_index {
-                    break;
+            } else if stopT == 1.0 {
+                let mut tmp = [SkConic::default(); 2];
+                if conic.chopAt(startT, &mut tmp) {
+                    dst.conicTo(tmp[1].fPts[1], tmp[1].fPts[2], tmp[1].fW);
+                }
+            } else {
+                let mut tmp = SkConic::default();
+                conic.chopAtRange(startT, stopT, &mut tmp);
+                dst.conicTo(tmp.fPts[1], tmp.fPts[2], tmp.fW);
+            }
+        }
+        v if v == SkSegType::kCubic_SegType as u32 => {
+            if startT == 0.0 {
+                if stopT == 1.0 {
+                    dst.cubicTo(pts[1], pts[2], pts[3]);
+                } else {
+                    SkChopCubicAt(pts[..4].try_into().unwrap(), &mut tmp0, stopT);
+                    dst.cubicTo(tmp0[1], tmp0[2], tmp0[3]);
+                }
+            } else {
+                SkChopCubicAt(pts[..4].try_into().unwrap(), &mut tmp0, startT);
+                if stopT == 1.0 {
+                    dst.cubicTo(tmp0[4], tmp0[5], tmp0[6]);
+                } else {
+                    SkChopCubicAt(
+                        tmp0[3..].try_into().unwrap(),
+                        &mut tmp1,
+                        (stopT - startT) / (1.0 - startT),
+                    );
+                    dst.cubicTo(tmp1[1], tmp1[2], tmp1[3]);
                 }
             }
+        }
+        _ => std::process::abort(),
+    }
+}
+// Source: src/core/SkContourMeasure.cpp:139-142
+pub(crate) fn tspan_big_enough(tspan: i32) -> i32 {
+    debug_assert!((tspan as u32) <= kMaxTValue as u32);
+    tspan >> 10
+}
+// Source: src/core/SkContourMeasure.cpp:147-147
+pub(crate) const CHEAP_DIST_LIMIT: f32 = 1.0 / 2.0;
+// Source: src/core/SkContourMeasure.cpp:149-159
+pub(crate) fn quad_too_curvy(pts: &[SkPoint; 3], tolerance: f32) -> bool {
+    let dx = pts[1].fX / 2.0 - ((pts[0].fX + pts[2].fX) / 2.0) / 2.0;
+    let dy = pts[1].fY / 2.0 - ((pts[0].fY + pts[2].fY) / 2.0) / 2.0;
+    let (a, b) = (dx.abs(), dy.abs());
+    let dist = if a < b { b } else { a };
+    dist > tolerance
+}
+// Source: src/core/SkContourMeasure.cpp:161-168
+pub(crate) fn conic_too_curvy(
+    firstPt: SkPoint,
+    midTPt: SkPoint,
+    lastPt: SkPoint,
+    tolerance: f32,
+) -> bool {
+    let mut midEnds = firstPt + lastPt;
+    midEnds *= 0.5;
+    let dxy = midTPt - midEnds;
+    let (a, b) = (dxy.fX.abs(), dxy.fY.abs());
+    let dist = if a < b { b } else { a };
+    dist > tolerance
+}
+// Source: src/core/SkContourMeasure.cpp:170-175
+pub(crate) fn cheap_dist_exceeds_limit(pt: SkPoint, x: f32, y: f32, tolerance: f32) -> bool {
+    let (a, b) = ((x - pt.fX).abs(), (y - pt.fY).abs());
+    let dist = if a < b { b } else { a };
+    dist > tolerance
+}
+// Source: src/core/SkContourMeasure.cpp:177-185
+pub(crate) fn cubic_too_curvy(pts: &[SkPoint; 4], tolerance: f32) -> bool {
+    use crate::include::core::SkScalar::SkScalarInterp;
+    cheap_dist_exceeds_limit(
+        pts[1],
+        SkScalarInterp(pts[0].fX, pts[3].fX, 1.0 / 3.0),
+        SkScalarInterp(pts[0].fY, pts[3].fY, 1.0 / 3.0),
+        tolerance,
+    ) || cheap_dist_exceeds_limit(
+        pts[2],
+        SkScalarInterp(pts[0].fX, pts[3].fX, 1.0 * 2.0 / 3.0),
+        SkScalarInterp(pts[0].fY, pts[3].fY, 1.0 * 2.0 / 3.0),
+        tolerance,
+    )
+}
+// Source: src/core/SkContourMeasure.cpp:189-189
+pub(crate) const kMaxRecursionDepth: i32 = 8;
 
-            segment_to(
-                &self.points[seg.point_index..],
-                seg.kind,
-                NormalizedF32::ZERO,
-                stop_t,
-                pb,
-            );
+// Source: src/core/SkContourMeasure.cpp:191-210
+// fIter only borrows immutable tail arrays owned by fPath's retained PathData. It never points
+// into the movable SkPath value. No borrowed record escapes Impl; fPath is never mutated.
+// Private lifetime extension represents the native retained-owner/raw-range relationship.
+// Rust fields drop in declaration order: scratch arrays, iterator, then its retained path.
+struct MeasureIterImpl {
+    fPts: SkTDArray<SkPoint>,
+    fSegments: SkTDArray<Segment>,
+    fIter: RangeIter<'static>,
+    fPath: SkPath,
+    fTolerance: f32,
+    fForceClosed: bool,
+}
+impl MeasureIterImpl {
+    fn new(path: &SkPath, forceClosed: bool, resScale: f32) -> Self {
+        let owner = path.clone();
+        let iter = SkPathPriv::Iterate(&owner).begin();
+        let iter = unsafe { std::mem::transmute::<RangeIter<'_>, RangeIter<'static>>(iter) };
+        Self {
+            fPath: owner,
+            fIter: iter,
+            fTolerance: CHEAP_DIST_LIMIT * (1.0_f32 / resScale),
+            fForceClosed: forceClosed,
+            fSegments: SkTDArray::new(),
+            fPts: SkTDArray::new(),
         }
     }
-
-    fn distance_to_segment(&self, distance: f32) -> Option<(usize, NormalizedF32)> {
-        debug_assert!(distance >= 0.0 && distance <= self.length);
-
-        let mut index = find_segment(&self.segments, distance);
-        // don't care if we hit an exact match or not, so we xor index if it is negative
-        index ^= index >> 31;
-        let index = index as usize;
-        let seg = self.segments[index];
-
-        // now interpolate t-values with the prev segment (if possible)
-        let mut start_t = 0.0;
-        let mut start_d = 0.0;
-        // check if the prev segment is legal, and references the same set of points
-        if index > 0 {
-            start_d = self.segments[index - 1].distance;
-            if self.segments[index - 1].point_index == seg.point_index {
-                debug_assert!(self.segments[index - 1].kind == seg.kind);
-                start_t = self.segments[index - 1].scalar_t();
-            }
-        }
-
-        debug_assert!(seg.scalar_t() > start_t);
-        debug_assert!(distance >= start_d);
-        debug_assert!(seg.distance > start_d);
-
-        let t =
-            start_t + (seg.scalar_t() - start_t) * (distance - start_d) / (seg.distance - start_d);
-        let t = NormalizedF32::new(t)?;
-        Some((index, t))
+    fn hasNextSegments(&self) -> bool {
+        self.fIter.clone().next().is_some()
     }
-
-    fn compute_line_seg(
-        &mut self,
-        p0: Point,
-        p1: Point,
-        mut distance: f32,
-        point_index: usize,
-    ) -> f32 {
-        let d = p0.distance(p1);
-        debug_assert!(d >= 0.0);
-        let prev_d = distance;
-        distance += d;
-        if distance > prev_d {
-            debug_assert!(point_index < self.points.len());
-            self.segments.push(Segment {
-                distance,
-                point_index,
-                t_value: MAX_T_VALUE,
-                kind: SegmentType::Line,
-            });
-        }
-
-        distance
-    }
-
+    // Source: src/core/SkContourMeasure.cpp:224-250
     fn compute_quad_segs(
         &mut self,
-        p0: Point,
-        p1: Point,
-        p2: Point,
+        pts: &[SkPoint; 3],
         mut distance: f32,
-        min_t: u32,
-        max_t: u32,
-        point_index: usize,
-        tolerance: f32,
+        mint: i32,
+        maxt: i32,
+        ptIndex: u32,
+        mut recursionDepth: i32,
     ) -> f32 {
-        if t_span_big_enough(max_t - min_t) != 0 && quad_too_curvy(p0, p1, p2, tolerance) {
-            let mut tmp = [Point::zero(); 5];
-            let half_t = (min_t + max_t) >> 1;
-
-            path_geometry::chop_quad_at(&[p0, p1, p2], NormalizedF32Exclusive::HALF, &mut tmp);
+        if recursionDepth < kMaxRecursionDepth
+            && tspan_big_enough(maxt - mint) != 0
+            && quad_too_curvy(pts, self.fTolerance)
+        {
+            let mut tmp = [SkPoint::make(0.0, 0.0); 5];
+            let halft = (mint + maxt) >> 1;
+            crate::src::core::SkGeometry::SkChopQuadAtHalf(pts, &mut tmp);
+            recursionDepth += 1;
             distance = self.compute_quad_segs(
-                tmp[0],
-                tmp[1],
-                tmp[2],
+                tmp[..3].try_into().unwrap(),
                 distance,
-                min_t,
-                half_t,
-                point_index,
-                tolerance,
+                mint,
+                halft,
+                ptIndex,
+                recursionDepth,
             );
             distance = self.compute_quad_segs(
-                tmp[2],
-                tmp[3],
-                tmp[4],
+                tmp[2..].try_into().unwrap(),
                 distance,
-                half_t,
-                max_t,
-                point_index,
-                tolerance,
+                halft,
+                maxt,
+                ptIndex,
+                recursionDepth,
             );
         } else {
-            let d = p0.distance(p2);
-            let prev_d = distance;
+            let d = SkPoint::distance(pts[0], pts[2]);
+            let prevD = distance;
             distance += d;
-            if distance > prev_d {
-                debug_assert!(point_index < self.points.len());
-                self.segments.push(Segment {
-                    distance,
-                    point_index,
-                    t_value: max_t,
-                    kind: SegmentType::Quad,
+            if distance > prevD {
+                debug_assert!(ptIndex < self.fPts.size() as u32);
+                self.fSegments.push_back(Segment {
+                    fDistance: distance,
+                    fPtIndex: ptIndex,
+                    packed: (maxt as u32 & 0x3fffffff)
+                        | ((crate::src::core::SkPathMeasurePriv::SkSegType::kQuad_SegType as u32)
+                            << 30),
                 });
             }
         }
-
         distance
     }
-
+    // Source: src/core/SkContourMeasure.cpp:252-283
+    fn compute_conic_segs(
+        &mut self,
+        conic: &SkConic,
+        mut distance: f32,
+        mint: i32,
+        minPt: SkPoint,
+        maxt: i32,
+        maxPt: SkPoint,
+        ptIndex: u32,
+        mut recursionDepth: i32,
+    ) -> f32 {
+        let halft = (mint + maxt) >> 1;
+        let halfPt = conic.evalAt(tValue2Scalar(halft));
+        if !halfPt.is_finite() {
+            return distance;
+        }
+        if recursionDepth < kMaxRecursionDepth
+            && tspan_big_enough(maxt - mint) != 0
+            && conic_too_curvy(minPt, halfPt, maxPt, self.fTolerance)
+        {
+            recursionDepth += 1;
+            distance = self.compute_conic_segs(
+                conic,
+                distance,
+                mint,
+                minPt,
+                halft,
+                halfPt,
+                ptIndex,
+                recursionDepth,
+            );
+            distance = self.compute_conic_segs(
+                conic,
+                distance,
+                halft,
+                halfPt,
+                maxt,
+                maxPt,
+                ptIndex,
+                recursionDepth,
+            );
+        } else {
+            let d = SkPoint::distance(minPt, maxPt);
+            let prevD = distance;
+            distance += d;
+            if distance > prevD {
+                debug_assert!(ptIndex < self.fPts.size() as u32);
+                self.fSegments.push_back(Segment {
+                    fDistance: distance,
+                    fPtIndex: ptIndex,
+                    packed: (maxt as u32 & 0x3fffffff)
+                        | ((crate::src::core::SkPathMeasurePriv::SkSegType::kConic_SegType as u32)
+                            << 30),
+                });
+            }
+        }
+        distance
+    }
+    // Source: src/core/SkContourMeasure.cpp:285-314
     fn compute_cubic_segs(
         &mut self,
-        p0: Point,
-        p1: Point,
-        p2: Point,
-        p3: Point,
+        pts: &[SkPoint; 4],
         mut distance: f32,
-        min_t: u32,
-        max_t: u32,
-        point_index: usize,
-        tolerance: f32,
+        mint: i32,
+        maxt: i32,
+        ptIndex: u32,
+        mut recursionDepth: i32,
     ) -> f32 {
-        if t_span_big_enough(max_t - min_t) != 0 && cubic_too_curvy(p0, p1, p2, p3, tolerance) {
-            let mut tmp = [Point::zero(); 7];
-            let half_t = (min_t + max_t) >> 1;
-
-            path_geometry::chop_cubic_at2(
-                &[p0, p1, p2, p3],
-                NormalizedF32Exclusive::HALF,
-                &mut tmp,
+        if recursionDepth < kMaxRecursionDepth
+            && tspan_big_enough(maxt - mint) != 0
+            && cubic_too_curvy(pts, self.fTolerance)
+        {
+            let mut tmp = [SkPoint::make(0.0, 0.0); 7];
+            let halft = (mint + maxt) >> 1;
+            crate::src::core::SkGeometry::SkChopCubicAtHalf(pts, &mut tmp);
+            recursionDepth += 1;
+            distance = self.compute_cubic_segs(
+                tmp[..4].try_into().unwrap(),
+                distance,
+                mint,
+                halft,
+                ptIndex,
+                recursionDepth,
             );
             distance = self.compute_cubic_segs(
-                tmp[0],
-                tmp[1],
-                tmp[2],
-                tmp[3],
+                tmp[3..].try_into().unwrap(),
                 distance,
-                min_t,
-                half_t,
-                point_index,
-                tolerance,
-            );
-            distance = self.compute_cubic_segs(
-                tmp[3],
-                tmp[4],
-                tmp[5],
-                tmp[6],
-                distance,
-                half_t,
-                max_t,
-                point_index,
-                tolerance,
+                halft,
+                maxt,
+                ptIndex,
+                recursionDepth,
             );
         } else {
-            let d = p0.distance(p3);
-            let prev_d = distance;
+            let d = SkPoint::distance(pts[0], pts[3]);
+            let prevD = distance;
             distance += d;
-            if distance > prev_d {
-                debug_assert!(point_index < self.points.len());
-                self.segments.push(Segment {
-                    distance,
-                    point_index,
-                    t_value: max_t,
-                    kind: SegmentType::Cubic,
+            if distance > prevD {
+                debug_assert!(ptIndex < self.fPts.size() as u32);
+                self.fSegments.push_back(Segment {
+                    fDistance: distance,
+                    fPtIndex: ptIndex,
+                    packed: (maxt as u32 & 0x3fffffff)
+                        | ((crate::src::core::SkPathMeasurePriv::SkSegType::kCubic_SegType as u32)
+                            << 30),
                 });
             }
         }
-
         distance
     }
+    // Source: src/core/SkContourMeasure.cpp:316-331
+    fn compute_line_seg(
+        &mut self,
+        p0: SkPoint,
+        p1: SkPoint,
+        mut distance: f32,
+        ptIndex: u32,
+    ) -> f32 {
+        let d = SkPoint::distance(p0, p1);
+        debug_assert!(d >= 0.0);
+        let prevD = distance;
+        distance += d;
+        if distance > prevD {
+            debug_assert!(ptIndex < self.fPts.size() as u32);
+            self.fSegments.push_back(Segment {
+                fDistance: distance,
+                fPtIndex: ptIndex,
+                packed: kMaxTValue as u32,
+            });
+        }
+        distance
+    }
+    // Source: src/core/SkContourMeasure.cpp:334-357
+    #[cfg(sk_debug)]
+    fn validate(&self) {
+        let segs = self.fSegments.as_slice();
+        let mut seg = 0;
+        let stop = segs.len();
+        let mut ptIndex = 0;
+        let mut distance = 0.0;
+        let mut maxChecks = 10000000_i32;
+        while seg < stop {
+            debug_assert!(segs[seg].fDistance > distance);
+            debug_assert!(segs[seg].fPtIndex >= ptIndex);
+            debug_assert!(segs[seg].t_value() > 0);
+            let mut s = seg;
+            while s < stop - 1 && segs[s].fPtIndex == segs[s + 1].fPtIndex {
+                maxChecks -= 1;
+                if maxChecks <= 0 {
+                    break;
+                }
+                debug_assert_eq!(segs[s].seg_type(), segs[s + 1].seg_type());
+                debug_assert!(segs[s].t_value() < segs[s + 1].t_value());
+                s += 1;
+            }
+            distance = segs[seg].fDistance;
+            ptIndex = segs[seg].fPtIndex;
+            seg += 1;
+        }
+    }
+    // Source: src/core/SkContourMeasure.cpp:360-463
+    fn buildSegments(&mut self) -> sk_sp<SkContourMeasure> {
+        let mut ptIndex = -1_i32;
+        let mut distance = 0.0;
+        let mut haveSeenClose = self.fForceClosed;
+        let mut haveSeenMoveTo = false;
+        self.fSegments.reset();
+        self.fPts.reset();
+        while self.hasNextSegments() {
+            let rec = self.fIter.record();
+            let verb = rec.fVerb;
+            let pts = rec.fPoints;
+            let w = rec.fConicWeight;
+            if haveSeenMoveTo && verb == SkPathVerb::kMove {
+                break;
+            }
+            match verb {
+                SkPathVerb::kMove => {
+                    ptIndex += 1;
+                    self.fPts.append(&pts[..1]);
+                    crate::SkASSERT!(@source b"src/core/SkContourMeasure.cpp\0".as_ptr(),387; @condition b"!haveSeenMoveTo\0".as_ptr(); !haveSeenMoveTo);
+                    haveSeenMoveTo = true;
+                }
+                SkPathVerb::kLine => {
+                    debug_assert!(haveSeenMoveTo);
+                    let prevD = distance;
+                    distance = self.compute_line_seg(pts[0], pts[1], distance, ptIndex as u32);
+                    if distance > prevD {
+                        self.fPts.append(&pts[1..2]);
+                        ptIndex += 1;
+                    }
+                }
+                SkPathVerb::kQuad => {
+                    debug_assert!(haveSeenMoveTo);
+                    let prevD = distance;
+                    distance = self.compute_quad_segs(
+                        pts[..3].try_into().unwrap(),
+                        distance,
+                        0,
+                        kMaxTValue,
+                        ptIndex as u32,
+                        0,
+                    );
+                    if distance > prevD {
+                        self.fPts.append(&pts[1..3]);
+                        ptIndex += 2;
+                    }
+                }
+                SkPathVerb::kConic => {
+                    debug_assert!(haveSeenMoveTo);
+                    let conic = SkConic::new(pts[..3].try_into().unwrap(), w);
+                    let prevD = distance;
+                    distance = self.compute_conic_segs(
+                        &conic,
+                        distance,
+                        0,
+                        conic.fPts[0],
+                        kMaxTValue,
+                        conic.fPts[2],
+                        ptIndex as u32,
+                        0,
+                    );
+                    if distance > prevD {
+                        self.fPts.push_back(SkPoint::make(conic.fW, 0.0));
+                        self.fPts.append(&pts[1..3]);
+                        ptIndex += 3;
+                    }
+                }
+                SkPathVerb::kCubic => {
+                    debug_assert!(haveSeenMoveTo);
+                    let prevD = distance;
+                    distance = self.compute_cubic_segs(
+                        pts[..4].try_into().unwrap(),
+                        distance,
+                        0,
+                        kMaxTValue,
+                        ptIndex as u32,
+                        0,
+                    );
+                    if distance > prevD {
+                        self.fPts.append(&pts[1..4]);
+                        ptIndex += 3;
+                    }
+                }
+                SkPathVerb::kClose => haveSeenClose = true,
+            }
+            self.fIter.advance();
+        }
+        if !distance.is_finite() {
+            return sk_sp::default();
+        }
+        if self.fSegments.empty() {
+            return sk_sp::default();
+        }
+        if haveSeenClose {
+            let prevD = distance;
+            let firstPt = self.fPts[0];
+            distance = self.compute_line_seg(
+                self.fPts[ptIndex as usize],
+                firstPt,
+                distance,
+                ptIndex as u32,
+            );
+            if distance > prevD {
+                self.fPts.push_back(firstPt);
+            }
+        }
+        #[cfg(sk_debug)]
+        self.validate();
+        sk_make_sp(SkContourMeasure::new(
+            std::mem::take(&mut self.fSegments),
+            std::mem::take(&mut self.fPts),
+            distance,
+            haveSeenClose,
+        ))
+    }
 }
-
-fn find_segment(base: &[Segment], key: f32) -> i32 {
-    let mut lo = 0u32;
-    let mut hi = (base.len() - 1) as u32;
-
+// Source: src/core/SkContourMeasure.cpp:465-498
+pub(crate) fn compute_pos_tan(
+    pts: &[SkPoint],
+    segType: u32,
+    t: f32,
+    pos: Option<&mut SkPoint>,
+    mut tangent: Option<&mut SkPoint>,
+) {
+    use crate::include::core::SkScalar::SkScalarInterp;
+    use crate::src::core::SkGeometry::{SkConic, SkEvalCubicAt, SkEvalQuadAtWithTangent};
+    use crate::src::core::SkPathMeasurePriv::SkSegType;
+    match segType {
+        v if v == SkSegType::kLine_SegType as u32 => {
+            if let Some(pos) = pos {
+                pos.set(
+                    SkScalarInterp(pts[0].fX, pts[1].fX, t),
+                    SkScalarInterp(pts[0].fY, pts[1].fY, t),
+                );
+            }
+            if let Some(tangent) = tangent {
+                tangent.set_normalize(pts[1].fX - pts[0].fX, pts[1].fY - pts[0].fY);
+            }
+        }
+        v if v == SkSegType::kQuad_SegType as u32 => {
+            SkEvalQuadAtWithTangent(pts[..3].try_into().unwrap(), t, pos, tangent.as_deref_mut());
+            if let Some(tangent) = tangent {
+                tangent.normalize();
+            }
+        }
+        v if v == SkSegType::kConic_SegType as u32 => {
+            SkConic::new(&[pts[0], pts[2], pts[3]], pts[1].fX).evalAtWithTangent(
+                t,
+                pos,
+                tangent.as_deref_mut(),
+            );
+            if let Some(tangent) = tangent {
+                tangent.normalize();
+            }
+        }
+        v if v == SkSegType::kCubic_SegType as u32 => {
+            SkEvalCubicAt(
+                pts[..4].try_into().unwrap(),
+                t,
+                pos,
+                tangent.as_deref_mut(),
+                None,
+            );
+            if let Some(tangent) = tangent {
+                tangent.normalize();
+            }
+        }
+        _ => debug_assert!(false, "unknown segType"),
+    }
+}
+// Source: src/core/SkContourMeasure.cpp:504-505
+impl Default for SkContourMeasureIter {
+    fn default() -> Self {
+        Self { fImpl: None }
+    }
+}
+impl SkContourMeasureIter {
+    // Source: src/core/SkContourMeasure.cpp:507-510
+    pub fn new(path: &SkPath, forceClosed: bool, resScale: f32) -> Self {
+        let mut out = Self::default();
+        out.reset(path, forceClosed, resScale);
+        out
+    }
+    // Source: src/core/SkContourMeasure.cpp:519-525
+    pub fn reset(&mut self, path: &SkPath, forceClosed: bool, resScale: f32) {
+        if path.isFinite() {
+            self.fImpl = Some(Box::new(MeasureIterImpl::new(path, forceClosed, resScale)));
+        } else {
+            self.fImpl = None;
+        }
+    }
+    // Source: src/core/SkContourMeasure.cpp:527-538
+    pub fn next(&mut self) -> sk_sp<SkContourMeasure> {
+        let Some(implementation) = self.fImpl.as_mut() else {
+            return sk_sp::default();
+        };
+        while implementation.hasNextSegments() {
+            let cm = implementation.buildSegments();
+            if cm.is_some() {
+                return cm;
+            }
+        }
+        sk_sp::default()
+    }
+}
+// Source: src/core/SkContourMeasure.cpp:542-547
+impl SkContourMeasure {
+    fn new(segs: SkTDArray<Segment>, pts: SkTDArray<SkPoint>, length: f32, isClosed: bool) -> Self {
+        Self {
+            fSegments: segs,
+            fPts: pts,
+            fLength: length,
+            fIsClosed: isClosed,
+            fRefCnt: SkRefCnt::new(),
+        }
+    }
+}
+// Source: src/core/SkContourMeasure.cpp:549-577
+// The only source instantiation uses Segment/f32; a borrowed slice carries base/count validity.
+pub(crate) fn SkTKSearch(base: &[Segment], count: i32, key: f32) -> i32 {
+    crate::SkASSERT!(@source b"src/core/SkContourMeasure.cpp\0".as_ptr(),551; @condition b"count >= 0\0".as_ptr(); count >= 0);
+    if count <= 0 {
+        return !0;
+    }
+    let mut lo = 0_u32;
+    let mut hi = (count - 1) as u32;
     while lo < hi {
         let mid = (hi + lo) >> 1;
-        if base[mid as usize].distance < key {
+        if base[mid as usize].fDistance < key {
             lo = mid + 1;
         } else {
             hi = mid;
         }
     }
-
-    if base[hi as usize].distance < key {
+    if base[hi as usize].fDistance < key {
         hi += 1;
         hi = !hi;
-    } else if key < base[hi as usize].distance {
+    } else if key < base[hi as usize].fDistance {
         hi = !hi;
     }
-
     hi as i32
 }
 
-fn compute_pos_tan(
-    points: &[Point],
-    seg_kind: SegmentType,
-    t: NormalizedF32,
-    pos: Option<&mut Point>,
-    tangent: Option<&mut Point>,
-) {
-    match seg_kind {
-        SegmentType::Line => {
-            if let Some(pos) = pos {
-                *pos = Point::from_xy(
-                    interp(points[0].x, points[1].x, t),
-                    interp(points[0].y, points[1].y, t),
+impl SkContourMeasure {
+    // Source: src/core/SkContourMeasure.cpp:579-609
+    fn distanceToSegment(&self, distance: f32, t: &mut f32) -> usize {
+        debug_assert!(distance >= 0.0 && distance <= self.length());
+        let seg = self.fSegments.as_slice();
+        let count = self.fSegments.size();
+        let mut index = SkTKSearch(seg, count, distance);
+        index ^= index >> 31;
+        let index = index as usize;
+        let mut startT = 0.0;
+        let mut startD = 0.0;
+        if index > 0 {
+            startD = seg[index - 1].fDistance;
+            if seg[index - 1].fPtIndex == seg[index].fPtIndex {
+                debug_assert_eq!(seg[index - 1].seg_type(), seg[index].seg_type());
+                startT = seg[index - 1].getScalarT();
+            }
+        }
+        debug_assert!(seg[index].getScalarT() > startT);
+        crate::SkASSERT!(@source b"src/core/SkContourMeasure.cpp\0".as_ptr(),604; @condition b"distance >= startD\0".as_ptr(); distance>=startD);
+        debug_assert!(seg[index].fDistance > startD);
+        *t = startT
+            + (seg[index].getScalarT() - startT) * (distance - startD)
+                / (seg[index].fDistance - startD);
+        index
+    }
+    // Source: src/core/SkContourMeasure.cpp:611-635
+    pub fn getPosTan(
+        &self,
+        mut distance: f32,
+        pos: Option<&mut SkPoint>,
+        tangent: Option<&mut SkPoint>,
+    ) -> bool {
+        if distance.is_nan() {
+            return false;
+        }
+        let length = self.length();
+        debug_assert!(length > 0.0 && !self.fSegments.empty());
+        if distance < 0.0 {
+            distance = 0.0;
+        } else if distance > length {
+            distance = length;
+        }
+        let mut t = 0.0;
+        let index = self.distanceToSegment(distance, &mut t);
+        let seg = &self.fSegments[index];
+        if t.is_nan() {
+            return false;
+        }
+        debug_assert!(seg.fPtIndex < (self.fPts.size() as u32));
+        compute_pos_tan(
+            &self.fPts.as_slice()[seg.fPtIndex as usize..],
+            seg.seg_type(),
+            t,
+            pos,
+            tangent,
+        );
+        true
+    }
+    // Source: src/core/SkContourMeasure.cpp:637-655
+    pub fn getMatrix(
+        &self,
+        distance: f32,
+        matrix: Option<&mut SkMatrix>,
+        flags: MatrixFlags,
+    ) -> bool {
+        let mut position = SkPoint::make(0.0, 0.0);
+        let mut tangent = position;
+        if self.getPosTan(distance, Some(&mut position), Some(&mut tangent)) {
+            if let Some(matrix) = matrix {
+                if flags & kGetTangent_MatrixFlag != 0 {
+                    matrix.setSinCosPivot(tangent.fY, tangent.fX, 0.0, 0.0);
+                } else {
+                    matrix.reset();
+                }
+                if flags & kGetPosition_MatrixFlag != 0 {
+                    matrix.postTranslate(position.fX, position.fY);
+                }
+            }
+            return true;
+        }
+        false
+    }
+}
+// Source: src/core/SkContourMeasure.cpp:657-704
+impl SkContourMeasure {
+    pub fn getSegment(
+        &self,
+        mut startD: f32,
+        mut stopD: f32,
+        dst: &mut SkPathBuilder,
+        startWithMoveTo: bool,
+    ) -> bool {
+        let length = self.length();
+        if startD < 0.0 {
+            startD = 0.0;
+        }
+        if stopD > length {
+            stopD = length;
+        }
+        if !(startD <= stopD) {
+            return false;
+        }
+        if self.fSegments.empty() {
+            return false;
+        }
+        let mut p = SkPoint::make(0.0, 0.0);
+        let mut startT = 0.0;
+        let mut stopT = 0.0;
+        let mut index = self.distanceToSegment(startD, &mut startT);
+        if !startT.is_finite() {
+            return false;
+        }
+        let stopIndex = self.distanceToSegment(stopD, &mut stopT);
+        if !stopT.is_finite() {
+            return false;
+        }
+        debug_assert!(index <= stopIndex);
+        if startWithMoveTo {
+            let seg = &self.fSegments[index];
+            compute_pos_tan(
+                &self.fPts.as_slice()[seg.fPtIndex as usize..],
+                seg.seg_type(),
+                startT,
+                Some(&mut p),
+                None,
+            );
+            dst.moveTo(p);
+        }
+        if self.fSegments[index].fPtIndex == self.fSegments[stopIndex].fPtIndex {
+            let seg = &self.fSegments[index];
+            SkContourMeasure_segTo(
+                &self.fPts.as_slice()[seg.fPtIndex as usize..],
+                seg.seg_type(),
+                startT,
+                stopT,
+                dst,
+            );
+        } else {
+            loop {
+                let seg = &self.fSegments[index];
+                SkContourMeasure_segTo(
+                    &self.fPts.as_slice()[seg.fPtIndex as usize..],
+                    seg.seg_type(),
+                    startT,
+                    1.0,
+                    dst,
                 );
+                index = self.fSegments.size() as usize
+                    - Segment::Next(&self.fSegments.as_slice()[index..]).len();
+                startT = 0.0;
+                if self.fSegments[index].fPtIndex >= self.fSegments[stopIndex].fPtIndex {
+                    break;
+                }
             }
-
-            if let Some(tangent) = tangent {
-                tangent.set_normalize(points[1].x - points[0].x, points[1].y - points[0].y);
-            }
+            let seg = &self.fSegments[index];
+            SkContourMeasure_segTo(
+                &self.fPts.as_slice()[seg.fPtIndex as usize..],
+                seg.seg_type(),
+                0.0,
+                stopT,
+                dst,
+            );
         }
-        SegmentType::Quad => {
-            let src = array_ref![points, 0, 3];
-            if let Some(pos) = pos {
-                *pos = path_geometry::eval_quad_at(src, t);
-            }
-
-            if let Some(tangent) = tangent {
-                *tangent = path_geometry::eval_quad_tangent_at(src, t);
-                tangent.normalize();
-            }
-        }
-        SegmentType::Cubic => {
-            let src = array_ref![points, 0, 4];
-            if let Some(pos) = pos {
-                *pos = path_geometry::eval_cubic_pos_at(src, t);
-            }
-
-            if let Some(tangent) = tangent {
-                *tangent = path_geometry::eval_cubic_tangent_at(src, t);
-                tangent.normalize();
-            }
-        }
+        true
     }
 }
-
-fn segment_to(
-    points: &[Point],
-    seg_kind: SegmentType,
-    start_t: NormalizedF32,
-    stop_t: NormalizedF32,
-    pb: &mut PathBuilder,
-) {
-    debug_assert!(start_t <= stop_t);
-
-    if start_t == stop_t {
-        if let Some(pt) = pb.last_point() {
-            // If the dash as a zero-length on segment, add a corresponding zero-length line.
-            // The stroke code will add end caps to zero length lines as appropriate.
-            pb.line_to(pt.x, pt.y);
-        }
-
-        return;
-    }
-
-    match seg_kind {
-        SegmentType::Line => {
-            if stop_t == NormalizedF32::ONE {
-                pb.line_to(points[1].x, points[1].y);
-            } else {
-                pb.line_to(
-                    interp(points[0].x, points[1].x, stop_t),
-                    interp(points[0].y, points[1].y, stop_t),
-                );
-            }
-        }
-        SegmentType::Quad => {
-            let mut tmp0 = [Point::zero(); 5];
-            let mut tmp1 = [Point::zero(); 5];
-            if start_t == NormalizedF32::ZERO {
-                if stop_t == NormalizedF32::ONE {
-                    pb.quad_to_pt(points[1], points[2]);
-                } else {
-                    let stop_t = NormalizedF32Exclusive::new_bounded(stop_t.get());
-                    path_geometry::chop_quad_at(points, stop_t, &mut tmp0);
-                    pb.quad_to_pt(tmp0[1], tmp0[2]);
-                }
-            } else {
-                let start_tt = NormalizedF32Exclusive::new_bounded(start_t.get());
-                path_geometry::chop_quad_at(points, start_tt, &mut tmp0);
-                if stop_t == NormalizedF32::ONE {
-                    pb.quad_to_pt(tmp0[3], tmp0[4]);
-                } else {
-                    let new_t = (stop_t.get() - start_t.get()) / (1.0 - start_t.get());
-                    let new_t = NormalizedF32Exclusive::new_bounded(new_t);
-                    path_geometry::chop_quad_at(&tmp0[2..], new_t, &mut tmp1);
-                    pb.quad_to_pt(tmp1[1], tmp1[2]);
-                }
-            }
-        }
-        SegmentType::Cubic => {
-            let mut tmp0 = [Point::zero(); 7];
-            let mut tmp1 = [Point::zero(); 7];
-            if start_t == NormalizedF32::ZERO {
-                if stop_t == NormalizedF32::ONE {
-                    pb.cubic_to_pt(points[1], points[2], points[3]);
-                } else {
-                    let stop_t = NormalizedF32Exclusive::new_bounded(stop_t.get());
-                    path_geometry::chop_cubic_at2(array_ref![points, 0, 4], stop_t, &mut tmp0);
-                    pb.cubic_to_pt(tmp0[1], tmp0[2], tmp0[3]);
-                }
-            } else {
-                let start_tt = NormalizedF32Exclusive::new_bounded(start_t.get());
-                path_geometry::chop_cubic_at2(array_ref![points, 0, 4], start_tt, &mut tmp0);
-                if stop_t == NormalizedF32::ONE {
-                    pb.cubic_to_pt(tmp0[4], tmp0[5], tmp0[6]);
-                } else {
-                    let new_t = (stop_t.get() - start_t.get()) / (1.0 - start_t.get());
-                    let new_t = NormalizedF32Exclusive::new_bounded(new_t);
-                    path_geometry::chop_cubic_at2(array_ref![tmp0, 3, 4], new_t, &mut tmp1);
-                    pb.cubic_to_pt(tmp1[1], tmp1[2], tmp1[3]);
-                }
-            }
+// Source: src/core/SkContourMeasure.cpp:706-733
+impl<'a> ForwardVerbIterator<'a> {
+    pub fn value(&self) -> VerbMeasure<'a> {
+        use crate::src::core::SkPathMeasurePriv::SkSegType;
+        const seg_pt_count: [usize; 4] = [2, 3, 4, 4];
+        const seg_verb: [SkPathVerb; 4] = [
+            SkPathVerb::kLine,
+            SkPathVerb::kQuad,
+            SkPathVerb::kCubic,
+            SkPathVerb::kConic,
+        ];
+        const _: () = assert!(seg_pt_count.len() == seg_verb.len());
+        const _: () = assert!((SkSegType::kLine_SegType as usize) < seg_pt_count.len());
+        const _: () = assert!((SkSegType::kQuad_SegType as usize) < seg_pt_count.len());
+        const _: () = assert!((SkSegType::kCubic_SegType as usize) < seg_pt_count.len());
+        const _: () = assert!((SkSegType::kConic_SegType as usize) < seg_pt_count.len());
+        let segment = &self.fSegments[0];
+        let typ = segment.seg_type() as usize;
+        debug_assert!(typ < seg_pt_count.len());
+        debug_assert!(segment.fPtIndex as usize + seg_pt_count[typ] <= self.fPts.len());
+        VerbMeasure {
+            fDistance: segment.fDistance,
+            fVerb: seg_verb[typ],
+            fPts: &self.fPts
+                [segment.fPtIndex as usize..segment.fPtIndex as usize + seg_pt_count[typ]],
         }
     }
-}
-
-fn t_span_big_enough(t_span: u32) -> u32 {
-    debug_assert!(t_span <= MAX_T_VALUE);
-    t_span >> 10
-}
-
-fn quad_too_curvy(p0: Point, p1: Point, p2: Point, tolerance: f32) -> bool {
-    // diff = (a/4 + b/2 + c/4) - (a/2 + c/2)
-    // diff = -a/4 + b/2 - c/4
-    let dx = (p1.x).half() - (p0.x + p2.x).half().half();
-    let dy = (p1.y).half() - (p0.y + p2.y).half().half();
-
-    let dist = dx.abs().max(dy.abs());
-    dist > tolerance
-}
-
-fn cubic_too_curvy(p0: Point, p1: Point, p2: Point, p3: Point, tolerance: f32) -> bool {
-    let n0 = cheap_dist_exceeds_limit(
-        p1,
-        interp_safe(p0.x, p3.x, 1.0 / 3.0),
-        interp_safe(p0.y, p3.y, 1.0 / 3.0),
-        tolerance,
-    );
-
-    let n1 = cheap_dist_exceeds_limit(
-        p2,
-        interp_safe(p0.x, p3.x, 2.0 / 3.0),
-        interp_safe(p0.y, p3.y, 2.0 / 3.0),
-        tolerance,
-    );
-
-    n0 || n1
-}
-
-fn cheap_dist_exceeds_limit(pt: Point, x: f32, y: f32, tolerance: f32) -> bool {
-    let dist = (x - pt.x).abs().max((y - pt.y).abs());
-    // just made up the 1/2
-    dist > tolerance
-}
-
-/// Linearly interpolate between A and B, based on t.
-///
-/// If t is 0, return A. If t is 1, return B else interpolate.
-fn interp(a: f32, b: f32, t: NormalizedF32) -> f32 {
-    a + (b - a) * t.get()
-}
-
-fn interp_safe(a: f32, b: f32, t: f32) -> f32 {
-    debug_assert!(t >= 0.0 && t <= 1.0);
-    a + (b - a) * t
 }

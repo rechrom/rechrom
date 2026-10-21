@@ -362,7 +362,7 @@ mod tests {
             let object = native(root, id);
             let object_result = cached(object);
             let pixels = |f: &FragmentNode| {
-                raster::pure_replay::RasterizeDisplayItemList(
+                raster::RasterizePaintArtifactTransparent(
                     &paint::paint_engine::Paint(f),
                     320,
                     200,
@@ -543,7 +543,7 @@ mod tests {
                             &cs,
                         );
                         let pixels = |tree: &FragmentNode| {
-                            raster::pure_replay::RasterizeDisplayItemList(
+                            raster::RasterizePaintArtifactTransparent(
                                 &paint::paint_engine::Paint(tree),
                                 320,
                                 200,
@@ -620,7 +620,7 @@ mod tests {
                 &cs,
             );
             let pixels = |tree: &FragmentNode| {
-                raster::pure_replay::RasterizeDisplayItemList(
+                raster::RasterizePaintArtifactTransparent(
                     &paint::paint_engine::Paint(tree),
                     320,
                     200,
@@ -709,7 +709,7 @@ mod tests {
                     &cs,
                 );
                 let pixels = |tree: &FragmentNode| {
-                    raster::pure_replay::RasterizeDisplayItemList(
+                    raster::RasterizePaintArtifactTransparent(
                         &paint::paint_engine::Paint(tree),
                         320,
                         200,
@@ -943,7 +943,7 @@ mod tests {
                 &cs,
             );
             let pixels = |tree: &FragmentNode| {
-                raster::pure_replay::RasterizeDisplayItemList(
+                raster::RasterizePaintArtifactTransparent(
                     &paint::paint_engine::Paint(tree),
                     320,
                     200,

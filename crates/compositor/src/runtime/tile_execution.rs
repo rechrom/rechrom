@@ -4,7 +4,7 @@ use super::{
     execution::{EngineTask, EngineTaskQueue, ExecutorTaskGraphRunner},
     native_images::CpuNativeImageServices,
     native_services::NativeEventSink,
-    raster_resources::{CpuAllocationIds, CpuSoftwareRasterBufferProvider, EngineRasterFailure},
+    raster_resources::{RasterAllocationIds, ExternalRasterBufferProvider, EngineRasterFailure},
     types::{CpuCompositorTypes, CpuSkiaBackend},
 };
 use crate::{
@@ -22,7 +22,8 @@ use crate::{
         tile_manager_settings::TileManagerSettings,
         tile_priority::TileResolution,
     },
-    engine::{CompositorExecutor, CompositorPixelProvider},
+    engine::{CompositorExecutor, CompositorRasterProvider},
+    runtime::skia::SkRegion,
 };
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -30,43 +31,43 @@ use std::sync::{
 };
 
 type B<R> = CpuCompositorTypes<R>;
-pub struct CpuTileExecution<R: CpuSkiaBackend> {
+pub struct TileExecution<R: CpuSkiaBackend> {
     pub(crate) images: CpuNativeImageServices<B<R>>,
-    pub(crate) pixels: Arc<dyn CompositorPixelProvider<R>>,
-    pub(crate) shared_images: crate::runtime::raster_resources::CpuPoolImages<R>,
-    pub(crate) allocations: Arc<CpuAllocationIds>,
-    pub(crate) failure: Arc<dyn crate::runtime::paint::CpuRasterFailureHandler>,
+    pub(crate) raster_provider: Arc<dyn CompositorRasterProvider>,
+    pub(crate) shared_images: crate::runtime::raster_resources::RasterPoolImages,
+    pub(crate) allocations: Arc<RasterAllocationIds>,
+    pub(crate) failure: Arc<dyn crate::runtime::paint::RasterFailureHandler>,
     pub(crate) task_graph: Arc<ExecutorTaskGraphRunner<RasterCompletion<B<R>>>>,
-    pub(crate) diagnostics: Arc<CpuTileDiagnostics>,
+    pub(crate) diagnostics: Arc<TileDiagnostics>,
     pub(crate) origin: Arc<dyn CompositorExecutor>,
     pub(crate) commands: EngineTaskQueue,
-    pub(crate) config: CpuTileExecutionConfig,
+    pub(crate) config: TileExecutionConfig,
 }
-impl<R: CpuSkiaBackend> CpuTileExecution<R> {
+impl<R: CpuSkiaBackend> TileExecution<R> {
     pub(crate) fn new(
         images: CpuNativeImageServices<B<R>>,
-        pixels: Arc<dyn CompositorPixelProvider<R>>,
+        raster_provider: Arc<dyn CompositorRasterProvider>,
         origin: Arc<dyn CompositorExecutor>,
         raster: Arc<dyn CompositorExecutor>,
         commands: EngineTaskQueue,
         events: Arc<dyn NativeEventSink>,
     ) -> Self {
-        let diagnostics = Arc::new(CpuTileDiagnostics {
+        let diagnostics = Arc::new(TileDiagnostics {
             origin: origin.clone(),
             events,
         });
-        let allocations = Arc::new(CpuAllocationIds::new());
-        let failure: Arc<dyn crate::runtime::paint::CpuRasterFailureHandler> =
+        let allocations = Arc::new(RasterAllocationIds::new());
+        let failure: Arc<dyn crate::runtime::paint::RasterFailureHandler> =
             Arc::new(EngineRasterFailure(commands.clone()));
         Self {
-            shared_images: crate::runtime::raster_resources::CpuPoolImages::new(
-                pixels.clone(),
+            shared_images: crate::runtime::raster_resources::RasterPoolImages::new(
+                raster_provider.clone(),
                 allocations.clone(),
                 failure.clone(),
             ),
             images,
-            config: CpuTileExecutionConfig::default(),
-            pixels,
+            config: TileExecutionConfig::default(),
+            raster_provider,
             allocations,
             failure,
             task_graph: Arc::new(ExecutorTaskGraphRunner::new(
@@ -78,13 +79,6 @@ impl<R: CpuSkiaBackend> CpuTileExecution<R> {
             origin,
             commands,
         }
-    }
-    pub(crate) fn CreateRasterBufferProvider(&self) -> CpuSoftwareRasterBufferProvider<R> {
-        CpuSoftwareRasterBufferProvider::new(
-            self.pixels.clone(),
-            self.allocations.clone(),
-            self.failure.clone(),
-        )
     }
     pub(crate) fn CreateManager(
         &mut self,
@@ -108,7 +102,16 @@ impl<R: CpuSkiaBackend> CpuTileExecution<R> {
         )
     }
 }
-impl<R: CpuSkiaBackend> TileManagerInitialization<B<R>> for CpuTileExecution<R> {
+impl TileExecution<SkRegion> {
+    pub(crate) fn CreateRasterBufferProvider(&self) -> ExternalRasterBufferProvider {
+        ExternalRasterBufferProvider::new(
+            self.raster_provider.clone(),
+            self.allocations.clone(),
+            self.failure.clone(),
+        )
+    }
+}
+impl<R: CpuSkiaBackend> TileManagerInitialization<B<R>> for TileExecution<R> {
     fn CreateImageController(
         &mut self,
         origin: Arc<dyn SequencedTaskRunner>,
@@ -162,49 +165,49 @@ impl<R: CpuSkiaBackend> TileManagerInitialization<B<R>> for CpuTileExecution<R> 
     }
 }
 
-pub(crate) struct CpuTileDiagnostics {
+pub(crate) struct TileDiagnostics {
     pub(crate) origin: Arc<dyn CompositorExecutor>,
     pub(crate) events: Arc<dyn NativeEventSink>,
 }
-pub(crate) struct CpuTraceScope {
+pub(crate) struct RasterTraceScope {
     events: Arc<dyn NativeEventSink>,
     event: &'static str,
 }
-impl Drop for CpuTraceScope {
+impl Drop for RasterTraceScope {
     fn drop(&mut self) {
         self.events
             .Emit("compositor.raster", format!("{} end", self.event));
     }
 }
-impl TileManagerTraceScope for CpuTraceScope {}
-impl TaskGraphTraceScope for CpuTraceScope {}
-impl TileTaskManagerTraceScope for CpuTraceScope {}
-impl TaskGraphScheduleTrace for CpuTraceScope {
+impl TileManagerTraceScope for RasterTraceScope {}
+impl TaskGraphTraceScope for RasterTraceScope {}
+impl TileTaskManagerTraceScope for RasterTraceScope {}
+impl TaskGraphScheduleTrace for RasterTraceScope {
     fn AddFlowId(&mut self, id: u64) {
         self.events
             .Emit("compositor.raster", format!("schedule flow={id}"));
     }
 }
-impl SyncPrimitivesAllowance for CpuTraceScope {}
-impl CpuTileDiagnostics {
-    pub(crate) fn Scope(&self, event: &'static str) -> CpuTraceScope {
+impl SyncPrimitivesAllowance for RasterTraceScope {}
+impl TileDiagnostics {
+    pub(crate) fn Scope(&self, event: &'static str) -> RasterTraceScope {
         self.events
             .Emit("compositor.raster", format!("{event} begin"));
-        CpuTraceScope {
+        RasterTraceScope {
             events: self.events.clone(),
             event,
         }
     }
 }
 static NEXT_RASTER_TRACE_ID: AtomicU64 = AtomicU64::new(1);
-impl TraceTaskIdProvider for CpuTileDiagnostics {
+impl TraceTaskIdProvider for TileDiagnostics {
     fn GetNextGlobalTraceId(&self) -> u64 {
         NEXT_RASTER_TRACE_ID
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .expect("native raster trace id exhausted")
     }
 }
-impl TileManagerWorkerDiagnostics for CpuTileDiagnostics {
+impl TileManagerWorkerDiagnostics for TileDiagnostics {
     fn TraceWorkerTask(&self, event: &'static str) -> Box<dyn TileManagerTraceScope> {
         Box::new(self.Scope(event))
     }
@@ -235,7 +238,7 @@ impl TileManagerWorkerDiagnostics for CpuTileDiagnostics {
         Box::new(self.Scope("RasterTask"))
     }
 }
-impl TileTaskManagerServices for CpuTileDiagnostics {
+impl TileTaskManagerServices for TileDiagnostics {
     fn TraceTileTaskManager(
         &self,
         event: TileTaskManagerTraceEvent,
@@ -250,7 +253,7 @@ impl TileTaskManagerServices for CpuTileDiagnostics {
         Box::new(self.Scope("AllowSyncPrimitives"))
     }
 }
-impl TaskGraphTrace for CpuTileDiagnostics {
+impl TaskGraphTrace for TileDiagnostics {
     fn TraceWorkQueueSchedule(&self) -> Box<dyn TaskGraphScheduleTrace + '_> {
         Box::new(self.Scope("WorkQueueSchedule"))
     }
@@ -283,7 +286,7 @@ impl TaskGraphTrace for CpuTileDiagnostics {
             .Emit("compositor.raster", format!("terminate flow={id}"));
     }
 }
-impl TileManagerGraphTrace for CpuTileDiagnostics {
+impl TileManagerGraphTrace for TileDiagnostics {
     fn InsertNodeForTask(
         &self,
         category: u16,
@@ -296,7 +299,7 @@ impl TileManagerGraphTrace for CpuTileDiagnostics {
         Box::new(self.Scope("InsertNodeForTask"))
     }
 }
-impl<R: CpuSkiaBackend> TileTraceContext for CpuTileExecution<R> {
+impl<R: CpuSkiaBackend> TileTraceContext for TileExecution<R> {
     fn MakeDictIntoImplicitSnapshotWithCategory<
         V: crate::adapter::property_types::PropertyTrace,
     >(
@@ -321,14 +324,14 @@ impl<R: CpuSkiaBackend> TileTraceContext for CpuTileExecution<R> {
 
 /// Explicit source feature defaults, not owner/cache/query stand-ins.
 /// Source: cc/base/features.cc:56-74.
-pub(crate) struct CpuTileExecutionConfig {
+pub(crate) struct TileExecutionConfig {
     pub reclaim_prepaint_when_idle: bool,
     pub reclaim_old_prepaint: bool,
     pub tile_oom_freeze_mitigation: bool,
     pub reclaim_delay_seconds: i64,
     pub trace_enabled: bool,
 }
-impl Default for CpuTileExecutionConfig {
+impl Default for TileExecutionConfig {
     fn default() -> Self {
         Self {
             reclaim_prepaint_when_idle: false,
@@ -340,7 +343,7 @@ impl Default for CpuTileExecutionConfig {
     }
 }
 
-impl<R: CpuSkiaBackend> TileManagerImages<B<R>> for CpuTileExecution<R> {
+impl<R: CpuSkiaBackend> TileManagerImages<B<R>> for TileExecution<R> {
     fn ImageController(&mut self, id: ImageControllerId) -> &mut dyn ImageController<B<R>> {
         self.images.ImageController(id)
     }

@@ -81,11 +81,19 @@ impl<B: DisplayItemListTypes> DisplayItemList<B> {
 
     // Source: cc/paint/display_item_list.h:51-56;
     // cc/paint/display_item_list.cc:29-35,85-128.
-    pub fn Raster(&self, canvas: &mut B::Canvas, scrolls: Option<&ScrollOffsetMap>) {
+    pub fn Raster<'canvas>(
+        &self,
+        canvas: &mut B::Canvas<'canvas>,
+        scrolls: Option<&ScrollOffsetMap>,
+    ) {
         let mut params = B::PlaybackParams(scrolls);
         self.RasterWithParams(canvas, &mut params);
     }
-    pub fn RasterWithParams(&self, canvas: &mut B::Canvas, params: &mut B::PlaybackParams<'_>) {
+    pub fn RasterWithParams<'canvas>(
+        &self,
+        canvas: &mut B::Canvas<'canvas>,
+        params: &mut B::PlaybackParams<'_>,
+    ) {
         debug_assert_eq!(self.state_, RecordingState::Finalized);
         let tracing = self.paint_op_buffer_.TraceRasterBegin(self.TotalOpCount());
         let offsets = self.OffsetsOfOpsToRaster(canvas);
@@ -103,7 +111,7 @@ impl<B: DisplayItemListTypes> DisplayItemList<B> {
             self.paint_op_buffer_.TraceRasterEnd(rastered);
         }
     }
-    pub fn OffsetsOfOpsToRaster(&self, canvas: &B::Canvas) -> Vec<usize> {
+    pub fn OffsetsOfOpsToRaster<'canvas>(&self, canvas: &B::Canvas<'canvas>) -> Vec<usize> {
         let mut offsets = Vec::new();
         if let Some(rect) = canvas.LocalClipBounds() {
             self.rtree_.SearchTo(&rect, &mut offsets, None);

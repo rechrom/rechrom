@@ -1,15 +1,15 @@
 //! Thin actual Skia no-pixels/value binding for canonical Paint solid analysis.
 //! Classification remains entirely in paint::cc::paint::solid_color_analyzer.
 #![allow(non_snake_case)]
-use crate::runtime::paint::{CpuPaintOp, CpuPaintOpBuffer, CpuPaintOpRef};
+use crate::runtime::{
+    paint::{CpuPaintOp, CpuPaintOpBuffer, CpuPaintOpRef},
+    skia::SkRegion,
+};
 use paint::cc::paint::solid_color_analyzer::*;
+use paint::cc::paint::blend_mode::BlendMode;
 use skia::{
-    include::core::{
-        SkRRect::{SkRRect, SkRRectBounds, SkRRectVector},
-        SkRegion::SkRegion,
-    },
-    src::{core::SkM44::SkM44, utils::SkNoDrawCanvas::SkNoDrawCanvas},
-    BlendMode,
+    include::{core::SkClipOp::SkClipOp, utils::SkNoDrawCanvas::SkNoDrawCanvas},
+    src::core::{SkCanvas::SkCanvas, SkM44::SkM44, SkRect::SkRect as NativeRect},
 };
 use std::sync::Arc;
 pub trait CpuPaintAnalysisTrace: Send + Sync {
@@ -36,32 +36,89 @@ impl AnalysisMatrix for Matrix {
         crate::cc::base::math_util::MathUtil::SkM44Preserves2DAxisAlignment(&MatrixRef(&self.0))
     }
     fn invert(&self) -> Option<Self> {
-        self.0.invert().map(Self)
+        {
+            let mut inverse = SkM44::default();
+            self.0.invert(&mut inverse).then_some(Self(inverse))
+        }
     }
     fn map(&self, x: f32, y: f32, z: f32, w: f32) -> [f32; 4] {
-        self.0.map(x, y, z, w)
+        {
+            let mapped = self.0.map(x, y, z, w);
+            [mapped.x, mapped.y, mapped.z, mapped.w]
+        }
     }
 }
-pub struct NoDrawCanvas(pub(crate) SkNoDrawCanvas);
-fn bounds(r: AnalysisRect) -> SkRRectBounds {
-    SkRRectBounds::MakeLTRB(r.left, r.top, r.right, r.bottom)
+pub struct NoDrawCanvas(pub(crate) core::pin::Pin<Box<SkNoDrawCanvas<'static>>>);
+fn bounds(r: AnalysisRect) -> NativeRect {
+    NativeRect::MakeLTRB(r.left, r.top, r.right, r.bottom)
 }
-fn analysis(r: SkRRectBounds) -> AnalysisRect {
+fn analysis(r: NativeRect) -> AnalysisRect {
+    let (left, top, right, bottom) = (r.fLeft, r.fTop, r.fRight, r.fBottom);
     AnalysisRect {
-        left: r.left,
-        top: r.top,
-        right: r.right,
-        bottom: r.bottom,
+        left,
+        top,
+        right,
+        bottom,
+    }
+}
+fn matrix_col_major(values: [f32; 16]) -> SkM44 {
+    return SkM44::ColMajor(&values);
+}
+impl NoDrawCanvas {
+    fn native(&self) -> &SkCanvas<'static> {
+        self.0.as_ref().canvas_ref()
+    }
+    fn save(&mut self) {
+        unsafe {
+            self.0.as_mut().canvas().save();
+        }
+    }
+    fn restore(&mut self) {
+        unsafe {
+            let mut canvas = self.0.as_mut().canvas();
+            let address = core::ptr::NonNull::from(canvas.as_mut().get_unchecked_mut());
+            SkCanvas::restore_raw(address)
+                .expect("SkNoDrawCanvas restore");
+        }
+    }
+    fn restore_to_count(&mut self, count: i32) {
+        while self.native().getSaveCount() > count.max(1) {
+            self.restore();
+        }
+    }
+    fn translate_by(&mut self, x: f32, y: f32) {
+        unsafe {
+            self.0.as_mut().canvas().translate(x, y);
+        }
+    }
+    fn concat_m44(&mut self, matrix: &SkM44) {
+        unsafe {
+            self.0.as_mut().canvas().concat44(matrix);
+        }
+    }
+    fn clip_rect(&mut self, rect: NativeRect, difference: bool, aa: bool) {
+        unsafe {
+            self.0.as_mut().canvas().clipRect(
+                &rect,
+                if difference {
+                    SkClipOp::kDifference
+                } else {
+                    SkClipOp::kIntersect
+                },
+                aa,
+            );
+        }
     }
 }
 impl AnalysisCanvas for NoDrawCanvas {
     type Matrix = Matrix;
     fn isClipRect(&self) -> bool {
-        self.0.isClipRect()
+        self.native().isClipRect()
     }
     fn getDeviceClipBounds(&self) -> Option<AnalysisRect> {
-        let r = self.0.getDeviceClipBounds();
-        (!r.isEmpty()).then(|| AnalysisRect {
+        let r = self.native().getDeviceClipBounds();
+        let empty = r.is_empty();
+        (!empty).then(|| AnalysisRect {
             left: r.fLeft as f32,
             top: r.fTop as f32,
             right: r.fRight as f32,
@@ -69,28 +126,34 @@ impl AnalysisCanvas for NoDrawCanvas {
         })
     }
     fn getBaseLayerSize(&self) -> (i32, i32) {
-        self.0.getBaseLayerSize()
+        {
+            let size = self.native().getBaseLayerSize();
+            (size.width(), size.height())
+        }
     }
     fn getLocalToDevice(&self) -> Matrix {
-        Matrix(self.0.getLocalToDevice())
+        Matrix(self.native().getLocalToDevice())
     }
     fn getLocalClipBounds(&self) -> Option<AnalysisRect> {
-        self.0.getLocalClipBounds().map(analysis)
+        {
+            let rect = self.native().getLocalClipBounds();
+            (!rect.isEmpty()).then(|| analysis(rect))
+        }
     }
     fn getSaveCount(&self) -> i32 {
-        self.0.getSaveCount()
+        self.native().getSaveCount()
     }
     fn restoreToCount(&mut self, count: i32) {
-        self.0.restoreToCount(count)
+        self.restore_to_count(count)
     }
     fn translate(&mut self, x: f32, y: f32) {
-        self.0.translate(x, y)
+        self.translate_by(x, y)
     }
     fn clipRect(&mut self, r: AnalysisRect, aa: bool) {
-        self.0.clipRect(bounds(r), false, aa)
+        self.clip_rect(bounds(r), false, aa)
     }
 }
-pub struct RectShape(SkRRectBounds);
+pub struct RectShape(AnalysisRect);
 impl AnalysisShape for RectShape {
     fn contains(&self, r: AnalysisRect) -> bool {
         let a = self.0;
@@ -104,10 +167,12 @@ impl AnalysisShape for RectShape {
             && a.bottom >= r.bottom
     }
 }
-pub struct RRectShape(SkRRect);
+pub struct RRectShape(crate::runtime::skia::SkRoundedRect);
 impl AnalysisShape for RRectShape {
     fn contains(&self, r: AnalysisRect) -> bool {
-        self.0.contains(bounds(r))
+        {
+            self.0.contains(&bounds(r))
+        }
     }
 }
 pub struct Flags<'a>(CpuPaintOpRef<'a, SkRegion>);
@@ -232,7 +297,7 @@ impl AnalysisFlags for Flags<'_> {
                 | CpuPaintOp::DrawDRRect { flags: f, .. },
             ) => {
                 let c = f.getColor4f();
-                [c.fR, c.fG, c.fB, c.fA]
+                [c.red, c.green, c.blue, c.alpha]
             }
             _ => panic!("source flagged draw required"),
         }
@@ -275,53 +340,48 @@ impl SolidColorBackend<CpuPaintOpBuffer<SkRegion>> for CpuSolidColorBackend {
     }
     fn Rect<'a>(&'a self, op: CpuPaintOpRef<'a, SkRegion>) -> RectShape {
         match op {
-            CpuPaintOpRef::Native { op, .. } => RectShape(SkRRectBounds::MakeLTRB(
-                op.rect.x as f32,
-                op.rect.y as f32,
-                (op.rect.x + op.rect.width) as f32,
-                (op.rect.y + op.rect.height) as f32,
-            )),
-            CpuPaintOpRef::Converted(CpuPaintOp::DrawRect(r, _)) => {
-                RectShape(SkRRectBounds::MakeLTRB(r.x(), r.y(), r.right(), r.bottom()))
-            }
+            CpuPaintOpRef::Native { op, .. } => RectShape(AnalysisRect {
+                left: op.rect.x as f32,
+                top: op.rect.y as f32,
+                right: (op.rect.x + op.rect.width) as f32,
+                bottom: (op.rect.y + op.rect.height) as f32,
+            }),
+            CpuPaintOpRef::Converted(CpuPaintOp::DrawRect(r, _)) => RectShape(AnalysisRect {
+                left: r.x(),
+                top: r.y(),
+                right: r.right(),
+                bottom: r.bottom(),
+            }),
             _ => panic!("source DrawRect required"),
         }
     }
     fn RRect<'a>(&'a self, op: CpuPaintOpRef<'a, SkRegion>) -> RRectShape {
-        let mut r = SkRRect::default();
-        match op {
+        use crate::adapter::geometry::{RRectF, RectF, Vector2dF};
+        let value = match op {
             CpuPaintOpRef::Native { op, .. } => {
                 let radii = op.corner_radii;
-                r.setRectRadii(
-                    SkRRectBounds::MakeLTRB(
+                RRectF {
+                    rect: RectF::new(
                         op.rect.x as f32,
                         op.rect.y as f32,
-                        (op.rect.x + op.rect.width) as f32,
-                        (op.rect.y + op.rect.height) as f32,
+                        op.rect.width as f32,
+                        op.rect.height as f32,
                     ),
-                    [
+                    corner_radii: [
                         radii.top_left,
                         radii.top_right,
                         radii.bottom_right,
                         radii.bottom_left,
                     ]
-                    .map(|r| SkRRectVector::new(r.x as f32, r.y as f32)),
-                );
+                    .map(|radius| Vector2dF::new(radius.x as f32, radius.y as f32)),
+                }
             }
             CpuPaintOpRef::Converted(
                 CpuPaintOp::DrawRRect(value, _) | CpuPaintOp::ClipRRect(value, _),
-            ) => r.setRectRadii(
-                SkRRectBounds::MakeLTRB(
-                    value.rect.x(),
-                    value.rect.y(),
-                    value.rect.right(),
-                    value.rect.bottom(),
-                ),
-                value.corner_radii.map(|p| SkRRectVector::new(p.x(), p.y())),
-            ),
+            ) => *value,
             _ => panic!("source rounded rect op required"),
-        }
-        RRectShape(r)
+        };
+        RRectShape(crate::runtime::skia::MakeSkRoundedRect(&value))
     }
     fn DrawColor(&self, op: CpuPaintOpRef<'_, SkRegion>) -> (Color, BlendMode) {
         match op {
@@ -353,13 +413,13 @@ impl SolidColorBackend<CpuPaintOpBuffer<SkRegion>> for CpuSolidColorBackend {
         use paint::paint_engine::DisplayItemType as T;
         match op {
             CpuPaintOpRef::Native { op, .. } => match op.r#type {
-                T::kSave => canvas.0.save(),
-                T::kRestore | T::kEndMask => canvas.0.restore(),
-                T::kConcat => canvas
-                    .0
-                    .concat(&SkM44::ColMajor(op.transform.values.map(|v| v as f32))),
-                T::kClipRect | T::kClipOutRect => canvas.0.clipRect(
-                    SkRRectBounds::MakeLTRB(
+                T::kSave => canvas.save(),
+                T::kRestore | T::kEndMask => canvas.restore(),
+                T::kConcat => canvas.concat_m44(&matrix_col_major(
+                    op.transform.values.map(|v| v as f32),
+                )),
+                T::kClipRect | T::kClipOutRect => canvas.clip_rect(
+                    NativeRect::MakeLTRB(
                         op.rect.x as f32,
                         op.rect.y as f32,
                         (op.rect.x + op.rect.width) as f32,
@@ -371,18 +431,18 @@ impl SolidColorBackend<CpuPaintOpBuffer<SkRegion>> for CpuSolidColorBackend {
                 _ => panic!("source analyzer state op required"),
             },
             CpuPaintOpRef::Converted(op) => match op {
-                CpuPaintOp::Save => canvas.0.save(),
-                CpuPaintOp::Restore => canvas.0.restore(),
-                CpuPaintOp::Translate(x, y) => canvas.0.translate(*x, *y),
-                CpuPaintOp::Concat(m) => canvas
-                    .0
-                    .concat(&SkM44::ColMajor(m.native().GetColMajor().map(|v| v as f32))),
+                CpuPaintOp::Save => canvas.save(),
+                CpuPaintOp::Restore => canvas.restore(),
+                CpuPaintOp::Translate(x, y) => canvas.translate_by(*x, *y),
+                CpuPaintOp::Concat(m) => canvas.concat_m44(&matrix_col_major(
+                    m.native().GetColMajor().map(|v| v as f32),
+                )),
                 CpuPaintOp::ClipRect {
                     rect,
                     difference,
                     antialias,
-                } => canvas.0.clipRect(
-                    SkRRectBounds::MakeLTRB(rect.x(), rect.y(), rect.right(), rect.bottom()),
+                } => canvas.clip_rect(
+                    NativeRect::MakeLTRB(rect.x(), rect.y(), rect.right(), rect.bottom()),
                     *difference,
                     *antialias,
                 ),

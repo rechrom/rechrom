@@ -2,7 +2,7 @@
 //! paint value, diagnostics and native resource capabilities enter this file;
 //! every resident compositor owner remains internal to the Engine assembly.
 use super::{
-    client_resources::CpuClientResources,
+    client_resources::RasterClientResources,
     engine_core::NativeEngineCore,
     engine_queries::{CallScopedSchedulerQueries, NativeFactoryPictureState},
     execution::{EngineTask, EngineTaskQueue},
@@ -50,7 +50,7 @@ use super::{
     native_worklet::NativeWorkletServices,
     paint_services::CpuPaintServices,
     skia::SkRegion,
-    tile_execution::CpuTileExecution,
+    tile_execution::TileExecution,
     types::{LocalSurfaceId, MainMutatorHostIdentity},
 };
 use crate::{
@@ -97,9 +97,9 @@ pub(crate) struct NativeFactoryCapabilities {
     pub frame_trace_categories: std::collections::BTreeSet<String>,
     pub events: Arc<dyn NativeEventSink>,
     pub lifecycle: Arc<NativeHostLifecycle>,
-    pub resources: CpuClientResources,
+    pub resources: RasterClientResources,
     pub frame_sink: Arc<Mutex<NativeFrameSinkEndpoint>>,
-    pub tile_execution: Arc<Mutex<CpuTileExecution<SkRegion>>>,
+    pub tile_execution: Arc<Mutex<TileExecution<SkRegion>>>,
     pub main_animations: NativeAnimationOwner,
     pub animations: NativeAnimationOwner,
     pub latency_monitors: NativeLatencyMonitorRegistry,
@@ -151,7 +151,7 @@ pub(crate) fn Create(
     let lifecycle_effects = HostLifecycleEffects::default();
     let lifecycle = Arc::new(NativeHostLifecycle::new(lifecycle_effects.clone()));
     let queries = Arc::new(CallScopedSchedulerQueries::default());
-    let resources = CpuClientResources::new();
+    let resources = RasterClientResources::new();
     let sink_id = HostImplFrameSinkId(owner);
     let sink = Arc::new(Mutex::new(NativeFrameSinkEndpoint::new(
         sink_id,
@@ -193,9 +193,9 @@ pub(crate) fn Create(
         ),
     ));
     let images = CpuNativeImageServices::new(caches, checker);
-    let tile_execution = Arc::new(Mutex::new(CpuTileExecution::new(
+    let tile_execution = Arc::new(Mutex::new(TileExecution::new(
         images,
-        executors.pixels.clone(),
+        executors.raster_provider.clone(),
         executors.compositor.clone(),
         executors.raster,
         commands.clone(),
@@ -206,7 +206,7 @@ pub(crate) fn Create(
         main_animations: main_animations.clone(),
         tree_environment: options.tree_environment,
         rendering_stats: stats.clone(),
-        ui_raster: executors.pixels.clone(),
+        ui_raster: executors.ui_raster,
         diagnostics: options.diagnostics.clone(),
         frame_trace_categories: options.frame_trace_categories.clone(),
         events: options.events.clone(),
@@ -464,7 +464,7 @@ impl NativeFactoryOptions {
             frame_sink: NativeHostFrameSinkConfig {
                 send_explicit_decode_requests_immediately: true,
                 new_content_per_frame: true,
-                pool: super::pool_services::CpuPoolConfig {
+                pool: super::pool_services::RasterPoolConfig {
                     prefer_exact_size_reuse: false,
                     invalidate_resources_on_size_change: false,
                 },

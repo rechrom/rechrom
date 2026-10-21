@@ -12,9 +12,8 @@ path = "src/main.rs"
 cc = "1"
 
 [features]
+default = []
 allocation_diagnostics = ["browser_tracing/allocation_diagnostics"]
-profile_paint = ["raster/profiling"]
-profile_native = ["profile_paint", "raster/source_replay"]
 
 [dev-dependencies]
 foundation = { package = "layoutng_foundation", path = "../../crates/foundation" }
@@ -27,10 +26,9 @@ event_loop = { path = "../../crates/event_loop" }
 devtools = { path = "../../crates/devtools" }
 foundation = { package = "layoutng_foundation", path = "../../crates/foundation" }
 paint = { path = "../../crates/paint" }
-skia = { path = "../../crates/skia" }
 browser = { path = "../../crates/browser" }
+renderer_skia = { path = "../../crates/renderer_skia" }
 renderer = { path = "../../crates/renderer" }
-raster = { path = "../../crates/raster", features = ["pure_replay"] }
 viz = { path = "../../crates/viz" }
 interaction = { path = "../../crates/interaction" }
 page_mutation = { path = "../../crates/page_mutation" }

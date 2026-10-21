@@ -1,4 +1,4 @@
-//! Shared translation from document SVG filter graphs to Skia CPU effect surfaces.
+//! Shared translation from document SVG filter graphs to Skia effect surfaces.
 
 use layoutng_assembly::internal::paint_input::{
     SvgBlendMode, SvgColorMatrixType, SvgCompositeOperator, SvgFilterGraph, SvgFilterInput,
@@ -6,14 +6,50 @@ use layoutng_assembly::internal::paint_input::{
     SvgLightSource, SvgLightingType,
 };
 use paint::paint_engine::PaintRect;
-use skia::cpu::layer_filters::{
-    ColorMatrixKind, RenderSvgBlend, RenderSvgComposite, RenderSvgEdgeMode, RenderSvgFilterGraph,
+use raster_commands::filter_graph::{
+    RenderSvgBlend, RenderSvgComposite, RenderSvgEdgeMode, RenderSvgFilterGraph,
     RenderSvgFilterKind, RenderSvgFilterPrimitive, RenderSvgLight, RenderSvgLightingType,
     RenderSvgTransfer,
 };
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
+
+// Source: cc/paint/render_surface_filters.cc. SVG feColorMatrix uses the
+// same CSS color-matrix coefficients, but this graph translation is backend
+// neutral and therefore must not reach through either Skia implementation.
+fn saturate_matrix(amount: f32) -> [f32; 20] {
+    let mut matrix = [0.0; 20];
+    matrix[0] = 0.213 + 0.787 * amount;
+    matrix[1] = 0.715 - 0.715 * amount;
+    matrix[2] = 0.072 - 0.072 * amount;
+    matrix[5] = 0.213 - 0.213 * amount;
+    matrix[6] = 0.715 + 0.285 * amount;
+    matrix[7] = 0.072 - 0.072 * amount;
+    matrix[10] = 0.213 - 0.213 * amount;
+    matrix[11] = 0.715 - 0.715 * amount;
+    matrix[12] = 0.072 + 0.928 * amount;
+    matrix[18] = 1.0;
+    matrix
+}
+
+fn hue_rotate_matrix(amount: f32) -> [f32; 20] {
+    let radians = amount.to_radians();
+    let cos_hue = radians.cos();
+    let sin_hue = radians.sin();
+    let mut matrix = [0.0; 20];
+    matrix[0] = 0.213 + cos_hue * 0.787 - sin_hue * 0.213;
+    matrix[1] = 0.715 - cos_hue * 0.715 - sin_hue * 0.715;
+    matrix[2] = 0.072 - cos_hue * 0.072 + sin_hue * 0.928;
+    matrix[5] = 0.213 - cos_hue * 0.213 + sin_hue * 0.143;
+    matrix[6] = 0.715 + cos_hue * 0.285 + sin_hue * 0.140;
+    matrix[7] = 0.072 - cos_hue * 0.072 - sin_hue * 0.283;
+    matrix[10] = 0.213 - cos_hue * 0.213 - sin_hue * 0.787;
+    matrix[11] = 0.715 - cos_hue * 0.715 + sin_hue * 0.715;
+    matrix[12] = 0.072 + cos_hue * 0.928 + sin_hue * 0.072;
+    matrix[18] = 1.0;
+    matrix
+}
 
 fn svg_input(input: &SvgFilterInput) -> String {
     match input {
@@ -254,14 +290,12 @@ pub fn TranslateSvgFilterGraphWithTransform(
                         }
                         m
                     }
-                    SvgColorMatrixType::kSaturate => skia::cpu::layer_filters::css_color_matrix(
-                        ColorMatrixKind::Saturate,
-                        values.first().copied().unwrap_or(1.0) as f32,
-                    ),
-                    SvgColorMatrixType::kHueRotate => skia::cpu::layer_filters::css_color_matrix(
-                        ColorMatrixKind::HueRotate,
-                        values.first().copied().unwrap_or(0.0) as f32,
-                    ),
+                    SvgColorMatrixType::kSaturate => {
+                        saturate_matrix(values.first().copied().unwrap_or(1.0) as f32)
+                    }
+                    SvgColorMatrixType::kHueRotate => {
+                        hue_rotate_matrix(values.first().copied().unwrap_or(0.0) as f32)
+                    }
                     SvgColorMatrixType::kLuminanceToAlpha => {
                         let mut m = [0.0; 20];
                         m[15] = 0.2125;

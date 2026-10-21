@@ -78,15 +78,12 @@ fn shape(page: &Page) -> *const font_engine::fonts::shaping::shape_result::Shape
     panic!("text layout object missing")
 }
 fn pixels(page: &Page, width: u32, height: u32, scale: f64) -> Vec<u8> {
-    raster::surface::RenderDisplayItemListToSurface(
+    raster::RasterizePaintArtifactWithScale(
         &page.CurrentFrame().unwrap().display_items,
         width,
         height,
         scale,
     )
-    .unwrap()
-    .pixels()
-    .to_vec()
 }
 #[test]
 fn viewport_geometry_reuses_shape_and_real_font_inputs_match_fresh_layout() {

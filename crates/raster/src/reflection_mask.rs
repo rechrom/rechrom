@@ -2,8 +2,8 @@ use std::io;
 use std::sync::Arc;
 
 use layoutng_assembly::internal::paint_input::PaintReflectionMaskLayer;
-use skia::compat::commands as target;
-use skia::compat::layer_filters::RenderReflectionMaskLayer;
+use raster_commands::commands as target;
+use raster_commands::filter_graph::RenderReflectionMaskLayer;
 
 use crate::convert::ToSkia;
 

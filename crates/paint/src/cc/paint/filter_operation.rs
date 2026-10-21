@@ -4,11 +4,8 @@
 //! PaintFilter image graphs retain their owning Skia value allocation.
 #![allow(non_snake_case, non_camel_case_types, dead_code)]
 use foundation::gfx::{OutsetsF, Point, Rect, RectF, ToEnclosingRect};
-use skia::include::core::{
-    SkColor::SkColor4f,
-    SkRRect::{SkMatrix3x3, SkRRectVector},
-};
 use std::sync::Arc;
+pub type FilterColor = super::color::Color4f;
 // Source: cc/paint/filter_operation.h:39-57.
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,10 +39,24 @@ pub enum MapDirection {
     Forward,
     Reverse,
 }
+/// Minimal device-transform capability required by filter bounds mapping.
+///
+/// Chromium passes an SkMatrix because FilterOperation needs only
+/// SkMatrix::mapVector. Keeping that semantic operation at this boundary lets
+/// each raster implementation use its own actual Skia matrix without exposing
+/// either concrete matrix type through Paint, Compositor or Renderer APIs.
+pub trait FilterMapTransform {
+    fn MapVector(&self, x: f32, y: f32) -> (f32, f32);
+}
 /// Source PaintFilter::MapRect is an immutable image-filter value operation.
 /// This boundary cannot be implemented by a default/empty/cull approximation.
 pub trait PaintFilter: Send + Sync + std::fmt::Debug {
-    fn MapRect(&self, rect: Rect, ctm: Option<&SkMatrix3x3>, direction: MapDirection) -> Rect;
+    fn MapRect(
+        &self,
+        rect: Rect,
+        ctm: Option<&dyn FilterMapTransform>,
+        direction: MapDirection,
+    ) -> Rect;
     fn TypeToString(&self) -> &'static str;
     /// Borrows the actual immutable value graph for CPU execution. The replay
     /// owner carries source inputs; consumers never reverse-engineer MapRect.
@@ -53,7 +64,11 @@ pub trait PaintFilter: Send + Sync + std::fmt::Debug {
 }
 pub enum PaintFilterReplay<'a> {
     Operations(&'a super::filter_operations::FilterOperations),
-    Reference(&'a layoutng_assembly::internal::paint_input::PaintFilterOperation),
+    Reference {
+        operation: &'a layoutng_assembly::internal::paint_input::PaintFilterOperation,
+        reference_box: crate::PaintRect,
+        reference_scale: f64,
+    },
     Reflection(&'a layoutng_assembly::internal::paint_input::PaintFilterOperation),
 }
 // Source: cc/paint/filter_operation.h:272-283; cc/paint/filter_operation.cc:48-144.
@@ -62,7 +77,7 @@ pub struct FilterOperation {
     type_: FilterType,
     amount_: f32,
     offset_: Point,
-    drop_shadow_color_: SkColor4f,
+    drop_shadow_color_: FilterColor,
     image_filter_: Option<Arc<dyn PaintFilter>>,
     matrix_: [f32; 20],
     zoom_inset_: i32,
@@ -106,7 +121,7 @@ impl FilterOperation {
             type_,
             amount_,
             offset_: Point::default(),
-            drop_shadow_color_: SkColor4f::default(),
+            drop_shadow_color_: FilterColor::default(),
             image_filter_: None,
             matrix_: [0.; 20],
             zoom_inset_: 0,
@@ -132,7 +147,7 @@ impl FilterOperation {
         ));
         self.offset_
     }
-    pub fn drop_shadow_color(&self) -> SkColor4f {
+    pub fn drop_shadow_color(&self) -> FilterColor {
         debug_assert_eq!(self.type_, FilterType::DROP_SHADOW);
         self.drop_shadow_color_
     }
@@ -177,7 +192,7 @@ impl FilterOperation {
         ));
         self.offset_ = v;
     }
-    pub fn set_drop_shadow_color(&mut self, v: SkColor4f) {
+    pub fn set_drop_shadow_color(&mut self, v: FilterColor) {
         debug_assert_eq!(self.type_, FilterType::DROP_SHADOW);
         self.drop_shadow_color_ = v;
     }
@@ -236,7 +251,7 @@ impl FilterOperation {
         r.blur_tile_mode_ = Some(mode);
         r
     }
-    pub fn CreateDropShadowFilter(offset: Point, sigma: f32, color: SkColor4f) -> Self {
+    pub fn CreateDropShadowFilter(offset: Point, sigma: f32, color: FilterColor) -> Self {
         let mut r = Self::new(FilterType::DROP_SHADOW, sigma);
         r.offset_ = offset;
         r.drop_shadow_color_ = color;
@@ -281,7 +296,7 @@ fn no_op(t: FilterType) -> FilterOperation {
         SATURATE | BRIGHTNESS | CONTRAST | OPACITY => FilterOperation::new(t, 1.),
         BLUR => FilterOperation::CreateBlurFilter(0.),
         DROP_SHADOW => {
-            FilterOperation::CreateDropShadowFilter(Point::default(), 0., SkColor4f::default())
+            FilterOperation::CreateDropShadowFilter(Point::default(), 0., FilterColor::default())
         }
         COLOR_MATRIX => {
             let mut m = [0.; 20];
@@ -333,19 +348,19 @@ fn float_between(p: f64, a: f32, b: f32) -> f32 {
 fn int_between(p: f64, a: i32, b: i32) -> i32 {
     (0.5 + (a as f64 + (b as f64 - a as f64) * p)).floor() as i32
 }
-fn color_between(p: f64, a: SkColor4f, b: SkColor4f) -> SkColor4f {
-    let mut alpha = float_between(p, a.fA, b.fA);
+fn color_between(p: f64, a: FilterColor, b: FilterColor) -> FilterColor {
+    let mut alpha = float_between(p, a.alpha, b.alpha);
     if alpha <= 0. {
-        return SkColor4f::default();
+        return FilterColor::default();
     }
     if 1. < alpha {
         alpha = 1.;
     }
-    let component = |x: f32, y: f32| float_between(p, x * a.fA, y * b.fA) / alpha;
-    SkColor4f::new(
-        component(a.fR, b.fR),
-        component(a.fG, b.fG),
-        component(a.fB, b.fB),
+    let component = |x: f32, y: f32| float_between(p, x * a.alpha, y * b.alpha) / alpha;
+    FilterColor::new(
+        component(a.red, b.red),
+        component(a.green, b.green),
+        component(a.blue, b.blue),
         alpha,
     )
 }
@@ -410,27 +425,24 @@ impl FilterOperation {
     }
 }
 // Source: cc/paint/filter_operation.cc:323-332.
-fn map_std_deviation(sigma: f32, ctm: Option<&SkMatrix3x3>) -> SkRRectVector {
-    let mut v = SkRRectVector::new(sigma, sigma);
-    if let Some(m) = ctm {
-        v = m.mapVector(v);
-    }
-    SkRRectVector::new(v.x * 3., v.y * 3.)
+fn map_std_deviation(sigma: f32, ctm: Option<&dyn FilterMapTransform>) -> (f32, f32) {
+    let (x, y) = ctm.map_or((sigma, sigma), |m| m.MapVector(sigma, sigma));
+    (x * 3., y * 3.)
 }
 // Source: cc/paint/filter_operation.cc:334-415.
 impl FilterOperation {
     fn MapRectInternal(
         &self,
         rect: Rect,
-        ctm: Option<&SkMatrix3x3>,
+        ctm: Option<&dyn FilterMapTransform>,
         direction: MapDirection,
     ) -> Rect {
         match self.type_ {
             FilterType::BLUR => {
                 let spread = map_std_deviation(self.amount_, ctm);
                 let mut result = RectF::from(rect);
-                let sx = spread.x.abs();
-                let sy = spread.y.abs();
+                let sx = spread.0.abs();
+                let sy = spread.1.abs();
                 // Preserve source OutsetsF::VH(spread_x,spread_y), including
                 // its vertical/horizontal order under anisotropic transforms.
                 result.OutsetEdges(OutsetsF::new(sx, sy, sx, sy));
@@ -439,19 +451,18 @@ impl FilterOperation {
             FilterType::DROP_SHADOW => {
                 let spread = map_std_deviation(self.amount_, ctm);
                 let mut result = RectF::from(rect);
-                let sx = spread.x.abs();
-                let sy = spread.y.abs();
+                let sx = spread.0.abs();
+                let sy = spread.1.abs();
                 result.OutsetEdges(OutsetsF::new(sy, sx, sy, sx));
-                let mut offset =
-                    SkRRectVector::new(self.offset_.x() as f32, self.offset_.y() as f32);
-                if let Some(m) = ctm {
-                    offset = m.mapVector(offset);
-                }
+                let mut offset = ctm.map_or(
+                    (self.offset_.x() as f32, self.offset_.y() as f32),
+                    |m| m.MapVector(self.offset_.x() as f32, self.offset_.y() as f32),
+                );
                 if direction == MapDirection::Reverse {
-                    offset.x = -offset.x;
-                    offset.y = -offset.y;
+                    offset.0 = -offset.0;
+                    offset.1 = -offset.1;
                 }
-                result.Offset(offset.x, offset.y);
+                result.Offset(offset.0, offset.1);
                 result.Union(RectF::from(rect));
                 ToEnclosingRect(result)
             }
@@ -463,27 +474,30 @@ impl FilterOperation {
                 }
             }
             FilterType::OFFSET => {
-                let mut offset =
-                    SkRRectVector::new(self.offset_.x() as f32, self.offset_.y() as f32);
-                if let Some(m) = ctm {
-                    offset = m.mapVector(offset);
-                }
+                let mut offset = ctm.map_or(
+                    (self.offset_.x() as f32, self.offset_.y() as f32),
+                    |m| m.MapVector(self.offset_.x() as f32, self.offset_.y() as f32),
+                );
                 if direction == MapDirection::Reverse {
-                    offset.x = -offset.x;
-                    offset.y = -offset.y;
+                    offset.0 = -offset.0;
+                    offset.1 = -offset.1;
                 }
                 let mut r = RectF::from(rect);
-                r.Offset(offset.x, offset.y);
+                r.Offset(offset.0, offset.1);
                 ToEnclosingRect(r)
             }
             _ => rect,
         }
     }
-    pub fn MapRect(&self, rect: Rect, ctm: Option<&SkMatrix3x3>) -> Rect {
+    pub fn MapRect(&self, rect: Rect, ctm: Option<&dyn FilterMapTransform>) -> Rect {
         self.MapRectInternal(rect, ctm, MapDirection::Forward)
     }
-    pub fn MapRectReverse(&self, rect: Rect, ctm: &SkMatrix3x3) -> Rect {
-        self.MapRectInternal(rect, Some(ctm), MapDirection::Reverse)
+    pub fn MapRectReverse(
+        &self,
+        rect: Rect,
+        ctm: Option<&dyn FilterMapTransform>,
+    ) -> Rect {
+        self.MapRectInternal(rect, ctm, MapDirection::Reverse)
     }
 }
 
@@ -515,7 +529,10 @@ impl FilterOperation {
                 let byte = |v: f32| ((v.clamp(0., 1.) * 255.).round()) as u32;
                 let c = self.drop_shadow_color_;
                 let color =
-                    (byte(c.fA) << 24) | (byte(c.fR) << 16) | (byte(c.fG) << 8) | byte(c.fB);
+                    (byte(c.alpha) << 24)
+                        | (byte(c.red) << 16)
+                        | (byte(c.green) << 8)
+                        | byte(c.blue);
                 value.insert("color".into(), json!(color as i32));
             }
             COLOR_MATRIX => {

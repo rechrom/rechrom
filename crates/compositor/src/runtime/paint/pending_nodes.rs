@@ -260,7 +260,7 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pain
 }
 impl<R: CpuSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNode<R> {
     type Filters = paint::cc::paint::filter_operations::FilterOperations;
-    type Path = skia::include::core::SkPath::SkPath;
+    type Path = R::Path;
     type PaintPropertyChange = native::PaintPropertyChangeType;
     type ClipNode = ClipNode<R>;
     fn CcNodeId(&self, s: i32) -> i32 {
@@ -387,7 +387,7 @@ impl<R: CpuSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNod
         self.node()
             .backdrop_filter_bounds
             .as_ref()
-            .map(|path| path.as_ref().clone())
+            .map(|path| R::FromPaintPath(path.as_ref()))
     }
     fn BackdropMaskElementId(&self) -> ElementId {
         element(self.node().compositor.backdrop_mask_element_id)

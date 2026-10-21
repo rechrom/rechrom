@@ -15,7 +15,6 @@ use interaction::input_event::*;
 use layoutng_assembly::internal::layout_input::Size;
 #[cfg(test)]
 use page_mutation::PageMutation;
-use skia::compat::surface::RasterSurface;
 use std::{
     cell::RefCell,
     io,
@@ -68,11 +67,47 @@ pub(crate) fn diagnostic_time_ns() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos())
 }
+/// Immutable RGBA readback used by screenshots and diagnostics. Presentation
+/// has already completed before this value is created; it carries no renderer,
+/// raster-engine or drawing-library capability.
+pub struct CapturedSurface {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+}
+
+impl CapturedSurface {
+    pub fn from_pixels(width: u32, height: u32, pixels: Vec<u8>) -> io::Result<Self> {
+        let expected = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|length| length.checked_mul(4))
+            .ok_or_else(|| io::Error::other("captured surface dimensions overflow"))?;
+        if pixels.len() != expected {
+            return Err(io::Error::other(
+                "captured surface pixels do not match its dimensions",
+            ));
+        }
+        Ok(Self {
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+}
+
 pub struct WindowFrame {
     pub provenance: Option<crate::page_presentation::FrameProvenance>,
     pub viewport: Viewport,
-    pub toolbar: RasterSurface,
-    pub content: RasterSurface,
+    pub toolbar: CapturedSurface,
+    pub content: CapturedSurface,
 }
 pub type FrameMailbox = Arc<Mutex<Option<WindowFrame>>>;
 #[derive(Debug)]

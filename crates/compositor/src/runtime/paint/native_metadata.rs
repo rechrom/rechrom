@@ -2,14 +2,16 @@
 //! No traversal summary is rebuilt when a getter is called: analysis happens
 //! once at insertion, and nested queries borrow their resident buffer metadata.
 use super::*;
-use crate::{adapter::layer_tree_host_impl::ContentColorUsage, runtime::types::CpuSkiaBackend};
+use crate::{
+    adapter::{geometry::Path as _, layer_tree_host_impl::ContentColorUsage},
+    runtime::types::CpuSkiaBackend,
+};
 use paint::cc::paint::{
     paint_flags::{Cap, Style},
     paint_op::{MetadataFlags, PaintOpMetadata, PaintOpMetadataFields},
     paint_op_buffer::PaintOpBufferMetadata,
     paint_op_buffer_iterator::{PaintOpType, PaintOpView},
 };
-use skia::include::core::SkPath::SkPath;
 
 pub(crate) fn visit_shader_images(
     shader: &paint::paint_engine::PaintShader,
@@ -135,37 +137,45 @@ pub(crate) fn filter_has_images(
         Operations(ops) => ops
             .operations()
             .iter()
-            .filter_map(|o| o.image_filter().as_deref())
+            .filter_map(|o| {
+                (o.r#type() == paint::cc::paint::filter_operation::FilterType::REFERENCE)
+                    .then(|| o.image_filter().as_deref())
+                    .flatten()
+            })
             .any(filter_has_images),
-        Reference(_) | Reflection(_) => true,
+        // SVG feImage inputs are resolved by PrePaint into immutable eager
+        // pixels owned by the reference graph. They are not CpuPaintImage
+        // decode/cache entries and therefore do not belong in cc's discardable
+        // image map. Reflection masks still retain record image resources.
+        Reference { .. } => false,
+        Reflection(_) => true,
     }
 }
 pub(crate) struct MetadataFields<'a, R: CpuSkiaBackend> {
     op: CpuPaintOpRef<'a, R>,
-    path: SkPath,
+    path: R::Path,
 }
 impl<'a, R: CpuSkiaBackend> MetadataFields<'a, R> {
     pub(crate) fn new(op: CpuPaintOpRef<'a, R>) -> Self {
         let path = match op {
             CpuPaintOpRef::Native { op, .. } if !op.path.is_empty() => {
-                paint::paint_clip_path::PaintClipPath::from_authored(
+                let authored = paint::paint_clip_path::PaintClipPath::from_authored(
                     &op.path,
                     &[],
                     op.even_odd,
                     Default::default(),
-                )
-                .single_path()
-                .expect("one native path")
-                .as_ref()
-                .clone()
+                );
+                let path = authored.single_path().expect("one native path").as_ref();
+                R::FromPaintPath(path)
             }
             CpuPaintOpRef::Converted(CpuPaintOp::DrawPath { path, .. }) => path.as_ref().clone(),
-            CpuPaintOpRef::Converted(CpuPaintOp::ClipPath { path, .. }) => path
-                .single_path()
-                .expect("PaintInput validates native union path capability")
-                .as_ref()
-                .clone(),
-            _ => SkPath::default(),
+            CpuPaintOpRef::Converted(CpuPaintOp::ClipPath { path, .. }) => {
+                path.single_path()
+                    .expect("PaintInput validates native union path capability")
+                    .as_ref()
+                    .clone()
+            }
+            _ => R::Path::default(),
         };
         Self { op, path }
     }
@@ -233,7 +243,7 @@ impl<R: CpuSkiaBackend> PaintOpMetadataFields<ContentColorUsage> for MetadataFie
             .then_some(MetadataFlagView(self.op))
     }
     fn IsValidGeometry(&self) -> bool {
-        self.path.isFinite()
+        self.path.is_finite()
     }
     fn ClipAntialias(&self) -> bool {
         match self.op {
@@ -258,8 +268,15 @@ impl<R: CpuSkiaBackend> PaintOpMetadataFields<ContentColorUsage> for MetadataFie
             _ => 0,
         }
     }
-    fn Path(&self) -> &SkPath {
-        &self.path
+    fn PathIsConvex(&self) -> bool {
+        self.path.is_convex()
+    }
+    fn PathBounds(&self) -> [f32; 4] {
+        let bounds = self.path.bounds();
+        [bounds.x(), bounds.y(), bounds.right(), bounds.bottom()]
+    }
+    fn PathIsVolatile(&self) -> bool {
+        self.path.is_volatile()
     }
     fn NestedMetadata(&self) -> &PaintOpBufferMetadata<ContentColorUsage> {
         match self.op {

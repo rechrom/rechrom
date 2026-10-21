@@ -265,7 +265,13 @@ impl Drop for Handle {
         self.visible.store(false, Ordering::Release);
         // Closing never joins a Page running script or tearing down caches.
         self.send(Command::Stop);
-        let _ = self.impl_sender.send(ImplCommand::Stop);
+        // Stop the producer before its consumer. An in-flight document turn
+        // may still commit after this handle is dropped during navigation.
+        // Its executor closes the compositor after that turn unwinds, which
+        // then closes the presenter. Otherwise an ordinary navigation races
+        // Commit against a disconnected impl receiver and emits a fatal error.
+        // Chromium: content/renderer/render_frame_impl.cc FrameDetached closes
+        // the WebLocalFrame before destroying its owning renderer objects.
     }
 }
 pub(crate) struct Params {
@@ -355,6 +361,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
     let doc_source = source.clone();
     let wake = doc_sender.clone();
     let doc_impl_sender = impl_sender.clone();
+    let doc_impl_shutdown = impl_sender.clone();
     let routes = params.routes.clone();
     let doc_reporter = reporter.clone();
     let doc_spawn = std::thread::Builder::new()
@@ -377,6 +384,9 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
                     doc_impl_sender,
                 )
             }));
+            // The document is no longer a frame producer, including when its
+            // task failed or panicked. Host teardown remains asynchronous.
+            let _ = doc_impl_shutdown.send(ImplCommand::Stop);
             match result {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => doc_reporter.terminal("document", error),
@@ -1538,7 +1548,7 @@ fn run_document(
                         viewport.height,
                         viewport.scale,
                         &mut pixels,
-                        skia::PixelFormat::Bgra8888,
+                        renderer_skia::PixelFormat::Bgra8888,
                         viewport.width as usize,
                     ) {
                         Ok(_) => true,

@@ -140,6 +140,9 @@ impl RasterInvalidationItem for DisplayItem {
         self.paint_invalidation_reason
             .expect("validated native DisplayItem reason")
     }
+    fn ImageContentRevisions(&self) -> &[(u64, u64)] {
+        &self.image_content_revisions
+    }
 }
 impl<R: CpuSkiaBackend> RasterInvalidationChunk<CpuGeometryMapper<R>> for PaintChunk {
     type Id = paint::display_item_id::DisplayItemId;
@@ -288,12 +291,12 @@ impl<R: CpuSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
             .backdrop_filter_bounds
             .as_ref()
             .expect("producer BackdropFilterInfo bounds")
-            .getBounds();
+            .bounds();
         Some(RectF::new(
-            r.left,
-            r.top,
-            r.right - r.left,
-            r.bottom - r.top,
+            r.x as f32,
+            r.y as f32,
+            r.width as f32,
+            r.height as f32,
         ))
     }
 }

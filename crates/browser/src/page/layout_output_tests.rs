@@ -321,7 +321,7 @@ fn style_write_geometry_and_frame_share_native_layout_and_match_fresh_pixels() {
             "the CSSOM query already updated native layout"
         );
         assert_eq!(measured, held(&page.state));
-        let actual = raster::pure_replay::RasterizeDisplayItemList(
+        let actual = raster::RasterizePaintArtifactTransparent(
             &page.frame.as_ref().unwrap().display_items,
             320,
             200,
@@ -339,7 +339,7 @@ fn style_write_geometry_and_frame_share_native_layout_and_match_fresh_pixels() {
             &dom::UserInteractionState::default(),
             &page.state.constraints.borrow(),
         );
-        let expected = raster::pure_replay::RasterizeDisplayItemList(
+        let expected = raster::RasterizePaintArtifactTransparent(
             &paint::paint_engine::Paint(&fresh),
             320,
             200,
@@ -399,7 +399,7 @@ fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
             1,
             "paint-only style must export current paint without rerunning layout"
         );
-        let actual = raster::pure_replay::RasterizeDisplayItemList(
+        let actual = raster::RasterizePaintArtifactTransparent(
             &page.frame.as_ref().unwrap().display_items,
             320,
             200,
@@ -417,7 +417,7 @@ fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
         );
         assert_eq!(
             actual,
-            raster::pure_replay::RasterizeDisplayItemList(
+            raster::RasterizePaintArtifactTransparent(
                 &paint::paint_engine::Paint(&fresh),
                 320,
                 200

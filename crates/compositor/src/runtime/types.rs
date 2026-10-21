@@ -23,15 +23,23 @@ pub trait SkiaValueBackend {
         + Send
         + Sync
         + 'static;
-    type Path: MainLayerPath + Send + Sync + 'static;
+    type Path: MainLayerPath + Default + Send + Sync + 'static;
+    /// Compile one immutable Paint-owned path into the selected backend value.
+    /// No concrete Skia path crosses Paint's package boundary.
+    fn FromPaintPath(path: &paint::paint_clip_path::PaintPath) -> Self::Path;
+    /// Blink Path::StrokeBoundingRect delegates this geometry to Skia. Keeping
+    /// it beside path compilation avoids introducing a second stroker in Paint.
+    fn StrokeBounds(
+        path: &paint::paint_clip_path::PaintPath,
+        width: f32,
+        resolution_scale: f32,
+    ) -> Option<crate::adapter::geometry::RectF>;
 }
 pub trait CpuSkiaBackend:
     SkRegionBackend
     + RoundedRectTransformBackend
-    + SkiaValueBackend<
-        Filters = paint::cc::paint::filter_operations::FilterOperations,
-        Path = skia::include::core::SkPath::SkPath,
-    > + Send
+    + SkiaValueBackend<Filters = paint::cc::paint::filter_operations::FilterOperations>
+    + Send
     + Sync
     + 'static
 {
@@ -39,10 +47,8 @@ pub trait CpuSkiaBackend:
 impl<R> CpuSkiaBackend for R where
     R: SkRegionBackend
         + RoundedRectTransformBackend
-        + SkiaValueBackend<
-            Filters = paint::cc::paint::filter_operations::FilterOperations,
-            Path = skia::include::core::SkPath::SkPath,
-        > + Send
+        + SkiaValueBackend<Filters = paint::cc::paint::filter_operations::FilterOperations>
+        + Send
         + Sync
         + 'static
 {

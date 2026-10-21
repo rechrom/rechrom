@@ -1,7 +1,8 @@
-//! Selected native DecorationLinePainter geometry. These are actual SkPath
-//! values shared by the wavy tile record and its raster/metadata consumers.
+//! Selected DecorationLinePainter geometry in Paint-owned path commands.
 #![allow(non_snake_case)]
-use skia::include::core::SkPath::{SkPath, SkPathFillType, SkPathPoint, SkPathVerb};
+use crate::paint_clip_path::{PaintPath, PaintPathFillType};
+use layoutng_assembly::internal::layout_input::{Offset, PaintPathCommand, PaintPathVerb};
+
 // Source: third_party/blink/renderer/core/paint/decoration_line_painter.h:24-31.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WaveDefinition {
@@ -9,6 +10,7 @@ pub struct WaveDefinition {
     pub control_point_distance: f32,
     pub phase: f32,
 }
+
 // Source: third_party/blink/renderer/core/paint/decoration_line_painter.cc:179-194.
 pub fn MakeWave(thickness: f32) -> WaveDefinition {
     // std::max(1, NaN) preserves its first argument. Native round is ties away.
@@ -21,44 +23,53 @@ pub fn MakeWave(thickness: f32) -> WaveDefinition {
         phase: -wavelength,
     }
 }
+
 // Source: third_party/blink/renderer/core/paint/decoration_line_painter.cc:130-146.
-pub fn WavyCenterlinePath(wave: &WaveDefinition, total_width: f32, start: SkPathPoint) -> SkPath {
-    let mut x = start.x + wave.phase;
-    let mut points = vec![SkPathPoint { x, y: start.y }];
-    let mut verbs = vec![SkPathVerb::kMove];
-    let end_x = start.x + total_width + wave.wavelength;
-    while x < end_x {
-        points.push(SkPathPoint {
-            x: x + wave.wavelength * 0.5,
-            y: start.y + wave.control_point_distance,
-        });
-        points.push(SkPathPoint {
-            x: x + wave.wavelength * 0.5,
-            y: start.y - wave.control_point_distance,
-        });
-        points.push(SkPathPoint {
-            x: x + wave.wavelength,
+pub fn WavyCenterlinePath(wave: &WaveDefinition, total_width: f32, start: Offset) -> PaintPath {
+    let mut x = start.x as f32 + wave.phase;
+    let mut commands = vec![PaintPathCommand {
+        verb: PaintPathVerb::kMoveTo,
+        point: Offset {
+            x: f64::from(x),
             y: start.y,
+        },
+        ..PaintPathCommand::default()
+    }];
+    let end_x = start.x as f32 + total_width + wave.wavelength;
+    while x < end_x {
+        commands.push(PaintPathCommand {
+            verb: PaintPathVerb::kCubicTo,
+            control1: Offset {
+                x: f64::from(x + wave.wavelength * 0.5),
+                y: start.y + f64::from(wave.control_point_distance),
+            },
+            control2: Offset {
+                x: f64::from(x + wave.wavelength * 0.5),
+                y: start.y - f64::from(wave.control_point_distance),
+            },
+            point: Offset {
+                x: f64::from(x + wave.wavelength),
+                y: start.y,
+            },
+            ..PaintPathCommand::default()
         });
-        verbs.push(SkPathVerb::kCubic);
         x += wave.wavelength;
     }
-    SkPath::Raw(&points, &verbs, &[], SkPathFillType::kWinding, false)
+    PaintPath::from_commands(commands, PaintPathFillType::Winding)
 }
+
 // Source: third_party/blink/renderer/core/paint/decoration_line_painter.cc:173-177.
-pub fn WavyPath(wave: &WaveDefinition) -> SkPath {
-    WavyCenterlinePath(wave, wave.wavelength, SkPathPoint { x: 0., y: 0.5 })
+pub fn WavyPath(wave: &WaveDefinition) -> PaintPath {
+    WavyCenterlinePath(wave, wave.wavelength, Offset { x: 0.0, y: 0.5 })
 }
 
 // Source: third_party/blink/renderer/core/paint/decoration_line_painter.cc:197-213.
-pub fn ComputeWavyPatternRect(
-    thickness: f32,
-    wave: &WaveDefinition,
-    path: &SkPath,
-) -> Option<[f32; 4]> {
-    // platform/geometry/path.cc:161-165 uses stroke precision 0.3f.
-    let bounds = path.stroke_bounds(thickness, 0.3)?;
-    let top = bounds.top.floor();
-    let bottom = bounds.bottom.ceil();
-    Some([0., top, wave.wavelength, bottom])
+// The actual stroked path bounds are computed by the selected Skia backend.
+pub fn WavyPatternRect(wave: &WaveDefinition, stroke_bounds: [f32; 4]) -> [f32; 4] {
+    [
+        0.0,
+        stroke_bounds[1].floor(),
+        wave.wavelength,
+        stroke_bounds[3].ceil(),
+    ]
 }

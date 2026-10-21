@@ -305,12 +305,12 @@ impl ClipPaintPropertyNode {
             .as_ref()
             .map_or(0, |shape| shape.paths().len())
     }
-    pub fn single_clip_path(&self) -> Option<&skia::include::core::SkPath::SkPath> {
+    pub fn single_clip_path(&self) -> Option<&crate::paint_clip_path::PaintPath> {
         self.clip_path.as_ref()?.single_path().map(Arc::as_ref)
     }
     pub fn clip_path_verb_count(&self) -> usize {
         self.clip_path.as_ref().map_or(0, |shape| {
-            shape.paths().iter().map(|p| p.verbs().len()).sum()
+            shape.paths().iter().map(|p| p.verb_count()).sum()
         })
     }
 }
@@ -356,7 +356,7 @@ impl ClipLayoutRects {
 pub struct EffectPaintPropertyNode {
     pub compositor: EffectCompositorState,
     /// Source: effect_paint_property_node.h:78-95,261-264.
-    pub backdrop_filter_bounds: Option<Arc<skia::include::core::SkPath::SkPath>>,
+    pub backdrop_filter_bounds: Option<Arc<crate::paint_clip_path::PaintPath>>,
     /// Source: effect_paint_property_node.h:427-429; builder.cc:2263-2264,
     /// 2493-2498,2690-2691. The producer publishes inherited participation.
     pub self_or_ancestor_participates_in_view_transition: bool,

@@ -94,7 +94,7 @@ The SVG geometry producer and Paint validity repair follow Chromium revision
 `cacf77bdba7ba7df8ea7236d7e14b08c658ff368`. See
 `docs/svg-empty-contour-semantics.md` and
 `NOTICE.chromium-svg-empty-contours`. Source-specific notices are preserved;
-the Skia BSD license is already retained unchanged in `crates/skia/LICENSE`.
+the Skia BSD license is retained unchanged in `crates/skia/LICENSE`.
 
 ## DOM template primitives
 

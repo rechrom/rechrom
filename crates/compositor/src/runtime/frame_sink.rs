@@ -2,7 +2,7 @@
 //! allocation; it contains no Host/Page reference and creates no window or Viz.
 use super::{
     frame::{CompositorFrame, CompositorRenderPass, FrameValueTypes},
-    resources::{CpuReturnedResource, CpuTransferableResource},
+    resources::{RasterReturnedResource, RasterTransferableResource},
 };
 use crate::adapter::{
     geometry::Size,
@@ -35,8 +35,8 @@ impl<B: UnboundedTypes> NativeFrameSink<B> for FrameSink<B> {
             .SubmitCompositorFrame(frame, hit_test_data_changed)
     }
 }
-impl<M, V: FrameValueTypes> NativeFrame<CpuReturnedResource>
-    for CompositorFrame<M, CompositorRenderPass<V>, CpuTransferableResource>
+impl<M, V: FrameValueTypes> NativeFrame<RasterReturnedResource>
+    for CompositorFrame<M, CompositorRenderPass<V>, RasterTransferableResource>
 {
     fn render_pass_list_is_empty(&self) -> bool {
         self.render_pass_list.is_empty()
@@ -58,10 +58,10 @@ impl<M, V: FrameValueTypes> NativeFrame<CpuReturnedResource>
     }
     // Source dependency: cc/trees/unbounded_frame_sink_handler.cc:71-76;
     // components/viz/common/resources/transferable_resource.cc:44-50. Each actual transfer's EndImport is used.
-    fn ReturnResources(&self) -> Vec<CpuReturnedResource> {
+    fn ReturnResources(&self) -> Vec<RasterReturnedResource> {
         self.resource_list
             .iter()
-            .map(CpuTransferableResource::ToReturnedResource)
+            .map(RasterTransferableResource::ToReturnedResource)
             .collect()
     }
 }

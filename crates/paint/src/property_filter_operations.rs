@@ -2,16 +2,22 @@
 //! here, before publishing Effect property nodes; compositor never rebuilds a
 //! filter list while traversing the PaintArtifact.
 use crate::cc::paint::{
-    filter_operation::{FilterOperation, FilterType},
+    filter_operation::{
+        FilterColor, FilterMapTransform, FilterOperation, FilterType, MapDirection, PaintFilter,
+        PaintFilterReplay,
+    },
     filter_operations::FilterOperations,
 };
-use foundation::gfx::Point;
+use crate::PaintRect;
+use foundation::gfx::{Point, Rect, Size};
 use layoutng_assembly::internal::{
     layout_input::Offset,
     layout_input_types::Color,
-    paint_input::{PaintFilterOperation, PaintFilterType},
+    paint_input::{
+        PaintFilterOperation, PaintFilterType, SvgFilterGraph, SvgFilterLength, SvgFilterRegion,
+        SvgFilterUnits,
+    },
 };
-use skia::include::core::SkColor::SkColor4f;
 use std::{fmt, sync::Arc};
 
 /// Explicitly retained unsupported input, never an empty reference filter.
@@ -56,7 +62,11 @@ impl PropertyFilterOperations {
     /// Source: third_party/blink/renderer/core/paint/filter_effect_builder.cc:373-510;
     /// platform/graphics/compositor_filter_operations.cc:22-109. PrePaint has
     /// already resolved zoom, percentages, currentColor and image resources.
-    pub fn from_authored(input: &[PaintFilterOperation]) -> Self {
+    pub fn from_authored(
+        input: &[PaintFilterOperation],
+        reference_box: Option<PaintRect>,
+        reference_scale: f64,
+    ) -> Self {
         let mut operations = Vec::with_capacity(input.len());
         for (operation_index, op) in input.iter().enumerate() {
             let blocked = |reason| {
@@ -97,14 +107,31 @@ impl PropertyFilterOperations {
                     Point::new(op.offset.x.floor() as i32, op.offset.y.floor() as i32),
                     op.blur_radius as f32,
                     // AppendDropShadowFilter passes Color::Rgb through SkColor.
-                    SkColor4f::new(
+                    FilterColor::new(
                         byte_color(op.color.red),
                         byte_color(op.color.green),
                         byte_color(op.color.blue),
                         byte_color(op.color.alpha),
                     ),
                 ),
-                kReference => return blocked(FilterInputBlockReason::ReferenceOwnerNotLowered),
+                kReference => {
+                    let Some(reference_box) = reference_box else {
+                        return blocked(FilterInputBlockReason::ReferenceOwnerNotLowered);
+                    };
+                    if op.reference_graph.is_none() || op.reference_error.is_some() {
+                        return blocked(FilterInputBlockReason::ReferenceOwnerNotLowered);
+                    }
+                    FilterOperation::CreateReferenceFilter(Some(Arc::new(ReferencePaintFilter {
+                        operation: op.clone(),
+                        reference_box,
+                        reference_scale,
+                        output_region: resolve_filter_region(
+                            op.reference_graph.as_ref().expect("validated reference graph"),
+                            reference_box,
+                            reference_scale,
+                        ),
+                    })))
+                }
                 kBoxReflect => return blocked(FilterInputBlockReason::ReflectionOwnerNotLowered),
             };
             operations.push(value);
@@ -132,6 +159,26 @@ impl PropertyFilterOperations {
     pub fn is_finite(&self) -> bool {
         self.canonical().is_ok()
     }
+    pub fn reference_output_bounds(&self, input: PaintRect) -> Option<PaintRect> {
+        let operations = self.canonical().ok()?;
+        if !operations.HasReferenceFilter() {
+            return None;
+        }
+        let input = input.enclosing();
+        let mapped = operations.MapRect(
+            Rect::new(
+                Point::new(input.x as i32, input.y as i32),
+                Size::new(input.width as i32, input.height as i32),
+            ),
+            None,
+        );
+        Some(PaintRect {
+            x: f64::from(mapped.x()),
+            y: f64::from(mapped.y()),
+            width: f64::from(mapped.width()),
+            height: f64::from(mapped.height()),
+        })
+    }
     /// Resource preparation may inspect an explicitly blocked reflection's
     /// actual source payload; this does not certify it as a native filter.
     pub fn reflection_mask_layers(
@@ -156,6 +203,136 @@ impl PropertyFilterOperations {
             .iter()
             .map(replay_operation)
             .collect()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ReferencePaintFilter {
+    operation: PaintFilterOperation,
+    reference_box: PaintRect,
+    reference_scale: f64,
+    output_region: PaintRect,
+}
+
+impl PaintFilter for ReferencePaintFilter {
+    fn MapRect(
+        &self,
+        _rect: Rect,
+        ctm: Option<&dyn FilterMapTransform>,
+        _direction: MapDirection,
+    ) -> Rect {
+        let region = self.output_region.enclosing();
+        let points = [
+            (region.x as f32, region.y as f32),
+            ((region.x + region.width) as f32, region.y as f32),
+            (region.x as f32, (region.y + region.height) as f32),
+            (
+                (region.x + region.width) as f32,
+                (region.y + region.height) as f32,
+            ),
+        ];
+        let points = points.map(|(x, y)| ctm.map_or((x, y), |matrix| matrix.MapVector(x, y)));
+        let left = points.iter().map(|point| point.0).fold(f32::INFINITY, f32::min);
+        let top = points.iter().map(|point| point.1).fold(f32::INFINITY, f32::min);
+        let right = points
+            .iter()
+            .map(|point| point.0)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let bottom = points
+            .iter()
+            .map(|point| point.1)
+            .fold(f32::NEG_INFINITY, f32::max);
+        Rect::new(
+            Point::new(left.floor() as i32, top.floor() as i32),
+            Size::new(
+                (right.ceil() - left.floor()).max(0.0) as i32,
+                (bottom.ceil() - top.floor()).max(0.0) as i32,
+            ),
+        )
+    }
+
+    fn TypeToString(&self) -> &'static str {
+        "ReferenceFilter"
+    }
+
+    fn ReplayGraph(&self) -> PaintFilterReplay<'_> {
+        PaintFilterReplay::Reference {
+            operation: &self.operation,
+            reference_box: self.reference_box,
+            reference_scale: self.reference_scale,
+        }
+    }
+}
+
+fn resolve_filter_region(
+    graph: &SvgFilterGraph,
+    reference: PaintRect,
+    user_scale: f64,
+) -> PaintRect {
+    let resolve_position = |value: Option<SvgFilterLength>,
+                            reference_origin: f64,
+                            axis: f64,
+                            units: SvgFilterUnits,
+                            default: f64| {
+        value.map_or(default, |value| {
+            if value.percentage {
+                reference_origin + axis * value.value / 100.0
+            } else if units == SvgFilterUnits::kObjectBoundingBox {
+                reference_origin + axis * value.value
+            } else {
+                value.value * user_scale
+            }
+        })
+    };
+    let resolve_length = |value: Option<SvgFilterLength>,
+                          axis: f64,
+                          units: SvgFilterUnits,
+                          default: f64| {
+        value.map_or(default, |value| {
+            if value.percentage {
+                axis * value.value / 100.0
+            } else if units == SvgFilterUnits::kObjectBoundingBox {
+                axis * value.value
+            } else {
+                value.value * user_scale
+            }
+        })
+    };
+    let SvgFilterRegion {
+        x,
+        y,
+        width,
+        height,
+    } = graph.region;
+    PaintRect {
+        x: resolve_position(
+            x,
+            reference.x,
+            reference.width,
+            graph.filter_units,
+            reference.x - reference.width * 0.1,
+        ),
+        y: resolve_position(
+            y,
+            reference.y,
+            reference.height,
+            graph.filter_units,
+            reference.y - reference.height * 0.1,
+        ),
+        width: resolve_length(
+            width,
+            reference.width,
+            graph.filter_units,
+            reference.width * 1.2,
+        )
+        .max(0.0),
+        height: resolve_length(
+            height,
+            reference.height,
+            graph.filter_units,
+            reference.height * 1.2,
+        )
+        .max(0.0),
     }
 }
 fn byte_color(value: f32) -> f32 {
@@ -208,10 +385,10 @@ fn replay_operation(op: &FilterOperation) -> Result<PaintFilterOperation, Filter
         value.blur_radius = f64::from(op.amount());
         let color = op.drop_shadow_color();
         value.color = Color {
-            red: color.fR,
-            green: color.fG,
-            blue: color.fB,
-            alpha: color.fA,
+            red: color.red,
+            green: color.green,
+            blue: color.blue,
+            alpha: color.alpha,
         };
     }
     Ok(value)

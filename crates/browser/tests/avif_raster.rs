@@ -110,7 +110,7 @@ fn render(avif: bool, scale: f64, background: &str) -> Vec<u32> {
         height,
         scale,
         &mut pixels,
-        renderer::PixelFormat::Rgba8888,
+        renderer_skia::PixelFormat::Rgba8888,
         width as usize,
     )
     .unwrap();

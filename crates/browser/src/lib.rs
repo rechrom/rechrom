@@ -35,11 +35,11 @@ pub mod interaction_services;
 mod native_test_thread;
 #[cfg(feature = "source_paint")]
 pub mod page;
-#[cfg(all(test, feature = "pure_source_png"))]
+#[cfg(test)]
 mod page_parser_invalidation_tests;
-#[cfg(all(test, feature = "pure_source_png"))]
+#[cfg(test)]
 mod page_resource_tests;
-#[cfg(all(test, feature = "pure_source_png"))]
+#[cfg(test)]
 mod page_tests;
 mod persistent_layout;
 pub mod style_services;
@@ -150,14 +150,6 @@ pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
     space.text_transform = Some(std::sync::Arc::new(
         text_transform::BrowserTextTransformProvider,
     ));
-    // Production uses the OpenType font engine on every platform. Only the
-    // explicitly requested C++ reference renderer injects its metrics adapter.
-    #[cfg(feature = "source_png")]
-    {
-        space.font_backend_factory = Some(std::sync::Arc::new(
-            raster::font_backend::SkiaFontBackendFactory,
-        ));
-    }
     if let Some(started) = started {
         eprintln!(
             "browser-constraints-profile width={width} height={height} ms={:.3}",
@@ -175,14 +167,11 @@ pub fn RenderHtml(source: &str, width: u32, height: u32) -> Vec<u8> {
 }
 
 fn RenderFragmentPng(fragments: &FragmentNode, width: u32, height: u32) -> Vec<u8> {
-    #[cfg(feature = "pure_source_png")]
-    let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(
+    let rgba = raster::RasterizePaintArtifact(
         &paint::paint_engine::Paint(fragments),
         width,
         height,
     );
-    #[cfg(not(feature = "pure_source_png"))]
-    let rgba = raster::RasterizeDisplayItemList(&paint::Paint(fragments), width, height);
     raster::EncodeRgbaPng(&rgba, width, height)
 }
 
@@ -281,17 +270,9 @@ pub fn BuildSourceDisplayListUrl(
         .ok_or_else(|| io::Error::other("page has no frame"))
 }
 
-#[cfg(feature = "source_png")]
-pub fn RenderUrlSourcePng(url: &str, width: u32, height: u32) -> io::Result<Vec<u8>> {
+pub fn RenderUrlTranslatedPng(url: &str, width: u32, height: u32) -> io::Result<Vec<u8>> {
     let display_list = BuildSourceDisplayListUrl(url, width, height)?;
-    let rgba = raster::source_replay::RasterizeSourceDisplayItemList(&display_list, width, height);
-    Ok(raster::EncodeRgbaPng(&rgba, width, height))
-}
-
-#[cfg(feature = "pure_source_png")]
-pub fn RenderUrlPureSourcePng(url: &str, width: u32, height: u32) -> io::Result<Vec<u8>> {
-    let display_list = BuildSourceDisplayListUrl(url, width, height)?;
-    let rgba = raster::pure_replay::RasterizeSourceDisplayItemList(&display_list, width, height);
+    let rgba = raster::RasterizePaintArtifact(&display_list, width, height);
     Ok(raster::EncodeRgbaPng(&rgba, width, height))
 }
 
@@ -332,12 +313,11 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "pure_source_png")]
     fn generated_after_clears_nested_floats_like_cpp_reference() {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/pseudo-clearfix.html");
         let url = format!("file://{}", fixture.display());
-        let actual = RenderUrlPureSourcePng(&url, 160, 100).unwrap();
+        let actual = RenderUrlTranslatedPng(&url, 160, 100).unwrap();
         let reference = include_bytes!("../tests/fixtures/pseudo-clearfix.expected.png");
         assert_eq!(actual, reference);
     }
@@ -443,8 +423,7 @@ mod tests {
     }
     fn local_and_redirected_url_body() {
         svg_profile_exports_shape_fragments();
-        #[cfg(feature = "pure_source_png")]
-        generated_after_clears_nested_floats_like_cpp_reference();
+            generated_after_clears_nested_floats_like_cpp_reference();
         let plain = "<html><body><div style='width:40px;height:20px;background:#123456'></div></body></html>";
         let hidden = "<html><body><div style='display:none;width:200px;height:200px;background:#ff0000'></div><div style='width:40px;height:20px;background:#123456'></div></body></html>";
         let contents = "<html><body><section style='display:contents'><div style='width:40px;height:20px;background:#123456'></div></section></body></html>";

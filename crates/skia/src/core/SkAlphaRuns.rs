@@ -1,238 +1,233 @@
-// Migrated unchanged in behavior from tiny-skia-0.12.0/src/alpha_runs.rs.
-
-// Copyright 2006 The Android Open Source Project
-// Copyright 2020 Yevhenii Reizner
-//
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
-
-use alloc::vec;
-use alloc::vec::Vec;
-use core::convert::TryFrom;
-use core::num::NonZeroU16;
-
-use crate::raster::color::AlphaU8;
-use crate::raster::LengthU32;
-
-pub type AlphaRun = Option<NonZeroU16>;
-
-/// Sparse array of run-length-encoded alpha (supersampling coverage) values.
-///
-/// Sparseness allows us to independently compose several paths into the
-/// same SkAlphaRuns buffer.
-pub struct SkAlphaRuns {
-    pub runs: Vec<AlphaRun>,
-    pub alpha: Vec<u8>,
+// Copyright 2006 The Android Open Source Project. BSD-style license.
+// Rust adaptation: borrowed slices retain the caller-owned sparse run buffers;
+// integer indices replace interior pointers without changing run splitting.
+// Source: src/core/SkAlphaRuns.h:24-33
+pub struct SkAlphaRuns<'a> {
+    pub fRuns: &'a mut [i16],
+    pub fAlpha: &'a mut [u8],
+    // Source: src/core/SkAlphaRuns.h:197
+    #[cfg(sk_debug)]
+    fWidth: core::mem::MaybeUninit<i32>,
+    // Adapted initialization witness for safe Rust entry points before reset.
+    #[cfg(sk_debug)]
+    width_initialized: bool,
 }
-
-impl SkAlphaRuns {
-    pub fn new(width: LengthU32) -> Self {
-        let mut runs = SkAlphaRuns {
-            runs: vec![None; (width.get() + 1) as usize],
-            alpha: vec![0; (width.get() + 1) as usize],
-        };
-        runs.reset(width);
-        runs
+impl<'a> SkAlphaRuns<'a> {
+    pub fn new(runs: &'a mut [i16], alpha: &'a mut [u8]) -> Self {
+        Self {
+            fRuns: runs,
+            fAlpha: alpha,
+            #[cfg(sk_debug)]
+            fWidth: core::mem::MaybeUninit::uninit(),
+            #[cfg(sk_debug)]
+            width_initialized: false,
+        }
     }
-
-    /// Returns 0-255 given 0-256.
-    pub fn catch_overflow(alpha: u16) -> AlphaU8 {
-        debug_assert!(alpha <= 256);
+    // Rust view of an already initialized native sparse buffer; no reset or
+    // storage allocation occurs, matching the original fRuns rebinding.
+    pub(crate) fn from_initialized(runs: &'a mut [i16], alpha: &'a mut [u8], width: usize) -> Self {
+        assert!(runs.len() > width && alpha.len() > width);
+        Self {
+            fRuns: runs,
+            fAlpha: alpha,
+            // Adapted view of the caller's already initialized sparse buffer.
+            #[cfg(sk_debug)]
+            fWidth: core::mem::MaybeUninit::new(width as i32),
+            #[cfg(sk_debug)]
+            width_initialized: true,
+        }
+    }
+    #[cfg(sk_debug)]
+    fn native_width(&self) -> i32 {
+        // Rust safety precondition, not a native release field/default value.
+        assert!(
+            self.width_initialized,
+            "SkAlphaRuns width read before reset"
+        );
+        unsafe { self.fWidth.assume_init_read() }
+    }
+    pub fn CatchOverflow(alpha: u32) -> u8 {
+        crate::SkASSERT!(@source b"src/core/SkAlphaRuns.h\0".as_ptr(), 31; @condition b"alpha >= 0 && alpha <= 256\0".as_ptr(); alpha <= 256);
         (alpha - (alpha >> 8)) as u8
     }
-
-    /// Returns true if the scanline contains only a single run, of alpha value 0.
-    pub fn is_empty(&self) -> bool {
-        debug_assert!(self.runs[0].is_some());
-        match self.runs[0] {
-            Some(run) => self.alpha[0] == 0 && self.runs[usize::from(run.get())].is_none(),
-            None => true,
-        }
+    // Source: src/core/SkAlphaRuns.h:37-40
+    pub fn empty(&self) -> bool {
+        crate::SkASSERT!(@source b"src/core/SkAlphaRuns.h\0".as_ptr(), 38; @condition b"fRuns[0] > 0\0".as_ptr(); self.fRuns[0] > 0);
+        self.fAlpha[0] == 0 && self.fRuns[self.fRuns[0] as usize] == 0
     }
-
-    /// Reinitialize for a new scanline.
-    pub fn reset(&mut self, width: LengthU32) {
-        let run = u16::try_from(width.get()).unwrap();
-        self.runs[0] = NonZeroU16::new(run);
-        self.runs[width.get() as usize] = None;
-        self.alpha[0] = 0;
-    }
-
-    /// Insert into the buffer a run starting at (x-offset_x).
-    ///
-    /// if start_alpha > 0
-    ///     one pixel with value += start_alpha,
-    ///         max 255
-    /// if middle_count > 0
-    ///     middle_count pixels with value += max_value
-    /// if stop_alpha > 0
-    ///     one pixel with value += stop_alpha
-    ///
-    /// Returns the offset_x value that should be passed on the next call,
-    /// assuming we're on the same scanline. If the caller is switching
-    /// scanlines, then offset_x should be 0 when this is called.
+    // Source: src/core/SkAlphaRuns.h:58-113
     pub fn add(
         &mut self,
-        x: u32,
-        start_alpha: AlphaU8,
+        mut x: usize,
+        start_alpha: u32,
         mut middle_count: usize,
-        stop_alpha: AlphaU8,
-        max_value: u8,
+        stop_alpha: u32,
+        max_value: u32,
         offset_x: usize,
     ) -> usize {
-        let mut x = x as usize;
-
-        let mut runs_offset = offset_x;
-        let mut alpha_offset = offset_x;
-        let mut last_alpha_offset = offset_x;
+        crate::SkASSERT!(@source b"src/core/SkAlphaRuns.h\0".as_ptr(), 61; @condition b"x >= 0 && x + (startAlpha != 0) + middleCount + (stopAlpha != 0) <= fWidth\0".as_ptr(); x + usize::from(start_alpha != 0) + middle_count + usize::from(stop_alpha != 0)
+                <= self.native_width() as usize);
+        crate::SkASSERT!(@source b"src/core/SkAlphaRuns.h\0".as_ptr(), 63; @condition b"fRuns[offsetX] >= 0\0".as_ptr(); self.fRuns[offset_x] >= 0);
+        let mut base = offset_x;
+        let mut last_alpha = base;
         x -= offset_x;
-
         if start_alpha != 0 {
-            Self::break_run(
-                &mut self.runs[runs_offset..],
-                &mut self.alpha[alpha_offset..],
-                x,
-                1,
-            );
-            // I should be able to just add alpha[x] + start_alpha.
-            // However, if the trailing edge of the previous span and the leading
-            // edge of the current span round to the same super-sampled x value,
-            // I might overflow to 256 with this add, hence the funny subtract (crud).
-            let tmp = u16::from(self.alpha[alpha_offset + x]) + u16::from(start_alpha);
-            debug_assert!(tmp <= 256);
-            // was (tmp >> 7), but that seems wrong if we're trying to catch 256
-            self.alpha[alpha_offset + x] = (tmp - (tmp >> 8)) as u8;
-
-            runs_offset += x + 1;
-            alpha_offset += x + 1;
+            Self::Break(&mut self.fRuns[base..], &mut self.fAlpha[base..], x, 1);
+            let tmp = self.fAlpha[base + x] as u32 + start_alpha;
+            crate::SkASSERT!(@source b"src/core/SkAlphaRuns.h\0".as_ptr(), 78; @condition b"tmp <= 256\0".as_ptr(); tmp <= 256);
+            self.fAlpha[base + x] = (tmp - (tmp >> 8)) as u8;
+            base += x + 1;
             x = 0;
+            #[cfg(sk_debug)]
+            self.validate();
         }
-
         if middle_count != 0 {
-            Self::break_run(
-                &mut self.runs[runs_offset..],
-                &mut self.alpha[alpha_offset..],
+            Self::Break(
+                &mut self.fRuns[base..],
+                &mut self.fAlpha[base..],
                 x,
                 middle_count,
             );
-            alpha_offset += x;
-            runs_offset += x;
+            base += x;
             x = 0;
             loop {
-                let a = Self::catch_overflow(
-                    u16::from(self.alpha[alpha_offset]) + u16::from(max_value),
-                );
-                self.alpha[alpha_offset] = a;
-
-                let n = usize::from(self.runs[runs_offset].unwrap().get());
-                debug_assert!(n <= middle_count);
-                alpha_offset += n;
-                runs_offset += n;
+                self.fAlpha[base] = Self::CatchOverflow(self.fAlpha[base] as u32 + max_value);
+                let n = self.fRuns[base] as usize;
+                crate::SkASSERT!(@source b"src/core/SkAlphaRuns.h\0".as_ptr(), 95; @condition b"n <= middleCount\0".as_ptr(); n <= middle_count);
+                base += n;
                 middle_count -= n;
-
                 if middle_count == 0 {
                     break;
                 }
             }
-
-            last_alpha_offset = alpha_offset;
+            #[cfg(sk_debug)]
+            self.validate();
+            last_alpha = base;
         }
-
         if stop_alpha != 0 {
-            Self::break_run(
-                &mut self.runs[runs_offset..],
-                &mut self.alpha[alpha_offset..],
-                x,
-                1,
-            );
-            alpha_offset += x;
-            self.alpha[alpha_offset] += stop_alpha;
-            last_alpha_offset = alpha_offset;
+            Self::Break(&mut self.fRuns[base..], &mut self.fAlpha[base..], x, 1);
+            base += x;
+            self.fAlpha[base] = (self.fAlpha[base] as u32 + stop_alpha) as u8;
+            #[cfg(sk_debug)]
+            self.validate();
+            last_alpha = base;
         }
-
-        // new offset_x
-        last_alpha_offset
+        last_alpha
     }
-
-    /// Break the runs in the buffer at offsets x and x+count, properly
-    /// updating the runs to the right and left.
-    ///
-    /// i.e. from the state AAAABBBB, run-length encoded as A4B4,
-    /// break_run(..., 2, 5) would produce AAAABBBB rle as A2A2B3B1.
-    /// Allows add() to sum another run to some of the new sub-runs.
-    /// i.e. adding ..CCCCC. would produce AADDEEEB, rle as A2D2E3B1.
-    fn break_run(runs: &mut [AlphaRun], alpha: &mut [u8], mut x: usize, count: usize) {
-        debug_assert!(count > 0);
-
-        let orig_x = x;
-        let mut runs_offset = 0;
-        let mut alpha_offset = 0;
-
+    // Source: src/core/SkAlphaRuns.h:126-171
+    pub fn Break(runs: &mut [i16], alpha: &mut [u8], mut x: usize, count: usize) {
+        crate::SkASSERT!(@source b"src/core/SkAlphaRuns.h\0".as_ptr(), 127; @condition b"count > 0 && x >= 0\0".as_ptr(); count > 0);
+        let next = x;
+        let mut base = 0;
         while x > 0 {
-            let n = usize::from(runs[runs_offset].unwrap().get());
-            debug_assert!(n > 0);
-
+            let n = runs[base] as usize;
+            crate::SkASSERT!(@source b"src/core/SkAlphaRuns.h\0".as_ptr(), 137; @condition b"n > 0\0".as_ptr(); runs[base] > 0);
             if x < n {
-                alpha[alpha_offset + x] = alpha[alpha_offset];
-                runs[runs_offset + 0] = NonZeroU16::new(x as u16);
-                runs[runs_offset + x] = NonZeroU16::new((n - x) as u16);
+                alpha[base + x] = alpha[base];
+                runs[base] = x as i16;
+                runs[base + x] = (n - x) as i16;
                 break;
             }
-            runs_offset += n;
-            alpha_offset += n;
+            base += n;
             x -= n;
         }
-
-        runs_offset = orig_x;
-        alpha_offset = orig_x;
+        base = next;
         x = count;
-
         loop {
-            let n = usize::from(runs[runs_offset].unwrap().get());
-            debug_assert!(n > 0);
-
+            let n = runs[base] as usize;
+            crate::SkASSERT!(@source b"src/core/SkAlphaRuns.h\0".as_ptr(), 156; @condition b"n > 0\0".as_ptr(); runs[base] > 0);
             if x < n {
-                alpha[alpha_offset + x] = alpha[alpha_offset];
-                runs[runs_offset + 0] = NonZeroU16::new(x as u16);
-                runs[runs_offset + x] = NonZeroU16::new((n - x) as u16);
+                alpha[base + x] = alpha[base];
+                runs[base] = x as i16;
+                runs[base + x] = (n - x) as i16;
                 break;
             }
-
             x -= n;
             if x == 0 {
                 break;
             }
-
-            runs_offset += n;
-            alpha_offset += n;
+            base += n;
         }
     }
-
-    /// Cut (at offset x in the buffer) a run into two shorter runs with
-    /// matching alpha values.
-    ///
-    /// Used by the RectClipBlitter to trim a RLE encoding to match the
-    /// clipping rectangle.
-    pub fn break_at(alpha: &mut [AlphaU8], runs: &mut [AlphaRun], mut x: i32) {
-        let mut alpha_i = 0;
-        let mut run_i = 0;
+    // Source: src/core/SkAlphaRuns.h:179-194
+    pub fn BreakAt(runs: &mut [i16], alpha: &mut [u8], mut x: usize) {
+        let mut base = 0;
         while x > 0 {
-            let n = runs[run_i].unwrap().get();
-            let n_usize = usize::from(n);
-            let n_i32 = i32::from(n);
-            if x < n_i32 {
-                alpha[alpha_i + x as usize] = alpha[alpha_i];
-                runs[0] = NonZeroU16::new(x as u16);
-                runs[x as usize] = NonZeroU16::new((n_i32 - x) as u16);
+            let n = runs[base] as usize;
+            crate::SkASSERT!(@source b"src/core/SkAlphaRuns.h\0".as_ptr(), 182; @condition b"n > 0\0".as_ptr(); runs[base] > 0);
+            if x < n {
+                alpha[base + x] = alpha[base];
+                runs[base] = x as i16;
+                runs[base + x] = (n - x) as i16;
                 break;
             }
-
-            run_i += n_usize;
-            alpha_i += n_usize;
-            x -= n_i32;
+            base += n;
+            x -= n;
+        }
+    }
+    // Source: src/core/SkAlphaRuns.cpp:11-23
+    pub fn reset(&mut self, width: usize) {
+        debug_assert!(width > 0 && width <= i16::MAX as usize);
+        #[cfg(sk_debug)]
+        self.fRuns[..width].fill(-42);
+        self.fRuns[0] = width as i16;
+        self.fRuns[width] = 0;
+        self.fAlpha[0] = 0;
+        // Source: src/core/SkAlphaRuns.cpp:21
+        #[cfg(sk_debug)]
+        {
+            self.fWidth.write(width as i32);
+            self.width_initialized = true;
+        }
+        #[cfg(sk_debug)]
+        self.validate();
+    }
+    // Source: src/core/SkAlphaRuns.cpp:26-37
+    #[cfg(sk_debug)]
+    pub fn assertValid(&self, y: i32, max_step: i32) {
+        let max = (y + 1) * max_step - i32::from(y == max_step - 1);
+        let mut base = 0;
+        while self.fRuns[base] != 0 {
+            crate::SkASSERT!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 33; @condition b"*alpha <= max\0".as_ptr(); self.fAlpha[base] as i32 <= max);
+            base += self.fRuns[base] as usize;
+        }
+    }
+    // Source: src/core/SkAlphaRuns.cpp:39-56
+    #[cfg(sk_debug)]
+    pub fn dump(&self) {
+        unsafe {
+            crate::SkDebugf!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 43; b"Runs\0".as_ptr());
+        }
+        let mut base = 0;
+        while self.fRuns[base] != 0 {
+            let n = self.fRuns[base] as usize;
+            unsafe {
+                crate::SkDebugf!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 47; b" %02x\0".as_ptr(),self.fAlpha[base] as core::ffi::c_int);
+            }
+            if n > 1 {
+                unsafe {
+                    crate::SkDebugf!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 49; b",%d\0".as_ptr(),n as core::ffi::c_int);
+                }
+            }
+            base += n;
+        }
+        unsafe {
+            crate::SkDebugf!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 54; b"\n\0".as_ptr());
+        }
+    }
+    // Source: src/core/SkAlphaRuns.cpp:58-70
+    #[cfg(sk_debug)]
+    pub fn validate(&self) {
+        #[cfg(sk_debug)]
+        {
+            crate::SkASSERT!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 58; @condition b"fWidth > 0\0".as_ptr(); self.native_width() > 0);
+            let mut count = 0;
+            while self.fRuns[count] != 0 {
+                crate::SkASSERT!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 64; @condition b"*runs > 0\0".as_ptr(); self.fRuns[count] > 0);
+                count += self.fRuns[count] as usize;
+                crate::SkASSERT!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 66; @condition b"count <= fWidth\0".as_ptr(); count <= self.native_width() as usize);
+            }
+            crate::SkASSERT!(@source b"src/core/SkAlphaRuns.cpp\0".as_ptr(), 69; @condition b"count == fWidth\0".as_ptr(); (count) == (self.native_width() as usize));
         }
     }
 }
-
-// Rust compatibility names for the migrated raster API.
-pub use SkAlphaRuns as AlphaRuns;

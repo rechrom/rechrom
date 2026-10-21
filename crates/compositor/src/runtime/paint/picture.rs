@@ -37,7 +37,7 @@ impl<R: CpuSkiaBackend> RecordingSourceTypes for CpuRecordingTypes<R> {
     type RegionBackend = R;
     type DirectlyCompositedImageInfo = DirectlyCompositedImageInfo;
     type DisplayItemList = ContentDisplayItemList<R>;
-    type RasterSource = CpuRasterSource<R>;
+    type RasterSource = NativeRasterSource<R>;
 }
 impl<R: CpuSkiaBackend> RecordingDisplayItemList<DirectlyCompositedImageInfo>
     for ContentDisplayItemList<R>
@@ -63,7 +63,7 @@ impl<R: CpuSkiaBackend> RecordingDisplayItemList<DirectlyCompositedImageInfo>
 }
 /// Source: cc/raster/raster_source.cc:26-40. These are precisely the immutable
 /// metadata values owned by RasterSource; its recording lease remains shared.
-pub struct CpuRasterSource<R: CpuSkiaBackend> {
+pub struct NativeRasterSource<R: CpuSkiaBackend> {
     display_list: Option<Arc<ContentDisplayItemList<R>>>,
     pub background_color: Color4f,
     pub requires_clear: bool,
@@ -76,7 +76,7 @@ pub struct CpuRasterSource<R: CpuSkiaBackend> {
     directly_composited_image_info: Option<DirectlyCompositedImageInfo>,
     debug_name: RwLock<String>,
 }
-impl<R: CpuSkiaBackend> CpuRasterSource<R> {
+impl<R: CpuSkiaBackend> NativeRasterSource<R> {
     pub fn from_recording(recording: &RecordingSource<CpuRecordingTypes<R>>) -> Self {
         let value = recording.RasterSourceFields();
         let source = Self {
@@ -102,22 +102,22 @@ impl<R: CpuSkiaBackend> CpuRasterSource<R> {
     pub fn display_list(&self) -> &Option<Arc<ContentDisplayItemList<R>>> {
         &self.display_list
     }
-    pub fn DebugName(&self) -> CpuRasterDebugName<'_> {
-        CpuRasterDebugName(
+    pub fn DebugName(&self) -> RasterDebugName<'_> {
+        RasterDebugName(
             self.debug_name
                 .read()
                 .expect("native source debug name poisoned"),
         )
     }
 }
-pub struct CpuRasterDebugName<'a>(RwLockReadGuard<'a, String>);
-impl Deref for CpuRasterDebugName<'_> {
+pub struct RasterDebugName<'a>(RwLockReadGuard<'a, String>);
+impl Deref for RasterDebugName<'_> {
     type Target = str;
     fn deref(&self) -> &str {
         self.0.as_str()
     }
 }
-impl<R: CpuSkiaBackend> TilingRasterSource for CpuRasterSource<R> {
+impl<R: CpuSkiaBackend> TilingRasterSource for NativeRasterSource<R> {
     fn IsSolidColor(&self) -> bool {
         self.is_solid_color
     }
@@ -137,7 +137,7 @@ impl<R: CpuSkiaBackend> TilingRasterSource for CpuRasterSource<R> {
         self.recorded_bounds().Intersects(rect)
     }
 }
-impl<R: CpuSkiaBackend> PictureRasterSource for CpuRasterSource<R> {
+impl<R: CpuSkiaBackend> PictureRasterSource for NativeRasterSource<R> {
     type DisplayItemList = ContentDisplayItemList<R>;
     fn GetDisplayItemList(&self) -> &Option<Arc<Self::DisplayItemList>> {
         &self.display_list
@@ -175,11 +175,11 @@ impl<R: CpuSkiaBackend> PictureRasterSource for CpuRasterSource<R> {
 impl<R: CpuSkiaBackend>
     crate::adapter::tile_manager::TileManagerRasterSource<
         crate::runtime::types::CpuCompositorTypes<R>,
-    > for CpuRasterSource<R>
+    > for NativeRasterSource<R>
 {
     type DisplayItemList = ContentDisplayItemList<R>;
     type DebugName<'a>
-        = CpuRasterDebugName<'a>
+        = RasterDebugName<'a>
     where
         Self: 'a;
     fn debug_name(&self) -> Self::DebugName<'_> {
@@ -325,7 +325,7 @@ impl<R: CpuSkiaBackend> super::CpuPaintCanvas<R> for CpuPictureRecorder<R> {
     fn Playback(
         &mut self,
         buffer: &CpuPaintOpBuffer<R>,
-        params: &mut super::CpuPlaybackParams<'_, R>,
+        params: &mut super::RasterPlaybackParams<'_, R>,
         local: bool,
         offsets: Option<&[usize]>,
     ) {

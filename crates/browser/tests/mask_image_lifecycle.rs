@@ -162,7 +162,7 @@ fn artifact_pixels(
         120,
         1.0,
         &mut pixels,
-        renderer::PixelFormat::Rgba8888,
+        renderer_skia::PixelFormat::Rgba8888,
         160,
     )
     .unwrap();

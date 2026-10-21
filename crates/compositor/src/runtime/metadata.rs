@@ -641,7 +641,7 @@ pub struct TransitionDirective {
     pub sequence_id: u32,
     pub kind: TransitionDirectiveType,
     pub shared_elements: Vec<SharedTransitionElement>,
-    pub display_color_spaces: super::resources::CpuDisplayColorSpaces,
+    pub display_color_spaces: super::resources::RasterDisplayColorSpaces,
     pub delay_layer_tree_view_deletion: bool,
 }
 impl<R: super::types::CpuSkiaBackend> FrameMetadataValueTypes

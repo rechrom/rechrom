@@ -2,7 +2,6 @@
 name = "raster"
 version = "0.0.1"
 edition = "2021"
-build = "build.rs"
 
 [dependencies]
 compositor_core = { package = "compositor", path = "../compositor" }
@@ -10,17 +9,11 @@ foundation = { package = "layoutng_foundation", path = "../foundation" }
 image_resource = { path = "../image_resource" }
 layoutng_assembly = { path = "../layoutng_assembly" }
 paint = { path = "../paint", features = ["translation_in_progress"] }
+raster_commands = { path = "../raster_commands" }
 skia = { path = "../skia" }
-font_engine = { path = "../font_engine", optional = true }
 
 [features]
 default = []
-# macOS-only C++ reference oracle. Production uses pure_replay.
-text = []
-font_backend = ["dep:font_engine"]
-source_replay = ["font_backend"]
-pure_replay = []
-profiling = ["pure_replay", "skia/profiling"]
 
 [dev-dependencies]
 font_engine = { path = "../font_engine" }

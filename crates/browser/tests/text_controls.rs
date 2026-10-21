@@ -271,16 +271,16 @@ fn text_control_selection_paints_blue_and_tracks_drag_shift_and_collapse() {
         assert_eq!(edit_selection(&page, id).Start(), 0);
         assert_eq!(edit_selection(&page, id).End(), 9);
         let blue_pixels = |page: &Page| {
-            let mut pixels = vec![0; 640 * 480];
-            raster::surface::RenderDisplayItemListIntoWindowBuffer(
+            let pixels = raster::RasterizePaintArtifactWithScale(
                 &page.CurrentFrame().unwrap().display_items,
                 640,
                 480,
                 1.0,
-                &mut pixels,
-            )
-            .unwrap();
-            pixels.iter().filter(|p| **p & 0xffffff == 0x0066ff).count()
+            );
+            pixels
+                .chunks_exact(4)
+                .filter(|pixel| pixel[..3] == [0x00, 0x66, 0xff])
+                .count()
         };
         assert!(page.Caret().is_none());
         assert!(

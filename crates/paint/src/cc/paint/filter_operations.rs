@@ -2,9 +2,8 @@
 // Copyright 2013 The Chromium Authors. BSD-style license in LICENSE.
 // Source: cc/paint/filter_operations.h:1-112; cc/paint/filter_operations.cc:1-267.
 #![allow(non_snake_case, dead_code)]
-use super::filter_operation::{FilterOperation, FilterType};
-use foundation::gfx::Rect;
-use skia::include::core::SkRRect::SkMatrix3x3;
+use super::filter_operation::{FilterMapTransform, FilterOperation, FilterType};
+use foundation::gfx::{Rect, Vector2dF};
 // Source: cc/paint/filter_operations.h:28-110; cc/paint/filter_operations.cc:23-61.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FilterOperations {
@@ -35,7 +34,7 @@ impl FilterOperations {
         &self.operations_[index]
     }
     // Source: cc/paint/filter_operations.cc:63-88.
-    pub fn MapRect(&self, rect: Rect, ctm: Option<&SkMatrix3x3>) -> Rect {
+    pub fn MapRect(&self, rect: Rect, ctm: Option<&dyn FilterMapTransform>) -> Rect {
         self.operations_
             .iter()
             .fold(rect, |r, op| op.MapRect(r, ctm))
@@ -49,29 +48,32 @@ impl FilterOperations {
         scale: foundation::gfx::Vector2dF,
         origin: foundation::gfx::PointF,
     ) -> Rect {
-        let matrix = SkMatrix3x3 {
-            values: [
-                scale.x(),
-                0.,
-                origin.x() * scale.x(),
-                0.,
-                scale.y(),
-                origin.y() * scale.y(),
-                0.,
-                0.,
-                1.,
-            ],
-        };
-        self.MapRect(rect, Some(&matrix))
+        // SkMatrix::mapVector removes translation, so the source scale-about-
+        // origin matrix maps filter vectors by scale alone. Keep `origin` in
+        // this source-shaped API while carrying only the required semantic
+        // operation across the package boundary.
+        let _ = origin;
+        struct ScaleTransform(Vector2dF);
+        impl FilterMapTransform for ScaleTransform {
+            fn MapVector(&self, x: f32, y: f32) -> (f32, f32) {
+                (x * self.0.x(), y * self.0.y())
+            }
+        }
+        let transform = ScaleTransform(scale);
+        self.MapRect(rect, Some(&transform))
     }
-    pub fn MapRectReverse(&self, rect: Rect, ctm: &SkMatrix3x3) -> Rect {
+    pub fn MapRectReverse(
+        &self,
+        rect: Rect,
+        ctm: Option<&dyn FilterMapTransform>,
+    ) -> Rect {
         self.operations_
             .iter()
             .rev()
             .fold(rect, |r, op| op.MapRectReverse(r, ctm))
     }
-    pub fn ExpandRect(&self, rect: Rect, ctm: &SkMatrix3x3) -> Rect {
-        let mut result = self.MapRect(rect, Some(ctm));
+    pub fn ExpandRect(&self, rect: Rect, ctm: Option<&dyn FilterMapTransform>) -> Rect {
+        let mut result = self.MapRect(rect, ctm);
         result.Union(self.MapRectReverse(rect, ctm));
         result
     }

@@ -13,7 +13,7 @@ use crate::{
         },
     },
     runtime::{
-        cpu_raster::{CpuRasterBuffer, RasterPlayback},
+        raster_execution::{RasterBuffer, RasterPlayback},
         types::{CpuCompositorTypes, CpuSkiaBackend},
     },
 };
@@ -42,39 +42,43 @@ pub trait CpuWorkletImageProvider<R: CpuSkiaBackend> {
 }
 pub struct CpuPlaybackImageProvider<R: CpuSkiaBackend>(pub Box<dyn CpuImageProvider<R> + Send>);
 pub struct CpuWorkletProvider<R: CpuSkiaBackend>(pub Box<dyn CpuWorkletImageProvider<R> + Send>);
-pub struct CpuImageProviderRef<'a, R: CpuSkiaBackend>(pub &'a mut dyn CpuImageProvider<R>);
-impl<R: CpuSkiaBackend> CpuImageProvider<R> for CpuImageProviderRef<'_, R> {
+pub struct RasterImageProviderRef<'a, R: CpuSkiaBackend>(pub &'a mut dyn CpuImageProvider<R>);
+impl<R: CpuSkiaBackend> CpuImageProvider<R> for RasterImageProviderRef<'_, R> {
     fn GetRasterContent(&mut self, image: &CpuDrawImage) -> CpuScopedRasterResult<R> {
         self.0.GetRasterContent(image)
     }
 }
-pub trait CpuRasterFailureHandler: Send + Sync {
+pub trait RasterFailureHandler: Send + Sync {
     fn OnRasterFailure(&self, error: io::Error);
 }
-pub type CpuTileRasterBufferValue<R> = dyn for<'a> CpuRasterBuffer<
-    CpuRasterSource<R>,
+pub type CpuTileRasterBufferValueFor<R> = dyn for<'a> RasterBuffer<
+    NativeRasterSource<R>,
     RasterTransform,
-    CpuImageProviderRef<'a, R>,
+    RasterImageProviderRef<'a, R>,
     ScrollOffsetMap,
 >;
-pub struct CpuTileRasterBuffer<R: CpuSkiaBackend> {
-    external: Box<CpuTileRasterBufferValue<R>>,
-    failure: Arc<dyn CpuRasterFailureHandler>,
+/// The production compositor has one feature-selected Skia value family. Keep
+/// that selection behind the injected pixel boundary; generic cc machinery
+/// continues to use `CpuTileRasterBufferValueFor<R>` internally.
+pub type TileRasterBufferValue = CpuTileRasterBufferValueFor<crate::runtime::skia::SkRegion>;
+pub struct TileRasterBuffer<R: CpuSkiaBackend> {
+    external: Box<CpuTileRasterBufferValueFor<R>>,
+    failure: Arc<dyn RasterFailureHandler>,
 }
-impl<R: CpuSkiaBackend> CpuTileRasterBuffer<R> {
+impl<R: CpuSkiaBackend> TileRasterBuffer<R> {
     pub(crate) fn FromBoxed(
-        external: Box<CpuTileRasterBufferValue<R>>,
-        failure: Arc<dyn CpuRasterFailureHandler>,
+        external: Box<CpuTileRasterBufferValueFor<R>>,
+        failure: Arc<dyn RasterFailureHandler>,
     ) -> Self {
         Self { external, failure }
     }
 
-    pub fn new<T>(external: T, failure: Arc<dyn CpuRasterFailureHandler>) -> Self
+    pub fn new<T>(external: T, failure: Arc<dyn RasterFailureHandler>) -> Self
     where
-        T: for<'a> CpuRasterBuffer<
-                CpuRasterSource<R>,
+        T: for<'a> RasterBuffer<
+                NativeRasterSource<R>,
                 RasterTransform,
-                CpuImageProviderRef<'a, R>,
+                RasterImageProviderRef<'a, R>,
                 ScrollOffsetMap,
             > + 'static,
     {
@@ -102,13 +106,13 @@ impl<R: CpuSkiaBackend> CpuImageProvider<R> for NativeImageProvider<'_, R> {
         self.0.GetRasterContent(image)
     }
 }
-impl<R: CpuSkiaBackend> TileManagerRasterBuffer<CpuCompositorTypes<R>> for CpuTileRasterBuffer<R> {
+impl<R: CpuSkiaBackend> TileManagerRasterBuffer<CpuCompositorTypes<R>> for TileRasterBuffer<R> {
     fn SupportsBackgroundThreadPriority(&self) -> bool {
         self.external.SupportsBackgroundThreadPriority()
     }
     fn Playback(&mut self, request: RasterPlaybackRequest<'_, CpuCompositorTypes<R>>) {
         let mut native = NativeImageProvider(request.settings.image_provider);
-        let mut provider = CpuImageProviderRef(&mut native);
+        let mut provider = RasterImageProviderRef(&mut native);
         let result = self.external.Playback(RasterPlayback {
             source: request.source,
             content_rect: request.content_rect,

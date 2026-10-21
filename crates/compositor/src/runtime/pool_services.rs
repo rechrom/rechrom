@@ -1,13 +1,13 @@
-//! Independent CPU capabilities retained by the canonical ResourcePool.
+//! Independent raster capabilities retained by the canonical ResourcePool.
 //! This object contains no pool/tree/host reference. The provider clone names
 //! the same native import/export allocation and release always has a live client.
 use super::{
-    client_resources::CpuClientResources,
+    client_resources::RasterClientResources,
     execution::{EngineTask, EngineTaskQueue},
     native_services::NativeEventSink,
     resources::{
-        CpuResourceSource, CpuSharedImage, CpuSyncToken, CpuSynchronizationType,
-        CpuTransferableResource,
+        RasterResourceSource, RasterSharedImage, RasterSyncToken, RasterSynchronizationType,
+        RasterTransferableResource,
     },
 };
 use crate::{
@@ -25,25 +25,25 @@ use std::sync::{
 };
 
 #[derive(Clone, Copy)]
-pub(crate) struct CpuPoolConfig {
+pub(crate) struct RasterPoolConfig {
     pub prefer_exact_size_reuse: bool,
     pub invalidate_resources_on_size_change: bool,
 }
-pub(crate) struct CpuPoolServices {
+pub(crate) struct RasterPoolServices {
     identity: ResourcePoolId,
-    resources: CpuClientResources,
+    resources: RasterClientResources,
     executor: Arc<dyn CompositorExecutor>,
     commands: EngineTaskQueue,
-    config: CpuPoolConfig,
+    config: RasterPoolConfig,
     events: Arc<dyn NativeEventSink>,
 }
-impl CpuPoolServices {
+impl RasterPoolServices {
     pub(crate) fn new(
         identity: ResourcePoolId,
-        resources: CpuClientResources,
+        resources: RasterClientResources,
         executor: Arc<dyn CompositorExecutor>,
         commands: EngineTaskQueue,
-        config: CpuPoolConfig,
+        config: RasterPoolConfig,
         events: Arc<dyn NativeEventSink>,
     ) -> Self {
         Self {
@@ -56,25 +56,25 @@ impl CpuPoolServices {
         }
     }
 }
-impl ResourcePoolPlatform<NativeCompositorTypes> for CpuPoolServices {
+impl ResourcePoolPlatform<NativeCompositorTypes> for RasterPoolServices {
     fn MakeTransferableResource(
         &self,
-        image: CpuSharedImage,
-        source: CpuResourceSource,
-        sync_token: CpuSyncToken,
-    ) -> CpuTransferableResource {
+        image: RasterSharedImage,
+        source: RasterResourceSource,
+        sync_token: RasterSyncToken,
+    ) -> RasterTransferableResource {
         // Source value constructor: components/viz/common/resources/transferable_resource.cc:28-41.
-        CpuTransferableResource {
+        RasterTransferableResource {
             id: ResourceId::default(),
             shared_image: image,
             source,
             sync_token,
-            synchronization_type: CpuSynchronizationType::SyncToken,
+            synchronization_type: RasterSynchronizationType::SyncToken,
         }
     }
     fn ImportResource(
         &self,
-        resource: CpuTransferableResource,
+        resource: RasterTransferableResource,
         callback: ResourcePoolReleaseCallback,
     ) -> ResourceId {
         assert_eq!(callback.owner.id, self.identity, "source pool import owner");
@@ -88,10 +88,10 @@ impl ResourcePoolPlatform<NativeCompositorTypes> for CpuPoolServices {
         self.resources.RemovePoolResource(self.identity, id, client);
     }
     fn FlushPendingWork(&self) {
-        // CPU software storage has no deferred GPU command stream to flush.
+        // The current host-readable storage has no deferred command stream to flush.
     }
 }
-impl ResourcePoolTiming for CpuPoolServices {
+impl ResourcePoolTiming for RasterPoolServices {
     fn DefaultTickClock(&self) -> PoolClockId {
         PoolClockId(1)
     }
@@ -114,21 +114,21 @@ impl ResourcePoolTiming for CpuPoolServices {
         );
     }
 }
-struct CpuPoolTrack;
-impl PoolTracingTrack for CpuPoolTrack {}
-struct CpuPoolScope {
+struct RasterPoolTrack;
+impl PoolTracingTrack for RasterPoolTrack {}
+struct RasterPoolScope {
     events: Arc<dyn NativeEventSink>,
     name: &'static str,
 }
-impl PoolTraceScope for CpuPoolScope {}
-impl Drop for CpuPoolScope {
+impl PoolTraceScope for RasterPoolScope {}
+impl Drop for RasterPoolScope {
     fn drop(&mut self) {
         self.events
             .Emit("compositor.resource_pool", format!("{} end", self.name));
     }
 }
 static NEXT_POOL_TRACE_ID: AtomicU64 = AtomicU64::new(1);
-impl ResourcePoolDiagnostics for CpuPoolServices {
+impl ResourcePoolDiagnostics for RasterPoolServices {
     fn GetNextGlobalTraceId(&self) -> u64 {
         NEXT_POOL_TRACE_ID
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
@@ -144,7 +144,7 @@ impl ResourcePoolDiagnostics for CpuPoolServices {
             "compositor.resource_pool",
             format!("track {name} id={tracing_id} disable_sibling_merge={disable_sibling_merge}"),
         );
-        Box::new(CpuPoolTrack)
+        Box::new(RasterPoolTrack)
     }
     fn RegisterDumpProvider(&self, owner: WeakResourcePoolId, name: &str) {
         self.events.Emit(
@@ -184,7 +184,7 @@ impl ResourcePoolDiagnostics for CpuPoolServices {
         };
         self.events
             .Emit("compositor.resource_pool", format!("{name} begin"));
-        Box::new(CpuPoolScope {
+        Box::new(RasterPoolScope {
             events: self.events.clone(),
             name,
         })

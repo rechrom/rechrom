@@ -14,8 +14,8 @@ use super::{
     native_frame_sink::{NativeFrameSinkEndpoint, NativeFrameSinkOperationsHandle},
     native_host_lifecycle::NativeHostLifecycle,
     native_services::{NativeEventSink, NativeTaskRunnerServices},
-    pool_services::{CpuPoolConfig, CpuPoolServices},
-    tile_execution::CpuTileExecution,
+    pool_services::{RasterPoolConfig, RasterPoolServices},
+    tile_execution::TileExecution,
 };
 use crate::{
     adapter::{
@@ -38,7 +38,7 @@ use crate::{
         input::MutatorHost,
         metadata::FrameTimingDetails,
         paint::{CpuDrawImage, CpuPaintImage},
-        resources::{CpuColorSpace, CpuReturnedResource},
+        resources::{RasterColorSpace, RasterReturnedResource},
         types::{FrameSinkId, LocalSurfaceId},
     },
     NativeCompositorTypes,
@@ -124,7 +124,7 @@ impl HostImplResourceReturnServices<NativeCompositorTypes> for NativeHostFrameSi
     fn ReceiveReturnsFromParent(
         &mut self,
         provider: &mut ClientResourceProvider<NativeCompositorTypes>,
-        resources: Vec<CpuReturnedResource>,
+        resources: Vec<RasterReturnedResource>,
         pool: Option<&mut crate::cc::resources::resource_pool::ResourcePool<NativeCompositorTypes>>,
         client: &mut dyn HostUIResourceReleaseClient<NativeCompositorTypes>,
     ) {
@@ -165,7 +165,7 @@ impl HostFrameSinkCallbackServices<NativeCompositorTypes> for NativeHostFrameSin
 pub(crate) struct NativeHostFrameSinkConfig {
     pub send_explicit_decode_requests_immediately: bool,
     pub new_content_per_frame: bool,
-    pub pool: CpuPoolConfig,
+    pub pool: RasterPoolConfig,
 }
 
 /// The complete HostImpl G facade. Frame-sink and resource operations are real
@@ -177,8 +177,8 @@ pub(crate) struct NativeHostFrameSinkServices {
     callbacks: NativeHostFrameSinkCallbacks,
     lifecycle: Arc<NativeHostLifecycle>,
     events: Arc<dyn NativeEventSink>,
-    resources: super::client_resources::CpuClientResources,
-    tile_execution: Arc<Mutex<CpuTileExecution<super::skia::SkRegion>>>,
+    resources: super::client_resources::RasterClientResources,
+    tile_execution: Arc<Mutex<TileExecution<super::skia::SkRegion>>>,
     commands: EngineTaskQueue,
     config: NativeHostFrameSinkConfig,
     timing: Arc<super::native_scheduler::NativeTimingHistory>,
@@ -190,8 +190,8 @@ impl NativeHostFrameSinkServices {
         endpoint: Arc<Mutex<NativeFrameSinkEndpoint>>,
         lifecycle: Arc<NativeHostLifecycle>,
         events: Arc<dyn NativeEventSink>,
-        resources: super::client_resources::CpuClientResources,
-        tile_execution: Arc<Mutex<CpuTileExecution<super::skia::SkRegion>>>,
+        resources: super::client_resources::RasterClientResources,
+        tile_execution: Arc<Mutex<TileExecution<super::skia::SkRegion>>>,
         task_runners: Arc<NativeTaskRunnerServices>,
         commands: EngineTaskQueue,
         config: NativeHostFrameSinkConfig,
@@ -249,7 +249,7 @@ impl HostImplResourceReturnServices<NativeCompositorTypes> for NativeHostFrameSi
     fn ReceiveReturnsFromParent(
         &mut self,
         provider: &mut ClientResourceProvider<NativeCompositorTypes>,
-        resources: Vec<CpuReturnedResource>,
+        resources: Vec<RasterReturnedResource>,
         pool: Option<&mut crate::cc::resources::resource_pool::ResourcePool<NativeCompositorTypes>>,
         client: &mut dyn HostUIResourceReleaseClient<NativeCompositorTypes>,
     ) {
@@ -303,7 +303,7 @@ impl HostImplGServices<NativeCompositorTypes> for NativeHostFrameSinkServices {
         image: &CpuDrawImage,
         scale_adjustment: f32,
         frame_index: usize,
-        color: HostTargetColorParams<CpuColorSpace>,
+        color: HostTargetColorParams<RasterColorSpace>,
     ) -> CpuDrawImage {
         let mut result = image.clone();
         result.scale = crate::adapter::geometry::Vector2dF::new(
@@ -416,7 +416,7 @@ impl HostImplGServices<NativeCompositorTypes> for NativeHostFrameSinkServices {
             .Resolve(runner)
             .expect("resource-pool runner identity")
             .clone();
-        let services = Arc::new(CpuPoolServices::new(
+        let services = Arc::new(RasterPoolServices::new(
             id,
             self.resources.clone(),
             executor,
@@ -560,7 +560,7 @@ impl HostImplGServices<NativeCompositorTypes> for NativeHostFrameSinkServices {
     fn DelegateReturnResource(
         &mut self,
         delegate: HostImplDelegateId,
-        resource: CpuReturnedResource,
+        resource: RasterReturnedResource,
     ) {
         self.lifecycle.ReturnResource(delegate, resource)
     }

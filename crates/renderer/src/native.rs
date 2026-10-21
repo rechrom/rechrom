@@ -20,7 +20,7 @@ pub struct RenderUpdate {
 }
 
 /// Backend-owned target and storage keep the management core independent of
-/// CPU pixel layouts or a concrete drawing library. The aggregate is borrowed.
+/// backend storage layouts or a concrete drawing library. The aggregate is borrowed.
 pub struct Renderer<B: DirectRendererBackend> {
     direct: DirectRenderer<B>,
 }
@@ -41,9 +41,15 @@ impl<B: DirectRendererBackend> Renderer<B> {
             .is_some()
             .then(std::time::Instant::now);
         let viewport = self.direct.backend.ValidateTarget(input, &target)?;
-        self.direct.DrawFrame(input, viewport)?;
+        {
+            let _draw = browser_tracing::span("renderer", "Renderer.DrawFrame");
+            self.direct.DrawFrame(input, viewport)?;
+        }
         let passes = started.map(|_| std::time::Instant::now());
-        let update = self.direct.backend.PublishFrame(input, target)?;
+        let update = {
+            let _publish = browser_tracing::span("renderer", "Renderer.PublishFrame");
+            self.direct.backend.PublishFrame(input, target)?
+        };
         if let (Some(started), Some(passes)) = (started, passes) {
             eprintln!("renderer-profile passes_ms={:.3} root_ms={:.3} total_ms={:.3} passes={} quads={} damage_pixels={} tiles={} tile_ms={:.3} pictures={} picture_ms={:.3} solids={} solid_ms={:.3}",
                 (passes-started).as_secs_f64()*1000., passes.elapsed().as_secs_f64()*1000., started.elapsed().as_secs_f64()*1000.,

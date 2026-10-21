@@ -79,11 +79,16 @@ impl<
                 }
                 continue;
             };
+            let old = &self.old_display_items_[old_index];
             let mut reason = new.GetPaintInvalidationReason();
+            if reason == Reason::kNone
+                && old.ImageContentRevisions() != new.ImageContentRevisions()
+            {
+                reason = Reason::kImage;
+            }
             if !IsFullPaintInvalidationReason(reason) && old_index < latest {
                 reason = Reason::kReordered;
             }
-            let old = &self.old_display_items_[old_index];
             if reason != Reason::kNone && (old.DrawsContent() || new.DrawsContent()) {
                 let value = clients.entry(new.ClientId()).or_default();
                 if old.IsTombstone() || old.DrawsContent() {

@@ -116,7 +116,7 @@ fn pixels(page: &Page, artifact: &std::sync::Arc<PaintArtifact>) -> Vec<u32> {
         240,
         1.0,
         &mut result,
-        renderer::PixelFormat::Rgba8888,
+        renderer_skia::PixelFormat::Rgba8888,
         320,
     )
     .unwrap();

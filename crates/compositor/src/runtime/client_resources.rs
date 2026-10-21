@@ -3,7 +3,7 @@
 //! platform capability. Callback targets are borrowed per call, never retained.
 use super::{
     host_owners::{NativeClientResourceProvider, NativePoolReleaseClient},
-    resources::{CpuReturnedResource, CpuSyncToken, CpuTransferableResource},
+    resources::{RasterReturnedResource, RasterSyncToken, RasterTransferableResource},
 };
 use crate::{
     adapter::{
@@ -31,11 +31,11 @@ enum Release {
     Pool(ResourcePoolReleaseCallback),
 }
 struct Imported {
-    resource: CpuTransferableResource,
+    resource: RasterTransferableResource,
     release: Release,
     exported_count: i32,
     marked_for_deletion: bool,
-    returned_sync_token: CpuSyncToken,
+    returned_sync_token: RasterSyncToken,
     returned_lost: bool,
 }
 struct ProviderState {
@@ -56,8 +56,8 @@ struct ReleaseCapabilities {
     threaded_release_callbacks_supported: bool,
 }
 #[derive(Clone)]
-pub(crate) struct CpuClientResources(Arc<Mutex<ProviderState>>);
-impl CpuClientResources {
+pub(crate) struct RasterClientResources(Arc<Mutex<ProviderState>>);
+impl RasterClientResources {
     pub(crate) fn new() -> Self {
         // Source dependency: client_resource_provider.h:171-182, resource_id.h:32-46.
         Self(Arc::new(Mutex::new(ProviderState {
@@ -109,7 +109,7 @@ impl CpuClientResources {
         let _ = id;
     }
     // Source dependency: client_resource_provider.cc:343-359.
-    fn Import(&self, mut resource: CpuTransferableResource, release: Release) -> ResourceId {
+    fn Import(&self, mut resource: RasterTransferableResource, release: Release) -> ResourceId {
         let mut state = self.0.lock().expect("native client resource provider");
         let id = ResourceId(state.next_id);
         state.next_id = state
@@ -136,7 +136,7 @@ impl CpuClientResources {
     }
     pub(crate) fn ImportPoolResource(
         &self,
-        resource: CpuTransferableResource,
+        resource: RasterTransferableResource,
         callback: ResourcePoolReleaseCallback,
     ) -> ResourceId {
         self.Import(resource, Release::Pool(callback))
@@ -210,10 +210,10 @@ impl CpuClientResources {
         }
     }
 }
-impl HostUIResourceProvider<NativeCompositorTypes> for CpuClientResources {
+impl HostUIResourceProvider<NativeCompositorTypes> for RasterClientResources {
     fn ImportResource(
         &mut self,
-        resource: CpuTransferableResource,
+        resource: RasterTransferableResource,
         release: HostUIResourceReleaseTask,
     ) -> ResourceId {
         self.Import(resource, Release::Ui(release))
@@ -232,7 +232,7 @@ impl HostUIResourceProvider<NativeCompositorTypes> for CpuClientResources {
         }
     }
 }
-impl NativeClientResourceProvider<NativeCompositorTypes> for CpuClientResources {
+impl NativeClientResourceProvider<NativeCompositorTypes> for RasterClientResources {
     fn CreateScopedBatchResourcesRelease(
         &mut self,
         enabled: bool,
@@ -282,7 +282,7 @@ impl NativeClientResourceProvider<NativeCompositorTypes> for CpuClientResources 
     }
     fn ReceiveReturnsFromParent(
         &mut self,
-        resources: Vec<CpuReturnedResource>,
+        resources: Vec<RasterReturnedResource>,
         pool: Option<&mut dyn NativePoolReleaseClient>,
         client: &mut dyn HostUIResourceReleaseClient<NativeCompositorTypes>,
     ) {
@@ -301,7 +301,7 @@ impl NativeClientResourceProvider<NativeCompositorTypes> for CpuClientResources 
                 if imported.exported_count != 0 {
                     continue;
                 }
-                // CpuReturnedResource already contains the actual EndImport
+                // RasterReturnedResource already contains the actual EndImport
                 // completion token produced by the transported shared image.
                 if returned.sync_token.HasData() {
                     imported.returned_sync_token = returned.sync_token;
@@ -343,7 +343,7 @@ impl NativeClientResourceProvider<NativeCompositorTypes> for CpuClientResources 
     fn PrepareSendToParent(
         &mut self,
         resources: &[ResourceId],
-        output: &mut Vec<CpuTransferableResource>,
+        output: &mut Vec<RasterTransferableResource>,
         interface: HostSharedImageInterfaceId,
     ) {
         // Source dependency: client_resource_provider.cc:230-273. CPU tokens
@@ -376,7 +376,7 @@ impl NativePoolReleaseClient for ResidentPoolRelease<'_> {
     fn OnPoolResourceReleased(
         &mut self,
         callback: ResourcePoolReleaseCallback,
-        token: &CpuSyncToken,
+        token: &RasterSyncToken,
         lost: bool,
     ) {
         self.0.RunReleaseCallback(callback, token, lost);
@@ -387,7 +387,7 @@ impl NativePoolReleaseClient for ResidentPoolRelease<'_> {
 // Imports in this CPU provider register only impl release callbacks, matching
 // its ImportResource call sites. There are no main-thread release callbacks to
 // flush; the same provider's batch flag still resets at source scope exit.
-struct NativeBatchResourceRelease(CpuClientResources);
+struct NativeBatchResourceRelease(RasterClientResources);
 impl crate::adapter::client_layer_tree_host_impl::ClientBatchResourceRelease
     for NativeBatchResourceRelease
 {

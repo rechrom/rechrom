@@ -18,7 +18,7 @@ use super::{
     native_animation::NativeAnimationOwner,
     native_metrics::NativeMetricsServices,
     native_services::NativeTaskRunnerServices,
-    resources::CpuColorSpace,
+    resources::RasterColorSpace,
     types::LocalSurfaceId,
 };
 use crate::{
@@ -285,7 +285,7 @@ impl super::host_owners::NativeChildLocalSurfaceIdAllocator for CpuChildLocalSur
 
 struct CpuColorSpaceCache {
     capacity: usize,
-    entries: Vec<(CpuColorSpace, bool)>,
+    entries: Vec<(RasterColorSpace, bool)>,
 }
 
 impl CpuColorSpaceCache {
@@ -297,15 +297,15 @@ impl CpuColorSpaceCache {
     }
 }
 
-impl HostColorSpaceCache<CpuColorSpace> for CpuColorSpaceCache {
-    fn Get(&mut self, key: &CpuColorSpace) -> Option<&bool> {
+impl HostColorSpaceCache<RasterColorSpace> for CpuColorSpaceCache {
+    fn Get(&mut self, key: &RasterColorSpace) -> Option<&bool> {
         let index = self.entries.iter().position(|(entry, _)| entry == key)?;
         let entry = self.entries.remove(index);
         self.entries.push(entry);
         self.entries.last().map(|(_, value)| value)
     }
 
-    fn Put(&mut self, key: CpuColorSpace, value: bool) {
+    fn Put(&mut self, key: RasterColorSpace, value: bool) {
         if self.capacity == 0 {
             return;
         }

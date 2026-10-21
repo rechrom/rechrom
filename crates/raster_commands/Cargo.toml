@@ -1,0 +1,9 @@
+[package]
+name = "raster_commands"
+version = "0.0.1"
+edition = "2021"
+publish = false
+license = "BSD-3-Clause"
+
+[lib]
+path = "src/lib.rs"

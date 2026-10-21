@@ -9,14 +9,17 @@ use crate::{
         layer_tree_impl::Color4f,
         prioritized_tile::ScrollOffsetMap,
     },
-    runtime::paint_services::{CpuPaintFeatures, CpuPaintPlatform, CpuPaintServices},
+    runtime::{
+        paint_services::{CpuPaintFeatures, CpuPaintPlatform, CpuPaintServices},
+        skia::SkRegion,
+    },
 };
 use paint::cc::paint::{
     paint_op_buffer::PaintOpBufferMetadata,
     paint_op_buffer_iterator::{PaintOpBufferView, PaintOpView},
     solid_color_analyzer::SolidColorAnalyzer,
 };
-use skia::{include::core::SkRegion::SkRegion, BlendMode};
+use paint::cc::paint::blend_mode::BlendMode;
 use std::{
     collections::BTreeMap,
     sync::{
@@ -268,7 +271,7 @@ impl Recorder {
     fn record(
         &mut self,
         b: &CpuPaintOpBuffer<SkRegion>,
-        p: &mut CpuPlaybackParams<'_, SkRegion>,
+        p: &mut RasterPlaybackParams<'_, SkRegion>,
         offsets: Option<&[usize]>,
     ) {
         use paint::cc::paint::discardable_image_map::{
@@ -318,7 +321,7 @@ impl CpuPaintCanvas<SkRegion> for Recorder {
     fn Playback(
         &mut self,
         b: &CpuPaintOpBuffer<SkRegion>,
-        p: &mut CpuPlaybackParams<'_, SkRegion>,
+        p: &mut RasterPlaybackParams<'_, SkRegion>,
         _: bool,
         offsets: Option<&[usize]>,
     ) {

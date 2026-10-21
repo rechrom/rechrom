@@ -12,7 +12,7 @@ use crate::common::{
 use crate::service::surfaces::surface_dependency_deadline::SurfaceDependencyDeadline;
 use compositor_core::adapter::geometry::Rect;
 use compositor_core::runtime::frame::RenderPassId;
-use compositor_core::runtime::resources::CpuReturnedResource;
+use compositor_core::runtime::resources::RasterReturnedResource;
 use compositor_core::{NativeCompositorFrame, NativeTransferableResource};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Instant;
@@ -112,7 +112,7 @@ pub struct Surface {
     last_sent_frame_token_: u32,
     pending_frame_data_change_reason_: PendingFrameDataChangeReason,
     frame_activation_reason_: FrameActivationReason,
-    retired_resources_: Vec<CpuReturnedResource>,
+    retired_resources_: Vec<RasterReturnedResource>,
     closed_: bool,
 }
 
@@ -470,10 +470,10 @@ impl Surface {
         self.retired_resources_
             .extend(Self::ReturnedResources(frame));
     }
-    pub fn TakeReturnedResources(&mut self) -> Vec<CpuReturnedResource> {
+    pub fn TakeReturnedResources(&mut self) -> Vec<RasterReturnedResource> {
         std::mem::take(&mut self.retired_resources_)
     }
-    pub fn ReturnedResources(frame: FrameData) -> Vec<CpuReturnedResource> {
+    pub fn ReturnedResources(frame: FrameData) -> Vec<RasterReturnedResource> {
         frame
             .frame
             .resource_list

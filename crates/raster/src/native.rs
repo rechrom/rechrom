@@ -1,31 +1,35 @@
-//! Native cc-selected CPU raster execution and immutable resource leases.
+//! Native cc-selected raster execution and immutable resource leases.
 //! No layerization, tile-priority, cancellation, graph or compositor state lives
 //! here. The only inputs are the canonical RasterPlayback and output allocation.
 #![allow(non_snake_case)]
-mod canvas;
-mod ui;
+mod backend;
+mod translated;
+pub use translated::{
+    BuildTranslatedFilterOperations, RasterizePaintArtifact, RasterizePaintArtifactTransparent,
+    RasterizePaintArtifactWithScale, ReplayDisplayItemListIntoTranslatedTarget,
+};
+mod ui_translated;
+use backend::{RasterBackend, RasterBackendTarget};
 use compositor_core::{
     adapter::{
-        geometry::{AxisTransform2d, Rect, Size},
+        geometry::{AxisTransform2d, Size},
         layer_tree_impl::ResourceId,
         prioritized_tile::ScrollOffsetMap,
         resource_pool::{ResourcePoolMemoryDump, SharedImageTracingImportance},
         resource_types::{SharedImageFormat, SinglePlaneFormat},
     },
     runtime::{
-        cpu_raster::{
-            CpuRasterBuffer, CpuRasterBufferProvider, CpuRasterResourceLease,
-            CpuRasterResourceProvider, RasterPlayback,
+        raster_execution::{
+            RasterBuffer, RasterBufferProviderBackend, RasterResourceLease, RasterPlayback,
         },
-        paint::{CpuImageProviderRef, CpuRasterSource, RasterTransform},
+        paint::{RasterImageProviderRef, NativeRasterSource, RasterTransform},
         resources::{
-            CommandBufferNamespace, CpuDumpGuid, CpuSharedImage, CpuSyncToken, CpuWriteMapping,
+            CommandBufferNamespace, RasterDumpGuid, RasterSharedImage, RasterSyncToken, RasterWriteMapping,
             NativeSharedImage,
         },
         skia::SkRegion,
     },
 };
-use skia::{src::core::SkCanvas::RasterImageCache, PixelFormat};
 use std::{
     collections::HashMap,
     io,
@@ -35,105 +39,124 @@ use std::{
     },
 };
 
-/// Actual immutable pixel allocation, shared without pixel readback/copy.
-pub struct CpuPixels {
+/// Current backend's immutable host-memory resource. This representation is
+/// private to `raster`; compositor and Viz retain only `RasterResourceLease`.
+struct HostMemoryResource {
     resource: ResourceId,
     size: Size,
-    format: PixelFormat,
+    format: SharedImageFormat,
     row_bytes: usize,
     pixels: Vec<u8>,
     opaque: bool,
     content_id: u64,
 }
-impl CpuRasterResourceLease for CpuPixels {
-    type PixelFormat = PixelFormat;
+impl RasterResourceLease for HostMemoryResource {
     fn resource_id(&self) -> ResourceId {
         self.resource
     }
     fn size(&self) -> Size {
         self.size
     }
-    fn format(&self) -> PixelFormat {
+    fn format(&self) -> SharedImageFormat {
         self.format
-    }
-    fn row_bytes(&self) -> usize {
-        self.row_bytes
     }
     fn is_opaque(&self) -> bool {
         self.opaque
     }
-    fn pixels(&self) -> &[u8] {
-        &self.pixels
+    fn backend_resource(&self) -> &(dyn std::any::Any + Send + Sync) {
+        self
     }
 }
-#[derive(Clone)]
-pub struct CpuPixelLease(Arc<CpuPixels>);
-impl CpuRasterResourceLease for CpuPixelLease {
-    type PixelFormat = PixelFormat;
-    fn resource_id(&self) -> ResourceId {
-        self.0.resource_id()
+
+/// Call-scoped mapping returned to a renderer that needs host-readable bytes.
+/// The compositor and Viz never see this value. A future backend may provide a
+/// different mapping implementation without changing their contracts.
+pub struct RasterReadView<'a> {
+    size: Size,
+    format: SharedImageFormat,
+    row_bytes: usize,
+    bytes: &'a [u8],
+}
+impl RasterReadView<'_> {
+    pub fn size(&self) -> Size {
+        self.size
     }
-    fn size(&self) -> Size {
-        self.0.size()
+    pub fn format(&self) -> SharedImageFormat {
+        self.format
     }
-    fn format(&self) -> PixelFormat {
-        self.0.format()
+    pub fn row_bytes(&self) -> usize {
+        self.row_bytes
     }
-    fn row_bytes(&self) -> usize {
-        self.0.row_bytes()
+    pub fn bytes(&self) -> &[u8] {
+        self.bytes
     }
-    fn is_opaque(&self) -> bool {
-        self.0.is_opaque()
-    }
-    fn pixels(&self) -> &[u8] {
-        self.0.pixels()
-    }
+}
+
+/// Maps an opaque raster resource for the current host-readable renderer.
+/// Backend representation stays inside this crate; failure means the selected
+/// renderer and resource backend are incompatible.
+pub fn MapResourceForRead(resource: &dyn RasterResourceLease) -> io::Result<RasterReadView<'_>> {
+    let resource = resource
+        .backend_resource()
+        .downcast_ref::<HostMemoryResource>()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "raster resource is not host-readable",
+            )
+        })?;
+    Ok(RasterReadView {
+        size: resource.size,
+        format: resource.format,
+        row_bytes: resource.row_bytes,
+        bytes: &resource.pixels,
+    })
 }
 struct AllocationState {
-    pixels: Option<Arc<CpuPixels>>,
+    pixels: Option<Arc<HostMemoryResource>>,
     rasterizing: bool,
-    destruction_token: CpuSyncToken,
+    destruction_token: RasterSyncToken,
 }
 struct Allocation {
     resource: ResourceId,
     size: Size,
-    format: PixelFormat,
-    creation: CpuSyncToken,
+    format: SharedImageFormat,
+    creation: RasterSyncToken,
     completed: AtomicU64,
     release_counter: Arc<AtomicU64>,
     state: Mutex<AllocationState>,
 }
 /// Exclusive write ownership of the very same native N32 allocation. The
-/// Vec is moved out of its sole published CpuPixels owner, never copied. The
+/// Vec is moved out of its sole published host-memory owner, never copied. The
 /// independent command-buffer counter is an execution capability, not a
 /// retained provider/host/tree reference.
-struct CpuMappedWrite {
+struct HostMemoryWrite {
     allocation: Arc<Allocation>,
-    pixels: Option<CpuPixels>,
+    pixels: Option<HostMemoryResource>,
 }
-impl CpuWriteMapping for CpuMappedWrite {
+impl RasterWriteMapping for HostMemoryWrite {
     fn size(&self) -> Size {
         self.allocation.size
     }
-    fn format(&self) -> PixelFormat {
+    fn format(&self) -> SharedImageFormat {
         self.allocation.format
     }
     fn row_bytes(&self) -> usize {
         self.pixels
             .as_ref()
-            .expect("live CPU write lease")
+            .expect("live raster write lease")
             .row_bytes
     }
     fn bytes_mut(&mut self) -> &mut [u8] {
-        &mut self.pixels.as_mut().expect("live CPU write lease").pixels
+        &mut self.pixels.as_mut().expect("live raster write lease").pixels
     }
 }
-impl Drop for CpuMappedWrite {
+impl Drop for HostMemoryWrite {
     fn drop(&mut self) {
         let mut pixels = self
             .pixels
             .take()
-            .expect("CPU write lease published exactly once");
+            .expect("raster write lease published exactly once");
         pixels.opaque = pixels_opaque(&pixels.pixels);
         let mut state = self
             .allocation
@@ -151,16 +174,16 @@ impl Drop for CpuMappedWrite {
     }
 }
 impl NativeSharedImage for Allocation {
-    fn MapCpuWrite(self: Arc<Self>) -> io::Result<Box<dyn CpuWriteMapping>> {
+    fn MapRasterWrite(self: Arc<Self>) -> io::Result<Box<dyn RasterWriteMapping>> {
         let pixels = {
             let mut state = self
                 .state
                 .lock()
-                .map_err(|_| io::Error::other("CPU allocation lock poisoned"))?;
+                .map_err(|_| io::Error::other("raster allocation lock poisoned"))?;
             if state.rasterizing {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
-                    "CPU allocation already has an exclusive raster/write lease",
+                    "raster allocation already has an exclusive raster/write lease",
                 ));
             }
             let mut pixels = match state.pixels.take() {
@@ -170,7 +193,7 @@ impl NativeSharedImage for Allocation {
                         state.pixels = Some(pixels);
                         return Err(io::Error::new(
                             io::ErrorKind::WouldBlock,
-                            "CPU allocation still has a live immutable read lease",
+                            "raster allocation still has a live immutable read lease",
                         ));
                     }
                 },
@@ -179,7 +202,7 @@ impl NativeSharedImage for Allocation {
                     let mut bytes = Vec::new();
                     bytes.try_reserve_exact(len).map_err(io::Error::other)?;
                     bytes.resize(len, 0);
-                    CpuPixels {
+                    HostMemoryResource {
                         resource: self.resource,
                         size: self.size,
                         format: self.format,
@@ -196,128 +219,89 @@ impl NativeSharedImage for Allocation {
             state.rasterizing = true;
             pixels
         };
-        Ok(Box::new(CpuMappedWrite {
+        Ok(Box::new(HostMemoryWrite {
             allocation: self,
             pixels: Some(pixels),
         }))
     }
-    fn CpuRasterAllocationId(&self) -> ResourceId {
+    fn RasterAllocationId(&self) -> ResourceId {
         self.resource
     }
-    fn creation_sync_token(&self) -> CpuSyncToken {
+    fn creation_sync_token(&self) -> RasterSyncToken {
         self.creation
     }
-    fn EndImport(&self, _token: &CpuSyncToken) -> CpuSyncToken {
-        // CPU writes are complete before publication. The acquired release point
+    fn EndImport(&self, _token: &RasterSyncToken) -> RasterSyncToken {
+        // raster writes are complete before publication. The acquired release point
         // belongs to this real in-process allocation and execution sequence.
         let mut token = self.creation;
         token.release_count = self.completed.load(Ordering::Acquire);
         token.verified_flush = true;
         token
     }
-    fn UpdateDestructionSyncToken(&self, token: &CpuSyncToken) {
+    fn UpdateDestructionSyncToken(&self, token: &RasterSyncToken) {
         self.state
             .lock()
-            .expect("CPU allocation lock poisoned")
+            .expect("raster allocation lock poisoned")
             .destruction_token = *token;
     }
     fn OnMemoryDump(
         &self,
-        dump: &mut dyn ResourcePoolMemoryDump<CpuDumpGuid>,
-        _guid: &CpuDumpGuid,
+        dump: &mut dyn ResourcePoolMemoryDump<RasterDumpGuid>,
+        _guid: &RasterDumpGuid,
         _importance: SharedImageTracingImportance,
     ) {
         let guid = dump.CreateAllocatorDump(&format!("cpu_shared_image/{}", self.resource.0));
-        let state = self.state.lock().expect("CPU allocation lock poisoned");
+        let state = self.state.lock().expect("raster allocation lock poisoned");
         let bytes = state
             .pixels
             .as_ref()
             .map_or(0, |pixels| pixels.pixels.len());
         dump.AddScalar(&guid, "size", "bytes", bytes as u64);
     }
-    fn CpuReadLease(&self) -> Option<Arc<dyn CpuRasterResourceLease<PixelFormat = PixelFormat>>> {
+    fn RasterReadLease(&self) -> Option<Arc<dyn RasterResourceLease>> {
         self.state
             .lock()
-            .expect("CPU allocation lock poisoned")
+            .expect("raster allocation lock poisoned")
             .pixels
             .as_ref()
-            .map(|pixels| {
-                Arc::clone(pixels) as Arc<dyn CpuRasterResourceLease<PixelFormat = PixelFormat>>
-            })
+            .map(|pixels| Arc::clone(pixels) as Arc<dyn RasterResourceLease>)
     }
 }
 struct ProviderState {
     allocations: Mutex<HashMap<ResourceId, Weak<Allocation>>>,
-    image_caches: Mutex<Vec<RasterImageCache>>,
-    image_cache_byte_limit: usize,
+    backend: Arc<dyn RasterBackend>,
     next_release: Arc<AtomicU64>,
     next_allocation: AtomicU64,
     command_buffer: u64,
 }
-struct CpuCacheLease {
-    provider: Arc<ProviderState>,
-    cache: Option<RasterImageCache>,
-}
-impl std::ops::Deref for CpuCacheLease {
-    type Target = RasterImageCache;
-    fn deref(&self) -> &Self::Target {
-        self.cache.as_ref().expect("actual cache lease")
-    }
-}
-impl std::ops::DerefMut for CpuCacheLease {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.cache.as_mut().expect("actual cache lease")
-    }
-}
-impl Drop for CpuCacheLease {
-    fn drop(&mut self) {
-        self.provider
-            .image_caches
-            .lock()
-            .expect("CPU cache pool poisoned")
-            .push(self.cache.take().expect("actual cache lease returned once"));
-    }
-}
+/// Raster package service boundary. It owns raster allocation identity, replay
+/// admission, backend caches and immutable publication. Compositor owns tile
+/// selection and scheduling; the selected Skia implementation remains private.
 #[derive(Clone)]
-pub struct CpuRasterProvider(Arc<ProviderState>);
-impl CpuRasterProvider {
-    /// The caller supplies the identity of this actual CPU execution sequence.
+pub struct RasterEngine(Arc<ProviderState>);
+
+impl RasterEngine {
+    /// The caller supplies the identity of this actual raster execution sequence.
     pub fn new(command_buffer: u64, image_cache_byte_limit: usize) -> Self {
+        let backend: Arc<dyn RasterBackend> = Arc::new(translated::TranslatedSkiaBackend::new(
+            image_cache_byte_limit,
+        ));
         Self(Arc::new(ProviderState {
             allocations: Mutex::new(HashMap::new()),
-            image_caches: Mutex::new(Vec::new()),
-            image_cache_byte_limit,
+            backend,
             next_release: Arc::new(AtomicU64::new(1)),
             next_allocation: AtomicU64::new(1),
             command_buffer,
         }))
     }
-    fn token(&self) -> CpuSyncToken {
-        let mut token = CpuSyncToken::new(
+    fn token(&self) -> RasterSyncToken {
+        let mut token = RasterSyncToken::new(
             CommandBufferNamespace::InProcess,
             self.0.command_buffer,
             self.0.next_release.fetch_add(1, Ordering::Relaxed),
         );
         token.verified_flush = true;
         token
-    }
-    // The external executor may run independent tile buffers concurrently.
-    // A cache lease owns its actual Skia cache for playback; the pool lock only
-    // transfers that ownership and is never held during CPU rasterization.
-    fn CacheForPlayback(&self) -> CpuCacheLease {
-        let cache = self
-            .0
-            .image_caches
-            .lock()
-            .expect("CPU cache pool poisoned")
-            .pop()
-            .unwrap_or_else(|| {
-                RasterImageCache::with_pixel_byte_limit(self.0.image_cache_byte_limit)
-            });
-        CpuCacheLease {
-            provider: Arc::clone(&self.0),
-            cache: Some(cache),
-        }
     }
     /// Called by the actual resource allocator, before cc acquires a raster buffer.
     /// The provider retains only a weak index; ResourcePool/shared-image ownership
@@ -327,16 +311,17 @@ impl CpuRasterProvider {
         id: ResourceId,
         size: Size,
         format: &SharedImageFormat,
-    ) -> io::Result<CpuSharedImage> {
+    ) -> io::Result<RasterSharedImage> {
         if id == ResourceId::default() || size.width() <= 0 || size.height() <= 0 {
-            return Err(io::Error::other("invalid native CPU image allocation"));
+            return Err(io::Error::other("invalid native raster image allocation"));
         }
-        let format = pixel_format(format)?;
+        validate_pixel_format(format)?;
+        let format = *format;
         let mut allocations = self
             .0
             .allocations
             .lock()
-            .expect("CPU allocation index poisoned");
+            .expect("raster allocation index poisoned");
         // Caller-selected tile IDs and internally allocated UI IDs share the
         // same monotonic native namespace and the very same allocation table.
         self.0
@@ -346,7 +331,7 @@ impl CpuRasterProvider {
         // cc's logical ResourceId is only a preferred number at this native
         // boundary. UI allocations share this table, so an occupied preference
         // obtains a new actual identity. All acquire/export paths consume the
-        // returned NativeSharedImage::CpuRasterAllocationId(), never the hint.
+        // returned NativeSharedImage::RasterAllocationId(), never the hint.
         let id = if allocations
             .get(&id)
             .is_some_and(|value| value.strong_count() != 0)
@@ -362,11 +347,11 @@ impl CpuRasterProvider {
         allocations: &mut HashMap<ResourceId, Weak<Allocation>>,
         id: ResourceId,
         size: Size,
-        format: PixelFormat,
-    ) -> io::Result<CpuSharedImage> {
+        format: SharedImageFormat,
+    ) -> io::Result<RasterSharedImage> {
         if allocations.get(&id).and_then(Weak::upgrade).is_some() {
             return Err(io::Error::other(
-                "native CPU resource id already owns an allocation",
+                "native raster resource id already owns an allocation",
             ));
         }
         allocations.retain(|_, allocation| allocation.strong_count() != 0);
@@ -385,22 +370,23 @@ impl CpuRasterProvider {
             }),
         });
         allocations.insert(id, Arc::downgrade(&image));
-        Ok(CpuSharedImage::new(image))
+        Ok(RasterSharedImage::new(image))
     }
     fn CreateUiSharedImage(
         &self,
         size: Size,
         format: &SharedImageFormat,
-    ) -> io::Result<CpuSharedImage> {
+    ) -> io::Result<RasterSharedImage> {
         if size.width() <= 0 || size.height() <= 0 {
-            return Err(io::Error::other("invalid native CPU UI image size"));
+            return Err(io::Error::other("invalid native raster UI image size"));
         }
-        let format = pixel_format(format)?;
+        validate_pixel_format(format)?;
+        let format = *format;
         let mut allocations = self
             .0
             .allocations
             .lock()
-            .map_err(|_| io::Error::other("CPU allocation index poisoned"))?;
+            .map_err(|_| io::Error::other("raster allocation index poisoned"))?;
         let id = self.NextAllocationLocked(&allocations)?;
         self.CreateSharedImageLocked(&mut allocations, id, size, format)
     }
@@ -411,7 +397,7 @@ impl CpuRasterProvider {
         loop {
             let next = self.0.next_allocation.fetch_add(1, Ordering::Relaxed);
             let next = u32::try_from(next)
-                .map_err(|_| io::Error::other("native CPU allocation identities exhausted"))?;
+                .map_err(|_| io::Error::other("native raster allocation identities exhausted"))?;
             let id = ResourceId(next);
             if !allocations
                 .get(&id)
@@ -425,40 +411,12 @@ impl CpuRasterProvider {
         self.0
             .allocations
             .lock()
-            .expect("CPU allocation index poisoned")
+            .expect("raster allocation index poisoned")
             .get(&id)
             .and_then(Weak::upgrade)
             .ok_or_else(|| {
-                io::Error::other("cc-selected CPU resource has no live native shared image")
+                io::Error::other("cc-selected raster resource has no live native shared image")
             })
-    }
-    pub fn CompletionToken(&self, id: ResourceId) -> io::Result<CpuSyncToken> {
-        let allocation = self.allocation(id)?;
-        Ok(allocation.EndImport(&allocation.creation))
-    }
-    /// Source: components/viz/service/display/software_renderer.cc:393-431.
-    /// Replay directly into the active render-pass Canvas. Ownership moves
-    /// through the raster capability; its pixel allocation is never copied.
-    /// The caller installs PictureDrawQuad's texture-to-quad transform first.
-    #[allow(clippy::too_many_arguments)]
-    pub fn RasterizePictureInto(
-        &self,
-        list: &compositor_core::runtime::paint::ContentDisplayItemList<SkRegion>,
-        content: Rect,
-        scale: f32,
-        nearest: bool,
-        animation: &std::collections::BTreeMap<
-            compositor_core::adapter::image_animation::PaintImageId,
-            usize,
-        >,
-        scrolls: &ScrollOffsetMap,
-        opacity: f32,
-        canvas: skia::cpu::canvas::Canvas,
-    ) -> io::Result<skia::cpu::canvas::Canvas> {
-        let mut cache = self.CacheForPlayback();
-        canvas::RasterPictureInto(
-            list, content, scale, nearest, animation, scrolls, opacity, canvas, &mut cache,
-        )
     }
 }
 fn pixels_opaque(pixels: &[u8]) -> bool {
@@ -466,46 +424,46 @@ fn pixels_opaque(pixels: &[u8]) -> bool {
 }
 fn pixel_len(size: Size) -> io::Result<usize> {
     if size.width() <= 0 || size.height() <= 0 {
-        return Err(io::Error::other("empty CPU raster allocation"));
+        return Err(io::Error::other("empty raster allocation"));
     }
     (size.width() as usize)
         .checked_mul(size.height() as usize)
         .and_then(|length| length.checked_mul(4))
         .filter(|length| *length <= isize::MAX as usize)
-        .ok_or_else(|| io::Error::other("CPU raster allocation overflow"))
+        .ok_or_else(|| io::Error::other("raster allocation overflow"))
 }
-fn pixel_format(format: &SharedImageFormat) -> io::Result<PixelFormat> {
-    if *format == SinglePlaneFormat::RGBA_8888 {
-        return Ok(PixelFormat::Rgba8888);
-    }
-    if *format == SinglePlaneFormat::BGRA_8888 {
-        return Ok(PixelFormat::Bgra8888);
-    }
-    if *format == SinglePlaneFormat::BGRX_8888 {
-        return Ok(PixelFormat::Bgrx8888);
+fn validate_pixel_format(format: &SharedImageFormat) -> io::Result<()> {
+    if *format == SinglePlaneFormat::RGBA_8888
+        || *format == SinglePlaneFormat::BGRA_8888
+        || *format == SinglePlaneFormat::BGRX_8888
+    {
+        return Ok(());
     }
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        format!("CPU raster format {:?} is not implemented", format),
+        format!("raster format {:?} is not implemented", format),
     ))
 }
 
-pub struct CpuBuffer {
-    provider: CpuRasterProvider,
+pub struct RasterBufferSession {
+    provider: RasterEngine,
     allocation: Arc<Allocation>,
-    previous: Option<CpuPixels>,
+    previous: Option<HostMemoryResource>,
     resource_content_id: u64,
     previous_content_id: u64,
-    published: bool,
+    finished: bool,
 }
-impl Drop for CpuBuffer {
+impl Drop for RasterBufferSession {
     fn drop(&mut self) {
-        if !self.published {
+        // Dropping an acquired buffer before playback preserves its previous
+        // publication. Once playback starts, success publishes new pixels and
+        // failure explicitly invalidates the resource before returning.
+        if !self.finished {
             let mut state = self
                 .allocation
                 .state
                 .lock()
-                .expect("CPU allocation lock poisoned");
+                .expect("raster allocation lock poisoned");
             state.rasterizing = false;
             if let Some(previous) = self.previous.take() {
                 state.pixels = Some(Arc::new(previous));
@@ -513,13 +471,32 @@ impl Drop for CpuBuffer {
         }
     }
 }
+impl RasterBufferSession {
+    /// Chromium's zero-copy provider drops a SharedImage that cannot be mapped
+    /// and lets the tile checkerboard. Backend replay errors have the same
+    /// publication semantics here: after write access begins, partially
+    /// modified storage must never be republished as either the old or new
+    /// content identity.
+    fn FinishFailedPlayback(&mut self, error: io::Error) -> io::Result<()> {
+        let mut state = self
+            .allocation
+            .state
+            .lock()
+            .expect("raster allocation lock poisoned");
+        debug_assert!(state.rasterizing && state.pixels.is_none());
+        state.pixels = None;
+        state.rasterizing = false;
+        self.finished = true;
+        Err(error)
+    }
+}
 impl<'image>
-    CpuRasterBuffer<
-        CpuRasterSource<SkRegion>,
+    RasterBuffer<
+        NativeRasterSource<SkRegion>,
         RasterTransform,
-        CpuImageProviderRef<'image, SkRegion>,
+        RasterImageProviderRef<'image, SkRegion>,
         ScrollOffsetMap,
-    > for CpuBuffer
+    > for RasterBufferSession
 {
     fn SupportsBackgroundThreadPriority(&self) -> bool {
         false
@@ -528,15 +505,15 @@ impl<'image>
         &mut self,
         request: RasterPlayback<
             '_,
-            CpuRasterSource<SkRegion>,
+            NativeRasterSource<SkRegion>,
             RasterTransform,
-            CpuImageProviderRef<'image, SkRegion>,
+            RasterImageProviderRef<'image, SkRegion>,
             ScrollOffsetMap,
         >,
     ) -> io::Result<()> {
-        if self.published {
+        if self.finished {
             return Err(io::Error::other(
-                "native CPU raster buffer cannot publish twice",
+                "native raster buffer cannot finish playback twice",
             ));
         }
         // Source zero-copy raster providers allocate a fixed resource size.
@@ -570,20 +547,24 @@ impl<'image>
             || pixel_len(self.allocation.size).map(|len| vec![0; len]),
             |pixels| Ok(pixels.pixels),
         )?;
-        let mut cache = self.provider.CacheForPlayback();
         let new_content_id = request.new_content_id;
-        let pixels = canvas::RasterSource(
+        let mut target =
+            RasterBackendTarget::new(self.allocation.size, self.allocation.format, storage)?;
+        if let Err(error) = self.provider.0.backend.Raster(
             RasterPlayback {
                 invalid_content_rect: &playback_rect,
                 ..request
             },
-            self.allocation.size,
-            self.allocation.format,
-            storage,
-            &mut cache,
-        )?;
+            &mut target,
+        ) {
+            return self.FinishFailedPlayback(error);
+        }
+        let pixels = match target.into_pixels() {
+            Ok(pixels) => pixels,
+            Err(error) => return self.FinishFailedPlayback(error),
+        };
         let opaque = pixels_opaque(&pixels);
-        let pixels = Arc::new(CpuPixels {
+        let pixels = Arc::new(HostMemoryResource {
             resource: self.allocation.resource,
             size: self.allocation.size,
             format: self.allocation.format,
@@ -596,24 +577,24 @@ impl<'image>
             .allocation
             .state
             .lock()
-            .expect("CPU allocation lock poisoned");
+            .expect("raster allocation lock poisoned");
         state.pixels = Some(pixels);
         state.rasterizing = false;
         let point = self.provider.0.next_release.fetch_add(1, Ordering::Relaxed);
         self.allocation.completed.store(point, Ordering::Release);
-        self.published = true;
+        self.finished = true;
         Ok(())
     }
 }
 impl<'image>
-    CpuRasterBufferProvider<
-        CpuRasterSource<SkRegion>,
+    RasterBufferProviderBackend<
+        NativeRasterSource<SkRegion>,
         RasterTransform,
-        CpuImageProviderRef<'image, SkRegion>,
+        RasterImageProviderRef<'image, SkRegion>,
         ScrollOffsetMap,
-    > for CpuRasterProvider
+    > for RasterEngine
 {
-    type Buffer = CpuBuffer;
+    type Buffer = RasterBufferSession;
     fn AcquireBufferForRaster(
         &mut self,
         id: ResourceId,
@@ -621,9 +602,10 @@ impl<'image>
         format: &SharedImageFormat,
         resource_content_id: u64,
         previous_content_id: u64,
-    ) -> io::Result<CpuBuffer> {
+    ) -> io::Result<RasterBufferSession> {
         let allocation = self.allocation(id)?;
-        if allocation.size != size || allocation.format != pixel_format(format)? {
+        validate_pixel_format(format)?;
+        if allocation.size != size || allocation.format != *format {
             return Err(io::Error::other(
                 "native raster metadata does not match shared image allocation",
             ));
@@ -632,11 +614,11 @@ impl<'image>
             let mut state = allocation
                 .state
                 .lock()
-                .expect("CPU allocation lock poisoned");
+                .expect("raster allocation lock poisoned");
             if state.rasterizing {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
-                    "CPU resource is already being rastered",
+                    "raster resource is already being rastered",
                 ));
             }
             let previous = match state.pixels.take() {
@@ -646,7 +628,7 @@ impl<'image>
                         state.pixels = Some(pixels);
                         return Err(io::Error::new(
                             io::ErrorKind::WouldBlock,
-                            "CPU resource still has a live immutable read lease",
+                            "raster resource still has a live immutable read lease",
                         ));
                     }
                 },
@@ -655,13 +637,13 @@ impl<'image>
             state.rasterizing = true;
             previous
         };
-        Ok(CpuBuffer {
+        Ok(RasterBufferSession {
             provider: self.clone(),
             allocation,
             previous,
             resource_content_id,
             previous_content_id,
-            published: false,
+            finished: false,
         })
     }
     fn IsResourceReadyToDraw(&self, id: ResourceId) -> bool {
@@ -669,7 +651,7 @@ impl<'image>
             let state = allocation
                 .state
                 .lock()
-                .expect("CPU allocation lock poisoned");
+                .expect("raster allocation lock poisoned");
             !state.rasterizing && state.pixels.is_some()
         })
     }
@@ -682,7 +664,7 @@ impl<'image>
             .0
             .allocations
             .lock()
-            .expect("CPU allocation index poisoned");
+            .expect("raster allocation index poisoned");
         if allocations
             .values()
             .filter_map(Weak::upgrade)
@@ -690,45 +672,30 @@ impl<'image>
                 allocation
                     .state
                     .lock()
-                    .expect("CPU allocation lock poisoned")
+                    .expect("raster allocation lock poisoned")
                     .rasterizing
             })
         {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
-                "CPU raster buffers must finish before shutdown",
+                "raster buffers must finish before shutdown",
             ));
         }
         allocations.retain(|_, allocation| allocation.strong_count() != 0);
         Ok(())
     }
 }
-impl CpuRasterResourceProvider for CpuRasterProvider {
-    type Lease = CpuPixelLease;
-    fn ExportResource(&self, id: ResourceId) -> Option<CpuPixelLease> {
-        let allocation = self.allocation(id).ok()?;
-        let state = allocation
-            .state
-            .lock()
-            .expect("CPU allocation lock poisoned");
-        state
-            .pixels
-            .as_ref()
-            .map(|pixels| CpuPixelLease(Arc::clone(pixels)))
-    }
-}
-
 /// The compositor's only injected pixel capability. Cloning this handle shares
 /// the same native allocation/cache owners; it does not clone pixel storage.
 /// Canonical cc code continues to choose tasks, resources and completion order.
-impl compositor_core::CompositorPixelProvider for CpuRasterProvider {
+impl compositor_core::CompositorRasterProvider for RasterEngine {
     fn CreateSharedImage(
         &self,
         resource: ResourceId,
         size: Size,
         format: &SharedImageFormat,
-    ) -> io::Result<CpuSharedImage> {
-        CpuRasterProvider::CreateSharedImage(self, resource, size, format)
+    ) -> io::Result<RasterSharedImage> {
+        RasterEngine::CreateSharedImage(self, resource, size, format)
     }
     fn AcquireBufferForRaster(
         &self,
@@ -737,11 +704,11 @@ impl compositor_core::CompositorPixelProvider for CpuRasterProvider {
         format: &SharedImageFormat,
         resource_content_id: u64,
         previous_content_id: u64,
-    ) -> io::Result<Box<compositor_core::runtime::paint::CpuTileRasterBufferValue<SkRegion>>> {
-        let buffer = <Self as CpuRasterBufferProvider<
-            CpuRasterSource<SkRegion>,
+    ) -> io::Result<Box<compositor_core::runtime::paint::TileRasterBufferValue>> {
+        let buffer = <Self as RasterBufferProviderBackend<
+            NativeRasterSource<SkRegion>,
             RasterTransform,
-            CpuImageProviderRef<'_, SkRegion>,
+            RasterImageProviderRef<'_, SkRegion>,
             ScrollOffsetMap,
         >>::AcquireBufferForRaster(
             &mut self.clone(),
@@ -753,42 +720,28 @@ impl compositor_core::CompositorPixelProvider for CpuRasterProvider {
         )?;
         Ok(Box::new(buffer))
     }
-    fn IsResourceReadyToDraw(&self, resource: ResourceId) -> bool {
-        <Self as CpuRasterBufferProvider<
-            CpuRasterSource<SkRegion>,
-            RasterTransform,
-            CpuImageProviderRef<'_, SkRegion>,
-            ScrollOffsetMap,
-        >>::IsResourceReadyToDraw(self, resource)
-    }
     fn CanPartialRasterIntoProvidedResource(&self) -> bool {
-        <Self as CpuRasterBufferProvider<
-            CpuRasterSource<SkRegion>,
+        <Self as RasterBufferProviderBackend<
+            NativeRasterSource<SkRegion>,
             RasterTransform,
-            CpuImageProviderRef<'_, SkRegion>,
+            RasterImageProviderRef<'_, SkRegion>,
             ScrollOffsetMap,
         >>::CanPartialRasterIntoProvidedResource(self)
     }
-    fn CompletionToken(&self, resource: ResourceId) -> io::Result<CpuSyncToken> {
-        CpuRasterProvider::CompletionToken(self, resource)
-    }
     fn NotifyWorkSubmitted(&self) {
-        <Self as CpuRasterBufferProvider<
-            CpuRasterSource<SkRegion>,
+        <Self as RasterBufferProviderBackend<
+            NativeRasterSource<SkRegion>,
             RasterTransform,
-            CpuImageProviderRef<'_, SkRegion>,
+            RasterImageProviderRef<'_, SkRegion>,
             ScrollOffsetMap,
         >>::NotifyWorkSubmitted(&mut self.clone());
     }
     fn Shutdown(&self) -> io::Result<()> {
-        <Self as CpuRasterBufferProvider<
-            CpuRasterSource<SkRegion>,
+        <Self as RasterBufferProviderBackend<
+            NativeRasterSource<SkRegion>,
             RasterTransform,
-            CpuImageProviderRef<'_, SkRegion>,
+            RasterImageProviderRef<'_, SkRegion>,
             ScrollOffsetMap,
         >>::Shutdown(&mut self.clone())
     }
 }
-
-mod solid;
-pub use solid::{CpuPaintAnalysisTrace, CpuSolidColorBackend};

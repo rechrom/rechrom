@@ -16,9 +16,10 @@ use layoutng_style::style::{
     style_path::StylePath,
 };
 use skia::{
-    path::{Path, PathBuilder, Rect},
-    src::core::SkContourMeasure::{
-        last_contour_is_closed, path_length, point_and_tangent_at_length,
+    include::core::SkPathTypes::{SkPathDirection, SkPathVerb},
+    src::core::{
+        SkContourMeasure::SkContourMeasureIter, SkPath::SkPath,
+        SkPathBuilder::SkPathBuilder, SkPoint::SkPoint, SkRect::SkRect,
     },
 };
 
@@ -31,6 +32,81 @@ use super::{
 struct Point {
     x: f32,
     y: f32,
+}
+
+#[derive(Clone, Copy)]
+struct PathPointAndTangent {
+    x: f32,
+    y: f32,
+    tangent_x: f32,
+    tangent_y: f32,
+}
+
+/// Preserve the previous Skia adapter's `PathBuilder::finish` contract: an
+/// empty/move-only or non-finite path is not usable motion-path geometry.
+fn finish_path(builder: &mut SkPathBuilder) -> Option<SkPath> {
+    if builder.verbs().len() <= 1 || !builder.isFinite() {
+        return None;
+    }
+    Some(builder.detach(None))
+}
+
+/// Sum every nonempty contour using Skia's source contour measurement rules.
+fn path_length(path: &SkPath) -> f32 {
+    let mut contours = SkContourMeasureIter::new(path, false, 1.0);
+    let mut length = 0.0;
+    loop {
+        let contour = contours.next();
+        if !contour.is_some() {
+            return length;
+        }
+        length += contour.length();
+    }
+}
+
+/// Match Blink's `Path::PointAndNormalAtLength`: distances continue across
+/// contours and an unavailable sample falls back to the first path point.
+fn point_and_tangent_at_length(path: &SkPath, distance: f32) -> PathPointAndTangent {
+    let distance = if distance.is_finite() { distance } else { 0.0 };
+    let mut contours = SkContourMeasureIter::new(path, false, 1.0);
+    let mut contour_start = 0.0;
+    loop {
+        let contour = contours.next();
+        if !contour.is_some() {
+            break;
+        }
+        let contour_end = contour_start + contour.length();
+        if distance <= contour_end {
+            let local_distance = (distance - contour_start).clamp(0.0, contour.length());
+            let mut position = SkPoint::default();
+            let mut tangent = SkPoint::default();
+            if contour.getPosTan(
+                local_distance,
+                Some(&mut position),
+                Some(&mut tangent),
+            ) {
+                return PathPointAndTangent {
+                    x: position.fX,
+                    y: position.fY,
+                    tangent_x: tangent.fX,
+                    tangent_y: tangent.fY,
+                };
+            }
+        }
+        contour_start = contour_end;
+    }
+
+    let first = path.getPoint(0);
+    PathPointAndTangent {
+        x: first.fX,
+        y: first.fY,
+        tangent_x: 1.0,
+        tangent_y: 0.0,
+    }
+}
+
+fn last_contour_is_closed(path: &SkPath) -> bool {
+    path.verbs().last() == Some(&SkPathVerb::kClose)
 }
 
 impl Point {
@@ -101,16 +177,27 @@ fn ellipse_radius(value: &BasicShapeRadius, center: f32, extent: f32) -> f32 {
     }
 }
 
-fn ellipse_path(center: Point, rx: f32, ry: f32) -> Option<Path> {
-    PathBuilder::from_oval(Rect::from_ltrb(
-        center.x - rx,
-        center.y - ry,
-        center.x + rx,
-        center.y + ry,
-    )?)
+fn ellipse_path(center: Point, rx: f32, ry: f32) -> Option<SkPath> {
+    let left = center.x - rx;
+    let top = center.y - ry;
+    let right = center.x + rx;
+    let bottom = center.y + ry;
+    let rect = SkRect::MakeLTRB(left, top, right, bottom);
+    // The previous Rect::from_ltrb rejected unsorted/non-finite coordinates
+    // and finite endpoints whose width or height overflowed to infinity.
+    if !rect.isFinite()
+        || !rect.isSorted()
+        || !(right - left).is_finite()
+        || !(bottom - top).is_finite()
+    {
+        return None;
+    }
+    let mut builder = SkPathBuilder::default();
+    builder.addOvalDefault(&rect, SkPathDirection::kCW);
+    finish_path(&mut builder)
 }
 
-fn inset_path(shape: &BasicShapeInset, size: &gfx::SizeF) -> Option<Path> {
+fn inset_path(shape: &BasicShapeInset, size: &gfx::SizeF) -> Option<SkPath> {
     let left = resolve(shape.Left(), size.width());
     let right = (size.width() - resolve(shape.Right(), size.width())).max(left);
     let top = resolve(shape.Top(), size.height());
@@ -147,21 +234,21 @@ fn inset_path(shape: &BasicShapeInset, size: &gfx::SizeF) -> Option<Path> {
     }
 
     const WEIGHT: f32 = std::f32::consts::FRAC_1_SQRT_2;
-    let mut builder = PathBuilder::new();
-    builder.move_to(left + resolved[0].0, top);
-    builder.line_to(right - resolved[1].0, top);
-    builder.conic_to(right, top, right, top + resolved[1].1, WEIGHT);
-    builder.line_to(right, bottom - resolved[2].1);
-    builder.conic_to(right, bottom, right - resolved[2].0, bottom, WEIGHT);
-    builder.line_to(left + resolved[3].0, bottom);
-    builder.conic_to(left, bottom, left, bottom - resolved[3].1, WEIGHT);
-    builder.line_to(left, top + resolved[0].1);
-    builder.conic_to(left, top, left + resolved[0].0, top, WEIGHT);
+    let mut builder = SkPathBuilder::default();
+    builder.moveToXY(left + resolved[0].0, top);
+    builder.lineToXY(right - resolved[1].0, top);
+    builder.conicToXY(right, top, right, top + resolved[1].1, WEIGHT);
+    builder.lineToXY(right, bottom - resolved[2].1);
+    builder.conicToXY(right, bottom, right - resolved[2].0, bottom, WEIGHT);
+    builder.lineToXY(left + resolved[3].0, bottom);
+    builder.conicToXY(left, bottom, left, bottom - resolved[3].1, WEIGHT);
+    builder.lineToXY(left, top + resolved[0].1);
+    builder.conicToXY(left, top, left + resolved[0].0, top, WEIGHT);
     builder.close();
-    builder.finish()
+    finish_path(&mut builder)
 }
 
-fn polygon_path(shape: &BasicShapePolygon, size: &gfx::SizeF) -> Option<Path> {
+fn polygon_path(shape: &BasicShapePolygon, size: &gfx::SizeF) -> Option<SkPath> {
     let vertices: Vec<Point> = shape
         .Values()
         .as_slice()
@@ -173,19 +260,19 @@ fn polygon_path(shape: &BasicShapePolygon, size: &gfx::SizeF) -> Option<Path> {
         .collect();
     let first = *vertices.first()?;
     let requested = resolve(shape.RoundingRadius(), 0.0);
-    let mut builder = PathBuilder::new();
+    let mut builder = SkPathBuilder::default();
     if requested <= 0.5 || vertices.len() < 3 {
-        builder.move_to(first.x, first.y);
+        builder.moveToXY(first.x, first.y);
         for point in vertices.iter().skip(1) {
-            builder.line_to(point.x, point.y);
+            builder.lineToXY(point.x, point.y);
         }
         builder.close();
-        return builder.finish();
+        return finish_path(&mut builder);
     }
 
     let count = vertices.len();
     let last = vertices[count - 1];
-    builder.move_to((last.x + first.x) * 0.5, (last.y + first.y) * 0.5);
+    builder.moveToXY((last.x + first.x) * 0.5, (last.y + first.y) * 0.5);
     for index in 0..count {
         let previous = vertices[(index + count - 1) % count];
         let current = vertices[index];
@@ -193,7 +280,7 @@ fn polygon_path(shape: &BasicShapePolygon, size: &gfx::SizeF) -> Option<Path> {
         let incoming_length = previous.distance(current);
         let outgoing_length = current.distance(next);
         if incoming_length <= 0.5 || outgoing_length <= 0.5 {
-            builder.line_to(current.x, current.y);
+            builder.lineToXY(current.x, current.y);
             continue;
         }
         let incoming = Point {
@@ -210,7 +297,7 @@ fn polygon_path(shape: &BasicShapePolygon, size: &gfx::SizeF) -> Option<Path> {
         let tangent = (interior * 0.5).tan();
         let weight = (interior * 0.5).sin();
         if !tangent.is_finite() || tangent <= f32::EPSILON || weight >= 1.0 - f32::EPSILON {
-            builder.line_to(current.x, current.y);
+            builder.lineToXY(current.x, current.y);
             continue;
         }
         let radius = requested
@@ -225,37 +312,43 @@ fn polygon_path(shape: &BasicShapePolygon, size: &gfx::SizeF) -> Option<Path> {
             x: current.x + outgoing.x * along,
             y: current.y + outgoing.y * along,
         };
-        builder.line_to(entry.x, entry.y);
-        builder.conic_to(current.x, current.y, exit.x, exit.y, weight);
+        builder.lineToXY(entry.x, entry.y);
+        builder.conicToXY(current.x, current.y, exit.x, exit.y, weight);
     }
     builder.close();
-    builder.finish()
+    finish_path(&mut builder)
 }
 
-fn commands_path(commands: &[PaintPathCommand]) -> Option<Path> {
-    let mut builder = PathBuilder::new();
+fn commands_path(commands: &[PaintPathCommand]) -> Option<SkPath> {
+    let mut builder = SkPathBuilder::default();
     for command in commands {
         let point = Point::from_offset(command.point);
         match command.verb {
-            PaintPathVerb::kMoveTo => builder.move_to(point.x, point.y),
-            PaintPathVerb::kLineTo => builder.line_to(point.x, point.y),
+            PaintPathVerb::kMoveTo => {
+                builder.moveToXY(point.x, point.y);
+            }
+            PaintPathVerb::kLineTo => {
+                builder.lineToXY(point.x, point.y);
+            }
             PaintPathVerb::kCubicTo => {
                 let control1 = Point::from_offset(command.control1);
                 let control2 = Point::from_offset(command.control2);
-                builder.cubic_to(
+                builder.cubicToXY(
                     control1.x, control1.y, control2.x, control2.y, point.x, point.y,
                 );
             }
-            PaintPathVerb::kClose => builder.close(),
+            PaintPathVerb::kClose => {
+                builder.close();
+            }
             PaintPathVerb::kQuadraticTo | PaintPathVerb::kConicTo => {
                 unreachable!("native SVG normalization emits only cubic curves")
             }
         }
     }
-    builder.finish()
+    finish_path(&mut builder)
 }
 
-fn basic_shape_path(shape: &dyn BasicShape, start: Point, size: &gfx::SizeF) -> Option<Path> {
+fn basic_shape_path(shape: &dyn BasicShape, start: Point, size: &gfx::SizeF) -> Option<SkPath> {
     match shape.GetType() {
         ShapeType::kBasicShapeCircleType => {
             let circle = unsafe { &*(shape as *const dyn BasicShape as *const BasicShapeCircle) };
@@ -305,7 +398,7 @@ fn basic_shape_path(shape: &dyn BasicShape, start: Point, size: &gfx::SizeF) -> 
 }
 
 fn resolved_sample(
-    path: Option<Path>,
+    path: Option<SkPath>,
     distance: &Length,
     scale: f32,
     path_is_author_units: bool,

@@ -1,6 +1,6 @@
 //! Software window target backed by softbuffer and winit native handles.
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use skia::compat::surface::RasterSurface;
+use renderer_skia::PixelFormat;
 use std::{io, num::NonZeroU32, sync::Arc};
 pub(crate) type WindowTarget =
     WindowSurface<std::sync::Arc<winit::window::Window>, std::sync::Arc<winit::window::Window>>;
@@ -56,7 +56,7 @@ impl DisplayTarget {
                     &mut pixels,
                     viewport.width as usize,
                     viewport,
-                    skia::PixelFormat::Bgra8888,
+                    PixelFormat::Bgra8888,
                 )?;
                 Ok(PreparedDisplayTarget::Offscreen {
                     pixels,
@@ -107,7 +107,7 @@ fn draw_page_surfaces(
     pixels: &mut [u32],
     stride: usize,
     viewport: crate::engine::Viewport,
-    format: skia::PixelFormat,
+    format: PixelFormat,
 ) -> io::Result<()> {
     if stride < viewport.width as usize
         || pixels.len() < stride.saturating_mul(viewport.height as usize)
@@ -144,7 +144,7 @@ fn draw_page_surfaces(
             let source = &frame.pixels[src..src + right - left];
             let target = &mut pixels[dst..dst + right - left];
             target.copy_from_slice(source);
-            if format == skia::PixelFormat::Bgrx8888 {
+            if format == PixelFormat::Bgrx8888 {
                 for pixel in target {
                     *pixel &= 0x00ff_ffff;
                 }
@@ -156,7 +156,7 @@ fn draw_page_surfaces(
 
 #[cfg(test)]
 pub struct SurfaceLayer<'a> {
-    pub surface: &'a RasterSurface,
+    pub surface: &'a crate::engine::CapturedSurface,
     pub x: u32,
     pub y: u32,
 }
@@ -199,7 +199,7 @@ fn readback_pixels(
     has_alpha: bool,
     viewport: crate::engine::Viewport,
 ) -> io::Result<crate::engine::WindowFrame> {
-    let rows = |start_y: u32, height: u32| -> io::Result<RasterSurface> {
+    let rows = |start_y: u32, height: u32| -> io::Result<crate::engine::CapturedSurface> {
         let mut rgba = Vec::with_capacity(viewport.width as usize * height as usize * 4);
         for y in start_y..start_y + height {
             let row =
@@ -214,7 +214,7 @@ fn readback_pixels(
                 ]);
             }
         }
-        RasterSurface::from_pixels(viewport.width, height, rgba)
+        crate::engine::CapturedSurface::from_pixels(viewport.width, height, rgba)
     };
     let toolbar_height = viewport.toolbar_pixels();
     Ok(crate::engine::WindowFrame {
@@ -281,11 +281,11 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         drop(acquire_trace);
         #[cfg(target_os = "macos")]
         let format = match buffer.pixel_format() {
-            softbuffer::BufferFormat::Xrgb8888 => skia::PixelFormat::Bgrx8888,
-            softbuffer::BufferFormat::Argb8888 => skia::PixelFormat::Bgra8888,
+            softbuffer::BufferFormat::Xrgb8888 => PixelFormat::Bgrx8888,
+            softbuffer::BufferFormat::Argb8888 => PixelFormat::Bgra8888,
         };
         #[cfg(not(target_os = "macos"))]
-        let format = skia::PixelFormat::Bgrx8888;
+        let format = PixelFormat::Bgrx8888;
         #[cfg(target_os = "macos")]
         let pixels = buffer.pixels_mut();
         #[cfg(not(target_os = "macos"))]
@@ -437,7 +437,7 @@ fn paint_optical_sequence(
     width: u32,
     height: u32,
     scale: f64,
-    format: skia::PixelFormat,
+    format: PixelFormat,
     present_sequence: u64,
 ) {
     let sequence = (present_sequence & 0xfff) as u16;
@@ -461,8 +461,8 @@ fn paint_optical_sequence(
         let green = if bits & 2 != 0 { 255u32 } else { 0 };
         let blue = if bits & 4 != 0 { 255u32 } else { 0 };
         let packed = match format {
-            skia::PixelFormat::Bgra8888 => 0xff00_0000 | red << 16 | green << 8 | blue,
-            skia::PixelFormat::Bgrx8888 => red << 16 | green << 8 | blue,
+            PixelFormat::Bgra8888 => 0xff00_0000 | red << 16 | green << 8 | blue,
+            PixelFormat::Bgrx8888 => red << 16 | green << 8 | blue,
             _ => 0xff00_0000 | blue << 16 | green << 8 | red,
         };
         let left = edge(8 + index * 3, width);
@@ -706,7 +706,8 @@ mod tests {
             for x in 0..=width + 1 {
                 for y in 0..=6 {
                     let src: Vec<u8> = (0..11 * 4 * 4).map(|i| (i * 17) as u8).collect();
-                    let surface = RasterSurface::from_pixels(11, 4, src.clone()).unwrap();
+                    let surface =
+                        crate::engine::CapturedSurface::from_pixels(11, 4, src.clone()).unwrap();
                     let mut actual = vec![0; width as usize * 5];
                     compose_layers(
                         &mut actual,

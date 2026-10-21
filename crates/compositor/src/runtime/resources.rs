@@ -1,4 +1,4 @@
-//! Concrete external resource values used by the CPU compositor family.
+//! Concrete external resource values used by the native compositor family.
 //!
 //! The cc resource pool owns reuse, accounting and release policy. The actual
 //! shared image remains an injected platform object behind `NativeSharedImage`;
@@ -98,7 +98,7 @@ pub enum ColorRangeId {
 /// IPC-safe gfx::ColorSpace value. Floating values compare by their native bit
 /// representation, matching Chromium's field-wise serialized identity.
 #[derive(Clone, Debug)]
-pub struct CpuColorSpace {
+pub struct RasterColorSpace {
     pub primaries: ColorPrimaryId,
     pub transfer: ColorTransferId,
     pub matrix: ColorMatrixId,
@@ -106,7 +106,7 @@ pub struct CpuColorSpace {
     pub custom_primary_matrix: [f32; 9],
     pub transfer_params: [f32; 7],
 }
-impl Default for CpuColorSpace {
+impl Default for RasterColorSpace {
     fn default() -> Self {
         Self {
             primaries: ColorPrimaryId::Invalid,
@@ -118,7 +118,7 @@ impl Default for CpuColorSpace {
         }
     }
 }
-impl CpuColorSpace {
+impl RasterColorSpace {
     // Source: ui/gfx/color_space.h:185-189.
     pub fn CreateSRGB() -> Self {
         Self {
@@ -219,7 +219,7 @@ impl CpuColorSpace {
             .cmp(rhs[..count].iter().flat_map(|value| value.to_ne_bytes()))
     }
 }
-impl PartialEq for CpuColorSpace {
+impl PartialEq for RasterColorSpace {
     fn eq(&self, rhs: &Self) -> bool {
         self.primaries == rhs.primaries
             && self.transfer == rhs.transfer
@@ -238,13 +238,13 @@ impl PartialEq for CpuColorSpace {
             ) == Ordering::Equal
     }
 }
-impl Eq for CpuColorSpace {}
-impl PartialOrd for CpuColorSpace {
+impl Eq for RasterColorSpace {}
+impl PartialOrd for RasterColorSpace {
     fn partial_cmp(&self, rhs: &Self) -> Option<Ordering> {
         Some(self.cmp(rhs))
     }
 }
-impl Ord for CpuColorSpace {
+impl Ord for RasterColorSpace {
     // Source: ui/gfx/color_space.cc:421-462.
     fn cmp(&self, rhs: &Self) -> Ordering {
         self.primaries
@@ -278,14 +278,14 @@ impl Ord for CpuColorSpace {
 /// value without moving display policy into cc.
 // Source: ui/gfx/display_color_spaces.h:49-159.
 #[derive(Clone, Debug, PartialEq)]
-pub struct CpuDisplayColorSpaces {
-    color_spaces: [CpuColorSpace; 6],
+pub struct RasterDisplayColorSpaces {
+    color_spaces: [RasterColorSpace; 6],
     formats: [SharedImageFormat; 6],
     pub primaries: [f32; 8],
     pub sdr_max_luminance_nits: f32,
     pub hdr_max_luminance_relative: f32,
 }
-impl Default for CpuDisplayColorSpaces {
+impl Default for RasterDisplayColorSpaces {
     // Source: ui/gfx/display_color_spaces.cc:17-56.
     fn default() -> Self {
         #[cfg(any(target_os = "macos", feature = "chromeos"))]
@@ -293,7 +293,7 @@ impl Default for CpuDisplayColorSpaces {
         #[cfg(not(any(target_os = "macos", feature = "chromeos")))]
         let format = crate::adapter::resource_types::SinglePlaneFormat::RGBA_8888;
         Self {
-            color_spaces: std::array::from_fn(|_| CpuColorSpace::CreateSRGB()),
+            color_spaces: std::array::from_fn(|_| RasterColorSpace::CreateSRGB()),
             formats: [format; 6],
             // SkNamedPrimariesExt::kSRGB / Rec709.
             primaries: [0.64, 0.33, 0.30, 0.60, 0.15, 0.06, 0.3127, 0.3290],
@@ -302,7 +302,7 @@ impl Default for CpuDisplayColorSpaces {
         }
     }
 }
-impl CpuDisplayColorSpaces {
+impl RasterDisplayColorSpaces {
     fn index(usage: ContentColorUsage, needs_alpha: bool) -> usize {
         let base = match usage {
             ContentColorUsage::kSRGB => 0,
@@ -315,7 +315,7 @@ impl CpuDisplayColorSpaces {
         &mut self,
         usage: ContentColorUsage,
         needs_alpha: bool,
-        color_space: CpuColorSpace,
+        color_space: RasterColorSpace,
         format: SharedImageFormat,
     ) {
         let index = Self::index(usage, needs_alpha);
@@ -326,7 +326,7 @@ impl CpuDisplayColorSpaces {
         &self,
         usage: ContentColorUsage,
         needs_alpha: bool,
-    ) -> CpuColorSpace {
+    ) -> RasterColorSpace {
         self.color_spaces[Self::index(usage, needs_alpha)].clone()
     }
     pub fn GetOutputFormat(
@@ -350,7 +350,7 @@ impl CpuDisplayColorSpaces {
         self.hdr_max_luminance_relative.log2()
     }
     // Source: ui/gfx/display_color_spaces.cc:116-155.
-    pub fn GetRasterAndCompositeColorSpace(&self, mut usage: ContentColorUsage) -> CpuColorSpace {
+    pub fn GetRasterAndCompositeColorSpace(&self, mut usage: ContentColorUsage) -> RasterColorSpace {
         if !self.SupportsHDR() && usage == ContentColorUsage::kHDR {
             usage = ContentColorUsage::kWideColorGamut;
         }
@@ -359,18 +359,18 @@ impl CpuDisplayColorSpaces {
             return result;
         }
         match usage {
-            ContentColorUsage::kSRGB => CpuColorSpace::CreateSRGB(),
-            ContentColorUsage::kHDR => CpuColorSpace::CreateDisplayP3Hdr(),
-            ContentColorUsage::kWideColorGamut => CpuColorSpace::CreateDisplayP3(),
+            ContentColorUsage::kSRGB => RasterColorSpace::CreateSRGB(),
+            ContentColorUsage::kHDR => RasterColorSpace::CreateDisplayP3Hdr(),
+            ContentColorUsage::kWideColorGamut => RasterColorSpace::CreateDisplayP3(),
         }
     }
 }
-impl HostDisplayColorSpaces<CpuColorSpace> for CpuDisplayColorSpaces {
-    fn GetRasterAndCompositeColorSpace(&self, usage: ContentColorUsage) -> CpuColorSpace {
-        CpuDisplayColorSpaces::GetRasterAndCompositeColorSpace(self, usage)
+impl HostDisplayColorSpaces<RasterColorSpace> for RasterDisplayColorSpaces {
+    fn GetRasterAndCompositeColorSpace(&self, usage: ContentColorUsage) -> RasterColorSpace {
+        RasterDisplayColorSpaces::GetRasterAndCompositeColorSpace(self, usage)
     }
     fn GetHdrHeadroom(&self) -> f32 {
-        CpuDisplayColorSpaces::GetHdrHeadroom(self)
+        RasterDisplayColorSpaces::GetHdrHeadroom(self)
     }
 }
 
@@ -388,13 +388,13 @@ pub enum CommandBufferNamespace {
     WebNnContextInterface = 5,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CpuSyncToken {
+pub struct RasterSyncToken {
     pub verified_flush: bool,
     pub namespace_id: CommandBufferNamespace,
     pub command_buffer_id: u64,
     pub release_count: u64,
 }
-impl CpuSyncToken {
+impl RasterSyncToken {
     pub fn new(
         namespace_id: CommandBufferNamespace,
         command_buffer_id: u64,
@@ -408,7 +408,7 @@ impl CpuSyncToken {
         }
     }
 }
-impl ResourceSyncToken for CpuSyncToken {
+impl ResourceSyncToken for RasterSyncToken {
     // Source: gpu/command_buffer/common/sync_token.h:66-68.
     fn HasData(&self) -> bool {
         self.namespace_id != CommandBufferNamespace::Invalid
@@ -416,93 +416,88 @@ impl ResourceSyncToken for CpuSyncToken {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CpuDumpGuid(pub [u64; 2]);
+pub struct RasterDumpGuid(pub [u64; 2]);
 
 /// Exclusive software-write lease for the actual shared-image allocation.
 /// Dropping the lease publishes the written pixels back to the same allocation;
 /// callers never receive a provider, resource table, or copied pixel snapshot.
-pub trait CpuWriteMapping: Send {
+pub trait RasterWriteMapping: Send {
     fn size(&self) -> Size;
-    fn format(&self) -> skia::PixelFormat;
+    fn format(&self) -> SharedImageFormat;
     fn row_bytes(&self) -> usize;
     fn bytes_mut(&mut self) -> &mut [u8];
 }
 
 /// Platform shared-image owner injected by the browser/Viz boundary.
 pub trait NativeSharedImage: Send + Sync {
-    /// Identity of the actual CPU allocation, independent of the Viz resource
+    /// Identity of the actual raster allocation, independent of the Viz resource
     /// ID assigned later by ClientResourceProvider::ImportResource. Raster
     /// acquisition precedes export and must address the backing allocation.
-    fn CpuRasterAllocationId(&self) -> ResourceId;
-    fn creation_sync_token(&self) -> CpuSyncToken;
+    fn RasterAllocationId(&self) -> ResourceId;
+    fn creation_sync_token(&self) -> RasterSyncToken;
     /// Completes the current import and returns the parent-visible release
     /// point, matching ClientSharedImage::EndImport.
-    fn EndImport(&self, token: &CpuSyncToken) -> CpuSyncToken;
-    fn UpdateDestructionSyncToken(&self, token: &CpuSyncToken);
+    fn EndImport(&self, token: &RasterSyncToken) -> RasterSyncToken;
+    fn UpdateDestructionSyncToken(&self, token: &RasterSyncToken);
     fn OnMemoryDump(
         &self,
-        dump: &mut dyn ResourcePoolMemoryDump<CpuDumpGuid>,
-        guid: &CpuDumpGuid,
+        dump: &mut dyn ResourcePoolMemoryDump<RasterDumpGuid>,
+        guid: &RasterDumpGuid,
         importance: SharedImageTracingImportance,
     );
-    /// Immutable CPU read lease exported by the raster owner. GPU-only shared
-    /// images return `None`; the software Renderer requires `Some` and never
+    /// Immutable read lease exported by the raster owner. Non-host-readable
+    /// images may return `None`; the current software Renderer requires `Some` and never
     /// obtains the provider, cache, tile or mutable allocation behind it.
-    fn CpuReadLease(
-        &self,
-    ) -> Option<Arc<dyn super::cpu_raster::CpuRasterResourceLease<PixelFormat = skia::PixelFormat>>>;
-    /// Maps the same allocation for exclusive CPU writes. Implementations must
+    fn RasterReadLease(&self) -> Option<Arc<dyn super::raster_execution::RasterResourceLease>>;
+    /// Maps the same allocation for exclusive host writes. Implementations must
     /// reject concurrent raster/read ownership rather than fabricate storage.
-    fn MapCpuWrite(self: Arc<Self>) -> io::Result<Box<dyn CpuWriteMapping>>;
+    fn MapRasterWrite(self: Arc<Self>) -> io::Result<Box<dyn RasterWriteMapping>>;
 }
 
 #[derive(Clone)]
-pub struct CpuSharedImage(Arc<dyn NativeSharedImage>);
-impl CpuSharedImage {
+pub struct RasterSharedImage(Arc<dyn NativeSharedImage>);
+impl RasterSharedImage {
     pub fn new(image: Arc<dyn NativeSharedImage>) -> Self {
         Self(image)
     }
-    pub fn native(&self) -> &Arc<dyn NativeSharedImage> {
-        &self.0
+    pub fn creation_sync_token(&self) -> RasterSyncToken {
+        self.0.creation_sync_token()
     }
-    pub fn CpuRasterAllocationId(&self) -> ResourceId {
-        self.0.CpuRasterAllocationId()
+    pub fn RasterAllocationId(&self) -> ResourceId {
+        self.0.RasterAllocationId()
     }
-    pub fn CpuReadLease(
-        &self,
-    ) -> Option<Arc<dyn super::cpu_raster::CpuRasterResourceLease<PixelFormat = skia::PixelFormat>>>
-    {
-        self.0.CpuReadLease()
+    pub fn RasterReadLease(&self) -> Option<Arc<dyn super::raster_execution::RasterResourceLease>> {
+        self.0.RasterReadLease()
     }
-    pub fn MapCpuWrite(&self) -> io::Result<Box<dyn CpuWriteMapping>> {
-        Arc::clone(&self.0).MapCpuWrite()
+    pub fn MapRasterWrite(&self) -> io::Result<Box<dyn RasterWriteMapping>> {
+        Arc::clone(&self.0).MapRasterWrite()
     }
 }
-impl PoolSharedImage<CpuSyncToken, CpuDumpGuid> for CpuSharedImage {
-    fn UpdateDestructionSyncToken(&self, token: &CpuSyncToken) {
+impl PoolSharedImage<RasterSyncToken, RasterDumpGuid> for RasterSharedImage {
+    fn UpdateDestructionSyncToken(&self, token: &RasterSyncToken) {
         self.0.UpdateDestructionSyncToken(token);
     }
     fn OnMemoryDump(
         &self,
-        dump: &mut dyn ResourcePoolMemoryDump<CpuDumpGuid>,
-        guid: &CpuDumpGuid,
+        dump: &mut dyn ResourcePoolMemoryDump<RasterDumpGuid>,
+        guid: &RasterDumpGuid,
         importance: SharedImageTracingImportance,
     ) {
         self.0.OnMemoryDump(dump, guid, importance);
     }
 }
-impl crate::adapter::layer_tree_host_impl::HostUISharedImage<CpuSyncToken> for CpuSharedImage {
-    fn creation_sync_token(&self) -> CpuSyncToken {
+impl crate::adapter::layer_tree_host_impl::HostUISharedImage<RasterSyncToken> for RasterSharedImage {
+    fn creation_sync_token(&self) -> RasterSyncToken {
         self.0.creation_sync_token()
     }
-    fn UpdateDestructionSyncToken(&mut self, token: &CpuSyncToken) {
+    fn UpdateDestructionSyncToken(&mut self, token: &RasterSyncToken) {
         self.0.UpdateDestructionSyncToken(token);
     }
 }
 
 // Source: ui/gfx/buffer_types.h:24-39.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CpuBufferUsage {
+pub enum RasterBufferUsage {
     GpuRead,
     Scanout,
     ScanoutCameraReadWrite,
@@ -520,7 +515,7 @@ pub enum CpuBufferUsage {
 // Source: components/viz/common/resources/transferable_resource.h:66-87.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum CpuResourceSource {
+pub enum RasterResourceSource {
     #[default]
     Unknown = 0,
     Ar = 1,
@@ -542,7 +537,7 @@ pub enum CpuResourceSource {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum CpuSynchronizationType {
+pub enum RasterSynchronizationType {
     #[default]
     SyncToken,
     GpuCommandsCompleted,
@@ -554,54 +549,51 @@ pub enum CpuSynchronizationType {
 // Source value copy: components/viz/common/resources/transferable_resource.h.
 // Only the native shared-image lease is shared; no owner metadata is copied.
 #[derive(Clone)]
-pub struct CpuTransferableResource {
+pub struct RasterTransferableResource {
     pub id: ResourceId,
-    pub shared_image: CpuSharedImage,
-    pub source: CpuResourceSource,
-    pub sync_token: CpuSyncToken,
-    pub synchronization_type: CpuSynchronizationType,
+    pub shared_image: RasterSharedImage,
+    pub source: RasterResourceSource,
+    pub sync_token: RasterSyncToken,
+    pub synchronization_type: RasterSynchronizationType,
 }
-impl CpuTransferableResource {
+impl RasterTransferableResource {
     // Source: components/viz/common/resources/transferable_resource.cc:44-50.
-    pub fn ToReturnedResource(&self) -> CpuReturnedResource {
-        CpuReturnedResource {
+    pub fn ToReturnedResource(&self) -> RasterReturnedResource {
+        RasterReturnedResource {
             id: self.id,
             sync_token: self.shared_image.0.EndImport(&self.sync_token),
             count: 1,
             lost: false,
         }
     }
-    pub fn CpuReadLease(
-        &self,
-    ) -> Option<Arc<dyn super::cpu_raster::CpuRasterResourceLease<PixelFormat = skia::PixelFormat>>>
-    {
-        self.shared_image.CpuReadLease()
+    pub fn RasterReadLease(&self) -> Option<Arc<dyn super::raster_execution::RasterResourceLease>> {
+        self.shared_image.RasterReadLease()
     }
 }
-impl PoolTransferableResource for CpuTransferableResource {
+impl PoolTransferableResource for RasterTransferableResource {
     // Source: components/viz/common/resources/transferable_resource.h:45-62.
     fn SetGpuCommandsCompletedSynchronization(&mut self) {
-        self.synchronization_type = CpuSynchronizationType::GpuCommandsCompleted;
+        self.synchronization_type = RasterSynchronizationType::GpuCommandsCompleted;
     }
 }
 
 // Source value: components/viz/common/resources/returned_resource.h:25-60.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct CpuReturnedResource {
+pub struct RasterReturnedResource {
     pub id: ResourceId,
-    pub sync_token: CpuSyncToken,
+    pub sync_token: RasterSyncToken,
     pub count: i32,
     pub lost: bool,
 }
 
 impl<R: CpuSkiaBackend> ResourcePoolTypes for CpuCompositorTypes<R> {
-    type ColorSpace = CpuColorSpace;
-    type SyncToken = CpuSyncToken;
-    type SharedImage = CpuSharedImage;
-    type DumpGuid = CpuDumpGuid;
-    type BufferUsage = CpuBufferUsage;
-    type ResourceSource = CpuResourceSource;
-    type TransferableResource = CpuTransferableResource;
+    type ColorSpace = RasterColorSpace;
+    type SyncToken = RasterSyncToken;
+    type SharedImage = RasterSharedImage;
+    type DumpGuid = RasterDumpGuid;
+    type BufferUsage = RasterBufferUsage;
+    type ResourceSource = RasterResourceSource;
+    type TransferableResource = RasterTransferableResource;
 
     fn EstimatedSizeInBytes(format: &SharedImageFormat, size: &Size) -> usize {
         format.EstimatedSizeInBytes(size)
@@ -611,7 +603,7 @@ impl<R: CpuSkiaBackend> ResourcePoolTypes for CpuCompositorTypes<R> {
     }
 }
 
-// Production compile assertion: the canonical CPU family, with the public
+// Production compile assertion: the canonical native family, with the public
 // SkRegion backend, supplies the complete resource-pool value contract.
 const _: fn() = || {
     fn assert_resource_pool_types<T: ResourcePoolTypes>() {}

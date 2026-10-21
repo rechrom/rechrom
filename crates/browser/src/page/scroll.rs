@@ -79,7 +79,7 @@ impl Page {
         self.RequestBeginFrameIfNeeded();
     }
 
-    #[cfg(feature = "pure_source_png")]
+    #[cfg(feature = "production_raster")]
     fn CompositorScrollOwner(
         &self,
         element: compositor::adapter::input_types::ElementId,
@@ -106,7 +106,7 @@ impl Page {
         None
     }
 
-    #[cfg(feature = "pure_source_png")]
+    #[cfg(feature = "production_raster")]
     fn ApplyCompositorScrollOffset(
         &mut self,
         sequence: u64,
@@ -152,7 +152,7 @@ impl Page {
         Ok(())
     }
 
-    #[cfg(feature = "pure_source_png")]
+    #[cfg(feature = "production_raster")]
     pub fn ApplyCompositorWheelEffects(
         &mut self,
         effects: Vec<CompositorMainThreadEffect>,
@@ -192,7 +192,7 @@ impl Page {
         Ok(())
     }
 
-    #[cfg(feature = "pure_source_png")]
+    #[cfg(feature = "production_raster")]
     pub(super) fn PresentCompositorOnlyFrame(&mut self) {
         let Some(frame) = self.frame.as_mut() else {
             return;

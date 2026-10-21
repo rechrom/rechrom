@@ -124,7 +124,7 @@ fn pixels(page: &Page) -> Vec<u32> {
         240,
         1.0,
         &mut pixels,
-        renderer::PixelFormat::Rgba8888,
+        renderer_skia::PixelFormat::Rgba8888,
         320,
     )
     .unwrap();
@@ -223,7 +223,7 @@ fn retained_text_path_resolution_changes_keep_identity_and_old_frame() {
             240,
             1.0,
             &mut old_pixels,
-            renderer::PixelFormat::Rgba8888,
+            renderer_skia::PixelFormat::Rgba8888,
             320,
         )
         .unwrap();

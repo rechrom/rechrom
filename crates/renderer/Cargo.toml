@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+browser_tracing = { path = "../tracing" }
 compositor_core = { package = "compositor", path = "../compositor" }
 foundation = { package = "layoutng_foundation", path = "../foundation" }
 viz = { path = "../viz" }

@@ -1,7 +1,7 @@
 //! Actual immutable Paint image catalog lease. Native stable identity and facts
 //! are read from the same allocation used by playback; no identity registry or
 //! animation/completion metadata projection is constructed.
-use super::{CpuPaintImage, CpuPaintImageValue, CpuWorkletInput, PaintRecord};
+use super::{CpuPaintImage, CpuPaintImageValue, CpuPaintRecordImage, CpuWorkletInput, PaintRecord};
 use crate::adapter::{image_animation::PaintImageId, layer_tree_host_impl::ContentColorUsage};
 use std::sync::Arc;
 #[derive(Debug)]
@@ -39,7 +39,7 @@ impl std::error::Error for CpuPaintImageInputError {}
 struct NativeImageLease {
     record: PaintRecord,
     catalog_index: usize,
-    document_record: Option<PaintRecord>,
+    document_record: Option<CpuPaintRecordImage>,
     software_image: std::sync::OnceLock<Arc<Vec<u8>>>,
 }
 impl NativeImageLease {
@@ -60,6 +60,17 @@ impl CpuPaintImage {
     pub fn FromPaintResource(
         record: &PaintRecord,
         resource: u64,
+    ) -> Result<Self, CpuPaintImageInputError> {
+        Self::FromPaintResourceForContainer(record, resource, None)
+    }
+
+    /// Resolves the exact document-image recording selected by this paint use.
+    /// A single SVG resource may be embedded at several container sizes in the
+    /// same artifact, so the use-site key is authoritative when one is present.
+    pub fn FromPaintResourceForContainer(
+        record: &PaintRecord,
+        resource: u64,
+        container: Option<&paint::paint_engine::DocumentImageContainerKey>,
     ) -> Result<Self, CpuPaintImageInputError> {
         let (catalog_index, image) = record
             .artifact()
@@ -87,7 +98,7 @@ impl CpuPaintImage {
         let document_record = match &image.content {
             paint::paint_engine::PaintImageContent::Bitmap(_) => None,
             paint::paint_engine::PaintImageContent::Document(content) => {
-                let key = image.document_container_key.as_ref().ok_or(
+                let key = container.or(image.document_container_key.as_ref()).ok_or(
                     CpuPaintImageInputError::DocumentColorSpaceNotPublished(resource),
                 )?;
                 let record = content
@@ -100,7 +111,17 @@ impl CpuPaintImage {
                     .ok_or(CpuPaintImageInputError::DocumentColorSpaceNotPublished(
                         resource,
                     ))?;
-                Some(PaintRecord::from_artifact(record.artifact.clone()))
+                Some(CpuPaintRecordImage {
+                    record: PaintRecord::from_artifact(record.artifact.clone()),
+                    intrinsic_size: crate::adapter::geometry::SizeF::new(
+                        record.intrinsic_size.width as f32,
+                        record.intrinsic_size.height as f32,
+                    ),
+                    record_size: crate::adapter::geometry::SizeF::new(
+                        record.record_size.width as f32,
+                        record.record_size.height as f32,
+                    ),
+                })
             }
         };
         Ok(Self(Arc::new(NativeImageLease {
@@ -126,9 +147,13 @@ impl CpuPaintImageValue for NativeImageLease {
                 "software image requires an actual bitmap allocation",
             )
         })?;
-        let converted = skia::raster::Pixmap::from_straight_rgba(input.width, input.height, pixels)
-            .ok_or_else(|| std::io::Error::other("invalid software image bitmap allocation"))?;
-        let _ = self.software_image.set(Arc::new(converted.take()));
+        let converted = skia::raster_target::premultiply_rgba8888(
+            input.width,
+            input.height,
+            pixels,
+        )
+        .ok_or_else(|| std::io::Error::other("invalid software image bitmap allocation"))?;
+        let _ = self.software_image.set(Arc::new(converted));
         Ok(self
             .software_image
             .get()
@@ -136,7 +161,7 @@ impl CpuPaintImageValue for NativeImageLease {
             .clone())
     }
 
-    fn GetPaintRecord(&self) -> Option<PaintRecord> {
+    fn GetPaintRecord(&self) -> Option<CpuPaintRecordImage> {
         self.document_record.clone()
     }
 

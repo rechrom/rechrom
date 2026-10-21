@@ -11,11 +11,11 @@
 //! resource capabilities. They retain no Host, tree, layer, tile or Page.
 
 use super::{
-    client_resources::CpuClientResources,
+    client_resources::RasterClientResources,
     host::{NativeTraceValue, TraceValue},
     native_host_lifecycle::NativeHostLifecycle,
     native_services::NativeEventSink,
-    tile_execution::CpuTileExecution,
+    tile_execution::TileExecution,
     types::{CpuCompositorTypes, CpuSkiaBackend, DeletionTrace},
 };
 use crate::adapter::{
@@ -297,13 +297,13 @@ impl HostPictureTileServices for NativeHostPictureTileServices {
 /// and TileManager remain borrowed by the translated host call.
 pub(crate) struct NativeHostPictureMutationServices<R: CpuSkiaBackend> {
     lifecycle: Arc<NativeHostLifecycle>,
-    tile_execution: Arc<Mutex<CpuTileExecution<R>>>,
+    tile_execution: Arc<Mutex<TileExecution<R>>>,
 }
 
 impl<R: CpuSkiaBackend> NativeHostPictureMutationServices<R> {
     pub(crate) fn new(
         lifecycle: Arc<NativeHostLifecycle>,
-        tile_execution: Arc<Mutex<CpuTileExecution<R>>>,
+        tile_execution: Arc<Mutex<TileExecution<R>>>,
     ) -> Self {
         Self {
             lifecycle,
@@ -338,7 +338,7 @@ impl<R: CpuSkiaBackend> HostPictureMutationServices for NativeHostPictureMutatio
 pub(crate) struct NativePictureLayerServices<R: CpuSkiaBackend> {
     features: Arc<NativeHostPictureFeatures>,
     events: Arc<dyn NativeEventSink>,
-    resources: CpuClientResources,
+    resources: RasterClientResources,
     marker: std::marker::PhantomData<fn() -> R>,
 }
 
@@ -346,7 +346,7 @@ impl<R: CpuSkiaBackend> NativePictureLayerServices<R> {
     pub(crate) fn new(
         features: Arc<NativeHostPictureFeatures>,
         events: Arc<dyn NativeEventSink>,
-        resources: CpuClientResources,
+        resources: RasterClientResources,
     ) -> Self {
         Self {
             features,

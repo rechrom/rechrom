@@ -2,12 +2,12 @@
 //! lifetime or source host policy is implemented here; those remain in HostImpl.
 use super::{
     host_resources::{SourceBitmap, UIImageInfo, UISurface},
-    resources::{CpuColorSpace, CpuSharedImage},
+    resources::{RasterColorSpace, RasterSharedImage},
 };
 use crate::adapter::{
     geometry::Size, layer_tree_host_impl::HostUISharedImageUsage, resource_types::SharedImageFormat,
 };
-/// The CPU raster/Skia allocation owner implements this capability. Borrowed
+/// The raster allocation owner implements this capability. Borrowed
 /// surfaces must retain the exact caller pixel slice and its stride; the trait
 /// does not permit a compositor-side pixel copy or fabricated image/surface.
 pub trait NativeUiRasterServices: Send + Sync {
@@ -24,24 +24,24 @@ pub trait NativeUiRasterServices: Send + Sync {
         &self,
         format: SharedImageFormat,
         size: Size,
-        color: &CpuColorSpace,
+        color: &RasterColorSpace,
         usage: HostUISharedImageUsage,
         label: &'static str,
-    ) -> Option<CpuSharedImage>;
+    ) -> Option<RasterSharedImage>;
     fn CreateSharedImageWithPixels(
         &self,
         format: SharedImageFormat,
         size: Size,
-        color: &CpuColorSpace,
+        color: &RasterColorSpace,
         usage: HostUISharedImageUsage,
         label: &'static str,
         pixels: &[u8],
-    ) -> Option<CpuSharedImage>;
+    ) -> Option<RasterSharedImage>;
 }
 use super::{
     engine_factory::NativeFactoryCapabilities,
     host_resources::SharedMapping,
-    resources::{CpuResourceSource, CpuSyncToken, CpuSynchronizationType, CpuTransferableResource},
+    resources::{RasterResourceSource, RasterSyncToken, RasterSynchronizationType, RasterTransferableResource},
 };
 use crate::{
     adapter::{geometry::SizeF, layer_tree_host_impl::*, layer_tree_impl::ResourceId},
@@ -57,7 +57,7 @@ impl NativeUiServices {
     }
     fn CheckSink(&self, sink: HostImplFrameSinkId) {
         assert_eq!(
-            self.native.frame_sink.lock().expect("CPU frame sink").id(),
+            self.native.frame_sink.lock().expect("raster frame sink").id(),
             sink
         )
     }
@@ -66,13 +66,13 @@ impl HostUIResourceServices<NativeCompositorTypes> for NativeUiServices {
     fn TraceUIResourceEvent(&mut self, name: &'static str) {
         self.native.events.Emit("cc", name.into())
     }
-    // This endpoint is specifically the CPU FrameSink; its context-provider and
-    // GPU context-provider/scanout capabilities are absent, as in Core's CPU path.
+    // This endpoint is specifically the software FrameSink; its context-provider and
+    // GPU context-provider/scanout capabilities are absent in this implementation.
     fn UIResourceContextProviderExists(&self, sink: HostImplFrameSinkId) -> bool {
         self.CheckSink(sink);
         false
     }
-    // Source: cc/trees/layer_tree_host_impl.cc:5680-5690. This requires the CPU SharedImageInterface too. The
+    // Source: cc/trees/layer_tree_host_impl.cc:5680-5690. This requires the matching SharedImageInterface too. The
     // injected raster capability is that actual allocator, even without GPU.
     fn UIResourceSharedImageInterfaceExists(&self, sink: HostImplFrameSinkId) -> bool {
         self.CheckSink(sink);
@@ -97,27 +97,27 @@ impl HostUIResourceServices<NativeCompositorTypes> for NativeUiServices {
             )
         }
     }
-    fn SRGBColorSpace(&self) -> CpuColorSpace {
-        CpuColorSpace::CreateSRGB()
+    fn SRGBColorSpace(&self) -> RasterColorSpace {
+        RasterColorSpace::CreateSRGB()
     }
     fn CreateUIResourceSharedImageForSoftwareCompositor(
         &mut self,
         sink: HostImplFrameSinkId,
         format: SharedImageFormat,
         size: Size,
-        color: &CpuColorSpace,
+        color: &RasterColorSpace,
         usage: HostUISharedImageUsage,
         label: &'static str,
-    ) -> Option<CpuSharedImage> {
+    ) -> Option<RasterSharedImage> {
         self.CheckSink(sink);
         self.native
             .ui_raster
             .CreateSoftwareSharedImage(format, size, color, usage, label)
     }
-    fn MapUIResourceSharedImage(&mut self, image: &CpuSharedImage) -> SharedMapping {
-        SharedMapping::FromCpuWriteMapping(
+    fn MapUIResourceSharedImage(&mut self, image: &RasterSharedImage) -> SharedMapping {
+        SharedMapping::FromRasterWriteMapping(
             image
-                .MapCpuWrite()
+                .MapRasterWrite()
                 .expect("UI shared-image map must succeed"),
         )
     }
@@ -126,11 +126,11 @@ impl HostUIResourceServices<NativeCompositorTypes> for NativeUiServices {
         sink: HostImplFrameSinkId,
         format: SharedImageFormat,
         size: Size,
-        color: &CpuColorSpace,
+        color: &RasterColorSpace,
         usage: HostUISharedImageUsage,
         label: &'static str,
         pixels: &[u8],
-    ) -> Option<CpuSharedImage> {
+    ) -> Option<RasterSharedImage> {
         self.CheckSink(sink);
         self.native
             .ui_raster
@@ -156,15 +156,15 @@ impl HostUIResourceServices<NativeCompositorTypes> for NativeUiServices {
     // Source: components/viz/common/resources/transferable_resource.cc:28-41.
     fn MakeUITransferableResource(
         &mut self,
-        image: CpuSharedImage,
-        sync_token: CpuSyncToken,
-    ) -> CpuTransferableResource {
-        CpuTransferableResource {
+        image: RasterSharedImage,
+        sync_token: RasterSyncToken,
+    ) -> RasterTransferableResource {
+        RasterTransferableResource {
             id: ResourceId::default(),
             shared_image: image,
-            source: CpuResourceSource::Ui,
+            source: RasterResourceSource::Ui,
             sync_token,
-            synchronization_type: CpuSynchronizationType::SyncToken,
+            synchronization_type: RasterSynchronizationType::SyncToken,
         }
     }
     fn OnCanDrawStateChanged(&mut self, delegate: HostImplDelegateId, can_draw: bool) {

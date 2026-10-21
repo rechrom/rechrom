@@ -27,7 +27,9 @@ pub struct BspTree {
 impl BspTree {
     // Source: components/viz/service/display/bsp_tree.cc:23-31
     pub fn new(list: &mut VecDeque<DrawPolygon>) -> Self {
-        let Some(data)=list.pop_front() else {return Self{root:None};};
+        let Some(data) = list.pop_front() else {
+            return Self { root: None };
+        };
         let mut node = BspNode::new(data);
         Self::build_tree(&mut node, list);
         Self {

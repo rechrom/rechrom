@@ -105,7 +105,7 @@ fn pixels(page: &mut Page) -> Vec<u32> {
         200,
         1.0,
         &mut pixels,
-        renderer::PixelFormat::Rgba8888,
+        renderer_skia::PixelFormat::Rgba8888,
         300,
     )
     .unwrap();
